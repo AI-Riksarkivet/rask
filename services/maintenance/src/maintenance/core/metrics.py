@@ -398,3 +398,38 @@ def record_drift(counts: dict[str, int]) -> None:
     """
     for category, value in counts.items():
         _drift_items.set(value, {"category": category})
+
+
+#: What a table's orphan check found, the closed `outcome` set of `maintenance.orphans.checks`
+#: (:mod:`maintenance.services.orphan_check`); a check whose read failed is counted ``incomplete`` before it raises.
+type OrphanCheckOutcome = Literal[
+    "clean", "reclaimable", "stranded", "raised", "excluded", "unnamed", "ungoverned", "trashed", "gone", "disabled", "incomplete"
+]
+
+#: Each table's orphan check, by what it found. No table label: which table is the check's log line's question, and a
+#: series per table would grow with the estate.
+_orphan_checks = _meter.create_counter(
+    "maintenance.orphans.checks",
+    unit="{check}",
+    description="Table orphan checks, by outcome.",
+)
+#: Files a check found above its table's listing floor, which Lance cannot see until the floor is raised.
+_stranded_files = _meter.create_counter(
+    "maintenance.orphans.stranded",
+    unit="{file}",
+    description="Unreferenced files a table's orphan check found above its listing floor, which Lance's cleanup cannot list.",
+)
+
+
+def create_orphan_check_series() -> None:
+    """Create every outcome's series of the check counter, and the stranded-file counter, at 0 when the worker starts,
+    for `create_task_series`' reason: a series born at 1 has no 0 before it."""
+    for outcome in get_args(OrphanCheckOutcome.__value__):
+        _orphan_checks.add(0, {"outcome": outcome})
+    _stranded_files.add(0)
+
+
+def record_orphan_check(*, outcome: OrphanCheckOutcome, stranded: int) -> None:
+    """Record one table's orphan check and the stranded files it found."""
+    _orphan_checks.add(1, {"outcome": outcome})
+    _stranded_files.add(stranded)

@@ -30,6 +30,7 @@ from lakehouse.governed import fga as fga_module
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
+from maintenance.services.purge import report_is_clean
 
 
 _PRIMARY_BUCKET = "lance-catalog"
@@ -164,6 +165,7 @@ class _Estate:
                 control_root=self.control_root,
                 namespace_root=self.namespace_root,
                 bucket_client=self.s3,
+                walk=False,
             )
         )
 
@@ -179,13 +181,15 @@ def test_a_fully_consistent_estate_reports_no_drift(tmp_path: Path, monkeypatch:
     report = _Estate(tmp_path).run(monkeypatch)
     assert report.total == 0
     # The real invariant is that no category goes MISSING: each is counted, unavailable, or skipped.
-    # `orphan_files` is skipped by default (it opens every dataset — a different order of work), and a
+    # The storage walk's two categories are skipped on a run that walks no storage (the hourly audit), and a
     # category silently absent from all three lists is the failure this guards.
     accounted = set(report.counts) | {u.category for u in report.unavailable} | {s.category for s in report.skipped}
     assert accounted == set(mod.CATEGORIES), f"unaccounted categories: {set(mod.CATEGORIES) - accounted}"
     assert report.unavailable == []
-    assert sorted(s.category for s in report.skipped) == ["absent_datasets", "orphan_files", "unregistered_datasets"]
+    assert sorted(s.category for s in report.skipped) == ["absent_datasets", "unregistered_datasets"]
     assert report.incomplete == []
+    # Clean in every category it checked, and still no licence to purge: it listed no bucket.
+    assert "walked no storage" in (report_is_clean(report) or "")
 
 
 # --------------------------------------------------------------------------- #
@@ -244,7 +248,7 @@ def test_unbound_namespaces_is_skipped_not_zero_when_warehouses_are_off(tmp_path
     _Estate.namespace_dir(tmp_path, "legacy_ns")
     report = estate.run(monkeypatch, warehouses_enabled=False)
     assert report.unbound_namespaces == []
-    assert {s.category for s in report.skipped} == {"unbound_namespaces", "orphan_files", "unregistered_datasets", "absent_datasets"}
+    assert {s.category for s in report.skipped} == {"unbound_namespaces", "unregistered_datasets", "absent_datasets"}
     assert "unbound_namespaces" not in report.counts
     assert report.total == 0
 
@@ -296,9 +300,9 @@ def test_an_openfga_outage_degrades_only_the_categories_that_needed_it(tmp_path:
     report = estate.run(monkeypatch)
     assert {u.category for u in report.unavailable} == _FGA_DERIVED_CATEGORIES
     assert all("ServiceUnavailableError" in u.reason for u in report.unavailable)
-    # The storage-only categories this fixture exercises. `orphan_files` is absent for a reason of its
-    # own rather than an FGA one, which is why this cannot simply be `CATEGORIES - _FGA_DERIVED` —
-    # tried, 2026-09-20. The DERIVED claim in the docstring is about the unavailable set above.
+    # The storage-only categories this fixture exercises. The walk's two are skipped for a reason of their
+    # own rather than an FGA one, which is why this cannot simply be `CATEGORIES - _FGA_DERIVED`. The
+    # DERIVED claim in the docstring is about the unavailable set above.
     assert set(report.counts) == {"unbound_namespaces", "orphan_buckets", "orphaned_trash", "dangling_bindings"}
     assert [n.namespace for n in report.unbound_namespaces] == ["legacy_ns"]
     assert [b.bucket for b in report.orphan_buckets] == ["bkt-orphan"]
@@ -345,7 +349,7 @@ def test_a_dead_bucket_listing_degrades_only_orphan_buckets(tmp_path: Path, monk
     assert [u.category for u in report.unavailable] == ["orphan_buckets"]
     assert "PermissionError" in report.unavailable[0].reason
     assert "orphan_buckets" not in report.counts
-    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_buckets", "orphan_files", "unregistered_datasets", "absent_datasets"}
+    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_buckets", "unregistered_datasets", "absent_datasets"}
 
 
 def test_an_unreadable_trash_index_degrades_only_the_categories_that_read_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -378,7 +382,7 @@ def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "storage:buckets" in reasons and "ONE PAGE" in reasons["storage:buckets"]
     assert "registry:projects" in reasons and "unreadable" in reasons["registry:projects"]
     # ...and the run is still a full report, not a failure: every category was reached.
-    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_files", "unregistered_datasets", "absent_datasets"}
+    assert set(report.counts) == set(mod.CATEGORIES) - {"unregistered_datasets", "absent_datasets"}
 
 
 def test_a_missing_control_root_is_not_a_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -392,6 +396,7 @@ def test_a_missing_control_root_is_not_a_crash(tmp_path: Path, monkeypatch: pyte
             control_root=f"file://{tmp_path / 'nothing-here'}",
             namespace_root=f"file://{tmp_path / 'nothing-here'}",
             bucket_client=_FakeS3([]),
+            walk=False,
         )
     )
     assert report.total == 0
@@ -410,6 +415,7 @@ def test_an_unwired_grant_census_is_reported_not_assumed_clean(tmp_path: Path, m
             control_root=estate.control_root,
             namespace_root=estate.namespace_root,
             bucket_client=estate.s3,
+            walk=False,
         )
     )
     assert {u.category for u in report.unavailable} == _FGA_DERIVED_CATEGORIES
@@ -447,10 +453,9 @@ def test_a_full_run_leaves_every_store_byte_identical(tmp_path: Path, monkeypatc
     assert after == before
 
 
-# --- the orphan scan's bucket coverage (#81 residual) ----------------------------------------------
-# `run_sweep` reads the warehouse REGISTRY so a bucket provisioned by an API call after the last
-# config edit is still maintained. The orphan scan kept iterating the configured list alone — same
-# blindness, worse consequence: it reports ZERO orphans for those buckets, and a zero in a drift
+# --- the storage walk's bucket coverage (#81 residual) ---------------------------------------------
+# A bucket provisioned by an API call after the last config edit is in no static list. A walk of the
+# configured list alone reports ZERO unregistered datasets for those buckets, and a zero in a drift
 # report is read as "checked and clean".
 
 
@@ -473,12 +478,14 @@ def test_a_registry_only_bucket_is_scanned(tmp_path: Path) -> None:
     sources.warehouse_records = [
         {"id": "acme-wh", "bucket": "acme-bucket", "project": "acme"},
         {"id": "beta-wh", "bucket": "beta-bucket", "project": "beta"},
+        # A quarantined tenant's bucket is still listed: reporting what lies in it rewrites nothing.
+        {"id": "gone-wh", "bucket": "gone-bucket", "project": "gone", "status": "deactivated"},
     ]
 
     buckets = mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources)
 
     assert buckets[0] == "configured-bucket"  # the configured list still leads
-    assert set(buckets) == {"configured-bucket", "acme-bucket", "beta-bucket"}
+    assert set(buckets) == {"configured-bucket", "acme-bucket", "beta-bucket", "gone-bucket"}
     assert report.incomplete == []
 
 
@@ -486,8 +493,8 @@ def test_an_unreadable_registry_is_REPORTED_not_silently_narrowed(tmp_path: Path
     """The posture that separates a report from a sweep.
 
     The sweep degrades to the configured list with a log line, costing one maintenance cycle. This
-    may not: buckets nobody looked at must be named, or the resulting `orphan_files: 0` is a zero
-    that means "we did not look" — the one number this report must never print.
+    may not: buckets nobody looked at must be named, or the resulting `unregistered_datasets: 0` is a
+    zero that means "we did not look" — the one number this report must never print.
     """
     report = mod.ReconcileReport(checked_at=datetime.now(UTC).isoformat())
     sources = mod.Sources()
@@ -544,7 +551,7 @@ def test_one_unreadable_warehouse_root_does_not_blind_the_whole_scan(tmp_path: P
     revoked credentials, a quarantined tenant — into a `CategoryUnavailable`, which blocks
     `report_is_clean` and with it the purge, for the WHOLE estate. So an unreadable root is named as an
     `IncompleteScan` (the input to distrust) while every readable root still reports, which is exactly
-    the rule the orphan scan already follows.
+    the rule the storage walk follows.
     """
     estate = _Estate(tmp_path)
     wh_svc.put_warehouse(
@@ -580,8 +587,6 @@ def test_the_DOORLESS_category_is_reported_but_does_not_gate_the_purge(tmp_path:
     COUNTED and NAMED. Excluding them from the report rather than from the gate would trade an
     unreachable purge for invisible drift.
     """
-    from maintenance.services.purge import report_is_clean
-
     estate = _Estate(tmp_path)
     _Estate.namespace_dir(tmp_path, "legacy_ns")
     report = estate.run(monkeypatch)
@@ -589,19 +594,13 @@ def test_the_DOORLESS_category_is_reported_but_does_not_gate_the_purge(tmp_path:
     assert report.counts["unbound_namespaces"] == 1, "the category must still be COUNTED"
     assert [n.namespace for n in report.unbound_namespaces] == ["legacy_ns"], "…and still NAMED"
     assert report.total == 0, f"a doorless category still gates the purge: counts={report.counts} total={report.total}"
-    # `report_is_clean` may still block on the orphan-file coverage gap, which IS clearable (the
-    # `maintenance.orphanScan` values key turns it on, and the live estate has it on). What must no
-    # longer appear in the blocker is either doorless category — that was the unsatisfiable part.
-    blocker = report_is_clean(report) or ""
-    assert "unbound_namespaces" not in blocker, f"a doorless category is still named as a purge blocker: {blocker}"
-    assert "NOT clean" not in blocker, f"findings still gate on a report whose only drift is doorless: {blocker}"
+    walked = report.model_copy(update={"skipped": []})
+    assert report_is_clean(walked) is None, "a report whose only drift is doorless still blocks the purge"
 
 
 def test_a_category_WITH_a_door_still_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The exclusion is exactly two categories, not a general relaxation. A ghost project has a door —
     revoke its tuples — so it must still block the purge."""
-    from maintenance.services.purge import report_is_clean
-
     estate = _Estate(tmp_path)
     estate.fga.tuples["project:ghosty"] = [("user:mallory", "admin")]
     report = estate.run(monkeypatch)

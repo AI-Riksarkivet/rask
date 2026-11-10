@@ -62,6 +62,7 @@ from maintenance.core.metrics import (
 from maintenance.services import base_reclaim, committed_files, credentials
 from maintenance.services.due import refresh_due, table_ids_of
 from maintenance.services.expiry import HISTORY_FENCED, DatasetResult, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, lost_staged_manifests
+from maintenance.services.floor import raise_stands
 from maintenance.services.naming import PolicyOwners, TableIds, claim_store, policy_owners, read_uuids
 from maintenance.services.plan import DatasetPlan, PlanContext, cadence_skip, resolve_plan
 
@@ -265,6 +266,19 @@ def _data_directories(uri: str, *, readings: PassReadings, settings: Maintenance
     return held
 
 
+def _expiry_policy(uri: str, plan: DatasetPlan, *, settings: MaintenanceSettings) -> ExpiryPolicy:
+    """``plan``'s expiry policy for the dataset at ``uri``: reclaiming from ``MAINTENANCE_MIN_VERSIONS_TO_EXPIRE``
+    versions, and from one while a listing-floor raise stands above the floor (:func:`maintenance.services.floor
+    .raise_stands`). A dataset that cannot be read keeps the usual count; the pass's own open reports it."""
+    threshold = settings.min_versions_to_expire
+    try:
+        if raise_stands(lance.dataset(uri, storage_options=settings.storage_options().in_clear(), session=shared_lance_session())):
+            threshold = 1
+    except Exception as exc:  # noqa: BLE001 — an unread dataset keeps the usual count, and the pass's own open reports it
+        log.warning("maintenance_floor_raise_unread", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
+    return plan.expiry_policy(min_reclaimable=threshold, staged_grace=timedelta(seconds=settings.staged_manifest_grace_seconds))
+
+
 def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassReadings, settings: MaintenanceSettings) -> DatasetResult:
     """One dataset's expiry: read under maintenance's own session, and written only under a vend scoped to the table
     ``__manifest`` names it as ([[LH-219]]), asked for where the probe finds something to write.
@@ -275,7 +289,7 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     """
     table = named.table
     options = settings.storage_options()
-    policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire, staged_grace=timedelta(seconds=settings.staged_manifest_grace_seconds))
+    policy = _expiry_policy(uri, plan, settings=settings)
     directories = _data_directories(uri, readings=readings, settings=settings, options=options)
     now = readings.context.now
     probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now)
@@ -657,7 +671,7 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
     return PassReadings(table_ids=ids, context=context, table=held.table, owners=owners)
 
 
-def _held_location(location: str) -> str:
+def held_location(location: str) -> str:
     """Where the store keeps the table at ``location``: the key a percent-encoded registered location decodes to
     ([[LH-319]]), in the store its spelling names, as discovery and every maintenance reader hold it."""
     return key_uri(store_of(location), decoded_path(location))
@@ -715,7 +729,7 @@ def run_table_pass(task: TableTask, settings: MaintenanceSettings, *, now: datet
             return PassOutcome(next_due=now + timedelta(seconds=settings.retry_seconds))
         log.warning("maintenance_task_outside_the_estate", extra={"uuid": task.uuid, "location": task.location})
         return PassOutcome(next_due=now + timedelta(hours=settings.recheck_hours))
-    location = _held_location(task.location)
+    location = held_location(task.location)
     datasets = _datasets_of(location, settings)
     if datasets is None:
         log.info("maintenance_task_table_unwritten", extra={"uuid": task.uuid, "table": held.table})
@@ -781,7 +795,7 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
     if isinstance(named, DatasetResult):
         return None
     plan = resolve_plan(result.uri, context=readings.context, owners=named.owners)
-    policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire, staged_grace=timedelta(seconds=settings.staged_manifest_grace_seconds))
+    policy = _expiry_policy(result.uri, plan, settings=settings)
     options = settings.storage_options()
     try:
         ds = lance.dataset(result.uri, storage_options=options.in_clear(), session=shared_lance_session())

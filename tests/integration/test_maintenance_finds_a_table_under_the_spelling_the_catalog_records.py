@@ -47,7 +47,7 @@ from lakehouse.objectfs import dataset_root_probe, lance_storage_options
 from lakehouse.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import objects_held, purge_expired_trash
-from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from maintenance.services.reconcile import CATEGORIES, ReconcileReport
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 
 
@@ -197,9 +197,8 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     assert standing, "precondition: the table created since holds bytes"
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
-        counts={category: 0 for category in CATEGORIES if category != "orphan_files"},
+        counts=dict.fromkeys(CATEGORIES, 0),
         total=0,
-        skipped=[CategorySkipped(category="orphan_files", reason="off")],
     )
     settings = MaintenanceSettings.model_validate(
         {

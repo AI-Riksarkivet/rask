@@ -700,16 +700,12 @@
                     "type": "boolean"
                 },
                 "floorRaise": {
-                    "description": "Write one metadata-only commit per stranded dataset to raise its Lance listing floor so residue becomes reclaimable. Off by default.",
+                    "description": "Write one metadata-only commit per stranded table, from its own orphan check, to raise its Lance listing floor so residue becomes reclaimable. Off by default.",
                     "type": "boolean"
                 },
                 "floorRaiseDryRun": {
                     "description": "Plan and report floor raises without committing. Defaults true; set false to commit once `floorRaise` is on.",
                     "type": "boolean"
-                },
-                "floorRaiseMaxPerTick": {
-                    "description": "Maximum datasets the floor raise commits to per tick; the remainder is reported as capped.",
-                    "type": "integer"
                 },
                 "lineageEmit": {
                     "description": "Emit a lineage event per dataset whose versions a pass reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.",
@@ -723,9 +719,24 @@
                     "description": "Days of version history kept by old-version GC.",
                     "type": "integer"
                 },
-                "orphanScan": {
-                    "description": "Run the reconciler's per-dataset unreferenced-file scan; read-only, and required for `trashPurge` to certify a clean report.",
-                    "type": "boolean"
+                "orphanCheck": {
+                    "type": "object",
+                    "properties": {
+                        "ceilingDays": {
+                            "description": "The longest a clean or an excluded table goes between two orphan checks, in days: a clean table's interval doubles up to it, and an excluded table waits it. A table whose floor was raised waits its retention and a day, whatever this says.",
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "enabled": {
+                            "description": "Run each table's orphan check; off, none is scheduled and one already held ends when it fires.",
+                            "type": "boolean"
+                        },
+                        "maxSeconds": {
+                            "description": "One orphan check's bound, in seconds, as `queue.maxPassSeconds` is a pass's: past it the check is counted (`maintenance.passes.overran`, kind orphans), and at twice it its replica exits.",
+                            "type": "integer",
+                            "minimum": 60
+                        }
+                    }
                 },
                 "port": {
                     "description": "HTTP port of the maintenance container.",
@@ -740,7 +751,7 @@
                             "minimum": 3
                         },
                         "auditSchedule": {
-                            "description": "The audit's NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs and the lost-task backstop, once per firing on one replica.",
+                            "description": "The audit's NATS message schedule (ADR-51): the drift report without the storage walk, its repairs and the lost-task backstop, once per firing on one replica.",
                             "type": "string",
                             "pattern": "^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$"
                         },
@@ -780,7 +791,7 @@
                             "minimum": 60
                         },
                         "scanSchedule": {
-                            "description": "The scan's NATS message schedule, a six-field cron (seconds first): the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim.",
+                            "description": "The scan's NATS message schedule, a six-field cron (seconds first): the audit with the storage walk, which lists every bucket's directories, then the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim.",
                             "type": "string",
                             "pattern": "^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$"
                         },

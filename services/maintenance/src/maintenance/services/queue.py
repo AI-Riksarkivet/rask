@@ -33,7 +33,7 @@ import json
 import logging
 import os
 import secrets
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
@@ -74,7 +74,10 @@ CLAIMS_BUCKET: Final = "MAINTENANCE_CLAIMS"
 _FETCH_TIMEOUT: Final = 5.0
 _DUE_BATCH: Final = 10
 #: The kinds whose task has a schedule of its own, which the hourly audit reads to find one nothing holds.
-_SCHEDULED_KINDS: Final = frozenset({"table", "trash"})
+_SCHEDULED_KINDS: Final = frozenset({"table", "trash", "orphans"})
+#: The shortest interval a table's orphan check is held at, in hours: a check that found residue, and a check whose
+#: schedule was lost, is held this far out (owner, 2026-11-09: a one-day floor).
+ORPHAN_CHECK_FLOOR_HOURS: Final = 24
 #: The kinds that repair the estate from a drift report, and the one claim they share.
 _RECONCILING_KINDS: Final = frozenset({"audit", "scan"})
 _RECONCILE_CLAIM: Final = "reconcile"
@@ -113,7 +116,9 @@ _MAX_OUTSTANDING_PINGS: Final = 2
 #: to the error callback while it reconnects. A session the server ends for its credential closes the client instead.
 _REFUSED: Final = "authorization violation"
 
-type TaskKind = Literal["table", "trash", "audit", "scan"]
+type TaskKind = Literal["table", "trash", "audit", "scan", "orphans"]
+#: The kinds a schedule of its own holds per table or trash record, which :meth:`TaskQueue.held` reads.
+type HeldKind = Literal["table", "trash", "orphans"]
 type Area = Literal["task", "schedule", "due"]
 
 
@@ -133,6 +138,13 @@ class Task(BaseModel):
     location: str = ""
     #: The trashed object's kind, for a ``trash`` task.
     trashed: Literal["table", "namespace"] = "table"
+    #: The interval an ``orphans`` check was held at, in hours: what its next interval is computed from. It rides the
+    #: schedule's body, so a lost schedule loses it, and the check is held at the floor again.
+    interval_hours: int = Field(default=ORPHAN_CHECK_FLOOR_HOURS, ge=1)
+
+    def ended(self) -> Task:
+        """This task as its next try is held after a worker ended it: an orphan check starts again at the floor."""
+        return self.model_copy(update={"interval_hours": ORPHAN_CHECK_FLOOR_HOURS}) if self.kind == "orphans" else self
 
     def subject(self, area: Area) -> str:
         """Where this task's message lives: on the queue, held as a schedule, or fired from one."""
@@ -182,9 +194,13 @@ async def _standing(claims: KeyValue, key: str, token: str) -> int | None:
 
 def _claim_key(task: Task) -> str:
     """The key of the claim a pass of ``task`` takes: its table (or trash record), as its subject names it, and one key for
-    the audit and the scan, which both repair the estate from a drift report of their own, so never at once."""
+    the audit and the scan, which both repair the estate from a drift report of their own, so never at once. A table's
+    orphan check takes its table's claim, so it never runs beside the table's pass, whose cleanup it would see half done,
+    nor beside another check of the table."""
     if task.kind in _RECONCILING_KINDS:
         return _RECONCILE_CLAIM
+    if task.kind == "orphans":
+        return Task(kind="table", uuid=task.uuid).subject("task").removeprefix("maintenance.task.")
     return task.subject("task").removeprefix("maintenance.task.")
 
 
@@ -373,6 +389,21 @@ class TaskQueue:
         per firing whatever the replica count, replacing any cadence it held before."""
         await self._hold(task, cadence, held=task.subject("schedule"), fires=task.subject("due"))
 
+    async def schedule_first(self, task: Task, at: datetime) -> bool:
+        """Hold ``task`` until ``at`` unless a schedule of it is held already, which it then leaves standing; ``False`` then.
+
+        Raises:
+            QueueUnavailableError: JetStream refused the schedule for another reason, or did not answer it.
+        """
+        held = task.subject("schedule")
+        try:
+            await self._hold(task, _at(at), held=held, fires=task.subject("due"), expect_nothing=True)
+        except APIError as exc:
+            if exc.err_code in _HELD_ALREADY:
+                return False
+            raise QueueUnavailableError(f"the queue refused {held}: {exc}") from exc
+        return True
+
     async def follow_up(self, task: Task, at: datetime) -> bool:
         """Hold a commit's ``task`` until ``at``, beside its schedule and never replacing it, unless a follow-up is held
         for it already, which covers this commit: its pass reads the table after it. ``False`` then. Fired, it is queued
@@ -408,7 +439,7 @@ class TaskQueue:
         except (NatsError, TimeoutError) as exc:
             raise QueueUnavailableError(f"the bus did not take {held}: {exc}") from exc
 
-    async def held(self, area: Literal["task", "schedule"], kind: Literal["table", "trash"]) -> set[str]:
+    async def held(self, area: Literal["task", "schedule"], kind: HeldKind) -> set[str]:
         """The uuid of every ``kind`` task the queue holds (``task``), or that a schedule holds (``schedule``): what the audit
         reads to find a table or a trash record left with neither.
 
@@ -481,7 +512,7 @@ class Worker:
     allows one delivery past ``max_deliver``, which only a task whose worker died on every delivery reaches: it is ended
     and counted without running, since JetStream keeps a work-queue task that ran out of deliveries unacknowledged, and
     its table would take no other (measured on nats-server 2.15.2). A run past ``_HUNG_FACTOR`` times
-    ``max_pass_seconds`` is taken to be hung, and the replica ends itself so its task goes to another, never two passes
+    its bound (its kind's own in ``max_seconds_by_kind``, else ``max_pass_seconds``) is taken to be hung, and the replica ends itself so its task goes to another, never two passes
     of one table at once. A loop outlives
     any error of the bus's: a fetch, ack or heartbeat the bus refuses or drops is logged and the loop asks again, so a
     JetStream leader change or a reconnect never leaves a running replica pulling nothing.
@@ -500,6 +531,7 @@ class Worker:
         retry_ended_seconds: float,
         store_events: Callable[[bytes], Awaitable[object]] | None = None,
         end_process: Callable[..., NoReturn] = end_replica,
+        max_seconds_by_kind: Mapping[str, float] | None = None,
     ) -> None:
         self._queue = queue
         self._end_process = end_process
@@ -514,6 +546,7 @@ class Worker:
         self._passing = False
         self._max_deliver = max_deliver
         self._max_pass = max_pass_seconds
+        self._max_by_kind = dict(max_seconds_by_kind or {})
         self._stopping = asyncio.Event()
 
     def stop(self) -> None:
@@ -654,8 +687,9 @@ class Worker:
 
     async def _keep_alive(self, msg: Msg, task: Task, lease: _Lease) -> None:
         """Renew ``lease`` every ``heartbeat_seconds`` from the delivery's arrival, the first at once, and end the process
-        once the pass has run past twice its bound."""
+        once the pass has run past twice its bound: its kind's own (``max_seconds_by_kind``), else ``max_pass_seconds``."""
         started = monotonic()
+        bound = self._max_by_kind.get(task.kind, self._max_pass)
         warned = False
         while True:
             sent = await self._tell(msg, Msg.Ack.Progress, lease)
@@ -664,11 +698,11 @@ class Worker:
             lease.until = sent + self._ack_wait
             await asyncio.sleep(self._heartbeat)
             ran = monotonic() - started
-            if not warned and ran > self._max_pass:
+            if not warned and ran > bound:
                 warned = True
                 record_pass_overran(kind=task.kind)
                 log.error("maintenance_task_overran", extra={"subject": msg.subject, "seconds": round(ran)})
-            if ran > _HUNG_FACTOR * self._max_pass:
+            if ran > _HUNG_FACTOR * bound:
                 self._end_process("maintenance_task_hung", subject=msg.subject, seconds=round(ran))
 
     async def _tell(self, msg: Msg, said: bytes, lease: _Lease) -> float:
@@ -731,7 +765,7 @@ class Worker:
         if task.kind not in _SCHEDULED_KINDS:
             return
         try:
-            await self._queue.schedule_at(task, datetime.now(UTC) + timedelta(seconds=self._retry_ended))
+            await self._queue.schedule_at(task.ended(), datetime.now(UTC) + timedelta(seconds=self._retry_ended))
         except QueueUnavailableError as exc:
             log.warning("maintenance_task_end_unscheduled", extra={"subject": msg.subject, "error": str(exc)[:300]})
 

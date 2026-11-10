@@ -595,7 +595,7 @@ def _registered(estate: _Estate, table: str, location: str) -> str:
 def _purge_expired(estate: _Estate, table: str, location: str) -> None:
     """The maintenance purge of the trash record ``table``'s recoverable drop filed, re-stamped long expired, under a clean drift report."""
     from lakehouse import trash
-    from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+    from maintenance.services.reconcile import CATEGORIES, ReconcileReport
 
     (filed,) = trash.named(estate.root, estate.key, table)
     record = trash.make_record(
@@ -605,9 +605,8 @@ def _purge_expired(estate: _Estate, table: str, location: str) -> None:
     trash.put(estate.root, estate.key, {**record, trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=1)).isoformat()})
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
-        counts={category: 0 for category in CATEGORIES if category != "orphan_files"},
+        counts=dict.fromkeys(CATEGORIES, 0),
         total=0,
-        skipped=[CategorySkipped(category="orphan_files", reason="off")],
     )
     settings = estate.maintenance(trash_purge_enabled=True, catalog_url=CATALOG_URL)
     with catalog_doors(estate.client):

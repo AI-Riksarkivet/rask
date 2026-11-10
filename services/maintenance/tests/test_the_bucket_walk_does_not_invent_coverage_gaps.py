@@ -23,8 +23,7 @@ listing was gone before the descent, and a depth-4 walk died `FileNotFoundError`
 that one vanished sub-prefix cost a whole bucket its scan.
 
 The depth bound stays a POLICY LEVER rather than a rescue — it reveals no hidden data, and its default
-is unchanged. It is bounded at both ends because the walk is the orphan scan's dominant cost: the scan opens every
-dataset it discovers in every bucket.
+is unchanged. It is bounded at both ends because the walk lists every directory it descends into, in every bucket.
 """
 
 from __future__ import annotations
@@ -86,8 +85,7 @@ def test_the_walk_reaches_exactly_as_deep_as_it_is_told(tmp_path: Path, depth: i
 
 
 def test_the_setting_exists_and_is_bounded() -> None:
-    """A depth of 0 scans nothing and an unbounded one opens every dataset in the estate on a walk that is already the
-    orphan scan's dominant cost. Both ends are refused."""
+    """A depth of 0 walks nothing and an unbounded one lists every directory in the estate. Both ends are refused."""
     assert MaintenanceSettings(discovery_max_depth=7).discovery_max_depth == 7
     for refused in (0, 17):
         with pytest.raises(ValueError):
@@ -115,7 +113,6 @@ def test_the_reconciler_walks_the_configured_bound(tmp_path: Path, monkeypatch: 
         s3_bucket="lance-catalog",
         s3_access_key_id="unit",
         s3_secret_access_key=SecretStr("unit"),
-        orphan_scan_enabled=True,
         discovery_max_depth=5,
     )
     (tmp_path / "control").mkdir(parents=True, exist_ok=True)
@@ -129,6 +126,7 @@ def test_the_reconciler_walks_the_configured_bound(tmp_path: Path, monkeypatch: 
             control_root=f"file://{tmp_path / 'control'}",
             namespace_root=f"file://{tmp_path / 'data'}",
             bucket_client=_NoBuckets(),
+            walk=True,
         )
     )
 

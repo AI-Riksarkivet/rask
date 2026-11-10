@@ -11,7 +11,7 @@ path does not exist. So a policy set on it polices no bytes, a protection record
 FGA grant keys off a table whose data is not there — while the drift report ran clean over it.
 
 THE CHECK COSTS NOTHING NEW, which is why it belongs on the walk that already exists rather than in a
-probe of its own. `_orphan_category` already holds both sides: `discover_datasets` gives it every
+probe of its own. `_walk_storage` already holds both sides: `discover_datasets` gives it every
 dataset URI in every scannable bucket, and `lance_docs/ns_catalog/catalog/dir/index.md:103-111` records `location` as a
 column of `__manifest` that the reconciler's own read simply does not select.
 

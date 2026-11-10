@@ -89,7 +89,7 @@ from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, end_trash, note_trash_refusal, reclaim_options_for
 from maintenance.services.naming import manifest_uuid
-from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
+from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, WALK_CATEGORIES, ReconcileReport
 
 
 log = logging.getLogger(__name__)
@@ -184,9 +184,8 @@ class TrashPurgeReport(BaseModel):
     refused: list[RefusedRecord] = Field(default_factory=list)
     #: Records past the per-tick cap. REPORTED, never silently dropped — the next tick takes them.
     capped: int = 0
-    #: Drift categories the report deliberately skipped. They do NOT block the purge (the shipped
-    #: config skips ``orphan_files``, so blocking on a skip would make reclamation unreachable), but
-    #: they are copied here so a purge can never read as "the whole estate was verified".
+    #: Drift categories the report deliberately skipped. They do NOT block the purge (a skip is a rule that does not
+    #: apply), but they are copied here so a purge can never read as "the whole estate was verified".
     skipped_categories: list[str] = Field(default_factory=list)
 
 
@@ -233,36 +232,30 @@ def _drain_order(record: dict[str, Any]) -> tuple[int, str]:
 
 
 def report_is_clean(report: ReconcileReport) -> str | None:
-    """The gate: ``None`` when this tick's drift report certifies the estate, else the blocking reason.
+    """The gate: ``None`` when this scan's drift report certifies the estate, else the blocking reason.
 
-    CLEAN := no findings, no category unavailable, no scan incomplete, and no skipped category that
-    represents a COVERAGE GAP.
+    CLEAN := no gating finding, no category unavailable, no source incomplete, and storage walked. What each requirement
+    protects the purge
+    from, which deletes the bytes under ONE trashed location after refusing any location a live table resolves into
+    (:func:`resolves_into`) on the roots the warehouse registry names (:func:`maintained_roots`):
 
-    A skip blocks or not depending on WHICH KIND it is (#128a), and this used to be a blanket pass.
-    The old docstring defended that with: "the shipped configuration skips ``orphan_files`` … so
-    treating a skip as drift would make the purge unreachable in every real deployment." That was
-    true, and the reasoning was CIRCULAR — it held only because `orphan_scan_enabled` defaulted False
-    and the chart shipped no lever to turn it on, so the scan could never run anywhere. The purge
-    therefore reclaimed bytes against a file layer nobody had ever inspected, and the report printed
-    the same thing for "we looked and it was clean" as for "we didn't look".
+    * **No gating finding** (``report.total``). ``orphan_buckets`` and ``dangling_bindings`` say the registry and the
+      store disagree about which buckets exist, and the purge's liveness check reads only the roots the registry names:
+      a live table under a root no record names, whose location resolves into the trashed one, would be invisible to
+      it. ``ghost_projects``, ``ghost_warehouses`` and ``unreferenced_projects`` say authorization and the registries
+      disagree, which leaves the registries the purge reads in a state nobody has accounted for. The categories in
+      ``NON_GATING_CATEGORIES`` are registration and authorization facts that cannot change which bytes go.
+    * **No category unavailable.** A store the report could not read is one whose disagreement it cannot rule out.
+    * **No source incomplete.** A registry, the grant census, the bucket listing or a catalog listing read in part, or a
+      bucket the storage walk could not list (``storage:<bucket>``, a depth limit, ``catalog:tables`` outside every
+      walked bucket, ``registry:warehouses``), is storage or a registry the report did not see whole.
+    * **Storage walked.** A run that walks no storage (the hourly audit) lists no bucket, so its report can carry none
+      of the walk's notes and says nothing about the buckets the purge's liveness check reads.
 
-    So the two kinds are now distinguished by `CategorySkipped.coverage_gap`:
+    What is inside each live table, its unreferenced files, is no part of the gate: it changes nothing about which
+    bytes the purge deletes, which are the trashed location's alone.
 
-      * NOT a gap — ``unbound_namespaces`` with warehouses off. The rule does not apply; there are no
-        bindings, nothing was missed. Blocking would make the purge unreachable on every single-bucket
-        deployment over a question with no answer to give.
-      * A GAP — ``orphan_files`` with the scan off. The rule applies and we chose not to run it.
-
-    The lever landed with this change (chart ``maintenance.orphanScan``), which is what makes blocking
-    reachable rather than fatal: an operator who wants the purge turns the scan on.
-
-    An UNAVAILABLE or INCOMPLETE category blocks for the neighbouring reason: those are questions the
-    report tried to answer and could not, and reclaiming on the strength of a scan that half-failed is
-    the failure mode the whole report-first rule exists to prevent.
-
-    Order matters. Real findings are reported FIRST because they are immediately actionable, whereas a
-    gap is a configuration change — a caller staring at "turn the scan on" while three orphans sit
-    unmentioned is being told the less useful of two true things.
+    Real findings are reported FIRST, because they are immediately actionable.
     """
     if report.total:
         # THE GATING CATEGORIES ONLY, matching what `report.total` counts. `NON_GATING_CATEGORIES`
@@ -272,20 +265,14 @@ def report_is_clean(report: ReconcileReport) -> str | None:
         # could, which is the same failure the total's own exclusion exists to prevent: the categories that
         # DO matter hidden behind ones that never fall. Measured live 2026-09-10, where 13 findings were
         # reported "across" four categories and two of them contributed zero.
-        # `orphan_files` is named by its BLOCKING count, not its total: the category can carry hundreds
-        # of findings that the ordinary sweep will collect on its own, and naming it on those would send
-        # an operator to work that time does for free while the real residue hides behind the number.
-        blocking = {**report.counts, "orphan_files": report.orphan_files_blocking}
-        drifting = sorted(name for name, count in blocking.items() if count and name not in NON_GATING_CATEGORIES)
+        drifting = sorted(name for name, count in report.counts.items() if count and name not in NON_GATING_CATEGORIES)
         return f"the drift report is NOT clean: {report.total} finding(s) across {drifting}"
     if report.unavailable:
         return f"the drift report could not check {sorted(u.category for u in report.unavailable)} — a category nobody looked at is not a clean one"
     if report.incomplete:
         return f"the drift report is INCOMPLETE ({sorted({i.source for i in report.incomplete})}) — a partial scan cannot certify the estate"
-    # EVERY gap, not just the first: an operator who enables one scan and re-runs must not discover a
-    # second gap, then a third, each round trip costing a pass that opens every dataset in the estate.
-    if gaps := sorted(s.category for s in report.skipped if s.coverage_gap):
-        return f"the drift report SKIPPED {gaps} — that part of the estate was never examined, so this report cannot certify it"
+    if unwalked := sorted(s.category for s in report.skipped if s.category in WALK_CATEGORIES):
+        return f"the drift report walked no storage ({unwalked} skipped): only the daily scan's report can certify the estate"
     return None
 
 

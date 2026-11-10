@@ -805,9 +805,9 @@ maintenance:
     retrySeconds: 900 # @schema type: integer; minimum: 60
     # -- How long the first commit of a burst holds its table's pass: the most often commits pass a table, each pass covering every commit before it.
     commitPassDelaySeconds: 300 # @schema type: integer; minimum: 1
-    # -- The audit's NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs and the lost-task backstop, once per firing on one replica.
+    # -- The audit's NATS message schedule (ADR-51): the drift report without the storage walk, its repairs and the lost-task backstop, once per firing on one replica.
     auditSchedule: "@hourly" # @schema type: string; pattern: ^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$
-    # -- The scan's NATS message schedule, a six-field cron (seconds first): the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim.
+    # -- The scan's NATS message schedule, a six-field cron (seconds first): the audit with the storage walk, which lists every bucket's directories, then the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim.
     scanSchedule: "0 30 0 * * *" # @schema type: string; pattern: ^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$
     # -- How long a stopping worker lets its running task finish, inside its pod's `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain. The render refuses a drain the grace cannot hold after preStop and the teardown, and the worker pod's sidecar blocks its shutdown for the grace less the teardown, which holds it.
     drainSeconds: 90 # @schema type: integer; minimum: 1
@@ -901,32 +901,44 @@ maintenance:
   # the next scan, so a backlog never becomes one unbounded delete storm against object storage.
   # -- Maximum trash records purged per tick; the remainder is reported as capped and drained next tick.
   trashPurgeMaxPerTick: 25
-  # [[LH-094]] — raise a stranded dataset's Lance LISTING FLOOR so its residue becomes reclaimable.
+  # [[LH-094]] — raise a stranded table's Lance LISTING FLOOR so its residue becomes reclaimable.
   #
   # `cleanup_old_versions` lists `_transactions/` and `_deletions/` only up to the earliest retained
   # manifest's commit, before the 7-day rule, so such a file above it is invisible to Lance for good
   # (`data/` and `_indices/` are listed past it, lance #8944). Any restore, re-upload or lifecycle rehydrate puts every object mtime
-  # above every manifest and creates it estate-wide. This writes ONE metadata-only commit per stranded
-  # dataset, which moves the floor past the residue; Lance then does the deleting on the next sweep.
+  # above every manifest and creates it estate-wide. A table's own orphan check (`orphanCheck` below)
+  # writes ONE metadata-only commit to a table it found stranded, which moves the floor past the residue
+  # once the table's next pass cleans the manifests beneath it; Lance then does the deleting.
   #
   # OFF BY DEFAULT because the commit is a real version on a GOVERNED table, written for a GC side
   # effect (owner ruling 2026-09-19, docs/adr/0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md). The rejected alternative had this service
   # delete the named bytes itself, on live tables, against a floor rule it derived rather than one
-  # upstream enforces.
-  # -- Write one metadata-only commit per stranded dataset to raise its Lance listing floor so residue becomes reclaimable. Off by default.
+  # upstream enforces. A raise moves the floor only once the table's pass cleans beneath it, so
+  # while a raise stands above the floor the pass cleans from the first reclaimable version, not from
+  # `minVersionsToExpire`.
+  # -- Write one metadata-only commit per stranded table, from its own orphan check, to raise its Lance listing floor so residue becomes reclaimable. Off by default.
   floorRaise: false
-  # The preview, and note the default is the OPPOSITE of trashPurgeDryRun above. The purge earns its
-  # permission from a report that must first run clean; this pass is what MAKES that report clean, so
-  # nothing gates it but these two flags — and the safe default for an ungated writer is to plan only.
-  # Turning `floorRaise` on therefore reports `floor_raise.raised` and commits nothing until this is
+  # The preview, and note the default is the OPPOSITE of trashPurgeDryRun above: nothing gates this
+  # writer but these two flags, and the safe default for an ungated writer is to plan only. Turning
+  # `floorRaise` on therefore logs each check's `floor_raise_result` and commits nothing until this is
   # set false.
   # -- Plan and report floor raises without committing. Defaults true; set false to commit once `floorRaise` is on.
   floorRaiseDryRun: true
-  # Per-tick ceiling on datasets committed to. A store rebuild strands every dataset at once, so an
-  # uncapped pass would turn one cron fire into a commit against every governed table in the estate.
-  # The remainder is reported (`floor_raise.capped`) and taken on the next tick.
-  # -- Maximum datasets the floor raise commits to per tick; the remainder is reported as capped.
-  floorRaiseMaxPerTick: 10
+  # EACH TABLE'S ORPHAN CHECK (owner, 2026-11-09/10): a task of its own per table on the work queue,
+  # taking its table's claim, that lists the table's files, names those no live version references, and
+  # raises the table's listing floor (`floorRaise`) when it found stranded ones. Its next check adapts:
+  # a day after it found residue, the table's retention and a day after a raise, twice its last interval
+  # after a clean check, up to `ceilingDays`; an excluded table (a branch, MemWAL, an unsupported flag,
+  # files through a base, too many versions or files) waits `ceilingDays`. A table's first pass holds its
+  # first check a day out, and the hourly audit holds one for a table that has none. Each check logs one
+  # `maintenance_orphan_check` line and counts `maintenance.orphans.checks` by outcome.
+  orphanCheck:
+    # -- Run each table's orphan check; off, none is scheduled and one already held ends when it fires.
+    enabled: true
+    # -- The longest a clean or an excluded table goes between two orphan checks, in days: a clean table's interval doubles up to it, and an excluded table waits it. A table whose floor was raised waits its retention and a day, whatever this says.
+    ceilingDays: 30 # @schema type: integer; minimum: 1
+    # -- One orphan check's bound, in seconds, as `queue.maxPassSeconds` is a pass's: past it the check is counted (`maintenance.passes.overran`, kind orphans), and at twice it its replica exits.
+    maxSeconds: 1800 # @schema type: integer; minimum: 60
   # [[LH-061]] — rebuild authorization tuples the control-plane registries still justify.
   #
   # ADDITIVE ONLY: the pass writes and never deletes, so it cannot widen access beyond what the control
@@ -1002,32 +1014,6 @@ maintenance:
   # (`tombstone_sweep.capped`).
   # -- Maximum trash records the tombstone sweep probes and clears per tick; the remainder is reported as capped.
   tombstoneSweepMaxPerTick: 50
-  # The reconciler's per-dataset FILE scan — the unreferenced-file category (#128a).
-  #
-  # THIS IS THE LEVER TRASHPURGE ABOVE DEPENDS ON, and until 2026-08-15 it did not exist at any values
-  # level: `MAINTENANCE_ORPHAN_SCAN_ENABLED` defaults False in config.py and the chart rendered no env
-  # var for it, so the scan could not be turned on in a deployed estate by any means. The reconciler
-  # therefore recorded `orphan_files` as SKIPPED on every tick, forever — and `report_is_clean` used to
-  # treat a skip as harmless, so the purge reclaimed bytes against a file layer nobody had inspected.
-  # The gate now BLOCKS on that skip, which is only reachable-not-fatal because this key exists.
-  #
-  # Off by default deliberately, and the cost is why: the scan opens EVERY dataset and unions the file
-  # references of EVERY live version across the data buckets — a different order of work from the rest
-  # of the report, which merely compares three stores. Turn it on to let the purge certify; leaving it
-  # off is a valid choice that now costs you the purge rather than silently granting it.
-  # ON since 2026-08-16. It is a REPORTING scan — it deletes nothing, and `trashPurge` above stays off —
-  # so the only thing being spent is read budget, and the estate just got cheap enough to spend it: the
-  # primary bucket went from 45 datasets to 13 when 32 leaked `ray-e2ebatch*` e2e artefacts were removed
-  # (they were 16 per-pid prefixes accumulated by a suite that called them "throwaway" and never threw
-  # them away). Opening every dataset across 13 is a different proposition from opening 45.
-  #
-  # It is ONE of the two blockers under `report_is_clean` that configuration can clear rather than work:
-  # `orphan_files` was the SKIPPED coverage gap, and `discoveryMaxDepth` below is the other. Real
-  # findings and categories reporting UNAVAILABLE are estate state, not switches. (The unavailable four
-  # cleared the same day for a different reason: the reconciler was refusing to LOOK UP its OpenFGA
-  # store when the ids were unpinned, which is the chart's default posture.)
-  # -- Run the reconciler's per-dataset unreferenced-file scan; read-only, and required for `trashPurge` to certify a clean report.
-  orphanScan: true
   # How deep the bucket walk descends looking for a dataset's `_versions/` marker. A subtree the walk
   # stops inside is filed as an `IncompleteScan` and blocks the purge — and the walk cannot tell "no
   # dataset here" from "did not look deep enough", so a prefix that will never hold one blocks
@@ -1035,9 +1021,9 @@ maintenance:
   #
   # It reveals no hidden data: measured 2026-09-08 on the primary bucket, depth 6 finds the same 30
   # datasets as depth 3 and stops nothing. The default stays 3 because that covers one of 93 buckets,
-  # and raising it costs a walk that is already the sweep's dominant cost (`_protected_roots` opens
-  # every discovered dataset in every bucket before one is compacted). MEASURE before moving it — the
-  # report names the prefixes it stopped at, which is where that measurement starts.
+  # and raising it costs the daily scan a listing per directory it descends into, in every bucket.
+  # MEASURE before moving it — the report names the prefixes it stopped at, which is where that
+  # measurement starts.
   # -- How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge.
   discoveryMaxDepth: 3
 

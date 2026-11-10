@@ -1,6 +1,6 @@
 ---
 name: rask-lance-catalog
-description: "The Lance catalog and the governance layer above it — the Lance Namespace spec (54 ops, the 24-code problem+json error model, the `POST /v1/<object>/{id}/<action>` route grammar) and rask's own `project > warehouse > namespace > table` hierarchy: the guards, the registries, protection/trash, and `services/maintenance`. Use when adding or changing a catalog endpoint; raising an error from the catalog; touching the hierarchy guards, the project/warehouse registries or `seed_ownership`; designing create/drop/undrop/cascade or protection semantics; working on compaction, maintenance's work queue and a table's pass, the hourly audit or the daily scan, the orphan scan or the reconciler; or answering \"is this spec-conformant\"."
+description: "The Lance catalog and the governance layer above it — the Lance Namespace spec (54 ops, the 24-code problem+json error model, the `POST /v1/<object>/{id}/<action>` route grammar) and rask's own `project > warehouse > namespace > table` hierarchy: the guards, the registries, protection/trash, and `services/maintenance`. Use when adding or changing a catalog endpoint; raising an error from the catalog; touching the hierarchy guards, the project/warehouse registries or `seed_ownership`; designing create/drop/undrop/cascade or protection semantics; working on compaction, maintenance's work queue and a table's pass, the hourly audit or the daily scan, a table's orphan check or the listing-floor raise, or the reconciler; or answering \"is this spec-conformant\"."
 ---
 
 # rask lance catalog — the spec and the estate's layer above it
@@ -392,12 +392,12 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 ## Lifecycle
 
 Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
-`services/maintenance/src/maintenance/services/{queue,tasks,table_pass,expiry,arrival,store_events,committed_files,due,plan,trash_task,audit,purge,reconcile,index_health}.py`
-and ADR 0198 with its 2026-11-09 amendment — plus `packages/lakehouse/src/lakehouse/clone_sources.py`, the tag a
+`services/maintenance/src/maintenance/services/{queue,tasks,table_pass,orphan_check,orphans,floor,expiry,arrival,store_events,committed_files,due,plan,trash_task,audit,purge,reconcile,index_health}.py`
+and ADR 0198 with its amendments — plus `packages/lakehouse/src/lakehouse/clone_sources.py`, the tag a
 registered shallow clone holds on the source version it reads (ADR 0198 §1), which lives in the `lakehouse` library
 beside `base_registry`, whose `forget_base_record` releases that tag wherever a clone's base record is forgotten
 (`trash.end` included), and `base_refs.py`, the one spelling rule every reader comparing two locations asks. Read them
-before changing anything a table's pass, the audit, the scan, the reconciler or the orphan scan touches. The
+before changing anything a table's pass, a table's orphan check, the audit, the scan or the reconciler touches. The
 per-table/namespace/project POLICY that governs a table's pass is
 `catalog.schemas.PolicyRequest` (retention, retain_versions, compact_enabled, interval, target rows),
 resolved **winner-takes-all** — the table's own record shadows the nearest namespace's which shadows the
@@ -565,7 +565,7 @@ governing their data. The project-scoped surface is the console's project page, 
   binding you cannot read is a namespace you cannot see.
 - `deactivate` = offboarding step one (quarantine; resolver 403s bound namespaces).
 - Maintenance lives in **`services/maintenance`** and DECIDES; it rewrites no data (ADR 0162, [[LH-467]]). It runs
-  version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, the orphan scan and cross-store reconcile, and
+  version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, each table's orphan check and cross-store reconcile, and
   writes the DUE LIST: one record per table that needs compacting or an index optimize, under `_maintenance_due/` on
   the control root (`lakehouse.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
   a caller holding `can_maintain`; the list is advisory. **Maintenance is driven by commits** (ADR 0198 and its
@@ -617,10 +617,14 @@ governing their data. The project-scoped surface is the console's project page, 
   applied silently forever (ADR 0160).
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs as two tasks of
   its own (`maintenance.services.audit`), each a NATS message schedule the worker asserts at its start and every 15
-  minutes, so a purged schedules stream heals: the hourly AUDIT (`maintenance.queue.auditSchedule`, `@hourly`) leaves
-  the file layer unscanned, so it opens no table, and the daily SCAN (`scanSchedule`, `0 30 0 * * *`, a six-field
-  cron: nats-server 2.15.2 refuses a five-field one) adds the orphan scan (about 20 store requests a table, owner
-  2026-11-09), then the floor raise and the trash purge that report certifies. Each runs once per firing, on one replica
+  minutes, so a purged schedules stream heals: the hourly AUDIT (`maintenance.queue.auditSchedule`, `@hourly`) walks
+  no storage, so it opens no table and lists no bucket, and the daily SCAN (`scanSchedule`, `0 30 0 * * *`, a six-field
+  cron: nats-server 2.15.2 refuses a five-field one) adds the storage walk (discovery: `unregistered_datasets`,
+  `absent_datasets` and the walk's own `incomplete` notes), then the trash purge that report certifies. The purge's gate
+  (`purge.report_is_clean`) is the drift report alone (owner, 2026-11-10: "Drift report only"): no gating finding, no
+  category unavailable, no source incomplete, and storage walked (the hourly audit's report is refused). What is inside a live table, its unreferenced files, is no part of it:
+  it changes nothing about which bytes the purge deletes. The audit also holds an orphan check, a jittered time within
+  a day out, for every live table holding neither a check's schedule nor a queued check. Each runs once per firing, on one replica
   whatever the replica count: its schedule fires on a subject of its own, and the queue holds one task per subject. The
   two share one claim (`queue._claim_key`, `reconcile`), since each repairs the estate from a report of its own: they
   never run at once, and the scan fires off the hour so it rarely waits. Maintenance has no Dapr cron binding; the
@@ -970,13 +974,23 @@ governing their data. The project-scoped surface is the console's project page, 
   tags: a branch head standing on a residual's files would hold the subject itself. Pinned by
   `services/catalog/tests/test_erasure_releases_a_pinning_branch_after_its_notice.py`.
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
-  orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
-  `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED` — it opens
-  every dataset, unlike the rest of the drift report which compares three stores, so it runs in the daily scan alone
-  and the hourly audit runs the report with it off, `audit.run_audit`). **It is ON in the
-  deployed estate**: `maintenance/core/config.py` defaults it `False`, but `chart/values.yaml` ships
-  `orphanScan: true`, and the chart is the single deploy artefact. Read the chart for what an estate
-  does; read `config.py` only for what an unconfigured process does.
+  orphans — but partially-failed writes and unpurged buckets do. **Each table's orphan check** finds them (owner,
+  2026-11-09/10; ADR 0198's 2026-11-10 amendment): a task of its own per table (`maintenance.task.orphans.<uuid>`,
+  `services/orphan_check.py`) that takes its table's claim (`table.<uuid>`, so never beside its pass), applies the
+  pass's guards (claim uuid, `trash.keeps`, `governs`, a `__manifest` row), scans the main dataset
+  (`orphans.scan_dataset`, with an age cut: a file not surely before the scan began reading is no finding), raises the
+  listing floor on its own findings (`floor.raise_listing_floor`, then a follow-up pass of the table), logs one
+  `maintenance_orphan_check` line and counts `maintenance.orphans.checks` by outcome and `maintenance.orphans.stranded`.
+  Its next check rides the schedule's body (`Task.interval_hours`): stranded or undecided -> a day; after a raise ->
+  the retention plus a day; clean or only Lance-reclaimable -> twice its interval up to
+  `maintenance.orphanCheck.ceilingDays` (30); excluded (a branch, MemWAL, an unsupported flag, files through a base,
+  past 500 versions, `orphans._MAX_REFERENCED_FILES` referenced or `_MAX_LISTED_FILES` listed files) or an ungoverned
+  bucket -> the ceiling; trashed or gone -> none;
+  a failed read raises, so the worker retries. Its bound is its own (`orphanCheck.maxSeconds`, `Worker`'s
+  `max_seconds_by_kind`). A table's pass holds its first check a day out (`TaskQueue.schedule_first`, refused while one
+  is held; the audit holds a missing one the same way). A raise moves the floor only once the table's pass cleans
+  beneath it, so while a raise stands above the floor (`floor.raise_stands`) the pass cleans from the first reclaimable
+  version rather than from `minVersionsToExpire`.
 - **Three Lance file classes look like orphans and are not.** A scan that names any of them would
   drive a reclaimer into live data, and all three were found by running against a real estate, not by
   reading the layout doc: `_refs/tags/*.json` are TAGS, which PIN versions (`cleanup_old_versions`
@@ -987,7 +1001,9 @@ governing their data. The project-scoped surface is the console's project page, 
   forever: `cleanup_old_versions` lists those two directories only up to the floor. `data/` and
   `_indices/` are listed past it (lance #8944 for `data/`, pylance 13.0.0), so an unreferenced data or
   index file is Lance's own to reclaim once it is 7 days old; `orphans._LISTED_PAST_THE_FLOOR_KINDS`
-  classifies by that, and the floor raise (`floor.py`, [[LH-094]]) acts only for the floor-bound kinds.
+  classifies by that, and the floor raise (`floor.py`, [[LH-094]]) acts only for the floor-bound kinds. A table carrying
+  the raise's stamp (`floor.FLOOR_KEY`) is raised again only once its floor has moved past the stamp (measured
+  2026-11-10 on pylance 13.0.0: a second raise over a moved floor, then one cleanup, removed the file stranded since).
   The cost of #8944: a vended-credential writer that stages fragments and commits more than 7 days later
   loses them to the `cleanup_old_versions` a table's pass runs.
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
@@ -1005,11 +1021,10 @@ governing their data. The project-scoped surface is the console's project page, 
 - Maintenance covers EVERY warehouse bucket, not a static list (#81): a table's pass runs only on a table in a bucket
   it governs, read per task (`table_pass.governs`: `s3_bucket` + `MAINTENANCE_S3_EXTRA_BUCKETS`, or a bucket
   `warehouse_records.maintainable_buckets(registry)` names, so not a deactivated warehouse's; an unreadable registry
-  decides nothing and the pass is tried again after `retrySeconds`), and the scan's floor raise names tables across
-  the same set (`plan.buckets_to_sweep`) — a bucket is created by an API CALL at runtime, so a
-  config-time list goes stale by construction. The orphan scan reads the same registry
-  (`_scannable_buckets`), reporting an `IncompleteScan` rather than silently narrowing when it is
-  unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).
+  decides nothing and the pass is tried again after `retrySeconds`), and a table's orphan check asks the same
+  `governs` — a bucket is created by an API CALL at runtime, so a config-time list goes stale by construction. The daily
+  scan's storage walk reads the same registry (`_scannable_buckets`, a deactivated warehouse's bucket included),
+  reporting an `IncompleteScan` rather than silently narrowing when it is unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).
 - **Lance's cleanup leaves every non-root base alone, so maintenance reclaims a table's data directories
   itself** ([[LH-286]], `maintenance.services.base_reclaim`). `cleanup_old_versions` is ROOT-SCOPED: measured
   on pylance 13.0.0, after an overwrite of a table whose fragments sit on a data base, `cleanup_old_versions(older_than=0,
@@ -1074,19 +1089,18 @@ governing their data. The project-scoped surface is the console's project page, 
   override it. Tags are not the check; the trash record is.
   **Every maintenance writer reads the record itself** ([[LH-449]]). A table's pass asks `trash.keeps` by the task's
   uuid before it opens anything, and a table the trash keeps gets no pass and no next time, its branches with it
-  (`table_pass.run_table_pass`, ended `trashed`), its own trash task deciding what follows. The listing-floor pass asks
-  `floor.why_in_trash` before its cap (`floorRaiseMaxPerTick`) and before any open, vend or commit: it holds a record to
-  cover its table and every dataset under it, so a branch the scan lists at `<table>/tree/<branch>` is frozen with its
-  table, and an unreadable trash index stops the floor pass for that scan. The vend door's describe is not this gate:
+  (`table_pass.run_table_pass`, ended `trashed`), its own trash task deciding what follows. A table's orphan check asks
+  the same `trash.keeps` before it opens anything, and a trashed table is checked no more, so the listing-floor raise it
+  makes never writes to a trashed table. The vend door's describe is not this gate:
   a Lance commit is a put-if-not-exists on the store, so a writer holding any credential could commit.
-  `why_in_trash` compares every location as the path it decodes to
+  The storage walk (`reconcile._trashed_keys`) and the trash purge compare a record's location as the path it decodes to
   (`base_refs.decoded_path`, [[LH-318]]): a record holds the location `describe_table` answered, which
   percent-encodes a registered location (`…/r%C3%A4ksm%C3%B6rg%C3%A5s`), while discovery lists the decoded
   directory the store keeps (`…/räksmörgås`) and an event names the encoded one.
   **Every other maintenance reader of a location the catalog records reads it the same way** ([[LH-319]]). A
   location maintenance holds is a store key, compared as listed: discovery's, the `__manifest`'s, and a table task's,
   whose pass finds the table's claim at the task's location (the claim's own, or a write event's `dataSource` URL) and
-  then reads that location as the key it decodes to (`table_pass._held_location`), so its table id, policy, cadence
+  then reads that location as the key it decodes to (`table_pass.held_location`), so its table id, policy, cadence
   stamp and vend check are every reader's own. A location the catalog recorded is a URL, read once as the key it decodes to. That covers:
   - the purge, which reclaims a trashed table under the key its record decodes to and the `.lance-reserved` marker
     pylance 13 writes under the spelling, both from `lakehouse.table_paths.spellings`, deleting by key
@@ -1110,7 +1124,7 @@ governing their data. The project-scoped surface is the console's project page, 
   **MAINTENANCE NAMES A DATASET BY `__manifest` ALONE** ([[LH-520]], `maintenance.services.naming.TableIds.table_of`):
   the row whose location it is, or whose table it is a branch of. It parses no name out of a path and reads no
   `lineage.dataset_id` stamp. A dataset no row names is refused `unnamed` by its table's pass (`table_pass._unnamed`:
-  reported by its location, never expired or vended), refused by the floor pass, and reported by the reconciler as an
+  reported by its location, never expired or vended), checked by no orphan check (`unnamed`), and reported by the reconciler as an
   `UnregisteredDataset` by location.
 
   **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** No maintenance reader

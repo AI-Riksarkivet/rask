@@ -248,3 +248,67 @@ events in production rest on an attestation nothing checks; the queue has no ope
 or cancel; and four of the worker's recovery paths (a refused enqueue of a fired schedule, a refused hold of an ended
 task's next try, a fetch and a settle the bus fails) have no test, since each needs one request to fail on a real bus
 and the lane's link can only cut a whole connection. Each is the second and third change's.
+
+## Amendment, 2026-11-10: each table's orphan check is its own task ([[LH-494]], #638)
+
+The daily scan walked every table's files inside one task, so it grew with the estate, and a scan past twice its bound
+ended its replica on every delivery, after which neither the listing floors nor the purge ran. Decided by the owner
+through the multi-question tool, 2026-11-09 and 2026-11-10:
+
+- **Each table's orphan check is its own task, on an adaptive cadence with a one-day floor** (2026-11-09). An `orphans`
+  task per table (`maintenance.task.orphans.<uuid>`, held on `maintenance.schedule.orphans.<uuid>`) takes its table's
+  claim (`table.<uuid>`), so it never runs beside the table's pass or another check of it. It applies the pass's guards
+  with the pass's keyed reads, scans the table's main dataset, raises the listing floor on its own findings, and holds
+  its next check. Its bound is its own (`maintenance.orphanCheck.maxSeconds`), and a table whose live versions
+  reference more files than one scan probes is excluded, as one past 500 versions is.
+- **The ceiling is 30 days and configurable** ("30 days is fine", 2026-11-10): `maintenance.orphanCheck.ceilingDays`,
+  at least 1. The floor F is fixed at a day.
+- **The rule.** Stranded or undecided files hold the next check at F; a raised floor at max(F, the table's retention +
+  a day), since the floor moves only once a pass cleans the manifests beneath the raise; a clean check, or one finding
+  only files Lance reclaims itself, doubles the interval it ran at up to C; an excluded table, or a bucket maintenance
+  does not govern, waits C; a table no `__manifest` row names waits F; a table gone or in the trash is checked no more;
+  a failed read raises, the worker retries, and a check it ends is held again at F. The interval rides the schedule's
+  body (`Task.interval_hours`): a lost schedule means the table is checked at F again. A table's pass holds its first
+  check a day out unless one is held (a publish expecting the schedule's subject empty), and the hourly audit holds
+  one, a jittered time within a day out, for every live table holding neither a check's schedule nor a queued check.
+- **The purge's gate is the drift report only** ("Drift report only", 2026-11-10). The gate lost the orphan files'
+  blocking count, the scan's `storage:datasets` incomplete source, its unavailable category and the coverage-gap skip.
+  None protected a trashed table's bytes: the purge deletes only under the trashed location, by key, and refuses a
+  location a live table equals, contains or sits inside; another live table's unreferenced files sit under that table's
+  own prefix, and a table reading through the trashed one is excluded from any scan by its base-path flag and protected
+  by the clone tag and the base registry instead. Read from the code, the orphan part could also block the purge for
+  good: a trashed table holding a stranded file (no pass and no raise touches a trashed table), an unnamed dataset with
+  stranded residue, and a dataset whose raise stamp refused every later raise. The daily scan keeps the storage walk
+  (discovery, `unregistered_datasets`, `absent_datasets` and the walk's own incomplete notes, which still gate) and the
+  purge, which consumes the report its own run produced; the gate refuses a report whose run walked no storage.
+- **No stored per-table result and no per-bucket storage totals** ("Drop it, log per table", 2026-11-10): each check
+  logs one `maintenance_orphan_check` line (the table, the outcome, counts and bytes by orphan class, the reason when
+  excluded, the interval chosen) and counts `maintenance.orphans.checks` by outcome and `maintenance.orphans.stranded`.
+- **What stays excluded**: tables with branches, MemWAL, an unsupported flag or files through a base. The scan subtracts
+  the main branch's references from a listing, which those layouts break; a branch-aware check is not built.
+
+Two fixes every per-table check needed. A file the store cannot place before the scan began reading its referenced set
+is no finding, since a commit landing during the check writes files that look stranded and age is the only evidence an
+unverified file has (`lance_docs/lance/guide/read_and_write.md:564-571`). And a table carrying the raise's stamp is raised
+again once its floor has moved past the stamp, instead of never again; the stamp carries the epoch to the fraction, so a
+manifest written earlier in the stamp's second cannot read as having passed it.
+
+Measured 2026-11-10 on pylance 13.0.0 (one unreferenced file planted in each directory an hour either side of the floor,
+one cleanup with `delete_unverified=True`): `data/` and `_indices/` files above the floor removed, `_transactions/` and
+`_deletions/` ones kept, every one below it removed. A floor raised a second time, over a floor that had moved past the
+first raise, made one cleanup remove the transaction file stranded after the first raise.
+
+Not measured, and stated: the per-table request count on a real store; how long a check of the estate's largest table
+takes against `orphanCheck.maxSeconds`.
+
+A table's pass cleans only once `maintenance.minVersionsToExpire` versions are reclaimable (20 by default), which on a
+table with fewer would leave a raise without the cleanup it was written for. So while a raise stands above the floor
+(`floor.raise_stands`: the stamp is later than the earliest retained manifest) the pass cleans from the first
+reclaimable version, under the table's own retention as ever.
+
+Review, 2026-11-10 (two reviewers, twelve findings, all fixed in the change). The ones that changed the design: the
+gate refuses a report whose run walked no storage, since such a report carries none of the walk's notes and the dropped
+coverage-gap skip had been the only thing refusing it; a check lists its table a page at a time and excludes one past
+100,000 listed files, since a ceiling on the referenced files alone does not see what a writer that never commits
+leaves (measured: 1.4 KiB held per unreferenced file); and the audit holds a missing check only where none is held
+(`schedule_first`), so it cannot replace the next time a check that fired meanwhile has just held.

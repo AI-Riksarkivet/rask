@@ -982,24 +982,36 @@ async def test_an_idle_worker_stops_and_closes_its_connection_at_once(tmp_path: 
     assert took is not None and took < 10, f"an idle worker took {took:.1f} s to stop and close"
 
 
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        pytest.param(Task(kind="audit"), Task(kind="scan"), id="the-audit-and-the-scan"),
+        pytest.param(
+            Task(kind="table", uuid="shared", location="s3://bucket/shared"),
+            Task(kind="orphans", uuid="shared", location="s3://bucket/shared"),
+            id="a-tables-pass-and-its-orphan-check",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_the_audit_and_the_scan_never_run_at_once(tmp_path: Path) -> None:
-    """The audit and the scan each repair the estate from a drift report of their own, so one waits out the other's claim
-    while it runs, on two replicas, and runs once it is done."""
+async def test_two_tasks_holding_one_claim_never_run_at_once(tmp_path: Path, first: Task, second: Task) -> None:
+    """The audit and the scan each repair the estate from a drift report of their own, and a table's orphan check reads
+    the files its pass's cleanup deletes, so each pair holds one claim: one waits out the other's while it runs, on two
+    replicas, and runs once it is done."""
     tools, docs, mint_, broker = _the_bus(tmp_path)
     worker = mint_.credentials[_WORKER]
     runs = _Runs()
-    runs.held[""] = release = asyncio.Event()
+    runs.held[first.uuid] = release = asyncio.Event()
     replicas: list[_Replica] = []
     lane: TaskQueue | None = None
     try:
         await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
         lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        for name in ("audit-replica", "scan-replica"):
+        for name in ("first-replica", "second-replica"):
             replicas.append(await _Replica.start(broker.url, worker, name, runs, ready=lambda: True))
-        assert await lane.enqueue(Task(kind="audit")) is True
-        assert await lane.enqueue(Task(kind="scan")) is True
-        assert await _until(lambda: len(runs.ran) >= 1, 15), f"neither the audit nor the scan ran: {runs.ran}"
+        assert await lane.enqueue(first) is True
+        assert await lane.enqueue(second) is True
+        assert await _until(lambda: len(runs.ran) >= 1, 15), f"neither task ran: {runs.ran}"
         # The other's first delivery waits one ack wait for the claim, and comes back after its retry delay: nothing to poll
         # for while it must not run, and released before its second delivery, which a held claim would give back again.
         await asyncio.sleep(3 * _ACK_WAIT)
@@ -1014,7 +1026,7 @@ async def test_the_audit_and_the_scan_never_run_at_once(tmp_path: Path) -> None:
                 await lane.close()
         finally:
             broker.stop()
-    assert len(beside) == 1, f"the audit and the scan ran at once: {beside}"
+    assert len(beside) == 1, f"two tasks holding one claim ran at once: {beside}"
 
 
 @pytest.mark.asyncio
@@ -1181,3 +1193,99 @@ async def test_a_task_whose_claim_the_bus_does_not_answer_is_held_until_it_is_an
         f"the task did not run once its claim was answered: {runs.ran} {replica.ended if replica else None}"
     )
     assert redelivered == 0, f"the unanswered claim spent {redelivered} of the task's deliveries"
+
+
+@pytest.mark.asyncio
+async def test_an_orphan_check_is_bounded_by_its_own_bound_and_a_pass_by_the_pass_bound(tmp_path: Path) -> None:
+    """Each kind's bound is its own (`maintenance.orphanCheck.maxSeconds` for a check, `maintenance.queue.maxPassSeconds`
+    for the others): a check that runs past twice its bound ends its replica, while a pass running as long is within
+    its own."""
+    tools, docs, mint_, broker = _the_bus(tmp_path)
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    ended: list[str] = []
+    queue: TaskQueue | None = None
+    lane: TaskQueue | None = None
+    loops: list[asyncio.Task[None]] = []
+    passing, checking = (
+        Task(kind="table", uuid="passing", location="s3://bucket/passing"),
+        Task(kind="orphans", uuid="checking", location="s3://bucket/checking"),
+    )
+    runs.held["passing"] = passed = asyncio.Event()
+    runs.held["checking"] = asyncio.Event()
+
+    def ends_its_process(event: str, **extra: object) -> NoReturn:
+        ended.append(f"{event} {extra.get('subject')}")
+        for loop in loops:
+            loop.cancel()
+        raise _Ended(event)
+
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        queue = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="bounded")
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        replica = Worker(
+            queue,
+            run=runs.of("bounded"),
+            ready=lambda: True,
+            heartbeat_seconds=_HEARTBEAT,
+            ack_wait_seconds=_ACK_WAIT,
+            max_deliver=_MAX_DELIVER,
+            max_pass_seconds=600,
+            max_seconds_by_kind={"orphans": 1},
+            retry_ended_seconds=3600,
+            end_process=ends_its_process,
+        )
+        loops.append(asyncio.create_task(replica.run_tasks()))
+        assert await lane.enqueue(passing) is True
+        assert await _until(lambda: runs.times("passing") == 1, 15), f"the pass never ran: {runs.ran}"
+        # Past twice the check's bound, inside the pass's: nothing to poll for while the pass must run on.
+        await asyncio.sleep(4)
+        alive = list(ended)
+        passed.set()
+
+        async def pass_done() -> bool:
+            return "passing" not in await lane.held("task", "table")
+
+        assert await _until(pass_done, 15), "the pass was never acknowledged"
+        assert await lane.enqueue(checking) is True
+        assert await _until(lambda: bool(ended), 15), f"the check ran past twice its bound and its replica lived on: {runs.ran}"
+    finally:
+        try:
+            for loop in loops:
+                loop.cancel()
+            await asyncio.gather(*loops, return_exceptions=True)
+            for client in (queue, lane):
+                if client is not None:
+                    await client.close()
+        finally:
+            broker.stop()
+    assert (alive, ended) == ([], [f"maintenance_task_hung {checking.subject('task')}"])
+
+
+@pytest.mark.asyncio
+async def test_a_tables_first_check_is_held_once_and_a_held_one_keeps_its_time(tmp_path: Path) -> None:
+    """A table's pass holds its check only where none is held (`TaskQueue.schedule_first`): a second hold is refused and
+    the first one's time stands, so a check's own interval is never replaced by a pass's."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    worker = mint_.credentials[_WORKER]
+    lane: TaskQueue | None = None
+    rig: Client | None = None
+    check = Task(kind="orphans", uuid="first-check", location="s3://bucket/first-check")
+    soon, later = datetime.now(UTC) + timedelta(hours=1), datetime.now(UTC) + timedelta(days=1)
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        holds = [await lane.schedule_first(check, soon), await lane.schedule_first(check, later)]
+        held = _held_at(await rig.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": check.subject("schedule")}))
+        covered = "first-check" in await lane.held("schedule", "orphans")
+    finally:
+        try:
+            for client in (lane, rig):
+                if client is not None:
+                    await client.close()
+        finally:
+            broker.stop()
+    assert (holds, covered) == ([True, False], True)
+    assert held is not None and abs((held - soon).total_seconds()) < 1, f"the held check's time was replaced: {held}"

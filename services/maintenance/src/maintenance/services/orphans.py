@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import logging
 import posixpath
+import time
+from collections.abc import Iterator
 
 import lance
 import pyarrow.fs as pafs
@@ -55,6 +57,7 @@ from pydantic import BaseModel, Field
 from lakehouse.features import unsupported_features, unsupported_features_from_open_error
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.storage_options import StorageOptions
+from lakehouse.stored_objects import iter_under
 from maintenance.core.config import shared_lance_session
 
 
@@ -71,6 +74,22 @@ class _OverlaysPresent(Exception):
             "referenced from DataFragment.overlays, not data_files(), so scanning would report live "
             "cell values as reclaimable."
         )
+
+
+class _FilesPastTheCeiling(Exception):
+    """A dataset's live versions reference more files than one scan probes (:data:`_MAX_REFERENCED_FILES`)."""
+
+    def __init__(self, dataset_uri: str, files: int) -> None:
+        super().__init__(
+            f"{dataset_uri}: {files} referenced files exceed the {_MAX_REFERENCED_FILES}-file ceiling, so its unreferenced files were not looked for"
+        )
+
+
+class _ListingPastTheCeiling(Exception):
+    """More files lie under a dataset than one scan lists (:data:`_MAX_LISTED_FILES`)."""
+
+    def __init__(self, dataset_uri: str) -> None:
+        super().__init__(f"{dataset_uri}: more than {_MAX_LISTED_FILES} files lie under it, past the listing ceiling, so its unreferenced files were not named")
 
 
 class _HistoryPastTheCeiling(Exception):
@@ -108,14 +127,22 @@ _MEM_WAL_DIR = "_mem_wal"
 _RESERVED_MARKER = ".lance-reserved"
 
 #: Ceiling on versions inspected per dataset. A table with a very long history would otherwise make
-#: one report O(versions x fragments) — and this pass runs over every dataset in every bucket.
-#: A dataset past it is EXCLUDED before any version is read, and named in `OrphanReport.excluded`;
-#: it is never walked in part, because a partial referenced set would mark live files as orphans, the
-#: single most dangerous way this pass can be wrong. Excluded rather than incomplete, so it never gates
-#: the purge: the ceiling bounds cost and hides no dataset (the dataset opened, and the purge's base-reference
-#: pre-pass reads it on its own), and the tables it reaches are the busy ones, whose expiry keeps raising
-#: the listing floor that floor-bound residue waits behind.
+#: one scan O(versions x fragments). A dataset past it is EXCLUDED before any version is read; it is
+#: never walked in part, because a partial referenced set would mark live files as orphans, the single
+#: most dangerous way this pass can be wrong. The tables it reaches are the busy ones, whose expiry keeps
+#: raising the listing floor that floor-bound residue waits behind.
 _MAX_VERSIONS = 500
+
+#: Ceiling on the files one scan probes: every exact path the live versions reference is asked for by one batched call,
+#: which fans out as one HEAD per file, so a table holding more is EXCLUDED, like one past :data:`_MAX_VERSIONS`, before
+#: its probe or its listing, and a huge table does not hold a replica past its bound.
+_MAX_REFERENCED_FILES = 50_000
+
+#: Ceiling on the files one scan lists under a dataset, read a page at a time and never held whole: a table past it is
+#: EXCLUDED. Without it a writer that crash-loops, leaving files and committing nothing, grows a listing no ceiling on
+#: the REFERENCED files sees, and the findings it becomes (measured 2026-11-10: 1.4 KiB a file held, 239 MiB for
+#: 200,000) end the worker at its memory limit on every delivery.
+_MAX_LISTED_FILES = 100_000
 
 #: The kinds `cleanup_old_versions` lists PAST the listing floor (lance v13.0.0 `cleanup.rs:764-777`):
 #: `data/` through `max(floor, now - 7 days)` since lance #8944, `_indices/` with no cutoff. An
@@ -138,10 +165,9 @@ class OrphanFile(BaseModel):
     #: data or index file); False when it is a floor-bound kind above the listing floor and no Lance call
     #: will ever enumerate it; None when the floor could not be read.
     #:
-    #: The distinction is what makes the purge gate meaningful. Measured on the deployed estate
-    #: 2026-09-18, `orphan_files` fell 1011 -> 32 in ten minutes as the ordinary sweep took 979 files at
-    #: the +7-day anniversary of the writes that made them — so a gate that counts both classes together
-    #: blocks the trash purge on a number that clears itself, and only the residue is a real finding.
+    #: The distinction is what makes a finding actionable. Measured on the deployed estate 2026-09-18,
+    #: the orphan count fell 1011 -> 32 in ten minutes as the ordinary sweep took 979 files at the
+    #: +7-day anniversary of the writes that made them, so only the residue is a real finding.
     reclaimable_by_lance: bool | None = None
     #: The file's own mtime as an epoch, which is what the floor is compared against. Kept on the
     #: finding so the classification is reproducible from the report alone, without re-listing.
@@ -157,14 +183,8 @@ class DatasetOrphanScan(BaseModel):
     orphans: list[OrphanFile] = Field(default_factory=list)
     versions_scanned: int = 0
     reason: str | None = None
-    #: EVERY file under the dataset prefix, not just the orphans — the storage this dataset occupies.
-    #: Free: the scan already lists them with sizes to find orphans at all, and summing the same pass
-    #: costs no extra I/O. Zero when `checked` is False, for the reason `orphans` is empty there.
-    total_bytes: int = 0
-    total_files: int = 0
-    #: TRUE when the scan does not examine this dataset and its omission hides nothing the purge relies
-    #: on, as opposed to a scan that tried and failed. Only the second is a partial answer, and only the
-    #: second may block reclamation (`purge.report_is_clean`). Two kinds are excluded:
+    #: TRUE when the scan does not examine this dataset BY RULE, as opposed to a scan that tried and
+    #: failed. Only the second is a partial answer, which a later try may complete. Two kinds are excluded:
     #:
     #: * a layout the orphan method does not APPLY to. The spec is what makes these permanent rather
     #:   than merely sticky. `lance_docs/lance/format/table/versioning.md` § Feature Flags: a reader seeing a flag it does not know
@@ -173,37 +193,9 @@ class DatasetOrphanScan(BaseModel):
     #:   MANIFEST, so the refusal clears when this code learns base_paths and never on a later tick.
     #:   Measured 2026-09-08: 419 of the estate's 490 incomplete notes were that refusal, and
     #:   `incomplete` held at exactly 490 across a day in which the finding total moved.
-    #: * a history past :data:`_MAX_VERSIONS`, which bounds cost and hides no dataset.
-    #:
-    #: Mirrors `CategorySkipped.coverage_gap`, which draws the same line one layer up.
+    #: * a history past :data:`_MAX_VERSIONS`, more referenced files than :data:`_MAX_REFERENCED_FILES`, or more
+    #:   listed files than :data:`_MAX_LISTED_FILES`, which bound cost.
     excluded: bool = False
-
-
-class OrphanReport(BaseModel):
-    """Unreferenced files across every scanned dataset. Machine-readable so a later reclaimer can
-    consume exactly what a human already reviewed."""
-
-    datasets_scanned: int = 0
-    datasets_unreadable: int = 0
-    #: Datasets the scan does not examine and whose omission hides nothing (`DatasetOrphanScan.excluded`).
-    datasets_excluded: int = 0
-    orphans: list[OrphanFile] = Field(default_factory=list)
-    #: Bytes and files under each SCANNED dataset — the storage it occupies, not its orphans
-    #: ([[LH-074]]). Keyed by dataset URI so a caller can roll up by whatever it knows: the bucket is
-    #: a prefix of the key, and the warehouse registry maps a bucket to its project. Unreadable and
-    #: excluded datasets are absent rather than zero, so a roll-up cannot report a partial estate as
-    #: a small one.
-    bytes_by_dataset: dict[str, int] = Field(default_factory=dict)
-    files_by_dataset: dict[str, int] = Field(default_factory=dict)
-    #: Sources that answered PARTIALLY — an unreadable manifest, an unlistable prefix. Named so the reader
-    #: knows which findings to distrust rather than assuming completeness. **This list gates the
-    #: purge** (`purge.report_is_clean`), so only a scan that TRIED and failed belongs in it.
-    incomplete: list[str] = Field(default_factory=list)
-    #: Datasets EXCLUDED, by their own shape or by a history past the version ceiling — reported so "we
-    #: correctly skipped 419" stays visible and distinguishable from "we scanned everything", without
-    #: claiming the estate was half-inspected.
-    excluded: list[str] = Field(default_factory=list)
-    total: int = 0
 
 
 def _kind_of(rel_path: str) -> str:
@@ -510,6 +502,12 @@ def listed_at_or_below(mtime_epoch: float, floor: float) -> bool:
     return latest <= floor
 
 
+def surely_before(mtime_epoch: float, instant: float) -> bool:
+    """Whether a file listed at ``mtime_epoch`` was surely modified before ``instant``: a whole-second mtime may be a
+    listing that dropped the fraction, so the file's own mtime lies anywhere in that second."""
+    return mtime_epoch + 1 <= instant if mtime_epoch.is_integer() else mtime_epoch < instant
+
+
 def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: StorageOptions | None = None) -> DatasetOrphanScan:
     """List one dataset's files and subtract what any live version references.
 
@@ -521,11 +519,19 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     A dataset that cannot be READ yields ``checked=False`` and NO orphans. That distinction is the
     whole safety property: "we could not determine the referenced set" must never render as "none of
     these files are referenced", which is the shape that would delete a live table.
+
+    A file the store cannot place before the instant the referenced set began to be read is no finding: a commit
+    landing while the scan reads writes its files after that instant, and they look unreferenced. Age is the only
+    evidence an unverified file has (`lance_docs/lance/guide/read_and_write.md:564-571`), so a file is an orphan only
+    when its mtime, listed to the whole second or not, lies surely before that instant (:func:`surely_before`).
     """
+    read_at = time.time()
     try:
         ds = open_dataset(dataset_uri, storage_options)
         referenced, versions, note = referenced_paths_of(ds, dataset_uri)
-    except (_OverlaysPresent, _HistoryPastTheCeiling) as exc:
+        if (files := sum(1 for rel in referenced if not rel.endswith("/"))) > _MAX_REFERENCED_FILES:
+            raise _FilesPastTheCeiling(dataset_uri, files)
+    except (_OverlaysPresent, _HistoryPastTheCeiling, _FilesPastTheCeiling) as exc:
         # Exclusions that arrive as exceptions because the walk is where they become visible: an overlay
         # by shape, a history by its length. Their own clause, so they are not sorted with the opens that
         # merely failed.
@@ -559,12 +565,40 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     if note:
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=note)
 
-    orphans: list[OrphanFile] = []
     try:
-        entries = fs.get_file_info(pafs.FileSelector(prefix, allow_not_found=True, recursive=True))
+        orphans = _unreferenced(
+            _listed(fs, dataset_uri, prefix=prefix, storage_options=storage_options), referenced, dataset_uri, prefix=prefix, read_at=read_at
+        )
+    except _ListingPastTheCeiling as exc:
+        log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": str(exc)})
+        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=str(exc), excluded=True)
     except Exception as exc:
         log.warning("orphan_listing_failed", extra={"dataset": dataset_uri, "error": str(exc)})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=f"listing failed: {exc}")
+    _classify_against_floor(orphans, ds, dataset_uri)
+    return DatasetOrphanScan(dataset=dataset_uri, checked=True, orphans=orphans, versions_scanned=versions)
+
+
+def _listed(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: StorageOptions | None) -> Iterator[tuple[str, int, float]]:
+    """Every file under the dataset as ``(path, size, mtime epoch)``, the path as ``prefix`` spells its root. On S3 a
+    page at a time through the object client, so a listing past the ceiling is abandoned unread."""
+    if dataset_uri.startswith("s3://") and storage_options is not None:
+        for stored in iter_under(f"s3://{prefix}", storage_options):
+            if not stored.path.endswith("/"):
+                yield stored.path, stored.size, stored.modified.timestamp()
+        return
+    for info in fs.get_file_info(pafs.FileSelector(prefix, allow_not_found=True, recursive=True)):
+        if info.type == pafs.FileType.File:
+            yield info.path, info.size or 0, info.mtime.timestamp() if info.mtime is not None else 0.0
+
+
+def _unreferenced(listed: Iterator[tuple[str, int, float]], referenced: set[str], dataset_uri: str, *, prefix: str, read_at: float) -> list[OrphanFile]:
+    """The listed files no live version references and the store places surely before ``read_at``.
+
+    Raises:
+        _ListingPastTheCeiling: more than :data:`_MAX_LISTED_FILES` files were listed.
+    """
+    orphans: list[OrphanFile] = []
 
     # Every referenced DIRECTORY — a data file's blob sidecar, an index segment — matched by prefix
     # rather than exactly, because what is referenced is the directory and its whole contents.
@@ -574,14 +608,10 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     # dataset, on the same hot path as the probe batching above (the audit's HOUSE-RULE-16 addendum).
     referenced_dirs = tuple(d for d in referenced if d.endswith("/"))
 
-    total_bytes = 0
-    total_files = 0
-    for info in entries:
-        if info.type != pafs.FileType.File:
-            continue
-        total_bytes += info.size or 0
-        total_files += 1
-        rel = posixpath.relpath(info.path, prefix)
+    for count, (path, size, mtime) in enumerate(listed, start=1):
+        if count > _MAX_LISTED_FILES:
+            raise _ListingPastTheCeiling(dataset_uri)
+        rel = posixpath.relpath(path, prefix)
         if rel in referenced:
             continue
         # ...or it sits under a referenced directory: a data file's blob sidecar, an index segment.
@@ -592,45 +622,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         # explicitly disposable. Reporting either every run would bury the findings that matter.
         if rel.startswith(f"{_VERSIONS_DIR}/") or rel.startswith(f"{_REFS_DIR}/") or rel == _RESERVED_MARKER:
             continue
-        orphans.append(
-            OrphanFile(
-                dataset=dataset_uri,
-                path=rel,
-                kind=_kind_of(rel),
-                size_bytes=info.size or 0,
-                mtime_epoch=info.mtime.timestamp() if info.mtime is not None else 0.0,
-            )
-        )
-
-    _classify_against_floor(orphans, ds, dataset_uri)
-    return DatasetOrphanScan(dataset=dataset_uri, checked=True, orphans=orphans, versions_scanned=versions, total_bytes=total_bytes, total_files=total_files)
-
-
-def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_options: StorageOptions | None = None) -> OrphanReport:
-    """Run :func:`scan_dataset` over ``(dataset_uri, prefix)`` pairs and aggregate.
-
-    Three outcomes, and the reason they are three rather than two is that only ``incomplete`` blocks
-    reclamation: a dataset that could not be READ hides what its manifest says and can be read on a
-    later tick, while an excluded one (a layout the method does not APPLY to, a history past the
-    version ceiling) hides nothing, so folding the second into the first freezes the purge gate shut.
-    Neither silently reduces the orphan count — "we could not look", "we did not look, by rule" and
-    "there was nothing there" stay distinguishable in the report.
-    """
-    report = OrphanReport()
-    for dataset_uri, prefix in datasets:
-        result = scan_dataset(fs, dataset_uri, prefix=prefix, storage_options=storage_options)
-        if result.checked:
-            report.datasets_scanned += 1
-            report.orphans.extend(result.orphans)
-            report.bytes_by_dataset[dataset_uri] = result.total_bytes
-            report.files_by_dataset[dataset_uri] = result.total_files
+        if not surely_before(mtime, read_at):
             continue
-        reason = result.reason or f"{dataset_uri}: unreadable"
-        if result.excluded:
-            report.datasets_excluded += 1
-            report.excluded.append(reason)
-            continue
-        report.datasets_unreadable += 1
-        report.incomplete.append(reason)
-    report.total = len(report.orphans)
-    return report
+        orphans.append(OrphanFile(dataset=dataset_uri, path=rel, kind=_kind_of(rel), size_bytes=size, mtime_epoch=mtime))
+    return orphans

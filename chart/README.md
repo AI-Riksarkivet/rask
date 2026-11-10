@@ -152,16 +152,17 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.driftRepairDryRun | bool | `true` | Plan and report drift repair without deleting any tuple. Defaults true. |
 | maintenance.driftRepairMaxPerTick | int | `50` | Maximum objects drift repair revokes per reconcile tick; the remainder is reported as capped and taken next tick. |
 | maintenance.enabled | bool | `true` | Deploy the maintenance service (its worker, the hourly audit and the write-event lane). |
-| maintenance.floorRaise | bool | `false` | Write one metadata-only commit per stranded dataset to raise its Lance listing floor so residue becomes reclaimable. Off by default. |
+| maintenance.floorRaise | bool | `false` | Write one metadata-only commit per stranded table, from its own orphan check, to raise its Lance listing floor so residue becomes reclaimable. Off by default. |
 | maintenance.floorRaiseDryRun | bool | `true` | Plan and report floor raises without committing. Defaults true; set false to commit once `floorRaise` is on. |
-| maintenance.floorRaiseMaxPerTick | int | `10` | Maximum datasets the floor raise commits to per tick; the remainder is reported as capped. |
 | maintenance.lineageEmit | bool | `true` | Emit a lineage event per dataset whose versions a pass reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names. |
 | maintenance.minVersionsToExpire | int | `20` | Expiry runs on a table only once it has at least this many reclaimable versions. |
 | maintenance.olderThanDays | int | `7` | Days of version history kept by old-version GC. |
-| maintenance.orphanScan | bool | `true` | Run the reconciler's per-dataset unreferenced-file scan; read-only, and required for `trashPurge` to certify a clean report. |
+| maintenance.orphanCheck.ceilingDays | int | `30` | The longest a clean or an excluded table goes between two orphan checks, in days: a clean table's interval doubles up to it, and an excluded table waits it. A table whose floor was raised waits its retention and a day, whatever this says. |
+| maintenance.orphanCheck.enabled | bool | `true` | Run each table's orphan check; off, none is scheduled and one already held ends when it fires. |
+| maintenance.orphanCheck.maxSeconds | int | `1800` | One orphan check's bound, in seconds, as `queue.maxPassSeconds` is a pass's: past it the check is counted (`maintenance.passes.overran`, kind orphans), and at twice it its replica exits. |
 | maintenance.port | int | `8000` | HTTP port of the maintenance container. |
 | maintenance.queue.ackWaitSeconds | int | `60` | Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it. A worker whose heartbeats the bus stops answering ends itself before the ack wait its last answered heartbeat restarted runs out, so its pass never runs beside the next. |
-| maintenance.queue.auditSchedule | string | `"@hourly"` | The audit's NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs and the lost-task backstop, once per firing on one replica. |
+| maintenance.queue.auditSchedule | string | `"@hourly"` | The audit's NATS message schedule (ADR-51): the drift report without the storage walk, its repairs and the lost-task backstop, once per firing on one replica. |
 | maintenance.queue.commitPassDelaySeconds | int | `300` | How long the first commit of a burst holds its table's pass: the most often commits pass a table, each pass covering every commit before it. |
 | maintenance.queue.drainSeconds | int | `90` | How long a stopping worker lets its running task finish, inside its pod's `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain. The render refuses a drain the grace cannot hold after preStop and the teardown, and the worker pod's sidecar blocks its shutdown for the grace less the teardown, which holds it. |
 | maintenance.queue.heartbeatSeconds | int | `20` | How often a running task tells JetStream it is still being worked on; well inside `ackWaitSeconds`. |
@@ -169,7 +170,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.queue.maxPassSeconds | int | `1800` | A pass running longer than this is logged and counted; at twice this its replica exits, Kubernetes restarts it, and the task is delivered again. |
 | maintenance.queue.recheckHours | int | `24` | The longest a table goes without a pass: what bounds a lost commit event, and the versions a deleted tag or branch releases. |
 | maintenance.queue.retrySeconds | int | `900` | When a pass that could not decide, or found the table's history held, is tried again. |
-| maintenance.queue.scanSchedule | string | `"0 30 0 * * *"` | The scan's NATS message schedule, a six-field cron (seconds first): the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim. |
+| maintenance.queue.scanSchedule | string | `"0 30 0 * * *"` | The scan's NATS message schedule, a six-field cron (seconds first): the audit with the storage walk, which lists every bucket's directories, then the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim. |
 | maintenance.queue.storeEventsMaxBytes | int | `134217728` | The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue. |
 | maintenance.replicas | int | `2` | Replicas of maintenance's web pods, which serve the write-event lane and run no worker. |
 | maintenance.tombstoneSweep | bool | `false` | Clear trash records whose bytes a probe proves are gone; deletes bookkeeping rows, never bytes. Off by default. |

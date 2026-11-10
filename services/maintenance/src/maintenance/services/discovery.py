@@ -1,7 +1,7 @@
 """Where the estate's Lance datasets are: a bounded walk of one bucket, and the prefixes it could not reach.
 
-Pure list-logic over a pyarrow filesystem, shared by a table's pass, the orphan scan (``reconcile.py``), the trash
-purge and the floor raise, so all of them cover the same datasets.
+Pure list-logic over a pyarrow filesystem: the drift report's storage walk (``reconcile.py``) lists each bucket's
+datasets with it.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ class Discovery(BaseModel):
     """What one bucket's walk found — AND what it did not reach.
 
     ``truncated`` keeps the depth bound from being silent: a dataset nested deeper than ``max_depth`` is
-    neither maintained by a pass nor scanned by the orphan pass, and a report over the datasets the
-    walk happened to reach would be the "0 that means we did not look" the orphan module forbids. A
+    never seen by the walk, and a report over the datasets the walk happened to reach would be the "0 that means we
+    did not look" the drift report forbids. A
     prefix the walk stopped at is DATA the caller must dispose of — the reconciler files an
     ``IncompleteScan``.
     """

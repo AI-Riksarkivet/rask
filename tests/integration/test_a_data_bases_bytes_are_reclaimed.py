@@ -55,7 +55,7 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.naming import claim_store, policy_owners
 from maintenance.services.plan import PlanContext
 from maintenance.services.purge import purge_expired_trash
-from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from maintenance.services.reconcile import CATEGORIES, ReconcileReport
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors, described_by, maintain_tier_door
 
 
@@ -195,9 +195,8 @@ def test_the_expiry_pass_reclaims_a_base_file_nothing_references(estate: _Estate
 def _clean_report() -> ReconcileReport:
     return ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
-        counts={category: 0 for category in CATEGORIES if category != "orphan_files"},
+        counts=dict.fromkeys(CATEGORIES, 0),
         total=0,
-        skipped=[CategorySkipped(category="orphan_files", reason="off")],
     )
 
 

@@ -173,13 +173,16 @@ def _due(table: str, table_uuid: str) -> DueRecord:
 
 
 class _RecordingQueue:
-    """The schedule a pass ends with, with `TaskQueue`'s signature, recorded."""
+    """The schedule a pass ends with, with `TaskQueue`'s signatures, recorded; the check it holds is another test's."""
 
     def __init__(self) -> None:
         self.held: list[tuple[Task, datetime]] = []
 
     async def schedule_at(self, task: Task, at: datetime) -> None:
         self.held.append((task, at))
+
+    async def schedule_first(self, task: Task, at: datetime) -> bool:
+        return True
 
 
 def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and_holds_its_next(estate: StorageOptions, maintenance: TestClient) -> None:

@@ -4,7 +4,7 @@ The commit lane queues the task when the catalog announces a table's drop (``dro
 the audit queues it for any record no task or schedule holds, a namespace's among them. The task holds itself until the
 record's deadline and :data:`lakehouse.trash.RELEASE_SETTLE` (a schedule), then asks the catalog to release this record
 alone (:func:`maintenance.services.trash_release.release_expired_trash`): the release deletes no byte, and the purge of
-the bytes stays the audit's, which the drift report certifies. A record gone by the time its task runs was undropped or
+the bytes stays the daily scan's, gated on the drift report that scan produced. A record gone by the time its task runs was undropped or
 ended; a table undropped stands again under the same uuid, so it gets a table task, as a table the catalog makes does.
 A drop that filed no record, a destructive one, leaves its task nothing to read past that.
 """

@@ -13,7 +13,10 @@ age filter, the flip is at the manifest timestamp to the second: -3600/-60/-1/0 
 +1/+60/+3600 s KEPT. `data/` and `_indices/` are listed past the floor (lance #8944 for `data/`), so an
 orphan there is Lance's whatever its mtime and never needs this pass; `orphans.py` classifies by kind.
 
-SO A TRANSACTION OR DELETION FILE ABOVE THE FLOOR IS PERMANENT, not late. A dataset collapsed to one
+SO A TRANSACTION OR DELETION FILE ABOVE THE FLOOR IS PERMANENT, not late. Re-measured 2026-11-10 on pylance 13.0.0
+(one unreferenced file planted in each directory an hour either side of the floor, one cleanup with
+`delete_unverified=True`): the `data/` and `_indices/` files above the floor were removed, the `_transactions/` and
+`_deletions/` ones kept, and every one below it removed. A dataset collapsed to one
 live version holds every such file written after that surviving commit forever, and nothing Lance
 offers will enumerate it. That is not a pathological case: **any** restore, re-upload or lifecycle
 rehydrate rewrites object mtimes above the manifest timestamps that reference them and recreates it
@@ -33,11 +36,13 @@ permit costs data.
 **A COMMIT ALONE DOES NOT MOVE THE FLOOR — the old manifests must then be CLEANED.** The floor is
 the EARLIEST RETAINED manifest, so a new version raises nothing until `cleanup_old_versions` drops the
 ones beneath it; the commit is what makes them droppable. That makes this raise USELESS on a dataset
-maintenance cannot maintain, and worse than useless, because the orphans stay stranded and every scan writes
+maintenance cannot maintain, and worse than useless, because the orphans stay stranded and every check writes
 another version. Measured on the deployed estate 2026-09-19: of the two stranded datasets, maintenance
 reclaimed `c6t115034-wh/medallion/bronze` (19 files gone, 32 -> 13) and REFUSED
 `m2proof_silver$m2-proof-1788537252` for want of a write credential, whose raise therefore ran twice.
-Both guards below exist for that measurement.
+So a table carrying :data:`FLOOR_KEY` is raised again only once its floor has moved past the stamp: then the cleanup
+has run beneath the last raise, and a file stranded since earns a raise of its own (measured 2026-11-10 on pylance
+13.0.0: a second raise over a moved floor, then one cleanup, removed the transaction file stranded after the first).
 
 THE COMMIT IS SIGNED BY A VENDED, TABLE-SCOPED CREDENTIAL, and a catalog denial REFUSES the raise.
 A config commit on a table the catalog refused, signed by whatever opened the dataset, is signed by the
@@ -58,17 +63,15 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import lance
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from lakehouse import base_refs, trash
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import shared_lance_session
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, write_options_for
-from maintenance.services.due import TableIds
 from maintenance.services.orphans import OrphanFile, listed_at_or_below
 
 
@@ -78,129 +81,27 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def trashed_locations(trash_records: list[dict[str, Any]]) -> dict[str, str]:
-    """``{decoded path: why}`` for every trash record naming bytes, each keyed as :func:`base_refs.decoded_path` reads it.
-
-    ONE LOCATION, TWO SPELLINGS ([[LH-318]]). A record holds the location `describe_table` answered, which
-    percent-encodes the table's name (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``, ``…$growth%25``), while the store keeps, and
-    discovery lists, the directory that spelling opens (``…$räksmörgås``, ``…$growth%``); measured on pylance 13.0.0,
-    `dir` backend, over moto and a local root. Keyed as spelled, a recoverably dropped table with such a name would
-    match no discovered dataset, and the pass would raise the floor of a table an undrop restores.
-
-    A trashed NAMESPACE record and a declared-only table both carry `location=""`, and the empty path is a prefix of
-    everything, so a record naming no location excludes nothing.
-    """
-    return {
-        base_refs.decoded_path(str(record["location"])): f"in trash as {record.get('id') or '?'} (expires_at={record.get('expires_at') or '?'})"
-        for record in trash_records
-        if record.get("location")
-    }
-
-
-def why_in_trash(uri: str, trashed_by_path: dict[str, str]) -> str | None:
-    """Why a trash record freezes ``uri``: the reason of the record naming its location or one holding it, else ``None``.
-
-    CONTAINMENT, NOT EQUALITY: discovery lists each branch of a dataset at ``<dataset>/tree/<branch>``, so a record
-    naming a table covers every dataset under it. A wrong refusal costs disk; a wrong permit writes to bytes an owner
-    was told are frozen. One lookup per path segment, the nearest record first, so a whole-estate pass costs the same
-    however many records the trash holds.
-    """
-    segments = base_refs.decoded_path(uri).split("/")
-    return next((why for end in range(len(segments), 0, -1) if (why := trashed_by_path.get("/".join(segments[:end]))) is not None), None)
-
-
 #: The config key the commit writes. Namespaced, and carrying the epoch it was raised at, so an
-#: operator reading a dataset's config can tell this commit apart from a real one without the register.
+#: operator reading a dataset's config can tell this commit apart from a real one without the register. To the
+#: fraction, as the floor is: a stamp cut to its second could read as passed by a manifest written earlier in it.
 FLOOR_KEY = "rask.maintenance.floor_raised_at"
 
 
 class FloorRaise(BaseModel):
-    """One dataset's outcome. Named rather than counted: this writes to a governed table, so which
-    tables were written to is the whole audit trail, and a count answers nobody's question about it."""
+    """One table's raise, or why it was refused. Named rather than counted: this writes to a governed table, so which
+    table was written to is the whole audit trail."""
 
     dataset: str
-    #: Orphan files this raise is expected to make visible to the next scan.
+    #: Stranded files this raise is expected to make visible to the table's next pass.
     orphan_files: int
     orphan_bytes: int
-    #: The floor before the commit, as an epoch — what the orphans were measured against.
+    #: The floor before the commit, as an epoch: what the orphans were measured against.
     floor_before: float
+    dry_run: bool
     #: The version the commit created. ``None`` on a dry run or a refusal.
     version: int | None = None
     #: Why nothing was written. ``None`` when the commit happened (or would have, on a dry run).
     refused: str | None = None
-
-
-class FloorReport(BaseModel):
-    """What one tick did. ``dry_run`` distinguishes a plan from an act, exactly as the trash purge does."""
-
-    enabled: bool = False
-    dry_run: bool = True
-    raised: list[FloorRaise] = Field(default_factory=list)
-    refused: list[FloorRaise] = Field(default_factory=list)
-    #: Datasets eligible beyond `max_per_tick`. Named because a truncated pass that logged nothing would
-    #: look like a complete one, and the next tick's smaller number would read as progress nobody made.
-    capped: int = 0
-    #: Why the pass wrote and planned nothing this tick: the trash index it must read first could not be read.
-    error: str | None = None
-
-
-def _eligible(orphans: list[OrphanFile]) -> dict[str, list[OrphanFile]]:
-    """Group the STRANDED orphans by dataset, keeping only datasets with no undecided orphan.
-
-    THREE CLASSES, and only one of them is this module's business. ``reclaimable_by_lance is True`` is a
-    file Lance will take once it passes the 7-day rule — time clears it, so it neither earns a commit nor
-    blocks one, and it is left out of the raise's count. ``None`` means the floor could not be read, and
-    "we could not tell" must never become "act": the whole justification for writing to a governed
-    table is that the residue is provably permanent, and an unread floor proves nothing. Only ``False``
-    is stranded.
-
-    AN UNDECIDED ORPHAN DISQUALIFIES ITS DATASET, because the commit is per dataset: raising the floor
-    for one stranded file also sweeps up its siblings, so a dataset holding even one orphan whose class
-    is unknown is one this pass has not established a case for.
-    """
-    by_dataset: dict[str, list[OrphanFile]] = {}
-    for orphan in orphans:
-        by_dataset.setdefault(orphan.dataset, []).append(orphan)
-    eligible: dict[str, list[OrphanFile]] = {}
-    for uri, found in by_dataset.items():
-        stranded = [o for o in found if o.reclaimable_by_lance is False]
-        if stranded and all(o.reclaimable_by_lance is not None for o in found):
-            eligible[uri] = stranded
-    return eligible
-
-
-def _set_aside_trashed(eligible: dict[str, list[OrphanFile]], trashed_by_path: dict[str, str]) -> tuple[dict[str, list[OrphanFile]], list[FloorRaise]]:
-    """The eligible datasets this pass may raise, and a refusal naming the record for each one a trash record covers."""
-    candidates: dict[str, list[OrphanFile]] = {}
-    trashed: list[FloorRaise] = []
-    for uri, found in sorted(eligible.items()):
-        if (frozen := why_in_trash(uri, trashed_by_path)) is None:
-            candidates[uri] = found
-        else:
-            trashed.append(_outcome(uri, found).model_copy(update={"refused": frozen}))
-    return candidates, trashed
-
-
-def _set_aside_unnamed(candidates: dict[str, list[OrphanFile]], names: TableIds) -> tuple[dict[str, tuple[str, list[OrphanFile]]], list[FloorRaise]]:
-    """The candidates a ``__manifest`` row names, with the table each is, and a refusal for each one no row names."""
-    named: dict[str, tuple[str, list[OrphanFile]]] = {}
-    unnamed: list[FloorRaise] = []
-    for uri, found in candidates.items():
-        if (table := names.table_of(uri)) is None:
-            unnamed.append(_outcome(uri, found).model_copy(update={"refused": "no __manifest row names this dataset, so it is neither vended nor written"}))
-        else:
-            named[uri] = (table, found)
-    return named, unnamed
-
-
-def _outcome(uri: str, found: list[OrphanFile]) -> FloorRaise:
-    """The raise ``found`` would earn ``uri``, measured against its orphans' own mtimes until the floor is read."""
-    return FloorRaise(
-        dataset=uri,
-        orphan_files=len(found),
-        orphan_bytes=sum(o.size_bytes for o in found),
-        floor_before=min((o.mtime_epoch for o in found), default=0.0),
-    )
 
 
 def _current_floor(uri: str, storage_options: StorageOptions) -> float | None:
@@ -212,13 +113,13 @@ def _current_floor(uri: str, storage_options: StorageOptions) -> float | None:
     try:
         dataset = lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
         return min(committed_at(version).timestamp() for version in dataset.versions())
-    except Exception as exc:  # noqa: BLE001 — an unreadable dataset refuses this raise, never the tick
+    except Exception as exc:  # noqa: BLE001 — an unreadable dataset refuses this raise, never the check
         log.warning("floor_read_failed", extra={"dataset": uri, "error": str(exc)})
         return None
 
 
-def _already_raised(uri: str, storage_options: StorageOptions) -> str | None:
-    """The epoch of a previous raise on this dataset, or ``None`` if there has not been one.
+def _stamp(uri: str, storage_options: StorageOptions) -> str | None:
+    """The epoch of the last raise on this dataset, as its config records it, or ``None`` if there has not been one.
 
     Read from the dataset's own config rather than from any state this service keeps, so it survives a
     pod roll, a replica change and an empty cache — and so an operator can answer the same question by
@@ -226,22 +127,75 @@ def _already_raised(uri: str, storage_options: StorageOptions) -> str | None:
     """
     try:
         return lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()).config().get(FLOOR_KEY)
-    except Exception:  # noqa: BLE001 — an unreadable config is handled by the floor read above
+    except Exception:  # noqa: BLE001 — an unreadable config is handled by the floor read before it
         return None
 
 
-def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: MaintenanceSettings, storage_options: StorageOptions) -> FloorRaise:
-    """One dataset's raise, or why it was refused: the floor re-read, the stamp, the vend for ``table``, then the commit."""
-    outcome = _outcome(uri, found)
+def _still_beneath(stamp: str, floor: float) -> str | None:
+    """Why a raise at ``stamp`` still stands above ``floor``, so another would buy only a version; ``None`` once the floor
+    has moved past it, when a pass has cleaned beneath the last raise."""
+    try:
+        raised_at = float(stamp)
+    except ValueError:
+        return f"its {FLOOR_KEY} reads {stamp!r}, no epoch, so whether the floor has moved past it cannot be told"
+    if floor < raised_at:
+        return f"already raised at {stamp} and the floor ({floor:.3f}) has not moved past it: no pass has cleaned beneath the raise yet"
+    return None
+
+
+def raise_stands(dataset: lance.LanceDataset) -> bool:
+    """Whether ``dataset`` carries a raise no pass has cleaned beneath yet: its stamp lies above its listing floor.
+
+    A table's pass asks it, and while it holds cleans from the first reclaimable version: the raise bought a version so
+    that a cleanup would move the floor, and a pass waiting for its usual count of reclaimable versions would leave the
+    stranded files, on a table that commits seldom, for as long as it does.
+    """
+    stamp = dataset.config().get(FLOOR_KEY)
+    if stamp is None:
+        return False
+    try:
+        raised_at = float(stamp)
+    except ValueError:
+        return False
+    return min(committed_at(version).timestamp() for version in dataset.versions()) < raised_at
+
+
+def raise_listing_floor(uri: str, *, table: str, stranded: list[OrphanFile], settings: MaintenanceSettings) -> FloorRaise:
+    """Write one metadata-only commit to the table at ``uri`` (the table ``__manifest`` names ``table``), whose ``stranded``
+    files lie above its listing floor, so its next pass can reclaim them; or why not.
+
+    Its table's own orphan check calls it, on that check's findings alone, after the guards the table's pass applies
+    (the claim records the task's uuid, no trash record keeps the table, the bucket is governed, a ``__manifest`` row
+    names the table).
+
+    OFF BY DEFAULT and DRY-RUN BY DEFAULT — two separate switches, because they answer different
+    questions. `MAINTENANCE_FLOOR_RAISE_ENABLED` is whether this estate wants the behaviour at all;
+    `MAINTENANCE_FLOOR_RAISE_DRY_RUN` is whether this check acts. An operator turning the feature on to
+    SEE what it would touch must not thereby write to a governed table.
+
+    THE FLOOR IS RE-READ HERE, and a table whose floor has moved past its stranded files is refused: something
+    committed since the check listed them, so the table's next pass reclaims without help and a commit here buys only
+    the phantom version. A table carrying :data:`FLOOR_KEY` is refused while its floor stands beneath that stamp, which
+    bounds the damage of a raise that cannot work: the floor only moves once a pass cleans the manifests beneath the
+    raise, so on a table maintenance may not clean this would write a version per check and reclaim nothing.
+    """
+    outcome = FloorRaise(
+        dataset=uri,
+        orphan_files=len(stranded),
+        orphan_bytes=sum(orphan.size_bytes for orphan in stranded),
+        floor_before=min((orphan.mtime_epoch for orphan in stranded), default=0.0),
+        dry_run=settings.floor_raise_dry_run,
+    )
+    if not settings.floor_raise_enabled:
+        return outcome.model_copy(update={"refused": "the floor raise is off (MAINTENANCE_FLOOR_RAISE_ENABLED)"})
+    storage_options = settings.storage_options()
     floor = _current_floor(uri, storage_options)
     if floor is None:
         return outcome.model_copy(update={"refused": "floor unreadable"})
     outcome.floor_before = floor
-    if (stamped := _already_raised(uri, storage_options)) is not None:
-        return outcome.model_copy(update={"refused": f"already raised at {stamped} and the floor has not moved — the sweep cannot clean this dataset"})
-    if all(listed_at_or_below(o.mtime_epoch, floor) for o in found):
-        # The floor already covers them: something committed to this dataset between the report and
-        # now, so the table's next pass will reclaim without help and a commit here buys only a version.
+    if (stamp := _stamp(uri, storage_options)) is not None and (beneath := _still_beneath(stamp, floor)) is not None:
+        return outcome.model_copy(update={"refused": beneath})
+    if all(listed_at_or_below(orphan.mtime_epoch, floor) for orphan in stranded):
         return outcome.model_copy(update={"refused": "floor already covers these orphans"})
     # THE CREDENTIAL IS RESOLVED BEFORE THE DRY-RUN BRANCH, so a preview reports the denial it
     # would hit rather than a plan it could never carry out. A dry run that lists a table the
@@ -256,63 +210,8 @@ def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: Maint
         # THE SHARED SESSION, like every other dataset open in this service. This pod runs against
         # a 512Mi limit it has already been OOMKilled against, and a store rebuild strands datasets
         # in bulk — a per-dataset session here is the shape that turns a recovery into an eviction.
-        lance.dataset(uri, storage_options=write_options.in_clear(), session=shared_lance_session()).update_config({FLOOR_KEY: str(int(time.time()))})
+        lance.dataset(uri, storage_options=write_options.in_clear(), session=shared_lance_session()).update_config({FLOOR_KEY: str(time.time())})
         outcome.version = lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()).version
-    except Exception as exc:  # noqa: BLE001 — one dataset's failure must not stop the others
+    except Exception as exc:  # noqa: BLE001 — a failed commit refuses this raise, and the check holds its next at the floor
         return outcome.model_copy(update={"refused": f"commit failed: {exc}"})
     return outcome
-
-
-def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanFile], names: TableIds, storage_options: StorageOptions) -> FloorReport:
-    """Write one metadata commit per stranded dataset, so the table's next pass can reclaim its residue.
-
-    OFF BY DEFAULT and DRY-RUN BY DEFAULT — two separate switches, because they answer different
-    questions. `MAINTENANCE_FLOOR_RAISE_ENABLED` is whether this estate wants the behaviour at all;
-    `MAINTENANCE_FLOOR_RAISE_DRY_RUN` is whether this tick acts. An operator turning the feature on to
-    SEE what it would touch must not thereby write to a governed table.
-
-    THE FLOOR IS RE-READ HERE, inside the same call, and a dataset whose floor has moved past its
-    orphans is refused. The report this consumes was produced earlier in the tick, and the cheap failure
-    is acting on a stale one: a dataset that gained a commit in between no longer needs this, and the
-    only thing a raise would buy it is the phantom version. One `versions()` read per candidate, no
-    re-listing — the report already carries each orphan's mtime, which is what makes that sufficient.
-
-    A DATASET ALREADY CARRYING :data:`FLOOR_KEY` IS REFUSED, and that guard is what bounds the damage
-    of a raise that cannot work. The floor only moves once `cleanup_old_versions` drops the manifests
-    beneath the new commit, so on a dataset maintenance may not maintain this writes a version per
-    scan forever and reclaims nothing. One raise per dataset: if the floor has not moved by the next
-    tick, the blocker is downstream and another commit is not the answer to it.
-
-    A DATASET A TRASH RECORD COVERS IS REFUSED FIRST, before the cap and before any open, vend or commit
-    ([[LH-449]]). A recoverable drop freezes its bytes until undrop or purge, and a Lance commit is a
-    put-if-not-exists on the store (`lance_docs/lance/format/table/transaction.md` § Commit Protocol), so the freeze holds only where
-    each writer reads the trash record itself, whatever signs its commit. The orphan scan reads every discovered
-    dataset, trashed ones included, because the drift report and the purge gate need them. Before the cap, because a
-    refusal repeated every scan would spend a slot every scan. The index is read once per call, as a pass reads
-    it, and an index that cannot be read writes and plans nothing: no dataset can then be shown to be outside it.
-
-    ``names`` is the catalog's ``__manifest`` read for the tick, and a dataset it names no table for is refused with the
-    trashed ones, before the cap and before any vend ([[LH-520]]). A read that missed a root plans nothing: a dataset absent
-    from it may still be a table.
-    """
-    report = FloorReport(enabled=settings.floor_raise_enabled, dry_run=settings.floor_raise_dry_run)
-    if not settings.floor_raise_enabled:
-        return report
-    try:
-        trashed_by_path = trashed_locations(trash.list_all(settings.resolved_control_root, storage_options))
-    except Exception as exc:  # noqa: BLE001 — an unread trash index stops this pass for the tick, never the reconcile tick
-        log.error("floor_raise_trash_index_unreadable", extra={"error": str(exc)})
-        report.error = f"the trash index could not be read, so no dataset can be shown to be outside it: {exc}"
-        return report
-    if not names.complete:
-        report.error = "a __manifest could not be read, so no dataset can be shown to be the table it names"
-        return report
-    eligible, trashed = _set_aside_trashed(_eligible(orphans), trashed_by_path)
-    candidates, unnamed = _set_aside_unnamed(eligible, names)
-    report.refused.extend([*trashed, *unnamed])
-    for uri in sorted(candidates)[: settings.floor_raise_max_per_tick]:
-        table, found = candidates[uri]
-        outcome = _raise_one(uri, table, found, settings=settings, storage_options=storage_options)
-        (report.refused if outcome.refused is not None else report.raised).append(outcome)
-    report.capped = max(0, len(candidates) - settings.floor_raise_max_per_tick)
-    return report

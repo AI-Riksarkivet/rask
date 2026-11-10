@@ -110,8 +110,8 @@ def test_a_scan_leaves_the_dataset_byte_identical(tmp_path: pathlib.Path) -> Non
         return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob("*")) if p.is_file()}
 
     before = fingerprint()
-    report = orphans.scan_datasets(_fs(), [(uri, prefix)])
-    assert report.total >= 1, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
+    scan = orphans.scan_dataset(_fs(), uri, prefix=prefix)
+    assert scan.orphans, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
     assert fingerprint() == before
 
 
@@ -171,29 +171,6 @@ def test_a_branched_dataset_is_refused_not_scanned(tmp_path: pathlib.Path) -> No
     assert result.excluded is True, "a branch is refused by SHAPE, and no retry ever makes it scannable"
     assert result.orphans == []
     assert "tree/" in (result.reason or "")
-
-
-def test_a_refused_dataset_does_not_read_as_clean_in_the_aggregate(tmp_path: pathlib.Path) -> None:
-    """Refusing must stay COUNTED and NAMED — never quietly lower the orphan count. Otherwise the
-    branchiest bucket in the estate reports as the tidiest.
-
-    It is counted as an EXCLUSION rather than as an unreadable scan, and the distinction is the whole
-    point: `purge.report_is_clean` blocks on `incomplete`, and a branch can never stop being refused —
-    its files live under `tree/{branch}/` while `lance.dataset()` opens MAIN — so counting it there
-    made reclamation unreachable. A branch is the cheapest fixture for that shape; on the live estate
-    it was the shallow clone that did it, 419 of 490 notes, with `incomplete` frozen at exactly 490
-    across a day in which the finding total moved.
-    """
-    uri = str(tmp_path / "branched.lance")
-    ds = lance.write_dataset(_table(), uri)
-    ds.create_branch("feature-a")
-
-    report = orphans.scan_datasets(_fs(), [(uri, uri)])
-    assert report.datasets_scanned == 0
-    assert report.datasets_excluded == 1
-    assert report.total == 0
-    assert report.excluded and "tree/" in report.excluded[0]
-    assert not report.incomplete, f"a permanent exclusion must not block the purge forever: {report.incomplete}"
 
 
 def test_a_memwal_shard_tree_is_refused(tmp_path: pathlib.Path) -> None:
@@ -417,17 +394,13 @@ class TestKindClassification:
 
 
 class TestUnreadableIsNotClean:
-    def test_the_aggregate_counts_it_as_UNREADABLE_not_as_scanned(self, dataset: str, tmp_path: pathlib.Path) -> None:
-        """An unreadable dataset must not silently reduce the orphan count."""
+    def test_an_unreadable_dataset_is_a_failed_scan_and_not_an_exclusion(self, tmp_path: pathlib.Path) -> None:
+        """An unreadable dataset must not read as a clean one, nor as one excluded by rule: a later try may read it."""
         missing = str(tmp_path / "nope.lance")
-        _plant(dataset, "data/stray-0000.lance")
 
-        report = orphans.scan_datasets(pafs.LocalFileSystem(), [(dataset, dataset), (missing, missing)])
+        scan = orphans.scan_dataset(pafs.LocalFileSystem(), missing, prefix=missing)
 
-        assert report.datasets_scanned == 1
-        assert report.datasets_unreadable == 1
-        assert report.incomplete, "an unreadable dataset must be NAMED, so the reader knows what to distrust"
-        assert report.total == len(report.orphans)
+        assert (scan.checked, scan.excluded, scan.orphans, bool(scan.reason)) == (False, False, [], True)
 
 
 class _RaisesOnLayoutProbe:

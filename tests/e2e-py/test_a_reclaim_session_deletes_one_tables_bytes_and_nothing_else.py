@@ -45,7 +45,7 @@ from lakehouse.record_store import put_record, record_key
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash
-from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from maintenance.services.reconcile import CATEGORIES, ReconcileReport
 
 
 pytestmark = pytest.mark.rustfs_provisioning
@@ -166,9 +166,8 @@ def reclaim(rustfs_store: ThrowawayStore) -> _Reclaim:
 def _clean_report() -> ReconcileReport:
     return ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
-        counts={category: 0 for category in CATEGORIES if category != "orphan_files"},
+        counts=dict.fromkeys(CATEGORIES, 0),
         total=0,
-        skipped=[CategorySkipped(category="orphan_files", reason="off in this lane")],
     )
 
 

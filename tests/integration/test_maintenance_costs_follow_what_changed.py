@@ -28,6 +28,7 @@ from __future__ import annotations
 import uuid
 from collections import Counter
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Any, cast
 
 import pyarrow as pa
@@ -61,17 +62,22 @@ def moto_url() -> Iterator[str]:
 
 
 class _IdleQueue:
-    """An idle estate's queue: a schedule holds every table but one, whose schedule was lost. `TaskQueue`'s signatures."""
+    """An idle estate's queue: a schedule holds every table's pass and check but one's, whose schedules were lost. `TaskQueue`'s signatures."""
 
     def __init__(self, scheduled: list[TableTask]) -> None:
         self._scheduled = scheduled
         self.queued: list[Task] = []
+        self.checks: list[Task] = []
 
     async def held(self, area: str, kind: str) -> set[str]:
-        return {table.uuid for table in self._scheduled} if (area, kind) == ("schedule", "table") else set()
+        return {table.uuid for table in self._scheduled} if area == "schedule" and kind in ("table", "orphans") else set()
 
     async def enqueue(self, task: Task) -> bool:
         self.queued.append(task)
+        return True
+
+    async def schedule_first(self, task: Task, at: datetime) -> bool:
+        self.checks.append(task)
         return True
 
 
@@ -147,7 +153,7 @@ class _Estate:
         assert portal is not None, "the maintenance client was never entered"
         with catalog_doors(self.both.catalog):
             out: dict[str, Any] = portal.call(lambda: run_audit(maintenance_settings(), queue=cast(TaskQueue, queue)))
-        assert (out["unscheduled"], queue.queued) == ({"tables": 1, "trash": 0}, [Task(kind="table", uuid=lost.uuid, location=lost.location)])
+        assert (out["unscheduled"], queue.queued) == ({"tables": 1, "trash": 0, "checks": 1}, [Task(kind="table", uuid=lost.uuid, location=lost.location)])
         return self.store.taken()
 
     def opened(self, seen: list[StoreRequest]) -> list[StoreRequest]:
@@ -164,7 +170,7 @@ class _Estate:
 
 def test_a_commits_pass_costs_a_fixed_handful_and_an_idle_estate_opens_no_table(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
     with counted(moto_url) as store:
-        env = {"MAINTENANCE_CATALOG_URL": CATALOG_URL, "MAINTENANCE_S3_ENDPOINT": store.url, "MAINTENANCE_ORPHAN_SCAN_ENABLED": "true"}
+        env = {"MAINTENANCE_CATALOG_URL": CATALOG_URL, "MAINTENANCE_S3_ENDPOINT": store.url}
         with catalog_and_maintenance(moto_url, monkeypatch, env=env) as both:
             estate = _Estate(both, store)
             estate.grow(4)

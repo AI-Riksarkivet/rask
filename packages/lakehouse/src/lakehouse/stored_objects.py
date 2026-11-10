@@ -12,7 +12,7 @@ through pyarrow's filesystem.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Final
@@ -52,21 +52,23 @@ def list_under(uri: str, storage_options: StorageOptions) -> list[StoredObject]:
     Any ``s3://`` root is listed through the object client, endpoint or none, so the listing asks the store for
     ``<key>/`` alone, what a session scoped to the location may list.
     """
+    return list(iter_under(uri, storage_options))
+
+
+def iter_under(uri: str, storage_options: StorageOptions) -> Iterator[StoredObject]:
+    """:func:`list_under` a page at a time, a thousand objects a request on S3, so a caller that stops early has asked
+    the store for no more than it read."""
     if uri.startswith("s3://"):
         bucket, _, key = uri.removeprefix("s3://").partition("/")
         pages = object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
-        return [
-            StoredObject(path=f"{bucket}/{entry['Key']}", size=int(entry.get("Size", 0)), modified=entry["LastModified"])
-            for page in pages
-            for entry in page.get("Contents", [])
-        ]
+        for page in pages:
+            for entry in page.get("Contents", []):
+                yield StoredObject(path=f"{bucket}/{entry['Key']}", size=int(entry.get("Size", 0)), modified=entry["LastModified"])
+        return
     fs, base = fs_and_base(uri, storage_options)
-    infos = fs.get_file_info(pafs.FileSelector(base.rstrip("/"), recursive=True, allow_not_found=True))
-    return [
-        StoredObject(path=info.path, size=int(info.size or 0), modified=info.mtime if info.mtime.tzinfo else info.mtime.replace(tzinfo=UTC))
-        for info in infos
-        if info.type == pafs.FileType.File and info.mtime is not None
-    ]
+    for info in fs.get_file_info(pafs.FileSelector(base.rstrip("/"), recursive=True, allow_not_found=True)):
+        if info.type == pafs.FileType.File and info.mtime is not None:
+            yield StoredObject(path=info.path, size=int(info.size or 0), modified=info.mtime if info.mtime.tzinfo else info.mtime.replace(tzinfo=UTC))
 
 
 class ObjectIdentity(BaseModel):

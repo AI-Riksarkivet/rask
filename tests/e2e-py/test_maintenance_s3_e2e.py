@@ -1,4 +1,4 @@
-"""#80 — a table's maintenance pass and the orphan scan, against REAL object storage.
+"""#80 — a table's maintenance pass and the orphan scan of a table's dataset, against REAL object storage.
 
 Every orphan assertion in the estate was written against ``pafs.LocalFileSystem`` (tests/unit/
 test_orphan_files.py). That is the right place to pin the RULES, and it cannot pin the STORE: the
@@ -21,10 +21,10 @@ store does differently.
    reclaimable).
 
 And the pass half: #81 taught maintenance to govern a warehouse bucket the REGISTRY names beside its configured ones,
-while a DEACTIVATED warehouse's is not passed (`table_pass.governs`), and ``reconcile._scannable_buckets`` to scan both
-— reporting is not rewriting. That asymmetry has only ever had fake-filesystem coverage.
+while a DEACTIVATED warehouse's is not passed (`table_pass.governs`).
 
-The passes run first and the scan over what they left, as the hourly audit scans an estate its passes have maintained.
+The passes run first and the scan over what they left, as a table's orphan check scans a table its passes have
+maintained.
 A pass compacts nothing (ADR 0155): it expires versions and writes a due record for a table its `__manifest` names and
 Lance's planner has work for, so each passed table is registered in a real `dir` namespace on its bucket, its location
 claimed as a catalog door claims one, and the plain table's record is read back from object storage.
@@ -49,9 +49,9 @@ and ``scripts/e2e_stack.sh`` exports). Run: ``make e2e-stack``, or point it at a
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -73,7 +73,7 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import s3_filesystem
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans
-from maintenance.services.reconcile import ReconcileReport, reconcile
+from maintenance.services.orphans import OrphanFile
 from maintenance.services.table_pass import PassOutcome, TableTask, run_table_pass
 
 
@@ -87,7 +87,6 @@ pytestmark = [pytest.mark.e2e, pytest.mark.compaction]
 #: Stray `data/*.lance` files planted by hand — the POSITIVE controls. Without them every "is not
 #: reported" assertion below would also pass on a scan that reports nothing at all.
 STRAY_IN_PASSED = "data/00000000000000000000000000deadbeef.lance"
-STRAY_IN_DEACTIVATED = "data/000000000000000000000000cafebabe00.lance"
 
 
 class Estate(BaseModel):
@@ -219,7 +218,7 @@ def estate(s3: Any) -> Iterator[Estate]:
 
     # The warehouse REGISTRY, on the control root — the record shapes `catalog/services/warehouses.py` writes: each
     # warehouse, and the binding of the top namespace its tables are under, which `warehouse_records.namespace_warehouse`
-    # reads; and the listing `reconcile` scans by. `reg` is active, `deact` quarantined.
+    # reads. `reg` is active, `deact` quarantined.
     for wid, bucket, status, top in (("wh-reg", built.reg, "active", "e2e-reg"), ("wh-deact", built.deact, "deactivated", "e2e-deact")):
         s3.put_object(
             Bucket=built.ctl,
@@ -249,7 +248,6 @@ def _settings_for(estate: Estate) -> MaintenanceSettings:
         s3_extra_buckets=estate.extra,
         s3_region="us-east-1",
         older_than_days=1,
-        orphan_scan_enabled=True,
         warehouses_enabled=True,
     )
 
@@ -267,13 +265,12 @@ def passed(estate: Estate, settings: MaintenanceSettings) -> dict[str, PassOutco
 
 
 @pytest.fixture(scope="module")
-def scanned(estate: Estate, settings: MaintenanceSettings, s3: Any, passed: dict[str, PassOutcome]) -> ReconcileReport:
-    """The orphan scan, run AFTER the passes (the `passed` dependency guarantees it) over datasets they have just
-    maintained.
+def scanned(estate: Estate, settings: MaintenanceSettings, s3: Any, passed: dict[str, PassOutcome]) -> list[OrphanFile]:
+    """Every orphan the scan names in the plain and the blob tables, run AFTER the passes (the `passed` dependency
+    guarantees it) over datasets they have just maintained.
 
-    Two stray `data/*.lance` files are planted first: one under a passed dataset and one under the
-    DEACTIVATED warehouse's. They are the positive controls — a scan that reports nothing would
-    satisfy every refusal assertion in this file, and these are what make that impossible.
+    A stray `data/*.lance` file is planted first under the passed dataset. It is the positive control — a scan that
+    reports nothing would satisfy every refusal assertion in this file, and it is what makes that impossible.
 
     `.lance-reserved` is planted too, and unlike the tag and the blob sidecar it is NOT something
     Lance wrote here: pylance 9 does not lay one down for these datasets. Stated plainly rather than
@@ -284,11 +281,20 @@ def scanned(estate: Estate, settings: MaintenanceSettings, s3: Any, passed: dict
     """
     assert passed, "the passes must have run before the scan"
     s3.put_object(Bucket=estate.ctl, Key=f"plain/{STRAY_IN_PASSED}", Body=b"a fragment no manifest references")
-    s3.put_object(Bucket=estate.deact, Key=f"deacttbl/{STRAY_IN_DEACTIVATED}", Body=b"orphaned in a quarantined tenant")
     s3.put_object(Bucket=estate.ctl, Key="plain/.lance-reserved", Body=b"")
-    # `client=None` → the FGA-backed categories report UNAVAILABLE, which is correct and irrelevant
-    # here; nothing below reads them. control_root is THIS estate's, so no real registry is touched.
-    return asyncio.run(reconcile(settings, None, warehouses_enabled=True, control_root=f"s3://{estate.ctl}"))
+    # The scan names a file only when the store places it surely before the scan began, and the store lists whole
+    # seconds: the clock leaves the planted second first, or the positive control is cut as a file still being written.
+    planted = float(int(time.time()))
+    deadline = time.monotonic() + 5
+    while time.time() < planted + 1.05:
+        assert time.monotonic() < deadline, "the clock did not move"
+    fs = s3_filesystem(settings.storage_options())
+    found: list[OrphanFile] = []
+    for uri in (estate.plain_uri, estate.blob_uri):
+        scan = orphans.scan_dataset(fs, uri, prefix=uri.removeprefix("s3://"), storage_options=settings.storage_options())
+        assert scan.checked, f"{uri} was not scanned: {scan.reason}"
+        found.extend(scan.orphans)
+    return found
 
 
 # --------------------------------------------------------------------------- #
@@ -335,15 +341,15 @@ def test_a_registry_only_buckets_table_is_passed_and_a_deactivated_ones_is_not(
 # --------------------------------------------------------------------------- #
 
 
-def test_a_stray_data_file_on_s3_is_still_reported(estate: Estate, scanned: ReconcileReport) -> None:
+def test_a_stray_data_file_on_s3_is_still_reported(estate: Estate, scanned: list[OrphanFile]) -> None:
     """The positive control: a `data/*.lance` under a live dataset's prefix that no manifest names IS
     an orphan, and is classified as `data` — the kind whose reclamation loses rows, so the kind a
     reader must never learn to ignore."""
-    found = {(o.dataset, o.path, o.kind) for o in scanned.orphan_files}
+    found = {(o.dataset, o.path, o.kind) for o in scanned}
     assert (estate.plain_uri, STRAY_IN_PASSED, "data") in found, f"the planted orphan was not reported: {sorted(found)}"
 
 
-def test_a_real_blob_sidecar_written_by_lance_is_not_an_orphan(estate: Estate, settings: MaintenanceSettings, scanned: ReconcileReport) -> None:
+def test_a_real_blob_sidecar_written_by_lance_is_not_an_orphan(estate: Estate, settings: MaintenanceSettings, scanned: list[OrphanFile]) -> None:
     """The refusal that cost 29 MB of real page images on the first live run — now against bytes Lance
     itself wrote on S3, not a directory a test fabricated.
 
@@ -364,14 +370,14 @@ def test_a_real_blob_sidecar_written_by_lance_is_not_an_orphan(estate: Estate, s
     ]
     assert sidecars, "the fixture must really have produced a `.blob` sidecar on S3 — otherwise this test asserts nothing"
 
-    named = {(o.dataset, o.path) for o in scanned.orphan_files}
+    named = {(o.dataset, o.path) for o in scanned}
     for path in sidecars:
         relative = path.removeprefix(f"{estate.ctl}/blobtbl/")
         assert (estate.blob_uri, relative) not in named, f"a LIVE blob sidecar Lance wrote was named an orphan: {relative}"
-    assert not any(o.path.endswith(".blob") for o in scanned.orphan_files), "some `.blob` was reported across the estate"
+    assert not any(o.path.endswith(".blob") for o in scanned), "some `.blob` was reported across the estate"
 
 
-def test_a_tag_is_not_reported_as_an_orphan_on_s3(estate: Estate, settings: MaintenanceSettings, scanned: ReconcileReport) -> None:
+def test_a_tag_is_not_reported_as_an_orphan_on_s3(estate: Estate, settings: MaintenanceSettings, scanned: list[OrphanFile]) -> None:
     """`_refs/tags/*.json` PINS a version — `cleanup_old_versions` exempts tagged versions for that
     reason, so a reclaimer acting on a tag would unpin published data and then free the versions the
     tag was protecting.
@@ -382,12 +388,10 @@ def test_a_tag_is_not_reported_as_an_orphan_on_s3(estate: Estate, settings: Main
     fs = s3_filesystem(settings.storage_options())
     tags = fs.get_file_info(pafs.FileSelector(f"{estate.ctl}/plain/_refs", allow_not_found=True, recursive=True))
     assert [t.path for t in tags if t.path.endswith(".json")], "the fixture must really have written a tag file on S3"
-    assert not any(o.path.startswith("_refs/") for o in scanned.orphan_files), (
-        f"a ref was reported as an orphan: {[o.path for o in scanned.orphan_files if o.path.startswith('_refs/')]}"
-    )
+    assert not any(o.path.startswith("_refs/") for o in scanned), f"a ref was reported as an orphan: {[o.path for o in scanned if o.path.startswith('_refs/')]}"
 
 
-def test_the_version_index_and_reserved_marker_are_not_reported(estate: Estate, settings: MaintenanceSettings, scanned: ReconcileReport) -> None:
+def test_the_version_index_and_reserved_marker_are_not_reported(estate: Estate, settings: MaintenanceSettings, scanned: list[OrphanFile]) -> None:
     """A manifest is what MAKES a version live, so it can never be unreferenced while it is present,
     and `.lance-reserved` is a zero-byte structural marker no manifest ever names. Reporting either
     every run is how a report trains its reader to ignore it.
@@ -401,11 +405,11 @@ def test_the_version_index_and_reserved_marker_are_not_reported(estate: Estate, 
     assert any(p.endswith(".manifest") for p in listed), "the fixture must really have manifests on S3"
     assert f"{estate.ctl}/plain/.lance-reserved" in listed, "the reserved marker was not planted — this test would assert nothing"
 
-    named = [o.path for o in scanned.orphan_files if o.path.startswith("_versions/") or o.path == ".lance-reserved"]
+    named = [o.path for o in scanned if o.path.startswith("_versions/") or o.path == ".lance-reserved"]
     assert named == [], f"the version index / reserved marker was reported: {named}"
 
 
-def test_a_branch_is_refused_on_object_storage(estate: Estate, settings: MaintenanceSettings, scanned: ReconcileReport) -> None:
+def test_a_branch_is_refused_on_object_storage(estate: Estate, settings: MaintenanceSettings) -> None:
     """The one refusal whose MECHANISM is directory-shaped, and therefore genuinely different here.
 
     `_unscannable_reason` asks whether `<prefix>/tree` is a Directory. S3 has no directories — `tree/`
@@ -423,28 +427,5 @@ def test_a_branch_is_refused_on_object_storage(estate: Estate, settings: Mainten
     assert result.checked is False, "a branched dataset was SCANNED on S3 — the tree/ gate did not fire"
     assert result.orphans == []
     assert "tree/" in (result.reason or "")
-    # ...and the aggregate report says so out loud rather than counting it as clean. EXCLUDED, not
-    # INCOMPLETE: `reconcile.py:860-863` states the rule and the cost of getting it wrong — `incomplete`
-    # gates the purge, so recording a correct structural refusal there would stall purges on every
-    # dataset that has a branch, and `counts` feeds `report.total`, so a key there would report a
-    # correct exclusion as drift.
-    assert any("tree/" in name or "tree/" in str(name) for name in scanned.excluded_datasets), (
-        f"the refusal never reached the report's excluded list: {scanned.excluded_datasets}"
-    )
-    assert not any(o.dataset == estate.branch_uri for o in scanned.orphan_files)
-
-
-def test_a_deactivated_warehouse_is_still_scanned_even_though_it_is_not_passed(estate: Estate, scanned: ReconcileReport) -> None:
-    """The deliberate asymmetry between `warehouse_records.maintainable_buckets` (excludes
-    deactivated) and `reconcile._scannable_buckets` (includes them), pinned end to end on real
-    storage.
-
-    Reporting is not rewriting. A quarantined tenant's orphans are exactly what an operator wants
-    named before deciding whether to offboard it, and naming them changes nothing on disk — while
-    reclaiming the same bytes would not. `test_a_registry_only_buckets_table_is_passed_and_a_deactivated_ones_is_not`
-    proves the other half: this same table was NOT passed.
-    """
-    found = {(o.dataset, o.path) for o in scanned.orphan_files}
-    assert (estate.deact_uri, STRAY_IN_DEACTIVATED) in found, (
-        f"a deactivated warehouse's bucket went unscanned — its zero would read as 'checked and clean': {sorted(found)}"
-    )
+    # EXCLUDED, not failed: a branch is refused by shape, and no later try makes it scannable.
+    assert result.excluded is True

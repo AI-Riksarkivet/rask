@@ -81,7 +81,7 @@ def test_an_UNRELATED_partial_read_refuses_nothing() -> None:
     tick for a reason that cannot affect the inference."""
     planned, refused = repair.plan_repair(
         _report(
-            IncompleteScan(source="storage:datasets", reason="depth limit reached"),
+            IncompleteScan(source="storage:lance-catalog", reason="depth limit reached"),
             IncompleteScan(source="storage:buckets", reason="listing truncated"),
             IncompleteScan(source="catalog:namespaces:s3://acme-wh", reason="manifest unreadable"),
         )

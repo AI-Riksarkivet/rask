@@ -1,11 +1,10 @@
-"""The orphan category must DEGRADE, like the seven store categories beside it (MAINT-05).
+"""The storage walk and the orphan scan must DEGRADE, like the store categories beside them (MAINT-05).
 
-The module's own docstring states the rule: "a category whose source is unreachable reports UNAVAILABLE
+The reconciler's own docstring states the rule: "a category whose source is unreachable reports UNAVAILABLE
 **with the reason** while the other six still report. A drift report that 500s on one bad store tells
-you nothing about the other six." Three storage calls on the orphan path stood outside every guard —
-the filesystem construction, the per-dataset scan aggregate, and the layout gate's own object probe —
-so one transient S3 failure raised out of `reconcile()`, answered the cron tick 500, and discarded a
-report whose seven store categories had already completed.
+you nothing about the other six." Storage calls on the walk and in the scan stood outside every guard —
+the walk's filesystem construction and the layout gate's own object probe — so one transient S3 failure
+raised out of `reconcile()` and discarded a report whose store categories had already completed.
 """
 
 from __future__ import annotations
@@ -41,7 +40,6 @@ def _run(tmp_path: Path) -> mod.ReconcileReport:
         # injected fault this module is actually about ever fires.
         s3_access_key_id="unit",
         s3_secret_access_key=SecretStr("unit"),
-        orphan_scan_enabled=True,
     )
     (tmp_path / "control").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
@@ -53,36 +51,29 @@ def _run(tmp_path: Path) -> mod.ReconcileReport:
             control_root=f"file://{tmp_path / 'control'}",
             namespace_root=f"file://{tmp_path / 'data'}",
             bucket_client=_NoBuckets(),
+            walk=True,
         )
     )
 
 
-def _assert_degraded(report: mod.ReconcileReport, needle: str) -> None:
-    assert "orphan_files" not in report.counts, "a category whose scan blew up must not report a count"
-    assert report.counts["orphan_buckets"] == 0, "the store categories that already completed must survive"
-    assert any(needle in note.reason for note in report.incomplete), f"no incomplete-scan note naming {needle!r}: {[n.reason for n in report.incomplete]}"
-
-
-def test_a_filesystem_that_cannot_be_built_degrades_the_category(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_filesystem_that_cannot_be_built_degrades_the_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real = mod.fs_and_base
 
     def _boom(uri: str, storage_options: StorageOptions) -> tuple[pafs.FileSystem, str]:
-        # ONLY the orphan scan's own s3:// construction — the registry readers share this helper, and
-        # failing those too would prove nothing about the category under test.
+        # ONLY the walk's own s3:// construction — the registry readers share this helper, and
+        # failing those too would prove nothing about the categories under test.
         if uri.startswith("s3://"):
             raise OSError("endpoint refused the connection")
         return real(uri, storage_options)
 
     monkeypatch.setattr(mod, "fs_and_base", _boom)
-    _assert_degraded(_run(tmp_path), "endpoint refused the connection")
 
+    report = _run(tmp_path)
 
-def test_a_scan_that_raises_degrades_the_category(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(*_a: object, **_kw: object) -> Any:
-        raise OSError("the object store went away mid-scan")
-
-    monkeypatch.setattr(mod, "scan_datasets", _boom)
-    _assert_degraded(_run(tmp_path), "the object store went away mid-scan")
+    assert {"unregistered_datasets", "absent_datasets"}.isdisjoint(report.counts), "a category whose walk blew up must not report a count"
+    assert {"unregistered_datasets", "absent_datasets"} <= {u.category for u in report.unavailable}
+    assert report.counts["orphan_buckets"] == 0, "the store categories that already completed must survive"
+    assert [(note.source, "endpoint refused the connection" in note.reason) for note in report.incomplete] == [("storage:lance-catalog", True)]
 
 
 def test_the_layout_gate_fails_closed_when_its_presence_probe_raises(tmp_path: Path) -> None:

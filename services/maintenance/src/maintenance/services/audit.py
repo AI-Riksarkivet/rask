@@ -2,13 +2,13 @@
 
 Both read three stores and report their disagreements, repair what the report justifies, and release every drop past
 its deadline (ADR 0146) that its own trash task has not, gated on neither the report nor the purge's opt-in, since it
-deletes nothing. The hourly AUDIT (:func:`run_audit`) leaves the file layer unscanned, so it opens no table, and queues
-a pass for every table and a task for every trash record that holds neither a schedule nor a queued task, which is what
-bounds a lost birth or a lost schedule to one firing. The daily SCAN (:func:`run_scan`, owner 2026-11-09: a scan opens
-every table, about 20 store requests each) runs the orphan scan too, and then, gated on THAT report running clean,
-raises listing floors and reclaims expired trash (#79). The purge rides the scan rather than a table's pass precisely
-because its permission comes from the report: it consumes the report object the same run produced, never a stored one.
-It is off by default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so the shipped configuration deletes no trashed byte.
+deletes nothing. The hourly AUDIT (:func:`run_audit`) walks no storage, so it opens no table and lists no bucket, and
+queues a pass for every table and a task for every trash record that holds neither a schedule nor a queued task, which
+is what bounds a lost birth or a lost schedule to one firing. The daily SCAN (:func:`run_scan`, owner 2026-11-09) walks
+every bucket for its datasets too, and then, gated on THAT report running clean, reclaims expired trash (#79). The purge
+rides the scan rather than a table's pass precisely because its permission comes from the report: it consumes the
+report object the same run produced, never a stored one. It is off by default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so
+the shipped configuration deletes no trashed byte.
 
 One task of each, once per firing whatever the replica count: each schedule is a NATS message schedule (``@hourly``, and
 ``0 30 0 * * *`` for the scan, by default), each on a subject of its own, and the queue holds one task per subject. Both
@@ -17,7 +17,8 @@ never run at once, and the later waits out the other.
 """
 
 import logging
-from collections import Counter
+import secrets
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
 
@@ -28,10 +29,8 @@ from lakehouse import location_claims, trash
 from lakehouse.control_emit import ControlEmitter
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.credentials import end_trash, grant_census
-from maintenance.services.due import table_ids
-from maintenance.services.floor import raise_listing_floors
-from maintenance.services.naming import TableIds, claim_store, claimed_location
-from maintenance.services.plan import buckets_to_sweep
+from maintenance.services.naming import claim_store, claimed_location
+from maintenance.services.orphan_check import FLOOR
 from maintenance.services.purge import objects_held, purge_expired_trash, refusal_log_entry
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.rebuild import rebuild_tuples
@@ -46,48 +45,29 @@ log = logging.getLogger(__name__)
 
 
 async def run_audit(settings: MaintenanceSettings, *, queue: TaskQueue | None) -> dict[str, Any]:
-    """The hourly audit: the drift report without the orphan scan, its repairs, the release of every drop past its
-    deadline (ADR 0146), and last the tasks no schedule holds.
+    """The hourly audit: the drift report without the storage walk, its repairs, the release of every drop past its
+    deadline (ADR 0146), and last the tasks and the orphan checks no schedule holds.
 
     The report is returned AND logged as one structured record: the log lands in the OTLP stream where drift is actually
-    noticed. It leaves the file layer to the daily scan (:func:`run_scan`, owner 2026-11-09), so it opens no table, and
-    with it what only a scanned file layer certifies, the listing floors and the purge.
+    noticed. It leaves the walk to the daily scan (:func:`run_scan`, owner 2026-11-09), and with it the purge, whose gate
+    refuses a report whose run walked no storage (:func:`maintenance.services.purge.report_is_clean`).
     """
-    payload, _, sources = await _report_and_repair(settings.model_copy(update={"orphan_scan_enabled": False}))
+    payload, _, sources = await _report_and_repair(settings, walk=False)
     if queue is not None:
         payload["unscheduled"] = await _queue_what_holds_nothing(settings, queue, sources)
     return payload
 
 
 async def run_scan(settings: MaintenanceSettings, *, control: ControlEmitter) -> dict[str, Any]:
-    """The daily scan: the drift report WITH the orphan scan (`MAINTENANCE_ORPHAN_SCAN_ENABLED`), its repairs and the
-    release, then what the scanned file layer certifies: the listing floors, and the #79 expired-trash purge.
+    """The daily scan: the drift report WITH the storage walk, its repairs and the release, then the #79 expired-trash
+    purge.
 
-    **The purge lives HERE, in the same run as the report.** Its gate is "the drift report ran clean", the orphan scan
-    included (a skipped scan is a coverage gap, :func:`maintenance.services.purge.report_is_clean`), so it must consume the
-    report THIS run produced: a purge reading a stored or previous report would certify a state that no longer exists.
-    Reclamation is off by default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so on the shipped configuration this adds one
-    report key and deletes nothing.
+    **The purge lives HERE, in the same run as the report.** Its gate is "the drift report ran clean"
+    (:func:`maintenance.services.purge.report_is_clean`), so it must consume the report THIS run produced: a purge
+    reading a stored or previous report would certify a state that no longer exists. Reclamation is off by default
+    (`MAINTENANCE_TRASH_PURGE_ENABLED`), so on the shipped configuration this adds one report key and deletes nothing.
     """
-    payload, report, _ = await _report_and_repair(settings)
-    names = await run_in_threadpool(_swept_table_ids, settings)
-    floors = await run_in_threadpool(
-        partial(raise_listing_floors, settings, orphans=report.orphan_files, names=names, storage_options=settings.storage_options())
-    )
-    payload["floor_raise"] = floors.model_dump(mode="json")
-    # WARNING and NAMED, like the purge line below, because this writes a version to a GOVERNED
-    # table. Which tables is the entire audit trail; a count answers nobody's question about it.
-    if floors.raised or floors.refused or floors.error:
-        log.warning(
-            "floor_raise_result",
-            extra={
-                "dry_run": floors.dry_run,
-                "raised": [{"dataset": r.dataset, "version": r.version, "orphan_files": r.orphan_files, "orphan_bytes": r.orphan_bytes} for r in floors.raised],
-                "refused": [{"dataset": r.dataset, "reason": r.refused} for r in floors.refused],
-                "capped": floors.capped,
-                "error": floors.error,
-            },
-        )
+    payload, report, _ = await _report_and_repair(settings, walk=True)
     purged = await purge_expired_trash(
         settings,
         report=report,
@@ -118,9 +98,10 @@ async def run_scan(settings: MaintenanceSettings, *, control: ControlEmitter) ->
     return payload
 
 
-async def _report_and_repair(settings: MaintenanceSettings) -> tuple[dict[str, Any], ReconcileReport, ReconcileSources | None]:
-    """One cross-store drift REPORT, the repairs it justifies and the release of every drop past its deadline; the
-    payload to log, the report, for a caller whose next step it gates, and the stores it read."""
+async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tuple[dict[str, Any], ReconcileReport, ReconcileSources | None]:
+    """One cross-store drift REPORT, the storage walk with it when ``walk``, the repairs it justifies and the release of
+    every drop past its deadline; the payload to log, the report, for a caller whose next step it gates, and the stores
+    it read."""
     # The stores this run read, so the tuple rebuild below writes only grants the records the
     # REPORT saw actually justify — see `reconcile`'s `into_sources`.
     read_sources: list[ReconcileSources] = []
@@ -130,6 +111,7 @@ async def _report_and_repair(settings: MaintenanceSettings) -> tuple[dict[str, A
         warehouses_enabled=settings.warehouses_enabled,
         control_root=settings.resolved_control_root,
         into_sources=read_sources,
+        walk=walk,
     )
     payload = report.model_dump(mode="json")
     summary = {
@@ -138,25 +120,13 @@ async def _report_and_repair(settings: MaintenanceSettings) -> tuple[dict[str, A
         "unavailable": [u.category for u in report.unavailable],
         "skipped": [s.category for s in report.skipped],
         # SOURCE AND REASON, because this list GATES RECLAMATION and the source alone cannot be
-        # acted on. `report_is_clean` blocks the #79 purge while anything is incomplete, so these
-        # entries are why the estate holds unreclaimed orphans — measured 2026-09-16: three entries
-        # all reading `storage:lance-catalog`, against 932 orphan files the purge could not touch.
-        # Each `IncompleteScan` carries its `reason`, which names what an operator can act on.
+        # acted on. `report_is_clean` blocks the #79 purge while anything is incomplete — measured
+        # 2026-09-16: three entries all reading `storage:lance-catalog`. Each `IncompleteScan` carries
+        # its `reason`, which names what an operator can act on.
         "incomplete": [f"{i.source}: {i.reason}" for i in report.incomplete],
         # WHICH ones, not just how many — see `_drift_names`. Without this the WARNING is a number
         # an operator cannot act on: no task's result is stored.
         "findings": _drift_names(report),
-        # The DISTRIBUTION beside the identities, because for this one category a bounded sample of
-        # NAMES answers neither "how bad is any of them" nor "how many are there" — see
-        # `_orphans_by_dataset`. Omitted entirely when the scan found nothing, so a clean tick does
-        # not carry an empty key that reads like a category nobody looked at.
-        **({"orphans_by_dataset": distribution} if (distribution := _orphans_by_dataset(report)) else {}),
-        # WHICH OF THEM WILL CLEAR THEMSELVES, beside the distribution — the difference between a
-        # finding to act on and a clock to wait out. Same omit-when-empty rule as the line above.
-        **({"orphans_by_reclaimability": split} if (split := _orphans_by_reclaimability(report)) else {}),
-        # STORAGE PER BUCKET ([[LH-074]]), largest first and bounded — the roll-up is only useful
-        # if the biggest tenants are the ones an operator sees. Omitted when the scan is off.
-        **({"bytes_by_bucket": _largest(report.bytes_by_bucket)} if report.bytes_by_bucket else {}),
     }
     # A category that could not be checked is NOT clean, so an unavailable/incomplete run is as
     # loud as a drifting one — otherwise a permanently-broken FGA connection reads as "no drift".
@@ -164,14 +134,8 @@ async def _report_and_repair(settings: MaintenanceSettings) -> tuple[dict[str, A
         log.warning("reconcile_drift", extra=summary)
     else:
         log.info("reconcile_clean", extra=summary)
-    # BEFORE the purge, and AFTER the report it consumes. Raising a floor does not clean THIS scan's
-    # report — Lance reclaims at the table's next pass, and the next scan sees the smaller
-    # number — so the ordering here buys nothing for the purge gate and is chosen for the other
-    # reason: the report is what identifies the stranded datasets, and the purge must be gated on
-    # the report as it was MEASURED, never on one a write in between could have changed.
-    # BEFORE the floor raise and the purge, because it is the only one of the three that RESTORES
-    # rather than reclaims: a tenant this revives may own datasets the other two would otherwise
-    # act on while nobody can administer them.
+    # BEFORE the purge, because it RESTORES rather than reclaims: a tenant this revives may own
+    # datasets the purge would otherwise act on while nobody can administer them.
     if read_sources:
         rebuilt = await rebuild_tuples(settings, report=report, sources=read_sources[0])
         payload["tuple_rebuild"] = rebuilt.model_dump(mode="json")
@@ -265,17 +229,6 @@ async def _release_expired_trash(settings: MaintenanceSettings) -> dict[str, Any
 _DRIFT_NAMES_PER_CATEGORY = 10
 
 
-def _swept_table_ids(settings: MaintenanceSettings) -> TableIds:
-    """Every table the swept buckets' manifests name. Blocking store reads: run off the event loop."""
-    options = settings.storage_options()
-    return table_ids({f"s3://{bucket}" for bucket in buckets_to_sweep(settings, options)}, options)
-
-
-def _largest(totals: dict[str, int], limit: int = 10) -> dict[str, int]:
-    """The `limit` biggest entries, descending. A whole-estate map would be hundreds of keys on one line."""
-    return dict(sorted(totals.items(), key=lambda kv: -kv[1])[:limit])
-
-
 def _drift_names(report: ReconcileReport) -> dict[str, list[str]]:
     """The IDENTITIES behind each non-zero drift count, bounded per category.
 
@@ -299,67 +252,6 @@ def _drift_names(report: ReconcileReport) -> dict[str, list[str]]:
     return named
 
 
-#: How many datasets the orphan distribution names before it starts counting the rest. Same bound and
-#: same reason as `_DRIFT_NAMES_PER_CATEGORY`: a drifting estate can carry thousands and one WARNING
-#: must not become the report.
-_ORPHAN_DATASETS_NAMED = 10
-
-
-def _orphans_by_dataset(report: ReconcileReport) -> dict[str, int]:
-    """How many unreferenced files each dataset holds, largest first, with the tail COUNTED.
-
-    [[LH-094]]. `orphan_files: 932` with ten file paths out of 932 identifies neither the scale of any
-    one dataset's problem nor how many datasets are involved, and the per-dataset counts the scan
-    already computes (`DatasetOrphanScan.orphans`) reach no log on the success path. The distribution
-    is what makes the number actionable — and what makes it DIAGNOSTIC: measured 2026-09-16,
-    `orphan_files` went 0 -> 932 in one tick, and "44 datasets, the largest holding 300" separates
-    newly-VISIBLE from newly-CREATED where a single total cannot.
-
-    Largest first, because that is the order an operator works in. The tail is one entry carrying its
-    own count rather than silence: a truncation that hides how much it hid is the failure this summary
-    exists to end, and the shown numbers still sum to `counts["orphan_files"]` so a reader can
-    reconcile the two.
-    """
-    tally = Counter(orphan.dataset for orphan in report.orphan_files)
-    if not tally:
-        return {}
-    ranked = tally.most_common()
-    named = dict(ranked[:_ORPHAN_DATASETS_NAMED])
-    if remainder := ranked[_ORPHAN_DATASETS_NAMED:]:
-        named[f"… {len(remainder)} more datasets (truncated)"] = sum(count for _, count in remainder)
-    return named
-
-
-def _orphans_by_reclaimability(report: ReconcileReport) -> dict[str, int]:
-    """How many orphans Lance will still collect, how many it can never see, and how many are unknown.
-
-    [[LH-094]]. The count alone cannot tell an operator whether to act or to wait: measured 2026-09-18
-    it fell 1011 -> 32 in ten minutes as the ordinary sweep reclaimed 979 files at the +7-day
-    anniversary of the writes that made them, so the same number meant "wait" on one tick and "act" on
-    the next. The split is what carries that difference.
-
-    The line is the LISTING FLOOR, not an age, for the kinds Lance lists through it.
-    `cleanup_old_versions` clamps its listing of `_transactions/` and `_deletions/` to the earliest
-    retained manifest's commit timestamp BEFORE the 7-day unverified rule filters what was listed
-    (lance v13.0.0 `rust/lance/src/dataset/cleanup.rs:756-778`), so such a file above that instant is
-    unreachable at any `older_than` and with `delete_unverified=True` — permanently, once a dataset has
-    collapsed to one live version. A `data/` or `_indices/` orphan is listed past the floor (lance
-    #8944), so it always counts as `lance_will_reclaim`.
-
-    `unknown` is its own bucket rather than folded into either, because a floor that could not be read
-    is "we could not tell". Reporting that as "Lance will take it" is the conflation `checked=False`
-    versus `orphans=[]` already exists to prevent, on the category that decides whether the trash purge
-    may run. The three sum to `counts["orphan_files"]`, so a reader can reconcile them.
-    """
-    if not report.orphan_files:
-        return {}
-    buckets = {"lance_will_reclaim": 0, "beyond_lance_listing_floor": 0, "unknown": 0}
-    for orphan in report.orphan_files:
-        key = "unknown" if orphan.reclaimable_by_lance is None else ("lance_will_reclaim" if orphan.reclaimable_by_lance else "beyond_lance_listing_floor")
-        buckets[key] += 1
-    return buckets
-
-
 def _finding_identity(finding: BaseModel) -> str:
     """One finding's identity, whatever the model calls it — first present field wins.
 
@@ -371,14 +263,6 @@ def _finding_identity(finding: BaseModel) -> str:
     finding an operator needs to see, and a blank entry is the failure mode this function exists to end.
     """
     dumped = finding.model_dump()
-    # QUALIFIED FIRST. `path` is relative to something on every model that carries one, and `dataset`
-    # is that something — `OrphanFile.dataset` exists for exactly this ("so a finding is actionable
-    # without re-deriving it") and the loop below reaches `path` before it would ever look. Measured on
-    # the live estate 2026-09-16: 932 orphan files across 13 buckets, named `data/00110000….lance` and
-    # `_transactions/0-….txn`. Every Lance dataset has both of those directories, so an unqualified
-    # path is not merely unhelpful — it is not unique across the report.
-    if (root := dumped.get("dataset")) and (relative := dumped.get("path")):
-        return f"{root}/{relative}"
     # `location` is LAST, and the position is the whole care required: `OrphanedTrash` carries one
     # too and is identified by its `id`, so putting `location` ahead of `id` would silently rename an
     # existing category's findings in the report an operator reads every tick. Last, it reaches only
@@ -392,7 +276,8 @@ def _finding_identity(finding: BaseModel) -> str:
 
 
 async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQueue, sources: ReconcileSources | None) -> dict[str, int]:
-    """Queue a pass for every table, and a task for every trash record, that neither a schedule nor the queue holds.
+    """Queue a pass for every table, and a task for every trash record, that neither a schedule nor the queue holds, and
+    schedule an orphan check for every table holding neither a check's schedule nor a queued check.
 
     A table's first task comes with the catalog's announcement of it, its birth or its first commit, and each pass
     schedules the next (:mod:`maintenance.services.table_pass`); a table's drop announcement queues its trash task. So what
@@ -402,6 +287,11 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
 
     The tables and the trash are the drift report's own reads of this run (``sources``), so the audit reads each claim
     once; only where the report could not read them all are the claims and the trash read here.
+
+    A table's first check is held by its first pass, and each check holds its next, so a table found here lost its
+    check's schedule, or predates the checks. Its check is held a jittered time within the floor rather than queued at
+    once, so a lost schedules stream does not start every table's check in the same hour; held at the floor's interval,
+    since the interval a lost schedule carried is lost with it. A table in the trash gets none.
     """
     options = settings.storage_options()
     tables = sources.live_tables() if sources is not None else None
@@ -413,10 +303,17 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
     trashed = {str(uuid): record for record in records if (uuid := trash.object_uuid(record))}
     covered_tables = await queue.held("schedule", "table") | await queue.held("task", "table")
     covered_trash = await queue.held("schedule", "trash") | await queue.held("task", "trash")
-    queued = {"tables": 0, "trash": 0}
+    covered_checks = (await queue.held("schedule", "orphans") | await queue.held("task", "orphans")) if settings.orphan_check_enabled else set(tables)
+    queued = {"tables": 0, "trash": 0, "checks": 0}
+    now = datetime.now(UTC)
     for uuid, location in tables.items():
-        if uuid not in covered_tables and uuid not in trashed and await queue.enqueue(Task(kind="table", uuid=uuid, location=location)):
+        if uuid in trashed:
+            continue
+        if uuid not in covered_tables and await queue.enqueue(Task(kind="table", uuid=uuid, location=location)):
             queued["tables"] += 1
+        if uuid not in covered_checks:
+            jitter = timedelta(seconds=secrets.randbelow(int(FLOOR.total_seconds())))
+            queued["checks"] += await queue.schedule_first(Task(kind="orphans", uuid=uuid, location=location), now + jitter)
     for uuid, record in trashed.items():
         task = Task(kind="trash", uuid=uuid, location=trash.location_of(record), trashed=trash.kind_of(record))
         if uuid not in covered_trash and await queue.enqueue(task):

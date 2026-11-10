@@ -13,7 +13,7 @@ remove anyone's access to anything, because the object they grant on is gone: `g
 WHAT IT MUST NEVER TOUCH IS THE POINT OF THIS SUITE. `ungoverned_tables` is the inverse shape — a
 REAL table that carries no tuples — and a pass that "cleaned up drift" by acting on it would delete
 live data to fix an authorization gap. `unbound_namespaces` and `unreferenced_projects` are likewise
-real records, and `orphan_buckets`/`orphan_files`/`orphaned_trash` are bytes. None is in this
+real records, and `orphan_buckets`/`orphaned_trash` are bytes. None is in this
 increment, and the refusal is asserted per category rather than by a total, because a pass that
 planned one data-tier deletion among many revokes would still pass a count.
 

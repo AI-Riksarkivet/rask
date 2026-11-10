@@ -31,7 +31,7 @@ from lakehouse import trash
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash
-from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from maintenance.services.reconcile import CATEGORIES, ReconcileReport
 
 
 CATALOG = "http://catalog.test"
@@ -56,9 +56,8 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
     ns.register_table(RegisterTableRequest(id=["team", "renamed"], location=location.rstrip("/").rsplit("/", 1)[-1]))
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
-        counts={category: 0 for category in CATEGORIES if category != "orphan_files"},
+        counts=dict.fromkeys(CATEGORIES, 0),
         total=0,
-        skipped=[CategorySkipped(category="orphan_files", reason="deliberately off in this configuration")],
     )
     settings = MaintenanceSettings(
         s3_bucket="lance-catalog", s3_secret_access_key=SecretStr("unit"), control_root=control_root, trash_purge_enabled=True, catalog_url=CATALOG

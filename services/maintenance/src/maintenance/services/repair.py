@@ -17,7 +17,7 @@ WHAT IT REFUSES, BY NAME RATHER THAN BY OMISSION. `ungoverned_tables` is the INV
 reason this module has a refusal list at all: a real table, real bytes, no tuples. A pass that
 "repaired drift" by acting on it would delete live data to close an authorization gap — the single
 worst thing a cleaner can do. `unbound_namespaces` and `unreferenced_projects` are real records, and
-`orphan_buckets`/`orphan_files`/`orphaned_trash` are bytes whose deletion needs storage evidence this
+`orphan_buckets`/`orphaned_trash` are bytes whose deletion needs storage evidence this
 pass does not gather. Each is REFUSED with a reason rather than silently skipped, so a reader can see
 the pass considered it and declined, which is what distinguishes a bounded tool from an unfinished one.
 
@@ -108,7 +108,6 @@ _REFUSED: dict[str, str] = {
     "unbound_namespaces": "a real top-level namespace missing a warehouse BINDING record — it needs binding, and the data under it is live",
     "unreferenced_projects": "a real project record holding no tuples — it needs an admin grant, which is a decision a person makes (see `rebuild.py`)",
     "orphan_buckets": "storage nothing claims — deleting bytes needs a listing, a floor and an age this pass does not gather",
-    "orphan_files": "storage nothing claims — same as `orphan_buckets`, and the ordinary sweep clears most of it",
     "orphaned_trash": "a trash record naming an unmaintained root — it is the only remaining POINTER to those bytes, so dropping it strands them silently",
     "dangling_bindings": "a binding record pointing at a missing warehouse — a registry write, not an authz one",
 }
@@ -166,7 +165,7 @@ def plan_repair(report: ReconcileReport) -> tuple[list[RevokedObject], dict[str,
         if not findings:
             continue
         # PER CATEGORY, never per report. This estate's reconcile carries a storage-tier IncompleteScan
-        # on most ticks (`storage:datasets`, depth limits), and none of those feed a revoke — stopping
+        # on most ticks (`storage:<bucket>` depth limits), and none of those feed a revoke — stopping
         # the whole pass on any incompleteness would refuse every tick for a reason that cannot produce
         # a false ghost.
         if (why := _partial(report, category)) is not None:

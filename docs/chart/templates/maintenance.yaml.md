@@ -135,12 +135,19 @@ SUBTRACT: with both flags on the tick previews and reclaims nothing.
 [[LH-094]]. The floor raise writes ONE metadata-only commit to a dataset whose orphans
 sit above its Lance listing floor, so the next ordinary sweep can enumerate them. It
 deletes nothing — the delete stays `cleanup_old_versions`'s, under Lance's own rule.
-Rendered unconditionally for the same reason the orphan scan below is: a setting with
-no path from values is one no deployed estate can turn on, which is how the orphan
-scan sat permanently SKIPPED. TWO FLAGS, because "does this estate want the
-behaviour" and "does this tick act" are different questions, and the dry run defaults
-TRUE here where the purge's defaults false — the purge is gated behind a clean report
-and this pass is what MAKES the report clean, so it has no such gate in front of it.
+Rendered unconditionally: a setting with no path from values is one no deployed estate
+can turn on. TWO FLAGS, because "does this estate want the behaviour" and "does this
+check act" are different questions, and the dry run defaults TRUE here where the purge's
+defaults false: nothing gates this writer but these two flags, and the safe default for
+an ungated writer is to plan only.
+
+## `{{- $check := required "maintenance.orphanCheck is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.maintenance.orphanCheck }}`
+
+Each table's orphan check (owner, 2026-11-09/10) runs on the worker pods alone, which run every task: the web pods take
+none, so its three values render only there. Each is `required`, so a release upgraded with `--reuse-values` from one
+that predates them fails the render rather than starting a worker on a setting pydantic would refuse; `enabled: false`
+is a value, not an absent one, and renders. The schema holds `ceilingDays` to at least the one-day floor and
+`maxSeconds` to the 60 s the worker's settings accept.
 
 ## `- { name: MAINTENANCE_TUPLE_REBUILD_ENABLED, value: {{ hasKey .Values.maintenance "tupleRebuild" | ternary ...`
 
@@ -166,13 +173,6 @@ person holding a grant rather than by a reclaimer, so seeing what it would do mu
 record: it asks the catalog to end each one (`DELETE /management/v1/trash/{kind}/{uuid}`), which refuses a record whose
 place or data directories still hold objects, so it satisfies `repair.py`'s refusal of `orphaned_trash` rather than
 overturning it. Capped because each end is one listing PER RECORD.
-
-## `- { name: MAINTENANCE_ORPHAN_SCAN_ENABLED, value: {{ hasKey .Values.maintenance "orphanScan" | ternary .Val...`
-
-#128a: the orphan scan's lever. Rendered unconditionally rather than behind an `if`,
-because the whole defect was that the setting existed in config.py and had NO path
-from values — an env var that appears only when enabled is one nobody can discover
-from `kubectl describe`, and this one gates whether the purge can certify at all.
 
 ## `- { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }`
 

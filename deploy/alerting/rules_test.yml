@@ -703,7 +703,7 @@ tests:
               service: maintenance
             exp_annotations:
               summary: "No maintenance scan has COMPLETED in a day"
-              description: "The daily scan has not completed in 26 hours, so no orphan scan, listing floor or expired-trash purge ran. Either its schedule no longer reaches a worker, or the scan fails or overruns every time: compare maintenance_tasks_ended_total and maintenance_passes_overran_total for kind scan."
+              description: "The daily scan has not completed in 26 hours, so no storage walk or expired-trash purge ran. Either its schedule no longer reaches a worker, or the scan fails or overruns every time: compare maintenance_tasks_ended_total and maintenance_passes_overran_total for kind scan."
   - interval: 10m
     input_series:
       - series: 'maintenance_tasks_completed_total{kind="scan"}'
@@ -717,10 +717,12 @@ tests:
         exp_alerts: []
 
   # A task ended on its last delivery pages on the evaluation that sees it; the 0 its worker creates at start is what
-  # lets increase() see the first one. A flat zero stays quiet.
+  # lets increase() see the first one. A flat zero stays quiet. A table's orphan check is a kind of its own.
   - interval: 1m
     input_series:
       - series: 'maintenance_tasks_ended_total{kind="table"}'
+        values: "0x4 1x10"
+      - series: 'maintenance_tasks_ended_total{kind="orphans"}'
         values: "0x4 1x10"
       - series: 'maintenance_tasks_ended_total{kind="audit"}'
         values: "0x14"
@@ -735,6 +737,13 @@ tests:
             exp_annotations:
               summary: "Maintenance ended table tasks that failed on every delivery"
               description: "A table task failed, or outlived its worker, on each of its `maintenance.queue.maxDeliver` deliveries, and a worker ended it. The maintenance_task_ended ERROR line names the subject and the last error; kind unreadable is a message no task parses. Its next try is held `maintenance.queue.recheckHours` out, unless a commit queues it sooner."
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              kind: orphans
+            exp_annotations:
+              summary: "Maintenance ended orphans tasks that failed on every delivery"
+              description: "A orphans task failed, or outlived its worker, on each of its `maintenance.queue.maxDeliver` deliveries, and a worker ended it. The maintenance_task_ended ERROR line names the subject and the last error; kind unreadable is a message no task parses. Its next try is held `maintenance.queue.recheckHours` out, unless a commit queues it sooner."
 
   # A task running past its bound, the same way.
   - interval: 1m
@@ -751,7 +760,7 @@ tests:
               kind: scan
             exp_annotations:
               summary: "A maintenance scan task is running past its bound"
-              description: "A scan task has run past `maintenance.queue.maxPassSeconds` and still holds its task; at twice that its replica exits and the task is delivered again. The maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later commit's pass of its table can start."
+              description: "A scan task has run past its bound (`maintenance.queue.maxPassSeconds`, or `maintenance.orphanCheck.maxSeconds` for kind orphans) and still holds its task; at twice that its replica exits and the task is delivered again. The maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later commit's pass of its table can start."
 
   # ------------------------------------------------------------------------------------------------
   # The HTTP plane. Series names are the live store's, verified — `http_server_duration_milliseconds_*`,
@@ -1064,7 +1073,7 @@ tests:
               category: "orphaned_trash"
             exp_annotations:
               summary: "A reconcile drift category grew in the last two hours — orphaned_trash"
-              description: "The hourly audit's drift report is finding MORE of this drift category than it did two hours ago. Each category names a different disagreement between the registry, OpenFGA and object storage, and a rising one means something is producing it now rather than leaving residue from before. A gating category also blocks the expired-trash purge, so reclamation stops until it clears. Find the named objects in the `reconcile_drift` log line for the matching category; `orphaned_trash` and the other non-gating categories are counted and reported but never block the purge. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "The drift report (the hourly audit's, and the daily scan's, which adds the storage walk's two categories) is finding MORE of this drift category than it did two hours ago. Each category names a different disagreement between the registry, OpenFGA and object storage, and a rising one means something is producing it now rather than leaving residue from before. A gating category also blocks the expired-trash purge, so reclamation stops until it clears. Find the named objects in the `reconcile_drift` log line for the matching category; `orphaned_trash` and the other non-gating categories are counted and reported but never block the purge. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # THE 989 MUST NOT PAGE. It is residue from warehouse deletes that predate the fix clearing them —
   # a triage queue, not an incident, and nothing an on-call window can drain. This is the case the

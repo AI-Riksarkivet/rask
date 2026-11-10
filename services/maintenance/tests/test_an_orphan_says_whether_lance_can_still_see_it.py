@@ -1,11 +1,8 @@
 """An orphan Lance will reclaim itself and one Lance can never enumerate are different findings.
 
-THE GATE IS ONLY DEFENSIBLE IF THE TWO ARE TOLD APART. `purge.py::report_is_clean` counts
-`orphan_files` in `report.total`, so the trash purge cannot run while any orphan is reported — and most
-orphans clear themselves. Measured on the deployed estate 2026-09-18: the count went 1011 -> 32 inside
-ten minutes as the ordinary sweep reclaimed 979 files at the +7-day anniversary of the writes that
-produced them. Blocking the purge on a number that falls on its own is a control that fires for a week
-and then stops meaning anything; blocking it on the residue that never falls is the real signal.
+A FINDING IS ONLY ACTIONABLE IF THE TWO ARE TOLD APART, and most orphans clear themselves. Measured on the deployed
+estate 2026-09-18: the count went 1011 -> 32 inside ten minutes as the ordinary sweep reclaimed 979 files at the +7-day
+anniversary of the writes that produced them. Only the residue that never falls earns a listing-floor raise.
 
 WHAT DECIDES WHICH DEPENDS ON THE DIRECTORY. `cleanup_old_versions` clamps its listing of `_versions/`,
 `_transactions/` and `_deletions/` to the commit timestamp of the EARLIEST RETAINED MANIFEST, before the
@@ -99,6 +96,10 @@ def test_an_orphan_in_the_floor_s_second_is_lance_s_only_when_its_listing_places
     listed = within_second(floor)
     orphan = Path(uri) / "_transactions" / "99-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.txn"
     os.utime(orphan, (listed, listed))
+    # The scan names only a file it can place before it began reading, so it starts once the floor's second is over.
+    deadline = time.monotonic() + 3
+    while time.time() < math.floor(floor) + 1.05:
+        assert time.monotonic() < deadline, "the clock did not move"
 
     scan = scan_dataset(pafs.LocalFileSystem(), uri, prefix=prefix)
 

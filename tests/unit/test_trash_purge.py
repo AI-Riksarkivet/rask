@@ -89,14 +89,14 @@ def doors(tmp_path: Path) -> Iterator[respx.MockRouter]:
         yield router
 
 
-def _clean_report(skipped: Iterable[str] = ("orphan_files",)) -> ReconcileReport:
+def _clean_report(skipped: Iterable[str] = ("unbound_namespaces",)) -> ReconcileReport:
     """A drift report that certifies the estate: every category checked and empty, bar deliberate skips."""
     skips = list(skipped)
     return ReconcileReport(
         checked_at=_NOW.isoformat(),
         counts={category: 0 for category in CATEGORIES if category not in skips},
         total=0,
-        skipped=[CategorySkipped(category=category, reason="deliberately off in this configuration") for category in skips],
+        skipped=[CategorySkipped(category=category, reason="warehouses are off") for category in skips],
     )
 
 

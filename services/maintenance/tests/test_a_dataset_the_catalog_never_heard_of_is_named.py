@@ -10,10 +10,6 @@ each miss it for a structural reason:
   outside its domain by construction;
 * `orphan_buckets` is per BUCKET and `lance-catalog` is claimed by a real warehouse.
 
-`orphan_files` counted some of its files, which is the misleading part — that category answers "which
-files inside a known dataset are unreferenced", so it described the residue of a thing the report
-never said existed.
-
 THE INVERSE OF `ungoverned_tables`, AND THAT IS THE POINT. There the catalog knows a table and
 authorization does not; here STORAGE holds a dataset and the catalog does not. Both are real bytes
 with a governance gap, and neither may ever be resolved by deleting the data — which is why this
@@ -96,7 +92,7 @@ def test_a_dataset_no_manifest_row_names_is_reported_by_its_location(discovered:
 
 
 def _category(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> mod.ReconcileReport:
-    """Drive `_orphan_category` with storage stubbed, so only the guard is under test."""
+    """Drive the storage walk with storage stubbed, so only the guard is under test."""
     monkeypatch.setattr(mod, "fs_and_base", lambda _uri, _opts: (object(), ""))
     monkeypatch.setattr(mod, "_scannable_buckets", lambda _r, _s, _src: ["lance-catalog"])
     monkeypatch.setattr(
@@ -104,13 +100,10 @@ def _category(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> mod.Reco
         "discover_datasets",
         lambda _fs, _bucket, max_depth=3: SimpleNamespace(uris=["s3://lance-catalog/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"], truncated=[]),
     )
-    monkeypatch.setattr(
-        mod, "scan_datasets", lambda _fs, _datasets, _opts: SimpleNamespace(orphans=[], incomplete=[], excluded=[], bytes_by_dataset={}, files_by_dataset={})
-    )
 
-    settings = MaintenanceSettings(s3_bucket="lance-catalog", s3_access_key_id="unit", s3_secret_access_key=SecretStr("unit"), orphan_scan_enabled=True)
+    settings = MaintenanceSettings(s3_bucket="lance-catalog", s3_access_key_id="unit", s3_secret_access_key=SecretStr("unit"))
     report = mod.ReconcileReport(checked_at="2026-09-20T00:00:00Z")
-    mod._orphan_category(report, settings, sources)
+    mod._walk_storage(report, settings, sources, walk=True)
     return report
 
 

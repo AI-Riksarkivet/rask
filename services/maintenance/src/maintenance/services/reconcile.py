@@ -39,7 +39,8 @@ import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
-from typing import Any
+from functools import partial
+from typing import Any, Final
 
 import lance
 import pyarrow.fs as pafs
@@ -57,7 +58,6 @@ from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.naming import TableIds
-from maintenance.services.orphans import OrphanFile, scan_datasets
 
 
 log = logging.getLogger(__name__)
@@ -95,7 +95,6 @@ CATEGORIES: tuple[str, ...] = (
     "ungoverned_tables",
     "unregistered_datasets",
     "absent_datasets",
-    "orphan_files",
 )
 
 #: Categories that are REPORTED but do not gate the #79 purge — counted, named, visible in every
@@ -188,9 +187,7 @@ class UnregisteredDataset(BaseModel):
     answers 404 from the table door, and NOTHING in this report counted it. The two neighbours that
     sound like they should each miss it structurally: `ungoverned_tables` compares REGISTERED tables
     against FGA tuples, so a dataset in neither set is outside its domain; `orphan_buckets` is per
-    bucket and `lance-catalog` is claimed by a real warehouse. `orphan_files` counted some of its
-    FILES, which is worse than silence — it described the residue of a thing the report never said
-    existed.
+    bucket and `lance-catalog` is claimed by a real warehouse.
 
     IT IS REAL BYTES, so `repair.py` refuses it by name for the same reason it refuses
     `ungoverned_tables`: the resolution is registration, never deletion.
@@ -262,24 +259,13 @@ class CategoryUnavailable(BaseModel):
 
 
 class CategorySkipped(BaseModel):
-    """A category deliberately not checked — either because its rule does not apply, or because
-    nobody looked. Those are different facts and `report_is_clean` must be able to tell them apart.
-
-    ``coverage_gap`` carries the distinction as DATA rather than leaving the gate to infer it from
-    the category name. Two skips shipped here and they are opposites:
-
-      * ``unbound_namespaces`` when warehouses are off — the rule genuinely does not apply. There are
-        no bindings, so nothing was missed and nothing can be found. NOT a gap.
-      * ``orphan_files`` when the scan is off — the rule applies and we chose not to run it. The file
-        layer was never inspected. A GAP, and the #128a defect was that the gate could not see it.
-
-    Defaults False so a does-not-apply skip added later cannot silently block every purge in the
-    estate; a genuine gap has to SAY so, which is the whole job of the flag.
-    """
+    """A category deliberately not checked, with why: ``unbound_namespaces`` while warehouses are off, where the rule
+    does not apply, and the two the storage walk finds while the run walks no storage (the hourly audit). Kept out of
+    ``counts``, so a category nobody checked never reads as a zero. A skipped walk gates the purge
+    (:data:`WALK_CATEGORIES`); ``unbound_namespaces`` does not."""
 
     category: str
     reason: str
-    coverage_gap: bool = False
 
 
 class IncompleteScan(BaseModel):
@@ -313,28 +299,11 @@ class ReconcileReport(BaseModel):
     #: Trash naming a root nothing maintains. Reported, never gating — see `NON_GATING_CATEGORIES`.
     orphaned_trash: list[OrphanedTrash] = Field(default_factory=list)
     dangling_bindings: list[DanglingBinding] = Field(default_factory=list)
-    #: Files under a dataset prefix that no LIVE version references (the reclamation gap).
+    #: Datasets on storage no catalog record names, from the daily walk.
     unregistered_datasets: list[UnregisteredDataset] = Field(default_factory=list)
     #: The INVERSE of `unregistered_datasets`: a catalog record whose location holds no bytes
     #: ([[LH-192]]). Reported, never gating.
     absent_datasets: list[AbsentDataset] = Field(default_factory=list)
-    orphan_files: list[OrphanFile] = Field(default_factory=list)
-    #: How many of `orphan_files` the purge GATES on — those Lance can never reclaim, plus any whose
-    #: class could not be decided. Its own field because it is not `len(orphan_files)`: an orphan below
-    #: its dataset's listing floor, or any data or index orphan, clears itself on the ordinary sweep, and blocking on those is a delay
-    #: rather than a control. Measured 2026-09-18, `orphan_files` fell 1011 -> 32 in ten minutes when
-    #: 979 of them passed 7 days; the 32 that stayed are the finding.
-    orphan_files_blocking: int = 0
-    #: Storage occupied per bucket, from the orphan scan's own listing ([[LH-074]]). Only SCANNED
-    #: datasets contribute, so a bucket whose datasets were excluded or unreadable is absent rather
-    #: than zero — a roll-up must not report a partly-seen estate as a small one.
-    bytes_by_bucket: dict[str, int] = Field(default_factory=dict)
-    files_by_bucket: dict[str, int] = Field(default_factory=dict)
-    #: Datasets the unreferenced-file scan does not examine and whose omission hides nothing — a shallow
-    #: clone, a branch, an unsupported feature flag, a history past the version ceiling. Reported so the
-    #: coverage stays visible: "we correctly excluded 419" and "we scanned everything" are different
-    #: facts. Deliberately not in `incomplete`, which gates the purge.
-    excluded_datasets: list[str] = Field(default_factory=list)
     unavailable: list[CategoryUnavailable] = Field(default_factory=list)
     skipped: list[CategorySkipped] = Field(default_factory=list)
     incomplete: list[IncompleteScan] = Field(default_factory=list)
@@ -524,7 +493,7 @@ def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptio
     root turns one unreachable tenant bucket — a deleted warehouse, revoked credentials, a quarantined
     tenant — into a `CategoryUnavailable`, which blocks `report_is_clean` and with it the purge, for
     the WHOLE estate. So a failed root is reported as an `IncompleteScan` and the readable ones still
-    report, which is exactly the rule the orphan scan already follows: name the input to distrust
+    report, which is exactly the rule the storage walk follows: name the input to distrust
     rather than either hiding the gap or stopping everything.
     """
     found: set[tuple[str, str]] = set()
@@ -625,7 +594,7 @@ def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovere
     THE MISSING HALF OF THE CATALOG<->STORAGE PAIR ([[LH-192]]). `_unregistered_datasets` answers
     "storage holds a dataset and the catalog does not"; this answers the reverse, which nothing did.
 
-    IT COSTS NO NEW I/O, which is why it rides `_orphan_category`'s walk. `discovered` is the URI set
+    IT COSTS NO NEW I/O, which is why it rides `_walk_storage`'s walk. `discovered` is the URI set
     that pass already built for its own comparison, and the location comes from a column of `__manifest`
     the reconciler was simply not selecting (`lance_docs/ns_catalog/catalog/dir/index.md:103-111`).
 
@@ -1095,15 +1064,18 @@ def build_report(
     return report
 
 
-_ORPHAN_SCAN_OFF = "MAINTENANCE_ORPHAN_SCAN_ENABLED is off — the per-dataset file scan is a different order of work from the store comparison"
+_UNWALKED = "this run walks no storage: the hourly audit compares the stores and leaves the bucket walk to the daily scan"
+#: The categories only the storage walk finds. A report that skipped them saw no bucket, so it carries none of the walk's
+#: ``storage:<bucket>`` notes either, and the purge's gate refuses it (:func:`maintenance.services.purge.report_is_clean`).
+WALK_CATEGORIES: Final = ("unregistered_datasets", "absent_datasets")
 
 
 def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources) -> list[str]:
-    """Every bucket the orphan scan should open: the configured list PLUS every registered warehouse.
+    """Every bucket the storage walk lists: the configured list PLUS every registered warehouse.
 
     A bucket is created by an API CALL at runtime, so every tenant provisioned since the last config edit is
-    invisible to the configured list alone (#81): a scan of that list would report zero orphans for them, and a
-    zero in a drift report is read as "checked and clean".
+    invisible to the configured list alone (#81): a walk of that list would report no unregistered dataset for them, and
+    a zero in a drift report is read as "checked and clean".
 
     Reuses the registry `_read_sources` ALREADY loaded rather than reading it again. Two reads would
     be two answers — the second could disagree with the one `orphan_buckets` and `dangling_bindings`
@@ -1127,9 +1099,9 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, s
         return buckets
     for record in sources.warehouse_records or []:
         bucket = str(record.get("bucket") or "")
-        # Deactivated warehouses are still SCANNED, unlike the sweep, which skips them. Reporting is
-        # not rewriting: a quarantined tenant's orphans are exactly what an operator wants named
-        # before deciding whether to offboard it, and naming them changes nothing on disk.
+        # Deactivated warehouses are still WALKED, unlike a table's pass, which skips them. Reporting is
+        # not rewriting: a quarantined tenant's unregistered datasets are exactly what an operator wants
+        # named before deciding whether to offboard it, and naming them changes nothing on disk.
         if bucket and bucket not in buckets:
             buckets.append(bucket)
     return buckets
@@ -1146,9 +1118,9 @@ def _registration_drift(report: ReconcileReport, sources: Sources, datasets: lis
     sets, so a catalog read failure would otherwise report every dataset in the estate as unregistered,
     and an unread trash index every table in the trash ([[LH-319]]).
 
-    Measured 2026-09-19: `orphan_files` counted an unknown dataset's files while no category said the
-    dataset was unknown. Measured 2026-09-22: `bronze$events` answered `describe` 200 at a location
-    holding nothing, over a clean report.
+    Measured 2026-09-19: an unknown dataset's files were counted while no category said the dataset was
+    unknown. Measured 2026-09-22: `bronze$events` answered `describe` 200 at a location holding nothing,
+    over a clean report.
     """
     if (unread := _first(sources.tables_error, sources.trash_error)) is not None:
         # The same comparison read from both sides: an unread input makes both answers unknown, not one.
@@ -1186,50 +1158,36 @@ def _registration_drift(report: ReconcileReport, sources: Sources, datasets: lis
             )
 
 
-def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources) -> None:
-    """Attach the unreferenced-file findings, or say honestly why they are absent.
+def _walk_storage(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources, *, walk: bool) -> None:
+    """Walk every bucket for its datasets and attach the two registration categories, or say why they are absent.
 
-    Gated separately because it opens EVERY dataset and unions the file references of EVERY live
-    version, across the data buckets — a different order of work from comparing three stores. When
-    off it is SKIPPED with a reason, never reported as zero: a 0 that means "we did not look" is the
-    one number this report must never print.
+    The walk lists directories, about two requests per directory, so it grows with the estate: the daily scan runs it
+    and the hourly audit does not (``walk``), and a run that does not walk SKIPS both categories with the reason, never
+    a zero, since a 0 that means "we did not look" is the one number this report must never print. What is inside each
+    dataset (its unreferenced files) is no part of this report.
+
+    Every storage call is guarded, like every other source in this module: a drift report that 500s on one bad store
+    tells you nothing about the other categories. A failure is UNAVAILABLE with the reason, or a ``storage:<bucket>``
+    note in ``incomplete``, and both block the purge (:func:`maintenance.services.purge.report_is_clean`).
     """
-    if not settings.orphan_scan_enabled:
-        # coverage_gap: the rule APPLIES and we did not run it, so the file layer is unexamined. That
-        # blocks `report_is_clean`, and therefore the #79 purge — reclaiming bytes on the strength of
-        # a scan that never opened a dataset is the failure the report-first rule exists to prevent.
-        report.skipped.append(CategorySkipped(category="orphan_files", reason=_ORPHAN_SCAN_OFF, coverage_gap=True))
-        # [[LH-176]] rides the SAME walk, so it is unrun for the same reason and must say so — a
-        # category silently absent from counts, unavailable AND skipped is the failure
-        # `test_a_fully_consistent_estate_reports_no_drift` exists to catch.
-        #
-        # NOT a coverage_gap, unlike its neighbour one line up. The flag blocks the #79 purge, and the
-        # purge reclaims expired TRASH bytes — which an unregistered dataset is not and which no
-        # amount of not-looking-for-one can change. Same reasoning that keeps this category out of
-        # `report.total`: it is a registration fact, not a storage one the purge can act differently on.
-        report.skipped.append(CategorySkipped(category="unregistered_datasets", reason=_ORPHAN_SCAN_OFF, coverage_gap=False))
-        # [[LH-192]] rides the same walk, so it is unrun whenever they are — not a `coverage_gap`, for
-        # the reason its mirror above gives.
-        report.skipped.append(CategorySkipped(category="absent_datasets", reason=_ORPHAN_SCAN_OFF, coverage_gap=False))
+    if not walk:
+        report.skipped.extend(CategorySkipped(category=category, reason=_UNWALKED) for category in WALK_CATEGORIES)
         return
-    # GUARDED, like every other source in this module. The three storage calls on this path — the
-    # filesystem construction here, `discover_datasets` per bucket, and `scan_datasets` below — used to
-    # be two-thirds unguarded, so a transient endpoint failure raised out of `reconcile()` and answered
-    # the cron tick 500, discarding a report whose seven store categories had already completed. That is
-    # exactly what this module's own docstring forbids: "a drift report that 500s on one bad store tells
-    # you nothing about the other six." UNAVAILABLE with the reason, which also blocks the #79 purge
-    # (`report_is_clean`) — a category nobody could look at must never read as clean.
+    buckets = _scannable_buckets(report, settings, sources)
     try:
         fs, _ = fs_and_base(f"s3://{settings.s3_bucket}", settings.storage_options())
-    except Exception as exc:  # noqa: BLE001 — any storage failure degrades ONE category, never the report
-        report.unavailable.append(CategoryUnavailable(category="orphan_files", reason=f"object storage unreachable: {exc}"))
-        report.incomplete.append(IncompleteScan(source="storage:datasets", reason=f"the unreferenced-file scan could not open object storage: {exc}"))
+    except Exception as exc:  # noqa: BLE001 — any storage failure degrades the walk's categories, never the report
+        reason = f"object storage unreachable: {exc}"
+        report.unavailable.extend(CategoryUnavailable(category=category, reason=reason) for category in WALK_CATEGORIES)
+        report.incomplete.extend(
+            IncompleteScan(source=f"storage:{bucket}", reason=f"the bucket walk could not open object storage: {exc}") for bucket in buckets
+        )
         return
     datasets: list[tuple[str, str]] = []
     #: The buckets discovery REACHED, as opposed to the ones it was asked for — a bucket whose listing
     #: raised is not evidence about anything registered into it.
     walked_buckets: list[str] = []
-    for bucket in _scannable_buckets(report, settings, sources):
+    for bucket in buckets:
         try:
             found = discover_datasets(fs, bucket, max_depth=settings.discovery_max_depth)
         except Exception as exc:
@@ -1238,49 +1196,11 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         walked_buckets.append(bucket)
         datasets.extend((uri, uri.removeprefix("s3://")) for uri in found.uris)
         # The depth bound is a REAL gap in coverage, so it becomes a real incomplete-scan note: a
-        # dataset nested deeper than the walk reaches was never opened, and `report_is_clean` — the
-        # gate the #79 purge waits on — must not certify an estate whose file layer we only partly saw.
+        # dataset nested deeper than the walk reaches was never seen, and `report_is_clean` — the
+        # gate the #79 purge waits on — must not certify an estate whose datasets we only partly saw.
         for prefix in found.truncated:
-            report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
-    # Before the per-dataset scan and not gated on it: whether the catalog and storage agree a dataset
-    # EXISTS is a different question from which files inside it are unreferenced.
+            report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not walked"))
     _registration_drift(report, sources, datasets, walked_buckets=walked_buckets)
-
-    try:
-        scan = scan_datasets(fs, datasets, settings.storage_options())
-    except Exception as exc:  # noqa: BLE001 — same rule as the filesystem guard above
-        report.unavailable.append(CategoryUnavailable(category="orphan_files", reason=f"the per-dataset file scan failed: {exc}"))
-        report.incomplete.append(IncompleteScan(source="storage:datasets", reason=f"the unreferenced-file scan aborted: {exc}"))
-        return
-    report.orphan_files = scan.orphans
-    report.counts["orphan_files"] = len(scan.orphans)
-    # THE COUNT IS EVERY ORPHAN; THE GATE IS ONLY WHAT LANCE CANNOT TAKE. `reclaimable_by_lance is True`
-    # means Lance still lists the file (a data or index file, or one below its dataset's listing floor),
-    # so the ordinary sweep collects it once it passes the 7-day unverified rule — waiting on that is a
-    # delay, not a control. `None` gates with the blocking class: an unreadable floor is "we could not
-    # tell", and the purge deletes bytes on the strength of this report.
-    report.orphan_files_blocking = sum(1 for orphan in scan.orphans if orphan.reclaimable_by_lance is not True)
-    report.total += report.orphan_files_blocking
-    for note in scan.incomplete:
-        report.incomplete.append(IncompleteScan(source="storage:datasets", reason=note))
-    # Its OWN field, never `incomplete` (which gates the purge — see `DatasetOrphanScan.excluded`)
-    # and never `counts` (which feeds `report.total` above and `report_is_clean`'s "drifting" message,
-    # so a key here would either inflate the finding total or name a correct exclusion as drift).
-    report.excluded_datasets = list(scan.excluded)
-    # STORAGE ACCOUNTING ([[LH-074]]), rolled up from the same listing the orphan scan already read —
-    # no extra I/O. Per BUCKET, because that is the unit the scan walks and the warehouse registry
-    # maps a bucket to its project; a dataset-level map would be unbounded in the log.
-    report.bytes_by_bucket = _roll_up(scan.bytes_by_dataset)
-    report.files_by_bucket = _roll_up(scan.files_by_dataset)
-
-
-def _roll_up(by_dataset: dict[str, int]) -> dict[str, int]:
-    """Sum a per-dataset map by bucket. `s3://bucket/prefix` -> `bucket`."""
-    totals: dict[str, int] = {}
-    for uri, value in by_dataset.items():
-        bucket = uri.removeprefix("s3://").split("/", 1)[0]
-        totals[bucket] = totals.get(bucket, 0) + value
-    return totals
 
 
 async def reconcile(
@@ -1299,6 +1219,7 @@ async def reconcile(
     into_sources: list[Sources] | None = None,
     platform_buckets: Iterable[str] | None = None,
     bucket_client: Any = None,
+    walk: bool,
 ) -> ReconcileReport:
     """Scan the three stores and REPORT their disagreements. Deletes nothing; mutates nothing.
 
@@ -1314,6 +1235,9 @@ async def reconcile(
     ``warehouses_enabled`` mirrors the catalog's own switch and is passed IN — compaction does not own
     that setting, and inferring it from the presence of records would report an estate mid-migration as
     clean. With warehouses off, ``unbound_namespaces`` is skipped, not zero.
+
+    ``walk`` lists every bucket for its datasets (:func:`_walk_storage`): the daily scan walks, the hourly audit does
+    not, and its two categories are then skipped, not zero.
     """
     # `resolved_control_root`, not `resolved_policy_root`. This defaulted to the POLICY root while its
     # own docstring above says "the catalog's control root … the one place the project/warehouse/binding
@@ -1353,21 +1277,20 @@ async def reconcile(
         warehouses_enabled=warehouses_enabled,
         platform_buckets=platform,
     )
-    # The unreferenced-FILE pass runs after the store comparison and is separately gated: it opens
-    # every dataset rather than comparing three stores, so it is a different order of work. Blocking
-    # Lance/S3 IO, so it goes to the threadpool like every other read here.
-    await run_in_threadpool(_orphan_category, report, settings, sources)
+    # The storage walk runs after the store comparison and only where the caller asks for it: it lists every
+    # bucket's directories rather than comparing three stores. Blocking S3 IO, so it goes to the threadpool like
+    # every other read here.
+    await run_in_threadpool(partial(_walk_storage, walk=walk), report, settings, sources)
     # ON THE WIRE, not just in a log line. This report gates the purge and answers whether the estate's
     # storage state is understood; a number only a reader of pod logs can see is one no alert can fire
     # on. Best-effort — a telemetry failure must never fail the reconcile that produced the finding.
     #
-    # AFTER THE ORPHAN PASS, which is the whole point of its position. `build_report` compares three
-    # STORES; `_orphan_category` then attaches the three categories that read STORAGE
-    # (`unregistered_datasets`, `absent_datasets`, `orphan_files`). Recording inside `build_report`
-    # meant the gauge carried ten categories while the log carried thirteen — measured live
-    # 2026-09-24, with `absent_datasets=9` and `orphan_files=1` BOTH non-zero and both blocking the
-    # trash purge, and neither reaching a series any alert could fire on. The log and the metric now
-    # read the same dict, one line apart, so they cannot disagree again.
+    # AFTER THE WALK, which is the whole point of its position. `build_report` compares three STORES;
+    # `_walk_storage` then attaches the categories that read STORAGE (`unregistered_datasets`,
+    # `absent_datasets`). Recording inside `build_report` meant the gauge carried fewer categories than
+    # the log — measured live 2026-09-24, with `absent_datasets=9` non-zero, blocking the trash purge,
+    # and reaching no series any alert could fire on. The log and the metric read the same dict, one
+    # line apart, so they cannot disagree.
     try:
         metrics.record_drift(report.counts)
     except Exception as exc:  # noqa: BLE001 — reporting about a report must not outrank it
@@ -1379,9 +1302,6 @@ async def reconcile(
             "counts": report.counts,
             "unavailable": [u.category for u in report.unavailable],
             "incomplete": len(report.incomplete),
-            # Beside `incomplete`: without it a correctly-excluded estate and a fully-scanned one
-            # print the same line.
-            "excluded": len(report.excluded_datasets),
         },
     )
     return report

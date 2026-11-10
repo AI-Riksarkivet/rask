@@ -124,11 +124,11 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: The port the worker's process serves its probes on (:mod:`maintenance.worker`), for the kubelet and for its
     #: sidecar's health check, which is what lets the sidecar leave when the worker does.
     worker_port: int = Field(default=8001, ge=1, le=65535, alias="MAINTENANCE_WORKER_PORT")
-    #: The audit's schedule, a NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs, the
-    #: release and the lost-task backstop run once per firing on one replica, whatever the replica count.
+    #: The audit's schedule, a NATS message schedule (ADR-51): the drift report without the storage walk, its repairs,
+    #: the release and the lost-task backstop run once per firing on one replica, whatever the replica count.
     audit_schedule: str = Field(default="@hourly", alias="MAINTENANCE_AUDIT_SCHEDULE")
-    #: The scan's schedule: the audit with the orphan scan, which opens every table, and then the listing floors and the
-    #: purge its report certifies (owner 2026-11-09: daily). At half past midnight, so it does not fire with the hourly
+    #: The scan's schedule: the audit with the storage walk, which lists every bucket's directories, and then the purge
+    #: its report certifies (owner 2026-11-09: daily). At half past midnight, so it does not fire with the hourly
     #: audit, whose claim it would wait out (the two never run at once). A six-field cron, seconds first: nats-server
     #: 2.15.2 refuses a five-field one (10189, measured 2026-11-09).
     scan_schedule: str = Field(default="0 30 0 * * *", alias="MAINTENANCE_SCAN_SCHEDULE")
@@ -247,8 +247,9 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: act they guard.
     trash_purge_dry_run: bool = Field(default=False, alias="MAINTENANCE_TRASH_PURGE_DRY_RUN")
 
-    #: Write one metadata-only commit to a dataset whose orphans sit above its Lance listing floor, so
-    #: the next ordinary sweep can enumerate them ([[LH-094]], owner ruling 2026-09-19).
+    #: Write one metadata-only commit to a table whose orphans sit above its Lance listing floor, so the
+    #: table's next pass can enumerate them ([[LH-094]], owner ruling 2026-09-19). Its table's own orphan
+    #: check decides it, on that check's findings alone.
     #:
     #: OFF BY DEFAULT because it writes a version to a GOVERNED table for a GC side effect, which is a
     #: real cost an estate should choose rather than inherit. It is the cheaper of the two routes the
@@ -260,14 +261,20 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: turning it on to SEE what it would touch must not thereby commit to a governed dataset.
     floor_raise_enabled: bool = Field(default=False, alias="MAINTENANCE_FLOOR_RAISE_ENABLED")
     #: Run the real selection and refusals, write nothing. DEFAULT TRUE, the opposite of the trash
-    #: purge's, and deliberately: the purge is gated behind a report that must first run clean, while
-    #: this pass is what MAKES that report clean and so has no such gate in front of it. Its only brake
-    #: is this flag.
+    #: purge's, and deliberately: nothing gates this writer but its two flags, so its brake is this one.
     floor_raise_dry_run: bool = Field(default=True, alias="MAINTENANCE_FLOOR_RAISE_DRY_RUN")
-    #: Per-tick ceiling on datasets committed to. The remainder is REPORTED (`FloorReport.capped`): a
-    #: store rebuild strands EVERY dataset at once, so an uncapped pass would turn one cron fire into a
-    #: commit against every governed table in the estate.
-    floor_raise_max_per_tick: int = Field(default=10, ge=1, le=1000, alias="MAINTENANCE_FLOOR_RAISE_MAX_PER_TICK")
+
+    #: Each table's orphan check: a task of its own per table (`maintenance.services.orphan_check`), held at an
+    #: interval that adapts to what it finds between a one-day floor and this ceiling (owner, 2026-11-09/10). Off, no
+    #: check is scheduled, and one already held ends when it fires.
+    orphan_check_enabled: bool = Field(default=True, alias="MAINTENANCE_ORPHAN_CHECK_ENABLED")
+    #: The longest a clean or an excluded table goes between two checks, in days: a clean table's interval doubles up to
+    #: it, and an excluded table (a branch, MemWAL, an unsupported flag, too many files) waits it (owner, 2026-11-10:
+    #: "30 days is fine"). A table whose floor was raised waits its retention and a day, whatever this says.
+    orphan_check_ceiling_days: int = Field(default=30, ge=1, alias="MAINTENANCE_ORPHAN_CHECK_CEILING_DAYS")
+    #: A check's own bound, as `max_pass_seconds` is a pass's: past it the check is logged and counted, and at twice it its
+    #: replica ends itself.
+    orphan_check_max_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_ORPHAN_CHECK_MAX_SECONDS")
 
     #: Rebuild authorization tuples the control-plane registries still justify ([[LH-061]], owner
     #: ruling 2026-09-19 overturning the standing deferral on a write-capable reconcile).
@@ -316,13 +323,6 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     control_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_CONTROL_EMIT_ENABLED")
     control_pubsub: str = Field(default="catalog-control-pubsub", alias="MAINTENANCE_CONTROL_PUBSUB")
 
-    # The orphan-FILE pass is separately gated because it is a different ORDER of work from the rest
-    # of the drift report: the others compare three stores (O(stores)), this opens every dataset and
-    # unions the file references of every live version (O(datasets x versions x fragments)) across the
-    # DATA buckets. Off by default so the cheap report stays cheap; step 4's policy surface gives it a
-    # cadence of its own.
-    orphan_scan_enabled: bool = Field(default=False, alias="MAINTENANCE_ORPHAN_SCAN_ENABLED")
-
     # How deep `discover_datasets` walks a bucket looking for the `_versions/` marker. A subtree the
     # walk stops inside becomes an `IncompleteScan`, which blocks `purge.report_is_clean` — and the
     # walk cannot tell "no dataset here" from "did not look deep enough", so a prefix that will never
@@ -334,8 +334,8 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # nothing, so raising it reveals no hidden data. The default stays 3 because that measurement
     # covers one of 93 buckets.
     #
-    # BOUNDED at both ends deliberately. 0 scans nothing; an unbounded walk is not a freedom but a
-    # foot-gun, because the orphan scan opens every dataset the walk discovers.
+    # BOUNDED at both ends deliberately. 0 walks nothing; an unbounded walk is not a freedom but a
+    # foot-gun, because the walk lists every directory it descends into, in every bucket.
     discovery_max_depth: int = Field(default=3, ge=1, le=16, alias="MAINTENANCE_DISCOVERY_MAX_DEPTH")
     # The reconciler reads the catalog's registries (`_projects/`, `_warehouses/`) off the control root.
     # Defaults to the primary bucket, matching the catalog's own LANCE_CONTROL_ROOT default; override

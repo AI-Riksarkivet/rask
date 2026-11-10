@@ -1,8 +1,10 @@
 """What each task on the work queue runs, and the worker's lifetime in its own process (ADR 0198 §2).
 
-Four kinds: a table's pass (:mod:`maintenance.services.table_pass`), which schedules the table's next one; a trash
-record's release at its deadline (:mod:`maintenance.services.trash_task`); the hourly audit and the daily scan
-(:mod:`maintenance.services.audit`). Each runs on one replica at a time, as the queue hands it out.
+Five kinds: a table's pass (:mod:`maintenance.services.table_pass`), which schedules the table's next one and, when none
+is held, its orphan check; a table's orphan check (:mod:`maintenance.services.orphan_check`), which schedules its next
+one and, after it raised the table's listing floor, holds the table's pass; a trash record's release at its deadline
+(:mod:`maintenance.services.trash_task`); the hourly audit and the daily scan (:mod:`maintenance.services.audit`). Each
+runs on one replica at a time, as the queue hands it out.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Final, get_args
 
@@ -20,8 +23,9 @@ from lakehouse.control_emit import ControlEmitter
 from lakehouse.governed.secrets import fetch_required_secrets
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
-from maintenance.core.metrics import create_task_series
+from maintenance.core.metrics import create_orphan_check_series, create_task_series
 from maintenance.services.audit import run_audit, run_scan
+from maintenance.services.orphan_check import FLOOR, run_orphan_check
 from maintenance.services.queue import QueueUnavailableError, Task, TaskKind, TaskQueue, Worker, creds_document
 from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask, emit_pass_lineage, emit_zero_baselines, run_table_pass
@@ -34,8 +38,8 @@ log = logging.getLogger(__name__)
 async def run_task(task: Task, *, settings: MaintenanceSettings, queue: TaskQueue, emitter: MaintenanceEmitter, control: ControlEmitter) -> None:
     """Run one task off the queue. A failure raises, and the worker delivers the task again or ends it.
 
-    A table's next pass that the bus does not take is left to the audit, which queues every table no schedule holds:
-    running the whole pass again to retry one publish would cost the table's reads for nothing.
+    A table's next pass, or check, that the bus does not take is left to the audit, which queues or schedules every one no
+    schedule holds: running the whole pass again to retry one publish would cost the table's reads for nothing.
     """
     match task.kind:
         case "table":
@@ -45,14 +49,34 @@ async def run_task(task: Task, *, settings: MaintenanceSettings, queue: TaskQueu
                 return
             try:
                 await queue.schedule_at(task, outcome.next_due)
+                if settings.orphan_check_enabled:
+                    # A check held already keeps its time: the guarded hold leaves it standing.
+                    await queue.schedule_first(Task(kind="orphans", uuid=task.uuid, location=task.location), datetime.now(UTC) + FLOOR)
             except QueueUnavailableError as exc:
                 log.warning("maintenance_next_pass_unscheduled", extra={"uuid": task.uuid, "error": str(exc)[:300]})
+        case "orphans":
+            await _check_orphans(task, settings=settings, queue=queue)
         case "trash":
             await run_trash_task(task, settings=settings, queue=queue)
         case "audit":
             await run_audit(settings, queue=queue)
         case "scan":
             await run_scan(settings, control=control)
+
+
+async def _check_orphans(task: Task, *, settings: MaintenanceSettings, queue: TaskQueue) -> None:
+    """Run ``task``'s check, hold the table's pass after a raise so its cleanup runs on the raised floor, and hold the next
+    check at the interval the check chose, which rides the schedule's body."""
+    checked = await run_in_threadpool(run_orphan_check, task, settings)
+    now = datetime.now(UTC)
+    try:
+        if checked.raised:
+            await queue.follow_up(Task(kind="table", uuid=task.uuid, location=task.location), now + timedelta(seconds=settings.commit_pass_delay_seconds))
+        if checked.next_check is not None:
+            hours = int(checked.next_check.total_seconds() // 3600)
+            await queue.schedule_at(task.model_copy(update={"interval_hours": hours}), now + checked.next_check)
+    except QueueUnavailableError as exc:
+        log.warning("maintenance_next_check_unscheduled", extra={"uuid": task.uuid, "error": str(exc)[:300]})
 
 
 @asynccontextmanager
@@ -113,6 +137,7 @@ async def _worker_on(
     await _assert_cadences(queue, settings)
     emit_zero_baselines()
     create_task_series(get_args(TaskKind.__value__))
+    create_orphan_check_series()
     worker = Worker(
         queue,
         run=partial(run_task, settings=settings, queue=queue, emitter=emitter, control=control),
@@ -121,6 +146,7 @@ async def _worker_on(
         ack_wait_seconds=settings.task_ack_wait_seconds,
         max_deliver=settings.task_max_deliver,
         max_pass_seconds=settings.max_pass_seconds,
+        max_seconds_by_kind={"orphans": settings.orphan_check_max_seconds},
         retry_ended_seconds=settings.recheck_hours * 3600,
         store_events=StoreEvents(settings, queue).hold_passes,
     )

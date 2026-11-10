@@ -43,7 +43,6 @@
 - { name: MAINTENANCE_TRASH_PURGE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashPurgeMaxPerTick") | ternary .Values.maintenance.trashPurgeMaxPerTick 25 | quote }} }
 - { name: MAINTENANCE_FLOOR_RAISE_ENABLED, value: {{ hasKey .Values.maintenance "floorRaise" | ternary .Values.maintenance.floorRaise false | quote }} }
 - { name: MAINTENANCE_FLOOR_RAISE_DRY_RUN, value: {{ hasKey .Values.maintenance "floorRaiseDryRun" | ternary .Values.maintenance.floorRaiseDryRun true | quote }} }
-- { name: MAINTENANCE_FLOOR_RAISE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "floorRaiseMaxPerTick") | ternary .Values.maintenance.floorRaiseMaxPerTick 10 | quote }} }
 - { name: MAINTENANCE_TUPLE_REBUILD_ENABLED, value: {{ hasKey .Values.maintenance "tupleRebuild" | ternary .Values.maintenance.tupleRebuild false | quote }} }
 - { name: MAINTENANCE_TUPLE_REBUILD_DRY_RUN, value: {{ hasKey .Values.maintenance "tupleRebuildDryRun" | ternary .Values.maintenance.tupleRebuildDryRun true | quote }} }
 - { name: MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tupleRebuildMaxPerTick") | ternary .Values.maintenance.tupleRebuildMaxPerTick 50 | quote }} }
@@ -53,7 +52,6 @@
 - { name: MAINTENANCE_TOMBSTONE_SWEEP_ENABLED, value: {{ hasKey .Values.maintenance "tombstoneSweep" | ternary .Values.maintenance.tombstoneSweep false | quote }} }
 - { name: MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN, value: {{ hasKey .Values.maintenance "tombstoneSweepDryRun" | ternary .Values.maintenance.tombstoneSweepDryRun true | quote }} }
 - { name: MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tombstoneSweepMaxPerTick") | ternary .Values.maintenance.tombstoneSweepMaxPerTick 50 | quote }} }
-- { name: MAINTENANCE_ORPHAN_SCAN_ENABLED, value: {{ hasKey .Values.maintenance "orphanScan" | ternary .Values.maintenance.orphanScan false | quote }} }
 - { name: MAINTENANCE_DISCOVERY_MAX_DEPTH, value: {{ hasKey .Values.maintenance "discoveryMaxDepth" | ternary .Values.maintenance.discoveryMaxDepth 3 | quote }} }
 {{- if .Values.maintenance.controlEmit }}
 - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
@@ -74,6 +72,10 @@
 - { name: MAINTENANCE_AUDIT_SCHEDULE, value: {{ required "maintenance.queue.auditSchedule is required" $queue.auditSchedule | quote }} }
 - { name: MAINTENANCE_SCAN_SCHEDULE, value: {{ required "maintenance.queue.scanSchedule is required" $queue.scanSchedule | quote }} }
 {{- if $worker }}
+{{- $check := required "maintenance.orphanCheck is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.maintenance.orphanCheck }}
+- { name: MAINTENANCE_ORPHAN_CHECK_ENABLED, value: {{ required "maintenance.orphanCheck.enabled is required" $check.enabled | quote }} }
+- { name: MAINTENANCE_ORPHAN_CHECK_CEILING_DAYS, value: {{ required "maintenance.orphanCheck.ceilingDays is required" $check.ceilingDays | quote }} }
+- { name: MAINTENANCE_ORPHAN_CHECK_MAX_SECONDS, value: {{ required "maintenance.orphanCheck.maxSeconds is required" $check.maxSeconds | quote }} }
 - { name: MAINTENANCE_DRAIN_SECONDS, value: {{ $drain | quote }} }
 - { name: MAINTENANCE_WORKER_PORT, value: {{ required "maintenance.worker.port is required" $root.Values.maintenance.worker.port | quote }} }
 {{- end }}

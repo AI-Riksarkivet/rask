@@ -304,36 +304,42 @@ def _render_refusal(*flags: str) -> str | None:
 @pytest.mark.parametrize(
     ("value", "refusal"),
     [
-        pytest.param("heartbeatSeconds=30", None, id="a-heartbeat-at-half-the-ack-wait"),
+        pytest.param("queue.heartbeatSeconds=30", None, id="a-heartbeat-at-half-the-ack-wait"),
         pytest.param(
-            "heartbeatSeconds=31",
+            "queue.heartbeatSeconds=31",
             "maintenance.queue.heartbeatSeconds (31) is past half of ackWaitSeconds (60): a heartbeat late once hands a running task to another replica",
             id="a-heartbeat-past-half-the-ack-wait",
         ),
-        pytest.param("maxDeliver=null", "maintenance.queue.maxDeliver is required", id="no-delivery-bound"),
-        pytest.param("drainSeconds=104", None, id="a-drain-the-grace-holds"),
+        pytest.param("queue.maxDeliver=null", "maintenance.queue.maxDeliver is required", id="no-delivery-bound"),
+        pytest.param("queue.drainSeconds=104", None, id="a-drain-the-grace-holds"),
         pytest.param(
-            "drainSeconds=105",
+            "queue.drainSeconds=105",
             "maintenance.queue.drainSeconds (105) is not inside the 105 s the pod's grace leaves after preStop and the teardown: a stopping replica "
             "would be killed with its pass still running",
             id="a-drain-the-grace-cannot-hold",
         ),
-        pytest.param("maxPassSeconds=10", "schema refuses maintenance.queue.maxPassSeconds", id="a-pass-bound-the-worker-refuses"),
-        pytest.param("maxPassSeconds=60", None, id="a-pass-bound-the-worker-takes"),
-        pytest.param("ackWaitSeconds=2", "schema refuses maintenance.queue.ackWaitSeconds", id="an-ack-wait-no-heartbeat-fits-in"),
-        pytest.param("auditSchedule=@every 30m", "schema refuses maintenance.queue.auditSchedule", id="an-interval-each-reassertion-would-restart"),
-        pytest.param("auditSchedule=bogus", "schema refuses maintenance.queue.auditSchedule", id="a-schedule-nats-refuses"),
+        pytest.param("queue.maxPassSeconds=10", "schema refuses maintenance.queue.maxPassSeconds", id="a-pass-bound-the-worker-refuses"),
+        pytest.param("queue.maxPassSeconds=60", None, id="a-pass-bound-the-worker-takes"),
+        pytest.param("queue.ackWaitSeconds=2", "schema refuses maintenance.queue.ackWaitSeconds", id="an-ack-wait-no-heartbeat-fits-in"),
+        pytest.param("queue.auditSchedule=@every 30m", "schema refuses maintenance.queue.auditSchedule", id="an-interval-each-reassertion-would-restart"),
+        pytest.param("queue.auditSchedule=bogus", "schema refuses maintenance.queue.auditSchedule", id="a-schedule-nats-refuses"),
+        pytest.param("orphanCheck.maxSeconds=10", "schema refuses maintenance.orphanCheck.maxSeconds", id="a-check-bound-the-worker-refuses"),
+        pytest.param("orphanCheck.ceilingDays=0", "schema refuses maintenance.orphanCheck.ceilingDays", id="a-ceiling-under-a-day"),
+        pytest.param("orphanCheck.ceilingDays=null", "maintenance.orphanCheck.ceilingDays is required", id="no-check-ceiling"),
+        pytest.param("orphanCheck.enabled=false", None, id="the-checks-turned-off"),
     ],
 )
-def test_a_queue_value_the_worker_cannot_run_with_fails_the_render(value: str, refusal: str | None) -> None:
+def test_a_worker_value_the_worker_cannot_run_with_fails_the_render(value: str, refusal: str | None) -> None:
     """[[LH-494]]: the worker's queue values are rendered into its settings and into the consumers the stream Job declares,
     and one the worker cannot run with must fail the render rather than the pods. A running task stays with its worker only
     while its heartbeat reaches the broker inside the ack wait, so the render refuses a heartbeat past half of it; an unset
     delivery bound would declare a consumer of one delivery; a drain the pod's grace cannot hold kills a replica with its
     pass still running; and the schema holds each value to the worker's own bound (an ack wait under 3 s leaves no heartbeat
     the worker accepts) and each schedule to a form nats-server takes (a six-field cron: 2.15.2 refuses a five-field one,
-    10189) and that the worker's reassertion of it every 15 minutes cannot restart, which an interval's might."""
-    assert _render_refusal(*chart_render.DEFAULT_ARGS, "--set", f"maintenance.queue.{value}") == refusal
+    10189) and that the worker's reassertion of it every 15 minutes cannot restart, which an interval's might. The orphan
+    check's values reach the worker's settings the same way, each one required, its bound held to the worker's own and
+    its ceiling to at least the one-day floor."""
+    assert _render_refusal(*chart_render.DEFAULT_ARGS, "--set", f"maintenance.{value}") == refusal
 
 
 def test_each_queue_consumer_is_declared_one_delivery_past_the_workers_bound() -> None:

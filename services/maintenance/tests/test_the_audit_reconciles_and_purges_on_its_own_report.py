@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine, Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -28,10 +29,8 @@ from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.reconcile import GrantCensusReader, ReconcileReport, Sources
 
 
-#: A HAND-ROLLED MIRROR OF THE REPORT DRIFTED, so these stubs return the real model. `_orphans_by_dataset`
-#: reads `orphan_files`, a field the mirror did not have, and both stubs raised `AttributeError` the day
-#: the summary grew — a double that must be edited whenever the thing it doubles grows is a double that
-#: will eventually not be. Any fixed stamp: the audit never reads it, and a clock would make this
+#: These stubs return the real model: a hand-rolled mirror of the report must be edited whenever the thing it doubles
+#: grows, and so eventually is not. Any fixed stamp: the audit never reads it, and a clock would make this
 #: non-deterministic.
 _CHECKED_AT = "2026-09-16T14:30:00+00:00"
 
@@ -58,10 +57,11 @@ class _Reconciler:
         into_sources: list[Sources] | None = None,
         platform_buckets: Iterable[str] | None = None,
         bucket_client: object = None,
+        walk: bool,
     ) -> ReconcileReport:
         self.calls.append(
             {
-                "orphan_scan": settings.orphan_scan_enabled,
+                "walk": walk,
                 "grants": grants,
                 "warehouses_enabled": warehouses_enabled,
                 "control_root": control_root,
@@ -129,18 +129,19 @@ def test_the_audit_hands_the_reconciler_the_catalogs_grant_census(monkeypatch: p
     ("run", "scans_and_purges"),
     [pytest.param(_the_hourly_audit, False, id="the-hourly-audit"), pytest.param(_the_daily_scan, True, id="the-daily-scan")],
 )
-def test_only_the_daily_scan_reads_the_file_layer_and_purges(
+def test_only_the_daily_scan_walks_storage_and_purges(
     monkeypatch: pytest.MonkeyPatch, run: Callable[[MaintenanceSettings], Coroutine[Any, Any, dict[str, Any]]], scans_and_purges: bool
 ) -> None:
-    """A scan opens every table, so it runs daily (owner, 2026-11-09), and the purge with it: its gate takes only a report
-    whose own run scanned the file layer. The hourly audit hands the reconciler no scan and runs no purge."""
+    """The walk lists every bucket's directories, so it runs daily (owner, 2026-11-09), and the purge with it: its gate
+    takes only a report whose own run walked storage. The hourly audit asks the reconciler for no walk and runs no
+    purge."""
     reconciler, purger = _Reconciler(), _Purger()
     monkeypatch.setattr(audit, "reconcile", reconciler)
     monkeypatch.setattr(audit, "purge_expired_trash", purger)
 
-    out = asyncio.run(run(_settings(MAINTENANCE_ORPHAN_SCAN_ENABLED=True)))
+    out = asyncio.run(run(_settings()))
 
-    assert ([call["orphan_scan"] for call in reconciler.calls], len(purger.reports), "trash_purge" in out) == (
+    assert ([call["walk"] for call in reconciler.calls], len(purger.reports), "trash_purge" in out) == (
         [scans_and_purges],
         int(scans_and_purges),
         scans_and_purges,
@@ -198,6 +199,7 @@ class _HoldingQueue:
     def __init__(self, holding: dict[tuple[str, str], set[str]]) -> None:
         self._holding = holding
         self.queued: list[Task] = []
+        self.scheduled: list[tuple[Task, datetime]] = []
 
     async def held(self, area: str, kind: str) -> set[str]:
         return set(self._holding.get((area, kind), set()))
@@ -206,10 +208,15 @@ class _HoldingQueue:
         self.queued.append(task)
         return True
 
+    async def schedule_first(self, task: Task, at: datetime) -> bool:
+        self.scheduled.append((task, at))
+        return True
+
 
 def test_the_audit_queues_what_neither_a_schedule_nor_the_queue_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The backstop for every lost announcement: a table whose claim no schedule or task holds gets a pass, a trash record
-    none holds gets its task, namespaces' included, and a trashed table gets no pass, since its trash task decides."""
+    none holds gets its task, namespaces' included, and a trashed table gets no pass, since its trash task decides. A
+    table holding no orphan check gets one, held within a day at the floor's interval, and a trashed table none."""
 
     monkeypatch.setattr(audit, "reconcile", _Reconciler())
     settings = _settings().model_copy(update={"control_root": str(tmp_path)})
@@ -225,12 +232,23 @@ def test_the_audit_queues_what_neither_a_schedule_nor_the_queue_holds(tmp_path: 
         trash.make_record("gone", uuid=namespace_uuid, location="", dropped_by=None, grace_days=7, kind="namespace"),
     ):
         trash.put(str(tmp_path), StorageOptions(), record)
-    queue = _HoldingQueue({("schedule", "table"): {tables["scheduled"][0]}, ("task", "table"): {tables["queued"][0]}})
+    queue = _HoldingQueue(
+        {
+            ("schedule", "table"): {tables["scheduled"][0]},
+            ("task", "table"): {tables["queued"][0]},
+            ("schedule", "orphans"): {tables["scheduled"][0]},
+            ("task", "orphans"): {tables["lost"][0]},
+        }
+    )
+    before = datetime.now(UTC)
 
     out = asyncio.run(audit.run_audit(settings, queue=cast(TaskQueue, queue)))
 
     lost_uuid, lost_at = tables["lost"]
-    assert out["unscheduled"] == {"tables": 1, "trash": 2}
+    queued_uuid, queued_at = tables["queued"]
+    assert out["unscheduled"] == {"tables": 1, "trash": 2, "checks": 1}
+    ((check, at),) = queue.scheduled
+    assert (check, before <= at < before + timedelta(days=1, minutes=1)) == (Task(kind="orphans", uuid=queued_uuid, location=queued_at), True)
     assert sorted(queue.queued, key=lambda task: (task.kind, task.uuid)) == sorted(
         [
             Task(kind="table", uuid=lost_uuid, location=lost_at),

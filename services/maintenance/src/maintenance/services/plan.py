@@ -14,8 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from lakehouse import maintenance_policies, warehouse_records
-from lakehouse.storage_options import StorageOptions
+from lakehouse import maintenance_policies
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import DueQuestion
 from maintenance.services.expiry import ExpiryPolicy
@@ -66,23 +65,6 @@ class DatasetPlan(BaseModel):
         if self.policy.get("kind") == "table":
             return table
         return str(self.policy.get("id") or "") or None
-
-
-def buckets_to_sweep(settings: MaintenanceSettings, options: StorageOptions) -> list[str]:
-    """#81 EVERY warehouse bucket the registry knows, beside the configured ones.
-
-    A warehouse bucket is created by an API CALL at runtime, so a config-time list goes stale by construction. An
-    unreadable registry degrades to the configured list and says so: what is known is still maintained.
-    """
-    buckets = list(settings.sweep_buckets)
-    try:
-        registry = warehouse_records.list_warehouse_records(settings.resolved_control_root, options)
-        discovered = [b for b in warehouse_records.maintainable_buckets(registry) if b not in buckets]
-        buckets.extend(discovered)
-        log.info("sweep_registry_buckets", extra={"configured": len(settings.sweep_buckets), "from_registry": len(discovered)})
-    except Exception as exc:  # noqa: BLE001 — a missing registry must not stop maintaining what we know
-        log.warning("sweep_registry_unreadable", extra={"error": str(exc)})
-    return buckets
 
 
 def _int_field(policy: dict[str, Any], name: str) -> int | None:

@@ -480,7 +480,7 @@ groups:
         annotations:
           summary: "A reconcile drift category grew in the last two hours — {{ $labels.category }}"
           description: >-
-            The hourly audit's drift report is finding MORE of this drift category than it did two hours ago.
+            The drift report (the hourly audit's, and the daily scan's, which adds the storage walk's two categories) is finding MORE of this drift category than it did two hours ago.
             Each category names a different disagreement between the registry, OpenFGA and object
             storage, and a rising one means something is producing it now rather than leaving residue
             from before. A gating category also blocks the expired-trash purge, so reclamation stops
@@ -541,7 +541,7 @@ groups:
             broken: nothing passes a table, releases a drop or audits the estate, and nothing else in this file can
             tell you.
 
-      # The daily scan (`maintenance.queue.scanSchedule`): the orphan scan, the listing floors, and the expired-trash
+      # The daily scan (`maintenance.queue.scanSchedule`): the drift report with the storage walk, and the expired-trash
       # purge, which acts only on its own scan's report. A 26h window over the daily schedule, so one late scan does
       # not page.
       - alert: MaintenanceScanNotCompleting
@@ -553,7 +553,7 @@ groups:
         annotations:
           summary: "No maintenance scan has COMPLETED in a day"
           description: >-
-            The daily scan has not completed in 26 hours, so no orphan scan, listing floor or expired-trash purge ran.
+            The daily scan has not completed in 26 hours, so no storage walk or expired-trash purge ran.
             Either its schedule no longer reaches a worker, or the scan fails or overruns every time: compare
             maintenance_tasks_ended_total and maintenance_passes_overran_total for kind scan.
 
@@ -570,8 +570,9 @@ groups:
             deliveries, and a worker ended it. The maintenance_task_ended ERROR line names the subject and the last error; kind unreadable is a
             message no task parses. Its next try is held `maintenance.queue.recheckHours` out, unless a commit queues it sooner.
 
-      # A task running past `maintenance.queue.maxPassSeconds`. It keeps its task until twice that, when its replica exits
-      # and the task is delivered again, so until then this count is the only sign.
+      # A task running past its bound (`maintenance.queue.maxPassSeconds`, or `maintenance.orphanCheck.maxSeconds` for a
+      # table's orphan check). It keeps its task until twice that, when its replica exits and the task is delivered again,
+      # so until then this count is the only sign.
       - alert: MaintenancePassesOverran
         expr: sum by (kind) (increase(maintenance_passes_overran_total[1h])) > 0
         labels:
@@ -580,8 +581,9 @@ groups:
         annotations:
           summary: "A maintenance {{ $labels.kind }} task is running past its bound"
           description: >-
-            A {{ $labels.kind }} task has run past `maintenance.queue.maxPassSeconds` and still holds its task; at twice
-            that its replica exits and the task is delivered again. The
+            A {{ $labels.kind }} task has run past its bound (`maintenance.queue.maxPassSeconds`, or
+            `maintenance.orphanCheck.maxSeconds` for kind orphans) and still holds its task; at twice that its replica
+            exits and the task is delivered again. The
             maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later
             commit's pass of its table can start.
 

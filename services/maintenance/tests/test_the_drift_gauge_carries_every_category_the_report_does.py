@@ -3,19 +3,16 @@
 The gauge exists because the report gates the trash purge and answers whether the estate's storage
 state is understood — "a number only a reader of pod logs can see is one no alert can fire on", in the
 recorder's own words. It was emitted from inside `build_report`, which compares three STORES, while
-`_orphan_category` runs afterwards and attaches the three categories that read STORAGE:
-`unregistered_datasets`, `absent_datasets` and `orphan_files`.
+the storage walk runs afterwards and attaches the categories that read STORAGE: `unregistered_datasets`
+and `absent_datasets`.
 
-MEASURED LIVE 2026-09-24. The pod logged thirteen categories and GreptimeDB held **ten** — confirmed by
-querying the three by name (`NO SERIES`) rather than by reading a truncated list, and over a two-hour
-range rather than an instant. Two of the three missing ones were NON-ZERO — `absent_datasets=9`,
-`orphan_files=1` — and both were BLOCKING the purge at that moment: `trash_purge_blocked ... 2
-finding(s) across ['orphan_buckets', 'orphan_files']`. So the estate was refusing to reclaim bytes for
-a reason no dashboard or alert could show.
+MEASURED LIVE 2026-09-24. The pod logged more categories than GreptimeDB held — confirmed by querying the
+missing ones by name (`NO SERIES`) over a two-hour range. One of them was NON-ZERO, `absent_datasets=9`,
+and the estate was refusing to reclaim bytes for a reason no dashboard or alert could show.
 
 THE FIX IS POSITION, NOT CONTENT, and this test pins the position by its consequence rather than by
 reading the source: drive the real `reconcile()` and require the recorded keys to equal the reported
-keys. A future pass that adds a fourteenth category after the recorder reds this the same day.
+keys. A future pass that adds a category after the recorder reds this the same day.
 """
 
 from __future__ import annotations
@@ -47,13 +44,8 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, int]]:
     return seen
 
 
-def _run(tmp_path: Path, *, orphan_scan: bool) -> mod.ReconcileReport:
-    settings = MaintenanceSettings(
-        s3_bucket="lance-catalog",
-        s3_access_key_id="unit",
-        s3_secret_access_key=SecretStr("unit"),
-        orphan_scan_enabled=orphan_scan,
-    )
+def _run(tmp_path: Path, *, walk: bool) -> mod.ReconcileReport:
+    settings = MaintenanceSettings(s3_bucket="lance-catalog", s3_access_key_id="unit", s3_secret_access_key=SecretStr("unit"))
     (tmp_path / "control").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     return asyncio.run(
@@ -64,12 +56,13 @@ def _run(tmp_path: Path, *, orphan_scan: bool) -> mod.ReconcileReport:
             control_root=f"file://{tmp_path / 'control'}",
             namespace_root=f"file://{tmp_path / 'data'}",
             bucket_client=_NoBuckets(),
+            walk=walk,
         )
     )
 
 
 def test_the_gauge_receives_exactly_what_the_report_carries(tmp_path: Path, recorded: list[dict[str, int]]) -> None:
-    report = _run(tmp_path, orphan_scan=True)
+    report = _run(tmp_path, walk=True)
 
     assert len(recorded) == 1, f"the drift gauge was written {len(recorded)} times, expected once per tick"
     assert recorded[0].keys() == report.counts.keys(), (
@@ -79,11 +72,11 @@ def test_the_gauge_receives_exactly_what_the_report_carries(tmp_path: Path, reco
     assert recorded[0] == report.counts, "the metric carries different VALUES than the report"
 
 
-def test_a_SKIPPED_orphan_scan_still_records_what_was_checked(tmp_path: Path, recorded: list[dict[str, int]]) -> None:
-    """The recorder's own discipline: a category that was not checked is OMITTED, never zeroed. Moving
-    the call must not turn a skipped scan into a false zero on the series an alert fires from."""
-    report = _run(tmp_path, orphan_scan=False)
+def test_a_run_that_walks_no_storage_still_records_what_was_checked(tmp_path: Path, recorded: list[dict[str, int]]) -> None:
+    """The recorder's own discipline: a category that was not checked is OMITTED, never zeroed. The hourly audit walks
+    no storage, and must not turn the walk's categories into a false zero on the series an alert fires from."""
+    report = _run(tmp_path, walk=False)
 
-    assert recorded, "nothing was recorded when the orphan scan was off"
-    assert "orphan_files" not in recorded[0], "a skipped scan was recorded as zero, which reads as clean"
-    assert recorded[0].keys() == report.counts.keys(), "the metric and the report disagree when the scan is off"
+    assert recorded, "nothing was recorded on a run that walks no storage"
+    assert {"unregistered_datasets", "absent_datasets"}.isdisjoint(recorded[0]), "an unwalked category was recorded as zero, which reads as clean"
+    assert recorded[0].keys() == report.counts.keys(), "the metric and the report disagree on a run that walks no storage"
