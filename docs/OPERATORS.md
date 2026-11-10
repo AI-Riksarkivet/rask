@@ -1,4 +1,4 @@
-# Operators: what the platform runs, and what rask never builds
+# Operators: what the platform runs, and what rask's own would reconcile
 
 Which Kubernetes operators sit around rask, who installs them, and the operational procedures rask itself owns
 (secrets, signing keys, NATS users, credentials, § 5 onward).
@@ -22,14 +22,27 @@ The lakehouse runs no compute and submits no job ([ADR 0155](adr/0155-the-medall
 KubeRay, Kueue, GPU operators and whatever orchestrates a pipeline belong to the user who runs that pipeline, and no
 lakehouse service imports `ray` (the import contract `the-lakehouse-knows-no-client`).
 
-## 2 · What we never build: a custom lakehouse operator
+## 2 · A rask operator is planned, and it owns intent, never state
 
-An operator earns its complexity when state of record lives in CRDs and needs reconciling. Ours does not: catalog and
-lakehouse state, lineage's commit feed and edge list included, lives in **Lance manifests on S3**, authz in
-**Postgres** (OpenFGA, on the `rask-age` server), and every
-control loop we need is either an existing service (maintenance's work queue), an existing Job (stream, bucket and seed
-provisioning), or one of the operators above. A lakehouse operator would be a second reconciler over state that
-already has an owner.
+No operator of rask's own exists yet. One is planned as the reconciler that makes the estate what git declares
+([ADR 0199](adr/0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md); the GitOps fact in
+`CLAUDE.md`), beside Argo CD, which applies the chart.
+
+The state of record stays where it is: catalog and lakehouse state, lineage's commit feed and edge list included,
+lives in **Lance manifests on S3**, and authorization in **OpenFGA**. An operator that copied either into custom
+resources would be a second owner of state that already has one, so it does not. What it reconciles is declared
+intent that today reaches the estate by an imperative step an install from git would miss:
+
+- **Provisioning the chart runs as Jobs**: the bus streams and consumers, the object store's buckets and policies, the
+  development secret-store seed. Each is idempotent and re-run per release; a reconciler converges them continuously
+  and reports drift.
+- **Projects, warehouses and grants**, if they become resources declared in git. Until the operator is designed,
+  [ADR 0192](adr/0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) stands: a
+  grant is made at the catalog's access doors. The operator would call those same audited doors as its own
+  identity, never the store or OpenFGA directly.
+
+It installs none of the platform's operators in § 1, and it holds no credential a service does not already hold by
+its own ServiceAccount.
 
 ## 3 · Optional: NACK for the streams
 
