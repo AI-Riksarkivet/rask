@@ -3,9 +3,11 @@
 The store's operator configures each rask bucket to deliver every object write to the bus (``objectStore.events``), and
 a production install attests it (``objectStore.events.provisioned``). The attestation is a value someone set once,
 while a warehouse bucket the catalog creates afterwards is configured, or not, by the operator's own means. So the
-hourly audit asks the store, for every bucket a table's pass governs (the configured buckets and every active
+hourly audit asks the store, for the bucket of every root a table's pass governs (the configured roots and every active
 warehouse's, :func:`maintenance.services.table_pass.governs`), for the bucket's event configuration
-(S3 ``GetBucketNotificationConfiguration``), and reports each one holding no rule for every object write.
+(S3 ``GetBucketNotificationConfiguration``), and reports each one holding no rule for every object write. A governed
+root may carry a key prefix (``bucket/prefix``), and several may share a bucket; the configuration is the bucket's, so
+each bucket is asked about once, by its own name.
 
 What the answer proves, measured on RustFS 1.0.3 (2026-11-10): the store answers the configuration as it was put,
 an empty one for a bucket configured with none, and checks the action ``s3:GetBucketNotification`` against the bucket's
@@ -72,7 +74,8 @@ def report_bucket_events(settings: MaintenanceSettings) -> BucketEventsReport | 
     except (OSError, ValueError, ClientError, BotoCoreError, StoreCredentialUnavailableError) as exc:
         log.warning("maintenance_bucket_store_events_unchecked", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
         return None
-    buckets = sorted({*settings.sweep_buckets, *warehouse_records.maintainable_buckets(records)})
+    roots = (*settings.sweep_buckets, *warehouse_records.maintainable_buckets(records))
+    buckets = sorted({root.partition("/")[0] for root in roots})
     client = object_client(options)
     report = BucketEventsReport()
     for bucket in buckets:

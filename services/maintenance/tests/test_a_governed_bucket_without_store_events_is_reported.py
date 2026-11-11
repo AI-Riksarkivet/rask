@@ -3,6 +3,8 @@ store event for their object writes (ADR 0198 §3 and §4).
 
 Over a moto server, which serves S3's notification API: a configured bucket, one whose only rule sends deletes, and a
 warehouse's bucket the store cannot answer about (it does not exist), which is unknown and never counted as configured.
+The deletes-only bucket holds two warehouses, one rooted at a key prefix of it: the store is asked about the bucket,
+once.
 The reconciler is stubbed, as the audit's wiring test stubs it: this pins what the audit asks the store, not the drift
 report. The same store on RustFS 1.0.3 answers as moto does (measured 2026-11-10, ADR 0198's amendment of that day).
 """
@@ -86,8 +88,9 @@ def test_the_audit_counts_each_governed_bucket_by_what_the_store_says_of_its_eve
     )
     registry = tmp_path / "_warehouses"
     registry.mkdir()
-    (registry / "w1.json").write_text(json.dumps({"id": "w1", "bucket": deletes_only}))
+    (registry / "w1.json").write_text(json.dumps({"id": "w1", "bucket": f"{deletes_only}/data"}))
     (registry / "w2.json").write_text(json.dumps({"id": "w2", "bucket": missing}))
+    (registry / "w3.json").write_text(json.dumps({"id": "w3", "bucket": deletes_only}))
     settings = MaintenanceSettings.model_validate(
         {
             "MAINTENANCE_S3_BUCKET": configured,
