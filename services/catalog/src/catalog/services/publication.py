@@ -57,6 +57,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core.config import shared_lance_session
 from catalog.services import dataplane
 from lakehouse import gate_specs
+from lakehouse.outage import store_refusal
 from lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, tier_contract_violations
 from lakehouse.storage_options import StorageOptions
 
@@ -233,21 +234,24 @@ class EffectiveGate(BaseModel):
 def declared_gate(registry_root: str, storage_options: StorageOptions, project: str) -> GateSpec | None:
     """This project's declared gate settings, or `None` when nobody declared any.
 
-    NEVER RAISES, and the stance is held deliberately: an unresolvable declaration
-    falls back rather than refusing, because failing every publish for a tenant over a settings lookup
-    takes an estate down for a config blip, while the request's own values remain a real gate. Logged
-    at ERROR because it is still a defect — a declaration nobody can read is a policy nobody is under.
+    A DECLARATION THAT CANNOT BE READ REFUSES, never reads as none ([[LH-572]]): the request's own values are the weakest
+    gate a writer can name, so falling back to them would publish under less than the project declared, as an unread
+    legal hold would reclaim under the defaults. The refusal is the project's alone, and a retry once the record or the
+    store is mended publishes under the gate the project chose.
 
     Read through `lakehouse.gate_specs`, the record's one format, rather than a reader of
     its own.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer the read of the declaration.
+        InternalError: The declaration is there and cannot be read as one, which only writing it again mends.
     """
     if not project or not registry_root:
         return None
     try:
         return gate_specs.get_spec(registry_root, storage_options, project)
-    except Exception:  # noqa: BLE001 — a settings lookup must not refuse an otherwise valid publish
-        log.exception("gate_spec_unresolvable", extra={"project": project})
-        return None
+    except (OSError, ValueError) as exc:
+        raise store_refusal(exc, reading=f"reading the quality gate project {project!r} declared", so="nothing is judged against a lesser one") from exc
 
 
 def effective_gate(spec: GateSpec | None, *, key_column: str, required_columns: Sequence[str]) -> EffectiveGate:

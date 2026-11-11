@@ -8,6 +8,8 @@ import time
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from lakehouse import outbox
 from lakehouse.storage_options import StorageOptions
 from lineage.core.config import Signing
@@ -76,6 +78,29 @@ def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: A
         )
     )
     assert dapr.published == [event]
+
+
+def test_a_delivered_event_whose_drop_fails_stays_staged_and_says_why(tmp_path: Any, monkeypatch: Any, caplog: pytest.LogCaptureFixture) -> None:
+    """The event reached the bus, so nothing is lost: its staged copy waits for the relay, which re-ingests and drops it.
+    The failure is reported, as the publish's own is, since a store refusing every drop has each event delivered twice
+    ([[LH-572]])."""
+
+    def _refused(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("the store refused the delete")
+
+    monkeypatch.setattr(outbox, "drop_event", _refused)
+    uri = _uri(tmp_path)
+    dapr = _Dapr()
+    event = '{"run":{"runId":"r1"}}'
+    with caplog.at_level("WARNING", logger=outbox.__name__):
+        asyncio.run(
+            outbox.publish_lineage_with_outbox(
+                dapr, outbox_uri=uri, storage_options=StorageOptions(), run_id="r1", event_json=event, pubsub_name="p", topic_name="t", timeout_seconds=5
+            )
+        )
+
+    assert (dapr.published, len(list(outbox.list_events(uri, StorageOptions())))) == ([event], 1)
+    assert [(record.getMessage(), getattr(record, "error", None)) for record in caplog.records] == [("outbox_drop_failed", "the store refused the delete")]
 
 
 # --------------------------------------------------------------------------- #

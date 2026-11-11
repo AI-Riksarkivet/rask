@@ -104,30 +104,38 @@ class FloorRaise(BaseModel):
     refused: str | None = None
 
 
-def _current_floor(uri: str, storage_options: StorageOptions) -> float | None:
-    """This dataset's earliest retained manifest timestamp, as an epoch, or ``None`` if unreadable.
+class _FloorReading(BaseModel):
+    """A dataset's listing floor and the stamp of its last raise, read off one handle."""
 
-    An epoch because it is compared with `FileInfo.mtime` epochs; `committed_at` reads the naive-local
-    manifest time in the right zone (see `orphans._classify_against_floor`).
+    #: The earliest retained manifest's timestamp, as an epoch: compared with `FileInfo.mtime` epochs, and read from the
+    #: naive-local manifest time in the right zone by `committed_at` (see `orphans._classify_against_floor`).
+    floor: float
+    #: The epoch of the last raise as the dataset's own config records it, ``None`` when there has not been one. Kept in
+    #: the dataset rather than in any state this service holds, so it survives a pod roll, a replica change and an empty
+    #: cache, and an operator can answer the same question by reading the dataset.
+    stamp: str | None
+
+
+def _floor_of(dataset: lance.LanceDataset) -> float:
+    """``dataset``'s listing floor: the commit time of its earliest retained version, in epoch seconds."""
+    return min(committed_at(version).timestamp() for version in dataset.versions())
+
+
+def _floor_and_stamp_of(dataset: lance.LanceDataset) -> _FloorReading:
+    """``dataset``'s listing floor and the stamp of its last raise, both off this handle, so the two are one reading."""
+    return _FloorReading(floor=_floor_of(dataset), stamp=dataset.config().get(FLOOR_KEY))
+
+
+def _read_floor(uri: str, storage_options: StorageOptions) -> _FloorReading | None:
+    """The dataset's floor and stamp from ONE open, or ``None`` when it cannot be read.
+
+    One open, because the stamp is judged against the floor: a second open that failed after the first answered would
+    read as "never raised" and commit another raise on a table raised already, a version bought for nothing each time.
     """
     try:
-        dataset = lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
-        return min(committed_at(version).timestamp() for version in dataset.versions())
+        return _floor_and_stamp_of(lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()))
     except Exception as exc:  # noqa: BLE001 — an unreadable dataset refuses this raise, never the check
-        log.warning("floor_read_failed", extra={"dataset": uri, "error": str(exc)})
-        return None
-
-
-def _stamp(uri: str, storage_options: StorageOptions) -> str | None:
-    """The epoch of the last raise on this dataset, as its config records it, or ``None`` if there has not been one.
-
-    Read from the dataset's own config rather than from any state this service keeps, so it survives a
-    pod roll, a replica change and an empty cache — and so an operator can answer the same question by
-    reading the dataset.
-    """
-    try:
-        return lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()).config().get(FLOOR_KEY)
-    except Exception:  # noqa: BLE001 — an unreadable config is handled by the floor read before it
+        log.warning("floor_read_failed", extra={"dataset": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return None
 
 
@@ -148,7 +156,8 @@ def raise_stands(dataset: lance.LanceDataset) -> bool:
 
     A table's pass asks it, and while it holds cleans from the first reclaimable version: the raise bought a version so
     that a cleanup would move the floor, and a pass waiting for its usual count of reclaimable versions would leave the
-    stranded files, on a table that commits seldom, for as long as it does.
+    stranded files, on a table that commits seldom, for as long as it does. The stamp is read first, so a table never
+    raised costs no listing of its versions.
     """
     stamp = dataset.config().get(FLOOR_KEY)
     if stamp is None:
@@ -157,7 +166,7 @@ def raise_stands(dataset: lance.LanceDataset) -> bool:
         raised_at = float(stamp)
     except ValueError:
         return False
-    return min(committed_at(version).timestamp() for version in dataset.versions()) < raised_at
+    return _floor_of(dataset) < raised_at
 
 
 def raise_listing_floor(uri: str, *, table: str, stranded: list[OrphanFile], settings: MaintenanceSettings) -> FloorRaise:
@@ -173,7 +182,8 @@ def raise_listing_floor(uri: str, *, table: str, stranded: list[OrphanFile], set
     `MAINTENANCE_FLOOR_RAISE_DRY_RUN` is whether this check acts. An operator turning the feature on to
     SEE what it would touch must not thereby write to a governed table.
 
-    THE FLOOR IS RE-READ HERE, and a table whose floor has moved past its stranded files is refused: something
+    THE FLOOR IS RE-READ HERE, with the last raise's stamp off the same handle, and a reading that fails refuses the raise:
+    no read answers "never raised" for "could not read". A table whose floor has moved past its stranded files is refused: something
     committed since the check listed them, so the table's next pass reclaims without help and a commit here buys only
     the phantom version. A table carrying :data:`FLOOR_KEY` is refused while its floor stands beneath that stamp, which
     bounds the damage of a raise that cannot work: the floor only moves once a pass cleans the manifests beneath the
@@ -188,14 +198,13 @@ def raise_listing_floor(uri: str, *, table: str, stranded: list[OrphanFile], set
     )
     if not settings.floor_raise_enabled:
         return outcome.model_copy(update={"refused": "the floor raise is off (MAINTENANCE_FLOOR_RAISE_ENABLED)"})
-    storage_options = settings.storage_options()
-    floor = _current_floor(uri, storage_options)
-    if floor is None:
-        return outcome.model_copy(update={"refused": "floor unreadable"})
-    outcome.floor_before = floor
-    if (stamp := _stamp(uri, storage_options)) is not None and (beneath := _still_beneath(stamp, floor)) is not None:
+    reading = _read_floor(uri, settings.storage_options())
+    if reading is None:
+        return outcome.model_copy(update={"refused": "the floor and the last raise's stamp could not be read"})
+    outcome.floor_before = reading.floor
+    if reading.stamp is not None and (beneath := _still_beneath(reading.stamp, reading.floor)) is not None:
         return outcome.model_copy(update={"refused": beneath})
-    if all(listed_at_or_below(orphan.mtime_epoch, floor) for orphan in stranded):
+    if all(listed_at_or_below(orphan.mtime_epoch, reading.floor) for orphan in stranded):
         return outcome.model_copy(update={"refused": "floor already covers these orphans"})
     # THE CREDENTIAL IS RESOLVED BEFORE THE DRY-RUN BRANCH, so a preview reports the denial it
     # would hit rather than a plan it could never carry out. A dry run that lists a table the
@@ -210,8 +219,10 @@ def raise_listing_floor(uri: str, *, table: str, stranded: list[OrphanFile], set
         # THE SHARED SESSION, like every other dataset open in this service. This pod runs against
         # a 512Mi limit it has already been OOMKilled against, and a store rebuild strands datasets
         # in bulk — a per-dataset session here is the shape that turns a recovery into an eviction.
-        lance.dataset(uri, storage_options=write_options.in_clear(), session=shared_lance_session()).update_config({FLOOR_KEY: str(time.time())})
-        outcome.version = lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()).version
+        written = lance.dataset(uri, storage_options=write_options.in_clear(), session=shared_lance_session())
+        written.update_config({FLOOR_KEY: str(time.time())})
+        # The handle the commit moved: measured on pylance 13.0.0, `update_config` leaves it at the version it made.
+        outcome.version = written.version
     except Exception as exc:  # noqa: BLE001 — a failed commit refuses this raise, and the check holds its next at the floor
         return outcome.model_copy(update={"refused": f"commit failed: {exc}"})
     return outcome

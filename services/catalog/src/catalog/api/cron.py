@@ -26,4 +26,16 @@ def mount_cron(app: FastAPI, binding_name: str, tick: Callable[..., Awaitable[Ba
     router.add_api_route(f"/{binding_name}", tick, methods=["POST"], tags=[tag])
     router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], include_in_schema=False)
     app.include_router(router)
+    record_tick(app, binding_name)
     return True
+
+
+def record_tick(app: FastAPI, binding_name: str) -> None:
+    """Record ``POST /<binding_name>`` as one of ``app``'s cron ticks, which a read-only window holds (:func:`ticks_of`)."""
+    app.state.cron_ticks = ticks_of(app) | {f"/{binding_name}"}
+
+
+def ticks_of(app: FastAPI) -> frozenset[str]:
+    """The pod-root path of every cron tick mounted on ``app``: the set is the mounts' own, so a tick mounted is a tick
+    held through a read-only window with no list to keep beside it."""
+    return getattr(app.state, "cron_ticks", frozenset())

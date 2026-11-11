@@ -56,7 +56,7 @@ from pydantic import BaseModel, Field
 
 from lakehouse.features import unsupported_features, unsupported_features_from_open_error
 from lakehouse.lancekit.versions import committed_at
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.stored_objects import iter_under
 from maintenance.core.config import shared_lance_session
 
@@ -582,7 +582,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
 def _listed(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: StorageOptions | None) -> Iterator[tuple[str, int, float]]:
     """Every file under the dataset as ``(path, size, mtime epoch)``, the path as ``prefix`` spells its root. On S3 a
     page at a time through the object client, so a listing past the ceiling is abandoned unread."""
-    if dataset_uri.startswith("s3://") and storage_options is not None:
+    if on_s3(dataset_uri) and storage_options is not None:
         for stored in iter_under(f"s3://{prefix}", storage_options):
             if not stored.path.endswith("/"):
                 yield stored.path, stored.size, stored.modified.timestamp()

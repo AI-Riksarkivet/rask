@@ -5,7 +5,7 @@ Every write the catalog commits is announced after the commit, signed with the c
 both, so a write it took would stay committed and be told to nobody: not lineage's feed, not the edge list, not a
 pipeline following them, not a person. While the key is unresolved the catalog therefore refuses every write it would
 announce, ServiceUnavailable before the commit, classifying a write the way the read-only window does
-(`maintenance_mode.is_mutating`, fail-closed). Its readiness says why meanwhile (`signing_ready_check`), and a missing
+(`maintenance_mode.is_mutating`: by the route it matches, never by its path text, and fail-closed). Its readiness says why meanwhile (`signing_ready_check`), and a missing
 key is re-read every 15 s (`lakehouse.governed.signing_key`), so the refusal ends on its own once the store answers.
 The commit id key (`catalog.core.commit_ids`, [[LH-497]]) is held to the same rule: an announcement names its commit by the
 run id derived under it, so a write the catalog cannot name that way is refused before its commit as well.
@@ -24,7 +24,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
 
-from catalog.api.maintenance_mode import GATED_MOUNTS, PROBLEM_JSON, is_mutating, is_read_vend
+from catalog.api.maintenance_mode import GATED_MOUNTS, PROBLEM_JSON, is_mutating
 from catalog.core.commit_ids import commit_ids_of
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
@@ -77,6 +77,6 @@ async def signing_gate_middleware(request: Request, call_next: Callable[[Request
     # would end the path there and the action read would be a segment of the name ([[LH-526]]).
     path: str = request.scope["path"]
     settings: Settings | None = getattr(request.app.state, "settings", None)
-    if unready and path.startswith(GATED_MOUNTS) and is_mutating(request.method, path) and not is_read_vend(path, request) and announces(path, settings):
+    if unready and path.startswith(GATED_MOUNTS) and is_mutating(request) and announces(path, settings):
         return unsigned_response()
     return await call_next(request)

@@ -45,7 +45,7 @@ from lakehouse.history_fences import TableHistory
 from lakehouse.lance_session import affordable_cache_bytes
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.maintenance_due import delete_due
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, on_s3
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
@@ -110,11 +110,14 @@ class PassReadings(BaseModel):
 
     table_ids: TableIds
     context: PlanContext
-    #: The table the pass is of, and the uuids its policy was read under; ``None`` when they could not be read, which
-    #: refuses each of its datasets. Read once, so the policy in ``context`` is the one these uuids name: a second read
-    #: that succeeded where the first failed would name the table with no policy read for it.
+    #: The table the pass is of, and the uuids its policy was read under; ``None`` when they, or the policy they name,
+    #: could not be read, which refuses each of its datasets. Read once, so the policy in ``context`` is the one these
+    #: uuids name: a second read that succeeded where the first failed would name the table with no policy read for it.
     table: str | None = None
     owners: PolicyOwners | None = None
+    #: Why the policy record that may govern the table cannot be read as a policy, which parks each of its datasets
+    #: (gate ``policy_unreadable``); ``None`` when it was read or none governs.
+    policy_unreadable: str | None = None
 
 
 class NamedDataset(BaseModel):
@@ -349,7 +352,11 @@ def name_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceSetti
     table = readings.table_ids.table_of(uri)
     if table is None:
         return _unnamed(uri, settings=settings)
-    if table != readings.table or readings.owners is None:
+    if table != readings.table:
+        return _unidentified(uri, table, settings=settings)
+    if readings.policy_unreadable is not None:
+        return _policy_unreadable(uri, table, reason=readings.policy_unreadable, settings=settings)
+    if readings.owners is None:
         return _unidentified(uri, table, settings=settings)
     return NamedDataset(table=table, owners=readings.owners)
 
@@ -498,6 +505,17 @@ def _unidentified(uri: str, table: str, *, settings: MaintenanceSettings) -> Dat
     return refused
 
 
+def _policy_unreadable(uri: str, table: str, *, reason: str, settings: MaintenanceSettings) -> DatasetResult:
+    """A table whose policy record is there and cannot be read as a policy: PARKED, never maintained under the defaults,
+    since the record may be a legal hold. Counted under the table's id, which ``MaintenanceTableParked`` pages on: no
+    later pass changes the answer until someone writes the record again."""
+    parked = DatasetResult(uri=uri, due="failed")
+    parked.park(f"the maintenance policy of table {table} cannot be read, so it is not maintained: {reason}", gate="policy_unreadable", table_id=table)
+    _record_dataset_metrics(parked)
+    _record_dataset_outcome(parked, subject=settings.catalog_service_identity)
+    return parked
+
+
 def _skipped(uri: str, plan: DatasetPlan, named: NamedDataset, *, readings: PassReadings, settings: MaintenanceSettings) -> DatasetResult:
     """A pass the policy cadence skips: no expiry, but the table's recorded files are read all the same, since a store
     event holds this pass for them and the read costs one listing."""
@@ -522,7 +540,9 @@ def _stamp_cadence(result: DatasetResult, *, table_uuid: str, plan: DatasetPlan,
     transient ``policy_interval`` skip for the whole interval rather than a standing refusal.
     """
     policy = plan.policy
-    if policy is None or not policy.get("compact_interval_hours") or result.error is not None or result.refused is not None or result.skipped is not None:
+    if policy is None or result.error is not None or result.refused is not None or result.skipped is not None:
+        return
+    if maintenance_policies.policy_settings(policy).compact_interval_hours is None:
         return
     try:
         maintenance_policies.write_state(
@@ -546,12 +566,12 @@ def _record_dataset_metrics(result: DatasetResult) -> None:
 
 
 def _record_parked(result: DatasetResult) -> None:
-    """Count a catalog refusal under the table id it refused, which `MaintenanceTableParked` pages on. Only the
-    catalog's answers: a layout refusal can land on a location that names no table."""
+    """Count a parked table under its id, which `MaintenanceTableParked` pages on: the catalog's refusals of the id, and
+    a policy record of it the pass cannot read. Only those: a layout refusal can land on a location that names no table."""
     if result.refused_table_id is None:
         return
     match result.refused_by:
-        case "vend_denied" | "table_not_governed" as gate:
+        case "vend_denied" | "table_not_governed" | "policy_unreadable" as gate:
             record_table_parked(table_id=result.refused_table_id, refused_by=gate)
         case _:
             return
@@ -650,25 +670,27 @@ async def emit_pass_lineage(emitter: MaintenanceEmitter, results: list[DatasetRe
 
 
 def governs(location: str, *, top_namespace: str, settings: MaintenanceSettings, options: StorageOptions) -> bool | None:
-    """Whether the table at ``location``, under the top-level namespace ``top_namespace``, is one maintenance governs: in a
-    configured bucket, or in its namespace's warehouse while that warehouse is active (#81); ``None`` when the warehouse
-    cannot be read, which decides nothing.
+    """Whether the table at ``location``, under the top-level namespace ``top_namespace``, is one maintenance governs: in
+    its namespace's warehouse while that warehouse is active, or, for a namespace bound to no warehouse, in a configured
+    bucket (#81); ``None`` when the warehouse cannot be read, which decides nothing.
 
     A deactivated warehouse's tables are not governed: deactivate is offboarding step one, and maintenance must not be the
-    one process still rewriting a quarantined tenant's data. The warehouse is the namespace's, read through its binding by
-    key, so what the pass costs is the table's, never the registry's; and two warehouses one project backs with one bucket
-    (the work and gold pair) are each judged by their own status. A location outside S3 is the control root's own.
+    one process still rewriting a quarantined tenant's data. So a bound namespace is judged by its warehouse's status
+    FIRST, its bucket configured or not: a configured bucket answers only for a namespace no warehouse holds, whose tables
+    are on the default root. The warehouse is the namespace's, read through its binding by key, so what the pass costs is
+    the table's, never the registry's; and two warehouses one project backs with one bucket (the work and gold pair) are
+    each judged by their own status. A location outside S3 is the control root's own.
     """
-    if not location.startswith("s3://"):
-        return True
-    if location.removeprefix("s3://").split("/", 1)[0] in settings.sweep_buckets:
+    if not on_s3(location):
         return True
     try:
         warehouse = warehouse_records.namespace_warehouse(settings.resolved_control_root, options, top_namespace)
     except (OSError, ValueError) as exc:
         log.warning("maintenance_warehouse_unreadable", extra={"location": location, "namespace": top_namespace, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return None
-    return warehouse is not None and not warehouse_records.is_deactivated(warehouse)
+    if warehouse is not None:
+        return not warehouse_records.is_deactivated(warehouse)
+    return location.removeprefix("s3://").split("/", 1)[0] in settings.sweep_buckets
 
 
 def read_for(location: str, held: location_claims.LocationClaim, settings: MaintenanceSettings, *, now: datetime) -> PassReadings | None:
@@ -679,13 +701,16 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
     in the ``__manifest`` of the bucket ``location`` is in, one filtered read of an index Lance keeps unindexed, so its
     bytes grow with the bucket's rows while its requests do not (:func:`maintenance.services.purge.manifest_rows_named`);
     and, by key, the one policy record that governs the table (:func:`lakehouse.maintenance_policies.governing_policy`).
-    A manifest or a policy record that cannot be read decides nothing (``None``): the policies are the protective
-    surface, and expiring without them would reclaim history an owner kept. A table whose policy owners cannot be read
+    A manifest, or a policy record the store did not answer, decides nothing (``None``): the policies are the protective
+    surface, and expiring without them would reclaim history an owner kept. A policy record that is there and cannot be
+    read as one (:class:`lakehouse.maintenance_policies.MalformedPolicyError`) leaves the readings without owners and
+    names why, so each of the table's datasets is parked (:func:`name_dataset`), and the orphan check counts the table
+    ``policy_unreadable`` and raises no floor on it. A table whose policy owners cannot be read
     (:func:`maintenance.services.naming.policy_owners`) leaves the policy unread and the readings without owners, so each
     of its datasets is refused (:func:`name_dataset`).
     """
     options = settings.storage_options()
-    root = f"s3://{location.removeprefix('s3://').split('/', 1)[0]}" if location.startswith("s3://") else settings.resolved_control_root
+    root = f"s3://{location.removeprefix('s3://').split('/', 1)[0]}" if on_s3(location) else settings.resolved_control_root
     ids = table_ids_of(root, options, segments=held.segments)
     if ids is None:
         return None
@@ -701,6 +726,10 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
                 table_uuid=owners.table_uuid,
                 namespace_uuids=owners.namespace_uuids,
             )
+        except maintenance_policies.MalformedPolicyError as exc:
+            log.error("maintenance_policy_malformed", extra={"uuid": held.uuid, "table": held.table, "error": str(exc)[:300]})
+            context = PlanContext(policies=[], now=now, older_than=timedelta(days=settings.older_than_days))
+            return PassReadings(table_ids=ids, context=context, table=held.table, policy_unreadable=str(exc)[:300])
         except maintenance_policies.UnreadablePolicyError as exc:
             log.error("maintenance_policy_unreadable", extra={"uuid": held.uuid, "table": held.table, "error": str(exc)[:300]})
             return None
@@ -843,10 +872,10 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
         log.warning("maintenance_next_due_unread", extra={"uri": result.uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return now + timedelta(seconds=settings.retry_seconds)
     earliest = min(due, default=None)
-    if earliest is None or plan.policy is None or not (interval := plan.policy.get("compact_interval_hours")):
+    if earliest is None or plan.policy is None or (interval := maintenance_policies.policy_settings(plan.policy).compact_interval_hours) is None:
         return earliest
     stamped = cadence_stamp(plan.policy, settings=settings, table_uuid=named.owners.table_uuid, uri=result.uri)
-    return max(earliest, stamped + timedelta(hours=int(str(interval)))) if stamped is not None else earliest
+    return max(earliest, stamped + timedelta(hours=interval)) if stamped is not None else earliest
 
 
 def cadence_stamp(policy: dict[str, object], *, settings: MaintenanceSettings, table_uuid: str, uri: str) -> datetime | None:

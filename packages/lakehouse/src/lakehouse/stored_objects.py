@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage.client import MAX_POOL_CONNECTIONS
-from lakehouse.storage_options import StorageOptions, object_client
+from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
 
 #: The most keys one S3 DeleteObjects request takes.
@@ -58,7 +58,7 @@ def list_under(uri: str, storage_options: StorageOptions) -> list[StoredObject]:
 def iter_under(uri: str, storage_options: StorageOptions) -> Iterator[StoredObject]:
     """:func:`list_under` a page at a time, a thousand objects a request on S3, so a caller that stops early has asked
     the store for no more than it read."""
-    if uri.startswith("s3://"):
+    if on_s3(uri):
         bucket, _, key = uri.removeprefix("s3://").partition("/")
         pages = object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
         for page in pages:
@@ -93,7 +93,7 @@ def identities(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -
     """
     if not keys:
         return {}
-    read = _s3_identity(uri, storage_options) if uri.startswith("s3://") else _local_identity(uri, storage_options)
+    read = _s3_identity(uri, storage_options) if on_s3(uri) else _local_identity(uri, storage_options)
     with ThreadPoolExecutor(max_workers=min(_IDENTITY_READS, len(keys))) as pool:
         found = list(pool.map(read, keys))
     return {key: identity for key, identity in zip(keys, found, strict=True) if identity is not None}
@@ -111,7 +111,7 @@ def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[
     """
     if not keys:
         return {}
-    if not uri.startswith("s3://"):
+    if not on_s3(uri):
         return identities(uri, storage_options, keys)
     from botocore.exceptions import BotoCoreError, ClientError
 
@@ -177,7 +177,7 @@ def delete_object(uri: str, storage_options: StorageOptions, key: str) -> bool:
     Raises:
         OSError: The store refused, or could not be reached for, the read or the delete.
     """
-    if not uri.startswith("s3://"):
+    if not on_s3(uri):
         fs, base = fs_and_base(uri, storage_options)
         try:
             fs.delete_file(f"{base}/{key}")
@@ -212,7 +212,7 @@ def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) 
     """
     if not paths:
         return
-    if not uri.startswith("s3://"):
+    if not on_s3(uri):
         fs, _ = fs_and_base(uri, storage_options)
         for path in paths:
             fs.delete_file(path)

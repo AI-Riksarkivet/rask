@@ -7,7 +7,8 @@ one case: one reclaimable version short reclaims nothing; at the threshold every
 removes what a commit that lost its version left behind, the manifest it staged ([[LH-529]]), whether or not versions are
 due, and then schedules the table's next pass for its recheck, never a minute out; under a policy that keeps the whole
 history it removes nothing. A pass that cannot read the table's own policy record, which may be a legal hold, reclaims
-nothing, whatever the policy of its namespace allows, and is retried. The time a pass schedules for the table's next is
+nothing, whatever the policy of its namespace allows: a record it cannot read as a policy parks the table, and a read
+the store fails is retried. The time a pass schedules for the table's next is
 pinned branch by branch, its clock injected.
 
 The table's name is one the catalog percent-encodes ([[LH-319]]): the event names the URL the catalog opened,
@@ -18,6 +19,7 @@ namespace carries its own in its ``__manifest`` row (ADR 0173 §8).
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -39,11 +41,13 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.record_store import record_key
 from lakehouse.storage_options import StorageOptions
+from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.expiry import HISTORY_FENCED, DatasetResult
 from maintenance.services.table_pass import TableTask, held_location, run_table_pass
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
+from tests.integration.store_requests import counted
 
 
 TABLE = "db$räksmörgås"
@@ -275,21 +279,66 @@ def test_a_tables_next_pass_comes_when_its_first_dataset_needs_one(
     assert due == expected(now, superseded)
 
 
-def test_a_pass_that_cannot_read_its_tables_policy_reclaims_nothing_and_is_retried(
-    *, bucket: str, moto_url: str, store: StorageOptions, settings: Callable[[], MaintenanceSettings]
+#: A pass's table record, as a test writes it under the table's uuid: bytes as stored, or settings beside its identity.
+type _Record = Callable[[str], bytes]
+
+
+def _written(**settings: object) -> _Record:
+    return lambda table_uuid: json.dumps({"kind": "table", "id": TABLE, "uuid": table_uuid, **settings}).encode()
+
+
+_RECHECK_DEFAULT = timedelta(hours=24)
+
+
+@pytest.mark.parametrize(
+    ("record", "store_fails_it", "refused_by", "next_pass"),
+    [
+        pytest.param(lambda _uuid: b'{"kind": "table", "cleanup_enabled": fal', False, "policy_unreadable", _RECHECK_DEFAULT, id="no-json-parks-the-table"),
+        pytest.param(_written(retention_days="30d"), False, "policy_unreadable", _RECHECK_DEFAULT, id="a-setting-no-value-reads-parks-the-table"),
+        pytest.param(_written(cleanup_enabled="false", retain_versions=1), False, None, _RECHECK_DEFAULT, id="a-hold-written-as-a-string-is-a-hold"),
+        pytest.param(_written(retain_versions=1), True, None, None, id="a-read-the-store-fails-is-retried"),
+    ],
+)
+def test_a_pass_that_cannot_read_its_tables_policy_as_written_reclaims_nothing(
+    *,
+    bucket: str,
+    moto_url: str,
+    store: StorageOptions,
+    settings: Callable[[], MaintenanceSettings],
+    monkeypatch: pytest.MonkeyPatch,
+    record: _Record,
+    store_fails_it: bool,
+    refused_by: str | None,
+    next_pass: timedelta | None,
 ) -> None:
+    """The table's own record may be a legal hold, so a pass reads it strictly and never plans on the defaults in its
+    place, whatever the policy of its namespace allows. A record that is there and cannot be read as a policy parks the
+    table, counted under its id so `MaintenanceTableParked` pages, and waits for the recheck, since no read changes it
+    until someone writes it again; a hold whose ``cleanup_enabled`` is the string ``"false"`` is a hold; a read the
+    store does not answer decides nothing and is retried."""
     namespace_uuid = str(uuid.uuid4())
     task = _table_with(THRESHOLD + 1, bucket=bucket, options=store, namespace_uuid=namespace_uuid)
     maintenance_policies.put_policy(f"s3://{bucket}", store, {"kind": "namespace", "id": "db", "uuid": namespace_uuid, "retain_versions": 1})
+    key = record_key(maintenance_policies.PREFIX, "table", task.uuid)
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
-    s3.put_object(Bucket=bucket, Key=record_key(maintenance_policies.PREFIX, "table", task.uuid), Body=b'{"kind": "table", "cleanup_enabled": fal')
+    s3.put_object(Bucket=bucket, Key=key, Body=record(task.uuid))
+    parked: list[dict[str, Any] | None] = []
+    monkeypatch.setattr(metrics._tables_parked, "add", lambda _amount, attributes=None, **_: parked.append(attributes))
     now = datetime.now(UTC)
 
-    with maintain_tier_door(lambda _table: task.location):
-        outcome = run_table_pass(task, settings(), now=now)
+    with counted(moto_url) as proxy, maintain_tier_door(lambda _table: task.location):
+        monkeypatch.setenv("MAINTENANCE_S3_ENDPOINT", proxy.url)
+        with proxy.answering_unavailable(lambda request: store_fails_it and request.path == f"/{bucket}/{key}"):
+            outcome = run_table_pass(task, settings(), now=now)
 
     kept = len(lance.dataset(task.location, storage_options=store.in_clear()).versions())
-    assert (kept, outcome.next_due) == (THRESHOLD + 1, now + timedelta(seconds=settings().retry_seconds))
+    retried = now + timedelta(seconds=settings().retry_seconds)
+    assert (kept, [result.refused_by for result in outcome.results], outcome.next_due) == (
+        THRESHOLD + 1,
+        [refused_by] if not store_fails_it else [],
+        now + next_pass if next_pass is not None else retried,
+    )
+    assert parked == ([{"table_id": TABLE, "refused_by": refused_by}] if refused_by else [])
 
 
 def test_a_pass_whose_tables_uuid_is_read_once_and_fails_runs_under_no_policy_at_all(

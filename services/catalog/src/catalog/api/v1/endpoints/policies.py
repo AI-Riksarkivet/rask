@@ -250,7 +250,9 @@ async def set_project_policy(
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     so = settings.storage_options()
-    registered = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
+    # Read whole ([[LH-572]]): a record that cannot be read is a bucket of this project the policy would leave on the
+    # defaults, or another project's claim on one it would govern.
+    registered = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
     buckets = sorted({str(r["bucket"]) for r in registered if r.get("bucket") and r.get("project") == project and (r.get("status") or "active") == "active"})
     if not buckets:
         raise InvalidInputError(

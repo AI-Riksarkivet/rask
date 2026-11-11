@@ -32,7 +32,7 @@ import logging
 import re
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
-from typing import Any, Final, Literal, Protocol, assert_never, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, assert_never, runtime_checkable
 from urllib.parse import urlsplit
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -49,12 +49,19 @@ from lakehouse.features import BasePathRef
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
+from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.storage_options import StorageOptions
 from lakehouse.store_session import IssuedSession, WebIdentity
 from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 
 
+if TYPE_CHECKING:
+    import lance
+
 log = logging.getLogger(__name__)
+
+#: What a vend refused for want of a reading did not do (:func:`lakehouse.outage.store_refusal`).
+_VENDED_NOTHING: Final = "no credential was vended"
 
 #: What a credential may do inside the prefix it is scoped to ([[LH-202]]):
 #:
@@ -585,7 +592,8 @@ def classified_in_any_ref(dataset: Any, *, branch: str = "") -> tuple[str, ...]:
         main = dataset if not branch else dataset.checkout_version(("main", None))
         found = set(classified_columns(main))
         branches = list(dataset.branches.list())
-    except (AttributeError, ValueError, OSError):
+    except (AttributeError, ValueError, OSError, RuntimeError):
+        # RuntimeError: a branch file Lance cannot parse fails the listing so (measured on pylance 13.0.0, 2026-11-12).
         log.warning("vend_refs_unreadable", exc_info=True)
         return ("<refs unreadable>",)
     for name in branches:
@@ -636,16 +644,19 @@ def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str
     Base spellings are normalised through :func:`same_store_uri` because a manifest states a base in
     the manifest's own spelling, which may be schemeless — the policy needs a bucket and a key.
 
+    A table holding no committed version has no facts (:func:`_open_vended_ref`): it has no schema, so no label, and
+    nothing to append to.
+
     Raises:
-        ServiceUnavailableError: The dataset opened and its base list could not be read. Answering "no
-            bases" here would vend without judging them, which the base judge exists to refuse.
+        ServiceUnavailableError: The object store did not answer the open, or the dataset opened and its base list could
+            not be read. Answering "no bases" here would vend without judging them, which the base judge exists to refuse.
+        InternalError: The table holds a committed version that does not open.
     """
     from lakehouse.features import manifest_base_path_refs
     from lakehouse.objectfs import same_store_uri
 
-    try:
-        ds = open_location(location, storage_options, branch=branch or None)
-    except (ValueError, OSError):
+    ds = _open_vended_ref(location, storage_options, branch=branch)
+    if ds is None:
         return VendFacts()
     try:
         refs = manifest_base_path_refs(ds)
@@ -659,6 +670,35 @@ def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str
         base_uris=uris,
         classified=classified_in_any_ref(ds, branch=branch),
     )
+
+
+def _open_vended_ref(location: str, storage_options: StorageOptions, *, branch: str) -> lance.LanceDataset | None:
+    """The ref of the table at ``location`` a vend reads (``branch``, ``""`` for main), or ``None`` for a table holding no
+    committed version: an open that fails says nothing about what a table holds, so only the storage tells a declared
+    table from one whose labels the open could not reach (:func:`catalog.services.dataplane.holds_a_version`, as
+    ``version/create`` asks it, [[LH-572]]); a branch is cut from a version, so one that does not open is never declared.
+
+    Raises:
+        ServiceUnavailableError: The object store did not answer the open or the storage's listing.
+        InternalError: The ref does not open while the table holds a committed version, or the storage cannot be listed, a
+            state of the table's own the spec answers 18 for (`lance_docs/ns_catalog/namespace/operations/errors.md`).
+    """
+    from catalog.services.dataplane import holds_a_version
+
+    try:
+        return open_location(location, storage_options, branch=branch or None)
+    except (ValueError, OSError) as exc:
+        failed = exc
+    if reads_as_store_outage(failed):
+        raise store_refusal(failed, reading="opening the table", so=_VENDED_NOTHING) from failed
+    try:
+        declared = not branch and not holds_a_version(location, storage_options)
+    except (ValueError, OSError) as exc:
+        raise store_refusal(exc, reading="listing the table's committed versions", so=_VENDED_NOTHING) from exc
+    if declared:
+        return None
+    log.warning("vend_open_failed", extra={"location": location, "branch": branch, "error": str(failed)[:300]})
+    raise store_refusal(failed, reading="opening the table's committed version", so=_VENDED_NOTHING) from failed
 
 
 class VendableBases(BaseModel):
@@ -727,21 +767,26 @@ def table_has_branch(location: str, storage_options: StorageOptions, branch: str
     a caller names a branch, which is the rare path, so folding it in would add a read to every vend
     that names none.
 
-    A TABLE WITH NO READABLE DATASET HAS NO BRANCHES, which is the right answer rather than a gap: a
-    declared-only table has no versions, and a branch is taken from a version. So the unreadable case
-    refuses rather than waving the name through — the same fail-closed direction the classification
-    and base checks take.
+    A TABLE HOLDING NO COMMITTED VERSION HAS NO BRANCHES, which is the right answer rather than a gap: a
+    declared-only table has no versions, and a branch is taken from a version. A table that holds one and
+    cannot be read refuses, answering neither "it has the branch" (a grant on an unverified prefix) nor "it
+    has none" (a live branch reported gone), as the classification and base checks refuse ([[LH-572]]).
+
+    Raises:
+        ServiceUnavailableError: The object store did not answer the open or the branch listing.
+        InternalError: The table's committed version or its branch list cannot be read.
     """
-    try:
-        return branch in open_location(location, storage_options).branches.list()
-    except Exception:
-        # ONE ARM, CATCHING ANYTHING, because every way of failing has the same right answer. A branch
-        # set this cannot determine must not read as "this branch exists": refusing costs a caller one
-        # retry, admitting hands out a 900 s grant on an unverified prefix. Narrower than
-        # :func:`dataset_facts`'s `(ValueError, OSError)` on purpose — that one degrades to a narrower
-        # credential, and this one decides whether a credential is minted at all.
-        log.warning("vend_branch_unreadable", extra={"location": location, "branch": branch}, exc_info=True)
+    dataset = _open_vended_ref(location, storage_options, branch="")
+    if dataset is None:
         return False
+    try:
+        return branch in dataset.branches.list()
+    except (ValueError, OSError, RuntimeError) as exc:
+        # A branch set this cannot read must not read as "this branch exists", nor as "there is no such branch": the
+        # second tells a caller of a live branch that it is gone whenever the store is down ([[LH-572]]). A branch file
+        # Lance cannot parse fails the listing with a RuntimeError (measured on pylance 13.0.0, 2026-11-12).
+        log.warning("vend_branch_unreadable", extra={"location": location, "branch": branch}, exc_info=True)
+        raise store_refusal(exc, reading="listing the table's branches", so=_VENDED_NOTHING) from exc
 
 
 def build_session_policy(

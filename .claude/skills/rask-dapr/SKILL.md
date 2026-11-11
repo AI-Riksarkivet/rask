@@ -168,6 +168,12 @@ sidecar.
   control relay accepts duplicates because a duplicate publish dedupes on `event_id`; catalog's erasure
   release and promotion expiry move each record by an ETag-guarded write, so one replica wins it. A new cron on a service that can scale needs its answer chosen and written down, or its
   absence reads as an oversight rather than a decision.
+- **A cron tick through the read-only window is answered 2xx and does nothing.** The chart's one `readOnlyWindow` holds
+  every tick: the catalog's are held in `maintenance_mode` before routing, each one recorded by its own mount
+  (`catalog.api.cron.ticks_of`; a tick mounted elsewhere than `mount_cron` calls `record_tick`, or it keeps writing
+  through a window), lineage's relay returns `paused`. A 2xx, not a
+  refusal: the cron component discards the handler's result (components-contrib `bindings/cron/cron.go`, `_, _ =
+  handler(...)`), so a refusal would buy only daprd's error log, and the next tick after the window does the work.
 - `ActorProxy` dispatches @actormethod WIRE names, not Python names; mocks cannot catch a mismatch.
 - Missing `dapr.io/app-token-secret` on a bus-subscribing app ⇒ `assert_app_token_configured`
   crash-loops the pod. Missing row in `dapr-resiliency.yaml` ⇒ no sidecar retry AND no dead-letter.

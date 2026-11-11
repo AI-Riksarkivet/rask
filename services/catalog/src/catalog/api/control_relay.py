@@ -56,6 +56,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ValidationError
 
+from catalog.api.cron import record_tick
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
 from lakehouse import dapr_publish, outbox, outbox_metrics
@@ -342,4 +343,5 @@ def mount_control_relay(app: FastAPI, binding_name: str) -> bool:
     if not binding_name:
         return False
     app.include_router(build_control_relay_router(binding_name))
+    record_tick(app, binding_name)
     return True

@@ -52,7 +52,7 @@ from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
-from lakehouse.storage_options import StorageOptions, object_client
+from lakehouse.storage_options import StorageOptions, object_client, on_s3
 from lakehouse.trash import TrashKind
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
@@ -411,7 +411,7 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions) -> list[st
     # raise here would report the category unavailable on a brand-new estate.
     if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
-    manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
+    manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if on_s3(root) else f"{base}/{MANIFEST_DIR}"
     dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
     table = dataset.to_table(columns=["object_id", "object_type"])
     return sorted(
@@ -437,7 +437,7 @@ def _tables(root: str, storage_options: StorageOptions) -> list[tuple[str, str |
     fs, base = fs_and_base(root, storage_options)
     if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
-    manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
+    manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if on_s3(root) else f"{base}/{MANIFEST_DIR}"
     dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
     # `location` is TOLERATED ABSENT, not required: the spec's "Schema Extensibility" clause guarantees
     # no column on a manifest an older writer produced. Missing it yields no locations and [[LH-192]]
@@ -656,7 +656,7 @@ def _orphaned_trash(records: list[dict[str, Any]], *, claimed: set[str]) -> list
     out: list[OrphanedTrash] = []
     for record in records:
         location = str(record.get("location") or "")
-        if not location.startswith("s3://"):
+        if not on_s3(location):
             continue
         bucket = location[len("s3://") :].split("/", 1)[0]
         if bucket and bucket not in claimed and (uuid := trash.object_uuid(record)) is not None:
@@ -755,7 +755,7 @@ _WAREHOUSES_OFF = "warehouses are disabled — every namespace resolving to the 
 
 def _bucket_of(root_uri: str) -> str | None:
     """The bucket a root URI addresses, or ``None`` for a local/file root (which owns no bucket)."""
-    if not root_uri.startswith("s3://"):
+    if not on_s3(root_uri):
         return None
     return root_uri[len("s3://") :].strip("/").split("/")[0] or None
 
@@ -1249,7 +1249,7 @@ async def reconcile(
     resolved_control_root = control_root or settings.resolved_control_root
     resolved_namespace_root = namespace_root or f"s3://{settings.s3_bucket}"
     storage_options = settings.storage_options()
-    if bucket_client is None and resolved_namespace_root.startswith("s3://"):
+    if bucket_client is None and on_s3(resolved_namespace_root):
         # The storage seam's client for the sweep's own options: signed by the whole credential in force (a session's
         # access key signs only beside its token), at the options' endpoint and region, never by the ambient chain.
         bucket_client = object_client(storage_options)

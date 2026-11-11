@@ -75,7 +75,7 @@ def _world(
     deleted: list[str] = []
     revoked: list[dict[str, Any]] = []
 
-    monkeypatch.setattr(ep.warehouses, "list_warehouses", lambda _root, _so: [_OTHER_WAREHOUSE, *(warehouse_records or [])])
+    monkeypatch.setattr(ep.warehouses, "every_warehouse", lambda _root, _so: [_OTHER_WAREHOUSE, *(warehouse_records or [])])
 
     def _delete_record(_root: str, _so: Any, project_id: str) -> None:
         calls.append("delete_record")

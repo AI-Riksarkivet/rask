@@ -47,11 +47,13 @@ from lance_namespace import (
 )
 from pydantic import SecretStr
 
-from lakehouse import location_claims, trash
+from lakehouse import base_registry, location_claims, trash
+from lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod
+from maintenance.services import trash_release
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
 from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
@@ -461,6 +463,70 @@ def test_a_deactivated_warehouses_bucket_is_outside_the_maintained_estate(tmp_pa
     assert "outside the maintained estate" in out.refused[0].reason
 
 
+def _purges(estate: _Estate) -> tuple[bool, str | None]:
+    out = asyncio.run(mod.purge_expired_trash(_settings(estate.tmp_path), report=_clean_report(), control_root=estate.control_root))
+    return out.ran, out.reason
+
+
+def _releases(estate: _Estate) -> tuple[bool, str | None]:
+    out = asyncio.run(trash_release.release_expired_trash(_settings(estate.tmp_path), control_root=estate.control_root, now=_NOW))
+    return out.ran, out.reason
+
+
+def test_one_records_failed_release_holds_it_and_the_step_goes_on(tmp_path: Path, doors: respx.MockRouter) -> None:
+    """The release promises "never raises" as the purge does, by construction: a record whose release fails in a way the
+    catalog's client answers for nothing is held naming its cause, and the record after it is released ([[LH-572]]).
+    Namespace records under no root, so each reaches the release door with nothing else deciding it first."""
+    estate = _Estate(tmp_path)
+    for name, days in (("team", 60), ("archive", 50)):
+        estate.put_record(name, location="", kind="namespace", released=False, dropped_at=_NOW - timedelta(days=days))
+    answer = cast(Callable[..., httpx.Response], doors.routes["release"].side_effect)
+    failures = iter([RuntimeError("the transport failed in a way the client does not wrap")])
+
+    def _fails_once(request: httpx.Request, **matched: str) -> httpx.Response:
+        if (failure := next(failures, None)) is not None:
+            raise failure
+        return answer(request, **matched)
+
+    doors.routes["release"].side_effect = _fails_once
+
+    out = asyncio.run(trash_release.release_expired_trash(_settings(tmp_path, s3_bucket=""), control_root=estate.control_root, now=_NOW))
+
+    assert (len(out.held), len(out.released)) == (1, 1), out
+    assert out.held[0].reason.startswith("the release failed"), out.held[0].reason
+
+
+@pytest.mark.parametrize(
+    ("act", "released", "stopped_by"),
+    [
+        pytest.param(_purges, True, "the maintained estate or the trash listing could not be read (JSONDecodeError: ", id="the-purge"),
+        pytest.param(_releases, False, "the trash, the warehouse registry or the estate could not be read (JSONDecodeError: ", id="the-release"),
+    ],
+)
+def test_a_reclaimer_whose_warehouse_registry_holds_an_unreadable_record_does_not_run(
+    tmp_path: Path, doors: respx.MockRouter, act: Callable[[_Estate], tuple[bool, str | None]], released: bool, stopped_by: str
+) -> None:
+    """The purge's maintained estate and the release's roots are built from every warehouse record, and a record either
+    cannot read may name the bucket a live table's location is under: a root left out reads every live table under it
+    as gone. So one unreadable record stops the step with its reason, before a record is judged, rather than leaving
+    that warehouse out of the map."""
+    from catalog.services import warehouses as wh_svc
+
+    estate = _Estate(tmp_path)
+    wh_svc.put_warehouse(
+        estate.control_root, StorageOptions(), {"id": "wh-live", "bucket": "bkt-live", "root_uri": "s3://bkt-live", "project": "acme", "created_at": "t"}
+    )
+    (tmp_path / "control" / "_warehouses" / "wh-torn.json").write_text('{"id": "wh-torn", "bucket": "bkt-')
+    estate.drop_recoverably("team", "orders", released=released)
+    before = _fingerprint(estate.data)
+
+    ran, reason = act(estate)
+
+    asked = [route.name for route in doors.routes if route.called]
+    assert (ran, asked, _fingerprint(estate.data)) == (False, [], before)
+    assert (reason or "").startswith(stopped_by), reason
+
+
 # --------------------------------------------------------------------------- #
 # ordering: the record is ended only once its bytes are gone
 # --------------------------------------------------------------------------- #
@@ -626,23 +692,62 @@ def test_a_SECOND_refusal_counts_up_rather_than_looking_like_the_first(tmp_path:
     assert [r.attempts for r in out.refused] == [2], "the report does not carry the accumulated count"
 
 
-def test_persisting_a_refusal_NEVER_turns_a_refusal_into_a_failure(tmp_path: Path, doors: respx.MockRouter) -> None:
-    """`_purge_one` is documented "never raises; every failure is a refusal", and this must not break it.
-
-    The annotation is bookkeeping ABOUT a refusal, strictly less important than the refusal itself. A
-    store that refuses the write, a record another replica cleared in between, a lost CAS race — none
-    of them may propagate, because doing so would convert a correctly-reported refusal into an
-    unhandled error on the reclamation path.
-    """
-
+def _a_refusal_the_catalog_cannot_note(estate: _Estate, doors: respx.MockRouter) -> tuple[str, str | None]:
+    """A record refused as still registered, whose refusal the catalog's door fails to note."""
     doors.routes["refusals"].mock(return_value=httpx.Response(503, json={"code": 17, "detail": "the control root is unreachable"}))
-    estate = _Estate(tmp_path)
     canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
     estate.reregister("team", "orders", location=location)
+    return canonical, None
 
-    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=True))
 
-    assert [r.id for r in out.refused] == [canonical], "a failed annotation swallowed the refusal itself"
+def _a_data_directory_claim_that_is_no_claim(estate: _Estate, _doors: respx.MockRouter) -> tuple[str, str | None]:
+    """The first record's table names a data directory whose claim is no claim (written by hand or by an older build),
+    which its purge reads before it deletes a byte; the second is an ordinary drop."""
+    broken, location = estate.drop_recoverably("team", "a", dropped_at=_NOW - timedelta(days=60))
+    directory = f"file://{estate.tmp_path / 'base' / 'a'}"
+    registry = base_registry.BaseRegistry(control_root=estate.control_root, storage_options=StorageOptions())
+    base_registry.claim_bases(registry, location, [RecordedBase(path=directory, role=BaseRole.DATA, origin=BaseOrigin.CREATE)])
+    claim = estate.tmp_path / "control" / location_claims.claim_key(directory)
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim.write_text(json.dumps({"table": 7}))
+    ordinary, _ = estate.drop_recoverably("team", "b", dropped_at=_NOW - timedelta(days=30))
+    return broken, ordinary
+
+
+@pytest.mark.parametrize(
+    ("arrange", "cause"),
+    [
+        pytest.param(_a_refusal_the_catalog_cannot_note, "still registered", id="a-refusal-the-catalog-cannot-note"),
+        pytest.param(_a_data_directory_claim_that_is_no_claim, "ValidationError", id="a-records-purge-fails-on-a-store-record"),
+    ],
+)
+def test_one_records_failure_is_its_refusal_and_the_run_goes_on(
+    tmp_path: Path,
+    doors: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    arrange: Callable[[_Estate, respx.MockRouter], tuple[str, str | None]],
+    cause: str,
+) -> None:
+    """The purge promises "never raises" by construction: a record whose purge fails, in any way, is that record's refusal
+    naming its cause, the next record is purged, and the counters and the ``trash_purge`` result line are written for the
+    run. A refusal the catalog's door fails to note is still the record's refusal, its bookkeeping the less important
+    half."""
+    from maintenance.core import metrics as metrics_mod
+
+    estate = _Estate(tmp_path)
+    refused, purged = arrange(estate, doors)
+    counted: list[tuple[int, dict[str, object]]] = []
+    monkeypatch.setattr(metrics_mod._trash_refused, "add", lambda value, attributes=None, **_: counted.append((value, dict(attributes or {}))))
+    caplog.set_level("INFO", logger=mod.__name__)
+
+    out = _run(estate)
+
+    lines = [vars(line) for line in caplog.records if line.getMessage() == "trash_purge"]
+    assert ([r.id for r in out.refused], [p.id for p in out.purged]) == ([refused], [purged] if purged else [])
+    assert cause in out.refused[0].reason, out.refused[0].reason
+    refused_counted = {str(attributes["lance.maintenance.kind"]): value for value, attributes in counted}
+    assert ([(line["refused"], line["purged"]) for line in lines], refused_counted) == ([(1, 1 if purged else 0)], {"table": 1, "namespace": 0})
 
 
 # --------------------------------------------------------------------------- #

@@ -5,7 +5,7 @@ binding, CAS, delete). Nothing else may import that: services share only cross-c
 never each other. But the maintenance sweep genuinely needs to know WHICH buckets exist, and the
 answer changes at runtime — a warehouse is provisioned by an API call, not by a config edit.
 
-So the reader lives here, in the shared lakehouse library, deliberately narrow: it lists records and
+So the reader lives here, in the shared lakehouse library, deliberately narrow: it reads records and
 nothing else. It cannot write, bind, or delete, which keeps the catalog the only writer while giving
 the sweep a truthful answer. Same store shape as its siblings (one JSON per record under a prefix),
 and that primitive now exists: :mod:`lakehouse.record_store`.
@@ -34,12 +34,28 @@ def list_warehouse_records(control_root: str, storage_options: StorageOptions) -
 
     One unreadable record is skipped with a warning rather than blinding the whole listing: this
     feeds a maintenance sweep, and one bad record must not stop every other tenant being maintained.
-    A caller making a DESTRUCTIVE decision must not use this — it is deliberately tolerant.
+    A caller making a DESTRUCTIVE decision must not use this — it is deliberately tolerant — and reads
+    :func:`read_warehouse_records` instead.
 
     A record with no ``id`` is dropped here rather than in the store: it is readable and well-formed
     JSON, it just names nothing this registry can route to.
     """
     return [record for record in list_records(control_root, storage_options, REGISTRY_PREFIX, event=_EVENT) if record.get("id")]
+
+
+def read_warehouse_records(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
+    """Every warehouse record (unordered), read whole, for a caller making a DESTRUCTIVE decision from the listing.
+
+    A record left out may be the one naming the bucket a live table's location is under, so one that cannot be read or is
+    not a JSON object raises rather than being skipped as :func:`list_warehouse_records` skips it. A record naming no
+    ``id`` is returned as it reads: its bucket is a root the caller reads all the same, which leaving it out would not be.
+    An absent prefix yields ``[]``.
+
+    Raises:
+        OSError: The store failed a read.
+        ValueError: A record is not JSON or not a JSON object.
+    """
+    return list_records(control_root, storage_options, REGISTRY_PREFIX, event=_EVENT, strict=True)
 
 
 def maintainable_buckets(records: list[dict[str, Any]]) -> list[str]:

@@ -83,7 +83,8 @@ groups:
         annotations:
           summary: "Lineage outbox oldest staged event > 5 min old"
           description: >-
-            The outbox relay is lagging; the oldest undrained event exceeds 300s.
+            The outbox relay is lagging; the oldest undrained event exceeds 300s. If `outbox_drop_failed_total` rises
+            with it, the store refuses a publisher's deletes of what it delivered.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       - alert: LineageOutboxStagingFailing
@@ -175,11 +176,13 @@ groups:
           severity: warning
           service: catalog
         annotations:
-          summary: "The commit reconciler cannot read a table's version log"
+          summary: "The commit reconciler cannot read a table's version log, the table, or lineage's feed"
           description: >-
             The catalog's commit reconciler could not read a retained version, or its commit time, on a table's ref, so
-            it kept that ref's mark and announces nothing after it until it can. Read the catalog's
-            `commit_reconcile_ref_unreadable` and `commit_reconcile_table_failed` logs for the table and the error.
+            it kept that ref's mark and announces nothing after it until it can; or it could not describe a table it
+            claims, or lineage's feed, so it announced nothing for that table, or nothing at all on that tick. Read the
+            catalog's `commit_reconcile_ref_unreadable`, `commit_reconcile_table_unreadable`,
+            `commit_reconcile_feed_unreadable` and `commit_reconcile_table_failed` logs for the table and the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
 
       # A root whose __manifest history the catalog cannot reclaim keeps a version per namespace operation again, and keeps
@@ -764,8 +767,8 @@ groups:
             overwrite of them goes unseen. The committed_files_unrecorded ERROR log names the location, the version and
             the store's error.
 
-      # One table the catalog keeps refusing, which the ratio rule cannot see: an id that holds no tuples is answered
-      # 403 at the vend door on every pass. A refused table is passed again at its recheck (a day) or its next commit, and
+      # One table the catalog keeps refusing, or whose policy record cannot be read, which the ratio rule cannot see: an
+      # id that holds no tuples is answered 403 at the vend door on every pass. A refused table is passed again at its recheck (a day) or its next commit, and
       # a series first appears at 1, which increase() cannot see, so the rule fires at the second refused pass a 25h
       # window holds: a table refused on passes a day apart. vmalert keeps `for:` in memory, so its own restart restarts
       # the clock.
@@ -776,13 +779,16 @@ groups:
           severity: warning
           service: maintenance
         annotations:
-          summary: "The catalog has refused maintenance of {{ $labels.table_id }} on passes a day apart"
+          summary: "Maintenance of {{ $labels.table_id }} has been parked on passes a day apart"
           description: >-
-            For a day the catalog has refused this table id, so its superseded versions are not reclaimed.
+            For a day this table id has been parked, so its superseded versions are not reclaimed.
             Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id,
             or the id names no table, which is what a stale lineage.dataset_id stamp leaves.
             table_not_governed is a 404. Grant the id, or fix the stamp or the location. The
             maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset.
+            policy_unreadable is a maintenance policy record of the table, its namespace or its project that
+            cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The
+            maintenance_policy_malformed ERROR line names the table and the record's fault.
 
   # ==================================================================================================
   # THE HTTP PLANE — fourteen apps emitted RED metrics and not one rule read them.

@@ -42,9 +42,11 @@ from lance_namespace import (
     DescribeTableRequest,
     DescribeTableResponse,
     DropNamespaceRequest,
+    InternalError,
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
+    LanceNamespaceError,
     ListTablesRequest,
     NamespaceAlreadyExistsError,
     NamespaceExistsRequest,
@@ -101,7 +103,7 @@ from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
-from lakehouse.ns_errors import PartiallyApplied
+from lakehouse.ns_errors import PartiallyApplied, status_for
 from lakehouse.records import RecordExistsError, RecordMissingError
 from lakehouse.storage import s3_client, split_s3_uri
 
@@ -429,15 +431,15 @@ async def list_estate_bindings(
     bucket it lives in, so leaking one leaks another tenant's shape.
     """
     _require_enabled(settings)
-    # `read_bindings`, NOT the tolerant `list_bindings`: the per-warehouse sibling 503s on any binding
+    # `read_bindings`, NOT the tolerant `list_bindings`: the per-warehouse sibling refuses on any binding
     # it could not parse, and answering the estate question with the opposite tolerance would put an
     # invisible bound namespace back — a 200 with one silently missing, which the frontend's
     # read-failed channel cannot see because nothing failed. One corrupt object degrades LOUDLY here,
     # exactly as it does one route over.
     records, skipped = await run_in_threadpool(warehouses.read_bindings, settings.registry_root, settings.storage_options())
     if skipped:
-        raise ServiceUnavailableError(
-            f"{len(skipped)} namespace binding(s) could not be read (e.g. {skipped[0]}) — refusing to "
+        raise InternalError(
+            f"{len(skipped)} namespace binding(s) cannot be read as one (e.g. {skipped[0]}) — refusing to "
             f"report a partial estate, because a binding you cannot read is a namespace you cannot see."
         )
     if (authz := fga_deps.authorization(settings, client, token)) is not None:
@@ -1192,6 +1194,11 @@ def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]],
     )
 
 
+def _a_refusal(exc: BaseException) -> bool:
+    """Whether ``exc`` is a guard's refusal, a spec error answered 4xx, as opposed to a failure of a store or of OpenFGA."""
+    return isinstance(exc, LanceNamespaceError) and status_for(int(exc.code)) < 500
+
+
 @router.delete("/{warehouse_id}")
 async def delete_warehouse(
     warehouse_id: str,
@@ -1267,8 +1274,9 @@ async def delete_warehouse(
     if purge_bucket:
         # The registry-wide read happens ONLY on the destructive path: the guard needs every claim on this
         # bucket, and a plain (recoverable) delete has no reason to pay for it. It runs here, before the
-        # cascade, so a refusal still costs nothing — the bottom-up rule applies to the bytes too.
-        records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
+        # cascade, so a refusal still costs nothing — the bottom-up rule applies to the bytes too. Read whole: a record
+        # that cannot be read may be a sibling's claim on this bucket ([[LH-572]]).
+        records = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
         _require_bucket_purgeable(settings, records, record, warehouse_id)
 
     # [[LH-205]] The cascade opens the warehouse's store and the purge empties a bucket through the
@@ -1359,6 +1367,12 @@ async def delete_warehouse(
         if isinstance(exc, fga.RevokeInterrupted):
             # The object whose revoke the outage stopped lost these before it.
             revoked += len(exc.removed)
+        if _a_refusal(exc) and not (namespaces_dropped or tables_removed or trash_ended or revoked):
+            # A GUARD'S REFUSAL BEFORE ANY STEP LANDED is the answer, under its own code ([[LH-572]]): a guard refuses before
+            # its step writes, so nothing is partial. A failure of the store or of OpenFGA is reported as partial even with
+            # nothing counted, since the step it stopped may have landed (a clone's row detached, then its tag's delete
+            # failed), and a re-issue is what finishes it.
+            raise
         log.error(
             "warehouse_delete_partial",
             extra={

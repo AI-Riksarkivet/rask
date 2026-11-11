@@ -5,6 +5,9 @@ it could re-publish whatever is staged and push the feed out on demand. The rout
 a binding, answers Dapr's discovery pre-flight without the app token (the probe carries none), and refuses a POST
 without it. Driven through lineage's router over the real store in a live catalog (`lineage_app`), with a recording
 graph backend, so a refused tick is seen to forward nothing.
+
+Through a read-only window (`LINEAGE_READ_ONLY`, rendered from the chart's one `readOnlyWindow`) the tick is answered and
+does nothing: it drains, prunes and forwards nothing, and says it paused, so the next tick after the window does the work.
 """
 
 from __future__ import annotations
@@ -56,10 +59,14 @@ def test_the_discovery_preflight_is_answered_at_the_binding_name_alone(tmp_path:
     assert (answers[0].json(), answers[1].status_code) == ({"status": "ok"}, 404)
 
 
-def test_a_tick_without_the_sidecars_token_forwards_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("read_only", "forwarded"), [pytest.param(False, 1, id="outside-a-window"), pytest.param(True, 0, id="through-a-read-only-window")])
+def test_a_tick_forwards_only_with_the_sidecars_token_and_outside_a_read_only_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_only: bool, forwarded: int
+) -> None:
     """Every count is in the report when it is zero: a count that appears only when it did something makes "nothing
     happened" and "the step never ran" the same observation."""
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+    monkeypatch.setenv("LINEAGE_READ_ONLY", str(read_only).lower())
     run = run_event("1d3c5a07-0000-4000-8000-000000000593", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=[_TABLE])
     with graph_backend() as (graph, url):
         monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
@@ -71,15 +78,16 @@ def test_a_tick_without_the_sidecars_token_forwards_nothing(tmp_path: Path, monk
                 sent_while_refused = len(graph.received)
                 tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
 
-    assert (refused, sent_while_refused) == ([403, 403], 0)
+    assert (refused, sent_while_refused, len(graph.received)) == ([403, 403], 0, forwarded)
     assert tick.json() == {
+        "paused": read_only,
         "outbox_drained": 0,
         "outbox_stranded": 0,
         "outbox_refused": 0,
         "outbox_refusals_recorded": 0,
         "pruned_events": 0,
         "parks_retired": 0,
-        "forwarded": 1,
+        "forwarded": forwarded,
         "forward_refused": 0,
         "forward_stalled": None,
     }

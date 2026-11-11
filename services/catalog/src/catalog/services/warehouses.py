@@ -21,7 +21,7 @@ import logging
 from typing import Any
 
 import pyarrow.fs as pafs
-from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
+from lance_namespace import InternalError, NamespaceAlreadyExistsError
 
 from catalog.services.control_records import (
     BindingRecord,
@@ -38,6 +38,7 @@ from catalog.services.control_records import (
 from lakehouse import trash
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
+from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
 
@@ -287,31 +288,43 @@ def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_
     return validated_or_refuse(record, WarehouseRecord, event="warehouse_record_malformed", path=key) if record is not None else None
 
 
-def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every readable warehouse record (unordered). An absent registry prefix yields ``[]``.
+def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
+    """``(readable warehouse records, paths that are there and could NOT be read as one)``, unordered. An absent prefix
+    yields ``([], [])``; a read the store did not answer raises (:func:`_read_registry`).
 
-    One corrupt or unreadable record is SKIPPED with a warning, never allowed to 500 the whole listing
-    (mirrors ``maintenance_policies.list_policies``): the list feeds the project-policy set and the
-    bucket-claim guards, and a single bad object voiding it would turn one tenant's registry corruption
-    into an every-tenant control-plane outage.
+    The skipped paths are returned, as :func:`read_bindings` returns its own, because the callers need opposite things
+    from one tolerance: a listing survives one bad object, while a decision that no record names something (the last
+    warehouse of a project, another claim on a bucket) is a guess while one cannot be read ([[LH-572]]).
     """
-    fs, base = fs_and_base(control_root, storage_options)
-    out: list[dict[str, str]] = []
-    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_REGISTRY_PREFIX}", allow_not_found=True)):
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
-        try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
-        except Exception as exc:
-            log.warning("warehouse_record_unreadable", extra={"path": info.path, "error": str(exc)})
-            continue
-        # Validated against the DECLARED shape, not eyeballed with `.get()` truthiness: a record whose
-        # `bucket` is a list is present, non-empty and structurally useless — it would be reported as
-        # live and then match no bucket claim, which is the one direction the claim guard must not fail.
-        if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is not None:
-            out.append(valid)
-    return out
+    return _read_registry(control_root, storage_options, prefix=_REGISTRY_PREFIX, model=WarehouseRecord, event="warehouse_record")
+
+
+def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+    """Every readable warehouse record (unordered), the tolerant half of :func:`read_warehouses`, for a caller that only
+    enumerates. An absent registry prefix yields ``[]``.
+
+    One corrupt record is SKIPPED with a warning, never allowed to 500 the whole listing: a single bad object voiding it
+    would turn one tenant's registry corruption into an every-tenant control-plane outage. A read the store did not
+    answer raises, as a failed listing does. A caller deciding something destructive or protective asks
+    :func:`every_warehouse`.
+    """
+    return read_warehouses(control_root, storage_options)[0]
+
+
+def every_warehouse(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
+    """Every warehouse record, read whole, for a caller deciding from the registry that no record names something.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a read of the registry.
+        InternalError: A record is there and cannot be read as one, so it may be the one the decision is about.
+    """
+    records, skipped = read_warehouses(control_root, storage_options)
+    if skipped:
+        raise InternalError(
+            f"{len(skipped)} warehouse record(s) cannot be read as one ({', '.join(sorted(skipped))}), so what the registry "
+            "holds cannot be determined. Refusing rather than deciding on a possibly-short list."
+        )
+    return records
 
 
 def projects_claiming_bucket(records: list[dict[str, str]], bucket: str) -> set[str]:
@@ -509,20 +522,41 @@ def read_bindings(control_root: str, storage_options: StorageOptions) -> tuple[l
     An earlier version of this function only logged the skip and its own docstring claimed the delete
     path "treats a skip as serious". It could not: nothing crossed the return boundary to treat.
     """
+    return _read_registry(control_root, storage_options, prefix=_BINDINGS_PREFIX, model=BindingRecord, event="binding_record")
+
+
+def _read_registry(
+    control_root: str, storage_options: StorageOptions, *, prefix: str, model: type[WarehouseRecord] | type[BindingRecord], event: str
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Every record directly under ``prefix`` that reads as ``model``, and the path of each that is there and does not,
+    logged under ``<event>_unreadable`` or ``<event>_malformed``.
+
+    Validated against the DECLARED shape, not eyeballed with ``.get()`` truthiness: a record whose ``bucket`` is a list is
+    present, non-empty and structurally useless, so it is skipped and named rather than read as live. A record deleted
+    since the listing named it is no record. A read the store did not answer raises, tolerant caller or strict: one
+    skipped as unreadable would read as a corrupt record, which no retry mends ([[LH-572]]).
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a record's read.
+    """
     fs, base = fs_and_base(control_root, storage_options)
     out: list[dict[str, str]] = []
     skipped: list[str] = []
-    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_BINDINGS_PREFIX}", allow_not_found=True)):
+    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{prefix}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
             with fs.open_input_stream(info.path) as stream:
                 record = json.loads(stream.readall().decode("utf-8"))
+        except FileNotFoundError:
+            continue
         except Exception as exc:
-            log.warning("binding_record_unreadable", extra={"path": info.path, "error": str(exc)})
+            if reads_as_store_outage(exc):
+                raise store_refusal(exc, reading=f"reading {info.path}", so="the registry cannot be read") from exc
+            log.warning(f"{event}_unreadable", extra={"path": info.path, "error": str(exc)})
             skipped.append(info.path)
             continue
-        if (valid := validated(record, BindingRecord, event="binding_record_malformed", path=info.path)) is not None:
+        if (valid := validated(record, model, event=f"{event}_malformed", path=info.path)) is not None:
             out.append(valid)
         else:
             skipped.append(info.path)
@@ -544,15 +578,16 @@ def namespaces_bound_to(control_root: str, storage_options: StorageOptions, ware
     The warehouse's *contents* for lifecycle purposes: non-empty ⇒ the delete refuses 409 and names
     them; ``?cascade=true`` drops them bottom-up in this order.
 
-    Raises ``ServiceUnavailableError`` if ANY binding object is unreadable — including ones belonging
-    to other warehouses. That looks over-broad and is deliberate: the unreadable object's own content
-    is what says which warehouse it binds, so "it probably wasn't this one's" is precisely the
-    assumption that cannot be made. Refusing is recoverable; a wrong emptiness answer is not.
+    Raises ``InternalError`` if ANY binding object is there and cannot be read as one — including ones
+    belonging to other warehouses. That looks over-broad and is deliberate: the unreadable object's own
+    content is what says which warehouse it binds, so "it probably wasn't this one's" is precisely the
+    assumption that cannot be made. Refusing is recoverable; a wrong emptiness answer is not. A read the
+    store did not answer raises ``ServiceUnavailableError`` (:func:`_read_registry`).
     """
     bindings, skipped = read_bindings(control_root, storage_options)
     if skipped:
-        raise ServiceUnavailableError(
-            f"{len(skipped)} namespace binding record(s) could not be read ({', '.join(sorted(skipped))}), so this "
+        raise InternalError(
+            f"{len(skipped)} namespace binding record(s) cannot be read as one ({', '.join(sorted(skipped))}), so this "
             f"warehouse's contents cannot be determined. Refusing rather than reporting a possibly-empty warehouse."
         )
     return sorted(str(b["top_ns"]) for b in bindings if b.get("warehouse_id") == warehouse_id)
@@ -653,15 +688,21 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse
     that binding could name this warehouse or another, so the selection refuses rather than guessing.
 
     Raises:
-        ServiceUnavailableError: A binding record could not be read.
+        ServiceUnavailableError: The store did not answer a read of a binding record or of the trash.
+        InternalError: A binding record or a trash record is there and cannot be read as one.
     """
     bindings, skipped = read_bindings(control_root, storage_options)
     if skipped:
-        raise ServiceUnavailableError(
-            f"{len(skipped)} namespace binding record(s) could not be read ({', '.join(sorted(skipped))}), so this "
+        raise InternalError(
+            f"{len(skipped)} namespace binding record(s) cannot be read as one ({', '.join(sorted(skipped))}), so this "
             f"warehouse's trash cannot be told from another's. Refusing rather than ending a record that may not be its own."
         )
-    records = trash.list_all(control_root, storage_options)
+    try:
+        records = trash.every_record(control_root, storage_options)
+    except (OSError, ValueError) as exc:
+        # A record that cannot be read may be this warehouse's own, which the delete would leave holding its grants and
+        # claim for a warehouse that no longer exists ([[LH-572]]).
+        raise store_refusal(exc, reading="reading the trash", so="this warehouse's own trash cannot be determined") from exc
     here = {str(b["top_ns"]) for b in bindings if b.get("warehouse_id") == warehouse_id}
     elsewhere = {str(b["top_ns"]) for b in bindings if b.get("warehouse_id") != warehouse_id}
     for record in records:

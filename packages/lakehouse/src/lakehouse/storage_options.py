@@ -151,11 +151,6 @@ class StorageOptions(BaseModel):
         """The region these options sign for; ``None`` leaves it to the client building them."""
         return self.options.get(REGION) or None
 
-    def reaches_by_endpoint(self, uri: str) -> bool:
-        """Whether ``uri`` is an ``s3://`` location these options name an endpoint for, reached through an S3 client there;
-        any other location resolves through pyarrow's own filesystem for its scheme."""
-        return uri.startswith("s3://") and self.endpoint is not None
-
     def with_options(self, extra: Mapping[str, str]) -> StorageOptions:
         """These options with ``extra``'s keys set over them, under the same key pair, each under its canonical spelling.
 
@@ -272,6 +267,17 @@ def _canonical(options: Mapping[str, str]) -> dict[str, str]:
         if values:
             canonical[aliases[0]] = values.pop()
     return canonical
+
+
+def on_s3(location: str) -> bool:
+    """Whether ``location`` is on S3: the one answer to which client reaches it.
+
+    A location on S3 is reached through :func:`object_client` or :func:`s3_filesystem`, signed by the options' own key
+    pair whether or not they name an endpoint, since an options map naming none is AWS proper and its regional endpoint.
+    Any other location resolves through pyarrow's own filesystem for its scheme, which for ``s3://`` would sign with the
+    pod's ambient credential chain instead ([[LH-572]]).
+    """
+    return location.startswith("s3://")
 
 
 def object_client(storage_options: StorageOptions) -> S3Client:

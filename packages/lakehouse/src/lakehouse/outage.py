@@ -47,8 +47,10 @@ over: its source is `PermissionDenied`, not `Generic`, and its status is not a 5
 
 from __future__ import annotations
 
+from lance_namespace import InternalError, ServiceUnavailableError
 
-__all__ = ["reads_as_store_outage"]
+
+__all__ = ["reads_as_store_outage", "store_refusal"]
 
 #: Each marker in all three dialects: pylance's flattened `LanceError(IO)` text, the native backend's Debug form, and
 #: pyarrow's S3 error. An object-store failure, as opposed to one of Lance's own.
@@ -75,3 +77,16 @@ def reads_as_store_outage(exc: BaseException) -> bool:
     if not any(marker in message for marker in _IO_MARKERS):
         return False
     return any(marker in message for marker in _TRANSPORT_MARKERS + _SERVER_ERROR_MARKERS)
+
+
+def store_refusal(exc: BaseException, *, reading: str, so: str) -> ServiceUnavailableError | InternalError:
+    """The spec's refusal for a guard whose ``reading`` failed with ``exc``, saying what it therefore did not do (``so``).
+
+    The store not answering is an outage (503, code 17), which a retry may clear. Anything else, a record that is there
+    and cannot be read as one or an answer the store gave, is the target's own state (500, code 18), which only a write
+    clears, so it is not told to retry (`lance_docs/ns_catalog/namespace/operations/errors.md`: 17 is "temporarily
+    unavailable", 18 an unexpected server error).
+    """
+    if reads_as_store_outage(exc):
+        return ServiceUnavailableError(f"the object store did not answer {reading}, so {so}")
+    return InternalError(f"{reading} failed, so {so}")

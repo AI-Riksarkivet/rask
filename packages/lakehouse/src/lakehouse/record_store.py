@@ -38,7 +38,7 @@ import pyarrow.fs as pafs
 from lakehouse import stored_objects
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage import split_s3_uri
-from lakehouse.storage_options import StorageOptions, object_client
+from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
 
 log = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def put_record(control_root: str, storage_options: StorageOptions, key: str, rec
     before a stamp), a write outside what a writer granted its own records' keys may make ([[XC-084]]).
     """
     body = json.dumps(record).encode()
-    if control_root.startswith("s3://"):
+    if on_s3(control_root):
         bucket, prefix = split_s3_uri(control_root.rstrip("/"))
         object_client(storage_options).put_object(Bucket=bucket, Key=f"{prefix}/{key}" if prefix else key, Body=body)
         return

@@ -9,10 +9,11 @@ under the run id derived from the commit, signed by the catalog for the author i
 signature either way.
 
 Each find is counted on ``catalog.commit_reconcile.reannounced``, each version the catalog recorded no author for on
-``catalog.commit_reconcile.unauthored``, and each ref whose log could not be read on ``catalog.commit_reconcile.unreadable``;
-each pages (`deploy/alerting/rules.yml`). A publication whose announcement the feed lacks is announced the same way, from
-the version the table's ``published`` tag names, for the caller the catalog recorded moving it ([[LH-552]]), and counted
-on the same counters under its operation, ``publish_table``.
+``catalog.commit_reconcile.unauthored``, and each ref whose log could not be read on ``catalog.commit_reconcile.unreadable``,
+as is each table, and the feed, that the store did not describe; each pages (`deploy/alerting/rules.yml`). A publication
+whose announcement the feed lacks is announced the same way, from the version the table's ``published`` tag names, for
+the caller the catalog recorded moving it ([[LH-552]]), and counted on the same counters under its operation,
+``publish_table``.
 
 The same tick watches every released erasure obligation for a late derived table (ADR 0183 §5,
 `catalog.services.erasure_derived.watch_released`): a table derived from the erased one, written before the release and
@@ -39,9 +40,9 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import DescribeTableRequest, LanceNamespace
+from lance_namespace import DescribeTableRequest, LanceNamespace, NamespaceNotFoundError, PermissionDeniedError, TableNotFoundError
 from opentelemetry import metrics
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from catalog.api.cron import mount_cron
 from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, StorageOptionsDep, estate_namespace, namespace_for_top_ns
@@ -70,9 +71,10 @@ _reannounced = _meter.create_counter(
 )
 _unreadable = _meter.create_counter(
     "catalog.commit_reconcile.unreadable",
-    unit="{ref}",
-    description="Table refs whose version log the commit reconciler could not read past a point: the ref keeps its mark, "
-    "and every lost announcement after it waits until it is read.",
+    unit="{read}",
+    description="Reads the commit reconciler could not make: a table ref's version log past a point (the ref keeps its mark, "
+    "and every lost announcement after it waits until it is read), or a describe of a table it claims or of lineage's feed "
+    "(nothing is announced for that table, or on that tick, until it is read).",
 )
 _late_derived = _meter.create_counter(
     "catalog.erasure.late_derived",
@@ -121,30 +123,47 @@ class _LiveTable(BaseModel):
     uuids: DatasetUuids
 
 
-async def _live_tables(request: Request, settings: Settings) -> list[_LiveTable]:
+class _LiveTables(BaseModel):
+    """The tables a tick reads, and how many claims named one it could not describe."""
+
+    tables: list[_LiveTable] = Field(default_factory=list)
+    #: Claims whose table the store did not describe: their versions are not read this tick, so nothing is announced for them.
+    unreadable: int = 0
+
+
+async def _live_tables(request: Request, settings: Settings) -> _LiveTables:
     """Every table the catalog holds a location claim for, whose name still describes to the claimed location.
 
     The claims, not a walk of the names: every table the catalog makes or registers takes one (ADR 0173 §6), across
     every warehouse, and it records the table's uuid. A claim kept for a trashed table, or one whose holder no longer
-    describes to it (a rename or a drop in flight), names no live table this tick.
+    describes to it (a rename or a drop in flight), names no live table this tick. A describe that failed otherwise is
+    no answer about the name, so it is logged with its cause and counted, as an unreadable ref is.
     """
     store = table_claims.claim_store(settings)
     claims = await run_in_threadpool(location_claims.held_claims, store)
-    live: list[_LiveTable] = []
+    live = _LiveTables()
     for claim in claims:
         if claim.uuid is None or not claim.segments or await run_in_threadpool(table_claims.kept_in_trash, store, claim):
             continue
         try:
             ns = await namespace_for_top_ns(request, settings, claim.segments[0]) if len(claim.segments) > 1 else await estate_namespace(request, settings)
             described = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=claim.segments))
-        except Exception as exc:  # noqa: BLE001 — a table this tick cannot reach is reached by the next
-            log.info("commit_reconcile_table_unreachable", extra={"table": claim.table, "error": str(exc)[:300]})
+        except (TableNotFoundError, NamespaceNotFoundError):
+            continue
+        except PermissionDeniedError:
+            # The table's warehouse is deactivated (the resolver's quarantine): no door commits to it, so nothing is owed
+            # until it is active again, when its marks are read from where they stand.
+            continue
+        except Exception as exc:  # noqa: BLE001 — a table this tick cannot reach is reached by the next; the others go on
+            log.error("commit_reconcile_table_unreadable", extra={"table": claim.table, "error": str(exc)[:300]})
+            _unreadable.add(1)
+            live.unreadable += 1
             continue
         location = str(described.location or "")
         if decoded_path(location) != claim.location:
             continue
         namespace_uuid = await ObjectUuids(request, settings).namespace(claim.segments[:-1]) if len(claim.segments) > 1 else None
-        live.append(
+        live.tables.append(
             _LiveTable(
                 segments=claim.segments,
                 location=location,
@@ -155,12 +174,17 @@ async def _live_tables(request: Request, settings: Settings) -> list[_LiveTable]
 
 
 def _feed_location(settings: Settings, ns: LanceNamespace) -> str | None:
-    """Where ``provenance$events`` lives, or ``None`` before lineage has created it."""
+    """Where ``provenance$events`` lives, or ``None`` before lineage has created it.
+
+    Raises:
+        Exception: Whatever the describe raised other than the feed or its namespace not being there yet: a feed the
+            store did not describe is not a feed that does not exist, so the tick stops rather than decides without it.
+    """
     if not settings.provenance_namespace:
         return None
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=[settings.provenance_namespace, "events"]))
-    except Exception:  # noqa: BLE001 — no feed yet is a feed holding nothing
+    except (TableNotFoundError, NamespaceNotFoundError):
         return None
     return str(described.location or "") or None
 
@@ -247,12 +271,19 @@ async def _on_cron(
     async with _tick_lock:
         estate = await estate_namespace(request, settings)
         late_derived = await _watch_released(settings, estate, so)
-        feed = await run_in_threadpool(_feed_location, settings, estate)
+        try:
+            feed = await run_in_threadpool(_feed_location, settings, estate)
+        except Exception as exc:  # noqa: BLE001 — a feed this tick cannot read is read by the next; nothing is announced without it
+            log.error("commit_reconcile_feed_unreadable", extra={"error": str(exc)[:300]})
+            _unreadable.add(1)
+            return CommitReconcileTick(skipped=True, unreadable=1, late_derived=late_derived)
         if feed is None:
             return CommitReconcileTick(skipped=True, late_derived=late_derived)
-        tables = await _live_tables(request, settings)
+        live = await _live_tables(request, settings)
+        tables = live.tables
         now = clock().astimezone(UTC)
-        reannounced = unauthored = unreadable = 0
+        reannounced = unauthored = 0
+        unreadable = live.unreadable
         for table in tables:
             try:
                 found = await run_in_threadpool(

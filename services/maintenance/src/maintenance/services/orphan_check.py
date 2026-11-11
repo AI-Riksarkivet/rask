@@ -19,7 +19,9 @@ its table's claim, so it never runs beside the table's pass or another check of 
    moves only once a pass cleans the manifests beneath the raise; a check that finds nothing, or only files Lance
    reclaims itself -> min(2I, C); an excluded table (a branch, MemWAL, an unsupported flag, files through a base, a
    history or a file count past the scan's ceilings) or a bucket maintenance does not govern -> C; a table no
-   ``__manifest`` row names -> F; a read that fails raises, so the worker delivers the check again.
+   ``__manifest`` row names, or whose policy record cannot be read as a policy (``policy_unreadable``: it may be a legal
+   hold, so the check neither scans nor raises, as the table's pass parks it) -> F; a read that fails raises, so the
+   worker delivers the check again.
 
 Tables with branches, MemWAL, unsupported flags or files through a base stay unchecked (excluded): the scan subtracts
 the main branch's references from a listing, which those layouts break.
@@ -111,6 +113,8 @@ def _check(task: Task, settings: MaintenanceSettings, *, now: datetime) -> tuple
     readings = read_for(task.location, held, settings, now=now)
     if readings is None:
         raise OrphanCheckIncompleteError("the table's __manifest rows or its policy could not be read")
+    if readings.policy_unreadable is not None:
+        return OrphanCheck(outcome="policy_unreadable", next_check=FLOOR), None
     location = held_location(task.location)
     table = readings.table_ids.table_of(location)
     if table is None or table != held.table or readings.owners is None:

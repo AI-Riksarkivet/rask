@@ -229,10 +229,10 @@ def named(control_root: str, storage_options: StorageOptions, canonical_id: str,
     door restores, whether a claim's holder is gone), so a record it cannot read raises rather than being left out.
 
     Raises:
+        OSError: The store could not be listed, or a record read.
         ValueError: A trash record is not a JSON object.
     """
-    listed = list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT, strict=True)
-    held = [record for record in listed if record.get("kind", "table") == kind and record.get("id") == canonical_id]
+    held = [record for record in every_record(control_root, storage_options) if record.get("kind", "table") == kind and record.get("id") == canonical_id]
     return sorted(held, key=lambda record: str(record.get("dropped_at") or ""))
 
 
@@ -322,8 +322,23 @@ def note_refusal(
 
 def list_all(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
     """Every readable trash record. An absent prefix yields ``[]``; one unreadable record is skipped
-    with a warning rather than blinding the whole listing."""
+    with a warning rather than blinding the whole listing. A caller deciding from the listing what a drop left asks
+    :func:`every_record`."""
     return list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT)
+
+
+def every_record(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
+    """Every trash record, read whole. An absent prefix yields ``[]``.
+
+    For a caller deciding from the listing what the drops left (an undrop restoring its cascade, a warehouse ending its
+    own trash): a record it could not read may be one of them, so one that cannot be read raises rather than being left
+    out as :func:`list_all` leaves it ([[LH-572]]).
+
+    Raises:
+        OSError: The store could not be listed, or a record read.
+        ValueError: A record is not a JSON object.
+    """
+    return list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT, strict=True)
 
 
 def deadline_of(record: dict[str, Any]) -> datetime | None:

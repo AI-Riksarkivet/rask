@@ -129,4 +129,5 @@ occurred_at  # unused variable (packages/lakehouse/src/lakehouse/control_events.
 erase_subject  # unused function (services/catalog/src/catalog/api/v1/endpoints/erasure.py:92)
 overdue  # unused variable (services/catalog/src/catalog/services/erasure_obligations.py:78)
 oldest_seq  # unused variable (services/lineage/src/lineage/schemas.py:45)
+paused  # unused variable (services/lineage/src/lineage/api/relay_cron.py:71)
 forgotten  # unused variable (services/maintenance/src/maintenance/services/committed_files.py:47)

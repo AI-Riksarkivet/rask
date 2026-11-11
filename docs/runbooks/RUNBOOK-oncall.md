@@ -186,7 +186,10 @@ refused to plan is picked up by its table's next scheduled pass.
 **Cause.** The lineage outbox stages each event durably before publishing; the relay drains it. A sustained
 non-zero depth means the relay isn't draining — usually the lineage service or NATS is unhealthy.
 
-**Diagnose.** Lineage pod health + logs; NATS health. A healthy relay drives depth back toward 0. On the catalog's
+**Diagnose.** Lineage pod health + logs; NATS health. A healthy relay drives depth back toward 0. `outbox_drop_failed_total`
+rising with the depth means the store refuses a publisher's deletes of events it delivered: nothing is lost, since the
+relay re-delivers and drops each copy, but every staged event is delivered twice until the publisher's delete grant on
+the outbox prefix is mended. On the catalog's
 control lane (`service.name` catalog), `control_relay_keys_unavailable` lines mean its sidecar cannot read
 `signing-public-<catalog identity>`, so nothing staged is delivered until it can; `control_outbox_unverifiable` lines
 mean something other than the catalog wrote under `_control_outbox`: treat that as a forgery
@@ -220,7 +223,10 @@ attempt's record does not match, and it needs no incident either. Otherwise find
 `_versions/`: no writer is vended a put on a final manifest, so it is a maintain-tier or store-root credential.
 
 A blocked reconciler (`CatalogCommitReconcileBlocked`, `commit_reconcile_ref_unreadable` ERROR logs) could not read a
-retained version or its commit time; it keeps that ref's mark until the read succeeds, so it skips nothing.
+retained version or its commit time; it keeps that ref's mark until the read succeeds, so it skips nothing. A
+`commit_reconcile_table_unreadable` ERROR log names a table it claims but could not describe, and a
+`commit_reconcile_feed_unreadable` one says lineage's feed could not be described, so that tick announced nothing; both
+are retried on the next tick, and a table gone from the catalog is not one of them.
 
 **Act.** A re-announcement needs nothing further once its cause is understood. An unauthored version is unjudged:
 treat it as an incident on the credential that wrote it, and restore the table to the last authored version if its
@@ -406,10 +412,12 @@ Every log line named is in the service's container log (`kubectl logs deploy/ras
 - `MaintenanceRefusalsRising` (warning): more than half of the tables passed in an hour were refused, usually by a
   manifest flag the supported-flag list does not know after a pylance upgrade. First check: the refusal reasons in
   `maintenance_dataset_outcome`.
-- `MaintenanceTableParked` (warning): the catalog refused maintenance of one table id on passes a day apart, so its
+- `MaintenanceTableParked` (warning): maintenance of one table id has been parked on passes a day apart, so its
   versions are not reclaimed. First check: `refused_by` — `vend_denied` (403: no `can_maintain` on the id, or a stale
-  `lineage.dataset_id` stamp) or `table_not_governed` (404); the `maintenance_vend_denied` and
-  `maintenance_table_not_governed` WARNING lines name the dataset.
+  `lineage.dataset_id` stamp), `table_not_governed` (404), or `policy_unreadable` (a maintenance policy record of the
+  table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the
+  policy door); the `maintenance_vend_denied` and `maintenance_table_not_governed` WARNING lines name the dataset, and
+  the `maintenance_policy_malformed` ERROR line names the table and the record's fault.
 - `MaintenanceDriftRising` (warning): a drift category of the hourly audit's report grew in two hours, so something is
   producing it now; a gating category also blocks the trash purge. First check: the `reconcile_drift` log line for the
   category, which names the objects.

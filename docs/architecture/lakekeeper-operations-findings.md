@@ -158,26 +158,23 @@ response reports the mode so an operator can see every pod is read-only before a
 
 **What rask does.** The catalog's read-only mode refuses every mutating request, the write and maintain tiers of the
 vend door included, with a 503 whose problem slug is `maintenance` and a 60 s `Retry-After`
-(`services/catalog/src/catalog/api/maintenance_mode.py:73-114`). It is switched by `LANCE_MAINTENANCE_READ_ONLY`
-(`services/catalog/src/catalog/core/config.py:334`), which no chart template renders, so the only way to turn it on is a
-live edit of the Deployment's environment. Maintenance does not know about it: its vend comes back 503, the pass records
-`VendUndecided` as a failure of each dataset (`services/maintenance/src/maintenance/services/table_pass.py:193-208`),
-which emits a FAIL event and fires `MaintenanceDatasetsFailing` (`rules.yml:494`).
+(`services/catalog/src/catalog/api/maintenance_mode.py`). It is switched by the chart's one `readOnlyWindow`
+([[LH-572]]), rendered as `LANCE_MAINTENANCE_READ_ONLY` on the catalog, which also holds its cron ticks and vends no
+spec-door credential above the read tier, as `MAINTENANCE_READ_ONLY` on maintenance, whose worker then holds without
+connecting to the bus so every task stays queued with its deliveries unspent (`maintenance/worker.py::_held`), and as
+`LINEAGE_READ_ONLY` on lineage, whose relay tick then does nothing. A window is a commit and its end a revert; each
+flip rolls the three Deployments.
 
-**Proposal.** One chart value, `catalog.readOnly`, rendered as `LANCE_MAINTENANCE_READ_ONLY` on the catalog and as a
-`MAINTENANCE_PAUSED` flag on maintenance, so a window is a commit and its end is a revert. With the flag set the worker's
-`ready` gate (`tasks.py:88-96`) is false, so it takes no task and the queue holds them; the due mover keeps moving fired
-schedules, since the work queue refuses a second task per table anyway. For a window the chart did not declare (another
-catalog replica, a platform proxy), maintenance also reads the `maintenance` slug on a vend's 503 as a pause rather than
-a failure: the pass returns its task with `nak(delay=Retry-After)` and records no FAIL.
+**Proposal.** The window the chart declares is the one above. What is left is a window the chart did not declare
+(another catalog replica, a platform proxy): maintenance reads the `maintenance` slug on a vend's 503 as a pause rather
+than a failure, so the pass returns its task with `nak(delay=Retry-After)` and records no FAIL.
 
-**Four facts.** GitOps: meets, and closes a gap; a window today is live-only state that an install from git would not
-reproduce and a reconcile would silently revert. Cloud native: meets. Lance-idiomatic: neutral. Zero trust: neutral; no
-new credential.
+**Four facts.** GitOps: meets; the declared window is a value in git, and a reconcile converges on it. Cloud native:
+meets. Lance-idiomatic: neutral. Zero trust: neutral; no new credential.
 
-**Effort and risk.** Small: a value, two env entries, the gate, and one branch in `_refusal_of`
-(`services/maintenance/src/maintenance/services/credentials.py:568-591`). The risk is that a long window holds every
-table's pass and they all run at its end; the queue's per-table uniqueness bounds that to one pass per table.
+**Effort and risk.** Small: one branch in `_refusal_of` (`services/maintenance/src/maintenance/services/credentials.py`).
+The risk is that a long window holds every table's pass and they all run at its end; the queue's per-table uniqueness
+bounds that to one pass per table.
 
 ### 2.4 A task the worker ends leaves no per-table record
 

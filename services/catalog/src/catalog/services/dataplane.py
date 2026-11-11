@@ -144,7 +144,7 @@ from lakehouse.outage import reads_as_store_outage
 from lakehouse.schema import SchemaFields, facet_fields
 from lakehouse.stage_stamp import declare_dataset_id
 from lakehouse.storage import split_s3_uri
-from lakehouse.storage_options import StorageOptions, object_client, s3_filesystem
+from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
 from lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 
 
@@ -583,7 +583,7 @@ def _namespace_holds(ns: LanceNamespace, segments: list[str]) -> bool:
 
 def _reserve(location: str, so: StorageOptions) -> None:
     """Write the `.lance-reserved` marker at ``location``, as :func:`delete_table_object` deletes: no directory object beside it."""
-    if so.reaches_by_endpoint(location):
+    if on_s3(location):
         bucket, prefix = split_s3_uri(location.rstrip("/"))
         object_client(so).put_object(Bucket=bucket, Key=f"{prefix}/{RESERVED_MARKER}", Body=b"")
         return
@@ -907,8 +907,13 @@ def _write_blob_into(
     except BaseException as exc:
         # A Rust PANIC is a pyo3 `PanicException`, which derives from BaseException, so `except Exception` would skip
         # the rollback and leave the name declared with no dataset behind it ([[LH-302]]).
-        with suppress(Exception):  # best-effort rollback; re-raise the real write error
-            ns.drop_table(DropTableRequest(id=segments))
+        # A failed drop leaves the name declared with no dataset behind it: logged as the release below is, while the write
+        # error stays what the caller is told. A name nothing is declared under has nothing to roll back.
+        try:
+            with suppress(TableNotFoundError):
+                ns.drop_table(DropTableRequest(id=segments))
+        except Exception as drop_exc:  # noqa: BLE001 — the write error is what the caller is told
+            log.error("create_rollback_drop_failed", extra={"table": "$".join(segments), "location": location, "error": str(drop_exc)[:300]})
         if registry is not None:
             try:
                 if claim is not None:
@@ -1195,7 +1200,7 @@ def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
     (``base_refs.decoded_path``), and pyarrow's S3 filesystem takes a path literally ([[LH-520]]). A local URI pyarrow
     decodes itself.
     """
-    if so.reaches_by_endpoint(uri):
+    if on_s3(uri):
         return s3_filesystem(so), decoded_path(uri)
     resolved, path = pafs.FileSystem.from_uri(uri)
     return resolved, path
@@ -1263,7 +1268,7 @@ def verify_fragment_data_files(location: str, so: StorageOptions, fragments: lis
 
 def object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]:
     """Each object's size, ``None`` for one that is absent: one batched lookup per filesystem, as :func:`verify_fragment_data_files` does."""
-    if so.endpoint is not None and all(uri.startswith("s3://") for uri in uris):
+    if uris and all(on_s3(uri) for uri in uris):
         infos = s3_filesystem(so).get_file_info([uri.removeprefix("s3://") for uri in uris])
     else:
         infos = [fs.get_file_info(path) for fs, path in (dataset_fs(uri, so) for uri in uris)]
@@ -1287,7 +1292,7 @@ def data_object_sizes(location: str, relative: Sequence[str], *, so: StorageOpti
 def object_store_path(location: str) -> str:
     """``location`` as Lance's object store names it: no scheme, no bucket, no leading slash, decoded once as pylance opens it."""
     decoded = decoded_path(location)
-    return decoded.partition("/")[2] if location.startswith("s3://") else decoded
+    return decoded.partition("/")[2] if on_s3(location) else decoded
 
 
 #: How many times a stamped commit plans again after another writer took the version it followed.
@@ -1834,7 +1839,7 @@ def delete_table_object(location: str, so: StorageOptions, relative: str) -> Non
     moto). A delete that fails leaves an inert object, never a wrong table, so it is logged rather than raised.
     """
     try:
-        if so.reaches_by_endpoint(location):
+        if on_s3(location):
             bucket, prefix = split_s3_uri(location.rstrip("/"))
             object_client(so).delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
         else:
@@ -2031,7 +2036,7 @@ def _table_paths(location: str) -> tuple[str, str]:
 
 def _objects_under(location: str, so: StorageOptions, path: str) -> list[str]:
     """Every object under ``path/``, as a store path; on S3 a directory marker is one."""
-    if so.reaches_by_endpoint(location):
+    if on_s3(location):
         bucket, _, key = path.partition("/")
         pages = object_client(so).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
         return [f"{bucket}/{entry['Key']}" for page in pages for entry in page.get("Contents", [])]
@@ -2127,7 +2132,7 @@ def _delete_everything_under(location: str, so: StorageOptions, stored: str, spe
             return
         rest = [obj for obj in held if not obj.startswith(versions)]
         last = [obj for obj in held if obj.startswith(versions)]
-        if so.reaches_by_endpoint(location):
+        if on_s3(location):
             _delete_objects(so, rest)
             _delete_objects(so, last)
         else:

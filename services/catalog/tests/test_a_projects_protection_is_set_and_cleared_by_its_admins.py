@@ -5,7 +5,7 @@ the table, namespace and warehouse doors. Protection is a statement about the pr
 what the delete it guards asks, `can_administer` on the project. A member of the project and the estate's owner, who
 administers no project by that alone, are each answered the not-found a missing project gets, so the door tells nobody
 which ids exist. The project's read answers the flag and who armed it, and its delete refuses a protected project
-unless it is forced.
+unless it is forced, and any project while a warehouse record it must judge cannot be read.
 
 Against the catalog as deployed, a loopback Dex signing callers in and a real OpenFGA deciding on a store of the test's
 own ([[LH-235]]).
@@ -20,6 +20,7 @@ import pytest
 from catalog.core.config import get_settings
 from lakehouse import maintenance_policies
 from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.objectfs import fs_and_base
 
 
 PROJECT = "acme"
@@ -124,3 +125,18 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
         assert (answer.status_code, answer.headers["content-type"], answer.json()["code"], answer.json()["detail"]) == answered
     assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == read_after
     assert (maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "project", PROJECT) is not None) is policy_after
+
+
+def test_a_projects_delete_is_refused_while_a_warehouse_record_cannot_be_read(estate: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """A project is deleted only once it holds no warehouse, and a record that cannot be read may be one of its own
+    ([[LH-572]]): read as absent, the project would go with a warehouse still naming it."""
+    settings = get_settings()
+    fs, base = fs_and_base(settings.registry_root, settings.storage_options())
+    fs.create_dir(f"{base}/_warehouses", recursive=True)
+    with fs.open_output_stream(f"{base}/_warehouses/wh-unreadable.json") as stream:
+        stream.write(b"{not json")
+
+    answer = estate.client.delete(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN))
+
+    assert (answer.status_code, answer.headers["content-type"], answer.json().get("code")) == (500, "application/problem+json", 18)
+    assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == 200

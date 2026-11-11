@@ -6,7 +6,9 @@ caller asks them not to: the spec lets the server decide when ``vend_credentials
 (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableRequest). The tier is the highest rung FGA grants on the
 table: ``can_write_data`` opens the write tier, judged by the tier judge like every write, and so do ``can_read_data``
 and ``can_maintain`` together, a compaction job's rungs, whose commits ``version/create`` judges as a maintainer's;
-``can_read_data`` alone the read tier; none, no credential. Maintain is never vended here (LH-473).
+``can_read_data`` alone the read tier; none, no credential. Maintain is never vended here (LH-473). Through a read-only
+window (`LANCE_MAINTENANCE_READ_ONLY`) the doors vend at most the read tier: a write-tier credential would write storage
+straight past a catalog that refuses every write.
 
 Every credential either door mints writes the ``vend_credentials`` issuance record (#532), the record the
 management vend door already writes.
@@ -39,9 +41,10 @@ from lakehouse.governed.store_credential import S3KeyPair
 from tests.unit.named_resolver import NamedResolver
 
 
-def _auth_settings() -> Settings:
+def _auth_settings(*, read_only: bool = False) -> Settings:
     return Settings.model_validate(
         {
+            "maintenance_read_only": read_only,
             "oidc_enabled": True,
             "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
@@ -102,17 +105,18 @@ _HEADERS = {"Authorization": "Bearer t"}
 
 
 @pytest.mark.parametrize(
-    ("door", "relations", "body", "tier"),
+    ("door", "relations", "body", "tier", "read_only"),
     [
-        pytest.param("describe", _READER, {}, "read", id="a-reader-gets-the-read-tier"),
-        pytest.param("describe", _WRITER, {}, "write", id="a-writer-gets-the-write-tier"),
-        pytest.param("describe", _COMPACTOR, {}, "write", id="a-reader-who-maintains-gets-the-write-tier"),
-        pytest.param("describe", {"can_get_metadata", "can_maintain"}, {}, None, id="a-maintainer-who-may-not-read-gets-none"),
-        pytest.param("describe", _WRITER, {"vend_credentials": True}, "write", id="an-explicit-ask-gets-the-same-tier"),
-        pytest.param("describe", _WRITER, {"vend_credentials": False}, None, id="asking-for-none-gets-none"),
-        pytest.param("describe", {"can_get_metadata"}, {}, None, id="metadata-without-data-gets-none"),
-        pytest.param("describe", {"can_get_metadata"}, {"vend_credentials": True}, 403, id="metadata-without-data-that-asks-is-refused"),
-        pytest.param("declare", _WRITER, {}, "write", id="a-declarer-gets-the-write-tier"),
+        pytest.param("describe", _READER, {}, "read", False, id="a-reader-gets-the-read-tier"),
+        pytest.param("describe", _WRITER, {}, "write", False, id="a-writer-gets-the-write-tier"),
+        pytest.param("describe", _COMPACTOR, {}, "write", False, id="a-reader-who-maintains-gets-the-write-tier"),
+        pytest.param("describe", {"can_get_metadata", "can_maintain"}, {}, None, False, id="a-maintainer-who-may-not-read-gets-none"),
+        pytest.param("describe", _WRITER, {"vend_credentials": True}, "write", False, id="an-explicit-ask-gets-the-same-tier"),
+        pytest.param("describe", _WRITER, {"vend_credentials": False}, None, False, id="asking-for-none-gets-none"),
+        pytest.param("describe", {"can_get_metadata"}, {}, None, False, id="metadata-without-data-gets-none"),
+        pytest.param("describe", {"can_get_metadata"}, {"vend_credentials": True}, 403, False, id="metadata-without-data-that-asks-is-refused"),
+        pytest.param("declare", _WRITER, {}, "write", False, id="a-declarer-gets-the-write-tier"),
+        pytest.param("describe", _WRITER, {"vend_credentials": True}, "read", True, id="a-writer-in-a-read-only-window-gets-the-read-tier"),
     ],
 )
 def test_a_spec_door_vends_the_highest_tier_fga_grants(
@@ -125,7 +129,9 @@ def test_a_spec_door_vends_the_highest_tier_fga_grants(
     relations: set[str],
     body: dict[str, bool],
     tier: str | int | None,
+    read_only: bool,
 ) -> None:
+    client.app.dependency_overrides[get_settings] = lambda: _auth_settings(read_only=read_only)
     _grants(monkeypatch, relations)
     fake_ns.declare_table.return_value = DeclareTableResponse(location=fake_ns.describe_table.return_value.location)
 

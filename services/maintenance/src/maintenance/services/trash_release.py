@@ -85,9 +85,10 @@ class TrashReleaseReport(BaseModel):
 def roots_read(settings: MaintenanceSettings, storage_options: StorageOptions, control_root: str) -> set[str]:
     """Every root whose manifest tells whether a trashed object stands again: the swept buckets and every warehouse's.
 
-    Raises if the registry cannot be read: a root left out would read every live table under it as gone.
+    Raises if the registry, or any one record in it, cannot be read (:func:`lakehouse.warehouse_records
+    .read_warehouse_records`): a root left out would read every live table under it as gone.
     """
-    records = warehouse_records.list_warehouse_records(control_root, storage_options)
+    records = warehouse_records.read_warehouse_records(control_root, storage_options)
     buckets = {*settings.sweep_buckets, *(str(record["bucket"]) for record in records if record.get("bucket"))}
     return {f"s3://{bucket}" for bucket in buckets if bucket}
 
@@ -105,8 +106,21 @@ def _why_held(record: dict[str, Any], *, roots: set[str], live: Liveness | None)
     return None
 
 
+async def _release_or_hold(record: dict[str, Any], *, roots: set[str], live: Liveness | None, settings: MaintenanceSettings) -> ReleasedRecord | HeldRecord:
+    """Release ONE record, and hold it naming the cause of any failure it raises: the step holds "never raises" by
+    construction, each record's failure reported beside the others' releases, so a record whose release fails leaves
+    the records after it released ([[LH-572]])."""
+    try:
+        return await _release_one(record, roots=roots, live=live, settings=settings)
+    except Exception as exc:  # noqa: BLE001 — one record's failure, whatever it is, holds that record
+        log.exception("trash_release_failed", extra={"kind": trash.kind_of(record), "id": trash.name_of(record)})
+        reason = f"the release failed ({type(exc).__name__}: {exc}); the record is held and the next tick asks again"
+        return HeldRecord(kind=trash.kind_of(record), id=trash.name_of(record), uuid=trash.object_uuid(record), reason=reason)
+
+
 async def _release_one(record: dict[str, Any], *, roots: set[str], live: Liveness | None, settings: MaintenanceSettings) -> ReleasedRecord | HeldRecord:
-    """Ask the catalog to release one record. Never raises; a record the catalog refuses, or could not decide, is held."""
+    """Ask the catalog to release one record; a record the catalog refuses, or could not decide, is held. A failure it does
+    not expect raises, and :func:`_release_or_hold` holds the record."""
     kind, obj_id = trash.kind_of(record), trash.name_of(record)
     if (reason := _why_held(record, roots=roots, live=live)) is not None:
         # INFO: the route names every held record at WARNING once per tick.
@@ -131,22 +145,21 @@ async def release_expired_trash(
     the one whose object's uuid is ``only``: a trash task's release at its own deadline. Never raises."""
     at = now or datetime.now(UTC)
     out = TrashReleaseReport()
-    storage_options = settings.storage_options()
     resolved_control_root = control_root or settings.resolved_control_root
     try:
+        # Read here, once, so a credential outage stops the step with its reason as an unreadable registry does.
+        storage_options = settings.storage_options()
         records = await run_in_threadpool(trash.list_all, resolved_control_root, storage_options)
         roots = await run_in_threadpool(roots_read, settings, storage_options, resolved_control_root)
-    except Exception as exc:  # noqa: BLE001 — an unreadable registry stops the step, it does not fail the tick
-        out.reason = f"the trash or the warehouse registry could not be read ({type(exc).__name__}: {exc})"
+        due = [record for record in records if trash.releasable(record, now=at) and not trash.is_released(record) and only in (None, trash.object_uuid(record))]
+        live = await run_in_threadpool(liveness_across, roots, storage_options) if due else None
+    except Exception as exc:  # noqa: BLE001 — an unreadable session, registry or estate stops the step, it does not fail the tick
+        out.reason = f"the trash, the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
         log.error("trash_release_blocked", extra={"reason": out.reason})
         return out
     out.ran = True
-    due = [record for record in records if trash.releasable(record, now=at) and not trash.is_released(record) and only in (None, trash.object_uuid(record))]
-    if not due:
-        return out
-    live = await run_in_threadpool(liveness_across, roots, storage_options)
     for record in due:
-        match await _release_one(record, roots=roots, live=live, settings=settings):
+        match await _release_or_hold(record, roots=roots, live=live, settings=settings):
             case ReleasedRecord() as released:
                 out.released.append(released)
             case HeldRecord() as held:

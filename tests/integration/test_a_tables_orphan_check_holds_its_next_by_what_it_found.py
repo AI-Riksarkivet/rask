@@ -8,8 +8,8 @@ The interval rule: the floor F is a day and the ceiling C `MAINTENANCE_ORPHAN_CH
 undecided files hold the next check at F; a raised floor at max(F, the table's retention + a day), since the floor moves
 only once a pass cleans the manifests beneath the raise; a clean check, or one finding only files Lance reclaims itself,
 doubles the interval it ran at up to C; an excluded table (a branch, too many files) waits C, and so does a table in a
-bucket maintenance does not govern; a table gone or in the trash is checked no more; a read that fails raises, so the
-worker tries again.
+bucket maintenance does not govern; a table whose policy record is no policy waits F; a table gone or in the trash is
+checked no more; a read that fails raises, so the worker tries again.
 
 A file the store lists to the whole second is placed anywhere in that second, so a planted file is a finding only once
 the check starts in a later second (`_a_second_after`): a polled clock, not a sleep.
@@ -17,6 +17,7 @@ the check starts in a later second (`_a_second_after`): a polled clock, not a sl
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -34,20 +35,23 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest, Descri
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel, SecretStr
 
-from lakehouse import location_claims, maintenance_policies, trash
+from lakehouse import location_claims, maintenance_policies, record_store, trash
 from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
+from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services import orphans
-from maintenance.services.floor import FLOOR_KEY
+from maintenance.services.floor import FLOOR_KEY, raise_listing_floor
 from maintenance.services.orphan_check import OrphanCheckIncompleteError
+from maintenance.services.orphans import OrphanFile
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.tasks import run_task
 from tests.integration.maintenance_vend_doors import CATALOG_URL, MAINTAIN_TIER_DOOR, maintain_tier_door
+from tests.integration.store_requests import StoreRequest, counted
 
 
 TABLE = "db$events"
@@ -257,13 +261,34 @@ def test_a_check_holds_the_next_by_what_it_found(
     assert lance.dataset(task.location, storage_options=store.in_clear()).version == version, "a check that raised no floor wrote a version"
 
 
-def test_a_table_in_a_bucket_maintenance_does_not_govern_is_checked_at_the_ceiling(
-    *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings]
-) -> None:
-    """A deactivated or unbound warehouse's table is no table maintenance writes to, so its check waits the ceiling."""
+def _unbound_in_a_bucket_nothing_configures(*, moto_url: str, bucket: str, store: StorageOptions) -> Task:
     elsewhere = f"{bucket}-elsewhere"
     _s3(moto_url).create_bucket(Bucket=elsewhere)
-    task = _table(bucket=elsewhere, options=store, control=f"s3://{bucket}")
+    return _table(bucket=elsewhere, options=store, control=f"s3://{bucket}")
+
+
+def _bound_to_a_deactivated_warehouse_in_a_configured_bucket(*, bucket: str, store: StorageOptions, **_: Any) -> Task:
+    """The table's namespace is bound to a warehouse offboarding has deactivated, whose bucket is also the one this
+    deployment configures (`MAINTENANCE_S3_BUCKET`): the warehouse's status is what decides, not the configured list."""
+    record_store.put_record(f"s3://{bucket}", store, "_warehouses/bindings/db.json", {"warehouse_id": "wh-gone"})
+    record_store.put_record(f"s3://{bucket}", store, "_warehouses/wh-gone.json", {"id": "wh-gone", "bucket": bucket, "status": "deactivated"})
+    return _table(bucket=bucket, options=store)
+
+
+@pytest.mark.parametrize(
+    "placed",
+    [
+        pytest.param(_unbound_in_a_bucket_nothing_configures, id="unbound-in-a-bucket-nothing-configures"),
+        pytest.param(_bound_to_a_deactivated_warehouse_in_a_configured_bucket, id="bound-to-a-deactivated-warehouse-in-a-configured-bucket"),
+    ],
+)
+def test_a_table_in_a_bucket_maintenance_does_not_govern_is_checked_at_the_ceiling(
+    *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings], placed: Callable[..., Task]
+) -> None:
+    """A deactivated or unbound warehouse's table is no table maintenance writes to, so its check waits the ceiling. A
+    namespace bound to a warehouse is judged by that warehouse's status; only an unbound one falls to the buckets this
+    deployment configures."""
+    task = placed(moto_url=moto_url, bucket=bucket, store=store)
     started = datetime.now(UTC)
 
     assert _next(_check(task, settings()), task, started) == (24 * 30, 30 * DAY)
@@ -282,13 +307,33 @@ def test_a_check_whose_table_cannot_be_read_is_tried_again(
         _check(task, settings())
 
 
+def _policy(**settings: object) -> Callable[[str], bytes]:
+    """The table's own policy record as stored, under the uuid the table is kept by."""
+    return lambda table_uuid: json.dumps({"kind": "table", "id": TABLE, "uuid": table_uuid, **settings}).encode()
+
+
 @pytest.mark.parametrize(
-    ("env", "denied", "kept_whole", "raised"),
+    ("env", "denied", "policy", "raised", "outcome"),
     [
-        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, False, False, True, id="raised-under-the-tables-vend"),
-        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "true"}, False, False, False, id="a-dry-run-writes-nothing"),
-        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, True, False, False, id="a-catalog-denial-writes-nothing"),
-        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, False, True, False, id="a-table-kept-whole-is-asked-no-vend-and-written-nothing"),
+        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, False, None, True, "raised", id="raised-under-the-tables-vend"),
+        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "true"}, False, None, False, "stranded", id="a-dry-run-writes-nothing"),
+        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, True, None, False, "stranded", id="a-catalog-denial-writes-nothing"),
+        pytest.param(
+            {"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"},
+            False,
+            _policy(cleanup_enabled=False),
+            False,
+            "stranded",
+            id="a-table-kept-whole-is-asked-no-vend-and-written-nothing",
+        ),
+        pytest.param(
+            {"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"},
+            False,
+            lambda _uuid: b'{"kind": "table", "cleanup_enabled": fal',
+            False,
+            "policy_unreadable",
+            id="a-table-whose-policy-is-no-policy-is-asked-no-vend-and-written-nothing",
+        ),
     ],
 )
 def test_a_stranded_table_has_its_floor_raised_and_its_pass_held(
@@ -297,20 +342,25 @@ def test_a_stranded_table_has_its_floor_raised_and_its_pass_held(
     bucket: str,
     store: StorageOptions,
     settings: Callable[..., MaintenanceSettings],
+    monkeypatch: pytest.MonkeyPatch,
     env: dict[str, str],
     denied: bool,
-    kept_whole: bool,
+    policy: Callable[[str], bytes] | None,
     raised: bool,
+    outcome: str,
 ) -> None:
     """The raise is ONE metadata-only commit, signed by the table's vend ([[LH-219]]), that moves the floor above the
     stranded file once a pass cleans beneath it: the check holds that pass, and its own next check past the retention
     the cleanup waits on. A dry run, or a vend the catalog refuses, writes nothing and holds the next check at the floor.
     A table whose policy keeps its whole history is never cleaned, so a raise would buy it only a version: none is
-    written and no vend asked."""
+    written and no vend asked. A policy record that cannot be read as a policy may be a legal hold, so the check, as the
+    table's pass, takes it for no defaults: it scans nothing, asks no vend, and counts why ([[LH-572]])."""
     task = _table(bucket=bucket, options=store)
-    if kept_whole:
-        maintenance_policies.put_policy(f"s3://{bucket}", store, {"kind": "table", "id": TABLE, "uuid": task.uuid, "cleanup_enabled": False})
+    if policy is not None:
+        _s3(moto_url).put_object(Bucket=bucket, Key=record_store.record_key(maintenance_policies.PREFIX, "table", task.uuid), Body=policy(task.uuid))
     _a_second_after(_plant(moto_url, bucket, f"_transactions/9-{uuid.uuid4()}.txn"))
+    counted_as: list[dict[str, Any] | None] = []
+    monkeypatch.setattr(metrics._orphan_checks, "add", lambda _amount, attributes=None, **_: counted_as.append(attributes))
     started = datetime.now(UTC)
 
     queue = _Queue()
@@ -336,8 +386,9 @@ def test_a_stranded_table_has_its_floor_raised_and_its_pass_held(
 
     dataset = lance.dataset(task.location, storage_options=store.in_clear())
     follow_ups = [(entry.task.kind, entry.task.uuid) for entry in queue.held if entry.follow_up]
-    assert (door.called, FLOOR_KEY in dataset.config(), follow_ups) == (not kept_whole, raised, [("table", task.uuid)] if raised else [])
+    assert (door.called, FLOOR_KEY in dataset.config(), follow_ups) == (policy is None, raised, [("table", task.uuid)] if raised else [])
     assert _next(queue, task, started) == ((24 * (RETENTION + DAY).days, RETENTION + DAY) if raised else (24, DAY))
+    assert counted_as == [{"outcome": outcome}]
 
 
 @pytest.mark.parametrize(
@@ -368,6 +419,45 @@ def test_a_stamped_table_is_raised_again_only_once_its_floor_has_moved(
     _check(task, settings(MAINTENANCE_FLOOR_RAISE_ENABLED="true", MAINTENANCE_FLOOR_RAISE_DRY_RUN="false"))
 
     assert lance.dataset(task.location, storage_options=store.in_clear()).version == (version + 1 if raised_again else version)
+
+
+def test_a_raise_reads_its_floor_and_its_stamp_as_one_reading(
+    *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings]
+) -> None:
+    """The floor and the last raise's stamp are judged together, so they are read off one handle: a store that answers
+    the floor's reads and then fails a second open leaves no "never raised" to act on, and a table raised already, whose
+    floor has not moved, is written no other version.
+
+    Driven at the raise itself, since the fault is placed by the store requests the raise makes: measured on pylance
+    13.0.0, the floor's open lists the table's ``_versions/`` once and its version listing once more, so a later listing
+    is another open's. The store answers each later listing 503, as one that cannot serve it does, until the raise asks
+    the catalog for the table's vend, so a raise that read "never raised" commits on a store that answers again."""
+    task = _table(bucket=bucket, options=store)
+    lance.dataset(task.location, storage_options=store.in_clear()).update_config({FLOOR_KEY: str(time.time())})
+    planted = f"_transactions/9-{uuid.uuid4()}.txn"
+    stranded = [
+        OrphanFile(dataset=task.location, path=planted, kind="transactions", mtime_epoch=_plant(moto_url, bucket, planted) + 1, reclaimable_by_lance=False)
+    ]
+    version = lance.dataset(task.location, storage_options=store.in_clear()).version
+    listings: list[StoreRequest] = []
+    vended: list[str] = []
+
+    def _another_open_before_the_vend(request: StoreRequest) -> bool:
+        if not request.lists(f"{LOCATION}/_versions/"):
+            return False
+        listings.append(request)
+        return len(listings) > 2 and not vended
+
+    def _vend(table: str) -> str:
+        vended.append(table)
+        return task.location
+
+    with counted(moto_url) as proxy, maintain_tier_door(_vend), proxy.answering_unavailable(_another_open_before_the_vend):
+        configured = settings(MAINTENANCE_S3_ENDPOINT=proxy.url, MAINTENANCE_FLOOR_RAISE_ENABLED="true", MAINTENANCE_FLOOR_RAISE_DRY_RUN="false")
+        raised = raise_listing_floor(task.location, table=TABLE, stranded=stranded, settings=configured)
+
+    after = lance.dataset(task.location, storage_options=store.in_clear()).version
+    assert (raised.version, after, (raised.refused or "").startswith("already raised")) == (None, version, True), raised
 
 
 def test_a_file_written_while_the_check_reads_is_no_finding(

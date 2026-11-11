@@ -9,7 +9,7 @@ honoured on the blob path.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import lance
 import pyarrow as pa
@@ -19,6 +19,8 @@ from lance_namespace import (
     CreateNamespaceRequest,
     DeclareTableRequest,
     DescribeTableRequest,
+    DropTableRequest,
+    DropTableResponse,
     InvalidInputError,
     LanceNamespace,
     TableAlreadyExistsError,
@@ -156,6 +158,47 @@ def test_exist_ok_on_declared_only_table_writes_instead_of_500(tmp_path: Path) -
     assert dataset.data_storage_version == "2.2"
     assert dataset.count_rows() == 1
     assert dataset.read_blobs("payload", indices=[0])[0][1] == b"first"
+
+
+class _DropRefused:
+    """The real namespace, whose drop the store refuses."""
+
+    def __init__(self, real: LanceNamespace) -> None:
+        self._real = real
+
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401 — every other operation is the real backend's
+        return getattr(self._real, name)
+
+    def drop_table(self, request: DropTableRequest) -> DropTableResponse:
+        raise OSError("the store refused the delete")
+
+
+def test_a_create_whose_write_and_rollback_both_fail_answers_the_write_and_logs_the_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The write's error is what the caller is told; a rollback that fails too leaves the name declared with no dataset
+    behind it, which is logged with its cause rather than swallowed ([[LH-572]])."""
+
+    def _refused_write(*_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401 — `lance.write_dataset`'s own signature
+        raise RuntimeError("the store refused the write")
+
+    monkeypatch.setattr(lance, "write_dataset", _refused_write)
+    real = connect("dir", {"root": str(tmp_path)})
+    _declare_namespace(real, "db")
+
+    with caplog.at_level("ERROR", logger="catalog.services.dataplane"), pytest.raises(RuntimeError, match="refused the write"):
+        create_table(
+            cast("LanceNamespace", _DropRefused(real)),
+            StorageOptions(),
+            ["db", "plain"],
+            pa.table({"id": [1]}),
+            root=str(tmp_path),
+            mode="create",
+            registry=None,
+        )
+
+    logged = [(record.getMessage(), getattr(record, "error", None)) for record in caplog.records if record.name == "catalog.services.dataplane"]
+    assert logged == [("create_rollback_drop_failed", "the store refused the delete")]
 
 
 # --- blob modes: managed (inline/packed/dedicated) always; external pointer gated ------------------ #

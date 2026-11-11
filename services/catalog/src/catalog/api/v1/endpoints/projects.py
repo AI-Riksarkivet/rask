@@ -485,7 +485,9 @@ async def delete_project(
 
     Raises:
         NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses.
-        ServiceUnavailableError: OpenFGA could not revoke its tuples; nothing was deleted.
+        InternalError: A warehouse record is there and cannot be read as one; nothing was deleted.
+        ServiceUnavailableError: The store did not answer a registry read, or OpenFGA could not revoke its tuples; nothing
+            was deleted.
     """
     so = settings.storage_options()
     # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
@@ -493,8 +495,9 @@ async def delete_project(
     fga_deps.require_not_protected(record, kind="project", obj_id=project_id, force=force)
 
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
-    # so what the 409 names is exactly what GET /management/v1/projects/{id} shows.
-    held = sorted(str(r["id"]) for r in await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so) if r.get("project") == project_id)
+    # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
+    # read may be one of this project's own ([[LH-572]]).
+    held = sorted(str(r["id"]) for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.get("project") == project_id)
     if held:
         raise NamespaceNotEmptyError(
             f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "

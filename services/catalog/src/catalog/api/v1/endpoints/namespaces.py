@@ -1195,7 +1195,9 @@ async def undrop_namespace(
         raise NamespaceAlreadyExistsError(f"cannot undrop namespace {canonical!r}: another namespace holds the name now; drop it first")
     if len(segments) > 1:
         trash_doors.require_its_own_parent(record, standing=await resolver.namespace_uuid(segments[:-1]), name=canonical)
-    everything = await run_in_threadpool(trash.list_all, settings.registry_root, so)
+    # Read whole, as the name's own records were (``trash.named``): a record that cannot be read may be one this cascade
+    # filed, which the undrop would leave for the purge under a subtree its owner was told is restored ([[LH-572]]).
+    everything = await run_in_threadpool(trash.every_record, settings.registry_root, so)
     # The records the cascade that dropped this namespace filed, at its name and under it: undropping a namespace that
     # cascade dropped below its own root restores that branch of it, once its parent stands again.
     cascade, prefix = record.get("cascade"), canonical + CATALOG_DELIMITER

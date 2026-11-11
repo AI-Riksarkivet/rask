@@ -21,7 +21,7 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
 from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.storage_options import REGION, VIRTUAL_HOSTED, StorageOptions, s3_filesystem
+from lakehouse.storage_options import REGION, VIRTUAL_HOSTED, StorageOptions, on_s3, s3_filesystem
 
 
 if TYPE_CHECKING:
@@ -166,8 +166,14 @@ def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_ke
 
 
 def fs_and_base(root_uri: str, storage_options: StorageOptions) -> tuple[pafs.FileSystem, str]:
-    """Resolve ``(filesystem, base_path)`` for ``root_uri`` (base has no scheme and no trailing slash)."""
-    if storage_options.reaches_by_endpoint(root_uri):
+    """Resolve ``(filesystem, base_path)`` for ``root_uri`` (base has no scheme and no trailing slash).
+
+    A root on S3 (:func:`~lakehouse.storage_options.on_s3`) is reached signed by the options' key pair, at their endpoint
+    or, naming none, at AWS proper's regional one: pyarrow's ``FileSystem.from_uri`` would sign with the ambient credential
+    chain and follow an ambient ``AWS_ENDPOINT_URL`` (measured on pyarrow 25.0.0), so a record written under the pair would
+    be read under another identity ([[LH-572]]).
+    """
+    if on_s3(root_uri):
         fs = s3_filesystem(storage_options, allow_bucket_creation=True)
         return fs, root_uri[len("s3://") :].rstrip("/")
     resolved, path = pafs.FileSystem.from_uri(root_uri)
@@ -247,14 +253,14 @@ def dataset_root_probe(dataset_uri: str, storage_options: StorageOptions) -> Cal
 def _where_a_root_may_be(uri: str) -> list[str]:
     """``uri``, and for an ``s3://`` spelling the key it decodes to as well.
 
-    pylance opens a URL at each segment percent-decoded once, while :func:`fs_and_base` keeps an endpoint store's
+    pylance opens a URL at each segment percent-decoded once, while :func:`fs_and_base` keeps an S3 store's
     ``s3://`` spelling literal, so a base declared in the catalog's encoded spelling (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``) is
     a dataset root at the decoded key (``…$räksmörgås``) and nothing at the spelled one ([[LH-319]]); pyarrow decodes a
     ``file://`` URI itself. A root found at either refuses compaction, so probing both never permits more.
     """
     from lakehouse.base_refs import decoded_path  # base_refs imports this module
 
-    if not uri.startswith("s3://"):
+    if not on_s3(uri):
         return [uri]
     opened = f"s3://{decoded_path(uri)}"
     return [uri] if opened == uri.rstrip("/") else [uri, opened]

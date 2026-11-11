@@ -124,7 +124,11 @@ async def _beating() -> None:
 
 
 async def _work(settings: MaintenanceSettings, stop: asyncio.Event, started: asyncio.Event) -> None:
-    """Start what the worker stands on and the worker, run it until ``stop``, then let its running task finish."""
+    """Start what the worker stands on and the worker, run it until ``stop``, then let its running task finish; through
+    a read-only window, hold instead (:func:`_held`)."""
+    if settings.read_only:
+        await _held(stop, started)
+        return
     async with (
         standing(app, settings),
         collaborators(app, settings) as held,
@@ -140,13 +144,30 @@ async def _work(settings: MaintenanceSettings, stop: asyncio.Event, started: asy
         log.info("maintenance_worker_stopping", extra={"drain_seconds": settings.drain_seconds})
 
 
+async def _held(stop: asyncio.Event, started: asyncio.Event) -> None:
+    """Hold through the lakehouse's read-only window (``MAINTENANCE_READ_ONLY``) until ``stop``, taking no task.
+
+    The worker connects to no bus and opens no store: every task stays queued on the work queue with its deliveries
+    unspent, nothing acked or given back, and each fired schedule waits on its stream. A task is kept for the work
+    queue's age, a day (the chart's stream Job declares ``MAINTENANCE_TASKS`` with ``max_age`` 86400 s); one a longer
+    window ages out is queued again by the first audit after it, whose backstop queues each table nothing holds. The
+    flag is rendered into the pod from git, so the window ends with a rolled pod that takes the tasks.
+    """
+    mark_started(app)
+    started.set()
+    log.info("maintenance_worker_held_for_read_only_window")
+    await stop.wait()
+    mark_draining(app)
+
+
 async def run(settings: MaintenanceSettings, stop: asyncio.Event) -> bool:
     """Run the worker until ``stop`` is set, then let the task it is running finish and stop what it used; whether the
     worker had started when it was asked to stop.
 
     A worker asked to stop while it is still starting is stopped there: its start may be waiting on a bus that is down,
     and a process that kept waiting would hold its pod in Terminating for the whole grace. The worker takes no task
-    while its signing key is unresolved, since what a pass emits could not be signed, and none once it is asked to stop.
+    while its signing key is unresolved, since what a pass emits could not be signed, none once it is asked to stop, and
+    none through a read-only window (:func:`_held`).
 
     Raises:
         RuntimeError: No bus is named, so there is no queue to take a task from; or the store holds no bus credential.

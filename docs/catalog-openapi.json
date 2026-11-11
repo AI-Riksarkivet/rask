@@ -15745,7 +15745,7 @@
     },
     "/management/v1/project/{id}/gate/describe": {
       "post": {
-        "description": "This project's declared gate, or ``null`` when the chart's settings still govern.\n\n``null`` rather than a populated default: a caller must be able to tell \"nothing is declared\" \u2014\nwhere a `helm upgrade` is still the only lever \u2014 from \"declared, and these are the values\".",
+        "description": "This project's declared gate, or ``null`` when the chart's settings still govern.\n\n``null`` rather than a populated default: a caller must be able to tell \"nothing is declared\" \u2014\nwhere a `helm upgrade` is still the only lever \u2014 from \"declared, and these are the values\". A declaration that cannot\nbe read is neither, so it is refused as the publish refuses it ([[LH-572]]).",
         "operationId": "describe_gate_management_v1_project__id__gate_describe_post",
         "parameters": [
           {

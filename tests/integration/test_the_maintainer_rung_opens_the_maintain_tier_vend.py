@@ -29,6 +29,8 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import lance
+import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse
@@ -81,11 +83,14 @@ def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     # this door.
     governed_settings = get_settings().model_copy(update={"fga_enabled": True})
 
-    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-catalog/db$t")
+    # The double describes a real table, as the backend it stands in for does: a vend reads what the table holds first.
+    location = str(tmp_path / "t.lance")
+    lance.write_dataset(pa.table({"id": pa.array([0], pa.int64())}), location, data_storage_version="2.2", enable_stable_row_ids=True)
+    fake_ns.describe_table.return_value = DescribeTableResponse(location=location)
     # Every name holds an object (``NamedResolver``): the claim here is which rung opens a tier, not how a name resolves.
     # The door acts on the table its double describes, whose location's claim records the uuid the checks were asked on.
     claims = table_claims.claim_store(governed_settings)
-    location_claims.take(claims, "s3://lance-catalog/db$t", "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=uuid_of("table", ["db", "t"]))
+    location_claims.take(claims, location, "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=uuid_of("table", ["db", "t"]))
     app.dependency_overrides[get_resolver] = lambda: NamedResolver()
     app.dependency_overrides[get_resolved_table] = lambda: table_claims.resolve(fake_ns, claims, ["db", "t"])
     app.dependency_overrides[get_namespace] = lambda: fake_ns

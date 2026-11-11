@@ -384,6 +384,23 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
     assert not tenant.bucket_exists()
 
 
+def test_a_cascade_refused_before_anything_landed_answers_its_refusal(tenant: _Tenant) -> None:
+    """A cascade refused at its first table, whose claim a drop in flight holds fenced, has removed nothing: the refusal is
+    its answer, never a partial delete that counts nothing and asks for a re-issue ([[LH-572]])."""
+    tenant.bind("bronze")
+    tenant.create_table("bronze$a")
+    settings = get_settings()
+    claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
+    location = tenant.client.post("/v1/table/bronze$a/describe", json={}).json()["location"]
+    in_flight = location_claims.read(claims, location)
+    location_claims.fence(claims, location, in_flight, table="bronze$a", segments=["bronze", "a"], token="a-drop-in-flight", is_gone=lambda _claim: False)
+
+    refused = tenant.delete_warehouse()
+
+    assert (refused.status_code, refused.headers["content-type"], refused.json().get("code")) == (409, "application/problem+json", 14), refused.text
+    assert tenant.present(["namespace:bronze", "table:bronze$a"]) == ["namespace:bronze", "table:bronze$a"]
+
+
 def _a_store_that_will_not_delete_a_tag(source_location: str, tag: str, *, storage_options: StorageOptions) -> bool:
     raise OSError(f"the store did not answer the delete of {tag} on {source_location}")
 

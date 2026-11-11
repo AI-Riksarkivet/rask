@@ -302,7 +302,14 @@ operations** (ADR 0156, LH-476): every rask-only route is served under `/managem
 `/management/v1/projects`, and a rask route on `/v1` answers 404. The two GET twins of `count_rows` and
 `tags/list` stay on `/v1` because they are spec operations the stock pylance REST client sends as GET.
 `tests/integration/test_spec_conformance.py` walks the served route table for both directions, and the
-read-only maintenance gate (`catalog/api/maintenance_mode.py`) refuses writes on both mounts. The same classification
+read-only maintenance gate (`catalog/api/maintenance_mode.py`) refuses writes on both mounts. It classifies a request by
+the ROUTE it matches, never by its path text, since a name can spell a read action (`DELETE /management/v1/projects/list`):
+GET, HEAD and OPTIONS read, DELETE, PUT and PATCH write, and a POST reads only when its route's last literal segment is a
+listed read action (the vend door at the read tier alone); a POST matching no route writes. Through the window the spec
+vend doors vend at most the read tier (`fga_deps.spec_vend_tier`), and the catalog's cron ticks at the pod root are
+answered 200 `{"skipped": true}` without running (`catalog.api.cron.ticks_of`: each mount records its tick, so a tick
+mounted is a tick held). The chart's one `readOnlyWindow` renders the flag into the catalog, maintenance's worker and lineage's relay
+alike ([[LH-572]]). The same classification
 refuses every write the catalog would announce while it holds no signing key (`catalog/api/signing_gate.py`, [[XC-095]]):
 503 code 17 before the commit, since an announcement signed after the commit could not be made; only a data write under
 the provenance namespace, which the catalog never announces, is served then.
@@ -454,7 +461,12 @@ resolved **winner-takes-all** — the table's own record shadows the nearest nam
 project record, and the winner supplies EVERY field. Maintenance matches a table and its ancestor namespaces by the
 uuids `__manifest` and the location claims record (`maintenance.services.naming.policy_owners`); a table whose uuid, or
 an ancestor's, cannot be read is refused (gate `unidentified`), never maintained under the defaults, since the record it
-cannot find may be a legal hold. Any surface showing an effective policy must say
+cannot find may be a legal hold. Every reader of a setting parses the record's settings strictly where it reads it, through
+`lakehouse.maintenance_policies.PolicySettings` (the door's types and bounds; `"false"` reads false, `"30d"` refuses), since
+a record can reach the store past the typed door: a record that is there and cannot be read as a policy
+(`MalformedPolicyError`) PARKS the table (gate `policy_unreadable`, counted on `compaction.tables.parked`, which
+`MaintenanceTableParked` pages on) until it is written again, and a policy read the store did not answer decides nothing
+and is retried after `retrySeconds`. Any surface showing an effective policy must say
 which record won; an inherited value rendered identically to a set one is how nobody can tell what is
 governing their data. The project-scoped surface is the console's project page, `frontend/console/src/routes/projects/[project]/+page.svelte`, § Maintenance.
 
@@ -481,7 +493,9 @@ governing their data. The project-scoped surface is the console's project page, 
   walk, as do its Restrict, Skip and Overwrite paths. A part-way failure answers 503 `PartiallyApplied` naming
   `namespaces_dropped` (nested ones included), `tables_removed`, `trash_ended` and `tuples_revoked`, which counts each
   revoke as it lands and a partly revoked object's removed tuples through `fga.RevokeInterrupted`; re-issuing the call
-  finishes it. A destroyed table's base record and location claim are keyed by its location, which nothing names once
+  finishes it. A guard's refusal (a spec error answered 4xx, `endpoints.warehouses._a_refusal`) raised before any step
+  counted answers as itself, since a guard refuses before its step writes; a store's or OpenFGA's failure is partial even
+  with nothing counted, since the step it stopped may have landed ([[LH-572]]). A destroyed table's base record and location claim are keyed by its location, which nothing names once
   the table is gone, so a failure between its drop and their release leaves them (the claim lapses after its lease).
   Pinned by `tests/integration/test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`,
   `tests/integration/test_a_namespace_cascade_revokes_a_grant_only_once_its_object_is_gone.py` and
@@ -614,7 +628,14 @@ governing their data. The project-scoped surface is the console's project page, 
   cascade. Without it, deleting the work warehouse wiped gold's data.
 - Anything making a DESTRUCTIVE decision reads `read_bindings` (which returns unparseable paths) and
   refuses on a non-empty skip list; `list_bindings` is the tolerant half, for enumeration only. A
-  binding you cannot read is a namespace you cannot see.
+  binding you cannot read is a namespace you cannot see. The warehouse registry and the trash have the same pair
+  ([[LH-572]]): `warehouses.every_warehouse` refuses while a record cannot be read (a project delete, the purge's
+  sibling guard, a project policy set) where `list_warehouses` skips it, and `trash.every_record` raises where
+  `trash.list_all` skips (`trash.named`, an undrop restoring its cascade, `warehouses.trash_owned_by`, a cascade's
+  `fga_deps._trashed_objects`). A record you cannot read may be the one the decision is about. Every such refusal tells
+  an outage from a record (`lakehouse.outage.store_refusal`): a store that did not answer is 503 code 17, which a retry
+  may clear; a record that is there and cannot be read as one is 500 code 18, which only writing it again clears. The
+  registry reader raises the outage itself, so even a tolerant listing never reads one as a corrupt record.
 - `deactivate` = offboarding step one (quarantine; resolver 403s bound namespaces).
 - Maintenance lives in **`services/maintenance`** and DECIDES; it rewrites no data (ADR 0162, [[LH-467]]). It runs
   version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, each table's orphan check and cross-store reconcile, and
@@ -839,8 +860,9 @@ governing their data. The project-scoped surface is the console's project page, 
   maintainer and keeps the maintainer doors, and is
   not vended the tier. The management door refuses the tier 409 code 19 for a table whose maintenance policy keeps its
   whole history (`cleanup_enabled` false, `lakehouse.maintenance_policies.keeps_whole_history`, gate
-  `require_reclaimable_history` in `api/v1/endpoints/credentials.py`), and maintenance's probe asks no vend for such a
-  table.
+  `require_reclaimable_history` in `api/v1/endpoints/credentials.py`) or is there and cannot be read as a policy (it may
+  be the hold, and no retry reads it otherwise), and 503 code 17 when the store did not answer the policy read; and
+  maintenance's probe asks no vend for such a table.
   **The trash is the catalog's to end, and maintenance deletes only a due record's bytes** ([[XC-084]], ADR 0197).
   Maintenance's own canned policy writes only its due list, its copy of the commit records (`_maintenance_files/`),
   policy state and lineage outbox (`lance.objectStorePolicy.maintenance`, `chart/templates/_helpers.tpl`), so it asks four doors
@@ -878,9 +900,11 @@ governing their data. The project-scoped surface is the console's project page, 
   `add_columns` or `update` expression that reads a classified column asks `can_classify`, Lance itself telling which
   columns it reads (`dataplane.expressions_reading_a_label` plans it with and without the labelled columns); and a
   create, through the door (on the parent namespace's `can_classify`) or a first `version/create` (on the table's),
-  that carries a label asks what labelling asks. Pinned by
-  `services/catalog/tests/test_a_classified_column_is_never_vended_raw.py`. A copy made outside the catalog by a
-  writer who reads the column is LH-288's.
+  that carries a label asks what labelling asks. A vend whose table cannot be opened is refused, never read as
+  unlabelled (`vending._open_vended_ref`, [[LH-572]]): an outage answers 503 (code 17) and a committed version that
+  does not open 500 (code 18); only a table holding no committed version (`dataplane.holds_a_version`) has no labels.
+  Pinned by `services/catalog/tests/test_a_classified_column_is_never_vended_raw.py`. A copy made outside the catalog by
+  a writer who reads the column is LH-288's.
 - **Stock clients commit through `version/create`** ([[LH-471]], ADR 0157). `DescribeTable` and `DeclareTable`
   answer `managed_versioning=true`, so pylance stages `_versions/<n>.manifest-<uuid>` (its `manifest_path` is the
   object-store path: the key, no scheme, no bucket) and asks `POST /v1/table/{id}/version/create`.
@@ -1089,6 +1113,8 @@ governing their data. The project-scoped surface is the console's project page, 
   classifies by that, and the floor raise (`floor.py`, [[LH-094]]) acts only for the floor-bound kinds. A table carrying
   the raise's stamp (`floor.FLOOR_KEY`) is raised again only once its floor has moved past the stamp (measured
   2026-11-10 on pylance 13.0.0: a second raise over a moved floor, then one cleanup, removed the file stranded since).
+  The floor and the stamp are read off one handle, and a reading that fails refuses the raise, so a store that fails a
+  second read never reads as "never raised".
   The cost of #8944: a vended-credential writer that stages fragments and commits more than 7 days later
   loses them to the `cleanup_old_versions` a table's pass runs.
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
@@ -1104,10 +1130,13 @@ governing their data. The project-scoped surface is the console's project page, 
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
   (`lakehouse/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
 - Maintenance covers EVERY warehouse bucket, not a static list (#81): a table's pass runs only on a table in a bucket
-  it governs, read per task (`table_pass.governs`: `s3_bucket` + `MAINTENANCE_S3_EXTRA_BUCKETS`, or a bucket
-  `warehouse_records.maintainable_buckets(registry)` names, so not a deactivated warehouse's; an unreadable registry
-  decides nothing and the pass is tried again after `retrySeconds`), and a table's orphan check asks the same
-  `governs` — a bucket is created by an API CALL at runtime, so a config-time list goes stale by construction. The daily
+  it governs, read per task (`table_pass.governs`: a namespace bound to a warehouse is judged by that warehouse's
+  status first, so a deactivated warehouse's table is not governed even in a configured bucket; only a namespace bound to
+  none falls to `s3_bucket` + `MAINTENANCE_S3_EXTRA_BUCKETS`; an unreadable binding or warehouse record decides nothing
+  and the pass is tried again after `retrySeconds`), and a table's orphan check asks the same `governs`. The purge's
+  maintained estate (`purge.maintained_roots`) and the release's roots (`trash_release.roots_read`) read the registry
+  strictly (`warehouse_records.read_warehouse_records`): one record either cannot read stops the step, since a root left
+  out reads its live tables as gone — a bucket is created by an API CALL at runtime, so a config-time list goes stale by construction. The daily
   scan's storage walk reads the same registry (`_scannable_buckets`, a deactivated warehouse's bucket included),
   reporting an `IncompleteScan` rather than silently narrowing when it is unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).
 - **Lance's cleanup leaves every non-root base alone, so maintenance reclaims a table's data directories
@@ -1228,7 +1257,10 @@ governing their data. The project-scoped surface is the console's project page, 
   lineage. Moving rows between tiers runs on the user's own compute and orchestrator; the lakehouse runs
   no stage. **The promotion gate is the `published` tag** (ADR 0156 C1, ADR 0161, [[LH-466]]): readers of a
   governed tier read `@published`, and `POST /management/v1/table/{id}/publish` runs the project's quality gate
-  (`/management/v1/project/{id}/gate/*`) against the committed version; a pass advances the tag. With
+  (`/management/v1/project/{id}/gate/*`) against the committed version; a pass advances the tag. A declaration that
+  exists and cannot be read, or the table's binding to its project, refuses the publish (503 when the store did not
+  answer, 500 code 18 for a record that cannot be read as one) rather than judging it against the request's own weaker
+  values (`publication.declared_gate`, [[LH-572]]). With
   `review_enabled` on that gate, a version whose non-structural assertions fail, or whose row count moves past
   `review_band` from the published one (or that would be the table's first publication), is HELD
   (`catalog.services.promotions`): `published` stays, one record per table under `_promotions/` on the control

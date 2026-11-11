@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import json
 import logging
 import re
@@ -86,16 +87,41 @@ class Served(BaseModel):
         return lance_namespace.connect("rest", {"uri": self.url, "headers.Authorization": _TOKEN["Authorization"], **headers})
 
 
-@pytest.fixture
-def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
-    """The real catalog on a local root under uvicorn, alice signed in, FGA granting all but ``denied``."""
-    env = {
+def _local_root(tmp_path: Path) -> dict[str, str]:
+    return {
         "LANCE_REST_ROOT": str(tmp_path / "root"),
         "LANCE_CONTROL_ROOT": str(tmp_path / "control"),
         "LANCE_S3_ACCESS_KEY_ID": "unused",
         "LANCE_S3_SECRET_ACCESS_KEY": "unused",
     }
-    yield from _serve(Served(url="", denied=set(), root=tmp_path / "root"), env, monkeypatch)
+
+
+@pytest.fixture
+def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
+    """The real catalog on a local root under uvicorn, alice signed in, FGA granting all but ``denied``."""
+    yield from _serve(Served(url="", denied=set(), root=tmp_path / "root"), _local_root(tmp_path), monkeypatch)
+
+
+@pytest.fixture
+def served_without_the_write_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
+    """``served`` with the catalog's bulk-write cap off (``LANCE_MAX_CONCURRENT_WRITES=0``), for a claim about the commit
+    turn rather than the cap, which `tests/unit/test_load_shed.py` holds. The cap is read when the app is built, so the
+    module is reloaded with it, and reloaded again without it once the test is done."""
+    import catalog.main
+    from catalog.core.config import get_settings
+
+    env = {**_local_root(tmp_path), "LANCE_REST_IMPL": "dir", "LANCE_MAX_CONCURRENT_WRITES": "0"}
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    importlib.reload(catalog.main)
+    try:
+        yield from _serve(Served(url="", denied=set(), root=tmp_path / "root"), env, monkeypatch)
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+        importlib.reload(catalog.main)
+        get_settings.cache_clear()
 
 
 @pytest.fixture(scope="module")
@@ -1260,7 +1286,7 @@ def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served
     ],
 )
 def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other_tables(
-    served: Served, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, door: str, may_fail_with: tuple[type[Exception], ...]
+    served_without_the_write_cap: Served, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, door: str, may_fail_with: tuple[type[Exception], ...]
 ) -> None:
     """[[LH-259]] A writer that finds its ref's commit turn held waits it out, up to 30 s, and the catalog serves every sync
     door from one pool of request threads (anyio's default limiter: 40): measured, 50 writers waiting in threads made a
@@ -1268,7 +1294,9 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
     a door's commit waits in one of a bounded number of threads, past which it is refused as the retryable conflict a lost
     race is. Either way no write lands while the turn is held, and the catalog keeps answering. The waiters share one read
     of the turn record a tenth of a second at a time: read per waiter, 53 writers waiting on one held turn pegged the
-    estate's catalog at its 1-CPU limit (measured 2026-10-31)."""
+    estate's catalog at its 1-CPU limit (measured 2026-10-31). The bulk-write cap is off: fifty ``/insert`` waiters
+    outnumber the request threads only while none is shed."""
+    served = served_without_the_write_cap
     stock = served.stock()
     stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
     seeded = pa.table({"id": pa.array(range(51), pa.int64()), "v": pa.array(range(51), pa.int64())})

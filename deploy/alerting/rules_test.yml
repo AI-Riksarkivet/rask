@@ -274,7 +274,7 @@ tests:
               service: "lineage"
             exp_annotations:
               summary: "Lineage outbox oldest staged event > 5 min old"
-              description: "The outbox relay is lagging; the oldest undrained event exceeds 300s. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+              description: "The outbox relay is lagging; the oldest undrained event exceeds 300s. If `outbox_drop_failed_total` rises with it, the store refuses a publisher's deletes of what it delivered. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
   # M24 b. A backlog well under the threshold must NOT page — the gauge falls back on its own.
   - interval: 1m
@@ -598,8 +598,8 @@ tests:
               service: maintenance
               table_id: "acme$events"
             exp_annotations:
-              summary: "The catalog has refused maintenance of acme$events on passes a day apart"
-              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
+              summary: "Maintenance of acme$events has been parked on passes a day apart"
+              description: "For a day this table id has been parked, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
       - eval_time: 47h
         alertname: MaintenanceTableParked
         exp_alerts:
@@ -608,8 +608,8 @@ tests:
               service: maintenance
               table_id: "acme$events"
             exp_annotations:
-              summary: "The catalog has refused maintenance of acme$events on passes a day apart"
-              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
+              summary: "Maintenance of acme$events has been parked on passes a day apart"
+              description: "For a day this table id has been parked, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
 
   # The SAME table refused 403, then 404 once it is dropped: one table, one clock.
   - interval: 1h
@@ -627,8 +627,8 @@ tests:
               service: maintenance
               table_id: "acme$events"
             exp_annotations:
-              summary: "The catalog has refused maintenance of acme$events on passes a day apart"
-              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
+              summary: "Maintenance of acme$events has been parked on passes a day apart"
+              description: "For a day this table id has been parked, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
 
   # A pod replaced between two refused passes: the new pod's series first appears at 1, unseen, and its next count
   # still fires the table.
@@ -647,8 +647,8 @@ tests:
               service: maintenance
               table_id: "acme$events"
             exp_annotations:
-              summary: "The catalog has refused maintenance of acme$events on passes a day apart"
-              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
+              summary: "Maintenance of acme$events has been parked on passes a day apart"
+              description: "For a day this table id has been parked, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset. policy_unreadable is a maintenance policy record of the table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the policy door. The maintenance_policy_malformed ERROR line names the table and the record's fault."
 
   # One refused pass, then a grant: nothing the rule can see, so nothing fires.
   - interval: 1h
@@ -1120,8 +1120,8 @@ tests:
               severity: "warning"
               service: "catalog"
             exp_annotations:
-              summary: "The commit reconciler cannot read a table's version log"
-              description: "The catalog's commit reconciler could not read a retained version, or its commit time, on a table's ref, so it kept that ref's mark and announces nothing after it until it can. Read the catalog's `commit_reconcile_ref_unreadable` and `commit_reconcile_table_failed` logs for the table and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+              summary: "The commit reconciler cannot read a table's version log, the table, or lineage's feed"
+              description: "The catalog's commit reconciler could not read a retained version, or its commit time, on a table's ref, so it kept that ref's mark and announces nothing after it until it can; or it could not describe a table it claims, or lineage's feed, so it announced nothing for that table, or nothing at all on that tick. Read the catalog's `commit_reconcile_ref_unreadable`, `commit_reconcile_table_unreadable`, `commit_reconcile_feed_unreadable` and `commit_reconcile_table_failed` logs for the table and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
 
   # A pod's first find pages too: the counter's first sample is already 1, and `increase` alone reads 0 across it.
   - interval: 1m

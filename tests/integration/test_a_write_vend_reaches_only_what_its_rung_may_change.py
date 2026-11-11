@@ -50,6 +50,7 @@ from moto.sts.models import sts_backends
 from lakehouse import file_identities, history_fences, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.record_store import record_key
+from tests.integration import store_requests
 
 
 _SCHEMA = pa.schema([("id", pa.int64()), lance.blob_field("payload")])
@@ -245,14 +246,49 @@ def test_a_held_table_is_vended_no_maintain_tier(estate: _Estate, tier: _Tier, a
     assert (vended.status_code, vended.headers["content-type"], vended.json().get("code")) == answer, vended.text
 
 
-def test_a_table_whose_hold_cannot_be_read_is_vended_no_maintain_tier(estate: _Estate) -> None:
-    """[[XC-084]] A policy record that cannot be read may be a hold, so whether the table's history may be reclaimed is
-    unknown: the maintain tier is refused as the store's outage, and nothing is vended that could delete what it keeps."""
-    held = estate.client.post(f"/management/v1/table/{_TABLE}/policy/set", json={"cleanup_enabled": False})
+@pytest.mark.parametrize(
+    "record",
+    [
+        pytest.param(lambda _uuid: b'{"kind": "table", "cleanup_enabled": fal', id="no-json"),
+        pytest.param(lambda uuid: json.dumps({"kind": "table", "id": _TABLE, "uuid": uuid, "retention_days": "30d"}).encode(), id="a-setting-no-value-reads"),
+        pytest.param(
+            lambda uuid: json.dumps({"kind": "table", "id": _TABLE, "uuid": uuid, "cleanup_enabled": "false"}).encode(), id="a-hold-written-as-a-string"
+        ),
+    ],
+)
+def test_a_hold_written_past_the_policy_door_is_vended_no_maintain_tier(estate: _Estate, record: Callable[[str], bytes]) -> None:
+    """[[XC-084]] A policy record written past the policy door (by hand, by an older build) is read strictly: a hold whose
+    ``cleanup_enabled`` is the string ``"false"`` is a hold, and a record that cannot be read as a policy may be one, so
+    whether the table's history may be reclaimed is unknown. Each is refused the maintain tier with the hold's own code,
+    since no retry reads the record otherwise until someone writes it again, and nothing is vended that could delete
+    what it keeps."""
+    held = estate.client.post(f"/management/v1/table/{_TABLE}/policy/set", json={"retain_versions": 1})
     assert held.status_code == 200, held.text
-    estate.s3.put_object(Bucket=estate.bucket, Key=record_key("_policies", "table", estate.table_uuid()), Body=b'{"kind": "table", "cleanup_enabled": fal')
+    estate.s3.put_object(Bucket=estate.bucket, Key=record_key("_policies", "table", estate.table_uuid()), Body=record(estate.table_uuid()))
 
     vended = estate.client.post(f"/management/v1/table/{_TABLE}/credentials", params={"tier": "maintain"})
+
+    assert (vended.status_code, vended.headers["content-type"], vended.json().get("code")) == (
+        409,
+        "application/problem+json",
+        ErrorCode.INVALID_TABLE_STATE,
+    ), vended.text
+
+
+def test_a_policy_read_the_store_does_not_answer_is_vended_no_maintain_tier(estate: _Estate, moto_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A policy read the store did not answer says nothing about whether the table is held: no maintain-tier credential
+    is vended, and the caller is told to retry (503, code 17), where a record that cannot be read as a policy is refused
+    with the hold's own code ([[LH-572]]). The store answers every policy read 503 and forwards the rest."""
+    from catalog.core.config import get_settings
+
+    held = estate.client.post(f"/management/v1/table/{_TABLE}/policy/set", json={"retain_versions": 1})
+    assert held.status_code == 200, held.text
+    with store_requests.counted(moto_url) as store, store.answering_unavailable(lambda request: "/_policies/" in request.path):
+        monkeypatch.setenv("LANCE_S3_ENDPOINT", store.url)
+        get_settings.cache_clear()
+        vended = estate.client.post(f"/management/v1/table/{_TABLE}/credentials", params={"tier": "maintain"})
+    monkeypatch.setenv("LANCE_S3_ENDPOINT", moto_url)
+    get_settings.cache_clear()
 
     assert (vended.status_code, vended.headers["content-type"], vended.json().get("code")) == (
         503,

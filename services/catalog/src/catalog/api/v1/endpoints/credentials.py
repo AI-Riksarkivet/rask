@@ -72,11 +72,15 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
     nothing on a held table, and the commit-path cleanup a held table may be armed with fires only inside a commit, which
     every catalog door disarms before it makes (``lakehouse.auto_cleanup``). The policy is resolved as maintenance
     resolves it, each record read by its key: the table's own record, else its nearest namespace's, else its project's
-    (``maintenance_policies.governing_policy``). A record that cannot be read may be the hold, so it refuses.
+    (``maintenance_policies.governing_policy``), its settings read strictly (``maintenance_policies.PolicySettings``), so
+    a hold written ``cleanup_enabled: "false"`` past the policy door is a hold. A record that cannot be read may be the
+    hold, so it refuses: one that is there and cannot be read as a policy with the hold's own code, since no retry reads
+    it otherwise until someone writes it again, and a read the store did not answer as the outage it is.
 
     Raises:
-        InvalidTableStateError: The table's policy keeps its whole history (code 19).
-        ServiceUnavailableError: A policy record could not be read, so whether the table is held is unknown.
+        InvalidTableStateError: The table's policy keeps its whole history, or is there and cannot be read as a policy
+            (code 19).
+        ServiceUnavailableError: The store did not answer a policy read, so whether the table is held is unknown.
     """
     if requested_tier(request.query_params) != "maintain":
         return
@@ -92,9 +96,14 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
     )
     try:
         policy = await run_in_threadpool(resolve)
+        held = maintenance_policies.keeps_whole_history(policy)
+    except maintenance_policies.MalformedPolicyError as exc:
+        raise InvalidTableStateError(
+            "a maintenance policy that may govern the table cannot be read as one, and may keep its whole history, so no credential that could delete or rewrite it is vended"
+        ) from exc
     except maintenance_policies.UnreadablePolicyError as exc:
         raise ServiceUnavailableError("the maintenance policies could not be read, so no maintain-tier credential was vended") from exc
-    if maintenance_policies.keeps_whole_history(policy):
+    if held:
         raise InvalidTableStateError("the table's maintenance policy keeps its whole history, so no credential that could delete or rewrite it is vended")
 
 

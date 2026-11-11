@@ -249,7 +249,8 @@ def disarm_every_ref(dataset: lance.LanceDataset, table_id: list[str]) -> lance.
     """
     try:
         branches = list(dataset.branches.list() or {})
-    except Exception:  # noqa: BLE001 — the erasure reports an unreadable branch list as its own surface
+    except Exception as exc:  # noqa: BLE001 — the erasure's verification reports an unreadable branch list as its own surface
+        log.warning("disarm_branch_list_failed", extra={"table": "$".join(table_id), "error": str(exc)[:300]})
         branches = []
     for name in branches:
         disarm_commit_path_cleanup(dataset.checkout_version((name, None)), [*table_id, f"@{name}"])
@@ -263,8 +264,8 @@ def open_location(location: str, storage_options: StorageOptions, *, version: in
     § Per-Base Configuration: "every base inherits the unscoped options"): a data base on the estate's store is part of
     its table's storage, reached under the catalog's own identity as the root is ([[LH-286]]).
 
-    Raises whatever pylance raises — a caller translates it (:func:`_open_ref`) or degrades on it
-    (:func:`catalog.core.vending.dataset_facts`).
+    Raises whatever pylance raises, which every caller translates into the spec's codes (:func:`_open_ref`,
+    :func:`catalog.core.vending.dataset_facts`).
     """
     first = lance.dataset(location, storage_options=storage_options.in_clear(), version=None if branch else version, session=shared_lance_session())
     return first.checkout_version((branch, version)) if branch else first

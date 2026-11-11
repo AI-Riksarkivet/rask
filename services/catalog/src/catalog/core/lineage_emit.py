@@ -674,13 +674,17 @@ class _BaseLineageEmitter:
     async def project_for(self, top_ns: str) -> str | None:
         """Resolve the tenant, swallowing failure. BEST-EFFORT LIKE THE EMIT ITSELF: this runs on a
         committed write, and a registry blip must cost the watchers their notification, never the
-        caller their request. `None` degrades to exactly the pre-existing behaviour (author only)."""
+        caller their request. `None` emits the event to its author alone.
+
+        A failure is logged at WARNING with its cause: the event goes out naming no `rask_lance.project`, which reaches
+        none of the project's watchers, and coverage is decided here at the producer, where nothing downstream can
+        tell the miss from a namespace that has no tenant."""
         if self._project_resolver is None or not top_ns:
             return None
         try:
             return await self._project_resolver(top_ns)
-        except Exception:
-            log.debug("lineage project resolution failed for %r — emitting without a tenant", top_ns, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 — the committed write is answered whatever the registry says
+            log.warning("lineage_project_unresolved", extra={"namespace": top_ns, "error": str(exc)[:300]})
             return None
 
     async def emit_create(

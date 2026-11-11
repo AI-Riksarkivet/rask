@@ -20,7 +20,7 @@ from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_a_token, require_one_store_identity
 
 
@@ -130,6 +130,9 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     # The relay tick: a Dapr cron binding POSTs to /<name> on a schedule, and the tick drains the outbox,
     # prunes the feed and forwards to the configured graph backend. Empty = the route isn't mounted.
     relay_binding_name: str = Field(default="", alias="LINEAGE_RELAY_BINDING_NAME")
+    # The lakehouse's read-only window, rendered from the chart's one `readOnlyWindow` with the catalog's and maintenance's:
+    # the relay tick is answered and does nothing through it, so the next tick after the window drains, prunes and forwards.
+    read_only: bool = Field(default=False, alias="LINEAGE_READ_ONLY")
 
     # --- The outbox the relay drains: object storage the producers stage to and this service deletes from.
     s3_endpoint: str | None = Field(default=None, alias="LINEAGE_S3_ENDPOINT")
@@ -193,7 +196,7 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     @property
     def outbox_on_the_store(self) -> bool:
         """Whether the outbox the relay drains is on the object store, the one thing lineage signs store requests for."""
-        return self.outbox_uri.startswith("s3://")
+        return on_s3(self.outbox_uri)
 
     def s3_key_pair(self) -> S3KeyPair:
         """What the outbox is reached with: the session lineage's token was exchanged for, or the environment's pair.

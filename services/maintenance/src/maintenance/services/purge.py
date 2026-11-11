@@ -72,7 +72,7 @@ import lance
 import pyarrow.fs as pafs
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse import trash, warehouse_records
 from lakehouse.base_refs import decoded_path, decoded_segments, location_within, names_a_location, store_of
@@ -82,7 +82,7 @@ from lakehouse.control_events import ControlAction, ControlObjectType, ControlUu
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.data_directories import delete_directories, directories_to_end
 from lakehouse.objectfs import fs_and_base
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.stored_objects import StoredObject, delete_objects, list_under
 from lakehouse.table_paths import objects_at, spellings
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
@@ -291,12 +291,14 @@ def maintained_roots(settings: MaintenanceSettings, storage_options: StorageOpti
     destroying a quarantined tenant's dropped tables is not a maintenance decision to make on their
     behalf.
 
-    Raises if the registry cannot be read. The caller turns that into a refusal to run — narrowing the
-    estate silently would be safe for the purge, but "we could not enumerate what we maintain" is
-    exactly the moment a reclaimer should stop rather than proceed on a partial map.
+    Raises if the registry, or any one record in it, cannot be read (:func:`lakehouse.warehouse_records
+    .read_warehouse_records`). The caller turns that into a refusal to run — narrowing the estate silently would be
+    safe for the purge, but "we could not enumerate what we maintain" is exactly the moment a reclaimer should stop
+    rather than proceed on a partial map: a record left out may name the bucket a live table resolving into a trashed
+    location is under, which the liveness check would then never read.
     """
     buckets = set(settings.sweep_buckets)
-    buckets |= set(warehouse_records.maintainable_buckets(warehouse_records.list_warehouse_records(settings.resolved_control_root, storage_options)))
+    buckets |= set(warehouse_records.maintainable_buckets(warehouse_records.read_warehouse_records(settings.resolved_control_root, storage_options)))
     return {f"s3://{bucket}" for bucket in buckets if bucket}
 
 
@@ -349,7 +351,7 @@ def _manifest_rows(root: str, storage_options: StorageOptions, *, where: str | N
         fs, base = fs_and_base(root, storage_options)
         if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
             return []
-        manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
+        manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if on_s3(root) else f"{base}/{MANIFEST_DIR}"
         dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
         return dataset.to_table(columns=["object_id", "object_type", "location", "metadata"], filter=where).to_pylist()
     except Exception:  # noqa: BLE001 — ANY failure here must read as unreadable, never as a partial set
@@ -643,9 +645,9 @@ async def _refuse(out: TrashPurgeReport, record: dict[str, Any], *, reason: str,
     of the memory by omission.
 
     The note is the catalog's to write (``POST /management/v1/trash/{kind}/{uuid}/refusals``, [[XC-084]]), and it is
-    best-effort: a door that refuses or fails it leaves ``attempts`` unknown and the refusal reported, because
-    ``_purge_one`` promises "never raises; every failure is a refusal". A record that keeps no ``uuid`` is not one any
-    door files, and its refusal is reported, not remembered: there is no key to remember it under.
+    best-effort: a door that refuses or fails it leaves ``attempts`` unknown and the refusal reported under its own cause,
+    rather than the note's failure standing in for it as :func:`_purge_or_refuse` would report it. A record that keeps no
+    ``uuid`` is not one any door files, and its refusal is reported, not remembered: there is no key to remember it under.
     """
     kind, obj_id, uuid = trash.kind_of(record), trash.name_of(record), trash.object_uuid(record)
     attempts: int | None = None
@@ -669,7 +671,7 @@ def refusal_log_entry(record: RefusedRecord) -> dict[str, object]:
 
 
 async def _delete_bytes_or_refuse(
-    out: TrashPurgeReport, record: dict[str, Any], *, session: StorageOptions, settings: MaintenanceSettings, control_root: str
+    out: TrashPurgeReport, record: dict[str, Any], *, session: StorageOptions, own: StorageOptions, settings: MaintenanceSettings, control_root: str
 ) -> tuple[int, int] | None:
     """Delete the bytes this record names, its root and its data directories, under its reclaim session, or record a
     refusal and answer ``None``.
@@ -679,10 +681,11 @@ async def _delete_bytes_or_refuse(
     ``OSError``, or a base record that could not be read, is transient and the next run simply retries.
 
     The base record and the claims that say which data directories are the table's are READ with maintenance's own
-    session, which reads the estate; only the deletes are the session's, which reaches the bytes and nothing else.
+    session (``own``, read once for the run), which reads the estate; only the deletes are the reclaim session's, which
+    reaches the bytes and nothing else. Any other failure is the record's refusal too, made by :func:`_purge_or_refuse`.
     """
     location, obj_id = trash.location_of(record), trash.name_of(record)
-    registry = BaseRegistry(control_root=control_root, storage_options=settings.storage_options())
+    registry = BaseRegistry(control_root=control_root, storage_options=own)
     try:
         return await run_in_threadpool(partial(_delete_guarded, location, session, registry=registry, table=obj_id))
     except NotADatasetRootError as exc:
@@ -771,38 +774,67 @@ async def _preview_one(record: dict[str, Any], out: TrashPurgeReport, *, roots: 
     log.info("trash_purge_planned", extra={"kind": kind, "id": obj_id, "location": location})
 
 
+class _PurgeRun(BaseModel):
+    """What every record's purge in one run shares: read once, before the first record, in the run's guarded preamble."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    settings: MaintenanceSettings
+    #: Maintenance's own session, which reads the estate; a record's bytes go under the session the catalog vends for it.
+    own: StorageOptions
+    control_root: str
+    roots: set[str]
+    #: The run's liveness snapshot: ``None`` when a manifest could not be read, which refuses every record.
+    live: Liveness | None
+    control: ControlEmitter
+
+
+async def _purge_or_refuse(record: dict[str, Any], out: TrashPurgeReport, *, run: _PurgeRun) -> None:
+    """Purge ONE record, and make any failure it raises that record's refusal naming its cause: the batch holds "never
+    raises" by construction, each record's failure reported beside the others' successes, so a record whose purge fails
+    after an earlier record's bytes went leaves the later records purged and the run's counters and result line written.
+
+    The refusal is reported and not noted on the record: noting it asks the catalog again, and a handler that can fail
+    the way it handles is no handler. Its count stays unknown (``attempts`` ``None``), as a refusal the catalog failed to
+    note does.
+    """
+    try:
+        await _purge_one(record, out, run=run)
+    except Exception as exc:  # noqa: BLE001 — one record's failure, whatever it is, is that record's refusal
+        reason = f"the purge failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
+        out.refused.append(RefusedRecord(kind=trash.kind_of(record), id=trash.name_of(record), reason=reason))
+        log.exception("trash_purge_failed", extra={"kind": trash.kind_of(record), "id": trash.name_of(record)})
+
+
 async def _purge_one(
     record: dict[str, Any],
     out: TrashPurgeReport,
     *,
-    settings: MaintenanceSettings,
-    control_root: str,
-    roots: set[str],
-    live: Liveness | None,
-    recheck_live: Callable[[], Liveness | None],
-    control: ControlEmitter,
+    run: _PurgeRun,
 ) -> None:
-    """Delete → end → announce, for ONE record. Never raises; every failure is a refusal.
+    """Delete → end → announce, for ONE record. Each refusal it judges is reported here; a failure it does not expect
+    raises, and :func:`_purge_or_refuse` makes it the record's refusal.
 
     NOTHING HERE IS SIGNED BY MAINTENANCE'S OWN SESSION ([[XC-084]]): a table's bytes go under the session the catalog
     vends for this record, and the record, what it keeps and its grants are the catalog's to end once its own listing
     finds the place empty.
     """
+    settings = run.settings
     kind, obj_id, location = trash.kind_of(record), trash.name_of(record), trash.location_of(record)
     if (uuid := trash.object_uuid(record)) is None:
         out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason="the record keeps no uuid, so the catalog reclaims nothing of it"))
         return
-    if (reason := check(record, roots=roots, live=live)) is not None:
+    if (reason := check(record, roots=run.roots, live=run.live)) is not None:
         await _refuse(out, record, reason=reason, settings=settings)
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
         return
-    if await _recovered_since_the_snapshot(record, out, roots=roots, recheck_live=recheck_live, settings=settings):
+    if await _recovered_since_the_snapshot(record, out, roots=run.roots, recheck_live=partial(liveness_across, run.roots, run.own), settings=settings):
         return
     deleted = (0, 0)
     if kind == "table" and location:
         if (session := await _asked_of_the_catalog(record, out, partial(reclaim_options_for, kind, uuid, settings), asked="reclaim session")) is None:
             return
-        reclaimed = await _delete_bytes_or_refuse(out, record, session=session, settings=settings, control_root=control_root)
+        reclaimed = await _delete_bytes_or_refuse(out, record, session=session, own=run.own, settings=settings, control_root=run.control_root)
         if reclaimed is None:
             return
         deleted = reclaimed
@@ -827,7 +859,7 @@ async def _purge_one(
     uuids = _purged_uuids(record)
     object_type: ControlObjectType = "namespace" if kind == "namespace" else "table"
     await emit_control(
-        control,
+        run.control,
         action=_PURGE_ACTION[kind],
         object_type=object_type,
         object_id=f"{kind}:{uuid}",
@@ -881,12 +913,17 @@ async def purge_expired_trash(
         out.reason = blocker
         log.warning("trash_purge_blocked", extra={"reason": blocker})
         return out
-    storage_options = settings.storage_options()
     resolved_control_root = control_root or settings.resolved_control_root
     try:
+        # The run's own session is read here, once: a credential outage stops the run before any record is touched,
+        # with its reason, as an unreadable registry does, rather than between two records.
+        storage_options = settings.storage_options()
         roots = data_roots if data_roots is not None else await run_in_threadpool(maintained_roots, settings, storage_options)
         due = await run_in_threadpool(due_records, resolved_control_root, storage_options)
-    except Exception as exc:  # noqa: BLE001 — an unreadable registry/trash prefix stops the purge, it does not fail the tick
+        # One manifest read per root per tick, shared by every record — and `None` (unreadable) refuses all
+        # of them rather than letting a broken index read as "nothing is live".
+        live = await run_in_threadpool(liveness_across, roots, storage_options) if due else Liveness()
+    except Exception as exc:  # noqa: BLE001 — an unreadable session, registry or trash prefix stops the purge, it does not fail the tick
         out.reason = f"the maintained estate or the trash listing could not be read ({type(exc).__name__}: {exc}) — refusing to purge on a partial map"
         log.error("trash_purge_blocked", extra={"reason": out.reason})
         return out
@@ -897,23 +934,12 @@ async def purge_expired_trash(
         out.capped = len(due) - settings.trash_purge_max_per_tick
         due = due[: settings.trash_purge_max_per_tick]
 
-    # One manifest read per root per tick, shared by every record — and `None` (unreadable) refuses all
-    # of them rather than letting a broken index read as "nothing is live".
-    live = await run_in_threadpool(liveness_across, roots, storage_options) if due else Liveness()
+    run = _PurgeRun(settings=settings, own=storage_options, control_root=resolved_control_root, roots=roots, live=live, control=control)
     for record in due:
         if dry_run:
             await _preview_one(record, out, roots=roots, live=live)
             continue
-        await _purge_one(
-            record,
-            out,
-            settings=settings,
-            control_root=resolved_control_root,
-            roots=roots,
-            live=live,
-            recheck_live=lambda: liveness_across(roots, storage_options),
-            control=control,
-        )
+        await _purge_or_refuse(record, out, run=run)
 
     _record_metrics(out)
     log.info(

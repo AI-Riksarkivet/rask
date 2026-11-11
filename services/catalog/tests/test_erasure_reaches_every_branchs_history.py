@@ -355,21 +355,42 @@ def test_a_branch_whose_fork_point_cannot_be_read_is_still_erased(tmp_path: Path
     assert report.complete is True
 
 
-def test_an_unlistable_branch_set_is_not_verified_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
-    """Verification covers the refs it can list, so a table whose branches cannot be listed is not proved clean."""
+@pytest.mark.parametrize(
+    ("refs", "answered", "surface"),
+    [
+        pytest.param("branches", 0, "branches", id="branches"),
+        pytest.param("tags", 0, "tags", id="tags"),
+        pytest.param("tags", 1, "verify", id="tags-relisted-for-the-verification"),
+    ],
+)
+def test_an_unlistable_ref_set_is_not_verified_clean(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    erasure_job: Any,  # noqa: ANN401 — conftest.ErasureJob
+    refs: str,
+    answered: int,
+    surface: str,
+) -> None:
+    """Verification covers the refs it can list, so a table whose branches or tags cannot be listed is not proved clean:
+    an unread tag may pin a version holding the subject, exactly as an unread branch may. ``answered`` is how many
+    listings are answered before they fail: the tags are listed once to judge them and once more to verify."""
     uri = str(tmp_path / "unlisted")
     dataset = lance.write_dataset(_rows(_SUBJECT, "bob"), uri)
     job = erasure_job(uri, _PREDICATE)
     job.delete()
     job.compact()
+    listed = type(getattr(dataset, refs))
+    real_list, calls = listed.list, iter(range(answered))
 
-    def _boom(self: Any) -> None:
-        raise RuntimeError("branch store unavailable")
+    def _boom(self: Any) -> Any:  # noqa: ANN401 — the listing pylance answers
+        if next(calls, None) is not None:
+            return real_list(self)
+        raise RuntimeError(f"{refs} store unavailable")
 
-    monkeypatch.setattr(type(dataset.branches), "list", _boom)
+    monkeypatch.setattr(listed, "list", _boom)
     report = _verify(uri)
 
-    assert [s.outcome for s in report.surfaces if s.surface == "branches"] == ["failed"]
+    assert [s.outcome for s in report.surfaces if s.surface == surface] == ["failed"]
     assert (report.complete, report.settled) == (False, False)
 
 

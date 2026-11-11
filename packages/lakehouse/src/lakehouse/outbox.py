@@ -34,7 +34,7 @@ import pyarrow.fs as pafs
 from lakehouse import outbox_metrics
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage import split_s3_uri
-from lakehouse.storage_options import StorageOptions, object_client
+from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
 
 log = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, e
     S3 goes through the estate's CLIENT seam (``lakehouse.storage``), a plain PutObject. Everything else
     keeps the filesystem path: a local outbox is a real directory and genuinely needs its parent made.
     """
-    if storage_options.reaches_by_endpoint(outbox_uri):
+    if on_s3(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
         key = f"{_object_key(run_id, event_json)}.json"
         object_client(storage_options).put_object(
@@ -123,7 +123,7 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     and writes nothing. Everything else keeps the filesystem path: a local outbox is a real directory,
     and `delete_file` there needs no object-store permissions at all.
     """
-    if storage_options.reaches_by_endpoint(outbox_uri):
+    if on_s3(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
         # The stage's own client (:func:`~lakehouse.storage_options.object_client`): a delete signed with less than the whole key pair falls back
         # to boto3's default chain, and the lineage pod carries no ambient `AWS_*` (measured 2026-09-10), so that would be
@@ -330,7 +330,8 @@ async def _publish_staged(
     opt-in. A publish failure PROPAGATES (the producer's existing RETRY / redelivery handles it) and leaves
     the staged object in place, so even a hard process crash between the stage and a durable delivery is
     recoverable by the relay. The delete is best-effort: a failed delete just leaves a redundant object the
-    relay re-ingests idempotently and drops.
+    relay re-ingests idempotently and drops, logged with its cause and counted as the stage's and the publish's
+    failures are, so a store refusing every delete shows as itself rather than as a backlog nobody explains.
     """
     from fastapi.concurrency import run_in_threadpool
 
@@ -367,6 +368,10 @@ async def _publish_staged(
             outbox_metrics.record_publish_failed()
         raise
     outbox_metrics.record_published()
-    if staged:
-        with suppress(Exception):
-            await run_in_threadpool(drop_event, outbox_uri, storage_options, _object_key(key, event_json))
+    if not staged:
+        return
+    try:
+        await run_in_threadpool(drop_event, outbox_uri, storage_options, _object_key(key, event_json))
+    except Exception as exc:  # the event is delivered; what is left is a staged copy the relay re-ingests and drops
+        outbox_metrics.record_drop_failed()
+        log.warning("outbox_drop_failed", extra={"outbox_uri": outbox_uri, "key": _object_key(key, event_json), "error": str(exc)})

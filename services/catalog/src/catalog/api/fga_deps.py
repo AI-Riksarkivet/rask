@@ -67,6 +67,7 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.outage import store_refusal
 from lakehouse.storage_options import StorageOptions
 
 
@@ -1268,7 +1269,9 @@ async def spec_vend_tier(
     puts reach what a writer's do, so a put over a committed data file is as open to it as to a writer: no session
     policy refuses one (``vending.build_session_policy``). ``can_read_data`` alone opens the read tier. None of them, no
     credential: the door still answers, because describing a table is a metadata read. Maintain is never vended here;
-    it is the maintenance identity's (LH-473).
+    it is the maintenance identity's (LH-473). Through a read-only window (``maintenance_read_only``) a write-tier grant
+    opens the read tier: the window refuses every write at the catalog's doors, and a write-tier credential would write
+    storage straight past them.
 
     The rungs are probed with ``fga.check``, which writes no DENY: a reader's describe asking whether it may also
     write is not an access attempt. The rung that decides the tier is audited ALLOW, as every authorization
@@ -1287,6 +1290,8 @@ async def spec_vend_tier(
         granted = await _granted_vend_tier(client, token.subject, obj)
         if granted != "write":
             return granted
+    if settings.maintenance_read_only:
+        return "read"
 
     async def namespace(_top_ns: str) -> LanceNamespace:
         return ns
@@ -2141,9 +2146,10 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
     tenant is unknown — would break every existing grant on the day the edge landed, which is how a
     security control gets reverted rather than adopted.
 
-    Also fail-open when the OBJECT's tenant cannot be established: an unbound namespace has no tenant
-    to disagree with, and inventing a refusal from a failed registry read would turn a registry blip
-    into a governance outage on a path that already has an owner check in front of it.
+    A SCOPED ROLE IS REFUSED ON AN OBJECT NO PROJECT OWNS ([[LH-572]]): an unbound namespace, a namespace under
+    warehouses switched off, and a warehouse with no record belong to no tenant, so a grant there would reach the object,
+    and everything beneath it, for one project's assignees. A registry read that fails raises as what it is, never as an
+    object with no tenant.
 
     InvalidInput (13 -> 400), matching the bad-rung refusal above and lance-ns's own vocabulary: the
     grantor may well hold every rung this needs, so it is a malformed request rather than a denial.
@@ -2159,9 +2165,10 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
     if not owned_by:
         return
     target = await run_in_threadpool(_tenant_of, settings, fga_type, segments[0])
-    if target is None or target in owned_by:
+    if target in owned_by:
         return
-    raise InvalidInputError(f"{grantee!r} belongs to project {min(owned_by)!r} and cannot be granted on {segments[0]!r}, which belongs to project {target!r}")
+    held_by = f"project {target!r}" if target is not None else "no project"
+    raise InvalidInputError(f"{grantee!r} belongs to project {min(owned_by)!r} and cannot be granted on {segments[0]!r}, which belongs to {held_by}")
 
 
 def _tenant_of(settings: Settings, fga_type: str, first_segment: str) -> str | None:
@@ -2486,9 +2493,21 @@ async def orphaned_children(client: OpenFgaClient | None, settings: Settings, co
 
 
 def _trashed_objects(settings: Settings) -> set[str]:
-    """The FGA objects of every table and namespace in the trash, by the uuid each record keeps."""
+    """The FGA objects of every table and namespace in the trash, by the uuid each record keeps.
+
+    Read whole ([[LH-572]]): a record that cannot be read may be a trashed object of the subtree, whose grants and
+    records stay for its undrop, so the walk refuses rather than ending them.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a read of the trash.
+        InternalError: A trash record is there and cannot be read as one.
+    """
+    try:
+        records = trash.every_record(settings.registry_root, settings.storage_options())
+    except (OSError, ValueError) as exc:
+        raise store_refusal(exc, reading="reading the trash", so="no object found only by its container's edge was ended") from exc
     objects: set[str] = set()
-    for record in trash.list_all(settings.registry_root, settings.storage_options()):
+    for record in records:
         if (uuid := trash.object_uuid(record)) is not None:
             objects.add(fga.object_of(str(record.get("kind") or "table"), uuid))
     return objects

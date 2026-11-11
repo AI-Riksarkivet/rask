@@ -958,7 +958,7 @@ def test_project_policy_set_requires_project_admin(client: TestClient, monkeypat
     registry_reads: list[str] = []
     from catalog.services import warehouses as wh_svc
 
-    monkeypatch.setattr(wh_svc, "list_warehouses", lambda *a, **k: registry_reads.append("read") or [])
+    monkeypatch.setattr(wh_svc, "every_warehouse", lambda *a, **k: registry_reads.append("read") or [])
 
     resp = client.post(
         "/management/v1/project/acme/policy/set",

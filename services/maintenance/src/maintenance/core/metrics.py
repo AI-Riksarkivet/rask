@@ -15,9 +15,10 @@ from opentelemetry import metrics
 from lakehouse.lineage.signing import RefusalReason
 
 
-#: The refusals the catalog gives for a TABLE ID, and the closed `refused_by` set of `compaction.tables.parked`: the
-#: vend door's 403, and its 404 naming the table or namespace absent.
-type CatalogRefusal = Literal["vend_denied", "table_not_governed"]
+#: What parks a TABLE ID, and the closed `refused_by` set of `compaction.tables.parked`: the vend door's 403, its 404
+#: naming the table or namespace absent, and a policy record of the table's that cannot be read as one, which may be a
+#: legal hold and so is never read as the defaults.
+type CatalogRefusal = Literal["vend_denied", "table_not_governed", "policy_unreadable"]
 
 _meter = metrics.get_meter("lance.maintenance")
 
@@ -46,14 +47,14 @@ _refused = _meter.create_counter(
     description="Datasets refused by the maintenance pass, by refused_by gate.",
 )
 
-#: PER TABLE, which `_refused` deliberately is not. A table the catalog refuses on every tick is one row in
+#: PER TABLE, which `_refused` deliberately is not. A table parked on every tick is one row in
 #: a refusal share measured at 45.3-46.5% of every sweep (2026-09-24), so only its own id can page on it.
 #: `table_id` is bounded by the refused tables and `refused_by` by `CatalogRefusal`. No zero is emitted:
 #: an absent series is the healthy estate, and a zero could name no table.
 _tables_parked = _meter.create_counter(
     "compaction.tables.parked",
     unit="{dataset}",
-    description="Datasets left untouched for the tick because the catalog refused their table id, by table_id and refused_by.",
+    description="Datasets left untouched for the tick because their table id is parked (the catalog refused it, or its policy cannot be read), by table_id and refused_by.",
 )
 
 #: Datasets whose manifest carries reader flag 256 (mixed data file versions). Its own series because
@@ -456,7 +457,7 @@ def record_pass_overran(*, kind: str) -> None:
 
 
 def record_table_parked(*, table_id: str, refused_by: CatalogRefusal) -> None:
-    """Record that the catalog refused ``table_id`` at one door this tick.
+    """Record that ``table_id`` is parked this tick: the catalog refused it at one door, or its policy cannot be read.
 
     Keyword-only: both are strings, and a swapped pair would put a door name in the table label.
     """
@@ -528,7 +529,18 @@ def record_drift(counts: dict[str, int]) -> None:
 #: What a table's orphan check found, the closed `outcome` set of `maintenance.orphans.checks`
 #: (:mod:`maintenance.services.orphan_check`); a check whose read failed is counted ``incomplete`` before it raises.
 type OrphanCheckOutcome = Literal[
-    "clean", "reclaimable", "stranded", "raised", "excluded", "unnamed", "ungoverned", "trashed", "gone", "disabled", "incomplete"
+    "clean",
+    "reclaimable",
+    "stranded",
+    "raised",
+    "excluded",
+    "unnamed",
+    "policy_unreadable",
+    "ungoverned",
+    "trashed",
+    "gone",
+    "disabled",
+    "incomplete",
 ]
 
 #: Each table's orphan check, by what it found. No table label: which table is the check's log line's question, and a

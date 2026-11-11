@@ -639,9 +639,9 @@ def test_project_policy_set_refused_on_a_cross_claimed_bucket(client: TestClient
     assert resp.status_code == 409, resp.text
 
 
-def test_project_policy_set_tolerates_a_corrupt_registry_record(client: TestClient, tmp_path: object) -> None:
-    # A corrupt warehouse record next to the project's own must not 500 the set (skip-with-warning): the
-    # policy still resolves the readable active bucket.
+def test_project_policy_set_is_refused_while_a_registry_record_cannot_be_read(client: TestClient, tmp_path: object) -> None:
+    # A warehouse record that cannot be read may be one of the project's own, whose bucket the policy would leave on the
+    # defaults, or another project's claim on a bucket it would govern ([[LH-572]]): the set refuses and writes nothing.
     from pathlib import Path
 
     from catalog.core.config import get_settings
@@ -655,10 +655,11 @@ def test_project_policy_set_tolerates_a_corrupt_registry_record(client: TestClie
         {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"},
     )
     (Path(str(tmp_path)) / "_warehouses" / "zzz-corrupt.json").write_text("{truncated")
+
     resp = client.post("/management/v1/project/acme/policy/set", json={"retention_days": 90})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["buckets"] == ["acme-wh"]
-    assert client.post("/management/v1/project/acme/policy/delete").status_code == 200  # no leak across tests
+
+    assert (resp.status_code, resp.headers["content-type"], resp.json().get("code")) == (500, "application/problem+json", 18), resp.text
+    assert client.post("/management/v1/project/acme/policy/describe").status_code == 404
 
 
 def test_project_policy_rejects_a_malformed_project_id(client: TestClient, tmp_path: object) -> None:

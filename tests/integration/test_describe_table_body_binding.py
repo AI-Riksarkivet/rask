@@ -18,7 +18,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from lance_namespace import DescribeTableResponse
 from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
@@ -26,7 +25,6 @@ from catalog.core.vending import VendedSession
 from lakehouse.governed.store_credential import S3KeyPair
 
 
-_LOCATION = "s3://lance-catalog/db$t"
 _VEND = VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
 #: What the describe door answers for `_VEND`: its storage options, AWS proper so no endpoint, its signing pinned on, and
 #: its expiry inside them.
@@ -44,14 +42,13 @@ _VENDED_OPTIONS = {
 
 @pytest.fixture(autouse=True)
 def _version_exists(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub the version-existence check this door grew on 2026-09-02.
+    """Stub the version-existence check.
 
-    `describe` now opens the pinned dataset when a `version` is named, so that `?version=9999` on a
-    two-version table answers spec error 11 rather than confirming every number a caller tries. These
-    tests mock the NAMESPACE and hand back a location with no dataset behind it — a state a real
-    catalog never reaches — so the open fails and every case 404s before the body binding under test
-    is reached. Stubbing the check keeps this file about the one thing it is for: which channel the
-    fields are read from. The check itself is driven against a real dataset by
+    `describe` opens the pinned dataset when a `version` is named, so that `?version=9999` on a two-version table answers
+    spec error 11 rather than confirming every number a caller tries. These tests pin versions the one-version table the
+    double describes does not hold, so every pinned case would answer 404 before the body binding under test is reached.
+    Stubbing the check keeps this file about the one thing it is for: which channel the fields are read from. The check
+    itself is driven against a real dataset by
     `tests/e2e-py/test_track_a_acceptance.py::test_describe_refuses_a_branch_on_both_channels_and_an_impossible_version`.
     """
     from catalog.api.v1.endpoints import tables
@@ -60,9 +57,9 @@ def _version_exists(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> Iterator[MagicMock]:
-    """A vendor answering one credential, for a table whose location's claim records its uuid, as a credential is scoped by it (ADR 0173 §6)."""
-    fake_ns.describe_table.return_value = DescribeTableResponse(location=_LOCATION)
+def vendor(client: TestClient, claim_described: Callable[[str], str]) -> Iterator[MagicMock]:
+    """A vendor answering one credential, for the real table the double describes, whose location's claim records its uuid,
+    as a credential is scoped by it (ADR 0173 §6)."""
     claim_described("db$t")
     vend = MagicMock()
     vend.vend.return_value = _VEND

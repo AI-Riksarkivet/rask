@@ -20,6 +20,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pyarrow as pa
+import pyarrow.fs as pafs
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import DeregisterTableRequest, DeregisterTableResponse, LanceNamespace, ServiceUnavailableError
@@ -28,6 +29,7 @@ from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
 from lakehouse import location_claims, maintenance_policies
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 from maintenance.services.purge import objects_held
 from tests.integration.openfga_grants import TupleStore, act_as
@@ -132,4 +134,27 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
     assert {table: location_claims.holder(claims, location) for table, location in locations.items()} == dict.fromkeys(tables), (
         "a destroyed table's location stayed claimed"
     )
+    assert {t for t in governed.tuples if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"
+
+
+def test_a_cascade_that_cannot_read_a_trash_record_ends_no_grant_it_may_keep(real_ns_client: TestClient, governed: TupleStore) -> None:
+    """The walk finds a trashed table by its namespace's `child` edge alone, and only its trash record says it is
+    trashed: a record that cannot be read may be its own, so the cascade refuses with the namespace's own state (500,
+    code 18) rather than ending grants an undrop needs ([[LH-572]])."""
+    _ok(real_ns_client, "/v1/namespace/db/create", json={})
+    for table in ("db$a", "db$t"):
+        _ok(real_ns_client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    trashed = f"table:{_uuid(real_ns_client, 'table', 'db$t')}"
+    _ok(real_ns_client, "/v1/table/db$t/drop", json={})
+    kept = {t for t in governed.tuples if t[2] == trashed}
+    assert kept, "the trashed table kept no grant, so the claim that it keeps them would pass vacuously"
+    settings = get_settings()
+    fs, base = fs_and_base(settings.registry_root, settings.storage_options())
+    (record,) = [info.path for info in fs.get_file_info(pafs.FileSelector(f"{base}/_trash")) if info.path.endswith(".json")]
+    with fs.open_output_stream(record) as stream:
+        stream.write(b"{not json")
+
+    refused = real_ns_client.post("/v1/namespace/db/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
+
+    assert (refused.status_code, refused.json().get("code")) == (500, 18), refused.text
     assert {t for t in governed.tuples if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"

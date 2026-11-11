@@ -67,6 +67,8 @@ class DrainOutcome(BaseModel):
 class RelayReport(BaseModel):
     """One relay tick: what the drain did, how many feed rows retention removed, and what the forwarder sent."""
 
+    #: The tick did nothing, since the lakehouse is in its read-only window (``LINEAGE_READ_ONLY``).
+    paused: bool = False
     outbox_drained: int = 0
     outbox_stranded: int = 0
     outbox_refused: int = 0
@@ -108,8 +110,12 @@ async def _on_cron(
     """One relay tick, triggered by a Dapr cron tick: drain the outbox, prune the feed, then forward it.
 
     Best-effort per the cron contract: each step degrades to a warning, so the tick's report reaches the
-    caller either way.
+    caller either way. Through a read-only window it does nothing and says so: answered 2xx, the sidecar counts no
+    failed delivery, and every step is idempotent, so the first tick after the window does the work.
     """
+    if settings.read_only:
+        log.info("lineage_relay_tick_paused_for_read_only_window")
+        return RelayReport(paused=True).model_dump()
     report = RelayReport()
     if settings.outbox_uri:
         try:

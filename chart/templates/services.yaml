@@ -60,6 +60,7 @@ spec:
             {{- include "lance.otelEnv" (list $root "catalog") | nindent 12 }}
             {{- end }}
             - { name: LANCE_REST_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
+            - { name: LANCE_MAINTENANCE_READ_ONLY, value: {{ required "readOnlyWindow is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.readOnlyWindow | quote }} }
             - { name: LANCE_REST_IMPL, value: "dir" }
             - { name: LANCE_REST_ROOT, value: "s3://{{ .Values.objectStore.bucket }}" }
             - { name: LANCE_PUBLIC_PATH_PREFIX, value: {{ include "rask.catalogPublicPrefix" . | quote }} }
@@ -255,6 +256,7 @@ spec:
             - { name: LINEAGE_CATALOG_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
             - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
             - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }
+            - { name: LINEAGE_READ_ONLY, value: {{ required "readOnlyWindow is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.readOnlyWindow | quote }} }
             - { name: LINEAGE_EVENTS_RETENTION_DAYS, value: {{ .Values.services.lineage.eventsRetentionDays | quote }} }
             {{- with .Values.services.lineage.forward }}
             - { name: LINEAGE_FORWARD_URL, value: {{ .url | quote }} }

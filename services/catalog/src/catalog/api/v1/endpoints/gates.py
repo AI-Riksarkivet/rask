@@ -30,6 +30,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.schemas import GateSpecRequest, GateSpecResponse
+from catalog.services import publication
 from lakehouse import gate_specs
 from lakehouse.control_emit import emit_control
 from lakehouse.gate_specs import GateSpec
@@ -104,11 +105,12 @@ async def describe_gate(
     """This project's declared gate, or ``null`` when the chart's settings still govern.
 
     ``null`` rather than a populated default: a caller must be able to tell "nothing is declared" —
-    where a `helm upgrade` is still the only lever — from "declared, and these are the values".
+    where a `helm upgrade` is still the only lever — from "declared, and these are the values". A declaration that cannot
+    be read is neither, so it is refused as the publish refuses it ([[LH-572]]).
     """
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    spec = await run_in_threadpool(gate_specs.get_spec, settings.registry_root, settings.storage_options(), project)
+    spec = await run_in_threadpool(publication.declared_gate, settings.registry_root, settings.storage_options(), project)
     return GateSpecResponse.model_validate(spec.model_dump()) if spec else None
 
 

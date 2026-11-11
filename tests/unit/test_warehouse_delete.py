@@ -24,6 +24,7 @@ import pytest
 from lance_namespace import (
     DescribeNamespaceRequest,
     DescribeNamespaceResponse,
+    InternalError,
     InvalidInputError,
     ListNamespacesRequest,
     ListNamespacesResponse,
@@ -264,6 +265,22 @@ def test_a_purge_refuses_while_a_sibling_warehouse_still_claims_the_same_bucket(
     assert "acme-gold" in str(exc.value)
     assert purged == []
     # The refusal lands before ANY step: the warehouse the caller named is still registered.
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-work") is not None
+
+
+def test_a_purge_refuses_while_a_warehouse_record_cannot_be_read(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A record that cannot be read may be a sibling's claim on the same bucket ([[LH-572]]): read as absent, the purge
+    would delete the sibling's data, so it refuses before anything changes, as it refuses a sibling it can read."""
+    settings = _settings(tmp_path)
+    _seed(settings, warehouse_id="acme-work", bucket="acme-bkt")
+    (tmp_path / "_warehouses" / "acme-gold.json").write_text('{"id": "acme-gold", "bucket": "acme-')
+    purged: list[str] = []
+    monkeypatch.setattr(warehouses, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
+
+    with pytest.raises(InternalError, match="cannot be read as one"):
+        _delete(settings, _request(), warehouse_id="acme-work", purge_bucket=True)
+
+    assert purged == []
     assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-work") is not None
 
 

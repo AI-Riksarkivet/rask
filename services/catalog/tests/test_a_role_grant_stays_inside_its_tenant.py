@@ -14,6 +14,9 @@ would have broken every existing grant on the day the edge landed — which is h
 reverted rather than adopted — so the guard refuses only where the model carries the fact to refuse
 on. Both halves are asserted here, because the fail-open half is the one that would rot silently.
 
+A ROLE ONE PROJECT OWNS IS NEVER GRANTED ON AN OBJECT NO PROJECT OWNS ([[LH-572]]): an unbound namespace belongs to no
+tenant, so a grant there would reach it, and everything beneath it, for one project's assignees.
+
 A ROLE IS NEVER GRANTED A RUNG THE MODEL HOLDS FOR USERS ALONE ([[LH-563]]). A decision rung (`decider`, `[user]`) names
 one account, so a grant of it to a role's assignees is a malformed request, refused 400 before the store is asked, as the
 store itself refuses the tuple; asked, the store's refusal would reach the caller as an outage.
@@ -47,7 +50,7 @@ DOORS = {
         pytest.param("namespace", "acme", "beta", "reader", 400, 403, ("acme", "beta"), id="a-role-owned-by-another-project-is-refused"),
         pytest.param("namespace", "beta", "beta", "reader", 200, 200, (), id="a-role-owned-by-the-same-project-is-granted"),
         pytest.param("namespace", None, "beta", "reader", 200, 200, (), id="an-estate-wide-role-carrying-no-project-is-granted"),
-        pytest.param("namespace", "acme", None, "reader", 200, 200, (), id="a-namespace-whose-tenant-cannot-be-established-is-granted"),
+        pytest.param("namespace", "acme", None, "reader", 400, 403, ("acme", "beta_bronze"), id="a-namespace-belonging-to-no-project-is-refused"),
         # A warehouse's own record names its tenant ([[LH-555]]).
         pytest.param("warehouse", "acme", "beta", "reader", 400, 403, ("acme", "beta"), id="a-role-owned-by-another-project-is-refused-on-a-warehouse"),
         pytest.param("warehouse", "beta", "beta", "reader", 200, 200, (), id="a-role-owned-by-the-warehouses-project-is-granted"),

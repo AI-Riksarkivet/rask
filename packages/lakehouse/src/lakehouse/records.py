@@ -48,7 +48,7 @@ from typing import Any
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.storage_options import StorageOptions, object_client
+from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
 
 log = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ def create_json(root_uri: str, storage_options: StorageOptions, key: str, record
     """
     body = json.dumps(record).encode("utf-8")
 
-    if root_uri.startswith("s3://"):
+    if on_s3(root_uri):
         from botocore.exceptions import ClientError
 
         base = root_uri[len("s3://") :].rstrip("/")
@@ -164,7 +164,7 @@ def read_json_at(root_uri: str, storage_options: StorageOptions, key: str) -> St
     own; on a local root it is a content hash, which has the same meaning ("the bytes I read") and
     the same failure behaviour, without needing the filesystem to invent one.
     """
-    if root_uri.startswith("s3://"):
+    if on_s3(root_uri):
         from botocore.exceptions import ClientError
 
         bucket, full_key = _s3_parts(root_uri, key)
@@ -294,7 +294,7 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, reco
     """
     body = json.dumps(record).encode("utf-8")
 
-    if root_uri.startswith("s3://"):
+    if on_s3(root_uri):
         from botocore.exceptions import ClientError
 
         bucket, full_key = _s3_parts(root_uri, key)

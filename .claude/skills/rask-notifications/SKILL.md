@@ -188,8 +188,8 @@ the action names it reads must survive a member it does not know, since the lake
    properties of that are the reusable part: resolve the tenant ONCE at the choke point, and **omit rather than
    sanitize** a project that fails `is_safe_project` — a project-less run reaches its author and no watchers, while a
    coerced one could reach the WRONG tenant's watchers, which is disclosure rather than a miss. The residue:
-   `project_for` is best-effort and returns `None` on any failure, so a write whose top segment is not registry-bound
-   reaches zero watchers, silently.
+   `project_for` is best-effort, so a write whose top segment is not registry-bound reaches zero watchers, silently; one
+   whose resolution failed reaches zero watchers too, and the cause is logged at WARNING (`lineage_project_unresolved`).
 4. **A non-personal principal is not an address.** `user:*` (managed access) is a statement about everyone and
    addresses no one. A userset (`team:acme#member`) on the control lane is expanded to the persons it holds, and names
    nobody with authorization off. An address must identify a person.

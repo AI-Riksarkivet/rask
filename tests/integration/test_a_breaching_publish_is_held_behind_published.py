@@ -32,6 +32,7 @@ from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.core.config import Settings, get_settings
 from catalog.core.lineage_emit import make_emitter
 from catalog.services import object_uuids, table_claims, warehouses
+from lakehouse.gate_specs import GATES_PREFIX
 from lakehouse.governed import fga
 from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, dataset_uuids
 from lakehouse.location_claims import ClaimStore
@@ -180,6 +181,20 @@ def test_a_breaching_publish_lands_on_main_and_readers_of_published_still_read_t
     assert (answer["published"], answer["held"]) == (False, True), answer
     assert (estate.rows("published"), estate.rows()) == (4, 12)
     assert estate.holds() == [(TABLE, 2, 1, ["row_count_delta"])]
+
+
+def test_a_publish_under_a_gate_that_cannot_be_read_is_refused(estate: Estate) -> None:
+    """The project declared its gate, so a declaration that cannot be read is not a project with none ([[LH-572]]): read as
+    none, the request's own gate would publish the version the declared review holds."""
+    estate.insert(range(4, 12))
+    for record in (Path(estate.root) / GATES_PREFIX).glob("*.json"):
+        record.write_text("{not a gate")
+    act_as(estate.client, "alice")
+
+    answer = estate.client.post(f"/management/v1/table/{TABLE}/publish", json={"version": 2, "key_column": "id"}, headers=AUTH)
+
+    assert (answer.status_code, answer.headers["content-type"], answer.json().get("code")) == (500, "application/problem+json", 18), answer.text
+    assert estate.rows("published") == 4
 
 
 @pytest.fixture

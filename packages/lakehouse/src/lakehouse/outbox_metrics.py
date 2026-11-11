@@ -54,6 +54,15 @@ _stage_failed = _meter.create_counter(
         "object store refused a write the lineage lane did not need in order to deliver."
     ),
 )
+_drop_failed = _meter.create_counter(
+    "outbox.drop.failed",
+    unit="{event}",
+    description=(
+        "Published events whose staged copy the publisher could not delete. Delivered, so nothing is lost: the copy is "
+        "re-ingested and dropped by the relay. Sustained non-zero with a rising depth means the store refuses the "
+        "publisher's deletes, and the relay is re-delivering every event it stages."
+    ),
+)
 _drained = _meter.create_counter(
     "outbox.events.drained",
     unit="{event}",
@@ -147,6 +156,10 @@ def record_publish_failed() -> None:
 
 def record_stage_failed() -> None:
     _stage_failed.add(1)
+
+
+def record_drop_failed() -> None:
+    _drop_failed.add(1)
 
 
 def record_drained(count: int) -> None:

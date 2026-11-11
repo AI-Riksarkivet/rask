@@ -278,16 +278,18 @@ def _version(root: Path, table: list[str]) -> int | None:
 
 
 @pytest.mark.parametrize(
-    ("door", "table", "answer", "version"),
+    ("method", "door", "table", "answer", "version"),
     [
-        pytest.param("/v1/namespace/fresh/create", ["fresh", "t"], (503, 17), None, id="a-namespace-it-would-announce"),
-        pytest.param("/v1/namespace/describe%3F/create", ["describe?", "t"], (503, 17), None, id="a-namespace-whose-name-holds-a-question-mark"),
-        pytest.param("/v1/table/db$t/insert", ["db", "t"], (503, 17), 1, id="an-insert-it-would-announce"),
-        pytest.param(f"/v1/table/{PROVENANCE}$feed/insert", [PROVENANCE, "feed"], (200, None), 2, id="an-insert-it-never-announces"),
+        pytest.param("POST", "/v1/namespace/fresh/create", ["fresh", "t"], (503, 17), None, id="a-namespace-it-would-announce"),
+        pytest.param("POST", "/v1/namespace/describe%3F/create", ["describe?", "t"], (503, 17), None, id="a-namespace-whose-name-holds-a-question-mark"),
+        pytest.param("POST", "/v1/table/db$t/insert", ["db", "t"], (503, 17), 1, id="an-insert-it-would-announce"),
+        pytest.param("POST", f"/v1/table/{PROVENANCE}$feed/insert", [PROVENANCE, "feed"], (200, None), 2, id="an-insert-it-never-announces"),
+        # A DELETE is a write whatever it names: a project named like a read action is not read as one.
+        pytest.param("DELETE", "/management/v1/projects/list", ["list", "t"], (503, 17), None, id="a-delete-of-an-object-named-like-a-read"),
     ],
 )
 def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(
-    boot: Boot, control_outbox: str, tmp_path: Path, door: str, table: list[str], answer: tuple[int, int | None], version: int | None
+    boot: Boot, control_outbox: str, tmp_path: Path, method: str, door: str, table: list[str], answer: tuple[int, int | None], version: int | None
 ) -> None:
     """A write it would announce is refused before it commits, so the table stays at its version and a namespace is never
     made; lineage's own write under the provenance namespace, which it never announces, is served."""
@@ -295,7 +297,7 @@ def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(
     if version is not None:
         _made_natively(tmp_path / "warehouse", table)
 
-    written = client.post(door, content=_rows(), headers=ARROW_STREAM) if door.endswith("/insert") else client.post(door, json={})
+    written = client.post(door, content=_rows(), headers=ARROW_STREAM) if door.endswith("/insert") else client.request(method, door, json={})
     readiness = client.get("/readyz")
 
     assert (written.status_code, written.json().get("code") if written.status_code != 200 else None) == answer, written.text

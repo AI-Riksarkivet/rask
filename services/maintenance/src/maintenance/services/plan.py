@@ -67,36 +67,36 @@ class DatasetPlan(BaseModel):
         return str(self.policy.get("id") or "") or None
 
 
-def _int_field(policy: dict[str, Any], name: str) -> int | None:
-    value = policy.get(name)
-    return int(str(value)) if value else None
-
-
-def _age_bound(policy: dict[str, Any], *, default: timedelta) -> timedelta | None:
+def _age_bound(settings: maintenance_policies.PolicySettings, *, default: timedelta) -> timedelta | None:
     """The age a version must reach before expiry may take it.
 
     ``retain_versions: N`` alone means exactly keep-last-N: an age bound on top would keep everything younger than the
     global default and make the policy a no-op on fresh datasets.
     """
-    if (retention_days := _int_field(policy, "retention_days")) is not None:
-        return timedelta(days=retention_days)
-    if _int_field(policy, "retain_versions") is not None:
+    if settings.retention_days is not None:
+        return timedelta(days=settings.retention_days)
+    if settings.retain_versions is not None:
         return None
     return default
 
 
 def plan_from_policy(policy: dict[str, Any] | None, *, older_than: timedelta) -> DatasetPlan:
-    """The plan one resolved record makes, ``None`` meaning the global defaults."""
+    """The plan one resolved record makes, ``None`` meaning the global defaults.
+
+    Raises:
+        MalformedPolicyError: The record's settings cannot be read (:func:`lakehouse.maintenance_policies.policy_settings`).
+    """
     if policy is None:
         return DatasetPlan(older_than=older_than)
+    settings = maintenance_policies.policy_settings(policy)
     return DatasetPlan(
         policy=policy,
-        older_than=_age_bound(policy, default=older_than),
-        retain_versions=_int_field(policy, "retain_versions"),
-        cleanup_enabled=not maintenance_policies.keeps_whole_history(policy),
-        compact_enabled=bool(policy.get("compact_enabled", True)),
-        optimize_indices_enabled=bool(policy.get("optimize_indices_enabled", True)),
-        target_rows_per_fragment=_int_field(policy, "target_rows_per_fragment"),
+        older_than=_age_bound(settings, default=older_than),
+        retain_versions=settings.retain_versions,
+        cleanup_enabled=settings.cleanup_enabled,
+        compact_enabled=settings.compact_enabled,
+        optimize_indices_enabled=settings.optimize_indices_enabled,
+        target_rows_per_fragment=settings.target_rows_per_fragment,
     )
 
 
@@ -111,15 +111,16 @@ class PlanContext(BaseModel):
 def resolve_plan(uri: str, *, context: PlanContext, owners: PolicyOwners) -> DatasetPlan:
     """This dataset's plan, without the cadence: what the event lane asks between ticks.
 
-    ``owners`` are the uuids of the dataset's table and of its namespaces, whose records may govern it. A policy that
-    cannot be parsed falls back to the GLOBAL defaults: the dataset is maintained, never left out.
+    ``owners`` are the uuids of the dataset's table and of its namespaces, whose records may govern it. A record whose
+    settings cannot be read raises rather than planning on the defaults, since it may be a legal hold; the pass reads
+    each record strictly before it plans (:func:`maintenance.services.table_pass.read_for`) and parks a table whose
+    record it cannot read.
+
+    Raises:
+        MalformedPolicyError: The winning record's settings cannot be read.
     """
-    try:
-        policy = maintenance_policies.resolve_policy(context.policies, uri, table_uuid=owners.table_uuid, namespace_uuids=owners.namespace_uuids)
-        return plan_from_policy(policy, older_than=context.older_than)
-    except Exception as exc:  # noqa: BLE001 — unreadable tuning maintains on the defaults
-        log.warning("compaction_policy_ignored", extra={"uri": uri, "error": str(exc)})
-        return DatasetPlan(older_than=context.older_than)
+    policy = maintenance_policies.resolve_policy(context.policies, uri, table_uuid=owners.table_uuid, namespace_uuids=owners.namespace_uuids)
+    return plan_from_policy(policy, older_than=context.older_than)
 
 
 def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, table_uuid: str, uri: str, now: datetime) -> str | None:
@@ -127,9 +128,12 @@ def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, table
 
     An unreadable, absent or malformed stamp maintains — never the other way, or a lost stamp would silence maintenance
     forever — and is logged, so a persistently broken state prefix is visible.
+
+    Raises:
+        MalformedPolicyError: The policy's settings cannot be read.
     """
-    interval = policy.get("compact_interval_hours")
-    if not interval:
+    interval = maintenance_policies.policy_settings(policy).compact_interval_hours
+    if interval is None:
         return None
     try:
         stamped = maintenance_policies.read_state(settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=uri)
@@ -144,4 +148,4 @@ def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, table
         # TypeError covers a naive stamp: `now` is aware, and aware-minus-naive raises.
         log.warning("compaction_policy_state_malformed", extra={"policy": policy.get("id"), "uri": uri, "stamp": stamped})
         return None
-    return "policy_interval" if elapsed < timedelta(hours=int(str(interval))) else None
+    return "policy_interval" if elapsed < timedelta(hours=interval) else None

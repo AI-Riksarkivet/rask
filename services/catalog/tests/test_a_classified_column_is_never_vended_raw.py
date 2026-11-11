@@ -18,7 +18,9 @@ still a grant at the store.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
@@ -32,7 +34,7 @@ from lakehouse.governed.store_credential import S3KeyPair
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).
-INVALID_INPUT, PERMISSION_DENIED = 13, 15
+INVALID_INPUT, PERMISSION_DENIED, INTERNAL = 13, 15, 18
 TABLE = "/v1/table/db$t"
 PII = {"rask.classification": "pii"}
 
@@ -143,6 +145,60 @@ def test_a_classified_table_stays_unvendable_raw_whatever_a_writer_does(
     answers = [_bob(catalog, door, body) for door, body in laundering]
 
     assert (answers, _vends_raw(catalog), vendor.calls) == (refused, [], [])
+
+
+@pytest.mark.parametrize(
+    ("door", "body"),
+    [
+        pytest.param("/management/v1/table/db$t/credentials", None, id="the-credentials-door"),
+        pytest.param("/management/v1/table/db$t/credentials?branch=work", None, id="the-credentials-door-for-a-branch"),
+        pytest.param(f"{TABLE}/describe", {"vend_credentials": True}, id="describe"),
+    ],
+)
+def test_a_classified_table_whose_open_fails_is_vended_to_no_one(
+    table: tuple[Any, _Vendor], door: str, body: dict[str, Any] | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The labels are read off the table's open, so an open that fails says nothing about them ([[LH-572]]): a table
+    holding a committed version that does not open is refused, never vended as though it held no label. A 500's body is
+    redacted whatever raised it, so the vend's own refusal is told from a crash by the line it logs."""
+    catalog, vendor = table
+    _label(catalog, "secret")
+    location = catalog.client.post(f"{TABLE}/describe", json={}, headers=catalog.bearer("alice")).json()["location"]
+    for manifest in (Path(location.removeprefix("file://")) / "_versions").glob("*.manifest"):
+        manifest.write_bytes(b"not a manifest")
+
+    with caplog.at_level(logging.WARNING, logger="catalog.core.vending"):
+        answered = catalog.client.post(door, json=body, headers=catalog.bearer("bob"))
+
+    assert (answered.status_code, answered.headers["content-type"], answered.json().get("code")) == (500, "application/problem+json", INTERNAL)
+    assert [record.getMessage() for record in caplog.records if record.name == "catalog.core.vending"] == ["vend_open_failed"]
+    assert vendor.calls == []
+
+
+@pytest.mark.parametrize(
+    ("door", "answered_as"),
+    [
+        pytest.param("/management/v1/table/db$t/credentials", (200, "server_mediated", None), id="main-is-served-through-the-catalog"),
+        pytest.param("/management/v1/table/db$t/credentials?branch=work", (500, None, INTERNAL), id="a-branch-is-refused"),
+    ],
+)
+def test_a_table_whose_branches_cannot_be_listed_is_vended_no_credential(
+    table: tuple[Any, _Vendor], door: str, answered_as: tuple[int, str | None, int | None]
+) -> None:
+    """A label on any ref holds the table back, so a branch set that cannot be listed says nothing about the labels:
+    main is served through the catalog, and a vend for a branch, which cannot be told to exist, is refused
+    ([[LH-572]]). The branch file is one Lance cannot parse, which fails the listing with a RuntimeError (measured on
+    pylance 13.0.0)."""
+    catalog, vendor = table
+    made = catalog.client.post(f"{TABLE}/branches/create", json={"name": "work"}, headers=catalog.bearer("alice"))
+    assert made.status_code == 200, made.text
+    location = catalog.client.post(f"{TABLE}/describe", json={"vend_credentials": False}, headers=catalog.bearer("alice")).json()["location"]
+    (Path(location.removeprefix("file://")) / "_refs" / "branches" / "work.json").write_text("not json")
+
+    answered = catalog.client.post(door, headers=catalog.bearer("bob"))
+
+    assert (answered.status_code, answered.json().get("mode"), answered.json().get("code")) == answered_as, answered.text
+    assert vendor.calls == []
 
 
 def test_the_maintenance_identity_is_vended_the_maintain_tier_of_a_classified_table(table: tuple[Any, _Vendor]) -> None:

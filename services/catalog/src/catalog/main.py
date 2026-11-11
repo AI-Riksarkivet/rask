@@ -410,6 +410,9 @@ app = build_lance_service_app(
 # Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always
 # adds GET /dapr/subscribe; the subscription registers only when control_emit_enabled (see api/dapr.py).
 register_control_dapr(app)
+# THE CRON TICKS BELOW are mounted at the pod root, outside both gated mounts, and `maintenance_middleware` holds every
+# one of them through a read-only window, answering it 2xx without running it: each mount records its tick
+# (`catalog.api.cron.ticks_of`), so a tick mounted is a tick held.
 # THE CONTROL LANE'S RELAY (POST /<binding name> at the pod root, on the chart's cron schedule): drain
 # LANCE_CONTROL_OUTBOX_URI and re-publish what a bus outage left staged. Without it the staging that
 # `make_control_emitter` already does above is a durable copy nothing ever reads — and `table_published`

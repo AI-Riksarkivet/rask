@@ -247,6 +247,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | pubsub.controlName | string | `"catalog-control-pubsub"` | Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on. |
 | pubsub.name | string | `"lineage-pubsub"` | Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `<name>-<app-id>` component with its own queue group. |
 | pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC and siblings). |
+| readOnlyWindow | bool | `false` | Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its cron ticks, maintenance's worker takes no task, and lineage's relay pauses. Flipping it rolls the three services. |
 | resources.age | object | `{"limits":{"cpu":"1","memory":"2Gi"},"requests":{"cpu":"250m","memory":"512Mi"}}` | CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases). |
 | resources.catalog | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful. |
 | resources.default | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources). |

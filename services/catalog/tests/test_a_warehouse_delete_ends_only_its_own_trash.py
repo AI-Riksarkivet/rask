@@ -14,6 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+from lance_namespace import InternalError
+
 from catalog.services import warehouses
 from lakehouse import trash
 from lakehouse.storage_options import StorageOptions
@@ -56,3 +59,15 @@ def test_the_trash_a_warehouse_ends_is_its_own_and_each_child_comes_before_its_p
     ]
     assert [name for kind, name in ended if kind == "namespace"] == ["silver$inner", "silver"]
     assert [kind for kind, _ in ended] == sorted((kind for kind, _ in ended), key=lambda kind: kind == "namespace"), "a namespace came before a table"
+
+
+def test_a_trash_record_that_cannot_be_read_refuses_the_selection(tmp_path: Path) -> None:
+    """A record that cannot be read may be the warehouse's own ([[LH-572]]): the delete refuses rather than ending the rest
+    and leaving it holding its grants and its claim for a warehouse that no longer exists."""
+    control = str(tmp_path / "control")
+    warehouses.bind_namespace(control, StorageOptions(), "bronze", "acme-work", "s3://acme-bkt")
+    _trash(control, "bronze$trashed", "s3://acme-bkt/a_bronze$trashed")
+    (tmp_path / "control" / "_trash" / "unreadable.json").write_text("{not json")
+
+    with pytest.raises(InternalError, match="reading the trash failed"):
+        warehouses.trash_owned_by(control, StorageOptions(), "acme-work", bucket="acme-bkt")

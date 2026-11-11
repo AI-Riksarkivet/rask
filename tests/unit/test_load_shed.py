@@ -1,4 +1,7 @@
-"""Load-shed middleware — caps concurrent Arrow-IPC writes, shedding the overflow with 429 (P5).
+"""Load-shed middleware — caps concurrent bulk table writes, shedding the overflow with 429 (P5).
+
+A bulk write is known by its ROUTE, `POST /v1/table/<id>/{create,insert,merge_insert}`, never by its Content-Type: the
+handlers buffer the body whatever the header says, so a write that names another media type, or none, buffers as much.
 
 Driven at the ASGI layer (not via TestClient, which is synchronous) so overlap is deterministic: one write is
 held in flight while a second is issued, proving the cap sheds the second BEFORE its body is buffered.
@@ -8,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from starlette.types import Message, Receive, Scope, Send
 
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
@@ -74,8 +78,8 @@ def test_write_over_cap_is_shed_with_429_before_the_body() -> None:
 
 def test_metadata_creates_are_not_shed_even_at_capacity() -> None:
     # The `/create` suffix also ends CHEAP metadata endpoints (namespace / tags / version / materialized_view
-    # create) that send JSON and buffer no Arrow body. They must pass through even while the cap is full — the
-    # discriminator is the Arrow-IPC content-type, not the path suffix. (audit: loadshed-create-suffix)
+    # create) that send JSON and buffer no Arrow body. They must pass through even while the cap is full: the route
+    # is the bulk table write's alone, `/v1/table/<one id segment>/<action>`. (audit: loadshed-create-suffix)
     async def scenario() -> list[int]:
         release = asyncio.Event()
         entered = asyncio.Event()
@@ -95,7 +99,7 @@ def test_metadata_creates_are_not_shed_even_at_capacity() -> None:
             await _drive(mw, _scope("POST", "/v1/namespace/analytics/create", b"application/json")),
             await _drive(mw, _scope("POST", "/v1/table/t/tags/create", b"application/json")),
             await _drive(mw, _scope("POST", "/v1/materialized_view/mv/create", b"application/json")),
-            await _drive(mw, _scope("POST", "/v1/table/t/create")),  # no content-type at all
+            await _drive(mw, _scope("POST", "/v1/table/t/version/create", _ARROW)),
         ]
         release.set()
         await t1
@@ -104,22 +108,31 @@ def test_metadata_creates_are_not_shed_even_at_capacity() -> None:
     assert asyncio.run(scenario()) == [200, 200, 200, 200]
 
 
-def test_table_create_with_arrow_body_is_shed() -> None:
-    # The counterpart: a genuine table create DOES carry an Arrow stream, so it IS gated by the cap.
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        pytest.param(_ARROW, id="arrow"),
+        pytest.param(b"application/octet-stream", id="another-media-type"),
+        pytest.param(None, id="no-content-type"),
+    ],
+)
+def test_table_create_is_shed_whatever_its_content_type(content_type: bytes | None) -> None:
+    # The counterpart: a table create buffers its body whatever its header names, so it IS gated by the cap.
     async def scenario() -> int:
         release = asyncio.Event()
         entered = asyncio.Event()
 
-        async def app(_scope_: Scope, _receive: Receive, send: Send) -> None:
-            entered.set()
-            await release.wait()
+        async def app(scope: Scope, _receive: Receive, send: Send) -> None:
+            if str(scope["path"]).endswith("/insert"):
+                entered.set()
+                await release.wait()  # hold the only slot
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b""})
 
         mw = WriteConcurrencyLimitMiddleware(app, max_concurrent=1)
         t1 = asyncio.create_task(_drive(mw, _write("/v1/table/t/insert")))
         await entered.wait()
-        code = await _drive(mw, _write("/v1/table/t2/create"))  # Arrow create over the cap → shed
+        code = await _drive(mw, _scope("POST", "/v1/table/t2/create", content_type))  # a create over the cap → shed
         release.set()
         await t1
         return code

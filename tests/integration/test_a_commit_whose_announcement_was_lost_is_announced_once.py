@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -51,6 +51,8 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi import Body, FastAPI, Response
 from lance.fragment import write_fragments
+from lance.namespace import DirectoryNamespace
+from lance_namespace import DescribeTableRequest, DescribeTableResponse, InternalError, PermissionDeniedError
 
 from tests.integration.lineage_app import live_catalog, live_lineage, serve
 from tests.loopback import free_port
@@ -197,6 +199,42 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
             with live_lineage(catalog_url, monkeypatch, port=free_port()) as lineage_url, httpx.Client(base_url=lineage_url, timeout=60) as lineage:
                 gate.lineage = lineage_url
                 assert _commits(_follow(lineage), "db$t") == [], "the writes' own announcements reached the feed, so none was lost"
+
+                # The feed, then the table, described while the store does not answer: the tick announces nothing, counts the
+                # failure and logs its cause, and never reads an unanswered describe as a feed or a table that is not there.
+                # A table its warehouse's deactivation quarantines (the resolver's PermissionDenied) is no live table: the
+                # tick neither announces it nor counts it as a read it could not make.
+                real_describe = DirectoryNamespace.describe_table
+
+                def failing(described: list[str], error: Exception) -> Callable[[DirectoryNamespace, DescribeTableRequest], DescribeTableResponse]:
+                    def describe(ns: DirectoryNamespace, request: DescribeTableRequest) -> DescribeTableResponse:
+                        if list(request.id or []) == described:
+                            raise error
+                        return real_describe(ns, request)
+
+                    return describe
+
+                outage = InternalError('IO { source: Generic { store: "S3", source: RetryError { inner: Status { status: 503 } } } }')
+                unannounced: list[dict[str, Any]] = []
+                for described, error, events in (
+                    (["provenance", "events"], outage, ["commit_reconcile_feed_unreadable"]),
+                    (["db", "t"], outage, ["commit_reconcile_table_unreadable"]),
+                    (["db", "t"], PermissionDeniedError("warehouse 'wh' is deactivated"), []),
+                ):
+                    monkeypatch.setattr(DirectoryNamespace, "describe_table", failing(described, error))
+                    with caplog.at_level(logging.ERROR, logger="catalog.api.commit_reconcile"):
+                        unannounced.append(catalog.post(f"/{_TICK}").json())
+                    monkeypatch.setattr(DirectoryNamespace, "describe_table", real_describe)
+                    logged = [
+                        (record.getMessage(), "503" in str(getattr(record, "error", "")))
+                        for record in caplog.records
+                        if record.name == "catalog.api.commit_reconcile"
+                    ]
+                    assert logged == [(event, True) for event in events], logged
+                    caplog.clear()
+                assert [(tick["skipped"], tick["reannounced"], tick["unreadable"]) for tick in unannounced] == [(True, 0, 1), (False, 0, 1), (False, 0, 0)], (
+                    unannounced
+                )
 
                 # A retained version the store fails to open once: the tick keeps the ref's mark, and skips nothing for it.
                 real_checkout = lance.LanceDataset.checkout_version

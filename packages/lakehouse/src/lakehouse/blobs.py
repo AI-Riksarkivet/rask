@@ -18,8 +18,10 @@ import logging
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+from lance_namespace import ServiceUnavailableError
 
 from lakehouse.lancekit.blobs import BLOB_V2_EXTENSION_NAME, blob_descriptors, blob_field_names, holds_blob, is_blob_field, nested_fields, schema_has_blob
+from lakehouse.outage import reads_as_store_outage
 
 
 #: Re-exported deliberately: callers import these FROM here and the names are part of this module's
@@ -120,6 +122,13 @@ def blob_column_resolves(ds: lance.LanceDataset, column: str) -> bool:
     scrubber's job. Zero-length/null payloads resolve trivially — through pylance 9 ``take_blobs`` returned no
     handle for them at all; from 10.0.0 it returns ``None`` in that slot, which the loop skips. An EMPTY dataset
     resolves trivially too (nothing to probe).
+
+    A probe the store did not answer says nothing about the payload, so it is raised as the outage it is rather than
+    answered dangling: a dangling column refuses a promotion as a data defect no review can wave through, while an
+    outage is a 503 the caller retries ([[LH-572]]).
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a probe (:func:`lakehouse.outage.reads_as_store_outage`).
     """
     rows = ds.count_rows()
     if rows == 0:
@@ -140,6 +149,8 @@ def blob_column_resolves(ds: lance.LanceDataset, column: str) -> bool:
                 if handle.size() > 0:
                     handle.read_range(0, 1)
     except Exception as exc:
+        if reads_as_store_outage(exc):
+            raise ServiceUnavailableError(f"the store did not answer the probe of blob column {column!r}'s payload: {exc}") from exc
         log.warning("blob_resolve_failed", extra={"column": column, "error": str(exc)})
         return False
     return True

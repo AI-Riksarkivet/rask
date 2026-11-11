@@ -141,7 +141,7 @@ def test_an_unreadable_binding_refuses_rather_than_reporting_a_partial_estate(tm
     """Fail-CLOSED, matching the per-warehouse sibling. Answering with the tolerant reader would put
     an invisible bound namespace back — a 200 with one silently missing, which the page's
     read-failed channel cannot see because nothing failed."""
-    from lance_namespace import ServiceUnavailableError
+    from lance_namespace import InternalError
 
     settings = _settings(tmp_path)
     _seed(settings, warehouse_id="ok-wh", bindings=("fine",))
@@ -150,5 +150,5 @@ def test_an_unreadable_binding_refuses_rather_than_reporting_a_partial_estate(tm
     with fs.open_output_stream(f"{base}/_warehouses/bindings/broken.json") as stream:
         stream.write(b"{not json")
 
-    with pytest.raises(ServiceUnavailableError, match="could not be read"):
+    with pytest.raises(InternalError, match="cannot be read as one"):
         _estate(settings)

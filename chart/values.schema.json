@@ -1516,6 +1516,10 @@
                 }
             }
         },
+        "readOnlyWindow": {
+            "description": "Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its cron ticks, maintenance's worker takes no task, and lineage's relay pauses. Flipping it rolls the three services.",
+            "type": "boolean"
+        },
         "resources": {
             "type": "object",
             "properties": {

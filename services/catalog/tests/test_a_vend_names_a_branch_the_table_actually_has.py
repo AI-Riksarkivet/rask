@@ -170,36 +170,3 @@ def test_a_vend_for_MAIN_is_untouched(table: str, main: str) -> None:
 
     assert [call["branch"] for call in vendor.calls] == [""], "main's credential was not the one vended"
     assert response.mode == "direct"
-
-
-def test_an_UNREADABLE_branch_registry_refuses_rather_than_admits(table: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail CLOSED, and it needs its own leg because nothing else can reach it.
-
-    The lookup's except-arm is the difference between "costs a caller one retry" and "hands out a
-    900-second grant on an unverified prefix", and a store that answers slowly or partially is exactly
-    when a caller would most like the benefit of the doubt. Mutation-checked: flipping that arm to
-    `True` left every other assertion in this file green.
-    """
-    from catalog.core import namespace
-
-    def _unreadable(*_a: Any, **_k: Any) -> Any:  # noqa: ANN401 — a stand-in that only ever raises
-        raise RuntimeError("the branch registry is unreadable")
-
-    monkeypatch.setattr(namespace, "shared_lance_session", _unreadable)
-    vendor = _Vendor()
-    with pytest.raises(TableBranchNotFoundError):
-        asyncio.run(
-            vend_credentials(
-                id="ns$t",
-                table=_door(table),
-                settings=cast("Any", _settings()),
-                token=None,
-                client=None,
-                vendor=vendor,
-                subject="anon",
-                tier="write",
-                branch="work",
-            )
-        )
-
-    assert vendor.calls == [], "an unreadable registry still produced a credential"

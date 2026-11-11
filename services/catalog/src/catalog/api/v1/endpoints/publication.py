@@ -59,6 +59,7 @@ from lakehouse import commit_records
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.outage import store_refusal
 from lakehouse.records import RecordChangedError
 from lakehouse.storage_options import StorageOptions
 
@@ -210,21 +211,22 @@ log = logging.getLogger(__name__)
 
 
 async def _project_from_binding(settings: Settings, so: StorageOptions, top_ns: str) -> str | None:
-    """The tenant from the warehouse binding, SWALLOWING failure — the emitter's own contract.
+    """The tenant from the warehouse binding, or ``None`` for a namespace bound to no project, whose publish the request's
+    own gate governs.
 
-    Swallowing is not defensive padding here, it is the property this fallback has to preserve. The
-    emitter states it outright: resolution "cannot raise", so a registry blip costs the watchers their
-    tenant and never costs the caller their request. A fallback that raised would turn an unreachable
-    or absent registry into a failed publish — which is strictly worse than the defect it was added to
-    fix, because it converts a silently weaker gate into a broken door.
+    A REGISTRY THAT CANNOT BE READ REFUSES THE PUBLISH ([[LH-572]]): read as no tenant, the declaration the project made
+    would not be consulted, and the request's own gate, the weakest a writer can name, would publish in its place. The
+    emitter's own resolution swallows its failures, since a lost tenant there costs watchers a notification; here the
+    tenant decides which gate a version is judged by.
 
-    `None` degrades to exactly the pre-existing behaviour: the request's own gate governs.
+    Raises:
+        ServiceUnavailableError: The store did not answer the read of the binding or the warehouse record it names.
+        InternalError: The binding or the warehouse record is there and cannot be read as one.
     """
     try:
         return await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, so, top_ns)
-    except Exception:
-        log.debug("gate project resolution failed for %r — the request's own gate governs", top_ns, exc_info=True)
-        return None
+    except (OSError, ValueError) as exc:
+        raise store_refusal(exc, reading=f"reading the project namespace {top_ns!r} is bound to", so="its declared gate cannot be found") from exc
 
 
 async def resolve_effective_gate(
@@ -243,8 +245,9 @@ async def resolve_effective_gate(
 
     The project comes from the same request-scoped binding `publication_extra` names the tenant with,
     for the same reason: `CONTROL_ID_PATTERN` permits `-` inside a project id, so no string rule recovers
-    `acme` from `acme-bronze`, and a declaration is keyed by project. An unresolvable binding leaves
-    the request governing — there is no declaration to find without a project id.
+    `acme` from `acme-bronze`, and a declaration is keyed by project. A namespace bound to no project leaves the request
+    governing, since there is no declaration to find without a project id; a binding or a declaration that cannot be
+    read refuses ([[LH-572]]).
     """
     # THE EMITTER FIRST, THE BINDING AS THE FLOOR — and the floor is the fix.
     #

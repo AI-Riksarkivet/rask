@@ -18,10 +18,11 @@ A table or namespace record also keeps the object's name under ``id``, as it was
 display. Resolution order (:func:`resolve_policy`): a table policy wins over the nearest namespace policy wins
 over a project policy wins over the sweep's global defaults.
 
-Trust boundary: like the warehouse registry, records are trusted as written — the write path is the
-catalog's owner-gated API, and a principal with direct write access to the control bucket is already
-inside the storage trust boundary. A drop or deregister ends a table's record through
-:mod:`lakehouse.object_records`.
+Trust boundary: like the warehouse registry, who wrote a record is trusted — the write path is the catalog's
+owner-gated API, and a principal with direct write access to the control bucket is already inside the storage trust
+boundary. What a record says is not: a record that reached the store past the door is read back strictly
+(:class:`PolicySettings`), and one that cannot be read refuses what it governs rather than letting the defaults govern
+it. A drop or deregister ends a table's record through :mod:`lakehouse.object_records`.
 
 Fields: ``retention_days`` / ``retain_versions`` (old-version cleanup overrides — Lance itself exempts
 tag-pinned versions from cleanup, so ``published`` and every other tag survive any policy), ``compact_enabled``
@@ -37,10 +38,12 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Final
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 from lakehouse import stored_objects, warehouse_records
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, read_record, record_key
 from lakehouse.storage import split_s3_uri
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, on_s3
 
 
 log = logging.getLogger(__name__)
@@ -134,8 +137,53 @@ def resolve_policy(records: list[dict[str, Any]], uri: str, *, table_uuid: str, 
 
 
 class UnreadablePolicyError(RuntimeError):
-    """A policy record that may govern a table exists and cannot be read, or the store did not answer its read: whether it
-    keeps the table's history is unknown, so nothing that would reclaim it may be decided."""
+    """A policy record that may govern a table could not be read, so whether it keeps the table's history is unknown and
+    nothing that would reclaim it may be decided. Raised as itself when the store did not answer the read, which a later
+    read may get past; :class:`MalformedPolicyError` when the record is there and cannot be read as a policy."""
+
+
+class MalformedPolicyError(UnreadablePolicyError):
+    """A policy record that may govern a table is there and cannot be read as a policy: not JSON, not a record of its kind
+    and key, or a setting no value of its type reads (``retention_days: "30d"``). It may be a legal hold, and no later
+    read changes it until someone writes the record again."""
+
+
+class PolicySettings(BaseModel):
+    """What a stored policy record tells maintenance, parsed strictly: every reader of a setting reads it here, each time
+    it reads one (:func:`policy_settings`), so no reader takes a setting the strict parse would refuse.
+
+    A record reaches the store through the catalog's policy door, which types it (``catalog.schemas.PolicyRequest``), or
+    past it: written by hand, by an older build, or by the catalog's own boot step. So the record is parsed again on the
+    way out, with the door's types, and a value they refuse is a record that cannot be read, never a default:
+    ``bool("false")`` is true, and a hold written ``cleanup_enabled: "false"`` read that way would be no hold. Pydantic's
+    lax mode reads ``"false"``, ``"no"`` and ``0`` as false and ``"30"`` as 30, and refuses ``"30d"`` and ``"maybe"``.
+    Of the door's bounds only the floors are kept, each a value below which the setting has no meaning (a retention of
+    no days, a cadence of no hours, a fragment of no rows); its ceilings are the door's to keep for what it is asked.
+    The record's own identity (``kind``, ``id``, ``uuid``, ``buckets``) and the settings only the catalog reads are not
+    maintenance's, and are left to their readers.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    retention_days: int | None = Field(default=None, ge=1)
+    retain_versions: int | None = Field(default=None, ge=1)
+    cleanup_enabled: bool = True
+    compact_enabled: bool = True
+    optimize_indices_enabled: bool = True
+    compact_interval_hours: int | None = Field(default=None, ge=1)
+    target_rows_per_fragment: int | None = Field(default=None, ge=1)
+
+
+def policy_settings(record: dict[str, Any]) -> PolicySettings:
+    """The settings the policy ``record`` holds.
+
+    Raises:
+        MalformedPolicyError: A setting holds a value its type and bounds refuse.
+    """
+    try:
+        return PolicySettings.model_validate(record)
+    except ValidationError as exc:
+        raise MalformedPolicyError(f"the {record.get('kind')} policy record {record.get('uuid') or record.get('id')} cannot be read as one: {exc}") from exc
 
 
 def governing_policy(
@@ -151,11 +199,13 @@ def governing_policy(
     apart from its policies.
 
     Each record is read by its key, so what this costs is the table's depth, never the estate's policies. STRICT: a record
-    that is there and cannot be read, and a read the store fails, raise, since the record may be a legal hold, and a
-    caller that went on without it would reclaim history its owner kept.
+    that is there and cannot be read as a policy, and a read the store fails, raise, since the record may be a legal hold,
+    and a caller that went on without it would reclaim history its owner kept. A record that is returned holds settings
+    :func:`policy_settings` reads.
 
     Raises:
-        UnreadablePolicyError: A record, or the claim naming the bucket's project, cannot be read.
+        MalformedPolicyError: A record, or the claim naming the bucket's project, is there and cannot be read as one.
+        UnreadablePolicyError: The store failed a read.
     """
     try:
         if (own := _keyed(control_root, storage_options, "table", table_uuid)) is not None:
@@ -163,11 +213,13 @@ def governing_policy(
         for namespace_uuid in reversed(namespace_uuids):
             if (nearest := _keyed(control_root, storage_options, "namespace", namespace_uuid)) is not None:
                 return nearest
-        bucket = split_s3_uri(location)[0] if location.startswith("s3://") else ""
+        bucket = split_s3_uri(location)[0] if on_s3(location) else ""
         project = warehouse_records.bucket_project(claims_root, storage_options, bucket) if bucket else None
         tenant = _keyed(control_root, storage_options, "project", project) if project is not None else None
-    except (OSError, ValueError) as exc:
+    except OSError as exc:
         raise UnreadablePolicyError(f"a maintenance policy that may govern the table {table_uuid} could not be read: {exc}") from exc
+    except ValueError as exc:
+        raise MalformedPolicyError(f"a maintenance policy that may govern the table {table_uuid} cannot be read as one: {exc}") from exc
     return tenant if tenant is not None and bucket in (tenant.get("buckets") or []) else None
 
 
@@ -176,6 +228,7 @@ def _keyed(control_root: str, storage_options: StorageOptions, kind: str, key: s
 
     Raises:
         ValueError: The stored record is not a policy record of ``kind`` for ``key``.
+        MalformedPolicyError: A setting the record holds is one :class:`PolicySettings` refuses.
         OSError: The store failed the read.
     """
     record = read_record(control_root, storage_options, record_key(PREFIX, kind, key))
@@ -183,13 +236,18 @@ def _keyed(control_root: str, storage_options: StorageOptions, kind: str, key: s
         return None
     if record.get("kind") != kind or not _record_is_well_formed(record) or policy_key(record) != key:
         raise ValueError(f"the {kind} policy record stored for {key} is not one")
+    policy_settings(record)
     return record
 
 
 def keeps_whole_history(policy: dict[str, Any] | None) -> bool:
     """Whether the resolved ``policy`` keeps the whole version history of what it governs (``cleanup_enabled`` false: a
-    legal hold, or a time-travel window that is the product), so nothing of that history is reclaimed."""
-    return policy is not None and not bool(policy.get("cleanup_enabled", True))
+    legal hold, or a time-travel window that is the product), so nothing of that history is reclaimed.
+
+    Raises:
+        MalformedPolicyError: The record's settings cannot be read, so whether it is a hold is unknown.
+    """
+    return policy is not None and not policy_settings(policy).cleanup_enabled
 
 
 def _by_uuid(records: list[dict[str, Any]], kind: str) -> dict[str, dict[str, Any]]:

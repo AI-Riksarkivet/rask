@@ -1004,7 +1004,8 @@ export interface paths {
          * @description This project's declared gate, or ``null`` when the chart's settings still govern.
          *
          *     ``null`` rather than a populated default: a caller must be able to tell "nothing is declared" —
-         *     where a `helm upgrade` is still the only lever — from "declared, and these are the values".
+         *     where a `helm upgrade` is still the only lever — from "declared, and these are the values". A declaration that cannot
+         *     be read is neither, so it is refused as the publish refuses it ([[LH-572]]).
          */
         post: operations["describe_gate_management_v1_project__id__gate_describe_post"];
         delete?: never;

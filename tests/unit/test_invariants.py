@@ -759,6 +759,26 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
         assert value.lower() in {"true", "1"}, f"docs.enabled=true left {workload} at {var}={value} — a knob that cannot open is a deletion"
 
 
+#: Every lakehouse workload and the env var its own settings read the read-only window from, one per settings prefix.
+_READ_ONLY_ENV_BY_COMPONENT: dict[str, str] = {
+    "catalog": "LANCE_MAINTENANCE_READ_ONLY",
+    "lineage": "LINEAGE_READ_ONLY",
+    "maintenance": "MAINTENANCE_READ_ONLY",
+    "maintenance-worker": "MAINTENANCE_READ_ONLY",
+}
+
+
+@pytest.mark.parametrize(("window", "rendered"), [pytest.param((), "false", id="default-off"), pytest.param(("readOnlyWindow=true",), "true", id="on")])
+def test_the_one_read_only_window_reaches_every_lakehouse_service(window: tuple[str, ...], rendered: str) -> None:
+    """One value in git puts the whole lakehouse in a read-only window: the catalog's doors and cron ticks, maintenance's
+    worker and lineage's relay each read it from their own env, so a window set for one alone leaves the others writing."""
+    docs = _rendered_docs(*window)
+
+    assert {component: _env_by_component(docs, component).get(var) for component, var in _READ_ONLY_ENV_BY_COMPONENT.items()} == dict.fromkeys(
+        _READ_ONLY_ENV_BY_COMPONENT, rendered
+    )
+
+
 #: Deployments this gate does NOT cover, enumerated from an actual render rather than guessed.
 #: Matched as substrings of the rendered name, like the sibling gates in this file.
 #:

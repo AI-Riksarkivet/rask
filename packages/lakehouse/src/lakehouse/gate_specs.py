@@ -26,15 +26,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 
-
-log = logging.getLogger(__name__)
 
 #: Where the records live, relative to the control root.
 GATES_PREFIX = "_gates"
@@ -120,6 +117,10 @@ def get_spec(control_root: str, storage_options: StorageOptions, project: str) -
 
     ``None`` rather than a populated default is the contract: the caller must be able to tell
     "unset" from "set to these values", because unset means the chart's settings still govern.
+
+    Raises:
+        ValueError: The record does not read as a gate, which is not the same as no record ([[LH-572]]).
+        OSError: The store failed the read.
     """
     fs, base = fs_and_base(control_root, storage_options)
     try:
@@ -141,15 +142,16 @@ def delete_spec(control_root: str, storage_options: StorageOptions, project: str
     return True
 
 
-def _parse(raw: str, *, path: str) -> GateSpec | None:
-    """A record this build cannot read is skipped, LOUDLY, never raised.
+def _parse(raw: str, *, path: str) -> GateSpec:
+    """The gate the record at ``path`` declares.
 
-    A single unreadable document must not take down the gate for a whole estate — the medallion
-    falls back to the chart's settings, which is the honest behaviour for "the declaration could not
-    be read". Logged at ERROR because it is a real defect, just not one worth failing a run over.
+    A declaration that cannot be read is no gate the project chose to drop: read as none, the request's own values would
+    govern a project that declared stricter ones, so it raises and its reader refuses ([[LH-572]]).
+
+    Raises:
+        ValueError: The record does not read as a gate.
     """
     try:
         return GateSpec.model_validate(json.loads(raw))
-    except (ValueError, TypeError):
-        log.exception("gate_spec_unreadable", extra={"path": path})
-        return None
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"the gate record at {path} does not read as a gate") from exc

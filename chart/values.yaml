@@ -39,6 +39,15 @@ docs:
   # -- Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster.
   enabled: false
 
+# THE LAKEHOUSE'S READ-ONLY WINDOW, for a migration that needs nothing written while it runs (flip on, migrate, flip
+# off). One value, rendered into every service's own setting: the catalog (LANCE_MAINTENANCE_READ_ONLY) refuses every
+# write at its doors with 503 + Retry-After, vends no credential above the read tier and answers its cron ticks doing
+# nothing; maintenance's worker (MAINTENANCE_READ_ONLY) takes no task, leaving each queued; lineage (LINEAGE_READ_ONLY)
+# answers its relay tick doing nothing. Reads are served throughout. It reaches a pod as env, so flipping it rolls the
+# catalog, lineage and maintenance Deployments.
+# -- Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its cron ticks, maintenance's worker takes no task, and lineage's relay pauses. Flipping it rolls the three services.
+readOnlyWindow: false
+
 # Per-service definitions: the lakehouse apps (catalog, lineage), rendered by templates/services.yaml, which reads
 # .Values.services.catalog / .Values.services.lineage by NAME.
 # The peers whose `x-forwarded-*` headers uvicorn may believe, for every pod the cluster route reaches

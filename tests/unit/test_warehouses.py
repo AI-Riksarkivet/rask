@@ -12,10 +12,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
+import boto3
 import pytest
 from botocore.exceptions import ClientError
-from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
+from lance_namespace import InternalError, InvalidInputError, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
+from moto.server import ThreadedMotoServer
+from pydantic import SecretStr
 
 from catalog.api import dependencies, fga_deps
 from catalog.core.config import Settings
@@ -26,7 +30,10 @@ from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
+from tests.integration.store_requests import counted
 
 
 def _root(tmp_path: Any) -> str:
@@ -551,9 +558,32 @@ def test_an_unreadable_binding_refuses_rather_than_reporting_an_empty_warehouse(
     assert warehouses.namespaces_bound_to(root, so, "wh-a") == ["bronze"]
 
     (tmp_path / "_warehouses" / "bindings" / "silver.json").write_text("{ this is not json")
-    with pytest.raises(ServiceUnavailableError) as exc:
+    with pytest.raises(InternalError) as exc:
         warehouses.namespaces_bound_to(root, so, "wh-a")
     # The refusal names the unreadable object — an operator cannot fix what the error will not identify.
     assert "silver.json" in str(exc.value)
     # …and the tolerant listing still serves, because a broken binding must not black out enumeration.
     assert [b["top_ns"] for b in warehouses.list_bindings(root, so)] == ["bronze"]
+
+
+def test_a_binding_the_store_does_not_serve_is_an_outage_never_a_record_to_skip() -> None:
+    """A record the store did not answer says nothing about the record, so the reader raises the outage (503, code 17),
+    tolerant listing or strict, where it skips one that is there and cannot be read as one ([[LH-572]]): skipped, it
+    would read as a corrupt record no retry mends. Over a real S3 server, whose GET of the binding answers 503."""
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    try:
+        host, port = server.get_host_and_port()
+        moto = f"http://{host}:{port}"
+        bucket = f"reg-{uuid4().hex[:8]}"
+        boto3.client("s3", endpoint_url=moto, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
+        with counted(moto) as store:
+            so = lance_storage_options(store.url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
+            warehouses.bind_namespace(f"s3://{bucket}", so, "bronze", "wh-a", "s3://bkt-a")
+            with (
+                store.answering_unavailable(lambda request: request.method == "GET" and request.path.endswith("/bindings/bronze.json")),
+                pytest.raises(ServiceUnavailableError, match="did not answer"),
+            ):
+                warehouses.list_bindings(f"s3://{bucket}", so)
+    finally:
+        server.stop()

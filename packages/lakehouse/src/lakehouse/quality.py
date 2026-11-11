@@ -142,6 +142,10 @@ def assert_quality(
 
     The tabular checks use ``count_rows`` (with a filter for the null check) so the table is never
     materialised; the blob check reads ONE byte from the first and last rows' payloads per column.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a blob probe, which says nothing about the payload
+            (:func:`lakehouse.blobs.blob_column_resolves`).
     """
     ds = lance.dataset(uri, version=version, storage_options=storage_options.in_clear(), session=session)
     assertions = [Assertion(assertion=ROW_COUNT_POSITIVE, success=ds.count_rows() > 0)]

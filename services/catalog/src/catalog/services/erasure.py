@@ -492,7 +492,12 @@ def _drop_subject_tags(report: ErasureReport, dataset: _Dataset, *, every_head_c
     independently, so judging a `work` tag by main's same-numbered version would keep a tag pinning the subject and drop
     a clean one.
     """
-    for name, reference in _tags(dataset).items():
+    tags = _tags(dataset)
+    if tags is None:
+        detail = "the tag list could not be read, so no tag was judged or dropped, and one may still pin the subject"
+        report.surfaces.append(SurfaceResult(surface="tags", outcome="failed", detail=detail))
+        return
+    for name, reference in tags.items():
         if name.startswith(clone_sources.TAG_PREFIX):
             # A registered clone reads this version through the table's files (ADR 0198 §1): dropping the tag would let a
             # cleanup take files the clone has no other copy of, so the clone's own end releases it.
@@ -671,7 +676,9 @@ def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[
     # Re-listed AFTER step 4, so these are the survivors: a tag whose delete failed holds its version
     # exactly as hard as a branch does.
     forks = {name: fork for name, fork in current.items() if fork is not None}
-    tags = _tags(history.cold)
+    listed_tags = _tags(history.cold)
+    found.tags_unlisted = listed_tags is None
+    tags = listed_tags or {}
     report.surfaces.extend(
         SurfaceResult(surface=f"dangling:{name}", outcome="dangling", detail=_dangling_detail(_holders(_parse(name), history, forks, tags)))
         for name in found.dangling
@@ -679,12 +686,12 @@ def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[
     account = _account(found.residual, found.hidden, found.indexed, history, forks, tags)
     account.unforked = sorted(name for name, fork in current.items() if fork is None) if found.residual else []
     report.pinned_by, report.held_by_retention = account.pins, account.held_by_retention
-    if found.residual or found.unlisted or found.relist_failed:
+    if found.residual or found.unlisted or found.relist_failed or found.tags_unlisted:
         log.warning("erasure_incomplete", extra={"table": report.table, "versions": found.residual, "unlisted": found.unlisted})
         report.surfaces.append(SurfaceResult(surface="verify", outcome="failed", detail=_verify_detail(found, account)))
     else:
         report.surfaces.append(SurfaceResult(surface="verify", outcome="clean"))
-    return not (found.unlisted or found.relist_failed or account.unsettled)
+    return not (found.unlisted or found.relist_failed or found.tags_unlisted or account.unsettled)
 
 
 class _Verification(BaseModel):
@@ -705,6 +712,8 @@ class _Verification(BaseModel):
     unlisted: list[str] = Field(default_factory=list)
     #: The branch list could not be read again for the verification, so a branch cut meanwhile was not.
     relist_failed: bool = False
+    #: The tag list could not be read for the verification, so a tag pinning a residual was not named.
+    tags_unlisted: bool = False
     #: Branches listed for the verification that step 1 did not list: nothing deleted from them.
     late: list[str] = Field(default_factory=list)
 
@@ -1180,6 +1189,8 @@ def _verify_detail(found: _Verification, account: _Account) -> str:
         parts.append(f"the versions of {found.unlisted} could not be listed")
     if found.relist_failed:
         parts.append("the branch list could not be read again, so a branch cut during the verification was not verified")
+    if found.tags_unlisted:
+        parts.append("the tag list could not be read, so a tag pinning what is left was not named: verify again")
     if found.late:
         parts.append(f"{found.late} appeared during the verification: verify again")
     if account.pins:
@@ -1419,18 +1430,21 @@ def _branches(dataset: _Dataset) -> dict[str, _Reference | None] | None:
     return {str(name): None for name in (listed or [])}
 
 
-def _tags(dataset: _Dataset) -> dict[str, _Reference | None]:
-    """Every tag on this table mapped to the version it pins, ON THE BRANCH IT NAMES.
+def _tags(dataset: _Dataset) -> dict[str, _Reference | None] | None:
+    """Every tag on this table mapped to the version it pins, ON THE BRANCH IT NAMES; None when unlisted.
 
     `tags.list()` is root-scoped: from any handle it answers every branch's tags, each carrying the
     `branch` it names (`null` for main — ``lance_docs/lance/format/table/branch_tag.md`` "Tag File Format"). `None` marks
     one this cannot read, which the caller resolves against the tag rather than in its favour.
+
+    An unreadable tag list is None rather than `{}`, as an unreadable branch list is (:func:`_branches`): a tag no one
+    could name may pin a version holding the subject, so the caller records a failed surface rather than no tags.
     """
     try:
         listed = dataset.tags.list()
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_tag_list_failed", extra={"error": str(exc)})
-        return {}
+        return None
     if isinstance(listed, Mapping):
         return {str(name): _reference(meta, branch_key="branch", version_key="version") for name, meta in listed.items()}
     return {str(name): None for name in (listed or [])}
