@@ -80,10 +80,21 @@ def _ids(client: lance_namespace.LanceNamespace, table_id: list[str]) -> list[in
 
 
 def _versions_once_gone(client: lance_namespace.LanceNamespace, table_id: list[str], gone: set[int]) -> set[int]:
-    """The table's versions, read until none of ``gone`` is among them or a commit's pass has had its time."""
+    """The table's versions, read until none of ``gone`` is among them or a commit's pass has had its time.
+
+    pylance lists ``_versions/`` and then reads each manifest it listed, so a reading that lands inside the expiry names
+    a manifest the expiry deletes before it is read (measured on the e2e stack, 2026-11-11: ``ValueError: Not found:
+    <table>/_versions/<n>.manifest``). That reading is taken again, within the same deadline.
+    """
     deadline = time.monotonic() + scenario.COMMIT_PASS_SECONDS
     while True:
-        versions = {int(listed["version"]) for listed in lance.dataset(namespace_client=client, table_id=table_id).versions()}
+        try:
+            versions = {int(listed["version"]) for listed in lance.dataset(namespace_client=client, table_id=table_id).versions()}
+        except ValueError as raced:
+            if "/_versions/" not in str(raced) or time.monotonic() > deadline:
+                raise
+            time.sleep(1)
+            continue
         if gone.isdisjoint(versions) or time.monotonic() > deadline:
             return versions
         time.sleep(5)
