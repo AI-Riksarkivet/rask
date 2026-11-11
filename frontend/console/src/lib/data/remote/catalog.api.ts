@@ -2,8 +2,10 @@ import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '#lib/api/client.ts';
+import { parse } from '#lib/api/index.ts';
 import {
 	DeclareTableResponseSchema,
+	TableDescribeSchema,
 	DeleteRowsResponseSchema,
 	RenameTableResponseSchema,
 	TableLifecycleResponseSchema,
@@ -85,7 +87,7 @@ export const fetchTables = query(async (): Promise<ApiResult<TablesList>> =>
 /** `TrashEntry[]` — what is SCHEDULED against one table (#75/§2.4). Today that is exactly one thing:
  *  a pending undrop deadline. Reader-tier at the catalog, so an owner can see the clock they are
  *  racing — a deadline nobody can read is not a safety feature. */
-const TrashEntrySchema = v.object({
+export const TrashEntrySchema = v.object({
 	id: v.string(),
 	location: v.string(),
 	dropped_by: v.string(),
@@ -160,6 +162,26 @@ export const fetchTableDetail = query(
 				}
 				return { ok: false, status: describe.status, detail };
 			}
+			// A drift from the describe contract throws here and answers the 502 below.
+			const described = parse(TableDescribeSchema, await describe.json());
+			// A declared table holds no dataset, and every door that reads one answers it 404
+			// ("table has no readable dataset at its declared location"). The describe says so itself,
+			// so none of them is asked.
+			if (described.is_only_declared === true) {
+				return {
+					ok: true,
+					data: {
+						describe: described,
+						stats: null,
+						versions: null,
+						tags: null,
+						branches: null,
+						indexes: null,
+						policy: null,
+						declared: true,
+					},
+				};
+			}
 			const [stats, versions, tags, branches, indexes, policy] = await Promise.all([
 				read('stats').then(part),
 				read('version/list').then(part),
@@ -171,7 +193,7 @@ export const fetchTableDetail = query(
 			return {
 				ok: true,
 				data: {
-					describe: await describe.json(),
+					describe: described,
 					stats,
 					versions,
 					tags,

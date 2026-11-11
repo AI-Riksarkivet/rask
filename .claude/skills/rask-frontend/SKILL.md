@@ -93,9 +93,9 @@ index loads a filtered list shows its loading state; when it failed, `ProjectFil
 the filter, with no rows. A project's page (`/projects/[project]`) links each list filtered to it.
 
 **The audit and streams pages cannot work.** They need the platform's telemetry store and the NATS monitor (`/jsz`),
-which no Gateway route serves to a browser; the owner kept them anyway (2026-11-04), so `audit.api.ts` and
-`jetstream.api.ts` answer with that failure, naming what is missing, without a request. So do the doors the catalog does not serve:
-`#lib/storage/remote/storage.api.ts` (the stores-by-tier registry and its attach write) answers an honest 501 with a
+which no Gateway route serves to a browser; the owner kept them anyway (2026-11-04): the audit page says where the trail
+lives and offers no filter, and `jetstream.api.ts` answers with that failure, naming what is missing, without a request. So
+do the doors the catalog does not serve: `#lib/storage/remote/storage.api.ts` (the stores-by-tier registry) answers an honest 501 with a
 `detail` naming what no door keeps, and the storage page renders that refusal ("The stores registry is unavailable (HTTP 501) — …"). The e2e mocks
 serve only doors that exist. Promotions read the catalog's own doors:
 `GET /management/v1/promotions` for the open holds, and `POST /management/v1/table/{id}/promotion/{approve,reject}` for a
@@ -191,10 +191,17 @@ from or sent to a service. The bell and its panel are `@rask/ui`'s `shell/activi
 callbacks (`@rask/ui` imports nothing from the console): the badge counts entries since the panel was last opened, and
 the panel lists newest first, grouped by day, and can clear the log.
 
+**A principal is shown by its full id, with a copy control** (`#lib/access/identity`'s `Subject`): the console has no
+directory to resolve an id against, so the id is what a person reads and pastes into a grant. **A moment prints as
+`YYYY-MM-DD HH:mm:ss UTC+01:00`** (`@rask/ui/utils`' `formatZoned`) on every list of them, the bell and the events feed
+included.
+
 **Liveness rides cursors, not timers.** `#lib/live/tick.svelte.ts` wraps the shared `lineageFeed`/`controlCursor` streams
 of `feeds.api.ts` as `lineageTick`/`controlTick`, read through `liveRead` (`#lib/api/live.svelte.ts`), which opens on mount and
 treats a cursor's arrival as no change. Data mutations move the lineage cursor; governance mutations (grants,
-warehouses, tenants) move the control cursor. A timer is right only when nothing publishes the change (a liveness probe)
+warehouses, tenants) move the control cursor. The control cursor polls only while the root layout's `me` is an estate admin (`isEstateAdmin`,
+`#lib/estate-admin.ts`, the one rule): the catalog refuses everyone else (`can_observe_events` on the estate root), so
+another reader's pages read on mount and after their own writes. A timer is right only when nothing publishes the change (a liveness probe)
 or time itself is the change (a countdown).
 
 ## The workbench — `horizon-layout`

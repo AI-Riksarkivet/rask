@@ -12,6 +12,8 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { deregisterTable, dropTable, renameTable } from '../remote/catalog.api';
+	import { dropRecoveryText } from '../drop-recovery';
+	import { DropRecoveryRead } from '../drop-recovery-read.svelte.ts';
 
 	let { table }: { table: string } = $props();
 
@@ -23,10 +25,16 @@
 	// The `<ns>$` prefix the renamed table keeps — this form renames within the table's own namespace.
 	const nsPrefix = $derived(namespacePrefix(table));
 
+	// What this drop would leave recoverable, read from the table's warehouse when the dialog opens.
+	const recovery = new DropRecoveryRead();
+
 	function openDanger(action: 'drop' | 'deregister'): void {
 		dangerAction = action;
 		dangerError = null;
 		dangerOpen = true;
+		if (action === 'drop') {
+			void recovery.load(table);
+		}
 	}
 
 	function dangerFail(action: string, status: number, detail: string): void {
@@ -121,8 +129,8 @@
 		</button>
 	</div>
 	<p class="mut">
-		Deregister detaches the table from the catalog (data stays on storage); drop deletes it
-		permanently.
+		Deregister detaches the table from the catalog (data stays on storage); drop deletes it, and its
+		warehouse decides for how long it stays recoverable.
 	</p>
 	{#if dangerError}<p class="error">{dangerError}</p>{/if}
 </section>
@@ -137,8 +145,10 @@
 				This detaches <span class="mono">{table}</span> from the catalog (owner-gated: can_deregister).
 				The data stays on storage, but the catalog forgets the id and its grants are revoked.
 			{:else}
-				This permanently drops <span class="mono">{table}</span> and its data (owner-gated: can_drop).
-				Every version, tag and branch is deleted; its grants are revoked.
+				This drops <span class="mono">{table}</span> with every version, tag and branch
+				(owner-gated: can_drop):
+				{#if recovery.current}{dropRecoveryText(recovery.current)}.{:else}reading how long it stays
+					recoverable…{/if}
 			{/if}
 		</AlertDialog.Description>
 		<div class="dialog-actions">

@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Database, HardDrive, Layers } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
-	import AttachStore from '#lib/storage/AttachStore.svelte';
 	import { listStoresByTier } from '#lib/storage/remote/storage.api.ts';
 	import type { Store } from '#lib/storage/storage.ts';
 
@@ -53,9 +52,6 @@
 		page. The medallion is exactly bronze → silver → gold; raw is the external world and never a
 		governed tier.
 	</p>
-	<!-- The attach form answers the same refusal (`#lib/storage/remote/storage.api`); after a write it
-	     would re-read the stores rather than splice a row in. -->
-	<AttachStore onattached={() => void load()} />
 </header>
 
 {#if !settled}

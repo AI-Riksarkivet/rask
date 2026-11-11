@@ -19,6 +19,8 @@
 		TriangleAlert,
 	} from '@lucide/svelte';
 	import { assertionName, toFgaYaml } from './assertion';
+	import { Subject } from './identity/index.ts';
+	import { timeBoxLabel } from './time-box.ts';
 	import type { Tuple } from '../access';
 	import { deleteTuple, fetchTuples, listUsers, simulate, writeTuple } from '../remote/access.api';
 
@@ -386,10 +388,14 @@
 			{:else}
 				<ul class="flex flex-col gap-1">
 					{#each tuples as t (`${t.user}|${t.relation}|${t.object}`)}
+						{@const grantWindow = timeBoxLabel(t.condition, modelConditions)}
 						<li class="flex items-center gap-2 rounded border border-border px-2 py-1">
 							<div class="min-w-0 flex-1">
-								<div class="truncate font-mono text-[11px]">{t.user}</div>
+								<div class="text-[11px]"><Subject value={t.user} /></div>
 								<Badge variant="secondary" class="mt-0.5 font-mono text-[9px]">{t.relation}</Badge>
+								{#if grantWindow !== null}
+									<p class="mt-0.5 text-[11px] text-muted-foreground">Time-boxed {grantWindow}</p>
+								{/if}
 							</div>
 							<Button
 								size="sm"

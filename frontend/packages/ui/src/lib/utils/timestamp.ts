@@ -1,28 +1,16 @@
 /**
  * One shared way to render a moment in time across the estate.
  *
- * The panels are fed by three different clocks — the catalog's ISO strings, JS `Date`s, and
- * GreptimeDB's raw NANOSECOND epoch integers (the audit trail's `timestamp` column arrives as
- * `1753387234123456789`, which `new Date(...)` cannot parse at all) — so every surface used to
- * invent its own `when()` and the ones fed nanoseconds simply printed the integer. This module is
- * the single parser + formatter: it takes any of those, decides the epoch UNIT by magnitude, and
- * gives back both an absolute stamp and a compact relative one.
+ * A moment reaches a panel on three different clocks: the catalog's ISO strings, JS `Date`s, and raw
+ * NANOSECOND epoch integers (`1753387234123456789`, which `new Date(...)` cannot parse at all). This
+ * module is the single parser and formatter: it takes any of those, decides the epoch UNIT by
+ * magnitude, and prints the local stamp, with or without the zone it is read in.
  */
 
 /** Anything a panel might hold for a moment in time. */
 export type TimestampInput = string | number | Date | null | undefined;
 
-/** A formatted moment: the exact stamp, the human distance, and the string to hang in a tooltip. */
-export type FormattedTimestamp = {
-	/** `YYYY-MM-DD HH:mm:ss` in the reader's local zone. */
-	absolute: string;
-	/** Compact distance from `now` — `5m ago`, `in 2h`, `just now`. */
-	relative: string;
-	/** What to put in `title=`: the absolute stamp (so the relative text stays hoverable). */
-	title: string;
-};
-
-/** Rendered in place of any of the three when the value is absent or unparseable. */
+/** Rendered in place of a moment that is absent or unparseable. */
 const UNKNOWN = '—';
 
 // Epoch unit by magnitude, in absolute value. A second-epoch stays under 1e11 until the year 5138,
@@ -85,40 +73,22 @@ export function formatAbsolute(value: TimestampInput): string {
 	);
 }
 
-const MINUTE = 60_000;
-const HOUR = 60 * MINUTE;
-const DAY = 24 * HOUR;
-const MONTH = 30 * DAY;
-const YEAR = 365 * DAY;
-
-/** Compact distance from `now`: `just now`, `5m ago`, `in 2h`, `3d ago`. Past and future both, so a
- *  clock-skewed or scheduled timestamp reads honestly instead of as a negative age. */
-export function formatRelative(value: TimestampInput, now: number = Date.now()): string {
-	const date = toDate(value);
-	if (!date) return UNKNOWN;
-	const delta = now - date.getTime();
-	const ago = delta >= 0;
-	const abs = Math.abs(delta);
-	if (abs < 10_000) return 'just now';
-
-	let amount: string;
-	if (abs < MINUTE) amount = `${Math.floor(abs / 1000)}s`;
-	else if (abs < HOUR) amount = `${Math.floor(abs / MINUTE)}m`;
-	else if (abs < DAY) amount = `${Math.floor(abs / HOUR)}h`;
-	else if (abs < MONTH) amount = `${Math.floor(abs / DAY)}d`;
-	else if (abs < YEAR) amount = `${Math.floor(abs / MONTH)}mo`;
-	else amount = `${Math.floor(abs / YEAR)}y`;
-	return ago ? `${amount} ago` : `in ${amount}`;
+/** The zone a local stamp is read in, as an offset from UTC: `UTC`, `UTC+01:00`, `UTC-05:30`.
+ *  `minutesEast` is the offset east of Greenwich, the negation of `Date#getTimezoneOffset()`. An
+ *  offset rather than a zone name: the browser's short names differ between engines and locales
+ *  (`CET`, `GMT+1`), and an offset reads the same everywhere. */
+export function utcOffsetLabel(minutesEast: number): string {
+	if (minutesEast === 0) return 'UTC';
+	const sign = minutesEast > 0 ? '+' : '-';
+	const abs = Math.abs(minutesEast);
+	return `UTC${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
 }
 
-/**
- * Both forms at once — the shape a cell wants: show `relative`, hang `title` off it so the exact
- * moment is one hover away. `now` is injectable so a test can pin the clock.
- */
-export function formatTimestamp(
-	value: TimestampInput,
-	now: number = Date.now(),
-): FormattedTimestamp {
-	const absolute = formatAbsolute(value);
-	return { absolute, relative: formatRelative(value, now), title: absolute };
+/** `YYYY-MM-DD HH:mm:ss UTC+01:00`: the full local date and time with the zone it is read in, the
+ *  one form every list of moments in the console prints, so two surfaces never show one instant two
+ *  ways. `—` when there is nothing to format. */
+export function formatZoned(value: TimestampInput): string {
+	const date = toDate(value);
+	if (!date) return UNKNOWN;
+	return `${formatAbsolute(date)} ${utcOffsetLabel(-date.getTimezoneOffset())}`;
 }

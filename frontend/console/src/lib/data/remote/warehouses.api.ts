@@ -23,6 +23,14 @@ const WarehouseSchema = v.object({
 	created_at: v.optional(v.nullable(v.string())),
 	serving: v.optional(v.nullable(v.string())),
 	status: v.optional(v.nullable(v.string())),
+	delete_profile: v.optional(
+		v.nullable(
+			v.object({
+				mode: v.picklist(['hard', 'soft', 'estate']),
+				grace_days: v.optional(v.nullable(v.number())),
+			}),
+		),
+	),
 });
 
 /** `DeleteWarehouseResponse` — what the delete ACTUALLY did, store by store.

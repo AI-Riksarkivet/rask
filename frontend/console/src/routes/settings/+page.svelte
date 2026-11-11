@@ -3,6 +3,7 @@
 	import { Badge } from '@rask/ui/badge';
 	import { Card } from '@rask/ui/card';
 	import { FolderKanban, KeyRound, ScrollText, SlidersHorizontal, Users } from '@lucide/svelte';
+	import { Subject } from '#lib/access/identity/index.ts';
 	import type { PageData } from './$types';
 
 	// SETTINGS — the PLATFORM level: what configures the whole installation, as opposed to what any one
@@ -137,6 +138,6 @@
 	</section>
 
 	<p class="text-muted-foreground/80 text-xs">
-		Signed in as {data.meSubject || 'an unresolved identity'}.
+		Signed in as {#if data.meSubject}<Subject value={data.meSubject} />{:else}an unresolved identity{/if}.
 	</p>
 </div>

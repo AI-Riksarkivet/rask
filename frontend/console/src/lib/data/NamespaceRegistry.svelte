@@ -26,6 +26,8 @@
 	import { page } from '$app/state';
 	import { fetchTables } from './remote/catalog.api';
 	import { dropNamespace } from './remote/namespace.api';
+	import { dropRecoveryText } from './drop-recovery';
+	import { DropRecoveryRead } from './drop-recovery-read.svelte.ts';
 	import { fetchEstateBindings } from './remote/warehouses.api';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
@@ -142,11 +144,15 @@
 		dropTarget === null ? 0 : (rows.find((r) => r.ns === dropTarget)?.count ?? 0),
 	);
 
+	// What a cascade would leave recoverable, read from the namespace's warehouse when the dialog opens.
+	const recovery = new DropRecoveryRead();
+
 	function openDrop(ns: string): void {
 		dropTarget = ns;
 		cascade = false;
 		banner = null;
 		dropOpen = true;
+		void recovery.load(ns);
 	}
 
 	function fail(ns: string, status: number, detail: string): void {
@@ -339,10 +345,12 @@
 			>grouped from the catalog registry, estate-wide — every namespace your grants allow ·
 			&lt;namespace&gt;$&lt;table&gt;</span
 		>
+		<!-- A top-level namespace is created by binding it to a warehouse, so the link opens that form,
+		     its namespace field focused. -->
 		<a
 			class="new"
-			href={resolve('/catalog/warehouses')}
-			title="Namespaces are created through the governed warehouse-bind flow"
+			href={resolve('catalog/warehouses#bind-namespace')}
+			title="Opens the warehouses page's Bind namespace form, which creates a namespace"
 		>
 			<Plus size={12} /> New namespace
 		</a>
@@ -396,7 +404,7 @@
 				loading={tables === null || filterWaits}
 				emptyMessage={projectFilter
 					? `No namespaces in project ${projectFilter}.`
-					: 'No namespaces yet — bind one to a warehouse to create the first.'}
+					: 'No namespaces visible to you. The list holds only the namespaces your grants reach: ask a project admin for access, or bind one to a warehouse.'}
 				onrowclick={openDrawer}
 			/>
 		{/if}
@@ -435,9 +443,15 @@
 	<AlertDialog.Content>
 		<AlertDialog.Title>Drop namespace {dropTarget}</AlertDialog.Title>
 		<AlertDialog.Description>
-			This permanently drops <span class="mono">{dropTarget}</span> from the catalog (owner-gated: can_delete).
-			The default Restrict behavior refuses a non-empty namespace — tick Cascade to also drop everything
-			inside it.
+			This drops <span class="mono">{dropTarget}</span> from the catalog (owner-gated: can_delete).
+			The default Restrict behavior refuses a non-empty namespace, and removes an empty one
+			permanently: there is nothing in it to recover. Tick Cascade to also drop everything inside
+			it.
+			{#if cascade}
+				A cascade drops it and its tables
+				{#if recovery.current}{dropRecoveryText(recovery.current)}.{:else}(reading how long they
+					stay recoverable…).{/if}
+			{/if}
 		</AlertDialog.Description>
 		<label class="cascade">
 			<input type="checkbox" bind:checked={cascade} disabled={busy} />

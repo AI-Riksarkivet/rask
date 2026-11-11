@@ -19,6 +19,7 @@ type ControlEvent = {
 	object_id: string;
 	actor: string | null;
 	extra: Record<string, unknown>;
+	object_name?: string | null;
 };
 
 // Events and the 403 toggle are PER BEARER, like everything else mutable here. The bare `__mock/add`
@@ -156,6 +157,25 @@ Bun.serve({
 				404,
 			);
 		}
+		const nsTasks = /^\/management\/v1\/namespace\/([^/]+)\/tasks$/.exec(url.pathname);
+		if (nsTasks && req.method === 'GET') {
+			const id = decodeURIComponent(nsTasks[1] ?? '');
+			return json(
+				{
+					type: 'https://lance.org/problems/namespacenotfounderror',
+					title: 'NamespaceNotFoundError',
+					status: 404,
+					code: 1,
+					detail: `namespace '${id}' not found`,
+				},
+				404,
+			);
+		}
+		// A namespace page asks whether its namespace is there before reading its governance; one a spec
+		// names is, unless the spec seeds otherwise.
+		if (/^\/v1\/namespace\/[^/]+\/describe$/.test(url.pathname) && req.method === 'POST') {
+			return json({ properties: {} });
+		}
 		if (url.pathname === '/v1/table') return json({ tables: ['db1$t'] });
 		// #86 the estate-wide bindings read the namespaces page loads alongside the table list. An
 		// unserved endpoint would leave the page in its bindings-unavailable state, which is a different
@@ -187,6 +207,7 @@ Bun.serve({
 				object_id: body.object_id ?? 'table:db1$t',
 				actor: body.actor ?? 'user:alice',
 				extra: body.extra ?? {},
+				object_name: body.object_name ?? null,
 			});
 			return json({ ok: true, cursor: list.length });
 		}

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { controlEvents } from '#lib/admin/remote/admin.api.ts';
-	import type { ControlEvent } from '#lib/admin/control.ts';
+	import { grantDetail, objectLabel, type ControlEvent } from '#lib/admin/control.ts';
 	import { Activity, ShieldAlert } from '@lucide/svelte';
-	import { Subject } from '#lib/access/identity/index.ts';
+	import ControlEventLine from './ControlEventLine.svelte';
 
 	// A live cursor (query.live): the generator in admin.api.ts polls the catalog from this browser, owns
 	// the cursor, the window and event_id dedup, and yields the window when it changes. No argument: the
@@ -10,10 +10,7 @@
 	// ends the feed with a 403 that renders below and is not retried.
 	const feed = controlEvents();
 
-	const label = (e: ControlEvent) => e.action.replaceAll('_', ' ');
 	const failure = (err: unknown) => (err instanceof Error ? err.message : String(err));
-	// ISO slice, not toLocaleTimeString: the feed prints the event's own UTC clock, the same on every machine.
-	const at = (iso: string) => iso.slice(11, 19);
 
 	// #70 — filter the RENDERED window, client-side. The live cursor's generator owns the
 	// cursor and the window; filtering must never re-query per keystroke or the tail dies with the
@@ -27,9 +24,10 @@
 		if (typeFilter && e.object_type !== typeFilter) return false;
 		const needle = q.trim().toLowerCase();
 		if (!needle) return true;
-		return [e.action, e.object_id, e.actor ?? 'system'].some((f) =>
-			f.toLowerCase().includes(needle),
-		);
+		const grant = grantDetail(e);
+		return [e.action, objectLabel(e), e.object_id, e.actor ?? 'system', grant?.subject ?? '']
+			.filter((f) => f !== '')
+			.some((f) => f.toLowerCase().includes(needle));
 	}
 
 	// The type dropdown offers what the WINDOW actually contains — no hardcoded list to drift.
@@ -55,13 +53,18 @@
 		{@const shown = events.filter(matches)}
 
 		{#if events.length === 0}
-			<p class="empty">No recent changes.</p>
+			<!-- The catalog keeps this feed in memory, per replica (`GET /management/v1/events`): a restart
+			     empties it, so an empty feed says what it holds rather than that nothing changed. -->
+			<p class="empty">
+				No changes since this catalog started. The feed holds only the governance changes the
+				catalog has seen since its last start; earlier ones are in the audit trail.
+			</p>
 		{:else}
 			<div class="filters">
 				<input
 					class="mono"
 					type="search"
-					placeholder="filter by action, object or actor…"
+					placeholder="filter by action, object, subject or actor…"
 					aria-label="Filter events"
 					bind:value={q}
 				/>
@@ -80,12 +83,7 @@
 			{:else}
 				<ul class="events">
 					{#each shown as e (e.event_id)}
-						<li>
-							<span class="action">{label(e)}</span>
-							<span class="obj mono">{e.object_id}</span>
-							<Subject value={e.actor} class="actor" />
-							<span class="ts mono">{at(e.occurred_at)}</span>
-						</li>
+						<ControlEventLine event={e} />
 					{/each}
 				</ul>
 			{/if}
@@ -153,28 +151,6 @@
 		list-style: none;
 		margin: 0;
 		padding: 0;
-	}
-	.events li {
-		display: grid;
-		grid-template-columns: 170px 1fr auto auto;
-		gap: 12px;
-		align-items: baseline;
-		padding: 6px 0;
-		border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
-		font-size: 12px;
-	}
-	.action {
-		color: var(--ink);
-		font-weight: 500;
-	}
-	.obj {
-		color: var(--mut);
-	}
-	/* `.actor` moved with the subject into <Subject>: Svelte scopes styles to the component that
-	   declares the markup, so a rule here would never match the child's span. The class is still
-	   passed through for LAYOUT (grid placement); its colour comes from the component. */
-	.ts {
-		color: var(--faint);
 	}
 	.mono {
 		font-family: ui-monospace, monospace;

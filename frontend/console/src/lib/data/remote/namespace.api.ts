@@ -2,7 +2,7 @@ import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '#lib/api/client.ts';
 import { DropNamespaceResponseSchema, type DropNamespace } from '../catalog';
-import { fetchTables } from './catalog.api';
+import { fetchTables, TrashEntrySchema, type TrashEntry } from './catalog.api';
 import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
 import { PolicyDeleteResponseSchema, type NamespacePolicyDelete } from '../namespace';
 
@@ -116,4 +116,19 @@ export const dropNamespace = command(
 		if (result.ok) void fetchTables().refresh();
 		return result;
 	},
+);
+
+/** Whether the namespace exists for this caller — the spec's DescribeNamespace. */
+export const describeNamespace = query(v.string(), async (namespace): Promise<ApiResult<unknown>> =>
+	catalogJSON(`/v1/namespace/${enc(namespace)}/describe`, { method: 'POST', body: '{}' }),
+);
+
+/** The namespace's trash record: a recoverable drop the caller may see, or a 404 when there is none. */
+export const fetchNamespaceTasks = query(
+	v.string(),
+	async (namespace): Promise<ApiResult<TrashEntry[]>> =>
+		parsed(
+			await catalogJSON(`/management/v1/namespace/${enc(namespace)}/tasks`),
+			v.array(TrashEntrySchema),
+		),
 );

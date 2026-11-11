@@ -49,6 +49,10 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 test('renders the outbox at-risk events with a depth badge', async ({ page }) => {
 	await page.goto('/admin/dlq');
 	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toBeVisible();
+	// The subtitle says what the page holds, in words, with no tracker reference.
+	await expect(page.locator('.sub')).toHaveText(
+		'lineage events waiting in the outbox: view and replay',
+	);
 	const table = page.locator('table');
 	await expect(table).toContainText('run-1');
 	await expect(table).toContainText('bronze$a');

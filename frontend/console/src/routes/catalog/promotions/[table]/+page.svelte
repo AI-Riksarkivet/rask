@@ -5,6 +5,7 @@
 	import { Card } from '@rask/ui/card';
 	import { GatedAction } from '#lib/access/gated-action/index.ts';
 	import { formatAbsolute } from '@rask/ui/utils';
+	import { Subject } from '#lib/access/identity/index.ts';
 	import { reasonLabel } from '#lib/data/promotions.ts';
 	import { decidePromotion, getPromotion } from '#lib/data/remote/promotions.api.ts';
 
@@ -97,7 +98,7 @@
 				<dd>{formatAbsolute(held.expires_at)}</dd>
 				{#if held.requested_by}
 					<dt class="text-muted-foreground">Requested by</dt>
-					<dd><code class="text-xs">{held.requested_by}</code></dd>
+					<dd><Subject value={held.requested_by} class="text-xs" /></dd>
 				{/if}
 			</dl>
 

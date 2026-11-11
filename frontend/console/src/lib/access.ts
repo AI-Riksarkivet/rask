@@ -20,6 +20,7 @@ export const TupleConditionSchema = v.object({
 	name: v.string(),
 	context: v.record(v.string(), v.unknown()),
 });
+export type TupleCondition = v.InferOutput<typeof TupleConditionSchema>;
 
 export const TupleSchema = v.object({
 	user: v.string(), // e.g. user:alice, role:<id>#assignee, namespace:db1

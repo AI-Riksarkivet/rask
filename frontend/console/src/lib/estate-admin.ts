@@ -16,6 +16,12 @@ import type { Me } from '#lib/api/index.ts';
  */
 export function requireEstateAdmin(me: Me | null, area: string, refusal: string): Me {
 	if (!me) error(403, `Your identity could not be confirmed, so ${area} cannot be opened.`);
-	if (!me.estate_admin) error(403, refusal);
+	if (!isEstateAdmin(me)) error(403, refusal);
 	return me;
+}
+
+/** Whether `me`, the root layout's answer from `/management/v1/me`, is an estate admin: the one rule
+ *  every surface that offers or reads an estate-only thing asks. Unresolved is not an admin. */
+export function isEstateAdmin(me: Me | null | undefined): boolean {
+	return me?.estate_admin === true;
 }

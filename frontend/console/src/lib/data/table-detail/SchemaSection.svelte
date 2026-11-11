@@ -13,6 +13,7 @@
 	// instance never survives a navigation — an editor opened on table A cannot leak into B, by
 	// construction rather than by a hand-written reset list.
 	import { GatedAction } from '#lib/access/gated-action/index.ts';
+	import { AlertDialog } from '@rask/ui/alert-dialog';
 	import { Select } from '@rask/ui/select';
 	import { RETYPE_TYPES } from '../catalog';
 	import { addColumn, dropColumn, renameColumn, retypeColumn } from '../remote/catalog.api';
@@ -59,8 +60,19 @@
 		}
 	}
 
-	async function runDropColumn(name: string): Promise<void> {
-		if (colBusy) return;
+	// A drop asks first, as every destructive action here does: the column's data is gone from the
+	// version the drop writes onward.
+	let dropping = $state<string | null>(null);
+	let dropOpen = $state(false);
+
+	function askDropColumn(name: string): void {
+		dropping = name;
+		dropOpen = true;
+	}
+
+	async function runDropColumn(): Promise<void> {
+		const name = dropping;
+		if (colBusy || name === null) return;
 		colBusy = true;
 		colError = null;
 		try {
@@ -68,7 +80,11 @@
 			if (res.ok) await onchanged();
 			else colFail(res.status, res.detail);
 		} finally {
+			// Always close and disarm: the dialog's action does not close it by itself, and an open
+			// one would keep the drop armed for a second, unconfirmed click.
 			colBusy = false;
+			dropOpen = false;
+			dropping = null;
 		}
 	}
 
@@ -186,7 +202,7 @@
 									title="drop column"
 									aria-label="drop {f.name}"
 									disabled={colBusy}
-									onclick={() => runDropColumn(f.name)}>×</button
+									onclick={() => askDropColumn(f.name)}>×</button
 								>
 							{/if}
 						</td>
@@ -225,6 +241,27 @@
 	</form>
 	{#if colError}<p class="error">{colError}</p>{/if}
 </section>
+
+<AlertDialog.Root bind:open={dropOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Title>Drop column {dropping} from {table}</AlertDialog.Title>
+		<AlertDialog.Description>
+			This writes a new version of <span class="mono">{table}</span> without the column
+			<span class="mono">{dropping}</span>: its data is gone from that version on. Earlier versions
+			keep it until they are cleaned up. Needs writer access (can_write_data).
+		</AlertDialog.Description>
+		<div class="dialog-actions">
+			<AlertDialog.Cancel disabled={colBusy}>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="border-destructive/40 bg-destructive/15 text-destructive hover:bg-destructive/25"
+				disabled={colBusy}
+				onclick={runDropColumn}
+			>
+				Drop column
+			</AlertDialog.Action>
+		</div>
+	</AlertDialog.Content>
+</AlertDialog.Root>
 
 <style>
 	section {
@@ -312,6 +349,14 @@
 	}
 	.row {
 		display: flex;
+		gap: 8px;
+	}
+	.mono {
+		font-family: ui-monospace, monospace;
+	}
+	.dialog-actions {
+		display: flex;
+		justify-content: flex-end;
 		gap: 8px;
 	}
 </style>

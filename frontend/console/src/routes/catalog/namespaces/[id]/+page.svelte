@@ -7,7 +7,7 @@
 	// states as the registry — governed without a session ⇒ sign-in, unreachable ⇒ retrying.
 	import { GatedAction } from '#lib/access/gated-action/index.ts';
 	import { GrantsPanel, type GrantsClient } from '#lib/access/grants-panel/index.ts';
-	import { subjectDisplay } from '#lib/access/identity/index.ts';
+	import { Subject } from '#lib/access/identity/index.ts';
 	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -29,9 +29,13 @@
 	} from '#lib/data/remote/access-objects.api.ts';
 	import {
 		deleteNamespacePolicy,
+		describeNamespace,
 		fetchNamespacePolicy,
+		fetchNamespaceTasks,
 		setNamespacePolicy,
 	} from '#lib/data/remote/namespace.api.ts';
+	import type { TrashEntry } from '#lib/data/remote/catalog.api.ts';
+	import { formatZoned } from '@rask/ui/utils';
 
 	const ns = $derived(page.params.id ?? '');
 
@@ -169,9 +173,7 @@
 
 	// Split the one-hop edges for the card: inbound = grants (subject holds a rung ON the namespace),
 	// outbound = the container edge (namespace → parent/project). Labels come from the graph's nodes.
-	// #68: node labels carry raw OIDC subs — render the display form, keep the full value for title.
-	const graphNode = (id: string): { label: string; title: string } =>
-		subjectDisplay(graph?.nodes.find((n) => n.id === id)?.label ?? id);
+	const graphNode = (id: string): string => graph?.nodes.find((n) => n.id === id)?.label ?? id;
 	const grantEdges = $derived.by(() => {
 		const g = graph;
 		return g === null ? [] : g.edges.filter((e) => e.target === g.object);
@@ -228,11 +230,54 @@
 		// A's grants, which is the same class of bug as the edit form surviving a namespace change.
 		perms = null;
 		managed = null;
+		presence = { kind: 'checking' };
 		loadTables();
+		void loadPresence();
+	});
+
+	// Whether the namespace is there before its governance is read. A describe the catalog refuses (403)
+	// or does not find (404) is a namespace this caller cannot see: dropped, never there, or theirs to see
+	// no more. Its trash record, when the caller may read one, says it was dropped; without one the page
+	// says it cannot show the namespace, and asks for none of its governance, every read of which would
+	// be refused. A describe that failed any other way (a 5xx, an unreachable catalog) claims nothing.
+	let presence = $state<
+		| { kind: 'checking' }
+		| { kind: 'live' }
+		| { kind: 'dropped'; entry: TrashEntry }
+		| { kind: 'not-visible' }
+		| { kind: 'unavailable'; status: number; detail: string }
+	>({ kind: 'checking' });
+
+	/** The newest of a name's trash records: a name dropped twice keeps a record per drop. */
+	const newestDrop = (entries: readonly TrashEntry[]): TrashEntry | undefined =>
+		entries.reduce<TrashEntry | undefined>(
+			(newest, entry) =>
+				newest === undefined || Date.parse(entry.dropped_at) > Date.parse(newest.dropped_at)
+					? entry
+					: newest,
+			undefined,
+		);
+
+	async function loadPresence(): Promise<void> {
+		const current = ns;
+		const described = await describeNamespace(current);
+		if (ns !== current) return;
+		if (!described.ok && described.status !== 403 && described.status !== 404) {
+			presence = { kind: 'unavailable', status: described.status, detail: described.detail };
+			return;
+		}
+		if (!described.ok) {
+			const tasks = await fetchNamespaceTasks(current);
+			if (ns !== current) return;
+			const entry = tasks.ok ? newestDrop(tasks.data) : undefined;
+			presence = entry ? { kind: 'dropped', entry } : { kind: 'not-visible' };
+			return;
+		}
+		presence = { kind: 'live' };
 		loadPolicy();
 		loadPerms();
 		loadManaged();
-	});
+	}
 
 	function startPolicyEdit(): void {
 		draft = {
@@ -326,7 +371,27 @@
 			<RefreshCw size={16} />
 			<p>Catalog unreachable (HTTP {lastStatus}).</p>
 		</div>
-	{:else if tables === null}
+	{:else if presence.kind === 'dropped'}
+		<div class="dropped" data-testid="namespace-dropped">
+			<h2>This namespace was dropped</h2>
+			<p>
+				Dropped by <Subject value={presence.entry.dropped_by} /> on
+				{formatZoned(presence.entry.dropped_at)}. It stays recoverable until
+				<strong>{formatZoned(presence.entry.expires_at)}</strong>; its tables went with it.
+			</p>
+		</div>
+	{:else if presence.kind === 'not-visible'}
+		<div class="empty" data-testid="namespace-not-visible">
+			<p>
+				No namespace {ns} that you can see: it does not exist, or you hold no grant on it.
+			</p>
+		</div>
+	{:else if presence.kind === 'unavailable'}
+		<div class="empty">
+			<RefreshCw size={16} />
+			<p>Could not read namespace {ns} (HTTP {presence.status}): {presence.detail}</p>
+		</div>
+	{:else if tables === null || presence.kind === 'checking'}
 		<div class="empty"><p>Loading…</p></div>
 	{:else}
 		<!-- Goal cond 3: overview (default) | access — the FGA view moved onto its own tab. -->
@@ -335,7 +400,7 @@
 			<section>
 				<h2>Tables</h2>
 				{#if members.length === 0}
-					<p class="mut">No tables in this namespace.</p>
+					<p class="mut">No tables in this namespace that are visible to you.</p>
 				{:else}
 					<ul class="list">
 						{#each members as t (t)}
@@ -517,11 +582,9 @@
 								<ul class="edges">
 									{#each grantEdges as e (`${e.source}:${e.relation}`)}
 										<li class="mono">
-											<span class="subject" title={graphNode(e.source).title}
-												>{graphNode(e.source).label}</span
-											>
+											<Subject value={graphNode(e.source)} class="text-foreground" />
 											<span class="chip rel">{e.relation}</span>
-											<span class="mut">on {graphNode(e.target).label}</span>
+											<span class="mut">on {graphNode(e.target)}</span>
 										</li>
 									{/each}
 								</ul>
@@ -531,9 +594,7 @@
 									{#each containerEdges as e (`${e.relation}:${e.target}`)}
 										<li class="mono">
 											<span class="mut">{e.relation} →</span>
-											<span class="subject" title={graphNode(e.target).title}
-												>{graphNode(e.target).label}</span
-											>
+											<span class="subject">{graphNode(e.target)}</span>
 										</li>
 									{/each}
 								</ul>
@@ -621,6 +682,16 @@
 	}
 	.row:hover {
 		background: var(--panel-2);
+	}
+	.dropped {
+		border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+		border-radius: var(--radius-sm);
+		padding: 16px 18px;
+		margin: 24px 0;
+		font-size: 13px;
+	}
+	.dropped h2 {
+		margin: 0 0 6px;
 	}
 	.empty {
 		display: flex;

@@ -68,11 +68,18 @@ test('the New-namespace affordance points at the governed warehouse-bind flow', 
 }) => {
 	// Deliberate scope: no bare create surface here — creation goes through POST
 	// /management/v1/warehouses/{id}/namespaces on the warehouses page (bucket-per-warehouse tenancy).
+	await seed(page, {
+		'GET /management/v1/warehouses': [
+			{ id: 'acme-wh', project: 'acme', bucket: 'acme-bucket', root_uri: 's3://acme-bucket' },
+		],
+	});
 	await page.goto('/catalog/namespaces');
-	await expect(page.getByRole('link', { name: 'New namespace' })).toHaveAttribute(
-		'href',
-		'/catalog/warehouses',
-	);
+	await page.getByRole('link', { name: 'New namespace' }).click();
+	// It opens where it says: the Bind namespace form, its namespace field ready to type in.
+	await expect(page).toHaveURL(/\/catalog\/warehouses#bind-namespace$/);
+	await expect(page.getByRole('textbox', { name: 'Namespace', exact: true })).toBeFocused();
+	// …and the form says why Bind waits.
+	await expect(page.locator('#bind-hint')).toHaveText('Binding needs a warehouse and a namespace.');
 });
 
 test('drop confirms via the AlertDialog, posts the cascade behavior, and the row disappears', async ({

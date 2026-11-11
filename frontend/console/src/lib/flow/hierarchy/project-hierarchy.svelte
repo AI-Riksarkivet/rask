@@ -98,7 +98,7 @@
 	// The refetch key is the SUBJECT, not the props' identity. A caller whose `warehouses` array is
 	// re-derived on every render (the lakehouse's is, off a registry query) would otherwise re-walk
 	// the whole tree on each pass; keying on the ids means a re-derive that changed nothing refetches
-	// nothing, and it is also what `load()` compares against to stay latest-wins across navigation.
+	// nothing.
 	const key = $derived(`${project}\u0000${warehouses.map((w) => w.id).join('\u0001')}`);
 
 	$effect(() => {
@@ -109,11 +109,19 @@
 		// re-derived array or an inline arrow prop (the lakehouse Overview does both) refetched
 		// every warehouse and every namespace rung on an identity-only change. The key IS the
 		// subject; these reads must not add dependencies.
-		untrack(() => void load());
+		//
+		// Latest-wins is the effect's own: its teardown (a new key, or the component unmounting, as when
+		// the page's project turns out not to exist) retires this walk, so an answer that lands later is
+		// dropped without reading `key` again, a derived of an effect that may be gone by then.
+		let isLatest = true;
+		untrack(() => void load(() => isLatest));
+		return () => {
+			isLatest = false;
+		};
 	});
 
-	async function load(): Promise<void> {
-		const current = key;
+	async function load(isCurrent: () => boolean): Promise<void> {
+		const cap = maxTables;
 		const namespaces = new Map<string, string[] | null>();
 		await Promise.all(
 			warehouses.map(async (w) => {
@@ -130,14 +138,14 @@
 					ns,
 					res.ok
 						? {
-								tables: res.data.tables.slice(0, maxTables),
-								more: Math.max(0, res.data.tables.length - maxTables),
+								tables: res.data.tables.slice(0, cap),
+								more: Math.max(0, res.data.tables.length - cap),
 							}
 						: null,
 				);
 			}),
 		);
-		if (key !== current) return; // latest-wins across navigation
+		if (!isCurrent()) return;
 		tree = { namespaces, tables };
 	}
 

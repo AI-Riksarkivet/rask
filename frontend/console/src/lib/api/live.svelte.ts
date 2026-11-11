@@ -38,7 +38,7 @@ import { onMount, untrack } from 'svelte';
  *    9–18, nearly all of them shell elements simply absent, and moving it here put the count back. A
  *    live feed is a client concern; the server's job is to render the page.
  *
- * The read is `untrack`ed (the AuditViewer convention): a loader assigns the `$state` it also reads,
+ * The read is `untrack`ed: a loader assigns the `$state` it also reads,
  * so tracking it would re-enter.
  *
  * Nothing here is a timer. An idle surface issues exactly one request and then stays quiet.

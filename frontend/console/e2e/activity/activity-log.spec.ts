@@ -56,6 +56,10 @@ test('the bell logs each write with its outcome, keeps it across a reload, and f
 	// Newest first: the forced delete the catalog accepted, then the refusal with its status and detail.
 	await expect(entries.nth(0)).toContainText('Force-delete project acme');
 	await expect(entries.nth(0)).toContainText('Succeeded');
+	// The bell prints a moment as the event feed does: the full local date and time, and its zone.
+	await expect(entries.nth(0).locator('time')).toHaveText(
+		/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC([+-]\d{2}:\d{2})?$/,
+	);
 	await expect(entries.nth(1)).toContainText('Delete project acme');
 	await expect(entries.nth(1)).toContainText('Failed (HTTP 409)');
 	await expect(entries.nth(1)).toContainText(PROTECTED_DETAIL);

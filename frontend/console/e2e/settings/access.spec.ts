@@ -34,6 +34,8 @@ type AccessState = {
 
 let token: string;
 
+test.use({ timezoneId: 'UTC' });
+
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
@@ -331,7 +333,24 @@ test('the grant dialog offers time-boxing, driven by the model', async ({ page }
 	await expect(page.getByText('current_time')).toHaveCount(0);
 });
 
-test('a time-boxed grant sends its condition to the store', async ({ page }) => {
+test('a time-boxed grant sends its condition to the store, and says its window where it is listed', async ({
+	page,
+}) => {
+	// A grant already time-boxed on the object: the tuple list names its duration and its end.
+	await page.request.post(`${MOCK_CATALOG}/__mock/access/tuple`, {
+		data: {
+			bearer: token,
+			tuple: {
+				user: 'user:temp',
+				relation: 'reader',
+				object: 'table:db1$t',
+				condition: {
+					name: 'non_expired_grant',
+					context: { grant_time: '2026-11-11T19:30:26Z', grant_duration: '1h' },
+				},
+			},
+		},
+	});
 	await open(page);
 	await ask(page, 'Why…', {
 		Subject: 'user:alice',
@@ -368,6 +387,15 @@ test('a time-boxed grant sends its condition to the store', async ({ page }) => 
 	// "for the next 4 hours" means. Asserted as a real ISO instant, not merely present.
 	expect(Date.parse(ctx.grant_time ?? '')).not.toBeNaN();
 	expect('current_time' in ctx).toBe(false);
+
+	await expect(page.locator('li', { hasText: 'user:temp' })).toContainText(
+		'Time-boxed for 1h, until 2026-11-11 20:30:26 UTC',
+	);
+	// The bell names the window too.
+	await page.getByRole('button', { name: /^Activity/ }).click();
+	await expect(page.locator('[data-slot="activity-entry"]').first()).toContainText(
+		'Grant reader on table:db1$t to user:contractor, time-boxed for 4h, until',
+	);
 });
 
 test('a conditional grant is visually distinct on the canvas', async ({ page }) => {

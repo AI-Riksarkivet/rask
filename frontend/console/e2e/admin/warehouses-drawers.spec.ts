@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { mockMe, signIn, TOKEN } from './session';
+import { ME_MEMBER, mockMe, signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from './ports';
 
 // Row-drawer coverage for the WAREHOUSE registry (goal cond 8): clicking a row opens the bits-ui
@@ -74,4 +74,49 @@ test('a work warehouse row states the work class honestly (no serving marker)', 
 	await expect(drawer).toContainText('work warehouse');
 	await expect(drawer.getByText('serving · gold')).toHaveCount(0);
 	await expect(drawer).toContainText('2026-07-01T00:00:00Z');
+});
+
+test('Enter on a row action opens only that action, and the skip link reaches the content', async ({
+	page,
+}) => {
+	await page.goto('/catalog/warehouses');
+	await expect(page.getByRole('link', { name: 'acme-gold' })).toBeVisible();
+	// The first stop on the page skips the sidebar.
+	await page.keyboard.press('Tab');
+	const skip = page.getByRole('link', { name: 'Skip to content' });
+	await expect(skip).toBeFocused();
+	await page.keyboard.press('Enter');
+	await expect(page.locator('#main-content')).toBeFocused();
+
+	await page.getByRole('button', { name: 'Delete warehouse acme-wh', exact: true }).focus();
+	await page.keyboard.press('Enter');
+	// One dialog: the delete. The row's own drawer stays shut.
+	const dialogs = page.getByRole('dialog');
+	await expect(dialogs).toHaveCount(1);
+	await expect(dialogs).toContainText('acme-wh');
+	await expect(page.getByText('The full warehouse registry record.')).toHaveCount(0);
+});
+
+test('a person who is not an estate admin never reads the estate-only events feed', async ({
+	context,
+	page,
+}, testInfo) => {
+	token = `${TOKEN.member}:${testInfo.testId}`;
+	await context.clearCookies();
+	await signIn(context, { token });
+	await mockMe(page, ME_MEMBER);
+	await seed(page, { 'GET /management/v1/warehouses': WAREHOUSES });
+	const polled: string[] = [];
+	page.on('request', (req) => {
+		const path = new URL(req.url()).pathname;
+		if (path.endsWith('/management/v1/events')) polled.push(path);
+	});
+	await page.goto('/catalog/warehouses');
+	await expect(page.getByRole('link', { name: 'acme-gold' })).toBeVisible();
+	// Longer than one poll of the control cursor: a cursor opened for this person would have asked.
+	await page.waitForTimeout(6_000);
+	// The admin area's refusal page reads nothing either.
+	await page.goto('/admin');
+	await expect(page.getByText('Admin is estate-admin only')).toBeVisible();
+	expect(polled).toEqual([]);
 });

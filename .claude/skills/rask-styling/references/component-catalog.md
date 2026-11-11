@@ -21,7 +21,7 @@ No build step: `package.json` `exports` name the source (`./src/lib/components/<
 | Subpath | Contents |
 |---|---|
 | `./shell` | `AppShell`, `AppError` + `nav-config` (the sidebar's and the bell's types; the route matchers are the console's, `#lib/nav-match.ts`). The frame's parts (`app-sidebar`, `page-nav`, `navbar-user`, the bell `activity-center`, `breadcrumb`) are not exported: `AppShell` mounts them. The bell is fed through props and callbacks; the console owns the log (`rask-frontend`) |
-| `./utils` | `cn`, `toDate/formatAbsolute/formatRelative/formatTimestamp`, `WithElementRef/WithoutChildren/WithoutChild/WithoutChildrenOrChild` |
+| `./utils` | `cn`, `toDate/formatAbsolute/formatRelative/formatTimestamp/formatZoned/utcOffsetLabel`, `WithElementRef/WithoutChildren/WithoutChild/WithoutChildrenOrChild` |
 | `./motion` | GSAP `{@attach}` factories |
 | `./styles/tokens.css` | the theme |
 

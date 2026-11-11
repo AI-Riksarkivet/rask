@@ -36,6 +36,7 @@
 	import TableProperties from './TableProperties.svelte';
 	import BlobPreviewSection from './table-detail/BlobPreviewSection.svelte';
 	import DangerZone from './table-detail/DangerZone.svelte';
+	import DeclaredTable from './table-detail/DeclaredTable.svelte';
 	import IndexesSection from './table-detail/IndexesSection.svelte';
 	import InsertRowsSection from './table-detail/InsertRowsSection.svelte';
 	import MaintenanceSection from './table-detail/MaintenanceSection.svelte';
@@ -105,6 +106,12 @@
 		} else {
 			lastStatus = res.status;
 		}
+	}
+
+	/** Read the detail again past the read cache: the first write made it a different table. */
+	async function reread(): Promise<void> {
+		await fetchTableDetail({ table }).refresh();
+		await load();
 	}
 
 	$effect(() => {
@@ -214,6 +221,10 @@
 		</div>
 	{:else if detail === null}
 		<div class="empty"><p>Loading…</p></div>
+	{:else if detail.declared}
+		{#key table}
+			<DeclaredTable {table} onwritten={reread} />
+		{/key}
 	{:else}
 		<!-- Goal cond 3: overview (default) | preview (goal cond 5) | history (#113) | access. -->
 		<DetailTabs tabs={TABS} active={tab} onselect={selectTab} />

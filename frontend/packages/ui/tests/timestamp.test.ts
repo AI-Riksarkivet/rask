@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-	formatAbsolute,
-	formatRelative,
-	formatTimestamp,
-	toDate,
-} from '../src/lib/utils/timestamp.js';
+import { formatAbsolute, formatZoned, toDate, utcOffsetLabel } from '../src/lib/utils/timestamp.js';
 
 // The estate's one clock formatter. The reason it exists: GreptimeDB hands the audit trail raw
 // NANOSECOND epoch integers, which `new Date(...)` cannot parse — so the viewer printed
@@ -65,38 +60,23 @@ describe('formatAbsolute', () => {
 	});
 });
 
-describe('formatRelative', () => {
-	const now = MS;
-
-	it('reports the compact distance into the past', () => {
-		expect(formatRelative(MS - 5 * 60_000, now)).toBe('5m ago');
-		expect(formatRelative(MS - 30_000, now)).toBe('30s ago');
-		expect(formatRelative(MS - 3 * 3_600_000, now)).toBe('3h ago');
-		expect(formatRelative(MS - 2 * 86_400_000, now)).toBe('2d ago');
-		expect(formatRelative(MS - 45 * 86_400_000, now)).toBe('1mo ago');
-		expect(formatRelative(MS - 400 * 86_400_000, now)).toBe('1y ago');
-	});
-
-	it('collapses the last few seconds to "just now"', () => {
-		expect(formatRelative(MS, now)).toBe('just now');
-		expect(formatRelative(MS - 9_000, now)).toBe('just now');
-	});
-
-	it('reads a future stamp forwards, never as a negative age', () => {
-		expect(formatRelative(MS + 2 * 3_600_000, now)).toBe('in 2h');
-		expect(formatRelative(MS + 5 * 60_000, now)).toBe('in 5m');
-	});
-
-	it('renders an em dash when there is nothing to show', () => {
-		expect(formatRelative(undefined, now)).toBe('—');
+describe('utcOffsetLabel', () => {
+	it.each([
+		[0, 'UTC'],
+		[60, 'UTC+01:00'],
+		[-330, 'UTC-05:30'],
+	])('names %i minutes east of Greenwich as %s', (minutes, label) => {
+		expect(utcOffsetLabel(minutes)).toBe(label);
 	});
 });
 
-describe('formatTimestamp', () => {
-	it('pairs the relative text with the absolute stamp as its tooltip', () => {
-		const t = formatTimestamp(NANOS, MS + 5 * 60_000);
-		expect(t.relative).toBe('5m ago');
-		expect(t.absolute).toBe(formatAbsolute(NANOS));
-		expect(t.title).toBe(t.absolute);
+describe('formatZoned', () => {
+	it('prints the local stamp followed by the zone it is read in', () => {
+		const zone = utcOffsetLabel(-new Date(MS).getTimezoneOffset());
+		expect(formatZoned(NANOS)).toBe(`${formatAbsolute(NANOS)} ${zone}`);
+	});
+
+	it('renders an em dash when there is nothing to show', () => {
+		expect(formatZoned(null)).toBe('—');
 	});
 });

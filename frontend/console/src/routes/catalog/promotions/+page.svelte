@@ -80,7 +80,9 @@
 		</Card>
 	{:else if holds.length === 0}
 		<Card class="p-4">
-			<p class="text-muted-foreground text-sm">No promotion is waiting for a decision.</p>
+			<p class="text-muted-foreground text-sm">
+				No promotion visible to you is waiting for a decision.
+			</p>
 		</Card>
 	{:else if projectFilter && projects.state.kind === 'failed'}
 		<ProjectFilterNotice

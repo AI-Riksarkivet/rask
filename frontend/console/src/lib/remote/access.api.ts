@@ -23,6 +23,7 @@ import {
 	type Tuple,
 	type TuplesPage,
 } from '../access';
+import { timeBoxLabel } from '../access/time-box.ts';
 
 // The FGA workbench's data plane, declared with `#lib/reads.svelte.ts`'s `query`/`command`. The functions
 // run in the browser, reach the catalog same-origin with the signed-in session's bearer, and PARSE at
@@ -110,7 +111,13 @@ export const fetchStore = query(
  *  command; there the refresh is a no-op (no store is mounted) and the gallery is invalidated at the
  *  call site instead. */
 export const writeTuple = command(
-	({ user, relation, object }) => `Grant ${relation} on ${object} to ${user}`,
+	({ user, relation, object, condition }) => {
+		// The model the grant dialog was built from is read already; its parameter types say which
+		// value is the window.
+		const model = fetchAccessModel().current;
+		const box = model?.ok ? timeBoxLabel(condition, model.data.conditions) : null;
+		return `Grant ${relation} on ${object} to ${user}${box ? `, time-boxed ${box}` : ''}`;
+	},
 	TupleInputSchema,
 	async (tuple): Promise<ApiResult<Tuple>> => {
 		const result = parsed(

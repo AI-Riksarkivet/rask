@@ -103,7 +103,8 @@
 					text: granting ? grantReason : revokeReason,
 				};
 			} else if (res.status === 400 || res.status === 422) {
-				result = { tone: 'fail', text: `${relation} is not a grantable rung here.` };
+				// The catalog says which half it refused, the subject or the rung.
+				result = { tone: 'fail', text: res.detail };
 			} else {
 				result = { tone: 'fail', text: `Failed (HTTP ${res.status}).` };
 			}

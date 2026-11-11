@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import { parse, type Me } from '#lib/api/index.ts';
 import { authorizedFetch } from '#lib/api/client.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
+import { isEstateAdmin } from '#lib/estate-admin.ts';
 
 // The estate's PROJECT GALLERY, as ONE load — mounted by `/projects` (the navbar-addressable surface). Two routes, one implementation: a second copy of the
 // list is exactly the duplication the 2026-08-03 ruling deletes (a project is the TOP of the
@@ -68,7 +69,7 @@ export async function loadGallery(event: {
 		warehouses: null,
 	}));
 
-	if (me.estate_admin) {
+	if (isEstateAdmin(me)) {
 		try {
 			const res = await authorizedFetch(`${CATALOG_API}/management/v1/projects`);
 			if (res.ok) {
@@ -106,7 +107,7 @@ export async function loadGallery(event: {
 	return {
 		signedIn: true,
 		identityUnavailable: false,
-		estateAdmin: me.estate_admin,
+		estateAdmin: isEstateAdmin(me),
 		meSubject: subjectOf(me),
 		projects: memberships,
 	};

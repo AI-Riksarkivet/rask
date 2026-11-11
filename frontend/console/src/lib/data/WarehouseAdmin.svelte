@@ -33,6 +33,7 @@
 	import WarehouseDeleteDialog from './WarehouseDeleteDialog.svelte';
 	import { controlCursor } from '#lib/live/feeds.api.ts';
 	import { liveRead } from '#lib/live/tick.svelte.ts';
+	import { missingFieldsHint } from '#lib/form-hint.ts';
 
 	let warehouses = $state<WarehouseRecord[] | null>(null);
 	let lastStatus = $state(0);
@@ -44,6 +45,26 @@
 		warehouse: '',
 		namespace: '',
 	});
+
+	const provisionHint = $derived(
+		missingFieldsHint('Provisioning', [
+			['a warehouse id', draft.id],
+			['a project', draft.project],
+		]),
+	);
+	const bindHint = $derived(
+		missingFieldsHint('Binding', [
+			['a warehouse', bindDraft.warehouse],
+			['a namespace', bindDraft.namespace],
+		]),
+	);
+
+	/** "New namespace" on the namespaces page links here: the field it means takes the focus. */
+	function focusWhenLinked(input: HTMLInputElement): void {
+		if (page.url.hash !== '#bind-namespace') return;
+		input.scrollIntoView({ block: 'center' });
+		input.focus();
+	}
 
 	const unauthorized = $derived(warehouses === null && lastStatus === 401);
 	const offline = $derived(warehouses === null && settled && lastStatus !== 401);
@@ -320,7 +341,7 @@
 			loading={warehouses === null}
 			emptyMessage={projectFilter
 				? `No warehouses in project ${projectFilter}.`
-				: 'No warehouses provisioned — the form below creates the first.'}
+				: 'No warehouses visible to you. The list holds only the warehouses your grants reach: ask a project admin for access, or provision one below.'}
 			onrowclick={openDrawer}
 		/>
 
@@ -349,14 +370,16 @@
 				<button
 					class="btn"
 					type="submit"
-					disabled={busy || !draft.id.trim() || !draft.project.trim()}
+					disabled={busy || provisionHint !== null}
+					aria-describedby={provisionHint ? 'provision-hint' : undefined}
 				>
 					Provision
 				</button>
 			</form>
+			{#if provisionHint}<p class="mut" id="provision-hint">{provisionHint}</p>{/if}
 		</section>
 
-		<section>
+		<section id="bind-namespace">
 			<h2>Bind namespace</h2>
 			<form
 				class="row"
@@ -376,15 +399,18 @@
 					bind:value={bindDraft.namespace}
 					placeholder="top-level namespace"
 					aria-label="Namespace"
+					{@attach focusWhenLinked}
 				/>
 				<button
 					class="btn"
 					type="submit"
-					disabled={busy || !bindDraft.warehouse || !bindDraft.namespace.trim()}
+					disabled={busy || bindHint !== null}
+					aria-describedby={bindHint ? 'bind-hint' : undefined}
 				>
 					Bind
 				</button>
 			</form>
+			{#if bindHint}<p class="mut" id="bind-hint">{bindHint}</p>{/if}
 			<p class="mut">
 				Binding routes a top-level namespace's tables to the warehouse's bucket (immutable once
 				set).

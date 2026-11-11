@@ -20,6 +20,18 @@
 	} = $props();
 </script>
 
-<SvelteFlow {nodes} {edges} {width} {height} {nodeTypes} fitView minZoom={0.1} maxZoom={2}>
+<!-- The fit never shrinks the diagram below its natural size: a smaller zoom set its labels at 6-9px,
+     too small to read. A diagram wider than its box is panned instead. -->
+<SvelteFlow
+	{nodes}
+	{edges}
+	{width}
+	{height}
+	{nodeTypes}
+	fitView
+	fitViewOptions={{ minZoom: 1, maxZoom: 1 }}
+	minZoom={0.1}
+	maxZoom={2}
+>
 	<Background />
 </SvelteFlow>

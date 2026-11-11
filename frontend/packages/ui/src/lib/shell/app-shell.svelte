@@ -82,6 +82,15 @@
 	let sidebarOpen = $state(true);
 </script>
 
+<!-- The first stop on every page: past the sidebar's rows straight to the page's own content. -->
+<a
+	href="#main-content"
+	class="bg-background text-foreground focus-visible:ring-ring/50 sr-only z-50 rounded-md border px-3 py-2 text-sm focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus-visible:ring-3"
+	onclick={(e) => {
+		e.preventDefault();
+		document.getElementById('main-content')?.focus();
+	}}>Skip to content</a
+>
 <Sidebar.Provider bind:open={sidebarOpen} class="h-svh overflow-hidden">
 	<!-- The one navigation, on every page. -->
 	<AppSidebar {pathname} {pageNav} />
@@ -171,7 +180,9 @@
 			</div>
 		</header>
 		<div
-			class="content-enter flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden"
+			id="main-content"
+			tabindex="-1"
+			class="content-enter flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden outline-none"
 			{@attach contentEnter}
 		>
 			{@render children()}

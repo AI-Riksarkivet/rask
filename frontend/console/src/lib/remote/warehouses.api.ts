@@ -2,6 +2,7 @@ import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '#lib/api/client.ts';
 import { catalogJSON, parsed } from '#lib/doors.ts';
+import { ControlEventSchema, type ControlEvent } from '#lib/admin/control.ts';
 import type { ProjectSummary } from '../catalog';
 
 // The project + warehouse registry for the estate-level pages (`/projects`, one project's overview).
@@ -45,17 +46,7 @@ export const fetchVisibleProjects = query(async (): Promise<ApiResult<{ project:
 	parsed(await catalogJSON('/management/v1/projects'), v.array(v.object({ project: v.string() }))),
 );
 
-/** One control event, as `/management/v1/events` reports it — the fields the project page renders. */
-const ProjectEventSchema = v.object({
-	event_id: v.string(),
-	occurred_at: v.string(),
-	action: v.string(),
-	object_type: v.string(),
-	object_id: v.string(),
-	actor: v.nullable(v.string()),
-});
-const EventsPageSchema = v.object({ events: v.array(ProjectEventSchema) });
-export type ProjectEvent = v.InferOutput<typeof ProjectEventSchema>;
+const EventsPageSchema = v.object({ events: v.array(ControlEventSchema) });
 
 /** The 10 most recent control events touching ONE project (#71) — its own record plus its
  *  warehouses. Scope is honest about its reach: namespace/table events cannot be mapped to a
@@ -65,7 +56,7 @@ export type ProjectEvent = v.InferOutput<typeof ProjectEventSchema>;
  *  page renders the 403 as its own quiet state rather than an error. */
 export const projectEvents = query(
 	v.string(),
-	async (project): Promise<ApiResult<ProjectEvent[]>> => {
+	async (project): Promise<ApiResult<ControlEvent[]>> => {
 		const rec = await catalogJSON(`/management/v1/projects/${enc(project)}`);
 		const mine = new Set<string>([`project:${project}`]);
 		if (rec.ok) {

@@ -102,7 +102,12 @@
 						onclick={onrowclick ? () => onrowclick(row.original) : undefined}
 						onkeydown={onrowclick
 							? (e: KeyboardEvent) => {
-									if (e.key === 'Enter') onrowclick(row.original);
+									// The row's own key only: Enter on a link or a button inside the row is that
+									// control's, and must not also open the row.
+									if (e.target !== e.currentTarget) return;
+									if (e.key !== 'Enter' && e.key !== ' ') return;
+									e.preventDefault();
+									onrowclick(row.original);
 								}
 							: undefined}
 						role={onrowclick ? 'button' : undefined}

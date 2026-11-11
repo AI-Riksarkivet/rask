@@ -26,6 +26,7 @@
 	// The grant goes through the SAME remote command the FGA workbench writes with — one write door,
 	// so every raw tuple write is validated, audited, control-event-emitting and single-flight alike.
 	import { writeTuple } from '#lib/remote/access.api.ts';
+	import { missingFieldsHint } from '#lib/form-hint.ts';
 
 	let {
 		open = $bindable(false),
@@ -46,6 +47,12 @@
 	let admin = $state('');
 	let busy = $state(false);
 	let error = $state<string | null>(null);
+	const createHint = $derived(
+		missingFieldsHint('Creating a project', [
+			['a project name', name],
+			['a first warehouse id', whId],
+		]),
+	);
 
 	// Prefill the admin subject on the closed→open TRANSITION only (kept editable — the estate admin
 	// may be provisioning for someone else, and clearing the field must stick: an unconditional
@@ -220,10 +227,16 @@
 				<button type="button" class="btn ghost" disabled={busy} onclick={() => (open = false)}>
 					Cancel
 				</button>
-				<button class="btn" type="submit" disabled={busy || !name.trim() || !whId.trim()}>
+				<button
+					class="btn"
+					type="submit"
+					disabled={busy || createHint !== null}
+					aria-describedby={createHint ? 'project-create-hint' : undefined}
+				>
 					{busy ? '…' : 'Create project'}
 				</button>
 			</div>
+			{#if createHint}<p class="hint" id="project-create-hint">{createHint}</p>{/if}
 		</form>
 	</Dialog.Content>
 </Dialog.Root>
@@ -257,6 +270,11 @@
 	.error {
 		color: var(--fail);
 		margin: 0;
+	}
+	.hint {
+		color: var(--muted-foreground);
+		margin: 0;
+		text-align: right;
 	}
 	.actions {
 		display: flex;

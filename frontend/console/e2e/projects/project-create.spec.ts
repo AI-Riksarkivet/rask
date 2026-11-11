@@ -121,7 +121,16 @@ test('gold warehouse and admin grant are optional — one create, no tuple', asy
 	await page.goto('/projects');
 	await page.getByRole('button', { name: 'New project' }).click();
 	const dialog = page.getByRole('dialog');
+	// Create waits on the two required fields, and says so rather than sitting disabled.
+	const create = dialog.getByRole('button', { name: 'Create project' });
+	await expect(create).toBeDisabled();
+	await expect(create).toHaveAccessibleDescription(
+		'Creating a project needs a project name and a first warehouse id.',
+	);
 	await dialog.getByLabel('Project name').fill('solo');
+	await expect(create).toHaveAccessibleDescription(
+		'Creating a project needs a first warehouse id.',
+	);
 	await dialog.getByLabel('Warehouse id', { exact: true }).fill('solo-wh');
 	await dialog.getByLabel('Warehouse bucket').fill('solo-bucket');
 	await dialog.getByLabel('Initial admin').clear();

@@ -82,10 +82,15 @@ test('a project the reader cannot see reads as missing or not theirs, never as a
 			body: JSON.stringify({ code: 4, detail: 'project not found: secret' }),
 		}),
 	);
+	const sent: string[] = [];
+	page.on('request', (req) => sent.push(new URL(req.url()).pathname));
 	await page.goto('/projects/secret');
 	await expect(
 		page.getByText('that you can see: it does not exist, or you are not a member of it.'),
 	).toBeVisible();
+	// Nothing is read for a project that is not there: no policies, no events.
+	expect(sent.filter((p) => p.endsWith('/projects/secret/policies'))).toEqual([]);
+	expect(sent.filter((p) => p.endsWith('/management/v1/events'))).toEqual([]);
 	await expect(page.locator('.empty code', { hasText: 'secret' })).toBeVisible();
 	// An honest answer, not a project that looks like it has nothing in it.
 	await expect(page.getByRole('heading', { name: 'Warehouses' })).toHaveCount(0);

@@ -317,3 +317,63 @@ test('an UNMANAGED namespace stays silent — no policy, no notice', async ({ pa
 	});
 	await expect(page.getByText(/Granting here is/)).toHaveCount(0);
 });
+
+test('a dropped namespace shows that it was dropped, with its deadline, and reads none of its governance', async ({
+	page,
+}) => {
+	await seed(page, {
+		'POST /v1/namespace/gone/describe': { status: 404, body: { detail: 'namespace not found' } },
+		// Dropped twice: the newer drop is the one the page names.
+		'GET /management/v1/namespace/gone/tasks': [
+			{
+				kind: 'namespace',
+				id: 'gone',
+				uuid: '0b1f9c2e-0000-4000-8000-000000000001',
+				location: 's3://acme-bucket/gone-old',
+				dropped_by: 'user:dex~older-dropper',
+				dropped_at: '2026-11-10T08:00:00Z',
+				expires_at: '2026-11-10T09:00:00Z',
+			},
+			{
+				kind: 'namespace',
+				id: 'gone',
+				uuid: '5e883388-5ab8-46ff-b835-7d29bf4a72f6',
+				location: 's3://acme-bucket/gone',
+				dropped_by: 'user:dex~08a8684b-db88-4b73-90a9-3cd1661f5466',
+				dropped_at: '2026-11-11T19:31:00Z',
+				expires_at: '2026-11-11T20:31:00Z',
+			},
+		],
+	});
+	const sent: string[] = [];
+	page.on('request', (req) => sent.push(new URL(req.url()).pathname));
+	await page.goto('/catalog/namespaces/gone');
+	const dropped = page.getByTestId('namespace-dropped');
+	await expect(dropped).toContainText('This namespace was dropped');
+	await expect(dropped).toContainText('user:dex~08a8684b-db88-4b73-90a9-3cd1661f5466');
+	await expect(dropped).not.toContainText('older-dropper');
+	await expect(dropped).toContainText(/recoverable until \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/);
+	await expect(page.getByText(/Denied/)).toHaveCount(0);
+	expect(sent.filter((p) => /namespace\/gone\/(policy|access|managed-access)/.test(p))).toEqual([]);
+});
+
+test('a namespace the catalog refuses, with no trash record, is not shown and its governance is not read', async ({
+	page,
+}) => {
+	// A top-level namespace dropped with no grace period leaves no trash record, and its describe is
+	// refused (403) for a caller who can see no ancestor of it.
+	await seed(page, {
+		'POST /v1/namespace/gone/describe': {
+			status: 403,
+			body: { detail: 'can_get_metadata required on namespace:gone' },
+		},
+	});
+	const sent: string[] = [];
+	page.on('request', (req) => sent.push(new URL(req.url()).pathname));
+	await page.goto('/catalog/namespaces/gone');
+	await expect(page.getByTestId('namespace-not-visible')).toContainText(
+		'No namespace gone that you can see',
+	);
+	await expect(page.getByText(/Denied/)).toHaveCount(0);
+	expect(sent.filter((p) => /namespace\/gone\/(policy|access|managed-access)/.test(p))).toEqual([]);
+});

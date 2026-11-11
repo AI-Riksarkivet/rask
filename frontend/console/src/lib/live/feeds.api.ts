@@ -3,6 +3,8 @@ import { authorizedFetch } from '#lib/api/client.ts';
 import { lineagePulse, POLL_MS, PROBE_TIMEOUT_MS, type LineagePulse } from '#lib/api/runs-feed.ts';
 import * as v from 'valibot';
 import { query } from '#lib/reads.svelte.ts';
+import { page } from '$app/state';
+import { isEstateAdmin } from '#lib/estate-admin.ts';
 import { CATALOG_API, LINEAGE_API } from '#lib/upstreams.ts';
 
 export type { LineagePulse } from '#lib/api/runs-feed.ts';
@@ -35,8 +37,7 @@ const ControlProbeSchema = v.object({ cursor: v.number(), reset: v.boolean() });
 
 /**
  * The catalog control-plane cursor: the head of the catalog's change-event ring buffer, yielded when
- * it moves. Estate-admin gated at the catalog, so this ticks only for the identities the admin and
- * settings surfaces are already behind.
+ * it moves. Estate-admin gated at the catalog, so it is opened only for an estate admin.
  *
  * What it yields is a GENERATION, not the buffer head. A `reset` (the caller's cursor fell off the
  * bounded, drop-oldest buffer) is a change the console must re-read on, but it can hand back the very
@@ -47,6 +48,15 @@ export const controlCursor = query.live(async function* (): AsyncGenerator<numbe
 	let generation = 0;
 	let settled = false;
 	for (;;) {
+		// Polled only for an estate admin: the catalog refuses everyone else (authorization scope is the
+		// feed's data scope), so a poll for them would be a refusal every few seconds and a cursor that
+		// never moves; their pages read on mount and after their own writes. Asked on every tick, not
+		// once: this cursor lives as long as the page, and the root layout's `me` can arrive or change
+		// after it opened (a re-run of the layout's load).
+		if (!isEstateAdmin(page.data.me)) {
+			await sleep(POLL_MS);
+			continue;
+		}
 		let moved = false;
 		try {
 			const res = await authorizedFetch(`${CATALOG_API}/management/v1/events?since=${cursor}`, {

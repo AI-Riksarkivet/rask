@@ -31,8 +31,9 @@
 	import { Plus, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { tableFromJSON, tableToIPC } from 'apache-arrow';
 	import { createTableWithRows } from './catalog';
+	import { parseJsonRows, rowsToArrow } from './json-rows';
+	import { missingFieldsHint } from '#lib/form-hint.ts';
 	import { declareTable, fetchTables } from './remote/catalog.api';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
@@ -71,7 +72,7 @@
 	// What a BARE declare leaves behind, said where the user decides to make one — the dead end was
 	// not only missing a door, it was silent about being a dead end.
 	const DECLARE_ONLY_NOTE =
-		'Left empty, this reserves the name and writes no data: the table has no version, no schema and no detail page until its first write, and appending rows to it is refused. Come back here with the same namespace and name to land that first version.';
+		'Left empty, this reserves the name and writes no data: the table has no version and no schema until its first write, and appending rows to it is refused. Its page, or this form with the same namespace and name, lands that first version.';
 
 	// #85 declare-table form state — hidden behind a toggle so the registry stays a list by default.
 	let declaring = $state(false);
@@ -82,6 +83,12 @@
 	let declBusy = $state(false);
 	let declMsg = $state<{ ok: boolean; text: string } | null>(null);
 	const hasRows = $derived(declRows.trim().length > 0);
+	const declareHint = $derived(
+		missingFieldsHint(hasRows ? 'Creating' : 'Declaring', [
+			['a namespace', declNs],
+			['a table name', declName],
+		]),
+	);
 
 	async function load(): Promise<void> {
 		const [res] = await Promise.all([fetchTables(), projects.load()]);
@@ -159,26 +166,18 @@
 		const ns = declNs.trim();
 		const name = declName.trim();
 		if (declBusy || !ns || !name) return;
-		let rows: Record<string, unknown>[];
-		try {
-			const parsed: unknown = JSON.parse(declRows);
-			if (!Array.isArray(parsed) || parsed.length === 0) {
-				throw new Error('expected a non-empty JSON array of row objects');
-			}
-			rows = parsed as Record<string, unknown>[];
-		} catch (e) {
-			declMsg = {
-				ok: false,
-				text: `Invalid rows: ${e instanceof Error ? e.message : String(e)}`,
-			};
+		const parsed = parseJsonRows(declRows);
+		if (!parsed.ok) {
+			declMsg = { ok: false, text: `Invalid rows: ${parsed.reason}` };
 			return;
 		}
+		const rows = parsed.rows;
 		declBusy = true;
 		declMsg = null;
 		try {
-			// Browser-side Arrow-IPC encode (apache-arrow), exactly as the detail page's insert does —
-			// the inferred schema BECOMES the table's schema on a create.
-			const arrow = tableToIPC(tableFromJSON(rows), 'stream');
+			// Browser-side Arrow-IPC encode: the inferred schema BECOMES the table's schema on a create,
+			// so whole numbers are written as integers (`rowsToArrow`).
+			const arrow = rowsToArrow(rows);
 			const res = await createTableWithRows({ table: `${ns}$${name}`, arrow });
 			if (res.ok) {
 				declMsg = {
@@ -385,9 +384,15 @@
 					: DECLARE_ONLY_NOTE}
 			</p>
 			<div class="row">
-				<button class="btn" type="submit" disabled={declBusy || !declNs.trim() || !declName.trim()}>
+				<button
+					class="btn"
+					type="submit"
+					disabled={declBusy || declareHint !== null}
+					aria-describedby={declareHint ? 'declare-hint' : undefined}
+				>
 					{declBusy ? '…' : hasRows ? 'Create with rows' : 'Declare'}
 				</button>
+				{#if declareHint}<span class="hint" id="declare-hint">{declareHint}</span>{/if}
 			</div>
 		</form>
 	{/if}
@@ -437,7 +442,7 @@
 				loading={tables === null || filterWaits}
 				emptyMessage={projectFilter
 					? `No tables in project ${projectFilter}.`
-					: 'No tables registered — a create makes the first.'}
+					: 'No tables visible to you. The list holds only the tables your grants reach: ask a project admin for access, or declare one.'}
 				onrowclick={openDrawer}
 			/>
 		{/if}

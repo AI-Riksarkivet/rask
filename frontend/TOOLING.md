@@ -123,6 +123,8 @@ which tab is shown nor what the panel holds. A move or a split re-renders the gr
 action the patch focuses the list whose active tab is the one that moved; unpatched, focus falls to the page and the
 next key does nothing (measured on the deployed workbench with playwright-cli, 2026-11-11).
 `e2e/workbench/dock.spec.ts`'s keyboard test presses each key where the keyboard is, and fails on an unpatched install.
+Both gaps are reported upstream as https://github.com/play-horizon/horizon-layout/issues/23, and the patch goes once a
+release carries the fix.
 On a horizon-layout upgrade, drop the patch if upstream ships the same; otherwise regenerate it with
 `bun --cwd=frontend patch console/node_modules/horizon-layout`, the edit, and `bun --cwd=frontend patch --commit` on
 the same path.

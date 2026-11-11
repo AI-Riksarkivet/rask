@@ -20,16 +20,16 @@
 		white-space: nowrap;
 	}
 	.stage.bronze {
-		color: #b0763c;
-		border-color: color-mix(in srgb, #b0763c 55%, var(--line));
+		color: var(--stage-bronze);
+		border-color: color-mix(in srgb, var(--stage-bronze) 55%, var(--border));
 	}
 	.stage.silver {
-		color: #9aa4b2;
-		border-color: color-mix(in srgb, #9aa4b2 55%, var(--line));
+		color: var(--stage-silver);
+		border-color: color-mix(in srgb, var(--stage-silver) 55%, var(--border));
 	}
 	.stage.gold {
-		color: var(--accent, #ffc14d);
-		border-color: color-mix(in srgb, var(--accent, #ffc14d) 55%, var(--line));
+		color: var(--stage-gold);
+		border-color: color-mix(in srgb, var(--stage-gold) 55%, var(--border));
 	}
 	.mono {
 		font-family: ui-monospace, monospace;

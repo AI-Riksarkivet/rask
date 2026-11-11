@@ -33,9 +33,6 @@
 		return groups;
 	}
 
-	const timeOf = (at: number): string =>
-		new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-
 	/** "Failed (HTTP 409)", "Failed (unreachable)" or "Failed". */
 	function failureLabel(status: number | null): string {
 		if (status === null) return 'Failed';
@@ -49,6 +46,7 @@
 	import { Button } from '../components/button/index.js';
 	import * as Popover from '../components/popover/index.js';
 	import { cn } from '../utils/cn.js';
+	import { formatZoned } from '../utils/timestamp.js';
 
 	// The bell: the reader's OWN activity, the outcome of every write the console sent for them, kept
 	// in their browser by the console. It does not fetch and does not store: the console hands the
@@ -153,17 +151,13 @@
 										<CircleX class="text-destructive mt-0.5 size-4 shrink-0" aria-hidden="true" />
 									{/if}
 									<div class="min-w-0 flex-1">
-										<div class="flex min-w-0 items-baseline gap-2">
-											<p class="min-w-0 flex-1 truncate text-sm font-medium" title={entry.label}>
-												{entry.label}
-											</p>
-											<time
-												class="text-muted-foreground shrink-0 text-xs tabular-nums"
-												datetime={new Date(entry.at).toISOString()}
-											>
-												{timeOf(entry.at)}
-											</time>
-										</div>
+										<p class="text-sm font-medium break-words">{entry.label}</p>
+										<time
+											class="text-muted-foreground block text-xs tabular-nums"
+											datetime={new Date(entry.at).toISOString()}
+										>
+											{formatZoned(entry.at)}
+										</time>
 										{#if entry.ok}
 											<p class="text-success text-xs">Succeeded</p>
 										{:else}

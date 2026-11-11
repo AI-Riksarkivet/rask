@@ -20,6 +20,10 @@ test('the audit page says where the trail lives instead of rendering an empty on
 	await page.goto('/settings/audit');
 	await expect(page.getByText("lives in the platform's telemetry store")).toBeVisible();
 	await expect(page.getByRole('row')).toHaveCount(0);
+	// No control that could not act: no filters, no search.
+	await expect(page.getByRole('textbox')).toHaveCount(0);
+	await expect(page.getByRole('combobox')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Search' })).toHaveCount(0);
 });
 
 test('the sidebar lights Settings and its Audit row on the child route', async ({ page }) => {

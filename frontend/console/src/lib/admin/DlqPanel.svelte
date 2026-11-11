@@ -213,7 +213,7 @@
 	<header>
 		<Inbox size={16} />
 		<h1>Lineage DLQ</h1>
-		<span class="sub mono">transactional-outbox at-risk events · view + replay (#83)</span>
+		<span class="sub mono">lineage events waiting in the outbox: view and replay</span>
 	</header>
 
 	<div class="bar">

@@ -117,3 +117,26 @@ test('revoke hits the revoke endpoint', async ({ page }) => {
 	// …and never the grant: the two rungs travel to their OWN endpoints.
 	expect(await callTo(page, `/management/v1/table/${TABLE}/access/grant`)).toBeUndefined();
 });
+
+const BOB = 'user:dex~1b6e2f5a-7c4d-4e9b-9f1a-2d3c4b5a6e7f';
+
+test('a principal is shown by its full id, and its copy control puts the id on the clipboard', async ({
+	context,
+	page,
+}) => {
+	await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+	await seed(page, {
+		[`POST /management/v1/table/${TABLE}/access/list`]: {
+			object: 'table:db1$t',
+			grants: [{ relation: 'can_read_data', users: [BOB] }],
+		},
+	});
+	await page.goto('/catalog/tables/db1%24t');
+	await page.getByRole('tab', { name: 'access' }).click();
+	await page.getByRole('button', { name: 'Access review' }).click();
+	const holders = page.getByRole('row', { name: /can_read_data/ });
+	await expect(holders).toContainText(BOB);
+	await holders.getByRole('button', { name: `Copy ${BOB}` }).click();
+	await expect(holders.getByRole('button', { name: `Copied ${BOB}` })).toBeVisible();
+	expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(BOB);
+});

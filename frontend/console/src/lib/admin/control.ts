@@ -31,3 +31,22 @@ export const EventsPageSchema = v.object({
 	cursor: v.number(),
 	reset: v.boolean(),
 } satisfies Record<keyof PageWire, unknown>);
+
+/** What a grant event's `extra` names: the relation and the subject it was granted to or revoked
+ *  from, and the condition a time-boxed grant carries. The catalog's grant doors write these keys;
+ *  `extra` is open per action, so it is parsed here, where a grant is read out of it. */
+const GrantExtraSchema = v.object({
+	relation: v.string(),
+	subject: v.string(),
+	condition: v.optional(v.nullable(v.string()), null),
+});
+type GrantDetail = v.InferOutput<typeof GrantExtraSchema>;
+
+/** The grant an event announces, or `null` for an event whose `extra` names none. */
+export function grantDetail(e: ControlEvent): GrantDetail | null {
+	const parsed = v.safeParse(GrantExtraSchema, e.extra);
+	return parsed.success ? parsed.output : null;
+}
+
+/** The object an event is about, by the name the catalog gave it; the id only when it named none. */
+export const objectLabel = (e: ControlEvent): string => e.object_name ?? e.object_id;

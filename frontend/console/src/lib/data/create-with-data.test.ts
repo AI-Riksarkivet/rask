@@ -14,7 +14,10 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { tableFromJSON, Type } from 'apache-arrow';
+
 import { createTableWithRows } from './catalog';
+import { parseJsonRows, rowsToTable } from './json-rows';
 
 /** The real client is exercised, with only the network stubbed — a mocked `#lib/http` would assert
  *  the arguments this module passes rather than the request it actually makes. */
@@ -73,5 +76,38 @@ describe('createTableWithRows', () => {
 		});
 
 		expect(res).toEqual({ ok: false, status: 403, detail: 'no' });
+	});
+});
+
+describe('rowsToTable', () => {
+	const typeOf = (rows: Record<string, unknown>[], column: string) =>
+		rowsToTable(rows).schema.fields.find((f) => f.name === column)?.typeId;
+
+	it('reads a column of whole JSON numbers as Int64, nulls kept', () => {
+		const table = rowsToTable([{ id: 1 }, { id: null }, { id: 3 }]);
+		expect(table.schema.fields[0]?.typeId).toBe(Type.Int);
+		expect(Array.from(table.getChild('id')?.toArray() ?? [])).toEqual([1n, 0n, 3n]);
+		expect(table.getChild('id')?.nullCount).toBe(1);
+	});
+
+	it('keeps Float64 once any value has a fraction or leaves the safe range', () => {
+		expect(typeOf([{ x: 1 }, { x: 1.5 }], 'x')).toBe(Type.Float);
+		expect(typeOf([{ x: 2 ** 60 }], 'x')).toBe(Type.Float);
+	});
+
+	it('leaves every other column to apache-arrow inference', () => {
+		const rows = [{ name: 'a', ok: true, x: 0.5 }];
+		expect(String(rowsToTable(rows).schema.fields.map((f) => f.type))).toBe(
+			String(tableFromJSON(rows).schema.fields.map((f) => f.type)),
+		);
+	});
+});
+
+describe('parseJsonRows', () => {
+	it('takes a non-empty array of objects, and says why anything else is not rows', () => {
+		expect(parseJsonRows('[{"id": 1}]')).toEqual({ ok: true, rows: [{ id: 1 }] });
+		expect(parseJsonRows('[1, 2]').ok).toBe(false);
+		expect(parseJsonRows('[]').ok).toBe(false);
+		expect(parseJsonRows('{').ok).toBe(false);
 	});
 });

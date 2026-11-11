@@ -13,6 +13,7 @@
 	// `onrecovered` — the undrop bumps the registry, so the parent re-reads the detail.
 	import { Undo2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
+	import { formatZoned } from '@rask/ui/utils';
 	import { Subject } from '#lib/access/identity/index.ts';
 	import { fetchTableTasks, undropTable, type TrashEntry } from '../remote/catalog.api';
 
@@ -22,7 +23,7 @@
 	let recovering = $state(false);
 	let recoverError = $state<string | null>(null);
 	// Deliberately NOT a `'loading'` sentinel inside the `TrashEntry | null` union: that string is
-	// TRUTHY, so the recover branch would render for it and blow up on `recoverable.dropped_at.slice`.
+	// TRUTHY, so the recover branch would render for it and read fields a string does not have.
 	let probe = $state<'loading' | 'done' | 'failed'>('loading');
 	let probeError = $state<string | null>(null);
 
@@ -94,8 +95,8 @@
 		</p>
 		<p class="mut">
 			Dropped by <Subject value={recoverable.dropped_by} />
-			on {recoverable.dropped_at.slice(0, 10)} · recoverable until
-			<strong>{recoverable.expires_at.slice(0, 10)}</strong>, after which the maintenance sweep
+			on {formatZoned(recoverable.dropped_at)} · recoverable until
+			<strong>{formatZoned(recoverable.expires_at)}</strong>, after which the maintenance sweep
 			reports it for reclamation.
 		</p>
 		{#if recoverError}<p class="problem" data-testid="undrop-problem">{recoverError}</p>{/if}

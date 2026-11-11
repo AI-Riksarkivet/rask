@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test';
 import { mockMe, signIn, TOKEN } from './session';
 
-// The stores-by-tier page and its attach form. No door on this stack serves a stores registry
-// (`#lib/storage/remote/storage.api.ts`), so the page and the form both say so, and neither sends a
-// request: a console calling a door the catalog does not serve would meet a 404 live that a mock hid.
+// The stores-by-tier page. No door on this stack serves a stores registry
+// (`#lib/storage/remote/storage.api.ts`), so the page says so, sends no request, and offers no write
+// that could not act: a console calling a door the catalog does not serve would meet a 404 live that a
+// mock hid.
 
 const REASON = 'the catalog serves no stores-by-tier registry';
 
@@ -12,9 +13,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	await mockMe(page);
 });
 
-test('the tier page names the missing registry, and the attach form names it too', async ({
-	page,
-}) => {
+test('the tier page names the missing registry and offers no attach', async ({ page }) => {
 	const sent: string[] = [];
 	page.on('request', (req) => {
 		const path = new URL(req.url()).pathname;
@@ -26,14 +25,6 @@ test('the tier page names the missing registry, and the attach form names it too
 		REASON,
 	);
 
-	await page.getByRole('button', { name: 'Attach store' }).click();
-	await page.getByLabel('name', { exact: true }).fill('x');
-	await page.getByLabel('bucket', { exact: true }).fill('x');
-	await page.getByRole('button', { name: 'Attach', exact: true }).click();
-
-	// The refusal's own detail, and the form stays OPEN with the draft intact: a refused write must
-	// not read as a completed one.
-	await expect(page.getByText(REASON, { exact: false }).last()).toBeVisible();
-	await expect(page.getByLabel('name', { exact: true })).toHaveValue('x');
+	await expect(page.getByRole('button', { name: 'Attach store' })).toHaveCount(0);
 	expect(sent).toEqual([]);
 });

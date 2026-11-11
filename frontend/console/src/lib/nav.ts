@@ -15,6 +15,7 @@ import {
 import type { PageNav, PageNavLeaf } from '@rask/ui/shell';
 import type { Me } from '#lib/api/me.ts';
 import { exact, seg, under } from '#lib/nav-match.ts';
+import { isEstateAdmin } from '#lib/estate-admin.ts';
 
 /**
  * The console's one navigation: every route, in one sidebar, on every page.
@@ -91,7 +92,7 @@ export function areaOf(pathname: string): string {
  * admin gets every row live; anyone else gets the estate-admin rows disabled with the reason.
  */
 export function consoleSidebar(me: Me | null): PageNav {
-	const admin = me?.estate_admin ?? false;
+	const admin = isEstateAdmin(me);
 	// The FGA denial's own wording, so the rail, the route's 403 and the API name the same relation on
 	// the same object. An unresolved identity is told to sign in instead: naming a relation to someone
 	// the console cannot identify is no advice.

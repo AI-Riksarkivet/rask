@@ -4,8 +4,8 @@
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation — a draft typed on table A cannot land on B.
-	import { tableFromJSON, tableToIPC } from 'apache-arrow';
 	import { insertRows } from '../catalog';
+	import { parseJsonRows, rowsToArrow } from '../json-rows';
 
 	let { table, onchanged }: { table: string; onchanged: () => Promise<void> } = $props();
 
@@ -17,25 +17,17 @@
 		if (insertBusy || !insertJson.trim()) return;
 		insertBusy = true;
 		insertMsg = null;
-		let rows: Record<string, unknown>[];
-		try {
-			const parsed: unknown = JSON.parse(insertJson);
-			if (!Array.isArray(parsed) || parsed.length === 0) {
-				throw new Error('expected a non-empty JSON array of row objects');
-			}
-			rows = parsed as Record<string, unknown>[];
-		} catch (e) {
-			insertMsg = {
-				ok: false,
-				text: `Invalid rows: ${e instanceof Error ? e.message : String(e)}`,
-			};
+		const parsed = parseJsonRows(insertJson);
+		if (!parsed.ok) {
+			insertMsg = { ok: false, text: `Invalid rows: ${parsed.reason}` };
 			insertBusy = false;
 			return;
 		}
+		const rows = parsed.rows;
 		try {
-			// Browser-side Arrow-IPC encode (apache-arrow) → the catalog's Arrow-body insert. The inferred
-			// schema must match the table's — a mismatch is the catalog's honest error, surfaced below.
-			const arrow = tableToIPC(tableFromJSON(rows), 'stream');
+			// Browser-side Arrow-IPC encode → the catalog's Arrow-body insert, which casts the batch to the
+			// table's schema; a batch it cannot cast is the catalog's honest error, surfaced below.
+			const arrow = rowsToArrow(rows);
 			const res = await insertRows({ table, arrow });
 			if (res.ok) {
 				insertMsg = {

@@ -205,16 +205,18 @@
 						{#each held as grant (grant.relation)}
 							<tr>
 								<td class="mono rel">{grant.relation}</td>
-								<!-- One flex-gapped chip per holder (#68): adjacent inline spans rendered two
-								     subjects as ONE glued string once an opaque OIDC sub wrapped. The chip shows
-								     the display form; the FULL subject rides `title`, because the raw value is
-								     what a tuple write or a support ticket needs. -->
+								<!-- One flex-gapped chip per holder (#68), so two holders never read as one string. The
+								     chip shows the FULL subject with a copy control, because the raw value is what a
+								     tuple write or a support ticket needs and no directory resolves it to a name. -->
 								<td class="whos">
 									{#each grant.users as user (user)}
 										{#if user === '*'}
 											<span class="who mono wild">everyone (*)</span>
 										{:else}
-											<Subject value={user} class="who" />
+											<Subject
+												value={user}
+												class="bg-muted border-border mr-1 mb-[3px] rounded-sm border px-1.5"
+											/>
 										{/if}
 									{/each}
 								</td>
@@ -253,7 +255,7 @@
 					<p
 						class={['verdict', { allow: simVerdictShown.allowed, deny: !simVerdictShown.allowed }]}
 					>
-						<span class="mono">{simVerdictShown.user}</span>
+						<Subject value={simVerdictShown.user} />
 						{simVerdictShown.allowed ? 'can' : 'cannot'}
 						<span class="mono">{simVerdictShown.relation}</span> on this {kind}.
 					</p>

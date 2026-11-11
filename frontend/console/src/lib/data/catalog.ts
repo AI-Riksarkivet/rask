@@ -20,7 +20,19 @@ import type { Policy } from '#lib/policies.ts';
 import { command } from '#lib/reads.svelte.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 
-export type TableDescribe = components['schemas']['DescribeTableResponse'];
+/** The describe fields the table page reads (`DescribeTableResponse`), parsed at the boundary: a body
+ *  that drifts from them is the data layer's 502, never a cast. Loose, so the rest of the answer rides
+ *  along untouched. */
+const stringMap = v.optional(v.nullable(v.record(v.string(), v.string())));
+export const TableDescribeSchema = v.looseObject({
+	version: v.optional(v.nullable(v.number())),
+	location: v.optional(v.nullable(v.string())),
+	is_only_declared: v.optional(v.nullable(v.boolean())),
+	properties: stringMap,
+	metadata: stringMap,
+	schema: v.optional(v.nullable(v.looseObject({ fields: v.optional(v.array(v.unknown())) }))),
+} satisfies Partial<Record<keyof components['schemas']['DescribeTableResponse'], unknown>>);
+export type TableDescribe = v.InferOutput<typeof TableDescribeSchema>;
 export type TableStats = components['schemas']['GetTableStatsResponse'];
 export type TableVersions = components['schemas']['ListTableVersionsResponse'];
 export type TableTags = components['schemas']['ListTableTagsResponse'];
@@ -49,6 +61,8 @@ export type TableDetail = {
 	indexes: TableIndexes | PartError | null;
 	policy: Policy | PartError | null;
 	format?: { name: string; storage_version: string }; // #78 the catalog's fixed Lance file format
+	/** The table is declared and holds no version yet (`is_only_declared`): no part was read. */
+	declared?: boolean;
 };
 
 /** The catalog's name for the shared status-aware `ApiResult` (`#lib/api/client.ts`). */

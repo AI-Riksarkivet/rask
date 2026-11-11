@@ -143,6 +143,8 @@ const callTo = async (page: Page, path: string): Promise<Body | undefined> =>
 const bodyOf = async (page: Page, path: string): Promise<unknown> =>
 	(await callTo(page, path))?.body;
 
+test.use({ timezoneId: 'UTC' });
+
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
 	await signIn(context, { token });
@@ -330,13 +332,19 @@ test('add-column posts a SQL-expression column (#74)', async ({ page }) => {
 		.toEqual({ new_columns: [{ name: 'doubled', expression: 'id * 2' }] });
 });
 
-test('drop-column via the row × posts {columns} (#74)', async ({ page }) => {
+test('drop-column via the row × asks first, then posts {columns} (#74)', async ({ page }) => {
 	await page.goto('/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Schema' }).first();
 	await section.getByRole('button', { name: 'drop id' }).click();
+	// The × only asks: nothing is dropped until the dialog's own button says so.
+	const dialog = page.getByRole('alertdialog');
+	await expect(dialog).toContainText('Drop column id from db1$t');
+	expect(await callTo(page, `/v1/table/${TABLE}/drop_columns`)).toBeUndefined();
+	await dialog.getByRole('button', { name: 'Drop column', exact: true }).click();
 	await expect
 		.poll(() => bodyOf(page, `/v1/table/${TABLE}/drop_columns`))
 		.toEqual({ columns: ['id'] });
+	await expect(page.getByRole('alertdialog')).toHaveCount(0);
 });
 
 test('rename-column via the row ✎ posts an alter path→rename (#74)', async ({ page }) => {
@@ -502,6 +510,17 @@ test('surfaces the Lance file format badge (#78)', async ({ page }) => {
 test('danger-zone drop confirms via the AlertDialog, closes it, and the registry row is gone (#85)', async ({
 	page,
 }) => {
+	// The table's warehouse keeps drops for an hour, so the dialog names a deadline, not "permanently".
+	await seed(page, {
+		'GET /management/v1/warehouses/-/bindings': { bindings: { db1: 'wh1' } },
+		'GET /management/v1/warehouses/wh1': {
+			id: 'wh1',
+			project: 'acme',
+			bucket: 'wh1',
+			root_uri: 's3://wh1',
+			delete_profile: { mode: 'soft', grace_days: 1 / 24 },
+		},
+	});
 	await page.goto('/catalog/tables/db1%24t');
 	// the post-drop world the registry re-lists after navigation
 	await seed(page, { 'GET /v1/table': { tables: ['db1$other'] } });
@@ -510,6 +529,10 @@ test('danger-zone drop confirms via the AlertDialog, closes it, and the registry
 	// The confirm is the portalled @rask/ui AlertDialog — drive it by role, not the trigger section.
 	const dialog = page.getByRole('alertdialog');
 	await expect(dialog).toContainText('Drop table db1$t');
+	await expect(dialog).toContainText(
+		/recoverable until \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC([+-]\d{2}:\d{2})?/,
+	);
+	await expect(dialog).not.toContainText('permanently');
 	await dialog.getByRole('button', { name: 'Drop', exact: true }).click();
 	// The exact wire path, %24-encoded id included — poll, don't race the request.
 	await expect.poll(() => callTo(page, `/v1/table/${TABLE}/drop`)).toBeDefined();
@@ -703,6 +726,42 @@ test('the backfill affordance is shown gated, and reaches no catalog (#85)', asy
 	await expect.poll(() => callTo(page, `/v1/table/${TABLE}/backfill_column`)).toBeUndefined();
 });
 
+test('a declared table says so, reads no data door, and offers only its first write', async ({
+	page,
+}) => {
+	await seed(page, {
+		'POST /v1/table/db1%24fresh/describe': {
+			location: 's3://lance-catalog/db1$fresh',
+			is_only_declared: true,
+		},
+		'POST /v1/table/db1%24fresh/create': { version: 1 },
+	});
+	const created: string[] = [];
+	await page.route('**/api/catalog/v1/table/db1%24fresh/create', async (route) => {
+		created.push(route.request().method());
+		await route.fulfill({ status: 200, contentType: 'application/json', body: '{"version":1}' });
+	});
+	// Every request the page sends for the table, served or not: the mock's ledger records only what
+	// it answers, which could not show a data door it was never asked to serve.
+	const sent: string[] = [];
+	page.on('request', (req) => {
+		const path = new URL(req.url()).pathname;
+		if (path.startsWith('/api/catalog/') && path.includes('db1%24fresh'))
+			sent.push(path.replace('/api/catalog', ''));
+	});
+	await page.goto('/catalog/tables/db1%24fresh');
+	const state = page.getByTestId('declared-table');
+	await expect(state).toContainText('Declared, waiting for its first write');
+	// No tab, no schema write, no unreachable-catalog state: one state, and the one write that lands.
+	await expect(page.getByRole('tab')).toHaveCount(0);
+	await expect(page.getByText('Catalog unreachable')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Add column' })).toHaveCount(0);
+	expect(sent).toEqual(['/v1/table/db1%24fresh/describe']);
+	await state.getByLabel('First rows, as a JSON array of objects').fill('[{"id": 1}]');
+	await state.getByRole('button', { name: 'Write first rows' }).click();
+	await expect.poll(() => created).toEqual(['POST']);
+});
+
 // --------------------------------------------------------------------------- //
 // #75 recovery — the undrop surface. It shipped with a `data-testid` and no test
 // at all: a destructive-recovery affordance, racing a real expiry deadline,
@@ -740,14 +799,12 @@ test('a dropped-but-recoverable table offers undrop, with the real deadline (#75
 	await expect(panel).toContainText('still recoverable');
 	// The location is what recovery re-registers — it must be shown, not implied.
 	await expect(panel).toContainText('s3://lance-catalog/db1$dropped');
-	// The deadline is the whole point of the surface: a date the user can act before.
-	await expect(panel).toContainText('2026-08-08');
-	// …and the dropper goes through <Subject> (#68/#87): the opaque dex sub is ellipsized rather
-	// than dumped as a 60-character run-on blob, with the FULL value kept in `title` — the form a
-	// tuple write actually needs. There is no identity directory to resolve it against, so this
-	// typographic contract IS the guarantee.
-	await expect(panel).not.toContainText(TRASH_ENTRY.dropped_by);
-	await expect(panel.locator(`[title="${TRASH_ENTRY.dropped_by}"]`)).toBeVisible();
+	// The deadline is the whole point of the surface: a date and time the user can act before.
+	await expect(panel).toContainText('recoverable until 2026-08-08 09:15:00 UTC');
+	// …and the dropper is shown by its full id, with a control that copies it: there is no identity
+	// directory to resolve it against, so the id is what a person reads and pastes.
+	await expect(panel).toContainText(TRASH_ENTRY.dropped_by);
+	await expect(panel.getByRole('button', { name: `Copy ${TRASH_ENTRY.dropped_by}` })).toBeVisible();
 });
 
 test('an unreadable trash record is NAMED, never rendered as "your data is gone" (#147)', async ({
