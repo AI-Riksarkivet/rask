@@ -16,7 +16,11 @@ Asserts the dataops/governance story end to end:
   6. a promote run (bronze → silver, as a user's pipeline emits) makes silver derived from bronze;
   7. every subject the store holds names its identity provider;
   8. a forced rename keeps a direct grant and the protection record and writes no tuple, and a table created again at the
-     old name is another uuid the grant does not reach ([[LH-524]]), answered to that grant's holder as an absent table.
+     old name is another uuid the grant does not reach ([[LH-524]]), answered to that grant's holder as an absent table;
+  9. a rename into another namespace takes the table's grants along, so across a managed-access boundary it needs grant
+     authority ([[LH-568]]): a writer brings no table into a managed namespace and an owner inside one takes none out,
+     while the namespaces' owner moves one across and its ``parent`` and ``child`` edges then name the namespace it
+     is in, and no other.
 
 (The lineage service runs with its own auth OFF in this overlay; the gate is unit-tested +
 has its own e2e. This test focuses on catalog authz + provenance authorship + tier lineage.)
@@ -292,4 +296,64 @@ def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple
     finally:
         # The leg runs against live estates too; what it made goes, protection and all, so its namespace can be unbound.
         for table in (source, dest):
+            requests.post(f"{server}/v1/table/{table}/drop", headers=ah, params={"force": "true", "purge": "true"}, json={}, timeout=30)
+
+
+def _rename_into(server: str, table: str, namespace: str, headers: dict[str, str]) -> requests.Response:
+    """Rename ``table`` into ``namespace`` under its own name, as ``headers``' bearer."""
+    body = {"new_namespace_id": [namespace], "new_table_name": table.rsplit("$", 1)[-1]}
+    return requests.post(f"{server}/v1/table/{table}/rename", headers=headers, json=body, timeout=30)
+
+
+def test_a_rename_across_a_managed_boundary_needs_grant_authority_and_moves_the_parent_edge(stack: tuple[str, str]) -> None:
+    """A table's grants are held by its uuid and go with it, so a rename into another namespace is a grant-management
+    act ([[LH-568]]). A writer of both namespaces who owns the tables they made brings none into the managed one
+    (``can_accept_moved_table`` there) and takes none out of it (``can_move`` on the table), each refusal leaving the
+    table and its tuples as they were; the namespaces' owner moves one across, and where it inherits from moves with it."""
+    server, _ = stack
+    alice, mover = _token("alice@example.com"), _token(OUTSIDER)
+    ah, mh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {mover}"}
+    free, managed = f"mvf{os.getpid()}", f"mvm{os.getpid()}"
+    brought, taken, moved = f"{free}$brought", f"{managed}$taken", f"{free}$moved"
+    rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
+    for namespace in (free, managed):
+        assert_parent_exists(create_top_level(server, namespace, ah), namespace)
+    try:
+        for namespace in (free, managed):
+            granted = requests.post(
+                f"{server}/management/v1/namespace/{namespace}/access/grant", headers=ah, json={"user": _sub(mover), "relation": "writer"}, timeout=10
+            )
+            assert granted.status_code == 200, granted.text
+        flagged = requests.post(f"{server}/management/v1/namespace/{managed}/managed-access/set", headers=ah, json={"enabled": True}, timeout=10)
+        assert flagged.status_code == 200, flagged.text
+        for table, maker in ((brought, mh), (taken, mh), (moved, ah)):
+            created = requests.post(f"{server}/v1/table/{table}/create", headers={**maker, **ARROW}, data=_ipc(rows), timeout=30)
+            assert created.status_code == 200, created.text
+        namespaces = {namespace: namespace_uuid(server, namespace, ah) for namespace in (free, managed)}
+
+        refusals = ((brought, managed, f"can_accept_moved_table required on namespace:{managed}"), (taken, free, f"can_move required on table:{taken}"))
+        for table, into, refusal in refusals:
+            held = described(server, table, ah)
+            refused = assert_refused(
+                lambda table=table, into=into: _rename_into(server, table, into, mh),
+                status=403,
+                code=ErrorCode.PERMISSION_DENIED,
+                unchanged=lambda held=held: tuples_on(fga.table_object(held["properties"]["rask.uuid"])),
+                foreign={_sub(alice), held["location"], held["properties"]["rask.uuid"], *namespaces.values(), WAREHOUSE},
+            )
+            assert refused.json()["detail"] == refusal, f"{table} was refused on another rung: {refused.text}"
+            assert described(server, table, ah)["location"] == held["location"], f"the refused rename moved {table}"
+
+        mine = fga.table_object(described(server, moved, ah)["properties"]["rask.uuid"])
+        across = _rename_into(server, moved, managed, ah)
+
+        assert across.status_code == 200, across.text
+        entered = fga.namespace_object(namespaces[managed])
+        parents = {user for user, relation, _ in tuples_on(mine) if relation == "parent"}
+        assert parents == {entered}, f"the moved table inherits from {parents}, not from the namespace it is in"
+        named_by = {held["key"]["object"] for held in read(tuple_key={"user": mine, "relation": "child", "object": "namespace:"})}
+        assert named_by == {entered}, f"the moved table is named a child of {named_by}, not of the namespace it is in alone"
+    finally:
+        # The leg runs against live estates too; what it made goes, so its namespaces can be unbound.
+        for table in (brought, taken, moved, f"{managed}$moved"):
             requests.post(f"{server}/v1/table/{table}/drop", headers=ah, params={"force": "true", "purge": "true"}, json={}, timeout=30)

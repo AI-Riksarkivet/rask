@@ -11,6 +11,10 @@
 **Status, 2026-11-09 (the owner's decisions).** Finding 1 is admitted as a counted row, LH-568 #788, to be fixed before
 XC-081 #203. Findings 2 and 3 are parked as LH-569 #789 and LH-570 #790. Findings 4 to 7 are not taken up.
 
+**Status, 2026-11-11.** Finding 1 is fixed by LH-568 #788: the model defines `can_move` and `can_accept_moved_table` as
+proposed in 2.1 and the rename door asks them, so 2.1's "What rask does" and "The gap" describe the code before that
+change. The same change moves the table's parent edge under the rename's location claim, before the name.
+
 Scope: `crates/authz-openfga` in full, authentication in `crates/lakekeeper/src/service/authn.rs`, credential vending in
 `crates/lakekeeper/src/service/storage`, secrets (`crates/lakekeeper-secrets-kv2`, `service/secrets.rs`), the hierarchy
 and its lifecycle in `api/management/v1`, the audit log (`crates/audit-macros`, `service/events/backends/audit`), and the

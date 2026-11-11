@@ -1247,6 +1247,64 @@ tests:
       # alone, and stays a single namespace with no table: adding one puts a table into the demo estate
       # that nine seed-sequence assertions count.
 
+  # MOVING A TABLE ([[LH-568]]). A table's grants are held by its uuid and travel with it, so a rename into another
+  # namespace is a grant-management act on each side that is under managed access. Every subject below is one the
+  # fixtures above already place, so each negative holds a rung and lacks only the one the action needs.
+  - name: a table is moved out of its namespace only by its owner holding grant authority on it
+    check:
+      - user: user:alice # owns acme's stages, where nothing is managed, so owning carries the authority
+        object: table:acme_silver_features
+        assertions: { can_move: true }
+      - user: user:dave # the rung below: a writer drops nothing, so moves nothing
+        object: table:acme_silver_features
+        assertions: { can_move: false }
+      - user: user:mona # owns the table inside the managed scope: she may drop it, and may not take it out
+        object: table:beta_locked_records
+        assertions: { can_drop: true, can_move: false }
+      - user: user:nora # grant authority there and no data rung: authority alone moves nothing
+        object: table:beta_locked_records
+        assertions: { can_move: false }
+      - user: user:frank # the tenant's admin holds both, from above
+        object: table:beta_locked_records
+        assertions: { can_move: true }
+
+  - name: a moved table is accepted from a writer, and under managed access only from one holding grant authority there
+    check:
+      - user: user:dave # a writer where nothing is managed
+        object: namespace:acme_silver
+        assertions: { can_accept_moved_table: true }
+      - user: user:carol # the rung below
+        object: namespace:acme_silver
+        assertions: { can_accept_moved_table: false }
+      - user: user:dave # the same writer may create in the namespace that manages its own access, and may not bring a table in
+        object: namespace:acme_bronze
+        assertions: { can_create_table: true, can_accept_moved_table: false }
+      - user: user:sam # that namespace's owner still grants ON it, so he accepts into it
+        object: namespace:acme_bronze
+        assertions: { can_accept_moved_table: true }
+      - user: user:mona # an owner whose namespace is managed from above
+        object: namespace:beta_locked
+        assertions: { can_create_table: true, can_accept_moved_table: false }
+      - user: user:nora # grant authority and no writer rung: authority alone plants nothing
+        object: namespace:beta_locked
+        assertions: { can_accept_moved_table: false }
+      - user: user:frank
+        object: namespace:beta_locked
+        assertions: { can_accept_moved_table: true }
+      # The warehouse carries the same action, as it carries every `can_create_*` a parent is asked.
+      - user: user:dave
+        object: warehouse:acme_bucket
+        assertions: { can_accept_moved_table: true }
+      - user: user:oskar # owns the managed warehouse, where owning carries no grant authority
+        object: warehouse:beta_bucket
+        assertions: { can_accept_moved_table: false }
+      - user: user:nora # grant authority on it and no writer rung
+        object: warehouse:beta_bucket
+        assertions: { can_accept_moved_table: false }
+      - user: user:frank
+        object: warehouse:beta_bucket
+        assertions: { can_accept_moved_table: true }
+
   - name: the sweep may MAINTAIN what it may not WRITE, and that separation runs both ways
     # Owner ruling 2026-09-08 (zero trust). Gating the lineage bus door on the stamped subject needs the
     # sweep to be authorized for what it does; the cheap way was `writer` on every governed table, which

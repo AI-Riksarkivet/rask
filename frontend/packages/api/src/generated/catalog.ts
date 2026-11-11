@@ -3775,11 +3775,15 @@ export interface paths {
          *     ``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
          *     shape (a V1 root-namespace table) it refuses.
          *
-         *     The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
-         *     ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
-         *     namespace/tenant they lack create rights on. The table keeps its uuid, so every record and every grant kept for it
-         *     stays where it is ([[LH-523]], [[LH-524]]): into another namespace only its parent edge moves
-         *     (``fga_deps.move_parent_edge``), and its data directories' claims move to its new name
+         *     Within its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router
+         *     ``authorize``) AND ``can_create_table`` on that namespace. The table keeps its uuid, so every record and every grant
+         *     kept for it stays where it is ([[LH-523]], [[LH-524]]), and a rename into ANOTHER namespace therefore takes its grants
+         *     along: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,
+         *     which under managed access need grant authority on the table and on the destination ([[LH-568]]), else a writer
+         *     could bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,
+         *     out. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge
+         *     in one write before the name, its ``child`` edge taken from the source with it and written on the destination once
+         *     the name is there, and both go back if the rename is undone; its data directories' claims move to its new name
          *     (``_hand_over_data_directories``). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
          *     lifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped
          *     and another created ([[LH-554]]). Source missing → 404

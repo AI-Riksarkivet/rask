@@ -275,43 +275,13 @@ def test_rename_is_owner_tier_not_writer(client: TestClient, fake_ns: MagicMock,
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
-    revoke, grant = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)]), AsyncMock()
+    revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
-    monkeypatch.setattr(fga_module, "grant_on_create", grant)
 
     resp = client.post("/v1/table/db1$users/rename", json={"new_table_name": "u2"}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("db1$users")}
     revoke.assert_not_awaited()  # the true owner is NOT evicted
-    grant.assert_not_awaited()
-
-
-def test_rename_into_unauthorized_destination_namespace_is_denied(
-    client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]
-) -> None:
-    """CONTRACT (security): renaming INTO a namespace is a create there — it requires can_create_table on the
-    DEST parent. A source-table owner who lacks create rights on the destination cannot plant (relocate) their
-    table into another tenant's namespace; denied BEFORE the destructive native rename, no revoke/seed."""
-
-    async def _check(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        return relation == "can_drop"  # owner on the source table yes; can_create_table on dest namespace no
-
-    claim_described("staging$scratch")
-    _wire(client)
-    monkeypatch.setattr(fga_module, "check", _check)
-    revoke, grant = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)]), AsyncMock()
-    monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
-    monkeypatch.setattr(fga_module, "grant_on_create", grant)
-
-    resp = client.post(
-        "/v1/table/staging$scratch/rename",
-        json={"new_namespace_id": ["gold"], "new_table_name": "injected"},
-        headers={"Authorization": "Bearer t"},
-    )
-    assert resp.status_code == 403
-    revoke.assert_not_awaited()
-    grant.assert_not_awaited()
-    fake_ns.rename_table.assert_not_called()  # gated before the relocating native rename
 
 
 def test_drop_table_requires_owner_and_403_is_problem_json(client: TestClient, monkeypatch) -> None:

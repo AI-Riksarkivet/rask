@@ -68,9 +68,10 @@ def assert_refused(
     code: ErrorCode,
     unchanged: Callable[[], object],
     foreign: Iterable[str],
-) -> None:
+) -> requests.Response:
     """Send a request its caller may not make, and hold its answer to a refusal: ``status`` with the spec's ``code``,
-    what ``unchanged`` reads the same after the call as before it, and no name of ``foreign`` in the body."""
+    what ``unchanged`` reads the same after the call as before it, and no name of ``foreign`` in the body. The answer is
+    returned for a leg that also holds it to the rung it was refused on."""
     before = unchanged()
     answer = send()
     body = body_of(answer)
@@ -79,3 +80,4 @@ def assert_refused(
     assert unchanged() == before, f"the refused call changed what it acts on: {said}"
     leaked = names_in(body, foreign)
     assert not leaked, f"the refusal names {leaked}, which its caller did not send: {said}"
+    return answer

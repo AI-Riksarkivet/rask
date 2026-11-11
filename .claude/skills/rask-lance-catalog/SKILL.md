@@ -48,7 +48,24 @@ Two contracts stack here, and confusing them is how bugs happen:
   ETag) from source to destination before either backend call, stamped with a per-request token so two
   renames into ONE destination are not each other's retry; the losers answer 409 code 14, and a failed
   retire or destination register hands it back (unless the destination already resolves to the location:
-  then the winner's state stands). A destructive drop or cascade refuses 409 while the claim names another
+  then the winner's state stands). **A rename into another namespace takes the table's grants along, so it asks
+  grant authority** ([[LH-568]]): `can_move` on the table (`manage_grants and can_drop`) in `can_drop`'s place
+  (`fga_deps._rename_relation`, asked by the router) and `can_accept_moved_table` on the namespace it enters in
+  `can_create_table`'s (`fga_deps.require_rename_destination`), so under managed access a writer brings no table in
+  and an owner inside takes none out; a rename that keeps its namespace asks `can_drop` on the table and
+  `can_create_table` on that namespace. Where the table inherits from moves while the rename holds the claim
+  (`dataplane.Reparent`, built by `fga_deps.parent_edge_mover`), so the name and the edge have one arbiter. Its
+  `parent` edge moves in one OpenFGA Write BEFORE the name; its `child` edge on the source is taken away with it and
+  the one on the destination is written only once the name is registered there, because a namespace's removal ends
+  every object its `child` edges name (`fga_deps.end_removed_subtree`) and a table between its two names is in
+  neither namespace's listing. An undone rename returns the edge before the claim is handed back, and so does a
+  move whose answer OpenFGA lost. Once the name is registered the claim no longer keeps other requests off the
+  table, so the arrival (`fga_deps._arrive_at_destination`) writes the `child` edge and then reads where the table
+  inherits from: an edge a racing removal took is written again, and a table a rival rename moved on keeps no `child`
+  edge here. A `parent` edge already at the destination is an earlier attempt's and is finished by renaming there
+  again; one anywhere else refuses the rename 409 code 14 with nothing moved. Pinned on a real OpenFGA by
+  `services/catalog/tests/test_a_rename_into_another_namespace_needs_grant_authority_and_moves_the_parent_edge_whole.py`.
+  A destructive drop or cascade refuses 409 while the claim names another
   live holder. **A door acts on the table its name resolved to** ([[LH-521]], ADR 0173 §7): the drop, deregister
   and rename doors take `ResolvedTableDep` (`catalog.api.dependencies.get_resolved_table`, solved once per request:
   the table's location and that location's claim with its ETag, `table_claims.resolve`) and never describe the name
@@ -121,7 +138,8 @@ Two contracts stack here, and confusing them is how bugs happen:
   leaves children whose parent went too). A top-level name is never answered from its warehouse, since upward
   visibility makes every holder of one namespace a reader of it. Pinned by
   `services/catalog/tests/test_an_absent_object_is_not_found_rather_than_forbidden.py` on a real OpenFGA. A rename writes no tuple, except
-  that a rename into another namespace moves the parent edge (`fga_deps.move_parent_edge`); a table created again
+  that a rename into another namespace moves the table's parent and child edges, under the rename's claim
+  (`fga_deps.parent_edge_mover`, [[LH-568]]); a table created again
   under a dropped name is another uuid and inherits nothing; a name holding a space never reaches OpenFGA. Every
   listing batch-checks its own candidates on their uuids and fills its page (`fga_deps.authorized_page`, [[LH-223]]);
   only `/management/v1/me` calls `list_objects`, and the estate admin's raw ListObjects explorer. Grant, review and

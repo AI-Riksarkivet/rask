@@ -707,6 +707,20 @@ class OpenFgaStore:
 
         asyncio.run(_write())
 
+    def delete(self, *tuples: tuple[str, str, str]) -> None:
+        """Delete `(user, relation, object)` tuples straight from the store: the drift a test starts from, which no door produces."""
+        import asyncio
+
+        from openfga_sdk.client.models import ClientTuple, ClientWriteRequest
+
+        from lakehouse.governed import fga
+
+        async def _delete() -> None:
+            async with fga.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
+                await client.write(ClientWriteRequest(deletes=[ClientTuple(user=u, relation=r, object=o) for u, r, o in tuples]))
+
+        asyncio.run(_delete())
+
     def tuples(self) -> set[tuple[str, str, str]]:
         """Every `(user, relation, object)` the store holds, read back as an auditor reads it."""
         import asyncio

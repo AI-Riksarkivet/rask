@@ -1629,11 +1629,15 @@ async def rename_table(
     ``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
     shape (a V1 root-namespace table) it refuses.
 
-    The caller must hold ``can_drop`` on the source (owner tier, gated by the router ``authorize``) AND
-    ``can_create_table`` on the DESTINATION parent — else a source owner could plant their table into a
-    namespace/tenant they lack create rights on. The table keeps its uuid, so every record and every grant kept for it
-    stays where it is ([[LH-523]], [[LH-524]]): into another namespace only its parent edge moves
-    (``fga_deps.move_parent_edge``), and its data directories' claims move to its new name
+    Within its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router
+    ``authorize``) AND ``can_create_table`` on that namespace. The table keeps its uuid, so every record and every grant
+    kept for it stays where it is ([[LH-523]], [[LH-524]]), and a rename into ANOTHER namespace therefore takes its grants
+    along: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,
+    which under managed access need grant authority on the table and on the destination ([[LH-568]]), else a writer
+    could bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,
+    out. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge
+    in one write before the name, its ``child`` edge taken from the source with it and written on the destination once
+    the name is there, and both go back if the rename is undone; its data directories' claims move to its new name
     (``_hand_over_data_directories``). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
     lifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped
     and another created ([[LH-554]]). Source missing → 404
@@ -1658,21 +1662,16 @@ async def rename_table(
     # A rename can MINT an orphan as surely as a create, so its destination's namespace must exist. Same rule, same
     # door — checked before the native call, so a refused rename leaves the source exactly where it was.
     await fga_deps.require_parent_exists(ns, "table", new_segments)
-    # Renaming INTO a namespace is a create in that namespace: authorize can_create_table on the DESTINATION
-    # parent BEFORE the (destructive, relocating) rename — else a source-table owner could plant their table
-    # into a namespace/tenant they have no create rights on. (authorize already gated can_drop on the source.)
-    await fga_deps.require_create_on_parent(client, settings, token, resolver, resource="table", segments=new_segments)
+    # A rename mints a name in the destination's namespace, so the caller must be one who may put a table there, asked
+    # BEFORE the (destructive, relocating) rename. (authorize already asked the source's rung.)
+    await fga_deps.require_rename_destination(client, settings, token, resolver, source=segments, destination=new_segments)
     # The grants stay on the table's uuid and so follow it, so each is judged as a grant on the destination before
     # anything moves.
     renamed = fga.table_object(table.require_uuid())
     await fga_deps.require_grants_may_follow(client, settings, obj=renamed, source=segments, destination=new_segments)
-    # Where the table inherits from, read before the rename moves it: a rename into another namespace moves its
-    # parent edge, and that is all it writes.
-    parents = (
-        (await fga_deps.parent_object_of(resolver, settings, "table", segments), await fga_deps.parent_object_of(resolver, settings, "table", new_segments))
-        if new_segments[:-1] != segments[:-1] and settings.fga_enabled
-        else None
-    )
+    # A rename moves no grant ([[LH-524]]): every grant is held by the table's uuid, which the rename keeps. Into
+    # another namespace its parent and child edges move with it, and those are all it writes in OpenFGA.
+    reparent = await fga_deps.parent_edge_mover(client, settings, token, resolver, obj=renamed, source=segments, destination=new_segments)
     new_segments, location = await run_in_threadpool(
         partial(
             dataplane.rename_table,
@@ -1683,15 +1682,12 @@ async def rename_table(
             so=so,
             claims=table_claims.claim_store(settings),
             root=root,
+            reparent=reparent,
         )
     )
     await _hand_over_data_directories(settings, location, source=segments, destination=new_segments)
     # A rename keeps the table's uuid (ADR 0173 §2): the event and the control event name the one the door resolved.
     destination_ids = await uuids.table(new_segments, uuid=table.uuid)
-    # A rename moves no grant ([[LH-524]]): every grant is held by the table's uuid, which the rename keeps. Into
-    # another namespace, the parent edge moves with it.
-    if parents is not None and parents[0] is not None and parents[1] is not None:
-        await fga_deps.move_parent_edge(client, settings, token, obj=renamed, source=parents[0], destination=parents[1])
     # Versionless: the version history moved with the pointer, and the event names none of it. The location rides it so
     # the table's symlink is the one its earlier events named.
     await emit_write_event(

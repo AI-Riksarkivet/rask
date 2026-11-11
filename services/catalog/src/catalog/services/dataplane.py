@@ -27,7 +27,7 @@ from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import replace
-from typing import Any, Final, cast
+from typing import Any, Final, NamedTuple, cast
 
 import lance
 import pyarrow as pa
@@ -959,6 +959,22 @@ def _existing_location(ns: LanceNamespace, segments: list[str]) -> str | None:
     return getattr(resp, "table_uri", None) or getattr(resp, "location", None)
 
 
+class Reparent(NamedTuple):
+    """How a rename into another namespace takes along where its table inherits from, a step at a time, each called
+    from the rename's thread (:func:`rename_table`): ``leave`` and ``put_back`` while it holds the location's claim,
+    ``arrive`` once the destination is registered and the table is the destination's.
+
+    An internal bundle of three calls, never boundary input, so a ``NamedTuple``.
+    """
+
+    #: Move it to the destination, before the name moves. When it raises, it has returned what it may have moved.
+    leave: Callable[[], None]
+    #: Settle it at the destination, once the name is registered there, with whatever acted on the table since.
+    arrive: Callable[[], None]
+    #: Return it to the source, for a rename that is undone.
+    put_back: Callable[[], None]
+
+
 def rename_table(
     ns: LanceNamespace,
     source: table_claims.ResolvedTable,
@@ -968,6 +984,7 @@ def rename_table(
     so: StorageOptions,
     claims: location_claims.ClaimStore,
     root: str,
+    reparent: Reparent | None = None,
 ) -> tuple[list[str], str]:
     """Rename a table by moving its POINTER. No data byte is read, written or deleted.
 
@@ -1013,6 +1030,18 @@ def rename_table(
     The two backend calls are not one transaction. A crash between them leaves the table reachable by
     no id with its claim naming the destination; a re-register of either id at the location, after the
     claim's lease, recovers it.
+
+    WHERE THE TABLE INHERITS FROM MOVES UNDER THE CLAIM ([[LH-568]]). ``reparent`` is how a rename into another
+    namespace takes it along (:class:`Reparent`). It leaves the source, and is put back, while this request holds the
+    claim, so that move and the name's have the one arbiter and only the request holding the claim makes either. It leaves the
+    source BEFORE the name moves, because the two are not one transaction either: a table that inherits from the
+    namespace it is about to enter is read by nobody its move would not admit, while one already named there and
+    still inheriting from the namespace it left is read by everyone the move should have shut out. When leaving
+    raises, the step has returned what it may have moved, and the claim is handed back. Whenever the rename is undone
+    the move is put back first, and only then is the claim handed back; where another request's finished rename
+    stands, it stands. It arrives once the destination is registered, when the table is the destination's and the
+    arrival settles with whatever acted on it since. A crash in between leaves the source inheriting from the
+    destination's namespace, which renaming it there again finishes.
     """
     segments = source.segments
     if not new_table_name.strip():
@@ -1064,19 +1093,33 @@ def rename_table(
             f"cannot rename {source_id}: its location is held by another table, by a concurrent rename or registration; describe it and retry"
         ) from None
 
-    def _hand_back() -> None:
+    def _hand_back(put_back: Callable[[], None] | None) -> None:
         # The source keeps its location, so it keeps the claim; left with the destination, every later
-        # rename of the source would answer code 14 for the claim's lease. Logged, never raised over the
+        # rename of the source would answer code 14 for the claim's lease. What followed the table goes back
+        # first, while the claim still keeps every other request off it. Logged, never raised over the
         # failure that made the rename compensate.
+        if put_back is not None:
+            try:
+                put_back()
+            except Exception as exc:
+                log.error("rename_parent_not_put_back", extra={"source": source_id, "destination": dest_id, "error": str(exc)[:300]}, exc_info=True)
         try:
             table_claims.take(ns, claims, source_uri, source_id, segments, previous=dest_id)
         except Exception as exc:
             log.error("rename_claim_not_handed_back", extra={"source": source_id, "location": source_uri, "error": str(exc)[:300]})
 
+    put_back = None
+    if reparent is not None:
+        try:
+            reparent.leave()
+        except Exception:
+            _hand_back(None)
+            raise
+        put_back = reparent.put_back
     try:
         ns.deregister_table(DeregisterTableRequest(id=segments))
     except Exception:
-        _hand_back()
+        _hand_back(put_back)
         raise
     try:
         ns.register_table(RegisterTableRequest(id=new_segments, location=location))
@@ -1099,8 +1142,14 @@ def rename_table(
                 extra={"source": source_id, "location": location, "error": str(restore)},
             )
         else:
-            _hand_back()
+            _hand_back(put_back)
         raise
+    if reparent is not None:
+        try:
+            reparent.arrive()
+        except Exception as exc:
+            # The rename has happened, so nothing is raised over it: what the arrival left unwritten is logged.
+            log.error("rename_arrival_not_settled", extra={"source": source_id, "destination": dest_id, "error": str(exc)[:300]}, exc_info=True)
     return new_segments, source_uri
 
 

@@ -375,6 +375,13 @@ type warehouse
     # must exist on BOTH `namespace` and `warehouse` — otherwise the check 400s ("relation not found") and
     # fails closed to a 503 for everyone. Same writer rung as can_create_table.
     define can_create_materialized_view: writer
+    # ACCEPTING A MOVED TABLE ([[LH-568]]): what a rename into another namespace asks on its destination, in place of
+    # `can_create_table`. A table's grants are held by its uuid, so a moved table arrives with every grant on it. Where
+    # access is managed a grant needs grant authority, so accepting one that arrives with grants needs it too;
+    # elsewhere the writer rung that creates a table accepts one. Bare `managed_access_inheritance`, as on this rung's
+    # `manage_grants`: the flag here is about this warehouse. Declared here as well as on `namespace` for the reason
+    # the `can_create_*` relations are.
+    define can_accept_moved_table: (writer but not managed_access_inheritance) or (manage_grants and writer)
     # ---- grant actions, one per assignable rung ----
     # `manage_grants` grants anything here; a `pass_grants` holder may hand on ONLY what they already
     # hold. This is SQL's WITH GRANT OPTION, and the second clause is what makes the split useful
@@ -486,6 +493,10 @@ type namespace
     # Creating a materialized view is a create-on-parent op gated on the enclosing namespace (writer rung),
     # exactly like can_create_table — the view itself does not exist yet at authorization time.
     define can_create_materialized_view: writer
+    # Accepting a moved table, see `warehouse`. Bare `managed_access_inheritance`, not `from parent`: what governs the
+    # grants on a table inside this namespace is this namespace's own scope, its flag or one inherited from above. Its
+    # owner still grants ON it where only its own flag is set, and so accepts into it.
+    define can_accept_moved_table: (writer but not managed_access_inheritance) or (manage_grants and writer)
     define can_update_properties: writer
     define can_promote: validator
     define can_delete: owner
@@ -596,6 +607,11 @@ type table
     # This one is computed, so every owner already holds it the moment it exists.
     define can_set_protection: owner
     define can_deregister: owner
+    # MOVING A TABLE INTO ANOTHER NAMESPACE ([[LH-568]]), which a rename naming one does. It retires the name as a drop
+    # does, so it is the owner's act, and the table's grants, held by its uuid, go with it, so it is a grant-management
+    # act too. Inside a managed scope an owner holds no grant authority, and without this could take the table out to
+    # where owning grants again. A rename that keeps its namespace moves no grant anywhere and stays at `can_drop`.
+    define can_move: manage_grants and can_drop
     # Ref-plane / history ops. A plain data WRITER appends/overwrites within the current line; FORKING
     # history (branch) or REWINDING it (restore) is privileged and stays at the OWNER tier —
     # admin-inclusive via the parent cascade, never grantable to a mere writer, because `can_restore`

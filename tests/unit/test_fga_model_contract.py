@@ -184,9 +184,11 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     }
     asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, NamedResolver(), settings, user="dex~alice"))
 
-    # 4. The endpoint-level gates that check outside `authorize` (Overwrite / rename-into-namespace).
-    for resource in ("table", "namespace", "materialized_view"):
-        asyncio.run(fga_deps.require_create_on_parent(_CLIENT, settings, token, NamedResolver(), resource=resource, segments=["db1", "child"]))
+    # 4. A rename: the rung the router asks on its source and the one its door asks where the table lands, each within
+    #    the source's namespace and into another.
+    for destination in (["db1", "renamed"], ["db2", "child"]):
+        pairs.add(("table", fga_deps._rename_relation(["db1", "child"], destination)))
+        asyncio.run(fga_deps.require_rename_destination(_CLIENT, settings, token, NamedResolver(), source=["db1", "child"], destination=destination))
 
     pairs.update(checked)
     return pairs

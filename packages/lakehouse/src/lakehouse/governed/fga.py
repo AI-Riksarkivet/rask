@@ -162,8 +162,9 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str) -> list[Clie
     That is why the pairing is a function rather than a rule people are expected to remember — a
     one-directional link is a perfectly valid tuple that simply never resolves, so it is invisible to
     every mocked-client test and to the API itself. The set of callers is closed, and the TID251
-    banned-api entry on `lakehouse.governed.fga.hierarchy_edge_tuples` holds it that way:
-    `grant_on_create` below, where the catalog's create-door seed lands, is its one caller.
+    banned-api entry on `lakehouse.governed.fga.hierarchy_edge_tuples` holds it that way: its callers are
+    `grant_on_create` below, where the catalog's create-door seed lands, and the steps a link moves by
+    (`move_parent`, `unname_child`, `name_child`, `link_to_parent`), which leave it whole at each end of the move.
 
     The inverse is written only when the PARENT's type declares `child` (:data:`_CHILD_EDGE_PARENT_TYPES`):
     a `child` tuple on a type that does not is accepted by the API and read by no rule.
@@ -2357,6 +2358,67 @@ async def commit_unless_changed(
     _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, deletes, actor, origin)
     _audit_tuples(AuditAction.ACCESS_TUPLE_WRITE, writes, actor, origin)
     return True
+
+
+def _link_by_direction(obj: str, parent: str) -> tuple[ClientTuple, list[ClientTuple]]:
+    """``obj``'s link to ``parent`` by direction: its ``parent`` edge, and the inverse ``child`` edge where ``parent``'s type takes one."""
+    forward, *inverse = hierarchy_edge_tuples(child_object=obj, parent_object=parent)
+    return forward, inverse
+
+
+async def move_parent(client: OpenFgaClient, *, obj: str, source: str, destination: str, actor: str, origin: TupleOrigin) -> bool:
+    """Move ``obj``'s ``parent`` edge from ``source`` to ``destination`` in ONE Write; whether it committed.
+
+    The ``parent`` edge is the direction every check inherits through, so it changes whole or not at all: the Write
+    deletes the old edge and writes the new, and ``obj`` at no moment inherits from both parents or from neither. It
+    commits only while the old edge stands and the new one is absent (:func:`commit_unless_changed`): ``False`` says
+    the edge is not as the caller read it, and that nothing changed.
+
+    The inverse ``child`` edges are not moved here. A removal of a parent ends every object its ``child`` edges name,
+    so an object is named a child only of the parent it is at rest under: its mover takes the old edge away once this
+    move has committed and writes the new one after the object has arrived (:func:`unname_child`,
+    :func:`name_child`).
+
+    Raises:
+        ServiceUnavailableError: OpenFGA gave no answer, so whether the Write committed is unknown to the caller.
+    """
+    left, _ = _link_by_direction(obj, source)
+    entered, _ = _link_by_direction(obj, destination)
+    return await commit_unless_changed(client, deletes=[left], writes=[entered], actor=actor, origin=origin)
+
+
+async def name_child(client: OpenFgaClient, *, obj: str, parent: str, actor: str, origin: TupleOrigin) -> None:
+    """Write the inverse edge that names ``obj`` a child of ``parent``, where ``parent``'s type takes one; an edge
+    already there is left as it is (:func:`write_tuples`).
+
+    Raises:
+        ServiceUnavailableError: OpenFGA gave no answer.
+    """
+    _, inverse = _link_by_direction(obj, parent)
+    if inverse:
+        await write_tuples(client, inverse, actor=actor, origin=origin)
+
+
+async def link_to_parent(client: OpenFgaClient, *, obj: str, parent: str, actor: str, origin: TupleOrigin) -> None:
+    """Write both directions of ``obj``'s link to ``parent``, what an object at rest under ``parent`` carries: the
+    ``parent`` edge it inherits through and, where ``parent``'s type takes one, the ``child`` edge a removal of
+    ``parent`` finds it by. An edge already there is left as it is (:func:`write_tuples`).
+
+    Raises:
+        ServiceUnavailableError: OpenFGA gave no answer.
+    """
+    await write_tuples(client, hierarchy_edge_tuples(child_object=obj, parent_object=parent), actor=actor, origin=origin)
+
+
+async def unname_child(client: OpenFgaClient, *, obj: str, parent: str, actor: str, origin: TupleOrigin) -> None:
+    """Delete the inverse edge that names ``obj`` a child of ``parent``; an edge already absent is left absent
+    (:func:`delete_tuples`).
+
+    Raises:
+        ServiceUnavailableError: OpenFGA gave no answer.
+    """
+    _, inverse = _link_by_direction(obj, parent)
+    await delete_tuples(client, inverse, actor=actor, origin=origin)
 
 
 def names_someone(user: str) -> bool:
