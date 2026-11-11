@@ -3,5 +3,5 @@
 image:
   tags:
     lance-rest-catalog: "85e36a832"
-    web-console: "fd1a03be0"
+    web-console: "e0f769bc1"
   digests: {}
