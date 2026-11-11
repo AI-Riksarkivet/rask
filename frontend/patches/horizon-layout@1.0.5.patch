@@ -1,0 +1,91 @@
+diff --git a/dist/TabGroup.svelte b/dist/TabGroup.svelte
+index 3eff96b10ae04348eed206901738be84cccc5ecd..762c27ea8ab6b09dc81a0f649d227aeeb75076d9 100644
+--- a/dist/TabGroup.svelte
++++ b/dist/TabGroup.svelte
+@@ -1,6 +1,6 @@
+ <script lang="ts">
+ 	import type { Id, KeyboardControl, TabGroupConfig, View } from './types.js';
+-	import { onDestroy, untrack, type Snippet } from 'svelte';
++	import { onDestroy, tick, untrack, type Snippet } from 'svelte';
+ 	import { getModifier } from './internal-utils.js';
+ 	import type { SvelteMap } from 'svelte/reactivity';
+ 	import type { DropSide, DropTarget } from './internal-types.js';
+@@ -35,6 +35,9 @@
+ 		baseClass: string;
+ 	} = $props();
+ 
++	// Ids for the tab-list pattern: the list names its active tab, each tab its panel, the panel its tab.
++	const uid = $props.id();
++
+ 	function handleKeyDown(event: KeyboardEvent) {
+ 		const modifier = getModifier(event);
+ 		for (const control of keyboardControls) {
+@@ -42,13 +45,28 @@
+ 				if (modifier === (shortcut.modifier ?? null) && event.key === shortcut.key) {
+ 					event.preventDefault();
+ 					event.stopPropagation();
++					const moved = config.tabs[config.activeTabIndex];
++					const doc = (event.target as Node | null)?.ownerDocument ?? document;
+ 					control.action(config, event);
++					void followMovedTab(doc, moved);
+ 					return;
+ 				}
+ 			}
+ 		}
+ 	}
+ 
++	// A move or a split re-renders the groups it touches, and the list that had focus can be one of
++	// them: focus goes to the list whose active tab is the one that moved. An action that selects
++	// another tab leaves no list with the old tab active, so focus stays where it is.
++	async function followMovedTab(doc: Document, moved: Id | undefined) {
++		if (moved === undefined) return;
++		await tick();
++		const list = doc.querySelector<HTMLElement>(
++			`[role="tablist"][data-active-tab="${CSS.escape(moved)}"]`
++		);
++		if (list && list !== doc.activeElement) list.focus();
++	}
++
+ 	function startTabDrag(event: DragEvent, tabId: Id) {
+ 		if (!event.dataTransfer) return;
+ 		event.stopPropagation();
+@@ -131,7 +149,14 @@
+ 	{#if !hideTabBar}
+ 		<div class="{baseClass}__tab-bar">
+ 			<!-- Tab list - keyboard navigation is handled on the list container. -->
+-			<div role="tablist" tabindex={0} class="{baseClass}__tabs" onkeydown={handleKeyDown}>
++			<div
++				role="tablist"
++				tabindex={0}
++				class="{baseClass}__tabs"
++				aria-activedescendant="{uid}-tab-{config.activeTabIndex}"
++				data-active-tab={config.tabs[config.activeTabIndex]}
++				onkeydown={handleKeyDown}
++			>
+ 				{#each config.tabs as tabId, index (tabId)}
+ 					{@const tab = views.get(tabId)}
+ 					<div
+@@ -152,6 +177,9 @@
+ 					{/if}
+ 					<div
+ 						role="tab"
++						id="{uid}-tab-{index}"
++						aria-selected={index === config.activeTabIndex}
++						aria-controls={index === config.activeTabIndex ? `${uid}-panel` : undefined}
+ 						class="{baseClass}__tab{index === config.activeTabIndex
+ 							? ` ${baseClass}__tab--active`
+ 							: ''}"
+@@ -202,7 +230,12 @@
+ 	{/if}
+ 
+ 	<div class="{baseClass}__body">
+-		<div class="{baseClass}__content">
++		<div
++			class="{baseClass}__content"
++			id="{uid}-panel"
++			role={hideTabBar ? undefined : 'tabpanel'}
++			aria-labelledby={hideTabBar ? undefined : `${uid}-tab-${config.activeTabIndex}`}
++		>
+ 			{@render views.get(config.tabs[config.activeTabIndex]!)?.snippet()}
+ 		</div>
+ 	</div>

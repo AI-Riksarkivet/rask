@@ -188,7 +188,8 @@ or time itself is the change (a countdown).
 
 The dock lives at `/workbench` (`#lib/dock/`, ADR 0200) on **horizon-layout** (pinned exactly in the console's
 `package.json`): headless, Svelte 5, MIT, with keyboard control built in (the tab list takes arrows, Shift/Ctrl/Alt
-moves and splits; the resizer is a slider). Two panels: `EventsPanel` (lineage's `GET /events` through the workbench's
+moves and splits; the resizer is a slider), and a patch (`patches/horizon-layout@1.0.5.patch`, `frontend/TOOLING.md`)
+adds the tab list's ARIA state and keeps the keyboard on a tab it moves. Two panels: `EventsPanel` (lineage's `GET /events` through the workbench's
 one `EventFeed`, `#lib/dock/bench.svelte.ts`) and `TablesPanel` (the very registry the catalog page renders). A panel
 RENDERS THE PAGE'S COMPONENT: it is not a smaller re-implementation. `Dock.svelte` adds what the library leaves to its
 host, from `@rask/ui` components: a close button on each tab (`tabControls`), and per group (`tabgroupControls`) the panel

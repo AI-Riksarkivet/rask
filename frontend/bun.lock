@@ -79,6 +79,7 @@
   },
   "patchedDependencies": {
     "apache-arrow@21.2.0": "patches/apache-arrow@21.2.0.patch",
+    "horizon-layout@1.0.5": "patches/horizon-layout@1.0.5.patch",
   },
   "overrides": {
     "brace-expansion": "^2.1.7",

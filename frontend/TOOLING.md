@@ -113,6 +113,20 @@ Re-check both on an apache-arrow upgrade: the patch is regenerated from the pris
 cache, `~/.bun/install/cache/apache-arrow@<version>@@@1/builder/valid.{js,mjs}`) with `git diff
 --no-index`, and the test copies upstream's body.
 
+## The horizon-layout patch
+
+`patches/horizon-layout@1.0.5.patch` gives the dock's tab groups (`dist/TabGroup.svelte`) the tab-list semantics and the
+keyboard focus the library leaves out. horizon-layout keeps the keyboard on each group's `tablist` and makes its tabs
+`tabindex="-1"`, so the list names its active tab with `aria-activedescendant`, each tab carries an id and
+`aria-selected`, and the shown view is a `tabpanel` labelled by its tab: without them a screen reader is told neither
+which tab is shown nor what the panel holds. A move or a split re-renders the groups it touches, so after a keyboard
+action the patch focuses the list whose active tab is the one that moved; unpatched, focus falls to the page and the
+next key does nothing (measured on the deployed workbench with playwright-cli, 2026-11-11).
+`e2e/workbench/dock.spec.ts`'s keyboard test presses each key where the keyboard is, and fails on an unpatched install.
+On a horizon-layout upgrade, drop the patch if upstream ships the same; otherwise regenerate it with
+`bun --cwd=frontend patch console/node_modules/horizon-layout`, the edit, and `bun --cwd=frontend patch --commit` on
+the same path.
+
 ## Knip and SvelteKit's generated `$app`
 
 `console/tsconfig.json` extends `$app/tsconfig`, which `svelte-kit sync` writes; it is no package. Knip 6.45.1 reads

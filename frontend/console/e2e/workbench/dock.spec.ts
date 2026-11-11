@@ -147,18 +147,24 @@ test('the keyboard alone moves a tab between groups, splits it out again and res
 }) => {
 	await open(page);
 	const lists = page.getByRole('tablist');
+	const holdingEvents = lists.filter({ has: tab(page, 'Events') });
 
-	// Ctrl+Left moves the Events tab into the group on its left: one group of two tabs.
+	// Ctrl+Left moves the Events tab into the group on its left: one group of two tabs. The group the
+	// keyboard was in is gone, so the keyboard goes with the tab, and the tab is the selected one.
 	await lists.nth(1).focus();
 	await page.keyboard.press('Control+ArrowLeft');
 	await expect(lists).toHaveCount(1);
 	await expect(lists.first().getByRole('tab')).toHaveCount(2);
+	await expect(holdingEvents).toBeFocused();
+	await expect(page.getByRole('tab', { name: /^Events/, selected: true })).toBeVisible();
+	await expect(page.getByRole('tabpanel', { name: /^Events/ })).toContainText('bronze.ingest');
 
-	// Alt+Right splits the active tab (Events, the one just moved in) back out into a pane of its own.
-	await lists.first().focus();
+	// Alt+Right splits the active tab (Events, the one just moved in) back out into a pane of its own,
+	// pressed where the keyboard already is.
 	await page.keyboard.press('Alt+ArrowRight');
 	await expect(lists).toHaveCount(2);
 	await expect(lists.nth(1).getByRole('tab')).toHaveText('Events');
+	await expect(holdingEvents).toBeFocused();
 
 	// The resizer is a slider: an arrow key moves it a step.
 	const resizer = page.getByRole('slider', { name: 'Resize pane 1' });

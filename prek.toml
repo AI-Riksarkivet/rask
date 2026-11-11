@@ -2,8 +2,10 @@
 repo = "https://github.com/pre-commit/pre-commit-hooks"
 rev = "v5.0.0"
 hooks = [
-  { id = "trailing-whitespace" },
-  { id = "end-of-file-fixer" },
+  # A patch's blank context line is a single space, which these two would strip, and bun refuses the hunk then:
+  # frontend/patches holds bun's patchedDependencies exactly as `bun patch --commit` writes them.
+  { id = "trailing-whitespace", exclude = "^frontend/patches/" },
+  { id = "end-of-file-fixer", exclude = "^frontend/patches/" },
   # chart/templates are Helm templates ({{ … }}), not parseable as plain YAML.
   # chart/crds-bootstrap is a VENDORED upstream CRD bundle — legitimately multi-document
   # (`---`-separated), which this hook rejects by default, and not ours to reformat.

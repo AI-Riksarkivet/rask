@@ -87,3 +87,12 @@ Measured 2026-11-11 at main `610561590`:
   autosave's refusal; `e2e/workbench/dock.spec.ts` drives the dock on the suite's edge, keyboard included, and
   `e2e/admin/workbench-layouts.spec.ts` proves a layout survives a reload and its new sign-in, and that a named view
   applies.
+
+## Amendment (2026-11-11): the tab lists are patched
+
+A walk of the deployed workbench with playwright-cli found two gaps in horizon-layout 1.0.5's tab lists; the keys
+themselves all work. Its tabs carry no `aria-selected` and its shown view no `tabpanel` role, so assistive technology is
+told neither which tab is shown nor what the panel holds. A keyboard move or split re-renders the group the keyboard
+was in, so focus falls to the page and the next key does nothing. Both are fixed in the library's `TabGroup.svelte` by
+`frontend/patches/horizon-layout@1.0.5.patch` (bun's `patchedDependencies`, as the Arrow patch is), described in
+`frontend/TOOLING.md`. The patch goes once upstream ships the same.
