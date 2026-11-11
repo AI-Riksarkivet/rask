@@ -1292,7 +1292,10 @@ export interface paths {
         };
         /**
          * Get Project
-         * @description One derived tenant — the same shape as the list. Estate-observer gated; unknown project → 404.
+         * @description One tenant, in the list's shape, for the callers the list shows it to: an estate observer, or a member of it.
+         *
+         *     Anyone else is answered the missing project's 404, so the door tells no caller which project ids exist (the rule
+         *     :func:`administered_project` states), and the trail records the refusal on each door it asked.
          */
         get: operations["get_project_management_v1_projects__project_id__get"];
         put?: never;
@@ -1302,8 +1305,8 @@ export interface paths {
          * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance
          *     policy, and drop its record.
          *
-         *     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
-         *     read routes use (module docstring). Order, fail-closed and each step earning the next:
+         *     Gated on ``project:<id>#can_administer``, the tenant's OWN admin bar: the rungs that open its reads, the estate
+         *     observer's and membership, retire nothing (module docstring). Order, fail-closed and each step earning the next:
          *     id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
          *     emptiness (409) → revoke tuples → end its roles → end its maintenance policy → delete record → audit + event.
          *

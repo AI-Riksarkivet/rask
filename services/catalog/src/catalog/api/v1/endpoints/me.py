@@ -3,9 +3,9 @@
 The console shell needs one cheap call to render *who am I and what am I* — the verified subject, the
 display claims, whether the caller is an estate admin, and which tenants they belong to (and at what
 role). Everything here is DERIVED from the verified token + OpenFGA; nothing is caller-supplied, and the
-response never discloses anything about *other* principals (unlike ``/management/v1/projects``, which is
-estate-observer gated for exactly that reason — this route needs no FGA gate because its data scope is
-the caller themself).
+response never discloses anything about *other* principals (unlike ``/management/v1/projects``, which names
+each tenant's admins and so answers a caller their own tenants, and every tenant only to an estate observer —
+this route needs no FGA gate because its data scope is the caller themself).
 
 **Authenticated-only, no authorization gate.** Any VERIFIED token gets a 200; anonymous is 401 (there is
 no self to describe). ``/management/v1/me`` matches no resource prefix in ``fga_deps.authorize``, so the router-wide

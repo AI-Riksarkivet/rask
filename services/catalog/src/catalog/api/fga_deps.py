@@ -2656,6 +2656,24 @@ async def require_relation(
     await authz.require(relation, obj, label=label)
 
 
+async def require_any_relation(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, doors: list[tuple[str, str]]) -> None:
+    """Gate on ANY of ``doors``, each a ``(relation, object)`` pair, through the audited :func:`_require_any` core.
+
+    For a handler that two rungs open, one on its object and one above it (a tenant's record: a member's, or the estate
+    observer's). The trail holds one ALLOW naming the door that decided, or a DENY for every door the caller lacked, so
+    its reader sees which object the request was decided on. A no-op with FGA off; with it on, no client is 503 and no
+    caller 401 (:func:`authorization`).
+
+    Raises:
+        PermissionDeniedError: The caller holds none of ``doors``.
+        ServiceUnavailableError: FGA is on and unwired, or OpenFGA could not decide.
+        UnauthenticatedError: FGA is on and nobody is signed in.
+    """
+    if (authz := authorization(settings, client, token)) is None:
+        return
+    await _require_any(authz.client, user=authz.subject, doors=doors)
+
+
 async def require_relation_on_a_path(
     client: OpenFgaClient | None,
     settings: Settings,

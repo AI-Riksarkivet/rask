@@ -256,7 +256,12 @@ client, XC-183), and revokes a machine role on the estate root (a relation only 
 `fga.machine_relations`) like any other grant: the hook grants one only to the release's own accounts, and any other
 holder was granted it at a door ([[LH-563]]). It records `_principals/<blake2s>.json` (`GET` on the same path), answers `revoked` as the tuples it removed and
 emits `principal_deleted` (signed by the catalog), on which a notifier erases what it keeps for the person. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create: one
-door, and a warehouse-owner cannot ride a create into project admin.
+door, and a warehouse-owner cannot ride a create into project admin. **A project is read by the callers its list shows
+it to** ([[LH-587]]): the list answers an estate observer every tenant and anyone else the projects they are a `member`
+of (`projects._visible_projects`), and `GET /management/v1/projects/{id}` decides over the same two doors
+(`fga_deps.require_any_relation`: `can_observe_events` on the estate root, or `member` on the project), so the trail
+holds one ALLOW naming the door that opened the read, or a DENY on each for a caller holding neither, who is answered
+the missing project's 404. Pinned by `services/catalog/tests/test_a_project_is_read_by_those_its_list_shows_it_to.py`.
 
 Check order at every create door: **identity (401) → shape (`InvalidInput` 400) → parent exists
 (404) → authz (403) → conflict (409) → native write → tuples (`seed_ownership`) → events.** Guards

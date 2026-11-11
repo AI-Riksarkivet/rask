@@ -4,8 +4,8 @@
 doors, before any handler runs (`test_an_undeclared_door_is_refused.py` walks those; `router_walk` draws the line).
 Every other route under the router it authenticates and nothing more: the projects, warehouses, models, the estate
 admin's authorization store, the decision door and every estate-wide listing. Their handlers decide them. A door
-acting on one object asks OpenFGA about its caller and refuses: 403, or the not-found a destructive door answers so
-that no caller learns which ids exist. A listing asks about each item and answers only those its caller may see, and a
+acting on one object asks OpenFGA about its caller and refuses: 403, or the not-found a door answers where a 403 would
+tell its caller which ids exist. A listing asks about each item and answers only those its caller may see, and a
 listing behind a gate does so for every caller the gate admits. Nothing at the router tells whether a handler does
 either, and a handler that forgets passes every other test, so one corpus holds a request for each such route, and the
 drive fails on a route that falls through with no entry as it does on an entry whose route is gone.
@@ -56,7 +56,7 @@ ROLE = "00000000-0000-4000-8000-000000000001"
 STRANGER, READER = "mallory", "bob"
 
 #: A refusal's status and the spec code a stock client reads (`lance_docs/ns_catalog/spec.yaml`): PermissionDenied, and
-#: the TableNotFound a destructive door answers in its place.
+#: the TableNotFound a door answers in its place where a 403 would tell its caller an id exists.
 _FORBIDDEN, _NOT_FOUND = (403, 15), (404, 4)
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
 
@@ -143,8 +143,8 @@ _DOORS: list[_Door] = [
     # The estate admin's feed and tenant registry.
     _Refusing(method="GET", route="/management/v1/events"),
     _Refusing(method="POST", route="/management/v1/projects", body={"id": "rival"}),
-    _Refusing(method="GET", route="/management/v1/projects/{project_id}", params={"project_id": PROJECT}),
     # A tenant's own doors.
+    _Refusing(method="GET", route="/management/v1/projects/{project_id}", params={"project_id": PROJECT}, refused=_NOT_FOUND),
     _Refusing(method="DELETE", route="/management/v1/projects/{project_id}", params={"project_id": PROJECT}, refused=_NOT_FOUND),
     _Refusing(
         method="POST",

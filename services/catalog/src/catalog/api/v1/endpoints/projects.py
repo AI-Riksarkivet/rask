@@ -22,8 +22,10 @@ drift invisible instead of fixable.
 (the model folds ``admin`` into ``member``), batch-checked over the tenant map
 above, so a membership FGA holds for a project no registry knows lists nothing. Authorization scope ==
 data scope (the ``/management/v1/events`` #12 rationale): a member sees their own tenants' names,
-buckets and admins and no one else's. Create and one tenant's detail stay estate-observer gated through
-``fga_deps.require_relation``. ``/management/v1/projects`` matches no resource prefix in
+buckets and admins and no one else's. One tenant's detail is read by the callers the list shows it to, the
+estate observer or a member of that tenant, and anyone else is answered the missing tenant's 404
+(:func:`get_project`); create is estate-observer gated through ``fga_deps.require_relation``.
+``/management/v1/projects`` matches no resource prefix in
 ``fga_deps.authorize``, so the router-wide gate only sets the 401/503 floor; every decision here is
 audited (allow/deny/outage, #41), and an OpenFGA outage fails the list closed with 503.
 
@@ -334,10 +336,18 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
 
 @router.get("/{project_id}")
 async def get_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectResponse:
-    """One derived tenant — the same shape as the list. Estate-observer gated; unknown project → 404."""
+    """One tenant, in the list's shape, for the callers the list shows it to: an estate observer, or a member of it.
+
+    Anyone else is answered the missing project's 404, so the door tells no caller which project ids exist (the rule
+    :func:`administered_project` states), and the trail records the refusal on each door it asked.
+    """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
+    doors = [("can_observe_events", settings.fga_root_object), ("member", f"project:{project_id}")]
+    try:
+        await fga_deps.require_any_relation(client, settings, token, doors=doors)
+    except PermissionDeniedError as exc:
+        raise TableNotFoundError(f"project not found: {project_id}") from exc
     tenant = (await _load_tenants(settings)).get(project_id)
     if tenant is None:
         raise TableNotFoundError(f"project not found: {project_id}")
@@ -349,8 +359,9 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
 
     The record is read first, since the gate is on the tenant it names. NO EXISTENCE ORACLE (audit #4, the rule the
     warehouse doors follow): a caller who may not administer the project is answered exactly the missing project's 404,
-    so nobody can enumerate the estate's tenants by a 404-versus-403 difference, which estate-observer gating
-    ``GET /management/v1/projects`` exists to prevent; an outage or a missing caller still answers 503 or 401. A create
+    so nobody can enumerate the estate's tenants by a 404-versus-403 difference, which answering
+    ``GET /management/v1/projects`` with the caller's own tenants exists to prevent; an outage or a missing caller still
+    answers 503 or 401. A create
     door answers 404 for a missing parent because that is a fix its caller needs; the doors this gates have no such
     teaching to do.
 
@@ -440,8 +451,8 @@ async def delete_project(
     """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance
     policy, and drop its record.
 
-    Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
-    read routes use (module docstring). Order, fail-closed and each step earning the next:
+    Gated on ``project:<id>#can_administer``, the tenant's OWN admin bar: the rungs that open its reads, the estate
+    observer's and membership, retire nothing (module docstring). Order, fail-closed and each step earning the next:
     id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
     emptiness (409) → revoke tuples → end its roles → end its maintenance policy → delete record → audit + event.
 

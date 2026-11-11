@@ -3,10 +3,9 @@
 Drives the handlers directly (no TestClient) with fake registry records + settings, mirroring the repo's
 direct-call style (``test_events_endpoint.py``). Pins the design decisions: the list is the caller's
 projects (every tenant for an estate observer, ``can_observe_events`` on the fixed root object; otherwise
-the registry's projects the caller is a ``member`` of), while one tenant's detail stays estate-observer
-gated; grouping tolerates a corrupt record (skip-with-warning,
-never a 500); ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable;
-an unknown project is a 404 domain error.
+the registry's projects the caller is a ``member`` of); with FGA off one tenant's read answers the list's shape,
+and a malformed id is refused before any lookup; grouping tolerates a corrupt record (skip-with-warning,
+never a 500); ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable.
 """
 
 from __future__ import annotations
@@ -28,9 +27,9 @@ from lakehouse.storage_options import StorageOptions
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:
-    # fga_enabled=False makes require_relation a genuine no-op (its own guard) AND _admins_for degrade to
-    # []; the gate's args are asserted separately below. registry_root/storage_options feed the (patched)
-    # list_warehouses call.
+    # fga_enabled=False: every authorization decision allows (``fga_deps.authorization`` answers None) and
+    # _admins_for degrades to []; the list's own check is asserted with FGA on below. registry_root/storage_options
+    # feed the (patched) list_warehouses call.
     return SimpleNamespace(
         fga_enabled=fga_enabled,
         fga_root_object="warehouse:lance_catalog",
@@ -110,7 +109,7 @@ def test_get_project_returns_list_shape(monkeypatch: pytest.MonkeyPatch) -> None
     assert [w.id for w in result.warehouses] == ["wh-a", "wh-b"] and result.admins == []
 
 
-# ── the gates: the list is the CALLER's projects; one tenant's detail stays estate-observer gated ────────
+# ── the gate: the list is the CALLER's projects ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(("estate_observer", "expected"), [(True, ["acme", "fresh", "globex"]), (False, ["fresh", "globex"])])
