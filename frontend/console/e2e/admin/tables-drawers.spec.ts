@@ -68,13 +68,23 @@ test('the access jump link lands on the detail page with the Access tab selected
 	await expect(page.getByRole('tab', { name: 'access' })).toHaveAttribute('aria-selected', 'true');
 });
 
-test('an in-cell table link navigates WITHOUT opening the drawer (stopPropagation)', async ({
+test('an in-cell table link navigates in the app, with no page load and no drawer', async ({
 	page,
 }) => {
 	await page.goto('/catalog/tables');
-	await page.getByRole('link', { name: 'db1$t', exact: true }).click();
+	// The list renders once the first visit's sign-in round trip is over, so loads count from here.
+	const link = page.getByRole('link', { name: 'db1$t', exact: true });
+	await expect(link).toBeVisible();
+	// A page load drops the in-memory sign-in, so the router must be the one to follow the link. The mock
+	// issuer signs a reloaded page straight back in, which is why the URL alone cannot tell the two apart.
+	const loads: string[] = [];
+	page.on('request', (request) => {
+		if (request.resourceType() === 'document') loads.push(request.url());
+	});
+	await link.click();
 	await expect(page).toHaveURL(/\/catalog\/tables\/db1%24t$/);
 	await expect(page.getByRole('dialog')).toHaveCount(0);
+	expect(loads).toEqual([]);
 });
 
 test('a namespace row opens the record drawer with the member count', async ({ page }) => {

@@ -40,6 +40,18 @@
 	const pageSize = $derived(String(table.getState().pagination.pageSize));
 	const totalRows = $derived(table.getCoreRowModel().rows.length);
 	const showPagination = $derived(totalRows > (PAGE_SIZES[0] ?? 10));
+
+	/** What owns its own click inside a row: a click landing on one is that control's, never the row's. */
+	const ROW_CONTROLS = 'a, button, input, select, textarea, label, summary';
+
+	/** Whether a row's click landed on a control inside it. The control itself never stops the click: the
+	 *  router reads a link's click where it bubbles to, and a stopped one is left to the browser, which
+	 *  loads the page whole and drops the in-memory sign-in. */
+	function landedOnAControl(e: MouseEvent): boolean {
+		const row = e.currentTarget;
+		const control = e.target instanceof Element ? e.target.closest(ROW_CONTROLS) : null;
+		return control !== null && row instanceof Element && control !== row && row.contains(control);
+	}
 </script>
 
 <!-- The table CARD owns containment: `min-w-0` + `max-w-full` so a wide table can never push the
@@ -99,7 +111,11 @@
 					<TablePrimitive.Row
 						data-state={row.getIsSelected() ? 'selected' : undefined}
 						class={cn(onrowclick && 'cursor-pointer')}
-						onclick={onrowclick ? () => onrowclick(row.original) : undefined}
+						onclick={onrowclick
+							? (e: MouseEvent) => {
+									if (!landedOnAControl(e)) onrowclick(row.original);
+								}
+							: undefined}
 						onkeydown={onrowclick
 							? (e: KeyboardEvent) => {
 									// The row's own key only: Enter on a link or a button inside the row is that

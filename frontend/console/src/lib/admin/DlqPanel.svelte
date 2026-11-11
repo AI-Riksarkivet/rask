@@ -196,11 +196,7 @@
 			class="btn ghost"
 			disabled={busy !== null}
 			aria-label="Replay {e.run_id}"
-			onclick={(ev) => {
-				// The row itself opens the drawer — the inline replay must not also do that.
-				ev.stopPropagation();
-				replay(e);
-			}}><RotateCcw size={12} /> {busy === e.run_id ? '…' : 'Replay'}</button
+			onclick={() => replay(e)}><RotateCcw size={12} /> {busy === e.run_id ? '…' : 'Replay'}</button
 		>
 	{:else}
 		<span class="mut" title="An unparseable object can't be replayed; the relay drops it."

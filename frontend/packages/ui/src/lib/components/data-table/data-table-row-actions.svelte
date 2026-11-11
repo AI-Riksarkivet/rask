@@ -15,16 +15,7 @@
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger>
 		{#snippet child({ props })}
-			<Button
-				{...props}
-				variant="ghost"
-				size="icon-sm"
-				onclick={(e: MouseEvent) => {
-					// Keep the trigger from also firing the table's row-level onrowclick.
-					e.stopPropagation();
-					(props as { onclick?: (e: MouseEvent) => void }).onclick?.(e);
-				}}
-			>
+			<Button {...props} variant="ghost" size="icon-sm">
 				<span class="sr-only">{label}</span>
 				<Ellipsis class="size-4" />
 			</Button>

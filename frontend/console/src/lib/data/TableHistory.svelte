@@ -511,10 +511,7 @@
 		class="btn tiny ghost chev"
 		aria-label="details for v{row.version}"
 		aria-expanded={selectedVersion === row.version}
-		onclick={(e) => {
-			e.stopPropagation();
-			select(row.version);
-		}}
+		onclick={() => select(row.version)}
 	>
 		<Chevron size={13} />
 	</button>

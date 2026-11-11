@@ -146,9 +146,9 @@ export const fetchTableDetail = query(
 		};
 		const policyPart = async (res: Response): Promise<Policy | PartError | null> => {
 			if (!res.ok) return { error: res.status };
-			const described = v.safeParse(PolicyDescribeSchema, await res.json());
-			if (!described.success) return { error: 502 };
-			return described.output.set ? described.output : null;
+			const answer = v.safeParse(PolicyDescribeSchema, await res.json());
+			if (!answer.success) return { error: 502 };
+			return answer.output.set ? answer.output : null;
 		};
 		try {
 			const describe = await read('describe?load_detailed_metadata=true&with_table_uri=true');

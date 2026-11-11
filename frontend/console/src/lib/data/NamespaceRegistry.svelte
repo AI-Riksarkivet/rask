@@ -195,7 +195,8 @@
 	let globalFilter = $state('');
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 10 });
 
-	// Goal cond 8: row click opens the record drawer (links/buttons in cells stopPropagation).
+	// Goal cond 8: a row click opens the record drawer; a click on a link or a button in a cell is that
+	// control's (the data table leaves a click on a control to the control).
 	let drawerOpen = $state(false);
 	let drawerRow = $state<Row | null>(null);
 	function openDrawer(row: Row): void {
@@ -303,8 +304,7 @@
 {#snippet nsCell(row: Row)}
 	<a
 		class="ns-name mono"
-		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.ns) })}
-		onclick={(e) => e.stopPropagation()}>{row.ns}</a
+		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.ns) })}>{row.ns}</a
 	>
 {/snippet}
 {#snippet stageCell(row: Row)}
@@ -318,7 +318,6 @@
 		<a
 			class="wh"
 			href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(row.warehouse) })}
-			onclick={(e) => e.stopPropagation()}
 		>
 			{row.warehouse}
 		</a>
@@ -329,10 +328,7 @@
 		class="drop"
 		aria-label={`Drop namespace ${row.ns}`}
 		disabled={busy}
-		onclick={(e) => {
-			e.stopPropagation();
-			openDrop(row.ns);
-		}}
+		onclick={() => openDrop(row.ns)}
 	>
 		<Trash2 size={12} /> drop
 	</button>

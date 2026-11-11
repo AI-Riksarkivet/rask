@@ -226,8 +226,8 @@
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 10 });
 	let stageFilter = $state(''); // '' = any stage
 
-	// Goal cond 8: row click opens the record drawer (the in-cell links keep navigating — they
-	// stopPropagation so a link click never also opens the drawer).
+	// Goal cond 8: a row click opens the record drawer; a click on a link in the row is the link's
+	// (the data table leaves a click on a control to the control).
 	let drawerOpen = $state(false);
 	let drawerRow = $state<Row | null>(null);
 	function openDrawer(row: Row): void {
@@ -314,8 +314,7 @@
 {#snippet tableCell(row: Row)}
 	<a
 		class="rowlink mono"
-		href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(row.id) })}
-		onclick={(e) => e.stopPropagation()}>{row.id}</a
+		href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(row.id) })}>{row.id}</a
 	>
 {/snippet}
 {#snippet stageCell(row: Row)}
@@ -325,7 +324,7 @@
 	<a
 		class="nslink mono"
 		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.namespace) })}
-		onclick={(e) => e.stopPropagation()}>{row.namespace}</a
+		>{row.namespace}</a
 	>
 {/snippet}
 

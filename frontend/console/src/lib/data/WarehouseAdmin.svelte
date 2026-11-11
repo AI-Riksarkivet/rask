@@ -151,7 +151,8 @@
 	let globalFilter = $state('');
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 10 });
 
-	// Goal cond 8: row click opens the full-record drawer (link + lifecycle button stopPropagation).
+	// Goal cond 8: a row click opens the full-record drawer; a click on the link or a lifecycle button
+	// is that control's (the data table leaves a click on a control to the control).
 	let drawerOpen = $state(false);
 	let drawerRow = $state<WarehouseRecord | null>(null);
 	function openDrawer(row: WarehouseRecord): void {
@@ -270,32 +271,21 @@
 {#snippet idCell(w: Warehouse)}
 	<a
 		class="whlink mono"
-		href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(w.id) })}
-		onclick={(e) => e.stopPropagation()}>{w.id}</a
+		href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(w.id) })}>{w.id}</a
 	>
 {/snippet}
 {#snippet statusCell(w: Warehouse)}
 	<span class="chip mono" class:off={statusOf(w) !== 'active'}>{statusOf(w)}</span>
 {/snippet}
 {#snippet actionsCell(w: WarehouseRecord)}
-	<button
-		class="btn ghost"
-		disabled={busy}
-		onclick={(e) => {
-			e.stopPropagation();
-			toggleActive(w);
-		}}
-	>
+	<button class="btn ghost" disabled={busy} onclick={() => toggleActive(w)}>
 		{statusOf(w) === 'active' ? 'deactivate' : 'activate'}
 	</button>
 	<button
 		class="btn ghost destroy"
 		disabled={busy}
 		aria-label={`Delete warehouse ${w.id}`}
-		onclick={(e) => {
-			e.stopPropagation();
-			openDelete(w);
-		}}
+		onclick={() => openDelete(w)}
 	>
 		delete
 	</button>
