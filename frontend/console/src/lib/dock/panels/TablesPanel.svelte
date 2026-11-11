@@ -2,9 +2,9 @@
 	/**
 	 * The catalog's table registry — literally the component `/catalog/tables` renders.
 	 *
-	 * `TableRegistry` takes no props and owns its own reads, so the panel is a sizing wrapper and
-	 * nothing else. That is the whole point of an in-app dock: no mirrored second implementation to
-	 * drift, no transport between the page and the panel — the SAME component, in a different frame.
+	 * `TableRegistry` takes no props and reads through the shared read instances (`fetchTables`), so
+	 * the panel is a sizing wrapper and nothing else: the SAME component as the page, in a different
+	 * frame, showing the last rows it read again at once when the dock remounts it.
 	 */
 	import TableRegistry from '#lib/data/TableRegistry.svelte';
 </script>

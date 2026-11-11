@@ -12,7 +12,7 @@ frontend/
   TOOLING.md        # the toolchain: one linter, one formatter, the rules that are off and why
   .oxlintrc.json    # oxlint — every extension, .svelte included (via @rsvelte/oxlint-plugin)
   .oxfmtrc.json     # rsvelte-fmt + oxfmt — every extension
-  patches/          # bun patchedDependencies (bits-ui, apache-arrow — see TOOLING.md)
+  patches/          # bun patchedDependencies (apache-arrow — see TOOLING.md)
   console/          # the app
     vite.config.ts  #   the SvelteKit config (`sveltekit({...})`: adapter-static, the CSP), the dev server
     package.json    #   `imports` declares `#lib/*` → `src/lib/*`, imported with the file's extension
@@ -25,14 +25,15 @@ frontend/
                               #   100 entries, 24 h, forgotten at sign-out
     src/lib/**/*.api.ts       # each surface's reads and writes against its upstream
     src/lib/upstreams.ts      # where each upstream answers: /api/catalog, /api/lineage
+    src/lib/dock/             # the /workbench dock on horizon-layout: panels, layout edits, autosave,
+                              #   named views; `store.ts` keeps them in this browser's localStorage
     serve.ts        #   the static server the image runs (SPA fallback, /config.json, the CSP header)
     e2e/            #   the Playwright suite (see below)
   packages/
     ui/             # @rask/ui — the design system (shadcn-svelte on bits-ui 2), AppShell + nav-config
                     #   (the bell is `shell/activity-center.svelte`), Storybook. The only package with a build step (svelte-package → dist/).
     api/            # @rask/api — the browser transport (`client`), the /management/v1/me contract, the
-                    #   lineage and dock-layout clients, the generated OpenAPI types
-    dockview/       # @rask/dockview — the Svelte binding over dockview 7 (the workbench)
+                    #   lineage client, the generated OpenAPI types
     flow/           # @rask/flow — the Svelte Flow binding (the governance graphs)
 ```
 
@@ -104,5 +105,5 @@ per family of specs, each with its own mocks and named by its Playwright project
 
 Some pages cannot work, and say so without a request: the audit trail and the streams view (no door
 serves the telemetry store or the NATS monitor to a browser), the stores-by-tier view (no door maps
-stores to tiers), and remembering a dock layout or the projects view (no door keeps per-person
-state).
+stores to tiers), and remembering the projects view (no door keeps per-person state). The workbench
+keeps its layout and named views in this browser (`console/src/lib/dock/store.ts`).

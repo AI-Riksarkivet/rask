@@ -29,8 +29,7 @@ import {
 // the wire boundary in this module, so a contract drift is an `{ok:false}` the component renders
 // honestly, never a cast.
 //
-// Results are the shared `ApiResult<T>` union rather than thrown `error()`s, on the dock-layout
-// precedent (`layout.api.ts`'s ok/absent/unreadable): the explorer renders DIFFERENT states off the
+// Results are the shared `ApiResult<T>` union rather than thrown `error()`s: the explorer renders DIFFERENT states off the
 // status (401/403 → "estate-admin only", else the detail), and a discriminated union keeps that an
 // exhaustive branch instead of exception control flow.
 //

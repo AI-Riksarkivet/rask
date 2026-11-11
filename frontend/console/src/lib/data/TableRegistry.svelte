@@ -39,9 +39,12 @@
 	import StageBadge from './StageBadge.svelte';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 
-	let tables = $state<string[] | null>(null);
-	let lastStatus = $state(0);
-	let settled = $state(false); // distinguishes "still loading" (0, unsettled) from a network error (0, settled)
+	// Seeded from the shared read instance: a registry mounted again (the workbench remounts a panel
+	// whenever its tab is shown) paints the last rows read at once, and `load` refreshes them.
+	const lastRead = fetchTables().current;
+	let tables = $state<string[] | null>(lastRead?.ok ? [...lastRead.data.tables].sort() : null);
+	let lastStatus = $state(lastRead?.ok ? 200 : 0);
+	let settled = $state(lastRead !== undefined); // distinguishes "still loading" (0, unsettled) from a network error (0, settled)
 
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);

@@ -6,7 +6,7 @@
  * (governance/access, lineage/graph, lineage/columns, the table-detail access graph), because nothing
  * in the estate had ever mapped these.
  *
- * Same approach as `@rask/dockview`'s `--dv-*` block, and for the same reason: the library exposes
+ * Same approach as the workbench dock's `--hl-*` block, and for the same reason: the library exposes
  * `--xy-*` custom properties, every one of them resolves through a rask token that is itself
  * re-declared under `.dark`, so the light/dark flip needs NO JavaScript. `colorMode` on <SvelteFlow>
  * is therefore left alone — it is a second source of truth that can only go stale.

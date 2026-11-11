@@ -201,3 +201,4 @@ with its client to that client's own repository.
 | [0197](0197-maintenance-writes-only-under-a-vend-and-no-workload-holds-a-store-key.md) | XC-084, LH-219, LH-238 | Maintenance writes only under a vend, and no workload holds a store key (2026-11-08) |
 | [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) | owner | Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08) (reopened by 0199) |
 | [0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) | owner | NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09) |
+| [0200](0200-the-workbench-dock-is-horizon-layout.md) | owner | The workbench's dock is horizon-layout: dockview 8 moved keyboard control into a separately licensed package (2026-11-11) |

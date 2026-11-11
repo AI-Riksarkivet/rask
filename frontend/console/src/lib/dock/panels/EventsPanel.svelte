@@ -1,8 +1,7 @@
 <script lang="ts">
-	/** The OpenLineage event feed from the shared store, newest first. */
-	import { getBench } from '#lib/dock/bench.svelte.ts';
+	/** The OpenLineage event feed from the workbench's one feed, newest first. */
+	import { eventFeed as store } from '#lib/dock/bench.svelte.ts';
 
-	const store = getBench();
 	const events = $derived([...store.events].reverse());
 </script>
 

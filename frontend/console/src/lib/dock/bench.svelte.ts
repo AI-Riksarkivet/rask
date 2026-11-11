@@ -1,8 +1,11 @@
 /**
- * The workbench's shared lineage event feed — ONE `EventFeed`, read once, rendered by the Events
- * panel through ordinary context.
+ * The workbench's shared lineage event feed — ONE `EventFeed` for the page, held in this module.
+ *
+ * A module and not the panel, because the dock renders only the active tab of a group and remounts
+ * a panel when it is moved, maximized or popped out: anything a panel must show again after that
+ * lives here. Not in context either: a popped-out panel is mounted in another window, outside the
+ * page's component tree, and reads this same instance.
  */
-import { createContext } from 'svelte';
 import { createLineageClient, type EventRecord } from '@rask/api/lineage';
 import { getJSON, requestJSON } from '#lib/http.ts';
 import { LINEAGE_API } from '#lib/upstreams.ts';
@@ -33,8 +36,4 @@ export class EventFeed {
 	}
 }
 
-export function createBench(): EventFeed {
-	return new EventFeed();
-}
-
-export const [getBench, setBench] = createContext<EventFeed>();
+export const eventFeed = new EventFeed();

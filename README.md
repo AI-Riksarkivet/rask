@@ -54,7 +54,8 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
     lineage APIs with its bearer. Its bell lists the reader's own writes, kept in the tab. A small Bun server
     (`serve.ts`) serves the built files and the runtime `config.json`
   - `packages/` — `@rask/ui` (Svelte 5 + Bits UI + Tailwind 4 design system, Storybook), `@rask/api` (the typed
-    client generated from the OpenAPI specs), `@rask/dockview` (the workbench), `@rask/flow` (the governance graphs)
+    client generated from the OpenAPI specs), `@rask/flow` (the governance graphs); the workbench's dock is the
+    console's own `src/lib/dock`, on horizon-layout
 - `scripts/` — all dev/ops scripts (the e2e stack drivers, the estate seed, the chart and store tooling)
 - `tests/` — cross-service suites: `unit`, `integration` and `e2e-py` (**live**, `-m e2e`, needs a
   deployed stack)

@@ -54,9 +54,10 @@ events and imports none of it.
 (`.docker/rest-catalog.dockerfile`) run with three commands. This repository hosts no client: the notifications inbox
 is retired (ADR 0193), and every other client left with XC-192.
 
-**JS packages** (4): `@rask/ui` (the design system, `rask-styling`), `@rask/api` (the typed `/api/*` client with its
-bearer provider, the generated OpenAPI types, the lineage client, the live-cursor reader and the dock stores),
-`@rask/dockview` (the dockview binding) and `@rask/flow` (the Svelte Flow binding). See `rask-frontend`.
+**JS packages** (3): `@rask/ui` (the design system, `rask-styling`), `@rask/api` (the typed `/api/*` client with its
+bearer provider, the generated OpenAPI types, the lineage client and the live-cursor reader) and
+`@rask/flow` (the Svelte Flow binding). The workbench's dock is the console's own code (`console/src/lib/dock`, on
+horizon-layout, ADR 0200). See `rask-frontend`.
 
 **Deployables** (each = a member + a `.docker/<name>.dockerfile`): `rest-catalog` (image `lance-rest-catalog`, the
 three lakehouse services) and `frontend` (image `web-console`, the console's static-file server), both deployed by the

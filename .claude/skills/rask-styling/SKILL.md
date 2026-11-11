@@ -1,6 +1,6 @@
 ---
 name: rask-styling
-description: Styling, theming and design-system work in the rask console — OKLCH tokens, Tailwind 4 `@source`, `tv()` + `cn()`, `data-slot`, dark mode, the legacy `--ink/--line` bridge, export subpaths, Storybook, and vendor stylesheets themed through `layer(base)`. Use when the console renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component (its subpath export, its story), when a vendor sheet out-specifies Tailwind utilities or a dock needs theming (dockview `--dv-*`, Svelte Flow), or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
+description: Styling, theming and design-system work in the rask console — OKLCH tokens, Tailwind 4 `@source`, `tv()` + `cn()`, `data-slot`, dark mode, the legacy `--ink/--line` bridge, export subpaths, Storybook, and vendor stylesheets themed through `layer(base)`. Use when the console renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component (its subpath export, its story), when a vendor sheet out-specifies Tailwind utilities or a dock needs theming (the workbench's horizon-layout `--hl-*`, Svelte Flow), or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
 ---
 
 # rask styling (`@rask/ui`)
@@ -21,8 +21,8 @@ system's build; from `frontend/console/src/` the depth is **two** `../`:
 @source '../../packages/ui/dist';
 ```
 
-The console mounts a **dock** at `/workbench`, so it also imports `@rask/dockview/styles.css` under `layer(base)`; the
-why is § *Third-party stylesheets*.
+The console mounts a **dock** at `/workbench`, so it also imports `horizon-layout/horizon-layout.css` and the dock's
+theme under `layer(base)`; the why is § *Third-party stylesheets*.
 
 Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches the console's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
 
@@ -38,53 +38,34 @@ Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed
 
 A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilities, so the console's own
 `class=` on that library's content silently loses. Import it into `base` and every utility sits above
-it, permanently. The console imports three this way:
+it, permanently. The console imports four this way:
 
 ```css
-@import '@xyflow/svelte/dist/style.css' layer(base);
-@import '@rask/flow/styles.css'         layer(base);   /* …immediately after it */
-@import '@rask/dockview/styles.css'     layer(base);
+@import '@xyflow/svelte/dist/style.css'      layer(base);
+@import '@rask/flow/styles.css'              layer(base);   /* …immediately after it */
+@import 'horizon-layout/horizon-layout.css'  layer(base);
+@import './lib/dock/theme.css'               layer(base);   /* …immediately after it */
 ```
 
 The xyflow sheet needs **two** lines, in that order: the vendor sheet, then `@rask/flow/styles.css`,
 which maps `--xy-*` onto the OKLCH tokens. Skip the second and the vendor's light-mode hex defaults
 (`#fefefe` controls, `#f7f9fb` edge labels, `#b1b1b7` edges) survive — the Controls widget and every
-edge label render as a white blob on rask's dark surfaces. Same shape as the `--dv-*` block below and
+edge label render as a white blob on rask's dark surfaces. Same shape as the `--hl-*` block below and
 for the same reason: every `--xy-*` resolves through a token that is itself re-declared under `.dark`,
 so `colorMode` on `<SvelteFlow>` is left unset.
 
-`@rask/dockview/styles.css` is **one import, not two** — it pulls dockview's own 124 KB sheet and then
-the rask theme block. There is no `@source` to add for it: the package ships no Tailwind utility
-classes, only `--dv-*` custom properties.
+## Theming the workbench dock — `--hl-*`, zero JavaScript
 
-## Theming dockview — 40 custom properties, zero JavaScript
-
-dockview exposes 113 `--dv-*` custom properties and 18 shipped themes. rask defines its own,
-`.dockview-theme-rask`, mapping ~40 of them onto OKLCH tokens — surfaces to `--card`/`--background`,
-the four tab states to `--foreground`/`--muted-foreground`, sashes to `--ring`, the drag overlay to a
-`color-mix()` of `--primary`, radii to `calc(var(--radius) - …)`.
-
-**The light/dark flip needs no JavaScript**, and that is the design point: every `--dv-*` resolves
-through a rask token that is itself re-declared under `.dark`, so mode-watcher toggling the class
-re-themes the dock underneath. `DockviewTheme.colorScheme` is therefore **deliberately unset** — it is
-a static field on a theme object and would be a second source of truth that could only go stale.
-
-**Two** groups are deliberately unmapped, and re-mapping them is a regression:
-
-- `--dv-color-{abyss,gh,mocha,monokai,nord,sol}-*` — the other shipped themes' private palettes. Read
-  only by their own theme classes; dead weight here.
-- `--dv-tab-group-color-*` — the nine user-pickable tab-group accents. A user's semantic choice per
-  group, not a theme surface. Overriding them collapses nine distinguishable colours onto one.
-
-`--dv-overlay-z-index` is the opposite case — **map it (rask uses 999)**. dockview does not theme it
-at all: only the built-in theme classes define it, so a custom theme that skips it leaves the
-PopupService wrapper (the tab-overflow dropdown) at `z-index: auto`, painted UNDER the dock it is
-prepended to, and the dropdown opens invisibly (`frontend/packages/dockview/src/styles.css` sets it).
-
-The non-CSS half lives in `theme.ts` (`gap`, `dndTabIndicator`, `tabAnimation`, `dndOverlayMounting`,
-`tabGroupIndicator`) — behavioural fields CSS cannot express. **Do not add GSAP to the dock chrome:**
-dockview rewrites panel transforms every frame under `defaultRenderer: 'always'`, so a tween on the
-same property is a second writer and reads as jank. Animate *inside* a panel if you want motion.
+horizon-layout is headless: every element carries a BEM class from its `baseClass` (`horizon-layout`,
+`horizon-layout-tabgroup__tab--active`, `horizon-layout-split__resizer-handle`, …), and its optional sheet
+supplies the structure those classes need (split panes, the resizer handle, drop zones and hints, the popout
+frame) plus a palette of `--hl-*` properties on `:root`. The console keeps the structure and replaces the
+palette: `frontend/console/src/lib/dock/theme.css` sets every `--hl-*` on `.horizon-layout` to a token
+(surfaces to `--background`/`--card`, the active tab to `--card`, the resizer and drop hints to `--ring` and a
+`color-mix()` of `--primary`). Every token is re-declared under `.dark`, so mode-watcher's class re-themes the
+dock; the library's own `.light` variant is never set. A popout window's root also carries `horizon-layout`, so
+it reads the same mapping, and `Dock.svelte` mirrors the page's `<html>` classes onto it for `.dark`. There is
+no `@source` to add: the library ships no Tailwind utilities.
 
 ## Dark mode
 

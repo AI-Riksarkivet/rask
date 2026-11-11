@@ -22,7 +22,7 @@ flowchart TD
     end
     subgraph js["frontend/ · JS/TS plane · bun workspace"]
         app["console/ · one single-page app"]
-        fpk["packages/ · ui · api · dockview · flow"]
+        fpk["packages/ · ui · api · flow"]
     end
     lake --> plh
     app --> fpk
@@ -38,7 +38,6 @@ Each is unambiguous from inside its plane, and language purity is what lets both
 | `packages/lakehouse` | Python | The lakehouse's one library ([ADR 0195](../adr/0195-the-three-kits-fold-into-one-lakehouse-library.md)), imported by catalog, lineage and maintenance and by no client: the lance app factory and what it installs (exceptions, the request-id middleware, logging, the probes and the drain, the body cap), the auth plane (`lakehouse.governed`), the naming and the input and credential guards (`lakehouse.arrow_ipc`, `lakehouse.storage_options`), the catalog's records, registries and governance guards, the namespace clients (`lakehouse.lancekit`), the events (`lakehouse.control_events`, `lakehouse.lineage_events`, `lakehouse.governed.subjects`, `lakehouse.signature_doors`, the outbox), the OpenLineage emission and Ed25519 signing seam (`lakehouse.lineage`), the store session, and [`lakehouse.storage`](../packages/storage.md), the S3 client, STS and URI seam. |
 | `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook; `@rask/ui/shell` exports the console's `AppShell`. |
 | `frontend/packages/api` | TS | `@rask/api`: the typed client generated from `docs/catalog-openapi.json` and `docs/lineage-openapi.json` and the lineage client, calling same-origin `/api/*` with the signed-in person's bearer. |
-| `frontend/packages/dockview` | TS / Svelte | `@rask/dockview`: the console's workbench docks. |
 | `frontend/packages/flow` | TS / Svelte | `@rask/flow`: the graph canvas the governance views use (the project hierarchy, the access graph). |
 
 ## `services/` · `frontend/console` · `scripts/` — runnable code

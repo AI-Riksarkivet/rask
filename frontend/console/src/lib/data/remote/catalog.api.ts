@@ -445,39 +445,3 @@ export const deleteRows = command(
 	async ({ table, predicate }): Promise<ApiResult<DeleteRowsResult>> =>
 		parsed(await post(`/v1/table/${enc(table)}/delete`, { predicate }), DeleteRowsResponseSchema),
 );
-
-/** The user-state documents the console owns: its dock's arrangement and its named views. */
-const UserStateArg = v.object({
-	document: v.picklist(['dock-layout', 'dock-layout-library']),
-});
-
-/** The envelope a user-state read answers: `{exists, value}`, `exists: false` a genuine "never saved". */
-export interface UserStateEnvelope {
-	exists?: boolean;
-	value?: unknown;
-}
-
-/** Why no user-state read or write can succeed: the lakehouse keeps no per-person documents, and the
- *  console has no backend of its own to keep them. Answered without a request; the dock store reads
- *  the 501 as its `unreadable` outcome, so it never saves over a workspace it could not read. */
-const NO_USER_STATE: { ok: false; status: number; detail: string } = {
-	ok: false,
-	status: 501,
-	detail:
-		'no door on this stack keeps per-person state: the dock layout and its named views are not saved',
-};
-
-/** Read the caller's own document. The three-outcome mapping (ok / absent / unreadable) stays in
- *  the dock's store, which is where it is tested — this only carries the status faithfully. */
-export const readUserStateDoc = query(
-	UserStateArg,
-	async (): Promise<ApiResult<UserStateEnvelope>> => NO_USER_STATE,
-);
-
-/** Save the caller's own document. A refused write is reported as such — never flattened to ok. */
-export const writeUserStateDoc = command(
-	({ document }) =>
-		document === 'dock-layout' ? 'Save the workbench layout' : 'Save the workbench views',
-	v.object({ ...UserStateArg.entries, value: v.unknown() }),
-	async (): Promise<ApiResult<unknown>> => NO_USER_STATE,
-);

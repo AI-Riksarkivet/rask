@@ -308,8 +308,8 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     `app.css` reads them with an `@source` two `../` up. See `.claude/skills/rask-styling`.
   - `frontend/packages/api` — `@rask/api`, the typed `/api/*` client the console calls through, with the bearer supplied
     by a provider the app installs, the lineage client and the OpenAPI types generated from `docs/*-openapi.json`.
-  - `frontend/packages/dockview` — `@rask/dockview`, the workbench's dock; `frontend/packages/flow` — `@rask/flow`, the
-    graph views the governance pages draw with.
+  - `frontend/packages/flow` — `@rask/flow`, the graph views the governance pages draw with. The workbench's dock is
+    the console's own code (`frontend/console/src/lib/dock`, on horizon-layout, ADR 0200).
 - `tests/` — `tests/unit`, `tests/integration` and `tests/e2e-py` (the live suites) for the lakehouse; the console's
   browser suite is its own Playwright suite (`frontend/console/e2e`).
 - `scripts/` — **all** dev/ops scripts, shell + Python. **No production-state-changing CLIs** — data enters, and moves

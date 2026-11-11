@@ -22,7 +22,8 @@ import {
 // edge routes it to a seed-driven mock upstream.
 //
 // THREE origins of the one build, one per family of specs, because each family seeds its own mocks:
-//   · auth-OFF (`e2e/*.spec.ts`, `e2e/catalog/`) — `e2e/console-config.off.json` says sign-in is off.
+//   · auth-OFF (`e2e/*.spec.ts`, `e2e/catalog/`, `e2e/workbench/`) — `e2e/console-config.off.json`
+//     says sign-in is off.
 //   · auth-ON for the estate pages and the reader's activity (`e2e/projects/`, `e2e/settings/`,
 //     `e2e/activity/`).
 //   · auth-ON for the catalog and operations pages, `e2e/admin/` (the project `admin`).
@@ -99,7 +100,11 @@ export default defineConfig({
 	projects: [
 		{
 			name: 'auth-off',
-			testMatch: [/\/e2e\/[^/]+\.spec\.ts$/, /\/e2e\/catalog\/.*\.spec\.ts$/],
+			testMatch: [
+				/\/e2e\/[^/]+\.spec\.ts$/,
+				/\/e2e\/catalog\/.*\.spec\.ts$/,
+				/\/e2e\/workbench\/.*\.spec\.ts$/,
+			],
 			use: { ...devices['Desktop Chrome'], baseURL: AUTH_OFF },
 		},
 		{

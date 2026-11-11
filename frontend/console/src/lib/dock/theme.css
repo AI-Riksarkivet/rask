@@ -1,0 +1,54 @@
+/*
+ * The workbench dock's theme: horizon-layout's `--hl-*` properties mapped onto the console's tokens.
+ *
+ * The library's own sheet (`horizon-layout/horizon-layout.css`, imported just before this one under
+ * `layer(base)` in app.css) supplies the structure every BEM class needs (the split panes, the
+ * resizer handle, the drop zones and hints, the popout frame) and a palette of its own on `:root`.
+ * Only the palette is replaced here. Every value resolves through a token that `tokens.css`
+ * re-declares under `.dark`, so the dock follows the theme with no class of its own; the library's
+ * `.light` variant is never set and stays inert.
+ *
+ * Set on the layout's root and on a popout's root (`horizon-layout__popout`), so both the page's
+ * dock and a panel in its own window read the same values.
+ */
+.horizon-layout {
+	--hl-background: var(--background);
+	--hl-foreground: var(--foreground);
+	--hl-primary: var(--primary);
+	--hl-popover: var(--popover);
+	--hl-border: var(--border);
+	--hl-card: var(--card);
+	/* The active tab is the panel's own surface, so it reads as attached to the content below. */
+	--hl-secondary: var(--card);
+	--hl-muted-foreground: var(--muted-foreground);
+	--hl-ring: var(--ring);
+	--hl-accent: var(--accent);
+	--hl-radius: calc(var(--radius) - 4px);
+	--hl-glass-blur: 0px;
+	--hl-tab-inactive-color: var(--muted-foreground);
+	--hl-drop-hint-border: var(--ring);
+	--hl-drop-hint-bg: color-mix(in oklch, var(--primary) 16%, transparent);
+
+	font-family: inherit;
+	font-size: 0.8125rem;
+}
+
+.horizon-layout-tabgroup__tab-bar {
+	min-height: 2.25rem;
+}
+
+/* A 36px tab strip, as the dock's header row has always been. */
+.horizon-layout-tabgroup__tab {
+	min-height: 1.75rem;
+	margin-block: 0.25rem;
+}
+
+.horizon-layout-tabgroup__tab-title {
+	font-size: 0.8125rem;
+	letter-spacing: normal;
+}
+
+/* The resizer is invisible at rest and shows the ring colour while hovered, dragged or focused. */
+.horizon-layout-split__resizer-handle:hover::before {
+	opacity: 1;
+}

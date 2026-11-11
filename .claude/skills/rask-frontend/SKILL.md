@@ -1,6 +1,6 @@
 ---
 name: rask-frontend
-description: The console — rask's one SvelteKit 3 + Svelte 5 single-page app in `frontend/` with no backend of its own: its route tree and navbars, browser sign-in (OIDC + PKCE against Dex, tokens in memory, `/config.json`, the CSP `serve.ts` sends), the browser data layer (`reads.svelte.ts`, `*.api.ts`, the bearer provider, same-origin `/api/*` per service), the bell (the reader's own activity log), `@rask/dockview` workbenches, and the gates (oxlint/oxfmt, svelte-check, vitest, the Playwright suite behind `e2e/edge.ts` and a mock issuer). Use when touching any `.svelte` or `frontend/` file, `@rask/api`, `@rask/dockview` or `@rask/flow`; when adding a route, a page, a read or write, or a frontend dependency; when wiring nav or a guard; when building a dock or panel; when the bell lists a write wrongly or not at all; or when sign-in loops, a call 401s/404s from the browser, the CSP blocks something, or a frontend gate fails.
+description: The console — rask's one SvelteKit 3 + Svelte 5 single-page app in `frontend/` with no backend of its own: its route tree and navbars, browser sign-in (OIDC + PKCE against Dex, tokens in memory, `/config.json`, the CSP `serve.ts` sends), the browser data layer (`reads.svelte.ts`, `*.api.ts`, the bearer provider, same-origin `/api/*` per service), the bell (the reader's own activity log), the `/workbench` dock (horizon-layout), and the gates (oxlint/oxfmt, svelte-check, vitest, the Playwright suite behind `e2e/edge.ts` and a mock issuer). Use when touching any `.svelte` or `frontend/` file, `@rask/api`, `@rask/flow` or `#lib/dock`; when adding a route, a page, a read or write, or a frontend dependency; when wiring nav or a guard; when building a dock or panel; when the bell lists a write wrongly or not at all; or when sign-in loops, a call 401s/404s from the browser, the CSP blocks something, or a frontend gate fails.
 ---
 
 # rask frontend — the console
@@ -79,9 +79,8 @@ links.
 **The audit and streams pages cannot work.** They need the platform's telemetry store and the NATS monitor (`/jsz`),
 which no Gateway route serves to a browser; the owner kept them anyway (2026-11-04), so `audit.api.ts` and
 `jetstream.api.ts` answer with that failure, naming what is missing, without a request. So do the doors the catalog does not serve:
-`#lib/storage/remote/storage.api.ts` (the stores-by-tier registry and its attach write) and `catalog.api.ts`'s
-user-state read and write each answer an honest 501 with a `detail` naming what no door
-keeps, and the storage page renders that refusal ("The stores registry is unavailable (HTTP 501) — …"). The e2e mocks
+`#lib/storage/remote/storage.api.ts` (the stores-by-tier registry and its attach write) answers an honest 501 with a
+`detail` naming what no door keeps, and the storage page renders that refusal ("The stores registry is unavailable (HTTP 501) — …"). The e2e mocks
 serve only doors that exist. Promotions read the catalog's own doors:
 `GET /management/v1/promotions` for the open holds, and `POST /management/v1/table/{id}/promotion/{approve,reject}` for a
 decision, keyed by table.
@@ -182,36 +181,38 @@ treats a cursor's arrival as no change. Data mutations move the lineage cursor; 
 warehouses, tenants) move the control cursor. A timer is right only when nothing publishes the change (a liveness probe)
 or time itself is the change (a countdown).
 
-## Workbenches — `@rask/dockview`
+## The workbench — `horizon-layout`
 
-The dock lives at `/workbench` with two panels, `EventsPanel` (lineage's `GET /events` through the dock's one
-`EventFeed`, `#lib/dock/bench.svelte.ts`) and `TablesPanel` (the very registry the catalog page renders). A panel
-RENDERS THE PAGE'S COMPONENT: it is not a smaller re-implementation, and when its data differs it passes rows as a prop
-rather than giving the board its own fetch. A panel with no page counterpart (`EventsPanel`) is fine.
-
-Layout persistence goes through `#lib/dock/user-state-fetch.ts`, which maps the dock stores' two calls onto the
-user-state read and write of `catalog.api.ts` and keeps their three outcomes (`ok` / `absent` / **`unreadable`**, which
-must refuse to save). **The catalog serves no user-state door** ([[LH-513]]): those two answer 501 without a request,
-which the store reads as `unreadable`, so no layout or named view persists until a client keeps that state in its own
-release.
-
-It is a **thin binding, not a wrapper**: consumers hold the real `DockviewApi`. Depend on **`dockview`, never
-`dockview-core`**: `dockview`'s runtime entry registers ContextMenu, KeyboardDocking, AdvancedDnD, TabGroupChips and
-Accessibility, and with core all five are silently absent.
+The dock lives at `/workbench` (`#lib/dock/`, ADR 0200) on **horizon-layout** (pinned exactly in the console's
+`package.json`): headless, Svelte 5, MIT, with keyboard control built in (the tab list takes arrows, Shift/Ctrl/Alt
+moves and splits; the resizer is a slider). Two panels: `EventsPanel` (lineage's `GET /events` through the workbench's
+one `EventFeed`, `#lib/dock/bench.svelte.ts`) and `TablesPanel` (the very registry the catalog page renders). A panel
+RENDERS THE PAGE'S COMPONENT: it is not a smaller re-implementation. `Dock.svelte` adds what the library leaves to its
+host, from `@rask/ui` components: a close button on each tab (`tabControls`), and per group (`tabgroupControls`) the panel
+picker for closed panels, maximize (with a Restore bar above the dock while one is maximized) and pop out. There are no
+floating groups and no context menu.
 
 **Four invariants.** Break any and the dock is wrong:
 
-1. **Panels mount once.** `SveltePanelRenderer` calls Svelte's `mount()` in `init()` and `unmount()` only in `dispose()`;
-   every move re-parents the same instance, so an interval, an `@xyflow/svelte` viewport and a subscription survive a
-   drag. Anything that mounts outside `init()` breaks it.
-2. **`defaultRenderer: 'always'`.** DOM-held state (scrollTop, focus, `<video>` position) does not survive a move under
-   the default `onlyWhenVisible`, which removes the element from the document; `'always'` parks panels in the overlay
-   container instead.
-3. **Layout is per-subject, not localStorage**, with `unreadable` refusing to save: treat it as empty and the next
-   autosave overwrites a workspace that is still there.
-4. **The dock is dynamically imported** (~100 KB gzipped, one route); its stylesheet is imported statically in
-   `app.css` under `layer(base)`, or the grid never lays out and panels stack as bare text. A dock's parent must be a
-   SIZED flex item: `flex: 1 1 0` against a block parent mounts every group at zero height.
+1. **A panel holds nothing in component state that must survive a remount.** The library renders only the active tab
+   of a group, and remounts a panel when it is moved, maximized or popped out. Data lives in a module
+   (`bench.svelte.ts`) or a shared read instance (`TableRegistry` seeds from `fetchTables().current`); scroll position,
+   search text and sort order reset, and that is accepted. `e2e/workbench/dock.spec.ts` pins it with reads that stop
+   answering.
+2. **A panel reads no context.** A popout mounts the panel in another window, outside the page's component tree, with
+   the page's stylesheets copied in; `Dock.svelte`'s `followTheme` mirrors the page's `<html>` classes onto that window
+   so light and dark follow. A bits-ui overlay inside a popped-out panel still portals to the page's document.
+3. **The layout is one value.** The page binds one `LayoutConfig`; every control writes a new value through
+   `#lib/dock/layout.ts`, and a stored layout is read with `parseLayoutConfig` then `validateConfig` (`readStoredLayout`).
+   Its three outcomes are `ok` / `absent` / **`unreadable`**, which shows the default with a notice and refuses every
+   save (`autosave.ts`, `views.svelte.ts`) until the person presses Reset layout, so nothing is written over a layout
+   that exists and could not be read. Where layouts and named views are kept is decided in `#lib/dock/store.ts` alone:
+   this browser's `localStorage`, one key per person (`rask-workbench:` and the SHA-256 of the principal's id), holding
+   the layout and the views and nothing else; memory where storage is refused, said in one line. Sign-out keeps them
+   (a preference), unlike the activity log.
+4. **The dock's stylesheets load with the app.** `app.css` imports `horizon-layout/horizon-layout.css` and the
+   `--hl-*` → token mapping (`#lib/dock/theme.css`) under `layer(base)`, so a popout copies them when it opens. A dock's
+   parent must be a SIZED flex item (`flex: 1 1 0`, `min-height: 0`), or the split has no height to divide.
 
 ## Develop
 
@@ -237,7 +238,7 @@ fits a read-only root filesystem.
 |---|---|
 | `bun --cwd=frontend run build` | `@rask/ui`'s `svelte-package`, then the app's `vite build` |
 | `bun --cwd=frontend run check` | build, then `svelte-check` in every package that declares `check` (the console's twice: the app, then `tsconfig.tools.json` for `serve.ts` and the e2e code) |
-| `bun --cwd=frontend run test` | build, then vitest in every package that declares `test` (`api`, `dockview`, `flow`, `ui`, `console`) |
+| `bun --cwd=frontend run test` | build, then vitest in every package that declares `test` (`api`, `flow`, `ui`, `console`) |
 | `bun --cwd=frontend run lint` / `fmt:check` | oxlint / rsvelte-fmt in every package |
 | `bun --cwd=frontend run knip` | the whole JS graph at once (`knip.json`) |
 | `bun --cwd=frontend run test:e2e` | builds, then the console's Playwright suite |
@@ -252,7 +253,7 @@ format is **oxfmt** with tabs, single quotes, `printWidth: 100`. ESLint and Pret
 stand-in for the Gateway: one origin that routes each `/api/*` prefix to a seed-driven mock upstream (`e2e/mock-*.ts`,
 `e2e/*/mock-*.ts`) and everything else to the shipped `serve.ts`, so its CSP and SPA fallback are what the specs meet.
 Vite preview is not used: it crashes under Bun's `node:http` proxy, and the host has no Node. Three origins of the one
-build, one per family of specs: **auth-off** (`e2e/*.spec.ts`, `e2e/catalog/`, served `e2e/console-config.off.json`,
+build, one per family of specs: **auth-off** (`e2e/*.spec.ts`, `e2e/catalog/`, `e2e/workbench/`, served `e2e/console-config.off.json`,
 `{"signIn": false}`), **estate** (`e2e/projects/`, `e2e/settings/`, `e2e/activity/`) and **admin** (`e2e/admin/`).
 An auth-on origin serves `e2e/console-config.json`, naming `e2e/mock-oidc.ts` under `/oidc`, so sign-in runs the app's
 real PKCE round trip: the mock issuer refuses, at `/auth`, any client but `rask-console`, a `redirect_uri` other than
@@ -260,7 +261,7 @@ the origin's `/auth/callback` and a request without an S256 challenge, and at `/
 carrying the `mock_oidc_no_end_session` cookie, `withoutEndSession()` in `e2e/admin/session.ts`). Its session is the
 identity cookie, and like an issuer that keeps one, it answers `prompt=login` with its login page even while it holds it. There is no test-only
 bypass in the app. Ports are declared in `e2e/ports.ts` and `e2e/admin/ports.ts`. A read the
-browser makes can also be stubbed per spec with `page.route`.
+browser makes can also be stubbed per spec with `page.route`, except in a spec that opens a popout: with a route on the context, Playwright holds the stylesheet requests of a window opened as `about:blank`, and the window renders unstyled for a reason the app does not have (measured 2026-11-11, Playwright 1.65).
 
 **TypeScript.** `strict` and `noUncheckedIndexedAccess` are on in the app (`frontend/console/tsconfig.json`);
 `exactOptionalPropertyTypes` only in `@rask/api`, and it stays off in Svelte code for an upstream reason (Bits UI "union

@@ -9,13 +9,13 @@
    light-mode hex on a dark canvas — a white blob on all four Svelte Flow surfaces in the console. */
 @import '@rask/flow/styles.css' layer(base);
 
+/* The workbench dock: horizon-layout's structural sheet, then its palette mapped onto the tokens
+   (`#lib/dock/theme.css`), both under `base` so the Tailwind utilities a panel's content is styled
+   with win over them. Imported here rather than by the route so a popout window, which copies the
+   page's stylesheets when it opens, finds them already loaded. */
+@import 'horizon-layout/horizon-layout.css' layer(base);
+@import './lib/dock/theme.css' layer(base);
+
 /* Scan the shared @rask/ui component library so its Tailwind classes are generated —
    Tailwind 4 ignores node_modules by default. */
-/* @rask/dockview: the vendor sheet plus the --dv-* → OKLCH token mapping, in ONE import and under
-   `base` — dockview ships 124 KB of unlayered CSS whose selectors would otherwise out-specify the
-   Tailwind utilities a panel's own content is styled with. This page mounts a dock at
-   /workbench; without this the grid never lays out and the panels stack as bare text.
-   The dock JS itself is dynamically imported by that route; this stylesheet is not, because
-   deferring 10 KB of gzipped CSS buys a flash of unstyled dock. */
-@import '@rask/dockview/styles.css' layer(base);
 @source '../../packages/ui/dist';

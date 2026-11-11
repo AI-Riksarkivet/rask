@@ -22,12 +22,13 @@
  * plain JSON of bounded size, so the comparison is cheap and, unlike a flag, self-correcting: drag a
  * panel away and back, and the marker clears itself.
  */
-import type { DockView, DockViewsStore } from '@rask/api/dock-views';
-import type { LayoutRead } from './types';
+import type { LayoutConfig } from 'horizon-layout';
+import { readStoredLayout, type LayoutRead } from './layout.ts';
+import type { StoredView, ViewsStore } from './store.ts';
 
-/** JSON with SORTED object keys, recursively — the divergence baseline's serializer. dockview's
- *  toJSON/fromJSON round-trip reorders the `panels` record's keys, so plain JSON.stringify marked an
- *  untouched, freshly-applied view as modified (review finding). Key order is not layout. */
+/** JSON with SORTED object keys, recursively — the divergence baseline's serializer. A layout built
+ *  by the dock and the same layout read back from storage can list their keys in different orders,
+ *  and key order is not layout. */
 function stableStringify(value: unknown): string {
 	return JSON.stringify(value, (_key, v: unknown) => {
 		if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
@@ -51,12 +52,12 @@ export interface ViewSummary {
 
 export type ViewsPhase = 'loading' | 'ready' | 'unreadable';
 
-export class DockViews<T> {
-	#store: DockViewsStore<T>;
-	/** Reads the dock's CURRENT arrangement. Injected so this class needs no DockviewApi. */
-	#snapshot: () => T | null;
+export class DockViews {
+	#store: ViewsStore;
+	/** Reads the dock's CURRENT arrangement. */
+	#snapshot: () => LayoutConfig | null;
 
-	#views = $state<DockView<T>[]>([]);
+	#views = $state<StoredView[]>([]);
 	#activeId = $state<string | null>(null);
 	/** The layout as it was when the active view was loaded or last saved — the divergence baseline. */
 	#baseline = $state<string | null>(null);
@@ -68,7 +69,7 @@ export class DockViews<T> {
 	/** The last refused write, or null — the sidebar renders it instead of failing silently. */
 	#lastError = $state<string | null>(null);
 
-	constructor(store: DockViewsStore<T>, snapshot: () => T | null) {
+	constructor(store: ViewsStore, snapshot: () => LayoutConfig | null) {
 		this.#store = store;
 		this.#snapshot = snapshot;
 	}
@@ -121,7 +122,7 @@ export class DockViews<T> {
 	}
 
 	/**
-	 * The dock's layout changed. Wire to `onDidLayoutChange`.
+	 * The dock's layout changed. Call on every change of the bound `LayoutConfig`.
 	 *
 	 * Deliberately NOT debounced, unlike autosave: this writes no bytes, and a modified marker that
 	 * appears a second after the drag reads as a bug.
@@ -140,7 +141,7 @@ export class DockViews<T> {
 			this.#detail = read.detail;
 			return;
 		}
-		this.#views = read.status === 'ok' ? read.layout : [];
+		this.#views = read.views;
 		this.#phase = 'ready';
 		this.#detail = null;
 		if (this.#activeId !== null && !this.#views.some((v) => v.id === this.#activeId)) {
@@ -149,18 +150,17 @@ export class DockViews<T> {
 	}
 
 	/**
-	 * The layout to apply for a view, as the dock's own three-outcome contract.
+	 * The layout to apply for a view, as the dock's own three-outcome contract: a missing view is
+	 * `absent` (a stale sidebar click is ordinary, not a crash), and a stored layout this workbench
+	 * cannot show is `unreadable`.
 	 *
-	 * Returns `LayoutRead` rather than a bare layout so a missing view is `absent` rather than a thrown
-	 * error — a stale sidebar click is an ordinary thing, not a crash.
+	 * Read-only: the caller applies the layout first, then commits with `activate(id)`, so a click
+	 * that does not apply never leaves a checked, unapplied view.
 	 */
 	select(id: string): LayoutRead {
-		// READ-ONLY on purpose: marking the view active here meant a click while the dock was still
-		// loading — or an apply that threw — left a checked, never-applied view (review finding).
-		// The caller applies the layout first, then commits with `activate(id)`.
 		const view = this.#views.find((v) => v.id === id);
 		if (view === undefined) return { status: 'absent' };
-		return { status: 'ok', layout: view.layout as never };
+		return readStoredLayout(view.layout);
 	}
 
 	/** Commit a view as ACTIVE — call after its layout was actually applied to the dock. */
@@ -170,6 +170,31 @@ export class DockViews<T> {
 		this.#activeId = id;
 		this.#baseline = stableStringify(view.layout);
 		this.#revision += 1;
+	}
+
+	/** Say why something the person asked for did not happen (a view that could not be applied). */
+	report(problem: string): void {
+		this.#lastError = problem;
+	}
+
+	/**
+	 * The person's explicit reset of views that could not be read: none are kept, the layout on screen
+	 * stays, and saving views works again.
+	 */
+	async reset(): Promise<boolean> {
+		if (this.#busy) return false;
+		this.#busy = true;
+		try {
+			const ok = await this.#store.reset();
+			this.#lastError = ok ? null : 'Reset failed — the views were not changed';
+			if (ok) {
+				this.clearActive();
+				await this.refresh();
+			}
+			return ok;
+		} finally {
+			this.#busy = false;
+		}
 	}
 
 	/** Stop tracking a view — the arrangement stays exactly as it is, it just stops being "the view". */
@@ -235,7 +260,7 @@ export class DockViews<T> {
 		this.#busy = true;
 		try {
 			const ok = await fn();
-			this.#lastError = ok ? null : `${op} failed — not saved (offline or session expired?)`;
+			this.#lastError = ok ? null : `${op} failed — not saved`;
 			return ok;
 		} finally {
 			this.#busy = false;

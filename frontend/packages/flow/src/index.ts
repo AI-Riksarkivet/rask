@@ -27,9 +27,8 @@
  *   arise. Nonce-driven, because centring is a gesture and may be repeated on the same node.
  *
  * `./styles.css` is the vendor sheet's `--xy-*` theme mapped onto the OKLCH tokens — imported per page
- * in `app.css` under `layer(base)`, immediately after `@xyflow/svelte/dist/style.css`, exactly as
- * `@rask/dockview/styles.css` is. It lives here and not in `@rask/ui` for the same reason dockview's
- * does not: the design system carries no vendor-canvas bindings.
+ * in `app.css` under `layer(base)`, immediately after `@xyflow/svelte/dist/style.css`. It lives here
+ * and not in `@rask/ui` because the design system carries no vendor-canvas bindings.
  *
  * What does NOT belong here: domain graphs. The FGA builders are lakehouse access logic, the workflow EDITOR is
  * media's. The binding stays domain-free.

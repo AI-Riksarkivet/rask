@@ -8,17 +8,13 @@
 	 * open a saved arrangement to LOOK at it without destroying it.
 	 */
 	import { Check, Plus, Save, Trash2 } from '@lucide/svelte';
-	import type { DockViews } from './views.svelte';
-	import type { SerializedDockview } from 'dockview';
+	import type { DockViews } from './views.svelte.ts';
 
 	interface Props {
-		views: DockViews<SerializedDockview>;
+		views: DockViews;
 		onselect: (id: string) => void;
-		/** True when rendered INSIDE the shared shell rail (AppShell sidebarContent): drops this
-		 *  component's own aside chrome — width, border — and lets the rail's own geometry rule. */
-		rail?: boolean;
 	}
-	let { views, onselect, rail = false }: Props = $props();
+	let { views, onselect }: Props = $props();
 
 	let creating = $state(false);
 	let draftName = $state('');
@@ -32,7 +28,7 @@
 	}
 </script>
 
-<aside class="views" class:rail>
+<aside class="views">
 	<header>
 		<span class="heading">Views</span>
 		<button
@@ -54,8 +50,8 @@
 				void create();
 			}}
 		>
-			<!-- svelte-ignore a11y_autofocus -- the field appears on an explicit click, so focusing it is
-			     what the click asked for. -->
+			<!-- The field appears on an explicit click, so focusing it is what the click asked for. -->
+			<!-- svelte-ignore a11y_autofocus -->
 			<input
 				bind:value={draftName}
 				type="text"
@@ -74,8 +70,17 @@
 		<!-- Never rendered as "no saved views": that reads as empty and invites the user to recreate
 		     work that is still there. -->
 		<p class="problem">
-			Your saved views could not be read ({views.detail}). They have NOT been changed.
+			Your saved views could not be read ({views.detail}). They have not been changed.
 		</p>
+		<button
+			type="button"
+			class="reset"
+			disabled={views.busy}
+			title="Discard the saved views that could not be read, so views can be saved again"
+			onclick={() => void views.reset()}
+		>
+			Reset views
+		</button>
 	{:else if views.views.length === 0}
 		<p class="empty">No saved views yet. Arrange the dock, then press +.</p>
 	{:else}
@@ -83,7 +88,7 @@
 			{#each views.views as v (v.id)}
 				{@const isActive = v.id === views.activeId}
 				<li>
-					<button type="button" class="row" class:on={isActive} onclick={() => onselect(v.id)}>
+					<button type="button" class={['row', { on: isActive }]} onclick={() => onselect(v.id)}>
 						{#if isActive}<Check size={13} />{/if}
 						<span class="name">{v.name}</span>
 						<!-- The whole point of the state model, in one dot. -->
@@ -130,25 +135,6 @@
 		border-inline-end: 1px solid var(--border);
 		background: var(--background);
 		overflow-y: auto;
-	}
-	.views.rail {
-		width: 100%;
-		border-inline-end: none;
-		background: transparent;
-	}
-	/* ICON-COLLAPSED rail: the shell shrinks the sidebar to a 48px icon strip, where a 200px list of
-	   view names, a heading and a name field can only render as clipped noise (user report: "the
-	   sidebar minimize looks like shit"). Collapse to a single centred + button — the shape every
-	   other icon-mode row takes — and let the labels return with the rail. */
-	:global([data-collapsible='icon']) .views.rail {
-		padding: 4px 0;
-		align-items: center;
-	}
-	:global([data-collapsible='icon']) .views.rail :is(.heading, ul, .new, .empty, .problem) {
-		display: none;
-	}
-	:global([data-collapsible='icon']) .views.rail header {
-		justify-content: center;
 	}
 	header {
 		display: flex;
@@ -248,5 +234,23 @@
 	}
 	.problem {
 		color: var(--destructive);
+	}
+	.reset {
+		align-self: flex-start;
+		margin: 0 2px;
+		padding: 2px 8px;
+		border: 1px solid var(--border);
+		border-radius: calc(var(--radius) - 6px);
+		background: transparent;
+		color: var(--foreground);
+		font-size: 11px;
+		cursor: pointer;
+	}
+	.reset:hover:not(:disabled) {
+		background: var(--accent);
+	}
+	.reset:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: -2px;
 	}
 </style>

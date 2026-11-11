@@ -21,14 +21,13 @@
       "dependencies": {
         "@lucide/svelte": "^1.72.0",
         "@rask/api": "workspace:*",
-        "@rask/dockview": "workspace:*",
         "@rask/flow": "workspace:*",
         "@rask/ui": "workspace:*",
         "@tailwindcss/vite": "^4.3.5",
         "@xyflow/svelte": "^1.7.1",
         "apache-arrow": "^21.2.0",
-        "dockview": "^7.0.4",
         "gsap": "^3.15.1",
+        "horizon-layout": "1.0.5",
         "mode-watcher": "^1.1.0",
         "oidc-client-ts": "^3.5.0",
         "svelte-sonner": "^1.2.3",
@@ -57,26 +56,6 @@
       "devDependencies": {
         "@sveltejs/kit": "^3.2.0",
         "svelte": "^5.57.3",
-        "vitest": "^5.1.0",
-      },
-      "peerDependencies": {
-        "svelte": "^5.0.0",
-      },
-    },
-    "packages/dockview": {
-      "name": "@rask/dockview",
-      "version": "0.0.0",
-      "dependencies": {
-        "@lucide/svelte": "^1.72.0",
-        "@rask/api": "workspace:*",
-        "dockview": "^7.0.4",
-      },
-      "devDependencies": {
-        "@sveltejs/vite-plugin-svelte": "^7.3.1",
-        "@types/node": "^26.6.6",
-        "svelte": "^5.57.3",
-        "svelte-check": "^4.7.8",
-        "typescript": "^6.0.3",
         "vitest": "^5.1.0",
       },
       "peerDependencies": {
@@ -401,8 +380,6 @@
 
     "@rask/api": ["@rask/api@workspace:packages/api"],
 
-    "@rask/dockview": ["@rask/dockview@workspace:packages/dockview"],
-
     "@rask/flow": ["@rask/flow@workspace:packages/flow"],
 
     "@rask/ui": ["@rask/ui@workspace:packages/ui"],
@@ -705,10 +682,6 @@
 
     "devalue": ["devalue@5.9.4", "", {}, "sha512-sPAT4pztbu6586/hrhOnMKS17IJrvg12mXiSPSS3W5qDeN2RGgvZ0diZCm31dBbnevfVmujNO3IM2wrS4Y2Rhg=="],
 
-    "dockview": ["dockview@7.0.4", "", { "dependencies": { "dockview-core": "^7.0.4" } }, "sha512-n6n9WpYZgp/WY8SgvP4hr9qh01ZXhSGIRmlhoJXxRU3f34bwxCbFyOhBArV4W8quolX8OQe1yPfAUwUUjdnZPA=="],
-
-    "dockview-core": ["dockview-core@7.0.4", "", {}, "sha512-AiIzD6ov153L/VuhqVBg5KD5oSAgJGH7L1xvzV/X+ghIEOTFfEQYEBGNd/ys+ZjQfdGRogHSeQ0v9JF/L6JrPg=="],
-
     "dom-accessibility-api": ["dom-accessibility-api@0.5.16", "", {}, "sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg=="],
 
     "elkjs": ["elkjs@0.12.1", "", {}, "sha512-IhMYKHE4S2vtx0QrhBP3lYOIKDeIiJXBrdq9MGYkuB8ZHqhrBnHNfSUndjXFewrX1CPK8chwq+2NA0K0hliYuw=="],
@@ -748,6 +721,8 @@
     "graceful-fs": ["graceful-fs@4.2.11", "", {}, "sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ=="],
 
     "gsap": ["gsap@3.15.1", "", {}, "sha512-63yjWRFWj3QRP1UOuD8kcidCcy3nxb1mMRpwHr/xJRvPfm9GtWOXFAYUiL0ro1fgPq2nY53LR+98pAgy9BumBg=="],
+
+    "horizon-layout": ["horizon-layout@1.0.5", "", { "peerDependencies": { "svelte": "^5.0.0" } }, "sha512-l8eHPooVKX/vYvrXbagJOV4nYjra2qRTpHW0n2P3gm8gAAIcKYMrHSeHV7LJMDWcMI4p7G3yVa2TuBPuEjzBgA=="],
 
     "https-proxy-agent": ["https-proxy-agent@7.0.6", "", { "dependencies": { "agent-base": "^7.1.2", "debug": "4" } }, "sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw=="],
 
