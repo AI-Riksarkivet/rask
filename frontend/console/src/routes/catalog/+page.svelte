@@ -1,12 +1,12 @@
 <script lang="ts">
 	// `/catalog` — the OVERVIEW of the ACTIVE PROJECT (#109): its hierarchy and the warehouses that
-	// claim it. The hierarchy VIEW is `@rask/ui/hierarchy`, the same component `/projects/<id>` renders.
+	// claim it. The hierarchy VIEW is `#lib/flow/hierarchy`, the same component `/projects/<id>` renders.
 	// It owns no transport: every rung is read with this user's bearer against the catalog's own gate,
 	// and a rung the caller cannot read draws as "unreadable" rather than absent.
 	import { FolderKanban, RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { ProjectHierarchy, type HierarchyHref } from '@rask/ui/hierarchy';
+	import { ProjectHierarchy, type HierarchyHref } from '#lib/flow/hierarchy/index.ts';
 	import type { WarehouseRecord } from '#lib/data/catalog.ts';
 	import { fetchNamespaceTables } from '#lib/data/remote/namespace.api.ts';
 	import { fetchWarehouseNamespaces, fetchWarehouses } from '#lib/data/remote/warehouses.api.ts';

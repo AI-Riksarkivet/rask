@@ -7,7 +7,7 @@
 	// instance never survives a navigation — an armed confirm dies with it. No `onchanged` prop:
 	// every success here leaves the page (the id no longer names this table).
 	import { AlertDialog } from '@rask/ui/alert-dialog';
-	import { namespacePrefix } from '@rask/api/identifiers';
+	import { namespacePrefix } from '#lib/api/identifiers.ts';
 	import { Trash2 } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';

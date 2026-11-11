@@ -615,7 +615,7 @@ def _remove_emptied_directories(location: str, storage_options: StorageOptions, 
 #:
 #: It reused the drop actions, for a stated reason that has now been discharged rather than overruled:
 #: ``ControlAction`` is a wire contract across three files (the Literal, ``docs/catalog-openapi.json``,
-#: ``frontend/packages/api/src/generated/catalog.ts``), adding a member without regenerating all three
+#: ``frontend/console/src/lib/api/generated/catalog.ts``), adding a member without regenerating all three
 #: leaves the TS client unable to NAME an event the backend publishes, and "the regen could not be done
 #: in this change". It has been done (``make openapi`` + ``bun run gen:types:catalog``, with
 #: ``make openapi-check`` green), so the reuse no longer buys anything.

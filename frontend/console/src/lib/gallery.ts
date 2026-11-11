@@ -1,6 +1,6 @@
 import * as v from 'valibot';
-import { parse, type Me } from '@rask/api';
-import { authorizedFetch } from '@rask/api/client';
+import { parse, type Me } from '#lib/api/index.ts';
+import { authorizedFetch } from '#lib/api/client.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 
 // The estate's PROJECT GALLERY, as ONE load — mounted by `/projects` (the navbar-addressable surface). Two routes, one implementation: a second copy of the

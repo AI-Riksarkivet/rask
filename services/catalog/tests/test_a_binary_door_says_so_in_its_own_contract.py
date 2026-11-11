@@ -6,7 +6,7 @@ FastAPI takes the 200 content type from `responses=` on the decorator. The `medi
 `application/json`, and nothing complains.
 
 THAT CONTRACT IS CONSUMED, not decorative: `docs/catalog-openapi.json` is committed and gated for
-drift, and `frontend/packages/api/src/generated/catalog.ts` is generated from it — so a client built
+drift, and `frontend/console/src/lib/api/generated/catalog.ts` is generated from it — so a client built
 from the catalog's own spec is told to parse Arrow as JSON ([[LH-186]]).
 """
 

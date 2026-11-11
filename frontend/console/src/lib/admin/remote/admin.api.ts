@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { getRequestEvent, query } from '#lib/reads.svelte.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
-import { parse } from '@rask/api';
+import { parse } from '#lib/api/index.ts';
 import { EventsPageSchema, type ControlEvent } from '#lib/admin/control.ts';
 
 const POLL_MS = 5000;

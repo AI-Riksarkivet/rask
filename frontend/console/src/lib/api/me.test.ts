@@ -4,7 +4,7 @@
  * outage, timeout, schema drift) is pinned here.
  */
 import { describe, expect, test } from 'vitest';
-import { fetchMe, type Me } from '../src/me';
+import { fetchMe, type Me } from './me';
 
 const me: Me = {
 	sub: 'user:alice',

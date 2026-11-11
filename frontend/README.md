@@ -25,16 +25,16 @@ frontend/
                               #   100 entries, 24 h, forgotten at sign-out
     src/lib/**/*.api.ts       # each surface's reads and writes against its upstream
     src/lib/upstreams.ts      # where each upstream answers: /api/catalog, /api/lineage
+    src/lib/api/              # the browser transport (`client.ts`), the /management/v1/me contract, the
+                              #   lineage client, the generated OpenAPI types (`generated/`)
+    src/lib/flow/             # the Svelte Flow binding and the project hierarchy (the governance graphs)
     src/lib/dock/             # the /workbench dock on horizon-layout: panels, layout edits, autosave,
                               #   named views; `store.ts` keeps them in this browser's localStorage
     serve.ts        #   the static server the image runs (SPA fallback, /config.json, the CSP header)
     e2e/            #   the Playwright suite (see below)
   packages/
-    ui/             # @rask/ui — the design system (shadcn-svelte on bits-ui 2), AppShell + nav-config
-                    #   (the bell is `shell/activity-center.svelte`), Storybook. The only package with a build step (svelte-package → dist/).
-    api/            # @rask/api — the browser transport (`client`), the /management/v1/me contract, the
-                    #   lineage client, the generated OpenAPI types
-    flow/           # @rask/flow — the Svelte Flow binding (the governance graphs)
+    ui/             # @rask/ui — the one package: the design system (shadcn-svelte on bits-ui 2), AppShell +
+                    #   nav-config (the bell is `shell/activity-center.svelte`), Storybook; read from source
 ```
 
 ## Runtime config and security
@@ -76,15 +76,15 @@ name with `RASK_EDGE_URL` (default `http://localhost:8080`).
 
 | Script            | What it runs                                                                  |
 | ----------------- | ----------------------------------------------------------------------------- |
-| `dev`             | builds `@rask/ui`, then the console's `vite dev` on :5173, `/api` → `RASK_EDGE_URL` (default `http://localhost:8080`), `/config.json` from `console/dev/config.json` |
-| `build`           | `@rask/ui` (svelte-package), then the console (adapter-static → `console/build`) |
-| `check`           | build, then `check` in every package (svelte-check; tsgo for `@rask/api`)     |
+| `dev`             | the console's `vite dev` on :5173, `/api` → `RASK_EDGE_URL` (default `http://localhost:8080`), `/config.json` from `console/dev/config.json` |
+| `build`           | the console (adapter-static → `console/build`), compiling `@rask/ui` from source |
+| `check`           | `check` in the console and `@rask/ui` (svelte-check)                           |
 | `lint` / `fmt` / `fmt:check` | oxlint / rsvelte-fmt in every package                              |
-| `test`            | build, then every package's vitest suite                                      |
-| `test:e2e`        | builds `@rask/ui`, then the console's Playwright suite (which builds the app) |
+| `test`            | the console's and `@rask/ui`'s vitest suites                                   |
+| `test:e2e`        | the console's Playwright suite (which builds the app)                          |
 | `knip`            | unused files, exports and dependencies across the workspace                   |
 | `storybook` / `build-storybook` | `@rask/ui`'s Storybook                                          |
-| `gen:types`       | regenerate `@rask/api`'s catalog and lineage types from `docs/*-openapi.json` |
+| `gen:types`       | regenerate `console/src/lib/api/generated` from `docs/*-openapi.json`          |
 
 ## The Playwright suite
 

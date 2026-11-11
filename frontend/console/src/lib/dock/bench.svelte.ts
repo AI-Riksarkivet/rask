@@ -6,7 +6,7 @@
  * lives here. Not in context either: a popped-out panel is mounted in another window, outside the
  * page's component tree, and reads this same instance.
  */
-import { createLineageClient, type EventRecord } from '@rask/api/lineage';
+import { createLineageClient, type EventRecord } from '#lib/api/lineage/index.ts';
 import { getJSON, requestJSON } from '#lib/http.ts';
 import { LINEAGE_API } from '#lib/upstreams.ts';
 

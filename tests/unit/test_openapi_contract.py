@@ -1,6 +1,6 @@
 """Guard against frontend↔backend schema drift (#24).
 
-The console's `@rask/api` generates its TypeScript catalog/lineage types from the committed
+The console's API client (`frontend/console/src/lib/api`) generates its TypeScript catalog/lineage types from the committed
 ``docs/{catalog,lineage}-openapi.json`` specs (``bun run gen:types:catalog``), which ``make openapi`` dumps
 from these FastAPI apps. If a route or response model is added/changed but the committed spec isn't
 regenerated, the generated frontend types silently lie. This test fails when a committed spec no longer
@@ -52,7 +52,7 @@ def _string_enums(spec: dict) -> dict[str, list[str]]:
 # dropping the guard would let the whole thing pass on an empty sweep.
 #
 # THE OTHER HOP IS GATED BY REGENERATION, not here: spec -> generated TypeScript client is `dagger call openapi`
-# (`.dagger/openapi.go`), which regenerates `@rask/api`'s client from the committed specs and diffs it. This file owns
+# (`.dagger/openapi.go`), which regenerates the console's API client from the committed specs and diffs it. This file owns
 # live app -> committed spec.
 _SPECS = [("catalog.main", "catalog-openapi.json", "catalog.ts"), ("lineage.main", "lineage-openapi.json", "lineage.ts")]
 

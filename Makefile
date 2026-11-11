@@ -142,7 +142,7 @@ openapi:
 # diffs the regenerated output back, which is what `git diff HEAD` reproduces.
 openapi-check: openapi
 	@git diff HEAD --exit-code -- docs/catalog-openapi.json docs/lineage-openapi.json \
-	  frontend/packages/api/src/generated/catalog.ts frontend/packages/api/src/generated/lineage.ts \
+	  frontend/console/src/lib/api/generated/catalog.ts frontend/console/src/lib/api/generated/lineage.ts \
 	  || { echo "!! OpenAPI drift: a route changed without refreshing the spec or its client. Commit the diff above."; exit 1; }
 	@echo "OpenAPI specs match the committed contract"
 
@@ -346,8 +346,8 @@ claude-bootstrap:
 # lakehouse's /api/* with its bearer. In development Vite serves `frontend/console/dev/config.json` as
 # /config.json: the issuer `http://localhost:8080/dex` (the value DEV_ISSUER defaults to, so the token's `iss` is the one
 # `make k3s-up` gives the estate) and the client `rask-console`. It proxies /api/* to RASK_EDGE_URL (default :8080): one
-# origin on the host that serves both the issuer and the API, as k3s Traefik's Service does. The design system builds
-# first so the app reads a complete dist/; to live-edit it, run `bun --cwd=frontend/packages/ui run dev` beside it.
+# origin on the host that serves both the issuer and the API, as k3s Traefik's Service does. The design system is
+# compiled from its source with the app, so an edit to `frontend/packages/ui` reaches the page through the same HMR.
 dev:                  # the console with Vite HMR, /api → RASK_EDGE_URL, signing in at the issuer dev/config.json names
 	bun --cwd=frontend run dev
 

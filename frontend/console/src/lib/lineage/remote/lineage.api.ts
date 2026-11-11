@@ -1,14 +1,18 @@
 import { command, query } from '#lib/reads.svelte.ts';
 import { LINEAGE_API } from '#lib/upstreams.ts';
 import * as v from 'valibot';
-import type { ApiResult } from '@rask/api/client';
-import { getJSON, requestJSON } from '@rask/api/client';
+import type { ApiResult } from '#lib/api/client.ts';
+import { getJSON, requestJSON } from '#lib/api/client.ts';
 import { auth } from '#lib/auth.svelte.ts';
-import { createLineageClient, type DlqBacklog, type DlqReplayResponse } from '@rask/api/lineage';
+import {
+	createLineageClient,
+	type DlqBacklog,
+	type DlqReplayResponse,
+} from '#lib/api/lineage/index.ts';
 
 // The lineage plane's DLQ surface (its backlog read and its replay write). It wraps the SHARED
 // `createLineageClient`, so every path, query string and `encodeURIComponent` stays single-sourced in
-// `@rask/api/lineage`. Both carry only the signed-in person's bearer.
+// `#lib/api/lineage`. Both carry only the signed-in person's bearer.
 //
 // No single-flight `refresh()` on the replay command, deliberately: it ECHOES a one-shot verdict and
 // the panel renders from that echo.

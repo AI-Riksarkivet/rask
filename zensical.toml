@@ -218,6 +218,7 @@ nav = [
         "adr/0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md",
         "adr/0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md",
         "adr/0200-the-workbench-dock-is-horizon-layout.md",
+        "adr/0201-the-console-holds-its-api-client-and-graph-views.md",
       ]},
       { "Tier Governance" = "TIER-GOVERNANCE.md" },
       { "Lineage" = "LINEAGE.md" },

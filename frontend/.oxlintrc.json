@@ -89,6 +89,6 @@
 		"**/dist/**",
 		"**/storybook-static/**",
 		"**/*.generated.ts",
-		"**/src/generated/**"
+		"**/api/generated/**"
 	]
 }

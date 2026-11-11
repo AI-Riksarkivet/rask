@@ -23,7 +23,7 @@
 		grantAccess,
 		revokeAccess,
 	} from './remote/access-objects.api';
-	import { FlowAutoFit } from '@rask/flow';
+	import { FlowAutoFit } from '#lib/flow/index.ts';
 
 	let { dataset }: { dataset: string } = $props();
 

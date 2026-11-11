@@ -30,14 +30,10 @@
  * in `app.css` under `layer(base)`, immediately after `@xyflow/svelte/dist/style.css`. It lives here
  * and not in `@rask/ui` because the design system carries no vendor-canvas bindings.
  *
- * What does NOT belong here: domain graphs. The FGA builders are lakehouse access logic, the workflow EDITOR is
- * media's. The binding stays domain-free.
- *
- * One domain graph is not in a page either, and it is not an exception to that rule: `@rask/ui/hierarchy`
- * (project › warehouse › namespace › table) draws on `StaticFlow` from the DESIGN SYSTEM, because two pages
- * render it and pages may not import each other. The direction is what matters — @rask/ui depends on this
- * package, never the reverse — so the binding is still domain-free and the stylesheet still ships from here.
- * That subpath is @rask/ui's only vendor-canvas consumer; nothing else there pulls @xyflow/svelte.
+ * Everything this module exports is domain-free: it knows nodes, edges and boxes, never a catalog object.
+ * The FGA graph builders stay with the access pages (`#lib/access`). The one domain view kept in this
+ * folder, `./hierarchy` (project › warehouse › namespace › table), is its own module: it draws on
+ * `StaticFlow`, two pages render it, and nothing here imports it.
  */
 export { default as GraphCanvas } from './GraphCanvas.svelte';
 export { default as StaticFlow } from './StaticFlow.svelte';

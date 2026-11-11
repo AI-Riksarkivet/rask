@@ -1,4 +1,4 @@
-// @rask/api/me — the frozen `GET /management/v1/me` identity contract + its fetch helper.
+// #lib/api/me — the frozen `GET /management/v1/me` identity contract + its fetch helper.
 //
 // The catalog serves `/management/v1/me` for any VERIFIED bearer: `{ sub, name, email, estate_admin, projects }`
 // (estate_admin = can_observe_events on the FGA root object; projects via the #51 list wrappers, each

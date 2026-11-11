@@ -8,25 +8,24 @@
 		"packages/*"
 	],
 	"scripts": {
-		"build": "bun --cwd=packages/ui run build && bun --cwd=console run build",
+		"build": "bun --cwd=console run build",
 		"build-storybook": "bun --cwd=packages/ui run build-storybook",
-		"check": "bun run build && bun run --filter '*' check",
-		"dev": "bun --cwd=packages/ui run build && bun --cwd=console run dev",
+		"check": "bun run --filter '*' check",
+		"dev": "bun --cwd=console run dev",
 		"fmt": "bun run --filter '*' fmt",
 		"fmt:check": "bun run --filter '*' fmt:check",
 		"gen:types": "bun run gen:types:lineage && bun run gen:types:catalog",
-		"gen:types:catalog": "openapi-typescript ../docs/catalog-openapi.json --default-non-nullable false -o packages/api/src/generated/catalog.ts",
-		"gen:types:lineage": "openapi-typescript ../docs/lineage-openapi.json --default-non-nullable false -o packages/api/src/generated/lineage.ts",
+		"gen:types:catalog": "openapi-typescript ../docs/catalog-openapi.json --default-non-nullable false -o console/src/lib/api/generated/catalog.ts",
+		"gen:types:lineage": "openapi-typescript ../docs/lineage-openapi.json --default-non-nullable false -o console/src/lib/api/generated/lineage.ts",
 		"knip": "knip --no-config-hints",
 		"lint": "bun run --filter '*' lint",
 		"storybook": "bun --cwd=packages/ui run storybook",
-		"test": "bun run build && bun run --filter '*' test",
-		"test:e2e": "bun --cwd=packages/ui run build && bun --cwd=console run test:e2e"
+		"test": "bun run --filter '*' test",
+		"test:e2e": "bun --cwd=console run test:e2e"
 	},
 	"devDependencies": {
 		"@rsvelte/fmt": "^0.7.27",
 		"@rsvelte/oxlint-plugin": "^0.2.6",
-		"@typescript/native-preview": "^7.0.0-dev.20260707.2",
 		"knip": "^6.45.1",
 		"openapi-typescript": "^7.13.0",
 		"oxfmt": "^0.78.0",

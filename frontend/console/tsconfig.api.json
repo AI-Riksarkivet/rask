@@ -1,0 +1,8 @@
+{
+	"//": "The API client (`src/lib/api`) under `exactOptionalPropertyTypes` as well, which the app's config keeps off for Bits UI. Pure TypeScript, so the Svelte reason does not apply here; run as the console's `check`'s third step.",
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"exactOptionalPropertyTypes": true
+	},
+	"include": ["src/lib/api/**/*.ts"]
+}

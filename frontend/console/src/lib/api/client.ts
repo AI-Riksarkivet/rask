@@ -1,4 +1,4 @@
-// @rask/api/client — the browser's one transport to the lakehouse's doors.
+// #lib/api/client — the browser's one transport to the lakehouse's doors.
 //
 // The console is a single-page app with no backend of its own: every call leaves the browser for the
 // same origin's `/api/*`, which the platform's Gateway routes to the service that owns the prefix

@@ -75,7 +75,7 @@ class ArrowFileResponse(Response):
 
     FastAPI takes a door's documented 200 content type from `response_class`, and defaults it to
     `JSONResponse` — so without this, `docs/catalog-openapi.json` advertises `application/json` for a
-    door that has never answered JSON, and `frontend/packages/api/src/generated/catalog.ts` is
+    door that has never answered JSON, and `frontend/console/src/lib/api/generated/catalog.ts` is
     generated from that document ([[LH-186]]). Passing `responses=` alone does NOT fix it: FastAPI
     merges the two and the JSON default stays alongside the truth.
     """
@@ -493,7 +493,7 @@ def _serves(media_type: str) -> dict[int | str, dict[str, object]]:
     FastAPI reads the 200 content type from here and nowhere else. The `media_type` handed to the
     `Response` object is chosen at request time, long after the schema is generated — so without this
     a door answers Arrow for its whole life while `docs/catalog-openapi.json` says `application/json`,
-    and `frontend/packages/api/src/generated/catalog.ts` is generated from that ([[LH-186]]).
+    and `frontend/console/src/lib/api/generated/catalog.ts` is generated from that ([[LH-186]]).
 
     `{"type": "string", "format": "binary"}` is OpenAPI's way of saying "opaque bytes"; there is no
     schema for an Arrow FILE beyond its media type, and inventing one would describe the payload

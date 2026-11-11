@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import type { Me } from '@rask/api';
+import type { Me } from '#lib/api/index.ts';
 
 /**
  * The estate-admin guard in front of `/admin/**` and `/settings/**`, ONE rule for both areas.

@@ -1,6 +1,6 @@
 import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
-import type { ApiResult } from '@rask/api/client';
+import type { ApiResult } from '#lib/api/client.ts';
 import { DropNamespaceResponseSchema, type DropNamespace } from '../catalog';
 import { fetchTables } from './catalog.api';
 import {

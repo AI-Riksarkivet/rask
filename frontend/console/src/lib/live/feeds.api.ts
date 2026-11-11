@@ -1,11 +1,11 @@
-import { parse } from '@rask/api';
-import { authorizedFetch } from '@rask/api/client';
-import { lineagePulse, POLL_MS, PROBE_TIMEOUT_MS, type LineagePulse } from '@rask/api/runs-feed';
+import { parse } from '#lib/api/index.ts';
+import { authorizedFetch } from '#lib/api/client.ts';
+import { lineagePulse, POLL_MS, PROBE_TIMEOUT_MS, type LineagePulse } from '#lib/api/runs-feed.ts';
 import * as v from 'valibot';
 import { query } from '#lib/reads.svelte.ts';
 import { CATALOG_API, LINEAGE_API } from '#lib/upstreams.ts';
 
-export type { LineagePulse } from '@rask/api/runs-feed';
+export type { LineagePulse } from '#lib/api/runs-feed.ts';
 
 /**
  * The console's LIVE CURSORS — generators that say *when the estate changed*, so a panel re-reads

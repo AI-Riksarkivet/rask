@@ -1061,7 +1061,7 @@ governing their data. The project-scoped surface is the console's project page, 
   written; writing it is exactly how a ghost is made.
 - **The control-event vocabulary is a wire contract in three files.** `ControlAction` /
   `ControlObjectType` (`lakehouse/control_events.py`) reach the frontend through
-  `docs/catalog-openapi.json` → `frontend/packages/api/src/generated/catalog.ts`. Adding an action
+  `docs/catalog-openapi.json` → `frontend/console/src/lib/api/generated/catalog.ts`. Adding an action
   without `make openapi` + `bun --cwd=frontend run gen:types:catalog` leaves the TS client unable to
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
   (`lakehouse/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.

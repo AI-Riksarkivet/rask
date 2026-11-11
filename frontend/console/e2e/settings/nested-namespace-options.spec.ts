@@ -15,7 +15,7 @@ import { seed as seedFor } from '../mock-client';
 // was proposing the wrong object and the check answered about it confidently.
 //
 // Why this test exists in the BROWSER and not only as a unit test: the helper
-// (`@rask/api/identifiers`) has its own tests, but a green helper proves nothing about whether the
+// (`#lib/api/identifiers.ts`) has its own tests, but a green helper proves nothing about whether the
 // call site was rewired. This drives the real component, through the real data function, and reads
 // the options actually in the DOM.
 //

@@ -14,7 +14,7 @@
  */
 import { InMemoryWebStorage, User, UserManager, WebStorageStateStore } from 'oidc-client-ts';
 import * as v from 'valibot';
-import { setBearerProvider } from '@rask/api/client';
+import { setBearerProvider } from '#lib/api/client.ts';
 import { sameOriginPath } from './return-path.ts';
 
 /** What the release renders into `/config.json`. `scopes` carries the lakehouse's audience scope

@@ -10,7 +10,7 @@ and no `package.json` asks for it; audit that claim with
 
 | Surface                                  | Lint                                  | Format                    | Type-check                                    |
 | ---------------------------------------- | ------------------------------------- | ------------------------- | --------------------------------------------- |
-| `.ts` `.js` `.mjs` (incl. `*.svelte.ts`) | **oxlint**                            | **rsvelte-fmt** (→ oxfmt) | `tsgo` (TypeScript 7) on `@rask/api`          |
+| `.ts` `.js` `.mjs` (incl. `*.svelte.ts`) | **oxlint**                            | **rsvelte-fmt** (→ oxfmt) | `svelte-check` (TypeScript 6)                 |
 | `.json` `.md` `.css` `.html` `.yaml`     | —                                     | **rsvelte-fmt** (→ oxfmt) | —                                             |
 | `.svelte`                                | **oxlint** + `@rsvelte/oxlint-plugin` | **rsvelte-fmt**           | `svelte-check` (TypeScript 6)                 |
 
@@ -78,14 +78,15 @@ gives in a console with no base path.
 
 `svelte-check` owns `.svelte` and runs on TypeScript 6. `typescript@7` (the native Go compiler) ships no
 JavaScript compiler API, and `svelte-check` calls into it, so TypeScript 7 cannot be the `typescript`
-dependency while `svelte-check` is in the toolchain. `@typescript/native-preview` (`tsgo`, the TS 7
-engine under a second package name) checks `@rask/api`, which is pure TypeScript.
+dependency while `svelte-check` is in the toolchain, and every file, `.ts` included, is checked by it.
 
-The console's `check` runs `svelte-check` twice. `tsconfig.json` extends `$app/tsconfig` and covers the
+The console's `check` runs `svelte-check` three times. `tsconfig.json` extends `$app/tsconfig` and covers the
 app (`src`, `vite.config.ts`), whose `types: ["$app/types"]` and browser libs describe code that runs in
 the page. `tsconfig.tools.json` covers what never ships to the browser and runs under Bun or Playwright:
 `serve.ts` (the image's server), `playwright.config.ts` and `e2e/**`, with `types: ["bun"]` and `DOM` kept
 in `lib` because a spec's `page.evaluate` callback runs in the page. Both carry the same strictness.
+`tsconfig.api.json` extends the app's config with `exactOptionalPropertyTypes` for `src/lib/api` alone: the API client is
+pure TypeScript, so the Bits UI reason the app keeps it off does not reach it.
 
 `@rsvelte/svelte-check` takes `--tsgo` and would put the whole workspace on TypeScript 7. Re-measure it
 on each release; it replaces `svelte-check` once it resolves SvelteKit's generated modules and honours

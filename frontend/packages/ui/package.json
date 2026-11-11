@@ -3,140 +3,127 @@
 	"version": "0.1.0",
 	"private": true,
 	"license": "Apache-2.0",
-	"files": [
-		"dist",
-		"!dist/**/*.test.*",
-		"!dist/**/*.stories.*"
-	],
 	"type": "module",
-	"types": "./dist/index.d.ts",
-	"svelte": "./dist/index.js",
 	"exports": {
 		".": {
-			"types": "./dist/index.d.ts",
-			"svelte": "./dist/index.js"
+			"types": "./src/lib/index.ts",
+			"svelte": "./src/lib/index.ts"
 		},
 		"./alert-dialog": {
-			"types": "./dist/components/alert-dialog/index.d.ts",
-			"svelte": "./dist/components/alert-dialog/index.js"
+			"types": "./src/lib/components/alert-dialog/index.ts",
+			"svelte": "./src/lib/components/alert-dialog/index.ts"
 		},
 		"./avatar": {
-			"types": "./dist/components/avatar/index.d.ts",
-			"svelte": "./dist/components/avatar/index.js"
+			"types": "./src/lib/components/avatar/index.ts",
+			"svelte": "./src/lib/components/avatar/index.ts"
 		},
 		"./badge": {
-			"types": "./dist/components/badge/index.d.ts",
-			"svelte": "./dist/components/badge/index.js"
+			"types": "./src/lib/components/badge/index.ts",
+			"svelte": "./src/lib/components/badge/index.ts"
 		},
 		"./button": {
-			"types": "./dist/components/button/index.d.ts",
-			"svelte": "./dist/components/button/index.js"
+			"types": "./src/lib/components/button/index.ts",
+			"svelte": "./src/lib/components/button/index.ts"
 		},
 		"./card": {
-			"types": "./dist/components/card/index.d.ts",
-			"svelte": "./dist/components/card/index.js"
+			"types": "./src/lib/components/card/index.ts",
+			"svelte": "./src/lib/components/card/index.ts"
 		},
 		"./checkbox": {
-			"types": "./dist/components/checkbox/index.d.ts",
-			"svelte": "./dist/components/checkbox/index.js"
+			"types": "./src/lib/components/checkbox/index.ts",
+			"svelte": "./src/lib/components/checkbox/index.ts"
 		},
 		"./collapsible": {
-			"types": "./dist/components/collapsible/index.d.ts",
-			"svelte": "./dist/components/collapsible/index.js"
+			"types": "./src/lib/components/collapsible/index.ts",
+			"svelte": "./src/lib/components/collapsible/index.ts"
 		},
 		"./data-table": {
-			"types": "./dist/components/data-table/index.d.ts",
-			"svelte": "./dist/components/data-table/index.js"
+			"types": "./src/lib/components/data-table/index.ts",
+			"svelte": "./src/lib/components/data-table/index.ts"
 		},
 		"./dialog": {
-			"types": "./dist/components/dialog/index.d.ts",
-			"svelte": "./dist/components/dialog/index.js"
+			"types": "./src/lib/components/dialog/index.ts",
+			"svelte": "./src/lib/components/dialog/index.ts"
 		},
 		"./dropdown-menu": {
-			"types": "./dist/components/dropdown-menu/index.d.ts",
-			"svelte": "./dist/components/dropdown-menu/index.js"
+			"types": "./src/lib/components/dropdown-menu/index.ts",
+			"svelte": "./src/lib/components/dropdown-menu/index.ts"
 		},
 		"./gated-action": {
-			"types": "./dist/components/gated-action/index.d.ts",
-			"svelte": "./dist/components/gated-action/index.js"
+			"types": "./src/lib/components/gated-action/index.ts",
+			"svelte": "./src/lib/components/gated-action/index.ts"
 		},
 		"./grant-form": {
-			"types": "./dist/components/grant-form/index.d.ts",
-			"svelte": "./dist/components/grant-form/index.js"
+			"types": "./src/lib/components/grant-form/index.ts",
+			"svelte": "./src/lib/components/grant-form/index.ts"
 		},
 		"./grants-panel": {
-			"types": "./dist/components/grants-panel/index.d.ts",
-			"svelte": "./dist/components/grants-panel/index.js"
-		},
-		"./hierarchy": {
-			"types": "./dist/components/hierarchy/index.d.ts",
-			"svelte": "./dist/components/hierarchy/index.js"
+			"types": "./src/lib/components/grants-panel/index.ts",
+			"svelte": "./src/lib/components/grants-panel/index.ts"
 		},
 		"./identity": {
-			"types": "./dist/components/identity/index.d.ts",
-			"svelte": "./dist/components/identity/index.js"
+			"types": "./src/lib/components/identity/index.ts",
+			"svelte": "./src/lib/components/identity/index.ts"
 		},
 		"./input": {
-			"types": "./dist/components/input/index.d.ts",
-			"svelte": "./dist/components/input/index.js"
+			"types": "./src/lib/components/input/index.ts",
+			"svelte": "./src/lib/components/input/index.ts"
 		},
 		"./motion": {
-			"types": "./dist/motion.d.ts",
-			"default": "./dist/motion.js"
+			"types": "./src/lib/motion.ts",
+			"default": "./src/lib/motion.ts"
 		},
 		"./navigation-menu": {
-			"types": "./dist/components/navigation-menu/index.d.ts",
-			"svelte": "./dist/components/navigation-menu/index.js"
+			"types": "./src/lib/components/navigation-menu/index.ts",
+			"svelte": "./src/lib/components/navigation-menu/index.ts"
 		},
 		"./popover": {
-			"types": "./dist/components/popover/index.d.ts",
-			"svelte": "./dist/components/popover/index.js"
+			"types": "./src/lib/components/popover/index.ts",
+			"svelte": "./src/lib/components/popover/index.ts"
 		},
 		"./select": {
-			"types": "./dist/components/select/index.d.ts",
-			"svelte": "./dist/components/select/index.js"
+			"types": "./src/lib/components/select/index.ts",
+			"svelte": "./src/lib/components/select/index.ts"
 		},
 		"./separator": {
-			"types": "./dist/components/separator/index.d.ts",
-			"svelte": "./dist/components/separator/index.js"
+			"types": "./src/lib/components/separator/index.ts",
+			"svelte": "./src/lib/components/separator/index.ts"
 		},
 		"./sheet": {
-			"types": "./dist/components/sheet/index.d.ts",
-			"svelte": "./dist/components/sheet/index.js"
+			"types": "./src/lib/components/sheet/index.ts",
+			"svelte": "./src/lib/components/sheet/index.ts"
 		},
 		"./shell": {
-			"types": "./dist/shell/index.d.ts",
-			"svelte": "./dist/shell/index.js"
+			"types": "./src/lib/shell/index.ts",
+			"svelte": "./src/lib/shell/index.ts"
 		},
 		"./sidebar": {
-			"types": "./dist/components/sidebar/index.d.ts",
-			"svelte": "./dist/components/sidebar/index.js"
+			"types": "./src/lib/components/sidebar/index.ts",
+			"svelte": "./src/lib/components/sidebar/index.ts"
 		},
 		"./skeleton": {
-			"types": "./dist/components/skeleton/index.d.ts",
-			"svelte": "./dist/components/skeleton/index.js"
+			"types": "./src/lib/components/skeleton/index.ts",
+			"svelte": "./src/lib/components/skeleton/index.ts"
 		},
-		"./styles/tokens.css": "./dist/styles/tokens.css",
+		"./styles/tokens.css": "./src/lib/styles/tokens.css",
 		"./switch": {
-			"types": "./dist/components/switch/index.d.ts",
-			"svelte": "./dist/components/switch/index.js"
+			"types": "./src/lib/components/switch/index.ts",
+			"svelte": "./src/lib/components/switch/index.ts"
 		},
 		"./table": {
-			"types": "./dist/components/table/index.d.ts",
-			"svelte": "./dist/components/table/index.js"
+			"types": "./src/lib/components/table/index.ts",
+			"svelte": "./src/lib/components/table/index.ts"
 		},
 		"./tooltip": {
-			"types": "./dist/components/tooltip/index.d.ts",
-			"svelte": "./dist/components/tooltip/index.js"
+			"types": "./src/lib/components/tooltip/index.ts",
+			"svelte": "./src/lib/components/tooltip/index.ts"
 		},
 		"./utils": {
-			"types": "./dist/utils/index.d.ts",
-			"default": "./dist/utils/index.js"
+			"types": "./src/lib/utils/index.ts",
+			"default": "./src/lib/utils/index.ts"
 		}
 	},
 	"scripts": {
-		"dev": "svelte-package -w",
-		"build": "svelte-package",
 		"check": "svelte-check --tsconfig ./tsconfig.json",
 		"test": "vitest run --passWithNoTests",
 		"lint": "oxlint .",
@@ -147,9 +134,7 @@
 	},
 	"dependencies": {
 		"@lucide/svelte": "^1.72.0",
-		"@rask/flow": "workspace:*",
 		"@tanstack/table-core": "^8.21.3",
-		"@xyflow/svelte": "^1.7.1",
 		"bits-ui": "^2.21.0",
 		"clsx": "^2.1.1",
 		"gsap": "^3.15.1",
@@ -163,7 +148,6 @@
 		"@storybook/addon-svelte-csf": "^5.1.6",
 		"@storybook/svelte": "^10.6.7",
 		"@storybook/svelte-vite": "^10.6.7",
-		"@sveltejs/package": "^3.0.2",
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@tailwindcss/vite": "^4.3.5",
 		"storybook": "^10.6.7",
@@ -174,6 +158,5 @@
 	},
 	"peerDependencies": {
 		"svelte": "^5.0.0"
-	},
-	"//": "@rask/flow + @xyflow/svelte back exactly ONE subpath, ./hierarchy — the project›warehouse›namespace›table view the console renders on /projects/<id> and the catalog overview. The vendor CANVAS binding still lives in @rask/flow, not here; what @rask/ui owns is the domain view drawn on it, transport-agnostic on the GrantsPanel precedent. An app importing @rask/ui/hierarchy must declare both packages itself and import their two stylesheets layer(base) in its app.css — no other subpath pulls them."
+	}
 }

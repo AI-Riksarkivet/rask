@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
-import { fetchMe, MeSchema, parse, type Me } from '@rask/api';
-import { timeoutSignal, upstreamJSON } from '@rask/api/client';
+import { fetchMe, MeSchema, parse, type Me } from '#lib/api/index.ts';
+import { timeoutSignal, upstreamJSON } from '#lib/api/client.ts';
 import { auth, initAuth, login, sessionToUser } from '#lib/auth.svelte.ts';
 import { readActiveProject } from '#lib/active-project.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';

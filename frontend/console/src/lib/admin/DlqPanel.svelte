@@ -24,7 +24,7 @@
 	import { ExternalLink, RefreshCw, RotateCcw, ShieldAlert, Inbox } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { fetchDlq, replayDlq } from '#lib/lineage/remote/lineage.api.ts';
-	import type { DlqBacklog, DlqEvent } from '@rask/api/lineage';
+	import type { DlqBacklog, DlqEvent } from '#lib/api/lineage/index.ts';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 
 	let backlog = $state<DlqBacklog | null>(null);

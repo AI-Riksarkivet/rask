@@ -12,7 +12,7 @@ export interface LineagePulse {
 	cursor: number;
 }
 
-// Parsed, not cast, at the wire boundary (the @rask/api parse-don't-validate rule) — a drift in the feed's
+// Parsed, not cast, at the wire boundary (the `#lib/api` parse-don't-validate rule) — a drift in the feed's
 // shape must fail here rather than silently read `undefined` as "nothing changed" forever.
 const LineageProbeSchema = v.object({ events: v.array(v.object({ seq: v.number() })) });
 

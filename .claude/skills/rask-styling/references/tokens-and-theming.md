@@ -54,10 +54,10 @@ Migration is opportunistic: when you touch a component still on a legacy name, s
 ## The `@source` line
 
 `frontend/console/src/app.css` imports the three stylesheets (`tailwindcss`, `tw-animate-css`, `@rask/ui/styles/tokens.css`),
-the Svelte Flow pair (`@xyflow/svelte/dist/style.css`, then `@rask/flow/styles.css`, both `layer(base)` — the vendor
+the Svelte Flow pair (`@xyflow/svelte/dist/style.css`, then `./lib/flow/styles.css`, both `layer(base)` — the vendor
 sheet alone leaves the Controls widget and edge labels in light-mode hex), the dock's sheet, and
-`@source '../../packages/ui/dist'` (two `../`). Its own `lib`/`routes` are found by Tailwind 4's default scan of the
-SvelteKit source tree; adding an explicit `@source` for them is safe, removing the `dist` one is not.
+`@source '../../packages/ui/src'` (two `../`). Its own `lib`/`routes` are found by Tailwind 4's default scan of the
+SvelteKit source tree; adding an explicit `@source` for them is safe, removing the `packages/ui/src` one is not.
 
 ## Reading and writing the mode
 

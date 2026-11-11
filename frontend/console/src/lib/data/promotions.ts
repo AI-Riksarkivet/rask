@@ -5,7 +5,7 @@
  * schema's keys in lockstep with it, so a field the catalog adds or renames stops compiling here.
  */
 import * as v from 'valibot';
-import type { components } from '@rask/api/generated/catalog';
+import type { components } from '#lib/api/generated/catalog.ts';
 
 type HoldWire = components['schemas']['PromotionHold'];
 type ListWire = components['schemas']['PromotionsListResponse'];

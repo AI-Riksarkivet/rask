@@ -7,7 +7,7 @@
 /* …and the rask theme for it, immediately after the vendor sheet so its `--xy-*` defaults are the ones
    being overridden. Without this the Controls widget and every edge label render in the library's
    light-mode hex on a dark canvas — a white blob on all four Svelte Flow surfaces in the console. */
-@import '@rask/flow/styles.css' layer(base);
+@import './lib/flow/styles.css' layer(base);
 
 /* The workbench dock: horizon-layout's structural sheet, then its palette mapped onto the tokens
    (`#lib/dock/theme.css`), both under `base` so the Tailwind utilities a panel's content is styled
@@ -18,4 +18,4 @@
 
 /* Scan the shared @rask/ui component library so its Tailwind classes are generated —
    Tailwind 4 ignores node_modules by default. */
-@source '../../packages/ui/dist';
+@source '../../packages/ui/src';

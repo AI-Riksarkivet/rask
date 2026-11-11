@@ -8,7 +8,7 @@
 #
 # Built by Dagger through scripts/dagger-image.sh, the one build seam (never docker).
 
-# ---- builder: bun install (workspace) + prebuild packages/ui + build the console -----
+# ---- builder: bun install (workspace) + build the console --------------------------
 # The bun the workspace pins (frontend/package.json `packageManager`, .dagger/frontend.go's lanes), so the image builds
 # with the toolchain its gates ran. Of this stage only the build, the bun binary and tini-static ship.
 FROM oven/bun:1.4.4-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e AS builder
@@ -42,10 +42,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 COPY frontend/console console
 COPY frontend/packages packages
 
-# Pre-build packages/ui (svelte-package → dist/) so its dist exports resolve during the app build.
-# hadolint ignore=DL3059
-RUN bun run --cwd=packages/ui build
-
+# The console compiles @rask/ui from its source (its exports name `src/`), so no package builds first.
 # hadolint ignore=DL3059
 RUN bun run --cwd=console build
 

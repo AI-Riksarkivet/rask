@@ -15,13 +15,13 @@ export type StageInfo = {
 // Non-greedy project prefix + literal stage names, so `acme-data-silver` parses as
 // project `acme-data`, stage `silver` (a greedy prefix would eat the stage).
 /**
- * The identifier grammar lives in `@rask/api/identifiers`, the one copy every reader shares: a second
+ * The identifier grammar lives in `#lib/api/identifiers.ts`, the one copy every reader shares: a second
  * copy that split on the FIRST delimiter would name the wrong namespace for a nested one. Re-exported
  * here so the stage derivation's callers import it from one place.
  */
-import { leafSegment, parentNamespace } from '@rask/api/identifiers';
+import { leafSegment, parentNamespace } from '#lib/api/identifiers.ts';
 
-export { parentNamespace as namespaceOfTable } from '@rask/api/identifiers';
+export { parentNamespace as namespaceOfTable } from '#lib/api/identifiers.ts';
 
 const STAGE_RE = /^(?:([a-z0-9][a-z0-9_-]*?)-)?(bronze|silver|gold)$/;
 

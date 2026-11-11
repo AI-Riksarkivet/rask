@@ -18,7 +18,7 @@
  *    anywhere would re-run every effect that once asked for it.
  */
 import { error, isHttpError } from '@sveltejs/kit';
-import type { ApiResult } from '@rask/api/client';
+import type { ApiResult } from '#lib/api/client.ts';
 import { untrack } from 'svelte';
 import { activity, type ActivityOutcome } from './activity.svelte.ts';
 import { auth, type Session } from './auth.svelte';
@@ -240,7 +240,7 @@ function thrownFailure(err: unknown): ActivityOutcome {
 	return { ok: false, status: null, detail: err instanceof Error ? err.message : String(err) };
 }
 
-/** Every write answers the shared `ApiResult` union (`@rask/api/client`), whose failure carries the
+/** Every write answers the shared `ApiResult` union (`#lib/api/client.ts`), whose failure carries the
  *  door's status and detail. */
 type WriteResult = ApiResult<unknown>;
 

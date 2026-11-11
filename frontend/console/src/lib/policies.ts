@@ -5,7 +5,7 @@
 // shape that drifted from the contract must become an `{ok:false}` the page renders honestly, not a
 // cast that renders a lie.
 import * as v from 'valibot';
-import type { components } from '@rask/api/generated/catalog';
+import type { components } from '#lib/api/generated/catalog.ts';
 
 /** `PolicyRequest` — the catalog's full set body, from the generated client. */
 export type PolicyRequest = components['schemas']['PolicyRequest'];
@@ -97,9 +97,8 @@ export interface PolicyDraft {
  * and be wrong in the dangerous direction — cleanup DELETES old versions, so it would run against a
  * tenant that had explicitly turned maintenance off.
  *
- * The console has the twin of this function for its table/namespace forms. It is duplicated
- * rather than shared because pages may not import each other and the only honest shared home would be
- * `@rask/api` — a move that has to change the lakehouse in the same commit, which this one does not.
+ * The console has the twin of this function for its table/namespace forms; the two map different
+ * drafts onto the same body.
  */
 export function policyRequestFrom(draft: PolicyDraft): PolicySetBody {
 	const body: PolicySetBody = {

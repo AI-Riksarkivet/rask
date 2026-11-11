@@ -4,21 +4,20 @@
 
 ## Build
 
-`svelte-package` (`@sveltejs/package` 2.5.8) emits `src/lib/` → `dist/`, stripping the `src/lib` prefix — which is why every `exports` entry reads `./dist/components/<x>` while the source sits at `src/lib/components/<x>`. `dist/` and `storybook-static/` are gitignored; the `files` allowlist keeps stories and tests out of the tarball. The workspace's `check` and `test` scripts run `build` first (`frontend/package.json`), because the console reads `dist/`.
+No build step: `package.json` `exports` name the source (`./src/lib/components/<x>/index.ts`), and the console compiles `@rask/ui` from it with its own Vite and svelte-check, so the workspace's `check` and `test` build nothing first (ADR 0201). `storybook-static/` is gitignored.
 
 `tsconfig.json`: `strict` + `noUncheckedIndexedAccess`, **no** `exactOptionalPropertyTypes` (the Bits UI "union too complex" incompatibility — leave it off), `target: ES2022` (so `toSorted` and the other ES2023 array methods are out), `verbatimModuleSyntax`.
 
-`vite.config.ts` serves Storybook + vitest, and its `test` block is load-bearing (`vite.config.ts:8-19`): `include` names **both** homes — `tests/**` and `src/**` — and `exclude` drops `dist/**` and `.svelte-kit/**`. `svelte-package` copies test files into both build trees, so vitest's default discovery ran every suite three times against regenerated output; narrowing to `src` alone silently dropped 117 tests to 10. Change neither half without checking the other.
+`vite.config.ts` serves Storybook + vitest, and its `test` block is load-bearing: `include` names **both** homes — `tests/**` and `src/**` — because narrowing to one silently drops the other.
 
-## The 31 export subpaths
+## The 30 export subpaths
 
-**Components** — `dist/components/<name>/index.js`, conditions `svelte` + `types` only:
+**Components** — `src/lib/components/<name>/index.ts`, conditions `svelte` + `types` only:
 
-`alert-dialog · avatar · badge · button · card · checkbox · collapsible · data-table · dialog · dropdown-menu · gated-action · grant-form · grants-panel · hierarchy · identity · input · navigation-menu · popover · select · separator · sheet · sidebar · skeleton · switch · table · tooltip` (measured 2026-11-04 against `package.json` `exports`)
+`alert-dialog · avatar · badge · button · card · checkbox · collapsible · data-table · dialog · dropdown-menu · gated-action · grant-form · grants-panel · identity · input · navigation-menu · popover · select · separator · sheet · sidebar · skeleton · switch · table · tooltip` (measured 2026-11-04 against `package.json` `exports`)
 
 **`./gated-action`** — ruling #143's implementation. `{ allowed, reason, action?, class?, children }`: when allowed it renders the children with NO wrapper at all; when refused it wraps them in a `Tooltip.Trigger` `child` span (`data-slot="gated-action"`, `aria-disabled="true"`, `class="contents"` so geometry is unchanged) with a capture-phase click/keydown guard. It deliberately does NOT set the native `disabled` attribute — that would kill the tooltip and drop the control from the tab order — so **a child that sets `disabled` itself defeats the mechanism**; make the child's own `disabled` conditional on the same verdict. Wrapping in a `Tooltip.Trigger` button instead of a span would nest a button inside a button.
 
-**`./hierarchy`** — `ProjectHierarchy` + `HierarchyNode` (#109): project › warehouse › namespace › table as a vertical graph. **The one subpath with a vendor-canvas dependency** — it draws on `@rask/flow`'s `StaticFlow`, so `@rask/flow` and `@xyflow/svelte` are `@rask/ui` dependencies for this component alone, and the app mounting it must declare both itself AND import their two stylesheets `layer(base)` in its `app.css` (vendor sheet first, then `@rask/flow/styles.css`) or the canvas paints in the library's light-mode hex. The console's `/projects/<id>` and `/catalog` overview both render it. It is transport-agnostic (the GrantsPanel precedent) because the library owns no API client: the two rung reads arrive as async props and the console passes its own `*.api.ts` reads.
 
 **`./identity`** — `Subject` + `subjectDisplay` (#87). An OIDC `sub` is an opaque base64 blob; the helper keeps readable identifiers verbatim and ellipsizes opaque ones in the middle, and the FULL subject always rides `title` so hover/copy still yields the value a tuple write needs. Render it with `<Subject value={…} />`, never `subjectDisplay(...).label` — the component is what makes the title invariant structural, where a call site reading `.label` can drop it. Its own subpath, not under `grants-panel`: the concern is any surface that prints a sub (FGA subjects, control-event actors, audit stamps).
 
@@ -64,7 +63,7 @@ Containment is deliberate: `Card` and the DataTable card both carry `min-w-0 max
 
 **Storybook 10.4.6** with `@storybook/svelte-vite` (not `-sveltekit` — this is a library). Addons: docs, svelte-csf, a11y. `preview.ts` imports `tokens.css`; `tags: ['autodocs']` globally. Run `make storybook` (→ `:6006`).
 
-Coverage is thin: **6 story files for 26 component subpaths** (the 31 `exports` less `.`, `./shell`, `./utils`, `./motion` and `./styles/tokens.css`, counted 2026-11-07) — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `gated-action.stories.svelte`, `shell/activity-center.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
+Coverage is thin: **6 story files for 25 component subpaths** (the 30 `exports` less `.`, `./shell`, `./utils`, `./motion` and `./styles/tokens.css`, counted 2026-11-11) — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `gated-action.stories.svelte`, `shell/activity-center.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
 
 Vitest suites are pure-function or SSR-string. Seven live in `tests/`; a suite may also sit beside its source (`src/lib/components/identity/subject.test.ts`) — `vite.config.ts:17` includes both homes. No jsdom and no `@testing-library/svelte` (adding either changes the workspace lockfile).
 
@@ -72,7 +71,7 @@ Vitest suites are pure-function or SSR-string. Seven live in `tests/`; a suite m
 
 Do not treat these as patterns to copy.
 
-1. An extensionless relative import violates the package's own `.js` convention and survives into `dist`: `motion.ts:10` → `'./gsap'`.
+1. An extensionless relative import violates the package's own `.js` convention: `motion.ts:10` → `'./gsap'`.
 2. Component subpaths declare no `default` condition — a tool resolving without the `svelte` condition gets an unresolvable specifier.
-3. Six exported subpaths have zero consumers outside the package (`avatar, collapsible, dropdown-menu, navigation-menu, sidebar, tooltip`); they exist to serve `shell/`.
+3. Five exported subpaths have zero consumers outside the package (`avatar, collapsible, navigation-menu, sidebar, tooltip`); they exist to serve `shell/`.
 4. `GrantsPanel` (420 lines) is the largest component and is arguably domain logic: its form carries the grantable FGA relations as `GRANTABLE` (`grant-form/grant-form.svelte:58`, `['reader','writer','validator','owner','pass_grants','manage_grants']`). It lives here so the console's surfaces that grant share one copy.

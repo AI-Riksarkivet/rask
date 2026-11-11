@@ -5,7 +5,8 @@
 		"interface": true
 	},
 	"ignoreIssues": {
-		"console/tsconfig.json": ["unlisted"]
+		"console/tsconfig.json": ["unlisted"],
+		"console/src/lib/api/generated/**": ["types"]
 	},
 	"ignoreBinaries": [
 		"make"

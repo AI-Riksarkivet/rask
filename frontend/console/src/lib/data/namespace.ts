@@ -9,7 +9,7 @@
 // The transport lives in `remote/access-objects.api.ts` (the access surfaces) and
 // `remote/namespace.api.ts` (lifecycle + policy); this module keeps the contracts they parse against.
 import * as v from 'valibot';
-import type { components } from '@rask/api/generated/catalog';
+import type { components } from '#lib/api/generated/catalog.ts';
 
 export type AccessList = components['schemas']['AccessListResponse'];
 export type AccessCheck = components['schemas']['AccessCheckResponse'];
@@ -102,7 +102,7 @@ export const AccessGraphSchema = v.object({
 });
 
 // The PolicyResponse wire contract (#50) — serialized with response_model_exclude_none, so the
-// nullable bounds arrive absent, not null. Parsed (not cast) at the boundary per the @rask/api
+// nullable bounds arrive absent, not null. Parsed (not cast) at the boundary per the `#lib/api`
 // parse-don't-validate rule: a schema drift is surfaced instead of lying downstream.
 export const PolicyResponseSchema = v.object({
 	kind: v.string(),

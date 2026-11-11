@@ -52,15 +52,15 @@ func (m *Rask) Openapi(
 	if err != nil {
 		return out, err
 	}
-	// The second hop: committed spec -> the typed client the console calls through. `@rask/api`'s generated files are
+	// The second hop: committed spec -> the typed client the console calls through. The console's generated API types (`console/src/lib/api/generated`) are
 	// openapi-typescript's output over the committed specs (`bun run gen:types`, which `make openapi` runs), so a spec
 	// refreshed without its client fails here, as `make openapi-check`'s diff does locally.
 	client, err := m.frontendBase(src).
-		WithExec([]string{"cp", "packages/api/src/generated/catalog.ts", "/tmp/catalog.orig.ts"}).
-		WithExec([]string{"cp", "packages/api/src/generated/lineage.ts", "/tmp/lineage.orig.ts"}).
+		WithExec([]string{"cp", "console/src/lib/api/generated/catalog.ts", "/tmp/catalog.orig.ts"}).
+		WithExec([]string{"cp", "console/src/lib/api/generated/lineage.ts", "/tmp/lineage.orig.ts"}).
 		WithExec([]string{"bun", "run", "gen:types"}).
-		WithExec([]string{"diff", "-u", "/tmp/catalog.orig.ts", "packages/api/src/generated/catalog.ts"}).
-		WithExec([]string{"diff", "-u", "/tmp/lineage.orig.ts", "packages/api/src/generated/lineage.ts"}).
+		WithExec([]string{"diff", "-u", "/tmp/catalog.orig.ts", "console/src/lib/api/generated/catalog.ts"}).
+		WithExec([]string{"diff", "-u", "/tmp/lineage.orig.ts", "console/src/lib/api/generated/lineage.ts"}).
 		Stdout(ctx)
 	return out + client, err
 }

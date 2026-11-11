@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import AccessGraphNode, { type AccessNodeType } from './AccessGraphNode.svelte';
-	import { parentNamespaceOrNull } from '@rask/api/identifiers';
+	import { parentNamespaceOrNull } from '#lib/api/identifiers.ts';
 	import type { NodeTypes } from '@xyflow/svelte';
 
 	// svelte-flow rule: register node components ONCE at module scope, never inline.
@@ -12,7 +12,7 @@
 	// narrows it, and an inspector beside it — replacing four tabs that shared no state, no URL and no
 	// question. Switching "tabs" used to throw away the graph you were looking at; nothing here does.
 	import { type Edge, MarkerType } from '@xyflow/svelte';
-	import { GraphCanvas } from '@rask/flow';
+	import { GraphCanvas } from '#lib/flow/index.ts';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import * as Popover from '@rask/ui/popover';

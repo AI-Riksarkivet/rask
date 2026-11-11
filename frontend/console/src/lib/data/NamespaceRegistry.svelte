@@ -78,7 +78,7 @@
 	liveRead(lineageTick, () => load());
 
 	// Group by the table's PARENT namespace — every segment but the LAST, via `namespaceOfTable`
-	// (`@rask/api/identifiers`). A bare name with no delimiter is its own root, which is this view's
+	// (`#lib/api/identifiers.ts`). A bare name with no delimiter is its own root, which is this view's
 	// rule and not the backend's: `parent_namespace_id` returns None there, so a root-level table
 	// gets a row here rather than vanishing. That divergence is safe because this answer is only a
 	// grouping key; anywhere it would become an FGA object id, `parentNamespaceOrNull` is the one to use.

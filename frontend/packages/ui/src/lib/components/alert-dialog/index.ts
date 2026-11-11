@@ -6,8 +6,8 @@ import Description from './alert-dialog-description.svelte';
 import Action from './alert-dialog-action.svelte';
 import Cancel from './alert-dialog-cancel.svelte';
 
-// Annotate with `typeof` so the emitted .d.ts can name these types (otherwise
-// svelte-package's declaration emit silently skips index.d.ts and publint fails).
+// Annotated with `typeof`: a bare re-export of a bits primitive infers a type TypeScript cannot
+// name in a declaration.
 const Root: typeof BitsAlertDialog.Root = BitsAlertDialog.Root;
 const Trigger: typeof BitsAlertDialog.Trigger = BitsAlertDialog.Trigger;
 const Portal: typeof BitsAlertDialog.Portal = BitsAlertDialog.Portal;

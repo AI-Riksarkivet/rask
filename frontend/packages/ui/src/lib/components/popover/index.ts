@@ -6,8 +6,8 @@ import Content from './popover-content.svelte';
 // of ROWS wants: a menu makes every child a `menuitem` with typeahead and arrow navigation, and
 // closes on any click inside, which is wrong for a list whose rows carry their own dismiss button.
 //
-// Annotate with `typeof` so the emitted .d.ts can name these types (otherwise svelte-package's
-// declaration emit silently skips index.d.ts and publint fails).
+// Annotated with `typeof`: a bare re-export of a bits primitive infers a type TypeScript cannot
+// name in a declaration.
 const Root: typeof BitsPopover.Root = BitsPopover.Root;
 const Trigger: typeof BitsPopover.Trigger = BitsPopover.Trigger;
 const Close: typeof BitsPopover.Close = BitsPopover.Close;

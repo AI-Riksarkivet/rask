@@ -1,9 +1,9 @@
-import { liveRead, type LiveCursor } from '@rask/api/live';
+import { liveRead, type LiveCursor } from '#lib/api/live.svelte.ts';
 import { controlCursor, lineageFeed } from './feeds.api';
 
 /**
  * The console's live CURSORS. The reader itself — `liveRead`, and the rules that make it not a
- * timer — lives in `@rask/api/live`; what stays here wraps this app's own `feeds.api.ts`.
+ * timer — lives in `#lib/api/live.svelte.ts`; what stays here wraps this app's own `feeds.api.ts`.
  *
  * Re-exported so consumers keep importing from one place: a surface asks the app for liveness
  * rather than reaching past it into a package.

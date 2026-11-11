@@ -1,4 +1,4 @@
-// @rask/api/observability — the console's client error report.
+// #lib/api/observability — the console's client error report.
 //
 // An unhandled browser error becomes one structured record with an id the person can quote, emitted
 // through a sink the app chooses (the browser console by default), and the person sees the id, never

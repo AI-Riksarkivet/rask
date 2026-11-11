@@ -119,7 +119,7 @@ export type NavUser = { name: string; email?: string; initials?: string };
 /** One project membership row from `/management/v1/me` — the tenant and the caller's role in it. */
 export type MeProject = { project: string; role: 'admin' | 'member' };
 
-/** The frozen `GET /management/v1/me` identity contract, mirrored structurally from @rask/api (the shared shell
+/** The frozen `GET /management/v1/me` identity contract, mirrored structurally from the console's `#lib/api` (the shared shell
  *  never imports app data — same seam as `NavUser`): any verified caller's sub/name/email, whether
  *  they hold the estate-admin privilege, and their project memberships. */
 export type Me = {

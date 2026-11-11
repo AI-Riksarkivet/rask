@@ -26,7 +26,7 @@
 	// graph says WHAT each box is, token-utility chrome only (themes in both modes).
 	import { Handle, Position } from '@xyflow/svelte';
 	import { Boxes, Database, Folder, Warehouse } from '@lucide/svelte';
-	import { cn } from '../../utils/cn.js';
+	import { cn } from '@rask/ui/utils';
 
 	let { data }: NodeProps<HierarchyNodeType> = $props();
 

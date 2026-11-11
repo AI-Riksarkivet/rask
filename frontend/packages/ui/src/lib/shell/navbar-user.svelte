@@ -10,7 +10,7 @@
 	// avatar trigger + dropdown (identity, theme toggle, settings, the shared auth control). Context-free
 	// (no sidebar dependency) so it renders in the navbar of every page. The
 	// identity flows in as a plain prop from the app's root layout load (single-sourced via
-	// @rask/api's sessionToUser) — the shared shell never imports app data.
+	// the console's sessionToUser) — the shared shell never imports app data.
 	//
 	// `authEnabled` drives the auth affordance: off → the local identity,
 	// no auth UI; on + signed in → identity + Sign out; on + signed out (user null) → a "Sign in" prompt.

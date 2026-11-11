@@ -18,13 +18,13 @@ system's build; from `frontend/console/src/` the depth is **two** `../`:
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import '@rask/ui/styles/tokens.css';
-@source '../../packages/ui/dist';
+@source '../../packages/ui/src';
 ```
 
 The console mounts a **dock** at `/workbench`, so it also imports `horizon-layout/horizon-layout.css` and the dock's
 theme under `layer(base)`; the why is § *Third-party stylesheets*.
 
-Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches the console's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
+Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at the package's **`src`**: the console compiles `@rask/ui` from source (its `exports` name `src/`), so a component edit reaches the page through Vite's HMR with no build step.
 
 ## Colour comes from tokens
 
@@ -42,12 +42,12 @@ it, permanently. The console imports four this way:
 
 ```css
 @import '@xyflow/svelte/dist/style.css'      layer(base);
-@import '@rask/flow/styles.css'              layer(base);   /* …immediately after it */
+@import './lib/flow/styles.css'              layer(base);   /* …immediately after it */
 @import 'horizon-layout/horizon-layout.css'  layer(base);
 @import './lib/dock/theme.css'               layer(base);   /* …immediately after it */
 ```
 
-The xyflow sheet needs **two** lines, in that order: the vendor sheet, then `@rask/flow/styles.css`,
+The xyflow sheet needs **two** lines, in that order: the vendor sheet, then `#lib/flow/styles.css`,
 which maps `--xy-*` onto the OKLCH tokens. Skip the second and the vendor's light-mode hex defaults
 (`#fefefe` controls, `#f7f9fb` edge labels, `#b1b1b7` edges) survive — the Controls widget and every
 edge label render as a white blob on rask's dark surfaces. Same shape as the `--hl-*` block below and
@@ -112,11 +112,11 @@ Six rules carry that snippet:
 3. **`ref = $bindable(null)` + `bind:this={ref}`** is the ref-forwarding contract, typed by `WithElementRef<T, El>`.
 4. **`data-slot="<name>"`** on the root element — CSS descendant selectors and the e2e harness both locate by it.
 5. **Runes and snippets throughout**: `$props()` destructuring, `{@render children?.()}`. The package contains no `<slot>`. Generic components declare `<script lang="ts" generics="TData">`.
-6. **Stay transport-agnostic.** The library never owns an API client — `GrantsPanel` takes a `client` prop of async functions. Shapes are declared structurally rather than imported from `@rask/api`, and `@rask/ui` imports no `$app/*` or the console's `#lib/*` (browser detection is `typeof window !== 'undefined'`).
+6. **Stay transport-agnostic.** The library never owns an API client — `GrantsPanel` takes a `client` prop of async functions. Shapes are declared structurally rather than imported from the console's `#lib/api`, and `@rask/ui` imports no `$app/*` or the console's `#lib/*` (browser detection is `typeof window !== 'undefined'`).
 
-Wrapping a **Bits UI** primitive that needs no skin: re-export it with an explicit `typeof` annotation. A bare re-export infers a non-portable type and silently skips the declaration (`collapsible/index.ts:3-4`).
+Wrapping a **Bits UI** primitive that needs no skin: re-export it with an explicit `typeof` annotation: a bare re-export infers a type TypeScript cannot name in a declaration (`collapsible/index.ts`).
 
-Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then **add the subpath to `exports` in `package.json`** — an unexported component is unreachable. Relative imports carry the `.js` extension (source `.ts` emits `.js`).
+Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then **add the subpath to `exports` in `package.json`** — an unexported component is unreachable. Relative imports carry the `.js` extension, which TypeScript and Vite resolve to the `.ts` source.
 
 ## Checklist
 
@@ -124,7 +124,6 @@ Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then
 - [ ] The component comes from `@rask/ui` via its subpath; new chrome lands in the package.
 - [ ] `class` adjusts layout; variants adjust appearance.
 - [ ] Dynamic values go through `style:` or a custom property.
-- [ ] `bun --cwd=frontend/packages/ui run build` before checking the console's rendering.
 - [ ] `bun --cwd=frontend run lint`, `fmt:check` and `check` green.
 
 ## Where to go deeper

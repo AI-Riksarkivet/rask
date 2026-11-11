@@ -1,7 +1,7 @@
 import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import * as v from 'valibot';
-import type { ApiResult } from '@rask/api/client';
+import type { ApiResult } from '#lib/api/client.ts';
 import {
 	DeclareTableResponseSchema,
 	DeleteRowsResponseSchema,

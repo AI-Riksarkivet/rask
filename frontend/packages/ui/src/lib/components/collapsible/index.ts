@@ -1,7 +1,7 @@
 import { Collapsible as CollapsiblePrimitive } from 'bits-ui';
 
-// `typeof` annotations so svelte-package emits index.d.ts (bare re-exports of bits
-// primitives infer a non-portable type and silently skip the declaration).
+// Annotated with `typeof`: a bare re-export of a bits primitive infers a type TypeScript cannot
+// name in a declaration.
 const Root: typeof CollapsiblePrimitive.Root = CollapsiblePrimitive.Root;
 const Trigger: typeof CollapsiblePrimitive.Trigger = CollapsiblePrimitive.Trigger;
 const Content: typeof CollapsiblePrimitive.Content = CollapsiblePrimitive.Content;

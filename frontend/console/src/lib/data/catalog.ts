@@ -7,9 +7,9 @@
 // branches, restore, schema evolution, indexes, drop/deregister/rename/declare, row update/delete)
 // lives in `remote/catalog.api.ts`. What stays here: the wire CONTRACTS (types + the valibot schemas
 // that module parses with) and the byte clients — the Arrow preview/insert — and the commit log.
-import { parse } from '@rask/api';
+import { parse } from '#lib/api/index.ts';
 import * as v from 'valibot';
-import type { components } from '@rask/api/generated/catalog';
+import type { components } from '#lib/api/generated/catalog.ts';
 import {
 	type ApiResult,
 	requestBinary as requestBin,
@@ -50,7 +50,7 @@ export type TableDetail = {
 	format?: { name: string; storage_version: string }; // #78 the catalog's fixed Lance file format
 };
 
-/** The catalog's name for the shared status-aware `ApiResult` (`@rask/api/client`). */
+/** The catalog's name for the shared status-aware `ApiResult` (`#lib/api/client.ts`). */
 export type CatalogResult<T> = ApiResult<T>;
 
 const requestJSON = (path: string, init?: RequestInit) => request(CATALOG_API, path, init);
@@ -198,7 +198,7 @@ export type CreateWarehouseBody = CreateWarehouse & { serving?: 'gold' };
 
 // The lance-namespace table-lifecycle wire contracts (#85). All-optional where the spec says so — the
 // catalog serializes with response_model_exclude_none, so null fields arrive absent. Parsed (not cast)
-// at the boundary per the @rask/api parse-don't-validate rule: a schema drift is surfaced instead of
+// at the boundary per the `#lib/api` parse-don't-validate rule: a schema drift is surfaced instead of
 // lying downstream. The parse runs in `remote/catalog.api.ts`, so these are exported — the contract
 // stays here, beside the types it defines.
 export const TableLifecycleResponseSchema = v.object({
@@ -248,7 +248,7 @@ export type DeleteRowsResult = v.InferOutput<typeof DeleteRowsResponseSchema>;
 // place is `table-detail/unavailable.ts`.
 
 // The lance-namespace DropNamespaceResponse wire contract (all fields optional — the catalog serializes
-// with response_model_exclude_none). Parsed (not cast) at the boundary per the @rask/api
+// with response_model_exclude_none). Parsed (not cast) at the boundary per the `#lib/api`
 // parse-don't-validate rule: a schema drift throws to the caller instead of lying downstream.
 export const DropNamespaceResponseSchema = v.object({
 	context: v.optional(v.record(v.string(), v.string())),

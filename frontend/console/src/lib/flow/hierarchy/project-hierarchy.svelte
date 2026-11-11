@@ -1,9 +1,9 @@
 <script lang="ts" module>
 	import type { HierarchyTier } from './hierarchy-node.svelte';
 
-	/** Mirrors the pages' status-aware `ApiResult` (`@rask/api`'s client.ts): 0 = fetch-level
-	 *  failure/offline. Declared STRUCTURALLY rather than imported, so the library owns no API
-	 *  client (the GrantsPanel precedent) and a page can hand its catalog remotes straight in. */
+	/** Mirrors the pages' status-aware `ApiResult` (`#lib/api/client.ts`): 0 = fetch-level
+	 *  failure/offline. Declared structurally, so the view owns no API client and a page hands its
+	 *  catalog reads straight in. */
 	export type HierarchyResult<T> =
 		| { ok: true; data: T }
 		| { ok: false; status: number; detail: string };
@@ -56,24 +56,20 @@
 	import { untrack } from 'svelte';
 	// The VERTICAL hierarchy view (#104, the 2026-08-05 ruling): the relationship the estate is BUILT
 	// on — project › warehouse › namespace › table — drawn as a graph, immediately, not behind a tab.
-	// Mechanism from @rask/flow (StaticFlow: a non-interactive viewer).
+	// Mechanism from `#lib/flow` (StaticFlow: a non-interactive viewer).
 	//
-	// It lives in @rask/ui because TWO pages render it — the console's `/projects/<id>` and the
-	// lakehouse's Overview (#109) — and pages may not import each other. TRANSPORT-AGNOSTIC on the
-	// GrantsPanel precedent (rask-styling rule 6): the library never owns an API client, so the two
-	// rung reads arrive as async props and each page supplies its OWN data functions.
+	// TWO pages render it — `/projects/<id>` and the catalog Overview (#109). Transport-agnostic: the
+	// two rung reads arrive as async props and each page supplies its own data functions.
 	//
-	// The one thing a consumer must know: this is the design system's single @rask/flow-backed
-	// component, so a page mounting it needs `@rask/flow` + `@xyflow/svelte` declared AND their two
-	// stylesheets imported `layer(base)` in its app.css (vendor sheet first, then @rask/flow's token
-	// mapping) — otherwise the canvas paints in the vendor's light-mode hex.
+	// The canvas needs the two stylesheets `app.css` imports `layer(base)` (the vendor sheet, then
+	// `#lib/flow/styles.css`'s token mapping), or it paints in the vendor's light-mode hex.
 	//
 	// The tree is fetched rung by rung and drawn HONESTLY: each namespace draws at most `maxTables`
 	// tables and then says "+k more" as its own node — a capped view that looks complete is how a
 	// hierarchy lies. A rung whose read failed renders an "unreadable" node rather than disappearing
 	// (a binding you cannot read is a namespace you cannot see — the estate's own listing rule).
 	import type { Edge, Node, NodeTypes } from '@xyflow/svelte';
-	import { StaticFlow } from '@rask/flow';
+	import { StaticFlow } from '#lib/flow/index.ts';
 	import HierarchyNode, { type HierarchyData } from './hierarchy-node.svelte';
 
 	let {

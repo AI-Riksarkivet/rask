@@ -1,6 +1,6 @@
 import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
-import type { ApiResult } from '@rask/api/client';
+import type { ApiResult } from '#lib/api/client.ts';
 import type { Store, StoreDraft } from '../storage';
 
 // The stores registry: every object store with the tier it backs, and the attach write. The catalog

@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import type { ApiResult } from '@rask/api/client';
+import type { ApiResult } from '#lib/api/client.ts';
 import { query } from '#lib/reads.svelte.ts';
 
 // The audit trail's read. The trail is the `lance.audit` log every lakehouse service emits over

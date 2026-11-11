@@ -1,7 +1,7 @@
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
-// @sveltejs/package 2.x removed the `package` config key. What ships is controlled
-// by package.json `files` (excludes *.stories.* / *.test.*) + the explicit `exports` map.
+// The preprocessor for this package's own tools (svelte-check, vitest, Storybook). The console compiles
+// the package's source with its own config.
 export default {
 	preprocess: vitePreprocess(),
 };

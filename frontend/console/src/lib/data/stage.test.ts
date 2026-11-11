@@ -13,7 +13,7 @@
  * with authorization about which object a table belongs to, and links the user to a namespace page for
  * an object that is not its parent.
  *
- * The grammar itself lives in `@rask/api/identifiers` and is covered by that package's tests; this
+ * The grammar itself lives in `#lib/api/identifiers.ts` and is covered by its own tests; this
  * file covers only the medallion-stage derivation built on top of it. The delimiter is a constant, not
  * a config read: `chart/templates/services.yaml` sets `LANCE_NS_DELIMITER` to a LITERAL `"$"` with no
  * values.yaml knob, so changing it is a repo edit that ships in the same commit as this constant.

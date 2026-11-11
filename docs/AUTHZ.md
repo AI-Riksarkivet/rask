@@ -1,7 +1,7 @@
 # Who can see and do what in the console
 
 The estate has **two** identity facts, both from the frozen `GET /management/v1/me` contract
-(read through `@rask/api`), both derived from FGA by the catalog:
+(read through the console's `#lib/api`), both derived from FGA by the catalog:
 
 | Fact                         | Type                       | Means                                                                 |
 | ---------------------------- | -------------------------- | --------------------------------------------------------------------- |

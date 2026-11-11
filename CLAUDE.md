@@ -303,13 +303,13 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     `/admin/...`, `/settings/...`, `/workbench`); an admin page's guard is a
     client-side `+layout.ts`, which discloses nothing the catalog's per-request check would not refuse. See
     `.claude/skills/rask-frontend`.
-  - `frontend/packages/ui` — Svelte 5 + Bits UI + Tailwind 4 design system (`@rask/ui`) with Storybook 10. The only
-    frontend package with a build step (`svelte-package` → `dist/`); styled components live here, and the console's
-    `app.css` reads them with an `@source` two `../` up. See `.claude/skills/rask-styling`.
-  - `frontend/packages/api` — `@rask/api`, the typed `/api/*` client the console calls through, with the bearer supplied
-    by a provider the app installs, the lineage client and the OpenAPI types generated from `docs/*-openapi.json`.
-  - `frontend/packages/flow` — `@rask/flow`, the graph views the governance pages draw with. The workbench's dock is
-    the console's own code (`frontend/console/src/lib/dock`, on horizon-layout, ADR 0200).
+  - `frontend/packages/ui` — the workspace's ONE package (ADR 0201): the Svelte 5 + Bits UI + Tailwind 4 design system
+    (`@rask/ui`) with Storybook 10. No build step: its exports name its `src/`, the console compiles it from source,
+    and the console's `app.css` scans it with an `@source` two `../` up. See `.claude/skills/rask-styling`.
+  - The console holds the code only it uses: `console/src/lib/api` (the typed `/api/*` client with the bearer
+    supplied by a provider the app installs, the lineage client and the OpenAPI types generated from
+    `docs/*-openapi.json`), `console/src/lib/flow` (the graph views the governance pages draw with, and the project
+    hierarchy) and `console/src/lib/dock` (the workbench's dock, on horizon-layout, ADR 0200).
 - `tests/` — `tests/unit`, `tests/integration` and `tests/e2e-py` (the live suites) for the lakehouse; the console's
   browser suite is its own Playwright suite (`frontend/console/e2e`).
 - `scripts/` — **all** dev/ops scripts, shell + Python. **No production-state-changing CLIs** — data enters, and moves
@@ -404,7 +404,7 @@ Key facts that aren't obvious from any single file:
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are globbed (`testpaths` names `packages/*/tests`, `services/*/tests` and the three root suites), not discovered from the rootdir.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
 - **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across the console and every package under `frontend/packages`. Prettier is gone.
-- **The JS workspace runs plain bun scripts** (`frontend/package.json`): `build` builds `@rask/ui` then the console, and `check`/`lint`/`fmt`/`fmt:check`/`test` run each package's own script through `bun run --filter '*'`. Add a new JS package's scripts in its own `package.json`; only `knip` stays root-level, because it analyses the whole JS graph at once.
+- **The JS workspace runs plain bun scripts** (`frontend/package.json`): `build` builds the console (which compiles `@rask/ui` from source), and `check`/`lint`/`fmt`/`fmt:check`/`test` run each member's own script through `bun run --filter '*'`. The members are the console and `@rask/ui`; code with one consumer lives in that consumer (ADR 0201). Only `knip` stays root-level, because it analyses the whole JS graph at once.
 - **The console is a client-rendered single-page app, Svelte 5 strict.** Every `.svelte` change is validated with the Svelte 5 skills + the `svelte` MCP autofixer. Its CSP is strict (no `unsafe-eval`): a dependency that builds code at runtime breaks under it, which is why `frontend/patches/` carries an apache-arrow patch.
 - **`ty` is configured with `error-on-warning = true`** — typecheck warnings fail CI.
 - **Comments carry rationale and provenance, never HISTORY** (owner ruling 2026-08-30). Three kinds of

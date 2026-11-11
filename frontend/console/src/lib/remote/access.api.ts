@@ -1,7 +1,7 @@
 import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
-import { fetchMe, type Me } from '@rask/api';
-import type { ApiResult } from '@rask/api/client';
+import { fetchMe, type Me } from '#lib/api/index.ts';
+import type { ApiResult } from '#lib/api/client.ts';
 import { catalogJSON, parsed } from '#lib/doors.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import {

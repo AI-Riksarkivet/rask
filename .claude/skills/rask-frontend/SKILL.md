@@ -1,6 +1,6 @@
 ---
 name: rask-frontend
-description: The console — rask's one SvelteKit 3 + Svelte 5 single-page app in `frontend/` with no backend of its own: its route tree and navbars, browser sign-in (OIDC + PKCE against Dex, tokens in memory, `/config.json`, the CSP `serve.ts` sends), the browser data layer (`reads.svelte.ts`, `*.api.ts`, the bearer provider, same-origin `/api/*` per service), the bell (the reader's own activity log), the `/workbench` dock (horizon-layout), and the gates (oxlint/oxfmt, svelte-check, vitest, the Playwright suite behind `e2e/edge.ts` and a mock issuer). Use when touching any `.svelte` or `frontend/` file, `@rask/api`, `@rask/flow` or `#lib/dock`; when adding a route, a page, a read or write, or a frontend dependency; when wiring nav or a guard; when building a dock or panel; when the bell lists a write wrongly or not at all; or when sign-in loops, a call 401s/404s from the browser, the CSP blocks something, or a frontend gate fails.
+description: The console — rask's one SvelteKit 3 + Svelte 5 single-page app in `frontend/` with no backend of its own: its route tree and navbars, browser sign-in (OIDC + PKCE against Dex, tokens in memory, `/config.json`, the CSP `serve.ts` sends), the browser data layer (`reads.svelte.ts`, `*.api.ts`, the bearer provider, same-origin `/api/*` per service), the bell (the reader's own activity log), the `/workbench` dock (horizon-layout), and the gates (oxlint/oxfmt, svelte-check, vitest, the Playwright suite behind `e2e/edge.ts` and a mock issuer). Use when touching any `.svelte` or `frontend/` file, `#lib/api`, `#lib/flow` or `#lib/dock`; when adding a route, a page, a read or write, or a frontend dependency; when wiring nav or a guard; when building a dock or panel; when the bell lists a write wrongly or not at all; or when sign-in loops, a call 401s/404s from the browser, the CSP blocks something, or a frontend gate fails.
 ---
 
 # rask frontend — the console
@@ -13,7 +13,10 @@ package declares the script.
 
 Workspace membership is **globbed** (`["console", "packages/*"]`), so a `packages/<x>` carrying a `package.json` is
 enrolled automatically and one without it is **silently skipped** — bun prints "Done!" and the package is never
-installed, built or linted.
+installed, built or linted. There are two members (ADR 0201): the console, and `@rask/ui`, the design system, which
+Storybook also builds. Code with one consumer lives in that consumer: the console's API client is `#lib/api`, its graph
+views `#lib/flow`, its dock `#lib/dock`. `@rask/ui`'s `exports` name its `src/`, so the console compiles it from source
+and nothing builds first.
 
 Styling and component authoring live in **`rask-styling`**. Svelte 5 and SvelteKit idioms live in `svelte-skills:*`
 and the `svelte` MCP. This skill is the plane above them: the app, its data, its sign-in, its gates.
@@ -144,7 +147,7 @@ every estate:
 | `/api/catalog` | the catalog | its own paths below the prefix (`/api/catalog/management/v1/me`, `/api/catalog/v1/table/{id}/query`); the catalog strips the prefix itself (`rask.catalogPublicPrefix`) |
 | `/api/lineage` | lineage | `/api/lineage/events?…`, `/api/lineage/admin/dlq…`; the Gateway rewrites the prefix to lineage's root |
 
-**The bearer is attached in one place.** `@rask/api/client` takes a provider the app installs once
+**The bearer is attached in one place.** `#lib/api/client.ts` takes a provider the app installs once
 (`setBearerProvider`, called by `auth.svelte.ts`), and `upstreamJSON` / `requestJSON` send it on every call;
 `#lib/doors.ts::catalogJSON` is the catalog's door over it. The result is the shared `ApiResult` union: 0 unreachable, n
 answered-n with the upstream's `{detail}`, 502 contract drift (a payload that fails its valibot schema).
@@ -176,7 +179,7 @@ callbacks (`@rask/ui` imports nothing from the console): the badge counts entrie
 the panel lists newest first, grouped by day, and can clear the log.
 
 **Liveness rides cursors, not timers.** `#lib/live/tick.svelte.ts` wraps the shared `lineageFeed`/`controlCursor` streams
-of `feeds.api.ts` as `lineageTick`/`controlTick`, read through `liveRead` (`@rask/api/live`), which opens on mount and
+of `feeds.api.ts` as `lineageTick`/`controlTick`, read through `liveRead` (`#lib/api/live.svelte.ts`), which opens on mount and
 treats a cursor's arrival as no change. Data mutations move the lineage cursor; governance mutations (grants,
 warehouses, tenants) move the control cursor. A timer is right only when nothing publishes the change (a liveness probe)
 or time itself is the change (a countdown).
@@ -219,8 +222,7 @@ floating groups and no context menu.
 | loop | command | what runs |
 |---|---|---|
 | UI against the cluster | `make dev-k3s` | reuses :8080 when it already serves the issuer, else port-forwards `kube-system/traefik` 8080:80, waits for `/dex` and `/api/lineage/livez`, runs `vite dev` (:5173) with `/api` proxied there, and stops the forward by PID |
-| UI against an edge you name | `make dev` (`RASK_EDGE_URL`, default `http://localhost:8080`) | builds `@rask/ui`, then `vite dev` on :5173 |
-| the design system live | `bun --cwd=frontend/packages/ui run dev` in a second terminal | `svelte-package -w` for `@rask/ui` |
+| UI against an edge you name | `make dev` (`RASK_EDGE_URL`, default `http://localhost:8080`) | `vite dev` on :5173; an edit to `@rask/ui` reaches it through HMR |
 | Storybook | `make storybook` | `@rask/ui`'s Storybook on :6006 |
 
 `vite.config.ts` serves `/config.json` from `CONSOLE_CONFIG_FILE`, else the committed `frontend/console/dev/config.json`
@@ -229,19 +231,19 @@ issuer that file names. Under `vite dev` SvelteKit sends that `csp` as a header 
 exactly the issuer's origin, as `serve.ts` does for the image; the built app's own policy is untouched. The Vite origin
 (:5173) is cross-origin to Dex on :8080, which answers CORS for it (the Dex fixture's `console.allowedOrigins`). The image is `.docker/frontend.dockerfile`
 (`make console-image` → `web-console:<tag>`, through `dagger call image --name=frontend`): a builder stage builds
-`@rask/ui` and the app, the runtime stage holds only `build/` and `serve.ts`, runs as uid 10001 under tini on :3000, and
+the app (with `@rask/ui` from source), the runtime stage holds only `build/` and `serve.ts`, runs as uid 10001 under tini on :3000, and
 fits a read-only root filesystem.
 
 ## Gates
 
 | command | runs |
 |---|---|
-| `bun --cwd=frontend run build` | `@rask/ui`'s `svelte-package`, then the app's `vite build` |
-| `bun --cwd=frontend run check` | build, then `svelte-check` in every package that declares `check` (the console's twice: the app, then `tsconfig.tools.json` for `serve.ts` and the e2e code) |
-| `bun --cwd=frontend run test` | build, then vitest in every package that declares `test` (`api`, `flow`, `ui`, `console`) |
+| `bun --cwd=frontend run build` | the app's `vite build`, compiling `@rask/ui` from source |
+| `bun --cwd=frontend run check` | `svelte-check` in the console (three times: the app, `tsconfig.tools.json` for `serve.ts` and the e2e code, and `tsconfig.api.json`, which adds `exactOptionalPropertyTypes` to `src/lib/api`) and in `@rask/ui` |
+| `bun --cwd=frontend run test` | vitest in the console (its `#lib/api` suites included) and in `@rask/ui` |
 | `bun --cwd=frontend run lint` / `fmt:check` | oxlint / rsvelte-fmt in every package |
 | `bun --cwd=frontend run knip` | the whole JS graph at once (`knip.json`) |
-| `bun --cwd=frontend run test:e2e` | builds, then the console's Playwright suite |
+| `bun --cwd=frontend run test:e2e` | the console's Playwright suite, which builds the app |
 | `make frontend-check` | check, lint, fmt:check, test and knip |
 | CI | `dagger call frontend` (check, test, lint, fmt:check, every one run and the job failing if any did) and `web-e2e` (`test:e2e`) |
 
@@ -264,8 +266,8 @@ bypass in the app. Ports are declared in `e2e/ports.ts` and `e2e/admin/ports.ts`
 browser makes can also be stubbed per spec with `page.route`, except in a spec that opens a popout: with a route on the context, Playwright holds the stylesheet requests of a window opened as `about:blank`, and the window renders unstyled for a reason the app does not have (measured 2026-11-11, Playwright 1.65).
 
 **TypeScript.** `strict` and `noUncheckedIndexedAccess` are on in the app (`frontend/console/tsconfig.json`);
-`exactOptionalPropertyTypes` only in `@rask/api`, and it stays off in Svelte code for an upstream reason (Bits UI "union
-too complex"). The app's `tsconfig.json` extends `$app/tsconfig` and covers `src`; the console's `check` runs
+`exactOptionalPropertyTypes` stays off for an upstream reason in Svelte code (Bits UI "union too complex"), and is on for
+the API client (`tsconfig.api.json`). The app's `tsconfig.json` extends `$app/tsconfig` and covers `src`; the console's `check` runs
 `svelte-check` a second time with `tsconfig.tools.json`, which type-checks the code that runs under Bun and Playwright
 rather than in the browser (`serve.ts`, `playwright.config.ts`, `e2e/**`, with `types: ["bun"]`). Validation is
 **valibot**.
@@ -282,7 +284,7 @@ connects) until it reports clean.
 
 ## Staying on-stack
 
-Animation → **GSAP** via `{@attach}`. Charts → **LayerChart**. Graph editors → **Svelte Flow** via `@rask/flow`.
+Animation → **GSAP** via `{@attach}`. Charts → **LayerChart**. Graph editors → **Svelte Flow** via `#lib/flow`.
 Components → `@rask/ui`. Validation → **valibot**. Sign-in → **oidc-client-ts**. A dependency that duplicates the stack is
 a no; extend the stack instead.
 

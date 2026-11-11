@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 
 /**
- * Strict boundary parse for @rask/api responses (parse-don't-validate, §7 of the
+ * Strict boundary parse for `#lib/api` responses (parse-don't-validate, §7 of the
  * frontend canon). Untrusted upstream JSON is parsed ONCE here into a typed, trusted
  * value; downstream code then trusts the type. Documented nullability quirks
  * (`error: null`, `metadata: null`, …) are encoded in the schemas themselves — every

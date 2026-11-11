@@ -1,4 +1,4 @@
-import type { ApiResult } from '@rask/api/client';
+import type { ApiResult } from '#lib/api/client.ts';
 import { query } from '#lib/reads.svelte.ts';
 import type { JetStreamOverview } from '../jetstream';
 

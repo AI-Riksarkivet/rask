@@ -1,4 +1,4 @@
-// @rask/api/lineage — the typed browser client for the lineage plane (`/api/lineage` through the Gateway).
+// #lib/api/lineage — the typed browser client for the lineage plane (`/api/lineage` through the Gateway).
 //
 // It covers what the console reads from lineage: the event feed and the DLQ admin pair. One client,
 // parameterised by a transport that carries the base path and the person's bearer.

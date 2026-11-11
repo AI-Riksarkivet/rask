@@ -5,16 +5,11 @@ Svelte 5 component library. Bits UI primitives + Tailwind 4 + Storybook.
 ## Develop
 
 ```bash
-bun run --cwd packages/ui dev         # svelte-package -w
 bun run --cwd packages/ui storybook   # localhost:6006
 ```
 
-Or from the repo root:
-
-```bash
-bun run dev:ui
-bun run storybook
-```
+There is no build step: the package's `exports` name `src/`, and the console compiles it from source,
+so an edit reaches `bun --cwd=frontend run dev` through Vite's HMR.
 
 ## Consume from a SvelteKit app
 
@@ -28,7 +23,7 @@ bun run storybook
 ```
 
 Import from the per-component subpath exports (never the root barrel or a deep
-`@rask/ui/dist/...` path):
+`@rask/ui/src/...` path):
 
 ```svelte
 <script lang="ts">
@@ -45,8 +40,8 @@ In the app's CSS:
 @import 'tw-animate-css';
 @import '@rask/ui/styles/tokens.css';
 
-/* Tailwind 4 skips node_modules — scan @rask/ui/dist or its classes vanish. */
-@source '../../packages/ui/dist';
+/* Tailwind 4 skips node_modules — scan @rask/ui's source or its classes vanish. */
+@source '../../packages/ui/src';
 ```
 
 ## Adding a component
