@@ -93,9 +93,10 @@ from catalog.core.vending import (
     vend_or_refuse,
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import commit_reconcile, dataplane, native, table_bases, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, commit_reconcile, dataplane, native, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import base_registry, location_claims, object_records, protection, trash
+from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -751,6 +752,8 @@ async def drop_table(
     # table's warehouse's delete profile, else the estate's (ADR 0146).
     grace = 0.0 if purge else await trash_doors.drop_grace_days(settings, segments)
     trashed = grace > 0
+    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+    ending: CloneEnding | None = None
     try:
         if trashed:
             # RECORD FIRST, DETACH SECOND (diff2 F6 leg a). This was deregister-then-record, and a
@@ -790,7 +793,17 @@ async def drop_table(
         else:
             # [[LH-532]] The bytes go at the location this door resolved, at the key Lance opens, never where the
             # backend's own drop looks: the backend removes only the row. RECORD FIRST here too: a residue record is filed
-            # before the row goes and cleared once the bytes are, so bytes a failed delete leaves keep their claim.
+            # before the row goes and cleared once the bytes are, so bytes a failed delete leaves keep their claim. A clone's
+            # ending is filed once every judgement has passed, right before the row goes (ADR 0198 §1), so a refusal files
+            # none: its tags are released after the row is gone, by this door or, when that fails, by maintenance's audit.
+            filed: list[CloneEnding] = []
+
+            def _file_the_ending() -> None:
+                if (
+                    found := clone_endings.file_ending(registry, claims, location, table=canonical, forget_record=True, door="drop", filing=fenced.token)
+                ) is not None:
+                    filed.append(found)
+
             response = await run_in_threadpool(
                 partial(
                     dataplane.destroy_table,
@@ -803,13 +816,17 @@ async def drop_table(
                     namespace_uuid=known.namespace_uuid,
                     control=claims,
                     dropped_by=f"user:{token.subject}" if token is not None else None,
+                    before_removal=_file_the_ending,
                 )
             )
+            ending = filed[0] if filed else None
     except dataplane.TableBytesLeftError:
         # The row is gone and bytes remain: the claim stays held, kept by the residue record once the fence lapses, the
         # grants stay, and nothing announces a drop that did not finish. The trash purge reclaims the objects.
         raise
     except Exception:
+        # An ending filed before a failure stays: a describe cannot tell whether the row the failure followed is still
+        # the clone's, and the finish judges it on its own reads once the claim's lease has passed.
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
     if trashed:
@@ -818,10 +835,11 @@ async def drop_table(
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
     else:
         # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
-        # table registered at this location. The location's claim goes too ([[LH-204]]).
-        registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+        # table registered at this location. The location's claim goes too ([[LH-204]]), and the clone's ending last.
         await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
         await run_in_threadpool(location_claims.release, claims, location, canonical)
+        if ending is not None:
+            await run_in_threadpool(clone_endings.clear_ending, claims, ending)
     # What was kept for the table under its uuid ends with it ([[LH-523]]); a table created later at this name holds
     # another uuid, so nothing left here could govern it. A recoverable drop keeps its maintenance policy for the undrop,
     # as it keeps its grants, and the trash purge ends both. Its protection goes now, because the drop it guarded has
@@ -954,7 +972,15 @@ async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, 
     canonical = fga.canonical_object_id(segments)
     claims = table_claims.claim_store(settings)
     fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="deregister"))
+    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     try:
+        # A clone's ending is filed before its row goes (ADR 0198 §1), so a tag release that fails below is finished by
+        # maintenance's audit rather than left for good: the row it would be re-issued against is gone by then. One filed
+        # before a failed native call stays too: a describe cannot tell whether the row the failure followed is still the
+        # clone's, and the finish judges it on its own reads once the claim's lease has passed.
+        ending = await run_in_threadpool(
+            partial(clone_endings.file_ending, registry, claims, fenced.location, table=canonical, forget_record=False, door="deregister", filing=fenced.token)
+        )
         response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
     except Exception:
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
@@ -963,17 +989,18 @@ async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, 
     # §1), and then the id's claim on them ([[LH-204]]): the base record stays, for the bytes it describes. The tags go
     # first, while the fence still holds the location, so no clone registered there meanwhile can hold a tag of the same
     # name, and a tag that cannot be deleted leaves the location held rather than free with the tag standing.
-    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     try:
         await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, holder=canonical))
     except (OSError, ValueError, base_registry.UnreadableBaseRecordError) as exc:
         log.error("deregister_clone_tags_kept", extra={"table": canonical, "location": fenced.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
         raise PartiallyApplied(
-            f"table {canonical} was detached, and its tag on a table it clones could not be deleted: its location stays held, and the "
-            "tag keeps that table from being destroyed until the clone is registered and deregistered again",
+            f"table {canonical} was detached, and its tag on a table it clones could not be deleted: its location stays held, and "
+            "maintenance's hourly audit releases the tag and the location from the record of the clone's end this door filed",
             problem_extra={"table": canonical, "detached": True},
         ) from exc
     await run_in_threadpool(location_claims.release, claims, fenced.location, canonical)
+    if ending is not None:
+        await run_in_threadpool(clone_endings.clear_ending, claims, ending)
     return response
 
 
@@ -1238,7 +1265,9 @@ async def register_table(
     async def _free_location() -> None:
         # The location's claim goes with the row; one another table holds is not this registration's to free.
         # The records kept under this request's uuid go last, once no table holds it.
-        await run_in_threadpool(location_claims.release, claims, claimed_location, canonical)
+        # Only the claim this registration took, under the uuid it minted: a take refused (another request's fence) took
+        # none, and the claim standing there is another table's under the same name.
+        await run_in_threadpool(partial(location_claims.release, claims, claimed_location, canonical, uuid=table_uuid))
         await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
 
     async def _detach() -> None:
@@ -1261,6 +1290,9 @@ async def register_table(
         except location_claims.LocationHeldError as held:
             log.warning("register_refused_held_location", extra={"table": id, "location": held.claim.location, "holder": held.claim.table})
             raise table_bases.occupied_location_refusal(body.location) from None
+        # Holding the claim, so of this registration and the finish of an ending at the location, the second sees the first
+        # (ADR 0198 §1): the clone that ended here may hold tags of the very names this one would take.
+        await run_in_threadpool(clone_endings.refuse_registration_while_ending, claims, claimed_location)
         verdict = await run_in_threadpool(table_bases.judge_registered_table, ns, so, segments, body.location, context)
         # The sources judged on the registered dataset are the ones its caller was asked for: one that differs (the source
         # changed hands meanwhile) was asked of no one, and is refused as one the caller may not tag.

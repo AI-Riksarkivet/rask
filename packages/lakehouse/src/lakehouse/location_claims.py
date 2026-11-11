@@ -412,13 +412,17 @@ class _NotHeld(Exception):
     """The claim a lift read carries no fence of its request's."""
 
 
-def release(store: ClaimStore, location: str, table: str) -> bool:
+def release(store: ClaimStore, location: str, table: str, *, uuid: str | None = None) -> bool:
     """Release ``table``'s claim on ``location``; ``False`` when it held none.
 
     A claim held by another table is left alone: the release is the holder's, and a drop of an id that
     never held the location must not free it for a third. The claim is replaced by its released form
     only under the ETag it was read with, so a claim another taker wrote after that read is judged
     afresh, and left.
+
+    ``uuid`` names the table the caller owns the claim for: given, only a claim recording that uuid is released. A name
+    is not an owner: a table registered again under the same name at the same location takes the claim under a uuid of
+    its own, and a release by name alone, landing after that take, frees the new table's location while it stands.
 
     Raises:
         records.RecordChangedError: The claim kept changing under the release.
@@ -431,7 +435,7 @@ def release(store: ClaimStore, location: str, table: str) -> bool:
         if found.stored is None:
             return False
         current = LocationClaim.model_validate(found.stored.record)
-        if current.released_at is not None or current.table != table:
+        if current.released_at is not None or current.table != table or (uuid is not None and current.uuid != uuid):
             return False
         released = current.model_copy(update={"released_at": found.at}).model_dump(mode="json")
         try:

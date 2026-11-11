@@ -94,7 +94,7 @@ from catalog.schemas import (
     WarehouseNamespacesResponse,
     WarehouseResponse,
 )
-from catalog.services import dataplane, native, object_uuids, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, dataplane, native, object_uuids, table_claims, trash_doors, warehouses
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
@@ -1025,7 +1025,7 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, bound: list[
     return subtrees
 
 
-async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[str], *, purge: bool) -> bool:
+async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[str], *, purge: bool, table_uuid: str) -> bool:
     """Detach one table from the catalog, its bytes left in place; ``False`` when it was already gone.
 
     DETACH, NOT DROP: this door takes bytes only on ``?purge_bucket=true``, and that holds for the tables in its
@@ -1037,22 +1037,54 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     A purge deletes the table's data directories BEFORE the deregister ([[LH-286]]): they are on approved bases, which
     the bucket purge does not reach, and the deregister is the step a re-issued call can no longer see past, so a delete
     that fails leaves the table registered for the re-issue to detach again.
+
+    ``table_uuid`` is the uuid the cascade identified the table by before it changed anything: the cascade holds no fence
+    between the row's removal and the claim's release, so the release frees only a claim recording it, never one the same
+    name took at the location meanwhile.
     """
     canonical = fga.canonical_object_id(segments)
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-    if purge:
+    claims = table_claims.claim_store(settings)
+    try:
+        described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
+    except TableNotFoundError:
+        return False
+    # A clone's ending is filed before anything changes (ADR 0198 §1), so a filing that fails refuses with every byte and
+    # the row in place, and a tag release failing below is finished by maintenance's audit, where a re-issued cascade
+    # would no longer list the clone it belongs to.
+    ending = (
+        await run_in_threadpool(
+            partial(
+                clone_endings.file_ending,
+                registry,
+                claims,
+                str(described.location),
+                table=canonical,
+                forget_record=purge,
+                door="warehouse_cascade",
+                filing=uuid.uuid4().hex,
+            )
+        )
+        if described.location
+        else None
+    )
+    if purge and described.location:
         try:
-            described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-        except TableNotFoundError:
-            return False
-        if described.location:
             await run_in_threadpool(
                 partial(data_directories.delete_table_directories, registry, described.location, table=canonical, storage_options=settings.storage_options())
             )
+        except Exception:
+            # This request has not touched the row, so the clone's holds are its own still.
+            if ending is not None:
+                await run_in_threadpool(clone_endings.clear_ending, claims, ending)
+            raise
     try:
         detached: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
     except TableNotFoundError:
+        # Another request removed the row: its own end, or this ending's finish, releases what the clone held.
         return False
+    # Any other failure of the native call leaves the ending: a describe cannot tell whether the row it followed is still
+    # the clone's, and the finish judges it on its own reads once the claim's lease has passed.
     if detached.location:
         # What the catalog promised a clone among the bytes ends before the location's claim does, as at the deregister
         # door: a tag that cannot be deleted leaves the location held, and no clone registered there can hold its name.
@@ -1060,7 +1092,9 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
             await run_in_threadpool(partial(base_registry.forget_base_record, registry, detached.location, table=canonical))
         else:
             await run_in_threadpool(partial(base_registry.release_clone_sources, registry, detached.location, holder=canonical))
-        await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), detached.location, canonical)
+        await run_in_threadpool(partial(location_claims.release, claims, detached.location, canonical, uuid=table_uuid))
+    if ending is not None:
+        await run_in_threadpool(clone_endings.clear_ending, claims, ending)
     return True
 
 
@@ -1265,10 +1299,11 @@ async def delete_warehouse(
             trash_ended.append(f"{kind}:{canonical}")
         if ns_conn is not None:
             for subtree in subtrees:
+                identified = {tuple(item.segments): item.uuid for item in subtree.descendants if item.kind == "table"}
                 for table in subtree.tables:
                     # What the announcement names the table by, read while it still stands (ADR 0173 §10).
                     known = await uuids.table(table)
-                    if await _detach_table(ns_conn, settings, table, purge=purge_bucket):
+                    if await _detach_table(ns_conn, settings, table, purge=purge_bucket, table_uuid=identified[tuple(table)]):
                         tables_removed.append(fga.canonical_object_id(table))
                         await namespaces_api._announce_removed(  # noqa: SLF001 — one announcement, deliberately
                             emitter,

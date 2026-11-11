@@ -76,9 +76,10 @@ The four rows were built as one (owner, 2026-11-08), and building them settled w
   delivery's late ack, which frees the table's task under another replica's pass. A settle the network itself holds
   past the lease (a silent partition that heals, a stalled node that resumes) is still applied late, so a pass also
   holds a claim on its table in the MAINTENANCE_CLAIMS key-value bucket: created only where none stands, renewed by
-  revision with each heartbeat, released only by its holder's revision, and gone one ack wait after its last renewal.
-  A pass that finds another's claim waits it out, and a stale holder's late renewal or release cannot match the
-  revision standing (measured on nats-server 2.15.2, three nodes, R3, 2026-11-09). The owner asked for it to be fixed
+  revision with each heartbeat, released only by its holder (at the revision it holds, or, where a renewal the bus
+  applied lost its answer, at the revision its own token stands at, the heartbeat ended first), and gone one ack wait
+  after its last renewal. A pass that finds another's claim waits it out, and a stale holder's late renewal or release
+  cannot match the revision standing (measured on nats-server 2.15.2, three nodes, R3, 2026-11-09). The owner asked for it to be fixed
   rather than documented (2026-11-09), though two cleanups of one table at once were measured harmless (pylance 13.0.0:
   60 rounds on disk and S3, no table harmed). A heartbeat-extended deadline survives a consumer leader change (measured: a
   task redelivered at the extended deadline after a step-down). A pass is a thread nothing can
@@ -86,10 +87,15 @@ The four rows were built as one (owner, 2026-11-08), and building them settled w
   which has no work without the bus and may wait out a crash-loop backoff once it is back. For the same reason a stopping
   replica whose drain ends with a pass still running ends there, and a task is only ever run off the pull it answered:
   each pull has a subscription of its own, so a pull a reconnect held back, answered after the worker gave up on it,
-  delivers to an inbox no one reads. A pass past twice `maxPassSeconds` ends its replica, and a task that
+  delivers to an inbox no one reads. A pass past twice `maxPassSeconds` ends its replica, as does a heartbeat that ends by an error nothing expected, and a task that
   outlives its worker on every one of `maxDeliver` deliveries is ended unrun on one more, which the consumer allows. The
-  backstop is the hourly audit, which opens no table and queues each table whose schedule was lost; the orphan scan and the
-  trash purge run once a day (owner, 2026-11-09).
+  backstop is the hourly audit, which opens no table and queues each table whose schedule was lost, and each trash record
+  still to be released (one released, or carrying no deadline, has no task to run); the orphan scan and the trash purge
+  run once a day (owner, 2026-11-09). The stream Job reads MAINTENANCE_SCHEDULES back and fails unless it allows message
+  schedules: a server older than 2.12 drops the field and reports the stream created (measured, nats-server 2.11.10,
+  2026-11-10), after which no schedule fires. A pass reads the trash again once it holds the table's history fence, before
+  it reclaims; the catalog's drop door takes no fence (decided 2026-11-10: a drop refused while maintenance cleans costs
+  more), so a drop landing after that read is followed by one cleanup under the table's own policy.
 - **Decision 3, the store's events.** Only writes are acted on: a write under a table holds that table's follow-up, and
   the pass checks every file its commits recorded against one listing of the table's root, rather than a HEAD per file.
   A delete is not acted on: a recorded file deleted while a retained version names it breaks every read at once, and the
@@ -130,7 +136,7 @@ Measured 2026-11-09:
   other after the ack wait.
 
 What still grows with a table is Lance's own cleanup accounting: a pass reads each retained version's manifest
-(`explain_cleanup_old_versions` and `versions`, [[LH-562]]), three reads a version, bounded by the table's retention.
+(`explain_cleanup_old_versions` and `versions`, [[LH-562]]), bounded by the table's retention: a pass opens each dataset once before its expiry and once after, and counts once where it holds no vend (measured on moto 2026-11-10: 50 requests for a commit's pass of a table of 4 versions, 155 for one of 25).
 Deriving the counts from a listing of `_versions/` instead would replace Lance's own answer, which LH-562 chose so that
 the threshold counts exactly what cleanup deletes.
 
@@ -312,3 +318,172 @@ coverage-gap skip had been the only thing refusing it; a check lists its table a
 100,000 listed files, since a ceiling on the referenced files alone does not see what a writer that never commits
 leaves (measured: 1.4 KiB held per unreferenced file); and the audit holds a missing check only where none is held
 (`schedule_first`), so it cannot replace the next time a check that fired meanwhile has just held.
+
+## Amendment, 2026-11-10: the queue can be seen ([[LH-494]], #638)
+
+What the queue does is now measured, and alerted on (`deploy/alerting/rules.yml`, group `maintenance`). Counted by the
+worker: a task handed back after its run failed (`maintenance.tasks.retried`, by kind), a completed task's time from the
+claim on its table to its acknowledgement (`maintenance.tasks.duration`), how each store event was settled
+(`maintenance.store_events.settled`: held, ignored, retried, unreadable, ended) and a fired schedule the queue refused
+(`maintenance.schedules.not_queued`). Sampled each minute by one more supervised loop of the worker
+(`maintenance.services.queue.sample_queue`): each of the three streams' message count, the oldest message's age on
+MAINTENANCE_TASKS and STORE_EVENTS, and each durable's deliveries awaiting an ack and redeliveries. The worker's bus user
+gained exactly the three reads that needs it lacked: STORE_EVENTS's stream info and its three durables' consumer info.
+The alerts: a task waiting six hours of the 24 the stream keeps it (`MaintenanceTaskAging`), a store event ended or
+unreadable (`MaintenanceStoreEventsEnded`), store events at 90 % of their durable's delivery ceiling
+(`MaintenanceStoreEventsStuck`), and a refused move standing an hour (`MaintenanceSchedulesNotQueued`). The counters and
+the sampler are proved on the bus lane, the sampler under the grants the render issues.
+
+Not built, and stated: an alert on one replica crash-looping (pod restarts are kube-state-metrics', the platform's, which
+this rules file reads nowhere); an operator's view of a task's history, a dead-letter of ended tasks, and a way to cancel
+a task.
+
+A governed bucket without store events is reported (the reporting half of decision 4). Measured on RustFS 1.0.3
+(2026-11-10, a throwaway store booted through Dagger with a NATS notify target): `GetBucketNotificationConfiguration`
+answers a bucket's configuration as it was put and an empty one for a bucket with none; the action checked is
+`s3:GetBucketNotification` on the bucket's own resource (a user granted it on one bucket is refused 403 on another, and
+`s3:GetBucketNotificationConfiguration` is refused as no action); maintenance's canned policy as it stood was refused 403
+on every bucket. So the hourly audit, with events expected (the development store, whose fixture configures them, or
+`objectStore.events.provisioned`), asks for every governed bucket's configuration (the configured buckets and every
+active warehouse's), and counts each bucket once per audit on the counter `maintenance.store_event_buckets.checked` by
+outcome: `configured`, `without` (no `s3:ObjectCreated:*` rule over the whole bucket, logged by name) or `unknown` (the
+store refused or failed the read, logged with the error, never counted as configured). A counter, because it sums across
+replicas, whichever runs an audit, and stops rising within two hours of a fix; and `unknown` alerts
+on its own, because a store refusing the read on every bucket otherwise reported nothing missing
+(`maintenance.services.bucket_events`; alerts `MaintenanceBucketWithoutStoreEvents` and
+`MaintenanceBucketStoreEventsUnknown`, each on its outcome's two-hour increase; changed in the final review of the
+second change, 2026-11-10).
+Maintenance's canned policy gained `s3:GetBucketNotification` on every bucket, since the warehouse buckets are made at
+runtime and no render names them. Not measured, and stated: the answer proves the configuration, not delivery. RustFS
+took a rule naming a target it does not have (`arn:rustfs:sqs::nosuch:nats`) and answers it back as configured, and refuses
+any rule while it has no notify target at all; whether a configured target's events reach `store.events` stays the
+table's daily recheck's to back up. The event body the worker parses is stated where a platform store's operator reads it,
+under `objectStore.events` in the chart's values.
+
+## Amendment, 2026-11-10: a clone's end is finished from the record its door filed ([[LH-494]], #638)
+
+**The defect.** Every door ending a registered clone removed the clone's row before it released the tag the clone holds
+on each source (§1): deregister (`tables._detach`), a destructive drop (`drop_table`, `dataplane.destroy_table` then
+`forget_base_record`), a namespace's destroying cascade (`namespaces._destroy_subtree`) and a warehouse cascade
+(`warehouses._detach_table`). A store error on a source's `_refs/tags`, or the process dying, between the two left the
+tag for good: a re-issued call answered 404, the row being gone, and the source stayed undestroyable. A re-issued
+namespace cascade was worse: with the clone gone from the listing, its stranded tag read as a clone outside the subtree,
+and the cascade was refused 409 `ReadFromOutsideError` for ever.
+
+**The decision** (owner, 2026-11-10, through the multi-question tool: "Intent record"). Before a door removes a clone's
+row it files the clone's ENDING (`lakehouse.clone_endings`, filed by `catalog.services.clone_endings.file_ending`): the
+clone's location as the door read it, its table id, the uuid its claim recorded, each source root its base record names
+as `derived_from`, and whether its base record goes with its bytes (a destructive drop, a destroying cascade, a purging
+warehouse cascade) or stays for bytes left in place (deregister, a warehouse cascade keeping its bucket). A failure to
+file refuses the door 503 code 17 before anything changes. A destructive drop and a destroying cascade file it through
+`dataplane.destroy_table`'s `before_removal`, once every judgement of the drop has passed and right before the row goes,
+so a refusal files nothing; a deregister and a warehouse cascade file it before they change anything. The door then
+removes the row, releases the tags and the claim as before, and removes the ending last. A table that is no clone files
+none. A door whose native call failed leaves the ending, whatever the failure: a describe cannot tell the clone's row
+from one the same name registered at the location since (a registration between its native register and its claim's
+take), so a door that judged by one could remove the ending of a clone whose row was gone and strand its tags. The one
+ending a door removes after a failure is the warehouse cascade's, when the data-directory delete that precedes its
+native call fails: that request never touched the row.
+
+**No request releases a claim another table holds.** `location_claims.release` takes the uuid its caller owns the
+claim for and, given one, frees only a claim recording it. The register door's undo passes the uuid it minted, so a
+registration whose take was refused (another request fences the claim) frees nothing; the finish passes the uuid of the
+claim it fenced; and the two cascades, which hold no fence between a table's row removal and its claim's release, pass the
+uuid they identified the table by, so a same-name registration taking the location there keeps it. The other releases
+own their claim another way: the drop door and deregister release by name under their own fence, which refuses every
+other take while it stands; the create and declare undos act on a location named after a uuid they minted, which the
+register door refuses to attach; data-directory claims record no uuid, and are released by name by the table the
+location's claim names; and `lakehouse.trash.end` releases a claim the trash record keeps from every other take. A
+release by name alone, landing after a same-name take, would leave a live table at a released location, open to a second
+id over the same bytes.
+
+**One object per filing, deleted once ended.** `_clone_endings/<sha256 of the decoded location>/<filing token>.json`:
+the digest the location's claim and the tag are keyed by, and the filing request's token. Each object has one writer,
+its door, and one other actor, a finish, which marks it under the ETag it read before acting. So an ending filed again
+at the location is another object, never acted on by a finish that read an earlier one, and an ended ending is removed
+with a plain delete: the estate asks no conditional delete of its store, and an object no one else writes needs none.
+The listing is one list request, whatever was ended before: measured on a moto server, the first design (records
+stamped `cleared_at` and kept) cost 21 requests for 10 cleared endings and 201 for 100 (a HEAD and a GET each, and the
+listing); this one costs 1 for 10 and 1 for 100, and 1 with one standing beside 100 ended.
+
+**Who finishes it.** Maintenance's store policy writes no source's `_refs/tags` and gains nothing. The catalog serves
+`GET /management/v1/clone-endings` (each ending standing, by digest and filing) and `POST
+/management/v1/clone-endings/{digest}/{filing}/finish`, both on `can_reclaim_trash` on the estate root, the `reclaimer`
+role the chart's bootstrap hook already grants maintenance for the trash doors: no new relation and no new grant. Each
+finish is recorded on the audit trail (`clone_ending_finish`, success or failure, the caller and the ending). The hourly
+audit (and the daily scan, which share the step) lists them and asks the finish for each; a refusal is logged by the
+ending's id at WARNING (`clone_endings_result`) and asked again next run, never fatal.
+
+**The finish's judgement**, on its own reads (`catalog.services.clone_endings.finish`), and only on the claim it read:
+
+- nothing until a claim's `LEASE` (15 min) has passed since the filing, the time a door's own fence holds the claim
+  (409 code 19); the ending is then marked by this finish under the ETag it read, and a second finish refuses while that
+  mark is younger than `LEASE` (409 code 19); an ending written since the read answers 409 code 14;
+- the location's claim held for another uuid than the ending's: another table's location now (a registration between
+  its claim and its refusal, below), so nothing is released and the ending stays (409 code 19);
+- held for the clone, which stands there (`table_claims.holder_stands`: it resolves to the location, or the trash keeps
+  it there; a read that fails raises, where `holder_is_gone` answers "not gone"): the door never removed it, or is still
+  at work (a destructive drop deleting a large clone's bytes keeps its residue record meanwhile), so nothing is released
+  and the ending stays (409 code 19). Once `STANDING_BOUND` (a day) has passed since the filing, the clone is taken to
+  stand for good, its own end owning its holds, and the ending is removed with nothing released; so an ending a door
+  left without removing its clone (it crashed before its native call) is not asked about for ever;
+- held for the clone, which no longer stands: the finish FENCES the claim under the ETag it read
+  (`location_claims.fence`), so no registration takes the location while it acts; a claim that moved since the read
+  answers 409 code 14 with nothing released;
+- released or absent: nothing to fence; a registration taking the location meanwhile refuses itself while the ending
+  stands.
+
+Then each source's tag is deleted through Lance's tag API (a source whose dataset is gone holds none), the base record
+is forgotten where the door said, the fenced claim is released, and the ending removed last; a finish failing part-way
+lifts its fence and leaves the ending for the next. The finish commits no table version and announces nothing, as the
+doors' own tag release announced nothing.
+
+**A registration at a location where an ending stands is REFUSED, 409 code 14** ("a clone's hold at this location is
+still being released"), asked once the registration holds the location's claim (`refuse_registration_while_ending`).
+Adopting the ending instead (removing it, since the new clone's `take` rewrites a tag of the same name) was the other
+choice, and cannot be made safe: the new clone may read other sources than the old one did, whose tags would then stand
+for no one, and a finish already past its judgement would delete the tags the new clone has just taken. With the
+refusal, of a registration and a finish the second sees the first, and a finish acting on the clone's claim holds it
+fenced, so no finish releases a new clone's tags or its claim. Create and declare cannot reach a location an ending
+names: they lay a table out at `<namespace root>/<a uuid they mint>` (`dataplane.declare_table`), and the register door
+refuses a location whose first segment is spelled as a uuid (`identifiers.is_spelled_as_a_uuid`), so no registered
+clone, and no ending, is at one.
+
+The design as first written had a standing table of any identity clear the ending and release nothing, cleared the
+ending of a standing clone at once, released the claim by name on an unfenced read, and kept every ended ending. A
+review round (2026-11-10) found each could release a live clone's hold, or strand one, or grow the listing for ever.
+
+**Accepted costs.** A native call that failed and left the row keeps its ending: the finish answers 409 at every audit
+while the clone stands, until `STANDING_BOUND`, and then removes it with nothing released. A door retried after a
+failure files a second ending and removes its own, so the first stands until the next audit's finish (at most an hour
+past `LEASE`), and a registration at the location is refused meanwhile. An ending whose clone a later door ended since
+(a drop that failed with its row in place, then a deregister) releases nothing that door left held, and forgets no base
+record of bytes that still stand: the finish forgets the record only where the ending says the bytes were to go AND no
+Lance dataset stands at the location (`objectfs.is_lance_dataset_root`, at the key the location decodes to; a store that
+cannot answer fails the finish closed). A purging warehouse cascade whose base-record step failed after its row went
+keeps the record if the finish runs before a re-issued cascade purges the bucket, and nothing forgets it afterwards; no
+worse than before, when the record and the tag both stayed. Once the bucket is gone the store answers that no dataset
+stands (measured on moto: a location in a deleted bucket reads as no dataset) and the finish forgets it.
+
+**What stays unfixed, by design.** A request stalled for longer than `LEASE` while it acts can be overtaken: a finish
+judges an ending once `LEASE` has passed since its filing, as any take judges a fence once `LEASE` has passed since it
+was set. A door acting on one clone for longer than `STANDING_BOUND` between filing and removing its ending could have the
+ending removed under it. A clone kept in the trash under `trashPurge: false` keeps its holds: its trash record ends them
+(`lakehouse.trash.end`), and that is the purge's switch. Pinned by
+`test_a_clones_end_that_cannot_delete_its_tag_is_finished_by_maintenance` (deregister, a destructive drop, a destroying
+namespace cascade), `test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location_until_the_finish` (the
+warehouse cascade), `test_a_door_refused_before_its_row_would_go_files_no_ending`,
+`test_a_finish_keeps_the_base_record_of_bytes_a_later_deregister_left_in_place`,
+`test_a_purging_cascade_whose_clone_ending_cannot_be_filed_deletes_nothing`,
+`test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_never_reached_the_row`,
+`test_a_registration_refused_by_another_requests_fence_releases_nothing`,
+`test_a_destroying_cascade_releases_only_the_claim_of_the_table_it_identified`,
+`test_a_cascade_releases_only_the_claim_of_the_table_it_identified`,
+`test_a_release_naming_its_uuid_leaves_a_claim_the_same_name_took_since`,
+`test_a_finish_releases_nothing_when_the_clones_claim_moved_after_its_read`,
+`test_a_finish_leaves_the_ending_of_a_clone_its_door_is_still_ending`,
+`test_a_door_whose_native_call_was_attempted_leaves_its_ending_for_the_finish`,
+`test_a_finish_that_may_not_act_releases_nothing_and_leaves_the_ending`,
+`test_a_registration_while_a_clones_ending_stands_is_refused_until_it_is_finished`,
+`test_the_audit_asks_the_catalog_to_finish_every_clones_ending_it_lists` and the two doors' rows in
+`test_a_door_the_router_leaves_open_decides_for_itself.py`.

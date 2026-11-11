@@ -55,6 +55,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 | Warehouse purge: DeleteObjects then DeleteBucket (R13) | not measured |
 | Session policy at the 2,048-byte boundary (R5) | source only (`rustfs@1.0.3:rustfs/src/admin/service/session_policy.rs:34-39`) |
 | AssumeRoleWithWebIdentity for a Kubernetes-shaped token, granted the canned policy its `sub` names; another account's, another audience's, an expired, forged or other-issuer token refused (R18) | measured on 1.0.3 with a stand-in issuer, 20 of 20 (`scripts/rustfs_web_identity_measure.py`) |
+| `GetBucketNotificationConfiguration` answers a bucket's event configuration as it was put (empty for none), checked as `s3:GetBucketNotification` on the bucket; a rule naming a target the store lacks is taken and answered back, and no rule is taken while the store has no notify target (maintenance's hourly audit, ADR 0198) | measured on 1.0.3, 2026-11-10; the `rustfs-provisioning` lane reads it under maintenance's rendered policy |
 | Conditional writes exclusive across nodes (multi-node) | source only: the precondition is re-checked under a namespace write lock that, on a distributed store, needs a majority of the set's lockers (`rustfs@1.0.3:crates/ecstore/src/set_disk/ops/locking.rs:46-61`); not measured |
 
 ## 3. The zero-trust model rask relies on

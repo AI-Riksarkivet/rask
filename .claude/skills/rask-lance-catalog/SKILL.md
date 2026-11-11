@@ -479,7 +479,7 @@ governing their data. The project-scoped surface is the console's project page, 
   uuid, never by its name, so it reclaims a trashed table while a table created since under the name stands. Pinned
   by `services/catalog/tests/test_an_undrop_restores_the_trashed_table_its_caller_names.py` and
   `tests/integration/test_maintenance_finds_a_table_under_the_spelling_the_catalog_records.py`. A table's pass never
-  touches a trashed table (`table_pass.run_table_pass` ends on `trash.keeps`); within maintenance only the daily scan's
+  touches a trashed table (`table_pass.run_table_pass` ends on `trash.keeps`, and the expiry reads it again once it holds the table's history fence, `expiry._dropped_since`; the drop door takes no fence, so a drop after that read is followed by one cleanup under the table's own policy); within maintenance only the daily scan's
   purge deletes its bytes, opt-in (`trashPurge`, off in the chart) and gated on that scan's own drift report (`purge.report_is_clean`),
   and `trashPurgeDryRun` reports what it would purge (`would_purge`).
   COVERAGE.md's old "soft-delete is N/A, time-travel replaces it"
@@ -580,13 +580,20 @@ governing their data. The project-scoped surface is the console's project page, 
   (`maintenance-worker`) through nats-py rather than Dapr, whose JetStream subscription sends no in-progress ack and whose
   publish cannot set a schedule header (`maintenance.services.tasks`). It takes one task at a time and heartbeats it
   every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a replica
-  whose heartbeats the bus stops answering ends itself before that ack wait runs out (`Worker._tell`), one whose drain
+  whose heartbeats the bus stops answering ends itself before that ack wait runs out (`Worker._tell`), as does one whose heartbeat ends by an error nothing expected (`Worker._keep_alive`), one whose drain
   ends with a pass still running ends there (`Worker.drain`), each pull has a subscription of its own, and a pass
   holds a claim on its table in the MAINTENANCE_CLAIMS bucket that another pass waits out (`Worker._claim`), so two
   passes of one table never overlap; a replica whose credential the bus takes no longer (revoked when its grants changed,
   or expired) ends itself and starts again on the store's current one (`TaskQueue.connect`); a pass
   past twice `maxPassSeconds` ends its replica, and a task that outlived its worker on all `maxDeliver` deliveries is
-  ended unrun on the one more the consumer allows. A commit's announcement on `lineage.events.v1` (`/maintenance-arrival`,
+  ended unrun on the one more the consumer allows. The worker counts each task retried, ended, completed (and its time
+  from claim to ack), each store event by how it settled, and each fired schedule the queue refused, and samples every
+  minute each stream's depth and oldest message's age and each durable's ack-pending and redelivered counts
+  (`maintenance.services.queue.sample_queue`, `maintenance.queue.*`), which the `maintenance` alert group reads. With
+  store events expected, the hourly audit also reads each governed bucket's event configuration and reports each
+  sending no `s3:ObjectCreated:*` event, counting each bucket once per audit on `maintenance.store_event_buckets.checked` by
+  outcome (`configured`, `without`, `unknown`; `maintenance.services.bucket_events`, alerts `MaintenanceBucketWithoutStoreEvents`
+  and `MaintenanceBucketStoreEventsUnknown`). A commit's announcement on `lineage.events.v1` (`/maintenance-arrival`,
   `maintenance.services.arrival.lane_task`) holds one follow-up pass `commitPassDelaySeconds` (300) out unless one is
   held already, so a burst of commits makes one pass; a table's drop (`drop_table`) queues its trash task instead. A table's pass
   (`maintenance.services.table_pass.run_table_pass`) expires the table and each branch once it has
@@ -595,7 +602,9 @@ governing their data. The project-scoped surface is the console's project page, 
   cadence, never later than `recheckHours` (24) and never sooner than 60 s; a pass that could not decide, or found the
   table's history fenced, is tried again after `retrySeconds`). The hourly audit opens no table and queues each table
   and trash record that holds neither a schedule nor a queued task, which bounds a lost announcement or schedule to one
-  firing (`maintenance.services.audit.run_audit`). A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
+  firing (`maintenance.services.audit.run_audit`); a trash record already released, or carrying no deadline, gets no task,
+  which would end holding nothing. The chart's stream Job reads MAINTENANCE_SCHEDULES back and fails unless it allows
+  message schedules, which nats-server older than 2.12 drops without a word. A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
   The pass's pre-vend probe and its next-pass time count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes, the time asking with the age a version will then have (`table_pass.versions_due_at`, [[LH-562]]); the catalog's GC preview names the versions by `lakehouse.version_retention`, since Lance's explanation counts them only.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
@@ -881,9 +890,29 @@ governing their data. The project-scoped surface is the console's project page, 
   503 PartiallyApplied with the location still held. While a tag stands, a destructive drop of the source refuses 409
   code 19 (`dataplane.require_no_clone_reading`), a destroying cascade removes each source after the clones it removes
   with it and refuses 409 code 19 while a clone outside it reads one of its tables (`clone_sources.destroy_order`), and
-  the trash credentials door vends no session to delete a trashed source's bytes. Nothing ends a tag a failed end left:
-  the source stays undestroyable until the clone is registered and deregistered again (owner 2026-11-09: no reader-side
-  auto-end, which could judge a live clone gone; the cure is #638's change 2). Measured on pylance 13.0.0, Lance itself commits a rewrite that loses or duplicates rows and an
+  the trash credentials door vends no session to delete a trashed source's bytes. **A failed end is finished by the
+  record its door filed** (owner 2026-11-10, "Intent record"; ADR 0198's amendment of that day): each of the four doors
+  ending a clone (deregister, a destructive drop, a namespace's destroying cascade, a warehouse cascade) files the
+  clone's ending, one object per filing at `_clone_endings/<the claim's digest>/<filing token>.json`
+  (`lakehouse.clone_endings`, `catalog.services.clone_endings`), naming its location, uuid, sources and whether its base
+  record goes, BEFORE its row goes (a destructive drop and a destroying cascade through `destroy_table`'s
+  `before_removal`, once every judgement has passed, so a refusal files none), and deletes it last; a door whose native
+  call failed leaves it, since no describe tells the clone's row from a same-name registration's; a store that will not
+  delete a tag leaves it standing, and maintenance's audit asks `GET
+  /management/v1/clone-endings` and `POST /management/v1/clone-endings/{digest}/{filing}/finish` (rung
+  `can_reclaim_trash`, as the trash doors; audited `clone_ending_finish`). The finish acts once a claim's `LEASE` has
+  passed since the filing and no other finish's mark is younger, on the claim it read: held for another uuid, or for the
+  clone standing there (its door never removed it, or is still at work), it releases nothing and leaves the ending (409
+  code 19), removing it with nothing released only once the clone has stood a day past the filing (`STANDING_BOUND`);
+  held for the clone gone, it FENCES the claim under that read's ETag (moved: 409 code 14), releases each source's tag,
+  the base record where the bytes went and the fenced claim, and deletes the ending last. A registration at a location
+  where an ending stands is refused 409 code 14 once it holds the claim (`clone_endings.refuse_registration_while_ending`),
+  so no finish can release a new clone's tags. No request releases a claim another table holds: the register undo, the
+  finish and both cascades name the uuid they own (`location_claims.release(..., uuid=...)`); the drop door and
+  deregister release by name under their own fence, which refuses every other take while it stands; the create and
+  declare undos act on a location named after a uuid they minted; data-directory claims record no uuid and are released
+  by name by the table the location's claim names; `trash.end` releases a claim the trash record keeps from every other
+  take. The finish forgets a base record only where the door meant the bytes to go and no dataset stands there. No reader judges a clone gone (owner 2026-11-09). Measured on pylance 13.0.0, Lance itself commits a rewrite that loses or duplicates rows and an
   index naming a base or an empty directory, so the judge is what refuses them.
   **Provenance travels in the spec Context** ([[LH-225]]): the staged manifest's `rask.*` transaction properties name
   the run, `version/create` refuses a silver or gold commit adding data without a run and inputs, and the finalize's

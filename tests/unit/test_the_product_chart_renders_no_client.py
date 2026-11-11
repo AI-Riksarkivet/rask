@@ -60,8 +60,10 @@ _CLIENTS: dict[str, re.Pattern[str]] = {
     "kueue": re.compile(r"kueue", re.IGNORECASE),
     "table-maintenance": re.compile(r"table-maintenance", re.IGNORECASE),
     "hf": re.compile(r"hf[-_]?token|hugging\s*face", re.IGNORECASE),
-    # NATS's reply subjects are `_INBOX.>`, which every bus user subscribes to; the inbox client is any other `inbox`.
-    "notifications": re.compile(r"notification|(?<![_a-z])inbox|mailpit", re.IGNORECASE),
+    # NATS's reply subjects are `_INBOX.>`, which every bus user subscribes to; the inbox client is any other `inbox`. S3's
+    # `s3:GetBucketNotification`, which maintenance's store policy grants to read a bucket's event configuration, is the
+    # store's action, not the client.
+    "notifications": re.compile(r"(?<!GetBucket)notification|(?<![_a-z])inbox|mailpit", re.IGNORECASE),
 }
 
 

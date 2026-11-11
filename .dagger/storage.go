@@ -67,7 +67,9 @@ func (m *Rask) SmokeRustfs(
 // tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py runs `scripts/rustfs_admin.py` through the
 // CLI the hook runs, and holds a policy the store refuses to failing the run and leaving the stored one; and
 // tests/e2e-py/test_a_reclaim_session_deletes_one_tables_bytes_and_nothing_else.py runs maintenance's purge under a session minted
-// with the policy the catalog builds for one trash record, which moto cannot enforce ([[XC-084]]).
+// with the policy the catalog builds for one trash record, which moto cannot enforce ([[XC-084]]); and
+// tests/e2e-py/test_the_store_answers_maintenance_which_buckets_send_store_events.py reads buckets' event configuration
+// under maintenance's rendered canned policy, as its hourly audit does.
 //
 //	dagger call rustfs-provisioning
 //
@@ -85,16 +87,26 @@ func (m *Rask) RustfsProvisioning(
 		return "", err
 	}
 	rootSecret := dag.SetSecret("rustfs-provisioning-root-secret", hex.EncodeToString(raw))
+	// A notify target, as the fixture names one, so the store takes a bucket's event configuration: RustFS 1.0.3 refuses
+	// one while it has no target ("No notify targets configured", measured 2026-11-10).
+	bus := dag.Container().From(natsImage).WithExposedPort(4222).AsService()
 	store := dag.Container().
 		From(rustfsImage).
+		WithServiceBinding("bus", bus).
 		WithNewFile("/run/secrets/rustfs/access_key", "rustfsadmin").
 		WithMountedSecret("/run/secrets/rustfs/secret_key", rootSecret, dagger.ContainerWithMountedSecretOpts{Owner: rustfsUser}).
 		WithEnvVariable("RUSTFS_ACCESS_KEY_FILE", "/run/secrets/rustfs/access_key").
 		WithEnvVariable("RUSTFS_SECRET_KEY_FILE", "/run/secrets/rustfs/secret_key").
+		WithEnvVariable("RUSTFS_NOTIFY_ENABLE", "true").
+		WithEnvVariable("RUSTFS_NOTIFY_NATS_ENABLE_PRIMARY", "on").
+		WithEnvVariable("RUSTFS_NOTIFY_NATS_ADDRESS_PRIMARY", "bus:4222").
+		WithEnvVariable("RUSTFS_NOTIFY_NATS_SUBJECT_PRIMARY", "store.events").
+		WithEnvVariable("RUSTFS_NOTIFY_NATS_QUEUE_DIR_PRIMARY", "/tmp/queue").
 		WithExposedPort(9000).
 		AsService()
 
-	return m.base(src).
+	// The renderable chart: the bucket-events test reads maintenance's canned policy off the render.
+	return withRenderableChart(m.base(src)).
 		WithServiceBinding("rustfs", store).
 		WithMountedSecret("/run/secrets/rustfs/secret_key", rootSecret).
 		WithEnvVariable("RASK_RUSTFS_PROVISIONING_ENDPOINT", "http://rustfs:9000").
@@ -105,6 +117,7 @@ func (m *Rask) RustfsProvisioning(
 			"uv", "run", "--no-sync", "pytest",
 			"tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py",
 			"tests/e2e-py/test_a_reclaim_session_deletes_one_tables_bytes_and_nothing_else.py",
+			"tests/e2e-py/test_the_store_answers_maintenance_which_buckets_send_store_events.py",
 			"-m", "rustfs_provisioning", "-v", "-rs", "-p", "no:cacheprovider", "--timeout=300", "--timeout-method=thread", "--require-live",
 		}).
 		Stdout(ctx)

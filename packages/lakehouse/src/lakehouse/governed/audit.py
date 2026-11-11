@@ -86,6 +86,7 @@ class AuditAction(StrEnum):
     EXPIRE_VERSIONS = "expire_versions"
     DLQ_REPLAY = "dlq_replay"
     DLQ_PARKED_REPLAY = "dlq_parked_replay"
+    CLONE_ENDING_FINISH = "clone_ending_finish"
 
 
 def configure_audit(*, enabled: bool) -> None:

@@ -32,6 +32,7 @@ import pytest
 
 if TYPE_CHECKING:
     from byo_scenario import ScenarioRun, Tenant
+    from measured_metrics import Measured
     from throwaway_rustfs import ThrowawayStore
 
 
@@ -110,6 +111,16 @@ def rustfs_store() -> ThrowawayStore:
     if store is None:
         pytest.skip("RASK_RUSTFS_PROVISIONING_ENDPOINT names no throwaway RustFS; `dagger call rustfs-provisioning` binds one")
     return store
+
+
+@pytest.fixture
+def maintenance_metrics(monkeypatch: pytest.MonkeyPatch) -> Iterator[Measured]:
+    """Maintenance's own instruments, counting into a reader of the test's own while it drives the worker
+    (`measured_metrics`)."""
+    from measured_metrics import measured
+
+    with measured(monkeypatch) as reader:
+        yield reader
 
 
 @pytest.fixture(scope="session")

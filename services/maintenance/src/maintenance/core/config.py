@@ -268,6 +268,10 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: interval that adapts to what it finds between a one-day floor and this ceiling (owner, 2026-11-09/10). Off, no
     #: check is scheduled, and one already held ends when it fires.
     orphan_check_enabled: bool = Field(default=True, alias="MAINTENANCE_ORPHAN_CHECK_ENABLED")
+    #: Whether the store is expected to send every governed bucket's object writes as store events: the platform store's
+    #: attestation (`objectStore.events.provisioned`), or the development store, whose fixture configures them. On, the
+    #: hourly audit reports each governed bucket configured with no rule for them (`maintenance.services.bucket_events`).
+    store_events_expected: bool = Field(default=False, alias="MAINTENANCE_STORE_EVENTS_EXPECTED")
     #: The longest a clean or an excluded table goes between two checks, in days: a clean table's interval doubles up to
     #: it, and an excluded table (a branch, MemWAL, an unsupported flag, too many files) waits it (owner, 2026-11-10:
     #: "30 days is fine"). A table whose floor was raised waits its retention and a day, whatever this says.

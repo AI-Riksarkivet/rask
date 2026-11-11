@@ -1,5 +1,5 @@
 """The commit lane queues the task each announced event asks for (ADR 0198 §2): a write's or a registration's pass held a
-delay out, one for a whole burst, a drop's release now, and nothing for an event that moves no bytes.
+delay out (the bus keeping one for a whole burst), a drop's release now, and nothing for an event that moves no bytes.
 
 THE EVENT IS A HINT; THE PASS IS THE DECISION. `build_write_event` carries the table, its uuid and its location, and no
 fragment or row count, so the lane answers only which task an event is worth, and the pass decides what is due. A pass
@@ -57,8 +57,9 @@ def _event(operation: str, *, uri: str | None = URI, uuid: str | None = TABLE_UU
 
 
 class _RecordingQueue:
-    """The lane's publishes, with `TaskQueue`'s signatures, recorded; ``down`` refuses each as an unreachable bus does. A
-    follow-up already held for a table refuses another, as JetStream's expected-sequence guard does."""
+    """The lane's publishes, with `TaskQueue`'s signatures, recorded; ``down`` refuses each as an unreachable bus does.
+    Which of a table's follow-ups the bus keeps is the bus's own guard, proven on a real broker by the `nats-auth` lane
+    (`tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py`, its burst)."""
 
     def __init__(self, *, down: bool = False) -> None:
         self.down = down
@@ -74,8 +75,6 @@ class _RecordingQueue:
     async def follow_up(self, task: Task, at: datetime) -> bool:
         if self.down:
             raise QueueUnavailableError("the bus did not take it")
-        if any(held.uuid == task.uuid for held, _ in self.followed):
-            return False
         self.followed.append((task, at))
         return True
 
@@ -90,7 +89,7 @@ def _queue(recording: _RecordingQueue) -> TaskQueue:
 @pytest.mark.parametrize(
     ("operation", "expected"),
     [
-        pytest.param("insert", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-write-is-passed-now"),
+        pytest.param("insert", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-write-asks-for-its-tables-pass"),
         pytest.param("create_table", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-create-is-a-write"),
         pytest.param("register_table", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-registration-is-passed-too"),
         pytest.param("drop_table", LaneTask(kind="trash", uuid=TABLE_UUID), id="a-drop-asks-for-its-release"),
@@ -128,10 +127,11 @@ def test_an_event_the_lane_cannot_act_on_is_acknowledged_untouched(event: object
 
 
 @pytest.mark.asyncio
-async def test_a_burst_of_commits_holds_one_pass_a_delay_out() -> None:
-    """Two writes and a registration hold one pass, ``MAINTENANCE_COMMIT_PASS_DELAY_SECONDS`` out, and queue nothing: the
-    held one covers the rest, since its pass reads the table after them. A registration waits as a write does, which an
-    undrop needs, since it announces its table before it clears the trash record."""
+async def test_each_commit_holds_its_tables_pass_a_delay_out() -> None:
+    """Two writes and a registration each hold the table's pass, ``MAINTENANCE_COMMIT_PASS_DELAY_SECONDS`` out, and queue
+    nothing: the bus keeps the first follow-up and refuses the others, so one pass reads the table after them all. A
+    registration waits as a write does, which an undrop needs, since it announces its table before it clears the trash
+    record."""
     queue = _RecordingQueue()
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
     delay = timedelta(seconds=settings.commit_pass_delay_seconds)
@@ -141,8 +141,8 @@ async def test_a_burst_of_commits_holds_one_pass_a_delay_out() -> None:
 
     after = datetime.now(UTC)
     assert (answers, queue.queued) == ([{"status": route.SUCCESS}] * 3, [])
-    assert [task for task, _ in queue.followed] == [Task(kind="table", uuid=TABLE_UUID, location=URI)]
-    assert before + delay <= queue.followed[0][1] <= after + delay, "the pass was not held the commit delay"
+    assert [task for task, _ in queue.followed] == [Task(kind="table", uuid=TABLE_UUID, location=URI)] * 3
+    assert all(before + delay <= at <= after + delay for _, at in queue.followed), "a pass was not held the commit delay"
 
 
 @pytest.mark.asyncio

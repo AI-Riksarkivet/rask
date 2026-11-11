@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Iterable, Mapping
 from contextlib import suppress
 from functools import partial
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Header, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -72,8 +73,9 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import dataplane, native, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
 from lakehouse import base_registry, clone_sources, location_claims, protection, trash
+from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import emit_control
 from lakehouse.control_events import ControlUuids
 from lakehouse.governed import fga
@@ -730,23 +732,42 @@ async def _destroy_subtree(
         with suppress(TableNotFoundError):
             # [[LH-532]] Described again at the moment it goes, so the bytes deleted are those of the row removed.
             doomed = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=child))
+            # A clone's ending is filed once every judgement has passed, right before its row goes (ADR 0198 §1), so a
+            # refusal files none: a tag release failing below is finished by maintenance's audit, where a re-issued cascade
+            # would no longer list the clone it belongs to. One filed before a failure stays, for the finish to judge.
+            canonical = fga.canonical_object_id(child)
+            location = str(doomed.location or "")
+            filed: list[CloneEnding] = []
+
+            def _file_the_ending(location: str = location, canonical: str = canonical, filed: list[CloneEnding] = filed) -> None:
+                if not location:
+                    return
+                found = clone_endings.file_ending(registry, claims, location, table=canonical, forget_record=True, door="namespace_cascade", filing=uuid4().hex)
+                if found is not None:
+                    filed.append(found)
+
             dropped: DropTableResponse = await run_in_threadpool(
                 partial(
                     dataplane.destroy_table,
                     ns,
                     storage_options,
                     child,
-                    str(doomed.location or ""),
+                    location,
                     estate_roots=estate_roots,
                     table_uuid=item.uuid,
                     namespace_uuid=uuid_at.get(tuple(child[:-1])),
                     control=claims,
                     dropped_by=dropped_by,
+                    before_removal=_file_the_ending,
                 )
             )
             if dropped.location:
-                await run_in_threadpool(base_registry.forget_base_record, registry, dropped.location, table=fga.canonical_object_id(child))
-                await run_in_threadpool(location_claims.release, claims, dropped.location, fga.canonical_object_id(child))
+                await run_in_threadpool(base_registry.forget_base_record, registry, dropped.location, table=canonical)
+                # Under the uuid this cascade identified the table by: the cascade holds no fence between the row's removal
+                # and here, and the same name registered at the location meanwhile holds the claim under a uuid of its own.
+                await run_in_threadpool(partial(location_claims.release, claims, dropped.location, canonical, uuid=item.uuid))
+            if filed:
+                await run_in_threadpool(clone_endings.clear_ending, claims, filed[0])
         yield child
     for child in [*child_namespaces, segments]:
         with suppress(NamespaceNotFoundError):

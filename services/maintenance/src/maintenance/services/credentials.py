@@ -29,7 +29,10 @@ and rebuild ask the catalog to revoke a ghost's grants (:func:`revoke_ghosts`) a
 THE TRASH IS THE CATALOG'S TO END, record by record ([[XC-084]]): maintenance asks it to release a drop past its deadline
 (:func:`release_trash`), to vend the session that deletes one trashed table's bytes (:func:`reclaim_options_for`), to
 end a record whose bytes are gone (:func:`end_trash`), and to note a refusal of its own (:func:`note_trash_refusal`).
-Each door answers in the same vocabulary, so a refusal there stops the record as a refused vend stops a dataset.
+Each door answers in the same vocabulary, so a refusal there stops the record as a refused vend stops a dataset. On the
+same rung it lists the registered clones' endings their doors could not clear (:func:`list_clone_endings`) and asks the
+catalog to finish each (:func:`finish_clone_ending`): a clone's tags stand on its sources' ``_refs/tags``, which
+maintenance's store policy does not write (ADR 0198 §1).
 
 THE CREDENTIAL MAINTENANCE PRESENTS IS THE POD'S OWN SERVICE-ACCOUNT TOKEN, projected by the kubelet with audience
 `rask-catalog` and read from the file on EVERY call (:func:`service_headers`): the kubelet rewrites it at ~515 s of a
@@ -449,6 +452,56 @@ def note_trash_refusal(kind: TrashKind, uuid: str, settings: MaintenanceSettings
     return _parsed(_answered(settings, door), _TrashNoted, asked_for=door.asked_for).attempts
 
 
+class CloneEndingListed(BaseModel):
+    """One clone's ending as the catalog lists it: its location's digest and the request that filed it."""
+
+    digest: str
+    filing: str
+
+    @property
+    def id(self) -> str:
+        return f"{self.digest}/{self.filing}"
+
+
+class _CloneEndings(BaseModel):
+    endings: list[CloneEndingListed]
+
+
+class CloneEndingFinished(BaseModel):
+    """What the catalog's finish of a clone's ending did: the source tags it released, or that the clone stands for good
+    and keeps them."""
+
+    tags_released: int
+    kept: bool
+
+
+def list_clone_endings(settings: MaintenanceSettings) -> list[CloneEndingListed]:
+    """Every registered clone's ending its door did not remove (ADR 0198 §1), oldest first.
+
+    Raises:
+        VendingNotDirect: No catalog door is configured.
+        MaintenanceDenied: The door refused: this identity holds no reclaim rung (403).
+        VendUndecided: The door could not be asked or decided nothing.
+    """
+    door = _clone_endings_door(settings, act="", answer="the clones' endings", method="GET")
+    return _parsed(_answered(settings, door), _CloneEndings, asked_for=door.asked_for).endings
+
+
+def finish_clone_ending(ending: CloneEndingListed, settings: MaintenanceSettings) -> CloneEndingFinished:
+    """Have the catalog finish ``ending``: release the clone's tag on each source its door named, and its location's
+    claim, and remove the ending. Maintenance's store policy writes no source's tags; the catalog does.
+
+    Raises:
+        VendingNotDirect: No catalog door is configured.
+        MaintenanceDenied: The door refused: this identity holds no reclaim rung (403), or the ending is too young, being
+            finished, its clone stands, or it changed under the finish (409).
+        TableNotGoverned: No such ending stands: finished since it was listed.
+        VendUndecided: The door could not be asked or decided nothing.
+    """
+    door = _clone_endings_door(settings, act=f"/{ending.id}/finish", answer="the finish of a clone's ending")
+    return _parsed(_answered(settings, door), CloneEndingFinished, asked_for=door.asked_for)
+
+
 def grant_census(settings: MaintenanceSettings) -> fga.GrantCensus | None:
     """The store's grants counted by object, as the catalog reads them for the drift report; ``None`` when the catalog
     answers that authorization is off.
@@ -522,6 +575,17 @@ def _trash_door(
         body=body,
         answer=answer,
         asked_for=f"{kind}:{uuid}",
+        denial=reclaim_denial_remedy(identity=settings.catalog_service_identity),
+    )
+
+
+def _clone_endings_door(settings: MaintenanceSettings, *, act: str, answer: str, method: Literal["GET", "POST"] = "POST") -> Door:
+    """The clone-endings door ``act`` names, asked on the reclaim rung the trash doors ask."""
+    return Door(
+        method=method,
+        path=f"/management/v1/clone-endings{act}",
+        answer=answer,
+        asked_for="the clones' endings",
         denial=reclaim_denial_remedy(identity=settings.catalog_service_identity),
     )
 

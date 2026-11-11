@@ -45,7 +45,17 @@ from nats.errors import Error as NatsError
 from nats.js.errors import APIError, KeyDeletedError, KeyNotFoundError, KeyWrongLastSequenceError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from maintenance.core.metrics import record_pass_overran, record_task_completed, record_task_ended
+from maintenance.core.metrics import (
+    record_consumer_backlog,
+    record_pass_overran,
+    record_schedule_not_queued,
+    record_store_event_settled,
+    record_stream_depth,
+    record_task_completed,
+    record_task_duration,
+    record_task_ended,
+    record_task_retried,
+)
 
 
 if TYPE_CHECKING:
@@ -164,6 +174,32 @@ class _SubjectsPage(BaseModel):
 
     state: _SubjectsState = Field(default_factory=_SubjectsState)
     total: int = 0
+
+
+class StreamState(BaseModel):
+    """What a stream holds, as its info states it: its message count, and when its oldest message was stored (the zero
+    time, year 1, while it holds none)."""
+
+    messages: int = 0
+    first_ts: datetime | None = None
+
+    def oldest_seconds(self, now: datetime) -> float:
+        """How long the oldest message has been held at ``now``; 0 while the stream holds none."""
+        if not self.messages or self.first_ts is None:
+            return 0.0
+        return max((now - self.first_ts).total_seconds(), 0.0)
+
+
+class _StreamInfo(BaseModel):
+    state: StreamState = Field(default_factory=StreamState)
+
+
+class ConsumerState(BaseModel):
+    """What a durable consumer awaits, as its info states it: deliveries not yet acknowledged, and messages delivered more
+    than once and not yet settled."""
+
+    num_ack_pending: int = 0
+    num_redelivered: int = 0
 
 
 def _parsed(msg: Msg) -> Task | None:
@@ -364,14 +400,26 @@ class TaskQueue:
         except KeyWrongLastSequenceError:
             return await _standing(claims, key, token)
 
-    async def release(self, key: str, revision: int) -> None:
-        """Give up the claim on ``key`` while it is still this worker's: a revision that no longer stands (the claim aged
-        out, or another holds it) is refused, and a release the bus does not answer leaves the claim to age out."""
+    async def release(self, key: str, token: str, revision: int) -> None:
+        """Give up the claim on ``key`` while it is still this worker's: a claim another holds, or one that aged out, is
+        left. A release whose ``revision`` a renewal moved since, applied by the bus with its answer lost, finds its own
+        ``token`` standing and releases that revision. A release the bus does not answer leaves the claim to age out."""
         try:
             claims = await self._bucket()
-            await asyncio.wait_for(claims.delete(key, last=revision), _API_TIMEOUT)
+            await asyncio.wait_for(self._delete(claims, key, token, revision=revision), _API_TIMEOUT)
         except (NatsError, TimeoutError) as exc:
             log.warning("maintenance_claim_kept", extra={"key": key, "error": f"{type(exc).__name__}: {exc}"[:300]})
+
+    @staticmethod
+    async def _delete(claims: KeyValue, key: str, token: str, *, revision: int) -> None:
+        try:
+            await claims.delete(key, last=revision)
+        except APIError as exc:
+            # A delete's refusal is the publish's own (`nats.js.kv.KeyValue.delete` maps no code), the codes an update's is.
+            if exc.err_code not in _HELD_ALREADY:
+                raise
+            if (standing := await _standing(claims, key, token)) is not None:
+                await claims.delete(key, last=standing)
 
     async def _bucket(self) -> KeyValue:
         """The claims bucket, bound once: the chart's stream Job declares it, and the worker never creates it."""
@@ -462,6 +510,22 @@ class TaskQueue:
             if not page.state.subjects or len(found) >= page.total:
                 return found
 
+    async def stream_state(self, stream: str) -> StreamState:
+        """What ``stream`` holds now, read off its info.
+
+        Raises:
+            QueueUnavailableError: JetStream refused the read, or did not answer it.
+        """
+        return _StreamInfo.model_validate(await self._api(f"$JS.API.STREAM.INFO.{stream}", {})).state
+
+    async def consumer_state(self, stream: str, durable: str) -> ConsumerState:
+        """What the durable consumer ``durable`` of ``stream`` awaits now, read off its info.
+
+        Raises:
+            QueueUnavailableError: JetStream refused the read, or did not answer it.
+        """
+        return ConsumerState.model_validate(await self._api(f"$JS.API.CONSUMER.INFO.{stream}.{durable}", {}))
+
     async def bind(self, stream: str, consumer: str) -> JetStreamContext.PullSubscription:
         """A pull subscription on the chart's durable ``consumer`` of ``stream``, which it binds to and never creates."""
         return await self._js.pull_subscribe_bind(durable=consumer, stream=stream)
@@ -529,12 +593,13 @@ class Worker:
         max_deliver: int,
         max_pass_seconds: float,
         retry_ended_seconds: float,
-        store_events: Callable[[bytes], Awaitable[object]] | None = None,
+        store_events: Callable[[bytes], Awaitable[int]] | None = None,
         end_process: Callable[..., NoReturn] = end_replica,
         max_seconds_by_kind: Mapping[str, float] | None = None,
     ) -> None:
         self._queue = queue
-        self._end_process = end_process
+        self._exit = end_process
+        self._ending = False
         self._retry_ended = retry_ended_seconds
         self._run = run
         self._store_events = store_events
@@ -548,6 +613,12 @@ class Worker:
         self._max_pass = max_pass_seconds
         self._max_by_kind = dict(max_seconds_by_kind or {})
         self._stopping = asyncio.Event()
+
+    def _end_process(self, event: str, **extra: object) -> NoReturn:
+        """End the process (``end_process``), noting first that it is ending, so a keep-alive the end unwinds is not taken
+        for one that ended unexpectedly (:meth:`_keep_alive`)."""
+        self._ending = True
+        self._exit(event, **extra)
 
     def stop(self) -> None:
         """Ask every loop to end once what it is doing is done."""
@@ -631,17 +702,21 @@ class Worker:
                 await self._give_back(msg, task, lease, delivered=delivered)
                 return
             self._passing = True
+            claimed = monotonic()
             try:
                 await self._run(task)
             except Exception as exc:  # noqa: BLE001 — every failure of a run is the task's, retried or ended below
                 await self._retry_or_end(msg, task, exc, lease=lease)
                 return
             await self._tell(msg, Msg.Ack.Ack, lease)
+            record_task_duration(kind=task.kind, seconds=monotonic() - claimed)
         finally:
             self._passing = False
+            # Ended before the release, so no renewal still in flight moves the claim's revision after the release read it.
             beating.cancel()
+            await asyncio.gather(beating, return_exceptions=True)
             if lease.claim:
-                await self._queue.release(_claim_key(task), lease.claim)
+                await self._queue.release(_claim_key(task), lease.token, lease.claim)
         record_task_completed(kind=task.kind)
 
     async def _claim(self, task: Task, lease: _Lease) -> bool:
@@ -687,7 +762,19 @@ class Worker:
 
     async def _keep_alive(self, msg: Msg, task: Task, lease: _Lease) -> None:
         """Renew ``lease`` every ``heartbeat_seconds`` from the delivery's arrival, the first at once, and end the process
-        once the pass has run past twice its bound: its kind's own (``max_seconds_by_kind``), else ``max_pass_seconds``."""
+        once the pass has run past twice its bound: its kind's own (``max_seconds_by_kind``), else ``max_pass_seconds``.
+
+        A keep-alive that ends by an error nothing expected ends the process too: the pass would run on unvouched for,
+        and JetStream would hand its task to another replica beside it.
+        """
+        try:
+            await self._beat(msg, task, lease)
+        except Exception as exc:  # noqa: BLE001 — any end of the heartbeat but its cancellation leaves the pass unvouched for
+            if self._ending:
+                raise
+            self._end_process("maintenance_heartbeat_ended", subject=msg.subject, error=f"{type(exc).__name__}: {exc}"[:300])
+
+    async def _beat(self, msg: Msg, task: Task, lease: _Lease) -> NoReturn:
         started = monotonic()
         bound = self._max_by_kind.get(task.kind, self._max_pass)
         warned = False
@@ -753,6 +840,7 @@ class Worker:
             await self._end(msg, task, lease, deliveries=delivered, error=f"{type(exc).__name__}: {exc}"[:300])
             return
         log.warning("maintenance_task_retried", extra={"subject": msg.subject, "deliveries": delivered, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        record_task_retried(kind=task.kind)
         await self._tell(msg, _nak(_redelivery_delay(delivered)), lease)
 
     async def _end(self, msg: Msg, task: Task, lease: _Lease, *, deliveries: int, error: str) -> None:
@@ -784,7 +872,8 @@ class Worker:
             await _unsubscribe(subscription)
 
     async def run_store_events(self) -> None:
-        """Hand each of the store's change events to ``store_events`` until :meth:`stop`.
+        """Hand each of the store's change events to ``store_events`` until :meth:`stop`, which answers how many tables'
+        passes it held; each event's settling is counted by outcome (``maintenance.store_events.settled``).
 
         ``store_events`` raises ``ValueError`` for a body that is no store event, which is ended at once, and ``OSError``
         or :class:`QueueUnavailableError` for one whose handling the store or the bus refused, which is delivered again
@@ -804,31 +893,36 @@ class Worker:
         finally:
             await _unsubscribe(subscription)
 
-    async def _on_store_event(self, msg: Msg, handle: Callable[[bytes], Awaitable[object]]) -> None:
+    async def _on_store_event(self, msg: Msg, handle: Callable[[bytes], Awaitable[int]]) -> None:
         delivered = msg.metadata.num_delivered or 1
         if delivered > self._max_deliver:
             log.error("maintenance_store_event_ended", extra={"subject": msg.subject, "deliveries": delivered, "error": "every delivery outlived its worker"})
             await msg.term()
+            record_store_event_settled(outcome="ended")
             return
         try:
-            await handle(msg.data)
+            held = await handle(msg.data)
         except ValueError as exc:
             log.error("maintenance_store_event_unreadable", extra={"subject": msg.subject, "error": str(exc)[:300]})
             await msg.term()
+            record_store_event_settled(outcome="unreadable")
             return
         except (OSError, QueueUnavailableError) as exc:
             await self._retry_or_end_store_event(msg, exc, delivered=delivered)
             return
         await msg.ack()
+        record_store_event_settled(outcome="held" if held > 0 else "ignored")
 
     async def _retry_or_end_store_event(self, msg: Msg, exc: OSError | QueueUnavailableError, *, delivered: int) -> None:
         error = f"{type(exc).__name__}: {exc}"[:300]
         if delivered >= self._max_deliver:
             log.error("maintenance_store_event_ended", extra={"subject": msg.subject, "deliveries": delivered, "error": error})
             await msg.term()
+            record_store_event_settled(outcome="ended")
             return
         log.warning("maintenance_store_event_retried", extra={"subject": msg.subject, "deliveries": delivered, "error": error})
         await msg.nak(delay=_redelivery_delay(delivered))
+        record_store_event_settled(outcome="retried")
 
     async def _fetch(self, subscription: JetStreamContext.PullSubscription, batch: int) -> list[Msg]:
         """The next ``batch`` messages, or none: an empty wait, or a fetch the bus refused or dropped, which is logged
@@ -859,9 +953,44 @@ class Worker:
             queued = await self._queue.enqueue(task)
         except QueueUnavailableError as exc:
             log.warning("maintenance_due_not_queued", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
+            record_schedule_not_queued()
             await msg.nak(delay=_RETRY_FIRST)
             return
         if not queued and msg.subject == task.follow_up_subject("due"):
             await msg.nak(delay=_FOLLOW_UP_RETRY)
             return
         await msg.ack()
+
+
+#: The streams the worker's sampler reads, each with whether its oldest message's age is read: a work queue whose backlog
+#: ages (MAINTENANCE_TASKS drops a task at its 24 h max age; STORE_EVENTS holds an event until it is settled), never the
+#: schedules, which hold a table's next time for as long as it is due.
+SAMPLED_STREAMS: Final = ((TASKS_STREAM, True), (SCHEDULES_STREAM, False), (STORE_EVENTS_STREAM, True))
+#: The durable consumers the sampler reads, each with its stream.
+SAMPLED_CONSUMERS: Final = ((TASKS_STREAM, TASK_CONSUMER), (SCHEDULES_STREAM, DUE_CONSUMER), (STORE_EVENTS_STREAM, STORE_EVENTS_CONSUMER))
+#: How often the worker samples them.
+SAMPLE_SECONDS: Final = 60.0
+
+
+async def sample_queue(queue: TaskQueue) -> int:
+    """Read each sampled stream's depth and each durable's backlog off the bus into their gauges; how many reads the bus
+    did not answer. A read it did not answer leaves its gauge at its last value, logged, so one stream's outage does not
+    hide what the others say."""
+    unread = 0
+    for stream, aged in SAMPLED_STREAMS:
+        try:
+            state = await queue.stream_state(stream)
+        except QueueUnavailableError as exc:
+            log.warning("maintenance_queue_unsampled", extra={"stream": stream, "error": str(exc)[:300]})
+            unread += 1
+            continue
+        record_stream_depth(stream=stream, messages=state.messages, oldest_seconds=state.oldest_seconds(datetime.now(UTC)) if aged else None)
+    for stream, durable in SAMPLED_CONSUMERS:
+        try:
+            backlog = await queue.consumer_state(stream, durable)
+        except QueueUnavailableError as exc:
+            log.warning("maintenance_queue_unsampled", extra={"consumer": durable, "error": str(exc)[:300]})
+            unread += 1
+            continue
+        record_consumer_backlog(consumer=durable, ack_pending=backlog.num_ack_pending, redelivered=backlog.num_redelivered)
+    return unread

@@ -26,7 +26,7 @@ from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import create_orphan_check_series, create_task_series
 from maintenance.services.audit import run_audit, run_scan
 from maintenance.services.orphan_check import FLOOR, run_orphan_check
-from maintenance.services.queue import QueueUnavailableError, Task, TaskKind, TaskQueue, Worker, creds_document
+from maintenance.services.queue import SAMPLE_SECONDS, QueueUnavailableError, Task, TaskKind, TaskQueue, Worker, creds_document, sample_queue
 from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask, emit_pass_lineage, emit_zero_baselines, run_table_pass
 from maintenance.services.trash_task import run_trash_task
@@ -155,6 +155,7 @@ async def _worker_on(
         asyncio.create_task(_supervised(worker, "maintenance-due", worker.run_due), name="maintenance-due"),
         asyncio.create_task(_supervised(worker, "maintenance-store-events", worker.run_store_events), name="maintenance-store-events"),
         asyncio.create_task(_supervised(worker, "maintenance-cadences", partial(_keep_cadences, worker, queue, settings)), name="maintenance-cadences"),
+        asyncio.create_task(_supervised(worker, "maintenance-queue-sampler", partial(_sample_queue, worker, queue)), name="maintenance-queue-sampler"),
     ]
     try:
         yield
@@ -178,6 +179,14 @@ async def _keep_cadences(worker: Worker, queue: TaskQueue, settings: Maintenance
         await worker.pause(_CADENCE_SECONDS)
         if not worker.stopping():
             await _assert_cadences(queue, settings)
+
+
+async def _sample_queue(worker: Worker, queue: TaskQueue) -> None:
+    """Sample the queue's streams and durables into their gauges every ``SAMPLE_SECONDS`` until the worker stops, the first
+    at once (:func:`maintenance.services.queue.sample_queue`)."""
+    while not worker.stopping():
+        await sample_queue(queue)
+        await worker.pause(SAMPLE_SECONDS)
 
 
 async def _supervised(worker: Worker, name: str, loop: Callable[[], Awaitable[None]]) -> None:

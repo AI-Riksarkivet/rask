@@ -762,6 +762,188 @@ tests:
               summary: "A maintenance scan task is running past its bound"
               description: "A scan task has run past its bound (`maintenance.queue.maxPassSeconds`, or `maintenance.orphanCheck.maxSeconds` for kind orphans) and still holds its task; at twice that its replica exits and the task is delivered again. The maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later commit's pass of its table can start."
 
+  # The oldest task ages in step with the clock, as on a queue no worker takes from: past six hours, held 30m, it warns.
+  # The same age on STORE_EVENTS is not this rule's, and two replicas sampling the same stream raise one alert.
+  - interval: 5m
+    input_series:
+      - series: 'maintenance_queue_oldest_seconds{stream="MAINTENANCE_TASKS",instance="a"}'
+        values: "0+300x100"
+      - series: 'maintenance_queue_oldest_seconds{stream="MAINTENANCE_TASKS",instance="b"}'
+        values: "0+300x100"
+      - series: 'maintenance_queue_oldest_seconds{stream="STORE_EVENTS",instance="a"}'
+        values: "0+300x100"
+    alert_rule_test:
+      - eval_time: 6h20m
+        alertname: MaintenanceTaskAging
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: MaintenanceTaskAging
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              stream: MAINTENANCE_TASKS
+            exp_annotations:
+              summary: "A maintenance task has waited more than six hours on the queue"
+              description: "The oldest message on MAINTENANCE_TASKS is over six hours old: tasks wait unrun, and at 24 hours the stream drops them unrun, their tables left to the hourly audit. Read maintenance_queue_ack_pending and maintenance_queue_redelivered for consumer maintenance-worker (deliveries stuck, or a task delivered again and again), maintenance_passes_overran_total (a pass holding its replica), and whether any worker replica runs and is ready (maintenance_tasks_completed_total)."
+
+  # A queue drained before the six hours are up stays quiet.
+  - interval: 5m
+    input_series:
+      - series: 'maintenance_queue_oldest_seconds{stream="MAINTENANCE_TASKS"}'
+        values: "0+300x60 0x40"
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: MaintenanceTaskAging
+        exp_alerts: []
+
+  # A store event ended pages on the evaluation that sees it, by outcome; held and retried ones do not.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_store_events_settled_total{outcome="ended"}'
+        values: "0x4 1x10"
+      - series: 'maintenance_store_events_settled_total{outcome="unreadable"}'
+        values: "0x14"
+      - series: 'maintenance_store_events_settled_total{outcome="held"}'
+        values: "0+5x14"
+      - series: 'maintenance_store_events_settled_total{outcome="retried"}'
+        values: "0+3x14"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MaintenanceStoreEventsEnded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              outcome: ended
+            exp_annotations:
+              summary: "Maintenance ended store events in the last hour"
+              description: "The worker settled store events as ended: ended, the store or the bus refused their handling on every delivery (or the worker died on every one); unreadable, the body is no S3 event record the worker parses (the contract is `objectStore.events` in the chart's values). Each one's table is passed at its daily recheck instead of after the write. The maintenance_store_event_ended and maintenance_store_event_unreadable ERROR lines name the subject and the error."
+
+  # The store events' durable at 950 deliveries awaiting an ack for 15m warns; at 899, or another durable at 1000, nothing.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-store-events"}'
+        values: "950x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: MaintenanceStoreEventsStuck
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MaintenanceStoreEventsStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              consumer: maintenance-store-events
+            exp_annotations:
+              summary: "Store events are near the delivery ceiling of their consumer"
+              description: "The maintenance-store-events consumer awaits an acknowledgement for at least 900 deliveries, 90 % of its max_ack_pending of 1000; at the ceiling the bus delivers no more store events, and overwrites are found only at each table's daily recheck. Read maintenance_store_events_settled_total by outcome (retried rising: the store refuses the claim reads) and maintenance_queue_oldest_seconds for STORE_EVENTS, and the maintenance_store_event_retried WARNING lines."
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-store-events"}'
+        values: "899x30"
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-worker"}'
+        values: "1000x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: MaintenanceStoreEventsStuck
+        exp_alerts: []
+
+  # Buckets found without store events warn on the sum of every replica's series: at 4h only the replica that ran the
+  # last two audits counted any; nothing warns before the first audit.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_store_event_buckets_checked_total{outcome="without",pod="a"}'
+        values: "0x59 2x240"
+      - series: 'maintenance_store_event_buckets_checked_total{outcome="without",pod="b"}'
+        values: "0x119 2x60 4x60"
+      - series: 'maintenance_store_event_buckets_checked_total{outcome="unknown",pod="a"}'
+        values: "0x240"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MaintenanceBucketWithoutStoreEvents
+        exp_alerts: []
+      - eval_time: 4h
+        alertname: MaintenanceBucketWithoutStoreEvents
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+            exp_annotations:
+              summary: "A governed bucket sends no store events for its writes"
+              description: "The hourly audits of the last two hours found governed buckets whose event configuration holds no s3:ObjectCreated:* rule over the whole bucket, so maintenance hears of no write there and a committed file overwritten in place is found only at its table's daily recheck. The maintenance_bucket_without_store_events WARNING line names each bucket; configure it to deliver every object write to the bus subject store.events (`objectStore.events` in the chart's values)."
+      - eval_time: 4h
+        alertname: MaintenanceBucketStoreEventsUnknown
+        exp_alerts: []
+  # Buckets configured after one audit stop the warning within two hours, whatever the replica that counted them.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_store_event_buckets_checked_total{outcome="without",pod="a"}'
+        values: "0x59 1x300"
+      - series: 'maintenance_store_event_buckets_checked_total{outcome="configured",pod="b"}'
+        values: "0x119 1x60 2x60 3x60"
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: MaintenanceBucketWithoutStoreEvents
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+            exp_annotations:
+              summary: "A governed bucket sends no store events for its writes"
+              description: "The hourly audits of the last two hours found governed buckets whose event configuration holds no s3:ObjectCreated:* rule over the whole bucket, so maintenance hears of no write there and a committed file overwritten in place is found only at its table's daily recheck. The maintenance_bucket_without_store_events WARNING line names each bucket; configure it to deliver every object write to the bus subject store.events (`objectStore.events` in the chart's values)."
+      - eval_time: 4h
+        alertname: MaintenanceBucketWithoutStoreEvents
+        exp_alerts: []
+  # A store refusing the read for every bucket counts each unknown, which warns on its own; nothing counts as without.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_store_event_buckets_checked_total{outcome="unknown",pod="a"}'
+        values: "0x59 3x60 6x60"
+      - series: 'maintenance_store_event_buckets_checked_total{outcome="without",pod="a"}'
+        values: "0x180"
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: MaintenanceBucketStoreEventsUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+            exp_annotations:
+              summary: "The store will not say whether a governed bucket sends store events"
+              description: "The hourly audits of the last two hours could not read the event configuration of governed buckets: the store refused or failed GetBucketNotificationConfiguration, so whether each sends its writes as store events is unknown, and it is never counted as configured. The maintenance_bucket_store_events_unknown WARNING line names each bucket and the error; grant maintenance's store identity s3:GetBucketNotification on the bucket, or restore the store."
+      - eval_time: 150m
+        alertname: MaintenanceBucketWithoutStoreEvents
+        exp_alerts: []
+
+  # Fired schedules refused every minute for an hour warn; one refusal, given back and moved, does not.
+  - interval: 1m
+    input_series:
+      - series: "maintenance_schedules_not_queued_total"
+        values: "0x4 0+1x120"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MaintenanceSchedulesNotQueued
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: MaintenanceSchedulesNotQueued
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+            exp_annotations:
+              summary: "Fired maintenance schedules are not reaching the work queue"
+              description: "For an hour the queue has refused, or not answered, fired schedules the worker moves onto MAINTENANCE_TASKS, so those tables' passes, trash releases and orphan checks do not run. The maintenance_due_not_queued WARNING line names the subject and the bus's answer; check that MAINTENANCE_TASKS exists as the chart's stream Job declares it (`nats stream info MAINTENANCE_TASKS` as the monitor user)."
+  - interval: 1m
+    input_series:
+      - series: "maintenance_schedules_not_queued_total"
+        values: "0x4 1x120"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: MaintenanceSchedulesNotQueued
+        exp_alerts: []
+
   # ------------------------------------------------------------------------------------------------
   # The HTTP plane. Series names are the live store's, verified — `http_server_duration_milliseconds_*`,
   # with the unit suffix the OTLP->Prometheus exporter appends. Labels `service_name` and

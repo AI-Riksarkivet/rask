@@ -20,6 +20,8 @@ test's: it records which worker ran it, and holds while the test holds it. The r
 * A worker the bus stops answering mid-pass (its connection cut through a `Link`) ends its process (exit 70) before the
   ack wait its last answered heartbeat restarted runs out, so its task, handed to the other worker, starts only once the
   first has ended: never two passes of one table at once.
+* A fired schedule whose task's publish the network lost (the `Link` drops that subject while every other flows) is
+  given back, and moved again once publishes flow.
 * A worker asked to stop whose drain ends with a pass still running ends its process (exit 70), so the task, handed to
   the other worker after its ack wait, never runs beside it.
 * A worker whose pass ends while the bus is cut ends its process (exit 70) once its ack cannot be answered before its
@@ -71,6 +73,7 @@ from typing import Any, NoReturn
 import httpx
 import pytest
 import respx
+from measured_metrics import Measured
 from nats.aio.msg import Msg
 from nats_auth_rig import VALUES_ENV, Broker, Client, Credential, Link, Mint, Permissions, Tools, Violation, issue, mint, run_stream_job, violations
 from pydantic import SecretStr
@@ -82,7 +85,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services import queue as worker_queue
 from maintenance.services import tasks
-from maintenance.services.queue import INBOX_PREFIX, SCHEDULES_STREAM, STORE_EVENTS_STREAM, TASK_CONSUMER, TASKS_STREAM, Task, TaskQueue, Worker
+from maintenance.services.queue import INBOX_PREFIX, SCHEDULES_STREAM, STORE_EVENTS_STREAM, TASK_CONSUMER, TASKS_STREAM, Task, TaskQueue, Worker, sample_queue
 from maintenance.services.store_events import StoreEvents
 from tests.unit.chart_render import DEFAULT_ARGS, nats_users, render
 
@@ -428,8 +431,8 @@ async def test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_othe
         release_settled = runs.held["settled"] = asyncio.Event()
         second_ready.set()
         outage = asyncio.create_task(link.cut(4 * _ACK_WAIT))
-        # The pass ends once the cut stands, so its ack cannot be answered: nothing to poll for.
-        await asyncio.sleep(0.5)
+        # The pass ends once the cut stands, so its ack cannot be answered.
+        assert await _until(lambda: link.down, 5), "the link was never cut"
         assert settler.stdin is not None
         settler.stdin.write(b"finish\n")
         await settler.stdin.drain()
@@ -510,7 +513,14 @@ async def test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_othe
         assert await lane.claim("table.asked-again", "mine", within=10) == renewed, "a claim asked again after its answer was lost was refused"
         assert await lane.renew("table.asked-again", "theirs", mine, within=10) is None, "a stale renewal took a claim another holds"
         assert await lane.claim("table.asked-again", "theirs", within=10) is None, "a claim was taken while another's stood"
-        await lane.release("table.asked-again", renewed)
+        # A release naming the revision a renewal moved since, as when the renewal's answer was lost, finds its own token
+        # standing; a release of a claim another holds leaves it.
+        await lane.release("table.asked-again", "mine", mine)
+        theirs = await lane.claim("table.asked-again", "theirs", within=10)
+        assert theirs is not None, "a release refused for a revision a renewal had moved left its holder's claim standing"
+        await lane.release("table.asked-again", "mine", renewed)
+        assert await lane.claim("table.asked-again", "mine", within=10) is None, "a release by a former holder freed the claim another holds"
+        await lane.release("table.asked-again", "theirs", theirs)
 
         deliveries: list[Msg] = []
 
@@ -706,10 +716,10 @@ async def _never_run(task: Task) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_worker_settles_each_store_event_by_what_its_handling_found(tmp_path: Path) -> None:
+async def test_a_worker_settles_each_store_event_by_what_its_handling_found(tmp_path: Path, maintenance_metrics: Measured) -> None:
     """A store event is acknowledged once its table's pass is held, ended at once when it is no store event, delivered
     again after a delay when the store refused a claim's read, the delay doubling with each delivery, and ended on its last
-    delivery when the store refuses it on every one. The handling is the service's own
+    delivery when the store refuses it on every one; each settling is counted by its outcome. The handling is the service's own
     (`maintenance.services.store_events.StoreEvents`), on a control root of the test's own, where a claim the store cannot
     read is a directory standing at its key. The worker ends an event on the third delivery, which the consumer the
     render declares at `_MAX_DELIVER` allows (one past it)."""
@@ -795,12 +805,16 @@ async def test_a_worker_settles_each_store_event_by_what_its_handling_found(tmp_
     assert {name: len(handled[body]) for name, body in events.items()} == {"held": 1, "unreadable": 1, "flaky": 2, "locked": 3}
     assert 10 <= waits[0] < 25 and waits[1] >= 25, f"the refused event came back after {waits} s, not after a doubling retry delay"
     assert held == {"held": True, "flaky": True, "locked": False}
+    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"held": 2, "retried": 3, "unreadable": 1, "ended": 1}
 
 
 @pytest.mark.asyncio
-async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_delivery_and_an_unreadable_one_ends_at_once(tmp_path: Path) -> None:
+async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_delivery_and_an_unreadable_one_ends_at_once(
+    tmp_path: Path, maintenance_metrics: Measured
+) -> None:
     """A task whose run raises is delivered again after its retry delay, and on its last delivery is ended, its next try
-    held a recheck out; a message on the queue that is no task is ended without running."""
+    held a recheck out; a message on the queue that is no task is ended without running. Each hand-back and each end is
+    counted by kind."""
     tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
     worker = mint_.credentials[_WORKER]
     runs: list[float] = []
@@ -867,6 +881,8 @@ async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_deli
 
     assert 10.0 <= runs[1] - runs[0] < 30.0, f"the failed task came back after {runs[1] - runs[0]:.1f} s, not after its retry delay"
     assert held_at is not None and abs((held_at - ended_at).total_seconds() - 3600) < 10, f"the ended task's next try is held for {held_at}, not a recheck out"
+    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("retried", "ended", "completed")}
+    assert counted == {"retried": {"table": _MAX_DELIVER - 1}, "ended": {"table": 1, "unreadable": 1}, "completed": {}}
 
 
 @pytest.mark.asyncio
@@ -952,8 +968,8 @@ async def test_an_idle_worker_stops_and_closes_its_connection_at_once(tmp_path: 
     def ends_its_process(event: str, **extra: object) -> NoReturn:
         raise AssertionError(f"the worker ended its process: {event} {extra}")
 
-    async def handled(_body: bytes) -> None:
-        return None
+    async def handled(_body: bytes) -> int:
+        return 0
 
     try:
         await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
@@ -1076,10 +1092,32 @@ async def test_an_audit_the_scan_outlasts_is_given_up_and_is_not_counted_as_a_ta
     assert (ended, ran) == ([], [("scan-replica", "")]), f"the audit was counted as ended, or ran beside the scan: {ended} {ran}"
 
 
+async def _purge_the_claims(rig: Client, _monkeypatch: pytest.MonkeyPatch) -> None:
+    purged = await rig.request("$JS.API.STREAM.PURGE.KV_MAINTENANCE_CLAIMS")
+    assert purged is not None and purged.get("success") is True, f"the claims were not purged: {purged}"
+
+
+async def _break_the_renewal(_rig: Client, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fault(self: TaskQueue, key: str, token: str, revision: int, *, within: float) -> int | None:
+        raise LookupError(f"a fault no heartbeat handles, renewing {key}")
+
+    monkeypatch.setattr(TaskQueue, "renew", fault)
+
+
+@pytest.mark.parametrize(
+    ("act", "reason"),
+    [
+        pytest.param(_purge_the_claims, "maintenance_claim_lost", id="its-claim-gone"),
+        pytest.param(_break_the_renewal, "maintenance_heartbeat_ended", id="its-heartbeat-ended-by-an-unexpected-error"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_a_pass_whose_claim_is_gone_ends_its_replica(tmp_path: Path) -> None:
+async def test_a_pass_whose_claim_is_gone_ends_its_replica(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, act: Callable[[Client, pytest.MonkeyPatch], Awaitable[None]], reason: str
+) -> None:
     """A pass renews its claim on its table with each heartbeat, and one that finds the claim no longer its own cannot
-    tell whether another pass has taken the table: the replica ends itself rather than run beside it."""
+    tell whether another pass has taken the table: the replica ends itself rather than run beside it. So does one whose
+    heartbeat ends by an error nothing expected, since the pass would run on with nothing vouching for it."""
     tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
     worker = mint_.credentials[_WORKER]
     runs = _Runs()
@@ -1095,7 +1133,7 @@ async def test_a_pass_whose_claim_is_gone_ends_its_replica(tmp_path: Path) -> No
         assert await lane.enqueue(Task(kind="table", uuid="claimed", location="s3://bucket/claimed")) is True
         assert await _until(lambda: runs.times("claimed") == 1, 15), f"the task never ran: {runs.ran}"
 
-        purged = await rig.request("$JS.API.STREAM.PURGE.KV_MAINTENANCE_CLAIMS")
+        await act(rig, monkeypatch)
 
         ended = await _until(lambda: bool(replica is not None and replica.ended), 3 * _ACK_WAIT)
     finally:
@@ -1108,10 +1146,7 @@ async def test_a_pass_whose_claim_is_gone_ends_its_replica(tmp_path: Path) -> No
         finally:
             broker.stop()
 
-    assert purged is not None and purged.get("success") is True, f"the claims were not purged: {purged}"
-    assert ended and replica is not None and replica.ended == ["maintenance_claim_lost"], (
-        f"the replica ran on without its claim: {replica.ended if replica else None}"
-    )
+    assert ended and replica is not None and replica.ended == [reason], f"the replica ran on: {replica.ended if replica else None}"
 
 
 @pytest.mark.asyncio
@@ -1289,3 +1324,178 @@ async def test_a_tables_first_check_is_held_once_and_a_held_one_keeps_its_time(t
             broker.stop()
     assert (holds, covered) == ([True, False], True)
     assert held is not None and abs((held - soon).total_seconds()) < 1, f"the held check's time was replaced: {held}"
+
+
+@pytest.mark.asyncio
+async def test_a_fired_schedule_whose_move_the_bus_lost_is_moved_again(tmp_path: Path) -> None:
+    """A fired schedule whose task's publish never reached the bus, while the replica's pulls and settles still did, is
+    given back and moved again once publishes flow: its task runs once, and not before."""
+    tools, docs, mint_, broker = _the_bus(tmp_path)
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    link = Link(broker.port)
+    replica: _Replica | None = None
+    lane: TaskQueue | None = None
+    before: list[tuple[str, str]] = []
+    moved = False
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        await link.start()
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        replica = await _Replica.start(link.url, worker, "mover", runs, ready=lambda: True)
+        link.drop("maintenance.task.>")
+        assert await lane.follow_up(Task(kind="table", uuid="moved", location="s3://bucket/moved"), datetime.now(UTC) + timedelta(seconds=1)) is True
+
+        # The mover gives the fired schedule back once its publish goes unanswered, which the broker traces.
+        assert await _until(lambda: "-NAK" in broker.log_text(), 30), "the mover never gave back the schedule whose move was lost"
+        before = list(runs.ran)
+        link.flow()
+        moved = await _until(lambda: runs.times("moved") == 1, 45)
+    finally:
+        try:
+            if replica is not None:
+                await replica.stop()
+            if lane is not None:
+                await lane.close()
+            await link.stop()
+        finally:
+            broker.stop()
+
+    assert before == [], f"a task ran though its move's publish was lost: {before}"
+    assert moved and replica is not None and replica.ended == [], f"the move was never made again once publishes flowed: {runs.ran}"
+
+
+@pytest.mark.asyncio
+async def test_a_fired_schedule_the_queue_refuses_is_counted_and_given_back(tmp_path: Path, maintenance_metrics: Measured) -> None:
+    """A fired schedule the queue does not take (its stream is gone, as on a bus whose stream Job has not run again yet)
+    is counted on `maintenance.schedules.not_queued` and given back, and is moved once the queue takes it again."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    worker = mint_.credentials[_WORKER]
+    task = Task(kind="table", uuid="refused", location="s3://bucket/refused")
+    queue: TaskQueue | None = None
+    rig: Client | None = None
+    loops: list[asyncio.Task[None]] = []
+    refused = moved = False
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        dropped = await rig.request(f"$JS.API.STREAM.DELETE.{TASKS_STREAM}")
+        assert dropped is not None and dropped.get("success") is True, f"the task stream was not removed: {dropped}"
+        queue = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="mover")
+        mover = Worker(
+            queue,
+            run=_never_run,
+            ready=lambda: True,
+            heartbeat_seconds=_HEARTBEAT,
+            ack_wait_seconds=_ACK_WAIT,
+            max_deliver=_MAX_DELIVER,
+            max_pass_seconds=600,
+            retry_ended_seconds=3600,
+        )
+        loops.append(asyncio.create_task(mover.run_due()))
+        await queue.schedule_at(task, datetime.now(UTC))
+        refused = await _until(lambda: maintenance_metrics.of("maintenance.schedules.not_queued") == 1, 20)
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = queue
+
+        async def queued() -> bool:
+            return "refused" in await lane.held("task", "table")
+
+        moved = await _until(queued, 60)
+    finally:
+        try:
+            for running in loops:
+                running.cancel()
+            await asyncio.gather(*loops, return_exceptions=True)
+            if rig is not None:
+                await rig.close()
+            if queue is not None:
+                await queue.close()
+        finally:
+            broker.stop()
+    assert (refused, moved) == (True, True), f"the refused schedule was counted {refused} and moved {moved}"
+
+
+#: How old the newest of the sampled messages is when the sampler reads them, in seconds.
+_AGED = 5.0
+
+
+@pytest.mark.asyncio
+async def test_the_sampler_reads_the_queue_as_the_bus_holds_it_and_keeps_what_it_cannot_read(tmp_path: Path, maintenance_metrics: Measured) -> None:
+    """The worker's sampler (`maintenance.services.queue.sample_queue`), as `maintenance-worker` under the grants the
+    render issues, reads each stream's depth and its oldest message's age, and each durable's deliveries awaiting an ack
+    and redeliveries, as the bus holds them: a task running and one queued behind it, and a store event delivered twice
+    and unsettled. A stream it cannot read leaves its gauges at their last values. And the task that ran is timed from its
+    claim to its acknowledgement."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    runs.held["running"] = release = asyncio.Event()
+    runs.held["waiting"] = asyncio.Event()
+    replica: _Replica | None = None
+    lane: TaskQueue | None = None
+    clients: list[Client] = []
+    clock = asyncio.get_running_loop().time
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="sampler")
+        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        store = await Client.connect(broker.url, mint_.credentials[_STORE], _STORE)
+        clients += [rig, store]
+        replica = await _Replica.start(broker.url, worker, "running", runs, ready=lambda: True)
+        queued_at = clock()
+        assert await lane.enqueue(Task(kind="table", uuid="running", location="s3://bucket/running")) is True
+        assert await _until(lambda: runs.times("running") == 1, 15), f"the first task never ran: {runs.ran}"
+        started_at = clock()
+        assert await lane.enqueue(Task(kind="table", uuid="waiting", location="s3://bucket/waiting")) is True
+        published_at = clock()
+        await store.js.publish("store.events", _write_event("t/data/a.lance"), timeout=10)
+        events = await rig.js.pull_subscribe_bind(durable="maintenance-store-events", stream=STORE_EVENTS_STREAM)
+        await (await events.fetch(1, timeout=5))[0].nak()
+        await events.fetch(1, timeout=5)
+        # Ages the oldest message well past the tolerance the reading is held to, so an age read as 0 is told apart.
+        await asyncio.sleep(_AGED - (clock() - published_at))
+
+        unread = await sample_queue(lane)
+        sampled_at = clock()
+        depth = maintenance_metrics.by("maintenance.queue.messages", "stream")
+        oldest = maintenance_metrics.by("maintenance.queue.oldest", "stream")
+        backlog = {name: maintenance_metrics.by(f"maintenance.queue.{name}", "consumer") for name in ("ack_pending", "redelivered")}
+
+        dropped = await rig.request(f"$JS.API.STREAM.DELETE.{STORE_EVENTS_STREAM}")
+        assert dropped is not None and dropped.get("success") is True, f"the store events' stream was not removed: {dropped}"
+        unread_once_gone = await sample_queue(lane)
+        kept = (
+            maintenance_metrics.of("maintenance.queue.messages", stream=STORE_EVENTS_STREAM),
+            maintenance_metrics.of("maintenance.queue.oldest", stream=STORE_EVENTS_STREAM),
+            maintenance_metrics.of("maintenance.queue.ack_pending", consumer="maintenance-store-events"),
+        )
+
+        released_at = clock()
+        release.set()
+        timed = await _until(lambda: maintenance_metrics.of("maintenance.tasks.duration", kind="table") == 1, 15)
+        acked_by = clock()
+    finally:
+        try:
+            if replica is not None:
+                await replica.stop()
+            for client in clients:
+                await client.close()
+            if lane is not None:
+                await lane.close()
+        finally:
+            broker.stop()
+
+    assert unread == 0
+    assert depth == {TASKS_STREAM: 2, SCHEDULES_STREAM: 0, STORE_EVENTS_STREAM: 1}
+    assert set(oldest) == {TASKS_STREAM, STORE_EVENTS_STREAM}
+    assert abs(oldest[TASKS_STREAM] - (sampled_at - queued_at)) < 1.5, f"the oldest task's age read {oldest[TASKS_STREAM]:.1f} s"
+    assert abs(oldest[STORE_EVENTS_STREAM] - (sampled_at - published_at)) < 1.5, f"the oldest event's age read {oldest[STORE_EVENTS_STREAM]:.1f} s"
+    assert backlog == {
+        "ack_pending": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 1},
+        "redelivered": {"maintenance-worker": 0, "maintenance-due": 0, "maintenance-store-events": 1},
+    }
+    assert (unread_once_gone, kept) == (2, (1, oldest[STORE_EVENTS_STREAM], 1))
+    total = maintenance_metrics.total("maintenance.tasks.duration", kind="table")
+    assert timed and total is not None and released_at - started_at <= total <= acked_by - queued_at, f"the task ran {total} s by its count"
+    assert [v for v in violations(broker.log_text()) if mint_.user_of(v.user_key) == _WORKER] == []

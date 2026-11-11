@@ -596,6 +596,25 @@ def holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) 
         return False
 
 
+def holder_stands(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -> bool:
+    """Whether ``claim``'s holder still stands at the claimed location: it resolves there, or the trash keeps it there.
+
+    :func:`holder_is_gone`'s judgement for a caller to whom "standing" is the irreversible answer: a read that fails
+    raises, where :func:`holder_is_gone` answers it "not gone". A name whose namespace is gone resolves nowhere.
+
+    Raises:
+        ServiceUnavailableError: The namespace backend could not be asked.
+        OSError: The trash record could not be read.
+    """
+    if kept_in_trash(store, claim):
+        return True
+    try:
+        described = native.call(ns, "describe_table", DescribeTableRequest(id=claim.segments))
+    except (TableNotFoundError, NamespaceNotFoundError):
+        return False
+    return decoded_path(str(described.location or "")) == claim.location
+
+
 def data_directory_holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -> bool:
     """Whether a data directory's holder no longer exists ([[LH-252]]).
 

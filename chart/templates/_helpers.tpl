@@ -569,12 +569,17 @@ securityContext:
   (dict "Sid" "DrainItsOwnOutboxAndNothingElse" "Effect" "Allow" "Action" (list "s3:GetObject" "s3:DeleteObject") "Resource" (list (printf "arn:aws:s3:::%s/_lineage_outbox" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control)))) -}}
 {{- end -}}
 
+{{- /* Each governed bucket's event configuration is read by the hourly audit (`maintenance.services.bucket_events`): the
+action RustFS 1.0.3 checks is `s3:GetBucketNotification`, on the bucket's own resource (measured 2026-11-10). The governed
+buckets include every warehouse bucket the catalog creates at runtime, which no render can name, so it is granted on the
+buckets as the estate's reads already are. */ -}}
 {{- define "lance.objectStorePolicy.maintenance" -}}
 {{- $control := .Values.objectStore.bucket -}}
 {{- $own := list (printf "arn:aws:s3:::%s/_maintenance_due/*" $control) (printf "arn:aws:s3:::%s/_maintenance_files/*" $control) (printf "arn:aws:s3:::%s/_policies/state/*" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control) -}}
 {{- toJson (list
   (dict "Sid" "ListAccountForReconcileDriftReport" "Effect" "Allow" "Action" (list "s3:ListAllMyBuckets") "Resource" (list "arn:aws:s3:::*"))
   (dict "Sid" "ReadTheEstateItSweeps" "Effect" "Allow" "Action" (list "s3:ListBucket" "s3:GetBucketLocation" "s3:GetObject") "Resource" (list "arn:aws:s3:::*" "arn:aws:s3:::*/*"))
+  (dict "Sid" "ReadEachBucketsEventConfiguration" "Effect" "Allow" "Action" (list "s3:GetBucketNotification") "Resource" (list "arn:aws:s3:::*"))
   (dict "Sid" "WriteItsOwnRecordsAndNothingElse" "Effect" "Allow" "Action" (list "s3:PutObject" "s3:DeleteObject") "Resource" $own)) -}}
 {{- end -}}
 

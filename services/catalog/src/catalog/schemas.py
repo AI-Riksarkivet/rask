@@ -799,6 +799,32 @@ class TrashRefusalResponse(BaseModel):
     attempts: int | None = None
 
 
+class CloneEndingEntry(BaseModel):
+    """One registered clone's ending that its door could not clear (ADR 0198 §1): the digest its finish is asked by."""
+
+    #: The SHA-256 of the clone's decoded location, which its tags, its claim and its endings are kept under.
+    digest: str
+    #: The token of the request that filed it, which names this ending under the digest.
+    filing: str
+    #: The door that ended the clone.
+    door: str
+    filed_at: datetime
+
+
+class CloneEndingsResponse(BaseModel):
+    """Every clone's ending not yet cleared, oldest first."""
+
+    endings: list[CloneEndingEntry]
+
+
+class CloneEndingFinishResponse(BaseModel):
+    """What finishing one clone's ending did: how many source tags it released, or that the clone itself stands there
+    for good and keeps them."""
+
+    tags_released: int
+    kept: bool
+
+
 class GrantCensusResponse(BaseModel):
     """Every object's grant count, by type, as the store holds them now: what a drift report's authorization categories
     read. The objects a deployment keeps for itself are left out, since no registry names them."""

@@ -47,19 +47,16 @@ from pydantic import SecretStr
 
 from lakehouse import file_identities, maintenance_policies
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.base_refs import normalise
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
-from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult
-from maintenance.services.naming import claim_store, policy_owners
-from maintenance.services.plan import PlanContext
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.store_events import StoreEvents
+from maintenance.services.table_pass import TableTask
 from tests.integration.maintenance_vend_doors import CATALOG_URL, MAINTAIN_TIER_DOOR, VENDED, described_by, maintain_tier_door
 
 
@@ -67,8 +64,6 @@ _TABLE_ID: list[str] = ["db", "t"]
 _TABLE = "$".join(_TABLE_ID)
 _DATA_FILE = r"data/[^/]+\.lance"
 _MERGE = "merge_insert?on=id&when_not_matched_insert_all=true"
-
-type _Policy = dict[str, object]
 
 
 def _rows(name: str, first: int = 1) -> pa.Table:
@@ -165,40 +160,30 @@ class _Estate:
             }
         )
 
-    def passed(
-        self,
-        location: str,
-        *,
-        reclaiming: bool = False,
-        door: AbstractContextManager[respx.MockRouter] | None = None,
-        policies: Sequence[_Policy] = (),
-    ) -> DatasetResult:
-        """Maintenance's own pass over the table at ``location``, under ``policies``, ``door`` answering its maintain-tier
-        vends (by default, each over the table's location); ``reclaiming`` expires every version but the latest first."""
-        described = self.client.post("/v1/namespace/db/describe", json={})
-        assert described.status_code == 200, described.text
-        now = datetime.now(UTC)
+    def passed(self, location: str, *, reclaiming: bool = False, door: AbstractContextManager[respx.MockRouter] | None = None) -> DatasetResult:
+        """Maintenance's own pass of the table at ``location``, as its task runs it (`table_pass.run_table_pass`), under
+        the policies the store holds, ``door`` answering its maintain-tier vends (by default, each over the table's
+        location); ``reclaiming`` keeps the latest version alone, under the table's own policy. The table's own dataset's
+        result."""
+        table_uuid = self.table_uuid()
+        if reclaiming:
+            maintenance_policies.put_policy(f"s3://{self.bucket}", self.key, {"kind": "table", "id": _TABLE, "uuid": table_uuid, "retain_versions": 1})
         settings = self.settings(**({"min_versions_to_expire": 1} if reclaiming else {}))
-        ids = TableIds(by_location={normalise(location): _TABLE}, namespace_uuids={"db": str(described.json()["properties"][UUID_PROPERTY])})
-        readings = table_pass.PassReadings(
-            table_ids=ids,
-            context=PlanContext(policies=list(policies), now=now, older_than=timedelta(0) if reclaiming else timedelta(days=7)),
-            table=_TABLE,
-            owners=policy_owners(ids, _TABLE, claims=claim_store(settings)),
-        )
         with door or maintain_tier_door(described_by(self.client)):
-            result = table_pass.maintain_dataset(location, readings=readings, settings=settings)
+            outcome = table_pass.run_table_pass(TableTask(uuid=table_uuid, location=location), settings)
+        assert outcome.ended is None and outcome.results, outcome
+        result = outcome.results[0]
         assert result.error is None, result.error
         return result
 
-    def reported_from(self, events: Sequence[bytes], *, policies: Sequence[_Policy]) -> dict[str, tuple[str | None, list[str]]]:
-        """The store's ``events`` handled as a replica handles them, then the pass of each table they held, under
-        ``policies``: by the table's uuid, what cut the pass short and the files it named."""
+    def reported_from(self, events: Sequence[bytes]) -> dict[str, tuple[str | None, list[str]]]:
+        """The store's ``events`` handled as a replica handles them, then the pass of each table they held: by the
+        table's uuid, what cut the pass short and the files it named."""
         queue = _HoldingQueue()
         handler = StoreEvents(self.settings(), cast(TaskQueue, queue))
         for event in events:
             asyncio.run(handler.hold_passes(event))
-        results = {task.uuid: self.passed(task.location, policies=policies) for task in queue.held}
+        results = {task.uuid: self.passed(task.location) for task in queue.held}
         return {table: (result.skipped, result.overwritten_files) for table, result in results.items()}
 
 
@@ -382,16 +367,16 @@ def _store_event(bucket: str, key: str) -> bytes:
     return json.dumps({"EventName": name, "Key": f"{bucket}/{key}", "Records": [record]}).encode()
 
 
-def _no_policy(estate: _Estate, location: str) -> list[_Policy]:
-    return []
+def _no_policy(estate: _Estate, location: str) -> None:
+    return None
 
 
-def _a_cadence_that_skips_the_pass(estate: _Estate, location: str) -> list[_Policy]:
+def _a_cadence_that_skips_the_pass(estate: _Estate, location: str) -> None:
     """The table's own policy, its cadence stamped a minute ago, so its next pass is cut short by it."""
-    policy: _Policy = {"kind": "table", "id": _TABLE, "uuid": estate.table_uuid(), "compact_enabled": True, "compact_interval_hours": 24}
+    policy: dict[str, object] = {"kind": "table", "id": _TABLE, "uuid": estate.table_uuid(), "compact_enabled": True, "compact_interval_hours": 24}
+    maintenance_policies.put_policy(f"s3://{estate.bucket}", estate.key, policy)
     stamped = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
     maintenance_policies.write_state(f"s3://{estate.bucket}", estate.key, policy, table_uuid=estate.table_uuid(), uri=location, at=stamped)
-    return [policy]
 
 
 @pytest.mark.parametrize(
@@ -405,17 +390,17 @@ def _a_cadence_that_skips_the_pass(estate: _Estate, location: str) -> list[_Poli
 def test_an_overwrite_is_reported_by_the_pass_its_store_event_holds(
     estate: _Estate,
     commit: Callable[[_Estate], tuple[str, str]],
-    arrange: Callable[[_Estate, str], list[_Policy]],
+    arrange: Callable[[_Estate, str], None],
     cut_short_by: str | None,
 ) -> None:
     location, relative = commit(estate)
-    policies = arrange(estate, location)
+    arrange(estate, location)
     _overwritten(estate, location, relative)
     events = [
         _store_event(estate.bucket, key) for key in (f"{estate.key_of(location)}/{relative}", "_file_identities/a/b.json", f"{uuid.uuid4()}/data/x.lance")
     ]
 
-    reported = estate.reported_from(events, policies=policies)
+    reported = estate.reported_from(events)
 
     assert reported == {estate.table_uuid(): (cut_short_by, [relative])}
 

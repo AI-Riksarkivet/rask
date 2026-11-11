@@ -347,6 +347,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/clone-endings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Clone Endings
+         * @description Every registered clone's ending its door did not remove, oldest first: each a finish to ask for.
+         */
+        get: operations["list_clone_endings_management_v1_clone_endings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/clone-endings/{digest}/{filing}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish Clone Ending
+         * @description Release what the door that ended a registered clone named (its tag on each source, its base record where its bytes
+         *     went, its location's claim, fenced while the finish acts), and remove the ending last.
+         *
+         *     Refused 409 (code 19) while the ending is younger than a location claim's lease, while another finish acts on it,
+         *     while another table holds the location, and while the clone itself stands there, until a day after the filing, when
+         *     the ending is removed with nothing released; 409 (code 14) when the ending or the claim changed under the finish. No
+         *     such ending answers 404.
+         */
+        post: operations["finish_clone_ending_management_v1_clone_endings__digest___filing__finish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/decisions/check": {
         parameters: {
             query?: never;
@@ -5421,6 +5467,42 @@ export interface components {
             occurred_at?: string;
         };
         /**
+         * CloneEndingEntry
+         * @description One registered clone's ending that its door could not clear (ADR 0198 §1): the digest its finish is asked by.
+         */
+        CloneEndingEntry: {
+            /** Digest */
+            digest: string;
+            /** Door */
+            door: string;
+            /**
+             * Filed At
+             * Format: date-time
+             */
+            filed_at: string;
+            /** Filing */
+            filing: string;
+        };
+        /**
+         * CloneEndingFinishResponse
+         * @description What finishing one clone's ending did: how many source tags it released, or that the clone itself stands there
+         *     for good and keeps them.
+         */
+        CloneEndingFinishResponse: {
+            /** Kept */
+            kept: boolean;
+            /** Tags Released */
+            tags_released: number;
+        };
+        /**
+         * CloneEndingsResponse
+         * @description Every clone's ending not yet cleared, oldest first.
+         */
+        CloneEndingsResponse: {
+            /** Endings */
+            endings: components["schemas"]["CloneEndingEntry"][];
+        };
+        /**
          * CommitTableOperation
          * @description A single operation within a batch commit. Provide exactly one of the operation fields to specify the operation kind.
          */
@@ -10218,6 +10300,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_clone_endings_management_v1_clone_endings_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloneEndingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finish_clone_ending_management_v1_clone_endings__digest___filing__finish_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                digest: string;
+                filing: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloneEndingFinishResponse"];
                 };
             };
             /** @description Validation Error */

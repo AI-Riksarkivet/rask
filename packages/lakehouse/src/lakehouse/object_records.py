@@ -12,6 +12,8 @@ Not listed, each for its own reason:
   rather than ending it.
 - Grants live in OpenFGA; the catalog's ``fga_deps`` revokes them.
 - Location claims and base records are keyed by the table's location, and the claim records the uuid.
+- A clone's ending (:mod:`lakehouse.clone_endings`) is keyed by its location too, and is filed BY the ending of the
+  object, to outlive it until the clone's holds are released: ending it here would end it before its work is done.
 - A promotion hold, a due record and an erasure obligation each end on their own terms: the hold expires, the sweep
   clears a due record no table holds, and an obligation stays as the record of a request.
 

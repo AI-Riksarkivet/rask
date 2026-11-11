@@ -388,10 +388,17 @@ def release_clone_sources(registry: BaseRegistry, location: str, *, holder: str,
         log.warning("clone_source_tags_kept_for_another_holder", extra={"location": location, "holder": claimed.table, "ending": holder})
         return []
     held = record if record is not None else read_base_record(registry, location)
-    # One source per table: a clone of a branch also records the branch's directory, which lies inside its table's root.
-    derived = [entry for entry in held.entries if entry.role is BaseRole.DERIVED_FROM] if held is not None else []
-    sources = list(dict.fromkeys(key_uri(entry.store, entry.source_table or entry.path) for entry in derived))
-    return clone_sources.release_all(sources, clone_location=location, storage_options=registry.storage_options)
+    return clone_sources.release_all(clone_source_locations(held), clone_location=location, storage_options=registry.storage_options)
+
+
+def clone_source_locations(record: BaseRecord | None) -> list[str]:
+    """The root of each source table the clone ``record`` describes reads through (its ``derived_from`` entries), where
+    the clone's tags stand (:mod:`lakehouse.clone_sources`); empty for a table that is no clone.
+
+    One source per table: a clone of a branch also records the branch's directory, which lies inside its table's root.
+    """
+    derived = [entry for entry in record.entries if entry.role is BaseRole.DERIVED_FROM] if record is not None else []
+    return list(dict.fromkeys(key_uri(entry.store, entry.source_table or entry.path) for entry in derived))
 
 
 def claim_data_directories(

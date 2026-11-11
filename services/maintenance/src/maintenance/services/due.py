@@ -14,6 +14,7 @@ evaluated. A dataset no manifest row names â€” unregistered, trashed, dropped â€
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -111,10 +112,12 @@ def _indices_due(ds: lance.LanceDataset, question: DueQuestion) -> list[IndexDue
     return due_indices(ds) if question.optimize_indices_enabled else []
 
 
-def evaluate_due(question: DueQuestion, storage_options: StorageOptions, *, now: datetime) -> DueRecord | None:
+def evaluate_due(
+    question: DueQuestion, storage_options: StorageOptions, *, now: datetime, opened: Callable[[], lance.LanceDataset] | None = None
+) -> DueRecord | None:
     """The table's due record as of now, or ``None`` when neither a compaction nor an index optimize is due. Raises when
-    the dataset cannot be read."""
-    ds = lance.dataset(question.location, storage_options=storage_options.in_clear(), session=shared_lance_session())
+    the dataset cannot be read. ``opened`` answers a handle the caller already holds on the dataset as it now stands."""
+    ds = opened() if opened is not None else lance.dataset(question.location, storage_options=storage_options.in_clear(), session=shared_lance_session())
     compaction = compaction_due(ds, question, storage_options)
     indices = _indices_due(ds, question)
     if compaction is None and not indices:
@@ -131,11 +134,11 @@ def evaluate_due(question: DueQuestion, storage_options: StorageOptions, *, now:
     )
 
 
-def refresh_due(question: DueQuestion, settings: MaintenanceSettings, *, now: datetime) -> DueVerdict:
+def refresh_due(question: DueQuestion, settings: MaintenanceSettings, *, now: datetime, opened: Callable[[], lance.LanceDataset] | None = None) -> DueVerdict:
     """Evaluate one table and write or delete its due record. Never raises: a failure leaves the record as it was."""
     options = settings.storage_options()
     try:
-        record = evaluate_due(question, options, now=now)
+        record = evaluate_due(question, options, now=now, opened=opened)
         if record is None:
             delete_due(settings.resolved_control_root, options, question.uuid)
             return "clear"

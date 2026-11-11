@@ -11,10 +11,11 @@ before that commit.
   each by key: the same number of requests at 4 tables as at 12, and once eight more warehouses and a policy on every
   other table are there, since a pass that listed the registries would read each record. The files its commits recorded are
   checked against one listing of its root, and of the records only the one the commit wrote is read, maintenance's copy
-  holding the rest (`lakehouse.file_identities.recorded_and_copied`), so a table of 13 commits reads one. Measured
-  2026-11-09: 58. What still grows with a table is Lance's own cleanup accounting, which reads each retained version's
-  manifest (`explain_cleanup_old_versions` and `versions`, [[LH-562]]): three reads a version, bounded by the table's
-  retention.
+  holding the rest (`lakehouse.file_identities.recorded_and_copied`), so a table of 13 commits reads one. The pass opens
+  each dataset once before its expiry and once after, and asks Lance's count of its reclaimable versions once where it
+  holds no vend. Measured 2026-11-10: 50 for a table of 4 versions, and 155 for one of 25. What still grows with a table is Lance's
+  own cleanup accounting, which reads each retained version's manifest (`explain_cleanup_old_versions` and `versions`,
+  [[LH-562]]), bounded by the table's retention.
 * **An idle estate** runs, besides each table's own schedule (its recheck, a day out), only the hourly audit
   (`audit.run_audit`): it opens no table, and grows with the estate by at most one request per table, the claim record its
   drift report reads, which its backstop reuses to find a table whose schedule was lost. Measured: about 1 request per
@@ -50,6 +51,9 @@ _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 #: The most a pass may cost: what one table's datasets, its records and its bucket's manifest need, with headroom for a
 #: pylance that reads a little differently. A pass that read every table would cost a multiple of the estate.
 _PASS_CEILING = 80
+#: The most a pass of a table of 25 versions may cost: one open of the dataset before its expiry and one after, and one
+#: count of its reclaimable versions, which reads every retained manifest; a second count would cost 25 reads more.
+_PASS_AT_25_VERSIONS = 160
 
 
 @pytest.fixture(scope="module")
@@ -182,10 +186,13 @@ def test_a_commits_pass_costs_a_fixed_handful_and_an_idle_estate_opens_no_table(
             crowded_pass = estate.a_commits_pass(5)
             estate.deepen(0, 8)
             deep_pass = estate.a_commits_pass(0)
+            estate.deepen(0, 11)
+            versions_25_pass = estate.a_commits_pass(0)
 
     assert len(large_pass) == len(small_pass) <= _PASS_CEILING, f"a commit's pass cost {len(small_pass)} requests at 4 tables and {len(large_pass)} at 12"
     grown = Counter((request.method, request.path) for request in crowded_pass) - Counter((request.method, request.path) for request in large_pass)
     assert len(crowded_pass) == len(large_pass), f"a commit's pass read {sorted(grown)} beside 8 more warehouses and 10 policies"
     assert estate.records_read(deep_pass, 0) == 1, f"a commit's pass read {estate.records_read(deep_pass, 0)} of its table's 13 commit records"
+    assert len(versions_25_pass) <= _PASS_AT_25_VERSIONS, f"a commit's pass of a table of 25 versions cost {len(versions_25_pass)} requests"
     assert (estate.opened(small_audit), estate.opened(large_audit)) == ([], []), "the hourly audit read inside a table"
     assert len(large_audit) - len(small_audit) <= 12 - 4, f"the audit grew by {len(large_audit) - len(small_audit)} requests for 8 more tables"

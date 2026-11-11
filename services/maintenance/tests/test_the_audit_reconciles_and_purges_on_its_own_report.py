@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+import httpx
 import pytest
+import respx
 from pydantic import SecretStr
 
 from lakehouse import location_claims, trash
@@ -167,6 +169,28 @@ def test_the_purge_consumes_the_report_its_own_audit_produced(monkeypatch: pytes
     assert out["trash_purge"]["ran"] is False
 
 
+def test_the_audit_asks_the_catalog_to_finish_every_clones_ending_it_lists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A clone's tag a door could not release is released by the catalog, asked by the audit for each ending the catalog
+    lists (ADR 0198 §1): maintenance's store policy writes no source's tags. A refusal is reported by the ending's id and
+    never stops the audit."""
+    monkeypatch.setattr(audit, "reconcile", _Reconciler())
+    catalog = "http://catalog.test"
+    settings = _settings(catalog_url=catalog).model_copy(update={"control_root": str(tmp_path)})
+    finished, refused = f"{'a' * 64}/{'c' * 32}", f"{'b' * 64}/{'c' * 32}"
+    listed = [{"digest": d, "filing": f, "door": "deregister", "filed_at": _CHECKED_AT} for d, f in (e.split("/") for e in (finished, refused))]
+
+    with respx.mock(base_url=catalog, assert_all_called=True) as doors:
+        doors.get("/management/v1/clone-endings").mock(return_value=httpx.Response(200, json={"endings": listed}))
+        done = doors.post(f"/management/v1/clone-endings/{finished}/finish").mock(return_value=httpx.Response(200, json={"tags_released": 1, "kept": False}))
+        young = doors.post(f"/management/v1/clone-endings/{refused}/finish").mock(
+            return_value=httpx.Response(409, json={"code": 19, "detail": "the ending was filed less than 0:15:00 ago"})
+        )
+        out = asyncio.run(_the_hourly_audit(settings))
+
+    assert (done.call_count, young.call_count) == (1, 1)
+    assert (out["clone_endings"]["finished"], list(out["clone_endings"]["refused"])) == ([finished], [refused])
+
+
 def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
     """A finding no operator can action keeps the drift report permanently non-clean.
 
@@ -216,20 +240,28 @@ class _HoldingQueue:
 def test_the_audit_queues_what_neither_a_schedule_nor_the_queue_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The backstop for every lost announcement: a table whose claim no schedule or task holds gets a pass, a trash record
     none holds gets its task, namespaces' included, and a trashed table gets no pass, since its trash task decides. A
-    table holding no orphan check gets one, held within a day at the floor's interval, and a trashed table none."""
+    table holding no orphan check gets one, held within a day at the floor's interval, and a trashed table none. A record
+    already released, or carrying no deadline, gets no task: its task would end holding nothing, and be queued again by
+    every audit."""
 
     monkeypatch.setattr(audit, "reconcile", _Reconciler())
     settings = _settings().model_copy(update={"control_root": str(tmp_path)})
     claims = location_claims.ClaimStore(control_root=str(tmp_path), storage_options=StorageOptions())
-    names = ("scheduled", "queued", "lost", "trashed")
+    names = ("scheduled", "queued", "lost", "trashed", "released", "undated")
     tables = {name: (str(uuid4()), f"{tmp_path}/{name}") for name in names}
     for name, (table_uuid, location) in tables.items():
         location_claims.take(claims, location, f"db${name}", ["db", name], is_gone=lambda _claim: False, uuid=table_uuid)
     trashed_uuid, trashed_at = tables["trashed"]
     namespace_uuid = str(uuid4())
+    released = trash.make_record("db$released", uuid=tables["released"][0], location=tables["released"][1], dropped_by=None, grace_days=7)
+    released[trash.RELEASED_AT] = datetime.now(UTC).isoformat()
+    undated = trash.make_record("db$undated", uuid=tables["undated"][0], location=tables["undated"][1], dropped_by=None, grace_days=7)
+    del undated["expires_at"]
     for record in (
         trash.make_record("db$trashed", uuid=trashed_uuid, location=trashed_at, dropped_by=None, grace_days=7),
         trash.make_record("gone", uuid=namespace_uuid, location="", dropped_by=None, grace_days=7, kind="namespace"),
+        released,
+        undated,
     ):
         trash.put(str(tmp_path), StorageOptions(), record)
     queue = _HoldingQueue(

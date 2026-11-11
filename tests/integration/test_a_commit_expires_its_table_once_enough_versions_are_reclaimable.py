@@ -7,7 +7,8 @@ one case: one reclaimable version short reclaims nothing; at the threshold every
 removes what a commit that lost its version left behind, the manifest it staged ([[LH-529]]), whether or not versions are
 due, and then schedules the table's next pass for its recheck, never a minute out; under a policy that keeps the whole
 history it removes nothing. A pass that cannot read the table's own policy record, which may be a legal hold, reclaims
-nothing, whatever the policy of its namespace allows, and is retried.
+nothing, whatever the policy of its namespace allows, and is retried. The time a pass schedules for the table's next is
+pinned branch by branch, its clock injected.
 
 The table's name is one the catalog percent-encodes ([[LH-319]]): the event names the URL the catalog opened,
 ``…$r%C3%A4ksm%C3%B6rg%C3%A5s`` as ``describe_table`` answers it, while the ``__manifest`` row and the store hold
@@ -33,13 +34,15 @@ from pydantic import SecretStr
 
 from lakehouse import location_claims, maintenance_policies
 from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.record_store import record_key
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
-from maintenance.services.table_pass import TableTask, run_table_pass
+from maintenance.services.expiry import HISTORY_FENCED, DatasetResult
+from maintenance.services.table_pass import TableTask, held_location, run_table_pass
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 
 
@@ -193,6 +196,83 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
     # The store stamps a put to the second, so the grace's end comes up to a second before the pass's clock adds it up.
     assert abs(due - now - next_pass) < timedelta(seconds=2), f"the table's next pass is {due - now} out"
     assert lance.dataset(task.location, storage_options=store.in_clear()).version == THRESHOLD
+
+
+def _outcome(kind: str, uri: str) -> DatasetResult:
+    """A dataset's result as the pass leaves it: failed, fenced off by a ref write, refused, dropped mid-pass, or run."""
+    match kind:
+        case "failed":
+            return DatasetResult(uri=uri, error="maintain: the store refused the cleanup")
+        case "fenced":
+            return DatasetResult(uri=uri, skipped=HISTORY_FENCED)
+        case "refused":
+            return DatasetResult(uri=uri, refused="the manifest carries a flag maintenance refuses", refused_by="manifest_flags")
+        case "trashed":
+            return DatasetResult(uri=uri, trashed="a-dropped-tables-uuid")
+        case _:
+            return DatasetResult(uri=uri)
+
+
+#: Each case's next pass, from the pass's clock and the commit times of the table's superseded versions, oldest first.
+type _Expected = Callable[[datetime, list[datetime]], datetime]
+_RETRY = timedelta(seconds=900)
+_RECHECK = timedelta(hours=72)
+
+
+@pytest.mark.parametrize(
+    ("policy", "staged_grace", "kind", "expected"),
+    [
+        pytest.param(KEEP_ONE, None, "failed", lambda now, _: now + _RETRY, id="a-failed-pass-is-retried"),
+        pytest.param(KEEP_ONE, None, "fenced", lambda now, _: now + _RETRY, id="a-history-fenced-pass-is-retried"),
+        pytest.param({"retention_days": 1}, None, "refused", lambda now, _: now + _RECHECK, id="a-refused-dataset-waits-for-the-recheck"),
+        pytest.param({"retention_days": 1}, None, "trashed", lambda now, _: now + _RECHECK, id="one-dropped-mid-pass-waits-for-the-recheck"),
+        pytest.param(
+            {"retention_days": 1}, None, "ran", lambda _, superseded: superseded[THRESHOLD - 1] + timedelta(days=1), id="enough-versions-come-due-as-they-age"
+        ),
+        pytest.param(
+            {"retention_days": 1, "compact_interval_hours": 30}, None, "ran", lambda now, _: now + timedelta(hours=30), id="the-policy-cadence-holds-it-later"
+        ),
+        pytest.param(KEEP_ONE, "30", "ran", lambda now, _: now + timedelta(seconds=60), id="never-sooner-than-a-minute"),
+    ],
+)
+def test_a_tables_next_pass_comes_when_its_first_dataset_needs_one(
+    *,
+    bucket: str,
+    moto_url: str,
+    store: StorageOptions,
+    settings: Callable[[], MaintenanceSettings],
+    monkeypatch: pytest.MonkeyPatch,
+    policy: dict[str, Any],
+    staged_grace: str | None,
+    kind: str,
+    expected: _Expected,
+) -> None:
+    """The time a pass schedules for the table (`table_pass.next_due`), read afresh after the pass: a dataset the pass
+    failed on, or found fenced, is tried again after the retry; a refused one, and one dropped mid-pass, waits for the
+    recheck; the versions the
+    policy keeps come due as they age, held to the policy's cadence once it has stamped one; and none comes sooner than a
+    minute, however soon a staged manifest's grace ends."""
+    monkeypatch.setenv("MAINTENANCE_RECHECK_HOURS", str(int(_RECHECK.total_seconds() // 3600)))
+    if staged_grace is not None:
+        monkeypatch.setenv("MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS", staged_grace)
+    task = _table_with(THRESHOLD + 1, bucket=bucket, options=store, policy=policy)
+    if staged_grace is not None:
+        _staged(bucket, moto_url, LOCATION, 2)
+    configured = settings()
+    now = datetime.now(UTC)
+    if "compact_interval_hours" in policy:
+        record = {"kind": "table", "id": TABLE, "uuid": task.uuid, **policy}
+        maintenance_policies.write_state(f"s3://{bucket}", store, record, table_uuid=task.uuid, uri=held_location(task.location), at=now.isoformat())
+    held = location_claims.holder(location_claims.ClaimStore(control_root=f"s3://{bucket}", storage_options=store), task.location)
+    assert held is not None
+    readings = table_pass.read_for(task.location, held, configured, now=now)
+    assert readings is not None
+    versions = lance.dataset(task.location, storage_options=store.in_clear()).versions()
+    superseded = sorted(committed_at(entry) for entry in versions[:-1])
+
+    due = table_pass.next_due([_outcome(kind, held_location(task.location))], readings=readings, settings=configured)
+
+    assert due == expected(now, superseded)
 
 
 def test_a_pass_that_cannot_read_its_tables_policy_reclaims_nothing_and_is_retried(

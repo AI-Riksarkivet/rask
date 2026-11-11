@@ -2,8 +2,9 @@
 
 A table's pass counts under the ``compaction.*`` prefix the alert rules and dashboards query; maintenance compacts
 nothing (ADR 0155), and what they count is its own work: the datasets a pass reached, the versions it reclaimed, the
-datasets it refused or failed. The worker counts its tasks under ``maintenance.tasks.*`` (ADR 0198 §2). Only the
-instrumentation scope names the service."""
+datasets it refused or failed. The worker counts its tasks under ``maintenance.tasks.*``, the store events and fired
+schedules it settles, and samples its streams and durable consumers under ``maintenance.queue.*`` (ADR 0198 §2). Only
+the instrumentation scope names the service."""
 
 from __future__ import annotations
 
@@ -305,14 +306,138 @@ _passes_overran = _meter.create_counter(
 )
 
 
+#: A task its worker handed back for another delivery after its run failed, by kind: a store or a catalog refusing a
+#: table's pass every time shows here long before its last delivery ends it.
+_tasks_retried = _meter.create_counter(
+    "maintenance.tasks.retried",
+    unit="{task}",
+    description="Maintenance tasks handed back for another delivery after their run failed, by kind.",
+)
+#: One task's run, from the claim on its table to its acknowledgement, by kind: a task that completed. Second-scale
+#: boundaries up to the pass bound's order (`maintenance.queue.maxPassSeconds`, 1800 s by default), since the SDK's
+#: default boundaries are millisecond-tuned and would put every pass above 10 s in one bucket.
+_task_duration = _meter.create_histogram(
+    "maintenance.tasks.duration",
+    unit="s",
+    description="Seconds from the claim on a task's table to the task's acknowledgement, by kind, for tasks that completed.",
+    explicit_bucket_boundaries_advisory=[0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 1800.0, 3600.0],
+)
+
+#: How the worker settled one store event it pulled (:meth:`maintenance.services.queue.Worker.run_store_events`), the
+#: closed `outcome` set of `maintenance.store_events.settled`: acknowledged with a table's pass held (``held``),
+#: acknowledged holding nothing (``ignored``: a key under no table, a delete, or a table whose follow-up was held
+#: already), handed back for another delivery (``retried``), ended at once as no store event (``unreadable``), and ended
+#: on its last delivery, or on the one past it after its worker died every time (``ended``).
+type StoreEventOutcome = Literal["held", "ignored", "retried", "unreadable", "ended"]
+
+_store_events_settled = _meter.create_counter(
+    "maintenance.store_events.settled",
+    unit="{event}",
+    description="Store events the worker settled, by outcome: held, ignored, retried, unreadable, ended.",
+)
+#: A fired schedule the queue did not take (:meth:`maintenance.services.queue.Worker._move`): it is delivered again
+#: after a delay, and a refusal that stands is a table whose time never comes.
+_schedules_not_queued = _meter.create_counter(
+    "maintenance.schedules.not_queued",
+    unit="{schedule}",
+    description="Fired schedules the work queue refused or did not answer, each given back to be moved again.",
+)
+
+#: What the worker's sampler reads off the bus every minute (:func:`maintenance.services.queue.sample_queue`). Synchronous
+#: gauges: one exports nothing until it is first set, so a web pod, which imports this module and runs no sampler,
+#: exports no constant 0 beside the worker's truth, and once set it exports its last value at every collection
+#: (measured on opentelemetry-sdk 1.45.2, cumulative temporality). A sample the bus does not answer leaves a gauge at
+#: its last value, logged (`maintenance_queue_unsampled`).
+_queue_messages = _meter.create_gauge(
+    "maintenance.queue.messages",
+    unit="{message}",
+    description="Messages a maintenance stream holds, by stream, as the worker last sampled it.",
+)
+#: Named without its unit: the exporter appends the unit, so the series is `maintenance_queue_oldest_seconds`, as
+#: `outbox.oldest_age` (unit ``s``) is `outbox_oldest_age_seconds` (deploy/alerting/rules.yml).
+_queue_oldest = _meter.create_gauge(
+    "maintenance.queue.oldest",
+    unit="s",
+    description="Age of the oldest message a work-queue stream holds (0 when it holds none), by stream, as the worker last sampled it.",
+)
+_queue_ack_pending = _meter.create_gauge(
+    "maintenance.queue.ack_pending",
+    unit="{message}",
+    description="Deliveries a maintenance durable consumer awaits an acknowledgement for, by consumer, as the worker last sampled it.",
+)
+_queue_redelivered = _meter.create_gauge(
+    "maintenance.queue.redelivered",
+    unit="{message}",
+    description="Messages a maintenance durable consumer has delivered more than once and not yet settled, by consumer, as the worker last sampled it.",
+)
+
+
+#: How the hourly audit found each governed bucket's store events (:mod:`maintenance.services.bucket_events`): configured
+#: for every object write, without a rule for them, or unknown, the store refusing or failing the read. A counter, added
+#: once per bucket per audit: whichever replica runs an audit, the replicas' series sum to what the audits found, and a
+#: fix stops the increase, so an alert on it clears within its window; seeded at 0 by outcome when a worker starts.
+type BucketEventsOutcome = Literal["configured", "without", "unknown"]
+
+_store_event_buckets_checked = _meter.create_counter(
+    "maintenance.store_event_buckets.checked",
+    unit="{bucket}",
+    description="Governed buckets the hourly audit asked the store about, by outcome: configured, without, unknown.",
+)
+
+
+def record_store_event_bucket_checked(*, outcome: BucketEventsOutcome) -> None:
+    """Record how the audit found one governed bucket's store events."""
+    _store_event_buckets_checked.add(1, {"outcome": outcome})
+
+
 def create_task_series(kinds: tuple[str, ...]) -> None:
-    """Create each kind's series of the worker's three counters at 0 when it starts, and the `unreadable` one of the
-    ended count: a series born at 1 has no 0 before it, so `increase()` sees no increase and the first task ended or
-    overrun never pages, and a worker that has completed nothing yet would read "no data"."""
+    """Create each kind's series of the worker's task counters at 0 when it starts, the `unreadable` one of the ended
+    count, every outcome of the store-event count and of the bucket-events count, and the not-queued count: a series born at 1 has no 0 before it, so
+    `increase()` sees no increase and the first task ended or overrun never pages, and a worker that has completed
+    nothing yet would read "no data"."""
     for kind in kinds:
-        for counter in (_tasks_completed, _tasks_ended, _passes_overran):
+        for counter in (_tasks_completed, _tasks_ended, _passes_overran, _tasks_retried):
             counter.add(0, {"kind": kind})
     _tasks_ended.add(0, {"kind": "unreadable"})
+    for outcome in get_args(StoreEventOutcome.__value__):
+        _store_events_settled.add(0, {"outcome": outcome})
+    _schedules_not_queued.add(0)
+    for outcome in get_args(BucketEventsOutcome.__value__):
+        _store_event_buckets_checked.add(0, {"outcome": outcome})
+
+
+def record_task_retried(*, kind: str) -> None:
+    """Record a task handed back for another delivery after its run failed."""
+    _tasks_retried.add(1, {"kind": kind})
+
+
+def record_task_duration(*, kind: str, seconds: float) -> None:
+    """Record how long a completed task held its claim, until its acknowledgement."""
+    _task_duration.record(seconds, {"kind": kind})
+
+
+def record_store_event_settled(*, outcome: StoreEventOutcome) -> None:
+    """Record how the worker settled one store event."""
+    _store_events_settled.add(1, {"outcome": outcome})
+
+
+def record_schedule_not_queued() -> None:
+    """Record a fired schedule the queue did not take."""
+    _schedules_not_queued.add(1)
+
+
+def record_stream_depth(*, stream: str, messages: int, oldest_seconds: float | None) -> None:
+    """Set a stream's sampled depth; ``oldest_seconds`` only for a stream whose age is read (a work queue a backlog ages
+    on), None for one that holds messages for their time (the schedules)."""
+    _queue_messages.set(messages, {"stream": stream})
+    if oldest_seconds is not None:
+        _queue_oldest.set(oldest_seconds, {"stream": stream})
+
+
+def record_consumer_backlog(*, consumer: str, ack_pending: int, redelivered: int) -> None:
+    """Set a durable consumer's sampled backlog."""
+    _queue_ack_pending.set(ack_pending, {"consumer": consumer})
+    _queue_redelivered.set(redelivered, {"consumer": consumer})
 
 
 def record_task_completed(*, kind: str) -> None:

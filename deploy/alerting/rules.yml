@@ -587,6 +587,113 @@ groups:
             maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later
             commit's pass of its table can start.
 
+      # The queue as the worker samples it each minute (`maintenance.services.queue.sample_queue`). The gauge's
+      # instrument is `maintenance.queue.oldest` with unit `s`, which the exporter appends, as for `outbox_oldest_age_seconds`
+      # above. Every replica samples the same streams, so `max` reads one value. MAINTENANCE_TASKS drops a message at its
+      # 24 h max age (`chart/templates/nats-stream-job.yaml`) with no consumer told, so a task waiting 6 h is the warning
+      # while 18 h are left to act.
+      - alert: MaintenanceTaskAging
+        expr: max by (stream) (maintenance_queue_oldest_seconds{stream="MAINTENANCE_TASKS"}) > 21600
+        for: 30m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "A maintenance task has waited more than six hours on the queue"
+          description: >-
+            The oldest message on MAINTENANCE_TASKS is over six hours old: tasks wait unrun, and at 24 hours the stream
+            drops them unrun, their tables left to the hourly audit. Read maintenance_queue_ack_pending and
+            maintenance_queue_redelivered for consumer maintenance-worker (deliveries stuck, or a task delivered again and
+            again), maintenance_passes_overran_total (a pass holding its replica), and whether any worker replica runs and
+            is ready (maintenance_tasks_completed_total).
+
+      # A store event the worker ended (its handling refused on every delivery, or outlived its worker every time) or could
+      # not read: its table's overwrite check waits for the daily recheck. Every outcome's series is created at 0 when a
+      # worker starts, so the first end is an increase. No `for:`: an end is final.
+      - alert: MaintenanceStoreEventsEnded
+        expr: sum by (outcome) (increase(maintenance_store_events_settled_total{outcome=~"ended|unreadable"}[1h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Maintenance {{ $labels.outcome }} store events in the last hour"
+          description: >-
+            The worker settled store events as {{ $labels.outcome }}: ended, the store or the bus refused their handling on
+            every delivery (or the worker died on every one); unreadable, the body is no S3 event record the worker parses
+            (the contract is `objectStore.events` in the chart's values). Each one's table is passed at its daily recheck
+            instead of after the write. The maintenance_store_event_ended and maintenance_store_event_unreadable ERROR lines
+            name the subject and the error.
+
+      # Delivery of store events stops when the durable's deliveries awaiting an ack reach its `max_ack_pending` (1000,
+      # `chart/templates/nats-stream-job.yaml`): 900 is 90 % of it.
+      - alert: MaintenanceStoreEventsStuck
+        expr: max by (consumer) (maintenance_queue_ack_pending{consumer="maintenance-store-events"}) >= 900
+        for: 15m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Store events are near the delivery ceiling of their consumer"
+          description: >-
+            The maintenance-store-events consumer awaits an acknowledgement for at least 900 deliveries, 90 % of its
+            max_ack_pending of 1000; at the ceiling the bus delivers no more store events, and overwrites are found only at
+            each table's daily recheck. Read maintenance_store_events_settled_total by outcome (retried rising: the store
+            refuses the claim reads) and maintenance_queue_oldest_seconds for STORE_EVENTS, and the
+            maintenance_store_event_retried WARNING lines.
+
+      # A governed bucket the hourly audit found configured with no store event for its writes
+      # (`maintenance.services.bucket_events`): a file overwritten in place there is found only at its table's daily
+      # recheck. The audit counts each bucket once per run on `maintenance_store_event_buckets_checked_total` by
+      # outcome, a counter that sums across replicas and stops rising once the buckets are fixed; 2h spans two audits, so
+      # a bucket the catalog just made waits one for its store's operator to configure it.
+      - alert: MaintenanceBucketWithoutStoreEvents
+        expr: sum(increase(maintenance_store_event_buckets_checked_total{outcome="without"}[2h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "A governed bucket sends no store events for its writes"
+          description: >-
+            The hourly audits of the last two hours found governed buckets whose event configuration holds no
+            s3:ObjectCreated:* rule over the whole bucket, so maintenance hears of no write there and a committed file
+            overwritten in place is found only at its table's daily recheck. The maintenance_bucket_without_store_events
+            WARNING line names each bucket; configure it to deliver every object write to the bus subject store.events
+            (`objectStore.events` in the chart's values).
+
+      # A governed bucket the store would not answer about: the read was refused (measured: a canned policy without
+      # s3:GetBucketNotification answers 403 for every bucket) or failed, so whether it sends its events is unknown,
+      # and an estate where every read is refused would otherwise report nothing missing.
+      - alert: MaintenanceBucketStoreEventsUnknown
+        expr: sum(increase(maintenance_store_event_buckets_checked_total{outcome="unknown"}[2h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "The store will not say whether a governed bucket sends store events"
+          description: >-
+            The hourly audits of the last two hours could not read the event configuration of governed buckets: the
+            store refused or failed GetBucketNotificationConfiguration, so whether each sends its writes as store events
+            is unknown, and it is never counted as configured. The maintenance_bucket_store_events_unknown WARNING line
+            names each bucket and the error; grant maintenance's store identity s3:GetBucketNotification on the bucket,
+            or restore the store.
+
+      # A fired schedule the queue refused or did not answer is given back and moved again 15 s later, so one refusal
+      # heals; a refusal standing an hour is a table whose time never comes. Its series is created at 0 when a worker
+      # starts.
+      - alert: MaintenanceSchedulesNotQueued
+        expr: sum(increase(maintenance_schedules_not_queued_total[1h])) > 0
+        for: 1h
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Fired maintenance schedules are not reaching the work queue"
+          description: >-
+            For an hour the queue has refused, or not answered, fired schedules the worker moves onto MAINTENANCE_TASKS, so
+            those tables' passes, trash releases and orphan checks do not run. The maintenance_due_not_queued WARNING line
+            names the subject and the bus's answer; check that MAINTENANCE_TASKS exists as the chart's stream Job declares
+            it (`nats stream info MAINTENANCE_TASKS` as the monitor user).
+
       # `SUPPORTED` is a whitelist, so a pylance upgrade that introduces a legitimate new manifest flag
       # makes a pass refuse datasets it used to maintain — and refusals are NOT errors, so nothing
       # else in this file would fire. Measured 2026-08-16: 17 refused datasets were exactly the ones

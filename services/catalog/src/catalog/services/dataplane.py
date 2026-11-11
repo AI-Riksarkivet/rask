@@ -1819,6 +1819,7 @@ def destroy_table(
     namespace_uuid: str | None,
     control: location_claims.ClaimStore,
     dropped_by: str | None = None,
+    before_removal: Callable[[], None] | None = None,
 ) -> DropTableResponse:
     """Destroy the table ``segments`` names, whose location its door resolved to ``location`` ([[LH-532]]).
 
@@ -1843,7 +1844,9 @@ def destroy_table(
        location holding at most the marker gets none and its claim lapses as usual: nothing opens a marker alone, so a
        register attaching it later adopts no data, and the purge refuses a location with no ``_versions/``, so a
        record there would hold the claim forever (both measured on pylance 13.0.0 over moto).
-    3. The row goes: the commit point. A deregister that answers TableNotFound found no row, and that answer is
+    3. ``before_removal``, when given, runs once every judgement has passed and the residue record is filed, right
+       before the row goes; if it raises, the residue record is cleared and the error raised: nothing changed.
+       The row goes: the commit point. A deregister that answers TableNotFound found no row, and that answer is
        raised unchanged. Any other failure is judged by whether the table is still described: if it is, nothing was
        removed and the failure is raised; if it is not, the row went and its answer was lost, so the drop goes on.
     4. Every object under both paths is deleted, absent counting as deleted, until a listing finds none, with
@@ -1875,6 +1878,14 @@ def destroy_table(
     )
     if residue is not None:
         trash.put(control.control_root, control.storage_options, residue)
+    if before_removal is not None:
+        # The caller's last step before the row goes, once every judgement has passed: a door files what the row's
+        # removal leaves it owing here (a clone's ending), so a refusal above files nothing. A failure changed nothing.
+        try:
+            before_removal()
+        except Exception:
+            _clear_residue(control, residue)
+            raise
     removed: DeregisterTableResponse | None
     try:
         removed = native.call(ns, "deregister_table", DeregisterTableRequest(id=segments))

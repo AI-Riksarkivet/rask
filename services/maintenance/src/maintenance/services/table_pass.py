@@ -61,7 +61,16 @@ from maintenance.core.metrics import (
 )
 from maintenance.services import base_reclaim, committed_files, credentials
 from maintenance.services.due import refresh_due, table_ids_of
-from maintenance.services.expiry import HISTORY_FENCED, DatasetResult, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, lost_staged_manifests
+from maintenance.services.expiry import (
+    HISTORY_FENCED,
+    DatasetOpener,
+    DatasetResult,
+    ExpiryPolicy,
+    ExpiryTarget,
+    count_reclaimable,
+    expire_versions,
+    lost_staged_manifests,
+)
 from maintenance.services.floor import raise_stands
 from maintenance.services.naming import PolicyOwners, TableIds, claim_store, policy_owners, read_uuids
 from maintenance.services.plan import DatasetPlan, PlanContext, cadence_skip, resolve_plan
@@ -121,6 +130,8 @@ class WriteProbe(BaseModel):
     may_write: bool
     data_storage_version: str | None = None
     mixed_data_file_versions: bool = False
+    #: The versions the policy would reclaim, as Lance counted them on the probe's handle; ``None`` when not counted.
+    reclaimable_versions: int | None = None
 
 
 def emit_zero_baselines() -> None:
@@ -144,7 +155,7 @@ def base_record_reader(settings: MaintenanceSettings, options: StorageOptions) -
 
 
 def _probe_before_vending(
-    uri: str, options: StorageOptions, *, policy: ExpiryPolicy, directories: list[base_registry.RecordedBase], now: datetime
+    uri: str, options: StorageOptions, *, policy: ExpiryPolicy, directories: list[base_registry.RecordedBase], now: datetime, opened: DatasetOpener
 ) -> WriteProbe:
     """Could expiry write anything at all on this dataset?
 
@@ -164,15 +175,17 @@ def _probe_before_vending(
     silent: the conservative answer otherwise hides a real fault as an extra credential.
     """
     try:
-        ds = lance.dataset(uri, storage_options=options.in_clear(), session=shared_lance_session())
+        ds = opened()
         armed = policy.cleanup_enabled and bool(auto_cleanup.armed_keys(ds.config()))
-        reclaimable = policy.cleanup_enabled and count_reclaimable(ds, policy) >= policy.min_reclaimable
+        counted = count_reclaimable(ds, policy) if policy.cleanup_enabled else None
+        reclaimable = counted is not None and counted >= policy.min_reclaimable
         stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
         lost = policy.cleanup_enabled and any(modified <= now - policy.staged_grace for _, modified in lost_staged_manifests(uri, options, version=ds.version))
         return WriteProbe(
             may_write=armed or reclaimable or stranded or lost,
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
+            reclaimable_versions=counted,
         )
     except Exception as exc:
         log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
@@ -237,7 +250,9 @@ def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) ->
     return stopped
 
 
-def _data_directories(uri: str, *, readings: PassReadings, settings: MaintenanceSettings, options: StorageOptions) -> list[base_registry.RecordedBase]:
+def _data_directories(
+    uri: str, *, readings: PassReadings, settings: MaintenanceSettings, options: StorageOptions, opened: DatasetOpener
+) -> list[base_registry.RecordedBase]:
     """The data directories the table at ``uri`` holds, as its base record names them ([[LH-286]]).
 
     None for a branch, whose files are its table's, and none for a table whose manifest declares no plain base outside
@@ -249,8 +264,8 @@ def _data_directories(uri: str, *, readings: PassReadings, settings: Maintenance
     if (table := readings.table_ids.of(uri)) is None:
         return []
     try:
-        declared = manifest_base_path_refs(lance.dataset(uri, storage_options=options.in_clear(), session=shared_lance_session()))
-    except Exception as exc:  # noqa: BLE001 — the pass opens the dataset again and reports its own failure
+        declared = manifest_base_path_refs(opened())
+    except Exception as exc:  # noqa: BLE001 — the expiry's open reports the failure as its own
         log.debug("maintenance_data_directories_unopened", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return []
     if not any(not ref.is_dataset_root and not base_refs.location_in_store(uri, ref.path) for ref in declared):
@@ -266,20 +281,20 @@ def _data_directories(uri: str, *, readings: PassReadings, settings: Maintenance
     return held
 
 
-def _expiry_policy(uri: str, plan: DatasetPlan, *, settings: MaintenanceSettings) -> ExpiryPolicy:
+def _expiry_policy(uri: str, plan: DatasetPlan, *, settings: MaintenanceSettings, opened: DatasetOpener) -> ExpiryPolicy:
     """``plan``'s expiry policy for the dataset at ``uri``: reclaiming from ``MAINTENANCE_MIN_VERSIONS_TO_EXPIRE``
     versions, and from one while a listing-floor raise stands above the floor (:func:`maintenance.services.floor
     .raise_stands`). A dataset that cannot be read keeps the usual count; the pass's own open reports it."""
     threshold = settings.min_versions_to_expire
     try:
-        if raise_stands(lance.dataset(uri, storage_options=settings.storage_options().in_clear(), session=shared_lance_session())):
+        if raise_stands(opened()):
             threshold = 1
     except Exception as exc:  # noqa: BLE001 — an unread dataset keeps the usual count, and the pass's own open reports it
         log.warning("maintenance_floor_raise_unread", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
     return plan.expiry_policy(min_reclaimable=threshold, staged_grace=timedelta(seconds=settings.staged_manifest_grace_seconds))
 
 
-def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassReadings, settings: MaintenanceSettings) -> DatasetResult:
+def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassReadings, settings: MaintenanceSettings, opened: DatasetOpener) -> DatasetResult:
     """One dataset's expiry: read under maintenance's own session, and written only under a vend scoped to the table
     ``__manifest`` names it as ([[LH-219]]), asked for where the probe finds something to write.
 
@@ -289,22 +304,26 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     """
     table = named.table
     options = settings.storage_options()
-    policy = _expiry_policy(uri, plan, settings=settings)
-    directories = _data_directories(uri, readings=readings, settings=settings, options=options)
+    policy = _expiry_policy(uri, plan, settings=settings, opened=opened)
+    directories = _data_directories(uri, readings=readings, settings=settings, options=options, opened=opened)
     now = readings.context.now
-    probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now)
+    probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now, opened=opened)
     target = ExpiryTarget(uri=uri, storage_options=options, table_id=table, data_directories=directories, now=now)
     if not probe.may_write:
-        return expire_versions(target, policy)
+        # Read on the handle the expiry reads too, which no commit has moved: Lance's count is not asked again.
+        return expire_versions(target.model_copy(update={"reclaimable_versions": probe.reclaimable_versions}), policy, opener=opened)
     try:
         vended = credentials.write_options_for(uri, settings, table_id=table)
     except _VEND_STOPS as exc:
         return _stopped_by_vend(probe, target, exc)
     history = TableHistory(control_root=settings.resolved_control_root, storage_options=vended, table_uuid=named.owners.table_uuid)
-    return expire_versions(target.model_copy(update={"write_options": vended, "history": history}), policy)
+    held = {"write_options": vended, "history": history, "table_uuid": named.owners.table_uuid, "control_root": settings.resolved_control_root}
+    return expire_versions(target.model_copy(update=held), policy)
 
 
-def _expire_in_span(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassReadings, settings: MaintenanceSettings) -> DatasetResult:
+def _expire_in_span(
+    uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassReadings, settings: MaintenanceSettings, opened: DatasetOpener
+) -> DatasetResult:
     """:func:`_expire` inside its own span, timed around the work: a failure and a refusal are both on the span.
 
     A pass its lineage event will name carries the uuids of the table and its namespace, read only for such a pass.
@@ -312,7 +331,7 @@ def _expire_in_span(uri: str, named: NamedDataset, plan: DatasetPlan, *, reading
     with tracer.start_as_current_span("maintenance.expire_versions") as span:
         span.set_attribute("lance.maintenance.dataset_uri", uri)
         started = perf_counter()
-        result = _expire(uri, named, plan, readings=readings, settings=settings)
+        result = _expire(uri, named, plan, readings=readings, settings=settings, opened=opened)
         if _lane_of(result) is not None:
             result.uuids = read_uuids(readings.table_ids, named.table, claims=claim_store(settings))
         result.duration_seconds = round(perf_counter() - started, 3)
@@ -347,7 +366,16 @@ def _plan_for(uri: str, named: NamedDataset, *, readings: PassReadings, settings
 
 def maintain_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceSettings) -> DatasetResult:
     """One dataset's pass: expiry, then on the table its due record and committed files, then its cadence stamp and
-    counters."""
+    counters.
+
+    A table the expiry found dropped since the pass read the trash is left there: its due record is deleted, and nothing
+    else is read or stamped.
+
+    The dataset is opened once for what the pass reads before the expiry (its floor raise, its declared bases, the probe,
+    and the expiry itself when it holds no vend), and once again after it, for what reads the table as the expiry left
+    it (its due record, its committed files, its unrecorded bases). An expiry holding a vend opens under the vend, so
+    every commit it makes signs with it.
+    """
     record_dataset_swept()
     named = name_dataset(uri, readings=readings, settings=settings)
     if isinstance(named, DatasetResult):
@@ -355,19 +383,28 @@ def maintain_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceS
     plan = _plan_for(uri, named, readings=readings, settings=settings)
     if plan.skipped is not None:
         return _skipped(uri, plan, named, readings=readings, settings=settings)
-    result = _expire_in_span(uri, named, plan, readings=readings, settings=settings)
+    result = _expire_in_span(uri, named, plan, readings=readings, settings=settings, opened=DatasetOpener(uri, settings.storage_options()))
+    if result.trashed is not None:
+        # Dropped since the pass read the trash: a trashed table gets no pass, so it leaves the due list and earns no
+        # cadence stamp, as a table the trash keeps when its pass starts (:func:`run_table_pass`).
+        delete_due(settings.resolved_control_root, settings.storage_options(), named.owners.table_uuid)
+        result.due = "clear"
+        _record_dataset_metrics(result)
+        _record_dataset_outcome(result, subject=settings.catalog_service_identity)
+        return result
     if readings.table_ids.of(uri) is not None:
+        after = DatasetOpener(uri, settings.storage_options())
         question = plan.due_question(table=named.table, uuid=named.owners.table_uuid, location=uri)
-        result.due = refresh_due(question, settings, now=readings.context.now)
-        _check_committed_files(result, named, settings=settings)
-        _report_unrecorded_bases(uri, settings=settings)
+        result.due = refresh_due(question, settings, now=readings.context.now, opened=after)
+        _check_committed_files(result, named, settings=settings, opened=after)
+        _report_unrecorded_bases(uri, settings=settings, opened=after)
     else:
         result.due = "unnamed"
     _finish(result, named=named, plan=plan, now=readings.context.now, settings=settings)
     return result
 
 
-def _check_committed_files(result: DatasetResult, named: NamedDataset, *, settings: MaintenanceSettings) -> None:
+def _check_committed_files(result: DatasetResult, named: NamedDataset, *, settings: MaintenanceSettings, opened: DatasetOpener) -> None:
     """Name each file a commit added that the store no longer holds as the catalog recorded it ([[LH-419]]), and forget
     each record no retained version needs.
 
@@ -381,7 +418,7 @@ def _check_committed_files(result: DatasetResult, named: NamedDataset, *, settin
         found = committed_files.check_and_copy(
             result.uri,
             named.owners.table_uuid,
-            open_table=lambda: lance.dataset(result.uri, storage_options=options.in_clear(), session=shared_lance_session()),
+            open_table=opened,
             data_options=options,
             control_root=settings.resolved_control_root,
             control_options=options,
@@ -396,7 +433,7 @@ def _check_committed_files(result: DatasetResult, named: NamedDataset, *, settin
         _forget_reclaimed(result, table=named.table, table_uuid=named.owners.table_uuid, reclaimed=found.reclaimed, settings=settings)
 
 
-def _report_unrecorded_bases(uri: str, *, settings: MaintenanceSettings) -> None:
+def _report_unrecorded_bases(uri: str, *, settings: MaintenanceSettings, opened: DatasetOpener) -> None:
     """Count and name each base the table's manifest declares that nothing sanctions ([[LH-279]]).
 
     A planted base protects nothing and every door refuses it (`base_registry.judge_bases`, the predicate the vend, read
@@ -406,7 +443,7 @@ def _report_unrecorded_bases(uri: str, *, settings: MaintenanceSettings) -> None
     """
     options = settings.storage_options()
     try:
-        declared = manifest_base_path_refs(lance.dataset(uri, storage_options=options.in_clear(), session=shared_lance_session()))
+        declared = manifest_base_path_refs(opened())
         judged = base_registry.judge_bases(
             uri, declared, configured=settings.external_blob_base_list, load_record=lambda: base_record_reader(settings, options)(uri)
         )
@@ -466,7 +503,7 @@ def _skipped(uri: str, plan: DatasetPlan, named: NamedDataset, *, readings: Pass
     event holds this pass for them and the read costs one listing."""
     skipped = DatasetResult(uri=uri, skipped=plan.skipped)
     if readings.table_ids.of(uri) is not None:
-        _check_committed_files(skipped, named, settings=settings)
+        _check_committed_files(skipped, named, settings=settings, opened=DatasetOpener(uri, settings.storage_options()))
     record_overwritten_files(len(skipped.overwritten_files))
     _record_dataset_outcome(skipped, subject=settings.catalog_service_identity)
     return skipped
@@ -540,6 +577,7 @@ def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
             "due": result.due,
             "refused": result.refused,
             "skipped": result.skipped,
+            "trashed": result.trashed,
             "error": result.error,
             "error_type": result.error_type,
             "data_storage_version": result.data_storage_version,
@@ -789,16 +827,17 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
     now = readings.context.now
     if result.error is not None or result.skipped == HISTORY_FENCED:
         return now + timedelta(seconds=settings.retry_seconds)
-    if result.refused is not None:
+    if result.refused is not None or result.trashed is not None:
         return None
     named = name_dataset(result.uri, readings=readings, settings=settings)
     if isinstance(named, DatasetResult):
         return None
     plan = resolve_plan(result.uri, context=readings.context, owners=named.owners)
-    policy = _expiry_policy(result.uri, plan, settings=settings)
     options = settings.storage_options()
+    opened = DatasetOpener(result.uri, options)
+    policy = _expiry_policy(result.uri, plan, settings=settings, opened=opened)
     try:
-        ds = lance.dataset(result.uri, storage_options=options.in_clear(), session=shared_lance_session())
+        ds = opened()
         due = [at for at in (versions_due_at(ds, policy, now=now), staged_due_at(ds, result.uri, policy=policy, options=options)) if at is not None]
     except Exception as exc:  # noqa: BLE001 — an unread dataset is retried, as one the pass failed on
         log.warning("maintenance_next_due_unread", extra={"uri": result.uri, "error": f"{type(exc).__name__}: {exc}"[:300]})

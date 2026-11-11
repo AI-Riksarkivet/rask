@@ -18,7 +18,7 @@ from typing import Any, Final, Literal
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import auto_cleanup
+from lakehouse import auto_cleanup, trash
 from lakehouse.base_registry import RecordedBase
 from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from lakehouse.features import (
@@ -71,8 +71,8 @@ class DatasetResult(BaseModel):
     #: The manifest carries reader flag 256: its data files are at more than one file version. Sticky, and the table
     #: is unopenable by pylance 11 and lancedb 0.34, so it is counted on its own beside any refusal.
     mixed_data_file_versions: bool = False
-    #: F6(d): this dataset is in the TRASH, recoverable until its deadline and therefore frozen. Names the record id and
-    #: its deadline, so a record stuck long past its deadline reads as a permanent exclusion.
+    #: The table was dropped into the trash after its pass began, so the pass reclaimed nothing: a trashed table is frozen
+    #: until its undrop or purge. Names the table's uuid.
     trashed: str | None = None
     #: The versions the policy would reclaim when the pass looked, ``None`` when it did not count them.
     reclaimable_versions: int | None = None
@@ -148,6 +148,14 @@ class ExpiryTarget(BaseModel):
     #: Where the table's history fence is kept, under the vend, which the pass holds while it deletes ([[LH-308]]); ``None``
     #: holds none.
     history: TableHistory | None = None
+    #: The table's uuid, by which its trash record is read again, under maintenance's own session, once its history is
+    #: held and before anything is reclaimed; ``None`` reads none.
+    table_uuid: str | None = None
+    #: The control root holding the trash.
+    control_root: str | None = None
+    #: The versions the policy would reclaim, as the probe counted them on the handle this pass reads (no vend); ``None``
+    #: counts them here.
+    reclaimable_versions: int | None = None
 
     @property
     def opened_with(self) -> StorageOptions:
@@ -271,7 +279,29 @@ def _refuse_unsupported_flags(opened: _Opened, uri: str) -> DatasetResult | None
     return opened.result(uri).refuse(refusal, gate="manifest_flags")
 
 
-def _open(target: ExpiryTarget) -> _Opened | DatasetResult:
+class DatasetOpener:
+    """One open of the dataset at ``uri`` for a pass's readers that read under one session: the first call opens it, and
+    every call answers that handle, or raises that open's error again.
+
+    A reader that writes, or opens under the vend, opens its own; so does one that must see what the pass committed.
+    """
+
+    def __init__(self, uri: str, options: StorageOptions) -> None:
+        self._uri, self._options = uri, options
+        self._held: lance.LanceDataset | Exception | None = None
+
+    def __call__(self) -> lance.LanceDataset:
+        if self._held is None:
+            try:
+                self._held = lance.dataset(self._uri, storage_options=self._options.in_clear(), session=shared_lance_session())
+            except Exception as exc:  # noqa: BLE001 — raised again to each reader, which reports it as its own open's failure
+                self._held = exc
+        if isinstance(self._held, Exception):
+            raise self._held
+        return self._held
+
+
+def _open(target: ExpiryTarget, opener: DatasetOpener | None = None) -> _Opened | DatasetResult:
     """The dataset opened with its manifest facts, or the result that says why it could not be.
 
     pylance refuses a manifest whose flags IT does not know before they can be read here (measured: a committed data
@@ -279,7 +309,7 @@ def _open(target: ExpiryTarget) -> _Opened | DatasetResult:
     and the lineage layer drops it.
     """
     try:
-        ds = lance.dataset(target.uri, storage_options=target.opened_with.in_clear(), session=shared_lance_session())
+        ds = opener() if opener is not None else lance.dataset(target.uri, storage_options=target.opened_with.in_clear(), session=shared_lance_session())
         reader_flags, writer_flags = manifest_feature_flags(ds)
         return _Opened(
             ds=ds,
@@ -353,7 +383,7 @@ def _count(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarge
     """What the pass reads before it writes anything: the versions the policy would reclaim, and the fragments that keep a
     deleted row's bytes in one of the table's data directories."""
     if policy.cleanup_enabled:
-        result.reclaimable_versions = count_reclaimable(ds, policy)
+        result.reclaimable_versions = target.reclaimable_versions if target.reclaimable_versions is not None else count_reclaimable(ds, policy)
     if target.data_directories:
         result.base_fragments_holding_deleted_rows = base_reclaim.fragments_holding_deleted_rows(ds, target.data_directories)
 
@@ -410,6 +440,19 @@ def _history_held(result: DatasetResult, target: ExpiryTarget, policy: ExpiryPol
     return target.history.held(HistoryWork.RECLAIM)
 
 
+def _dropped_since(target: ExpiryTarget) -> bool:
+    """Whether the table was dropped into the trash since its pass read the trash, read again once its history is held.
+
+    The table's pass reads the trash before it opens anything (:func:`maintenance.services.table_pass.run_table_pass`),
+    and a recoverable drop lands at any time after: the catalog's drop door takes no history fence, since a drop refused
+    while maintenance cleans would cost every caller more than this residual does. So a drop landing after this read is
+    followed by one cleanup under the table's own policy, which may reclaim versions an undrop would otherwise restore.
+    """
+    if target.table_uuid is None or target.control_root is None:
+        return False
+    return trash.keeps(target.control_root, target.storage_options, target.table_uuid)
+
+
 def _record_failure(result: DatasetResult, exc: BaseException) -> None:
     """A reclaim that raised: a ref Lance will never accept is a refusal, anything else a failure."""
     if (gate := classify_maintain_failure(str(exc))) is not None:
@@ -420,14 +463,15 @@ def _record_failure(result: DatasetResult, exc: BaseException) -> None:
     result.error_type = type(exc).__name__
 
 
-def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult:
+def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: DatasetOpener | None = None) -> DatasetResult:
     """One dataset's version expiry. Never raises: a per-dataset failure is captured in ``error``.
 
     Opens the dataset, disarms commit-path auto-cleanup before any gate can return (version reclamation has ONE owner,
     this pass), runs the refusal ladder that guards reclamation, then reclaims the versions and what they left in the
-    table's data directories.
+    table's data directories. A pass holding no vend writes nothing, so it may hand down the handle its probe read
+    (``opener``); one holding a vend opens under it, so every commit through the handle signs with the vend.
     """
-    opened = _open(target)
+    opened = _open(target, opener if target.write_options is None else None)
     if isinstance(opened, DatasetResult):
         return opened
     disarm = _disarm_commit_path_cleanup(opened.ds, target)
@@ -448,6 +492,10 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
                 log.info("maintenance_reclaim_awaits_its_vend", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
             return result
         with _history_held(result, target, policy):
+            if _dropped_since(target):
+                log.info("maintenance_table_trashed_mid_pass", extra={"uri": result.uri, "uuid": target.table_uuid})
+                result.trashed = target.table_uuid
+                return result
             _reclaim_versions(opened.ds, result=result, policy=policy)
             _reclaim_data_directories(opened.ds, result=result, target=target, vend=vend)
         # Whether or not any version is due: a lost staged manifest is no version's, so no ref's fence guards it, and a

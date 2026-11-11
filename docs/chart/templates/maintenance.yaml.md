@@ -54,7 +54,8 @@ symmetric with the lineage service (the audit's consistency fix).
 Gated on the sidecar because that is what it VERIFIES — the token exists to check the
 `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
 to check and the reference dangles: the Secret is not rendered and the pod never starts.
-verify the Dapr-stamped header on the cron route (forged-sweep guard)
+The one route it guards is the write-event lane's delivery (`/maintenance-arrival`, `require_dapr_token`): maintenance
+has no Dapr cron binding, its schedules being NATS message schedules on its own work queue.
 
 ## `- { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root)...`
 
@@ -62,17 +63,19 @@ THE REWRITE IS SIGNED PER TABLE ([[LH-219]]). A version expiry deletes files, so
 credential the catalog vends for that one table prefix, expiring in 900 s; maintenance's own session never signs it
 (`maintenance.services.credentials`). The catalog refuses that tier 409 code 19 for a table whose maintenance policy
 keeps its whole history (`cleanup_enabled` false), and maintenance's probe asks no vend for such a table. The trash
-is the catalog's to end ([[XC-084]]): the purge asks it to release a record past its deadline
-(`POST /management/v1/trash/{kind}/{uuid}/release`), for a session that deletes that one table's bytes
-(`POST .../credentials`), and to end the record once its place holds nothing (`DELETE /management/v1/trash/{kind}/{uuid}`),
-which the tombstone sweep asks too.
+is the catalog's to end ([[XC-084]]): maintenance asks it to release a record past its deadline
+(`POST /management/v1/trash/{kind}/{uuid}/release`; the record's own trash task, and every audit and scan), the daily
+scan's purge asks for a session that deletes that one table's bytes (`POST .../credentials`), and the purge after its
+deletes, like the audit's and the scan's tombstone sweep, asks it to end the record once its place holds nothing
+(`DELETE /management/v1/trash/{kind}/{uuid}`).
 
 GATED by `maintenance.vendWriteCredentials` (on by default). Off, the chart wires no door, the bootstrap-admin hook
 takes maintenance's maintainer grant back, and every rewrite is refused (`VendingNotDirect`): reclamation pauses while
-discovery, the due list and the drift report run, since maintenance's own session writes only its own records.
+each table's pass, the due list and the drift report run, since maintenance's own session writes only its own records.
 
-What its own session signs: discovery and the whole-estate protection pre-pass, which must open every manifest in every
-bucket and cannot be expressed by any per-table credential. Those are reads.
+What its own session signs are reads no per-table credential could express: each table's pass reading its datasets and
+the catalog's records, the daily scan's storage walk, each table's orphan check, and the purge's liveness read of every maintained
+root's `__manifest`.
 
 ## `- { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth...`
 
@@ -103,15 +106,15 @@ connection either way (values.yaml `nats.auth`).
 
 ## `- { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }`
 
-Stage the emit so a bus blip does not lose it. A maintenance run is emitted ONLY when the
-sweep does MATERIAL work (`sweep.py::_did_material_work` gates on fragments or versions
-removed), so a dropped publish loses the record of the one tick that actually rewrote
-bytes — the graph then shows a dataset whose files changed with nothing saying what
-changed them.
+Stage the emit so a bus blip does not lose it. A maintenance run is emitted ONLY when a
+table's pass does MATERIAL work (`table_pass._did_material_work` gates on versions or
+data-directory files removed), so a dropped publish loses the record of the one pass that
+actually deleted bytes — the graph then shows a dataset whose files changed with nothing
+saying what changed them.
 
-The SAME prefix the catalog and the drain name, because `lineage`'s reconcile
-cron is the only thing that reads it. A private prefix here would stage objects nothing
-ever collects, which reads as durability and is not.
+The SAME prefix the catalog names, because `lineage`'s relay tick (its own Dapr cron
+binding, `lineage.api.relay_cron`) is the only thing that reads it. A private prefix here
+would stage objects nothing ever collects, which reads as durability and is not.
 
 ## `- { name: MAINTENANCE_TRASH_PURGE_ENABLED, value: {{ hasKey .Values.maintenance "trashPurge" | ternary .Val...`
 
@@ -123,18 +126,23 @@ clean never reclaims, which is the designed direction, not a bug to route around
 ## `- { name: MAINTENANCE_TRASH_PURGE_DRY_RUN, value: {{ hasKey .Values.maintenance "trashPurgeDryRun" | ternar...`
 
 THE PREVIEW, and it is the step BEFORE spending the delete permission rather than an
-alternative to it. With reclamation off the pass returns before the trash prefix is even
-read, so the only way to learn what a purge would do was to let it do it — the wrong
-order for the one irreversible operation this service performs. It runs the REAL pass
-(same due-record selection, same liveness and shallow-clone pre-passes, same refusal
-check) and skips only the three mutations plus the refusal annotation. It can only
-SUBTRACT: with both flags on the tick previews and reclaims nothing.
+alternative to it. With reclamation off the purge returns before the trash prefix is even
+read, so without it the only way to learn what a purge would do is to let it do it — the
+wrong order for the one irreversible operation this service performs. It runs the REAL
+purge of the daily scan (same due-record selection, same liveness read, same refusal
+check) and skips only the mutations plus the refusal annotation. A registered clone's
+source needs no pass of its own: the catalog vends no session to delete its bytes while
+the clone's tag stands. It can only SUBTRACT: with both flags on the scan previews and
+reclaims nothing.
 
 ## `- { name: MAINTENANCE_FLOOR_RAISE_ENABLED, value: {{ hasKey .Values.maintenance "floorRaise" | ternary .Val...`
 
 [[LH-094]]. The floor raise writes ONE metadata-only commit to a dataset whose orphans
-sit above its Lance listing floor, so the next ordinary sweep can enumerate them. It
-deletes nothing — the delete stays `cleanup_old_versions`'s, under Lance's own rule.
+sit above its Lance listing floor, so the cleanup of the table's next pass can enumerate
+them. It runs in each table's orphan check, when the check found stranded files, and the
+worker then holds a pass of the table, so its cleanup runs on the raised floor
+(`maintenance.services.orphan_check`). It deletes nothing —
+the delete stays `cleanup_old_versions`'s, under Lance's own rule.
 Rendered unconditionally: a setting with no path from values is one no deployed estate
 can turn on. TWO FLAGS, because "does this estate want the behaviour" and "does this
 check act" are different questions, and the dry run defaults TRUE here where the purge's
@@ -216,12 +224,13 @@ Maintenance reads the catalog's records, its policy records among them, at the c
 catalog's `LANCE_REST_ROOT` names it (services.yaml), where maintenance's store policy grants its own writes
 (`lance.objectStorePolicy`). No value moves either, so the reads and the grant cannot point at different roots.
 
-EVERY bucket that can hold Lance data must be swept, or its tables accumulate superseded
-versions + small fragments FOREVER (audit 2026-07-14: the sweep saw exactly ONE bucket,
-so the medallion zone buckets and every #3-B multi-base data bucket leaked storage
-silently). Union of: the medallion storage zones (gold can live in its own bucket) and
-the approved multi-base data bases. Per-warehouse (#3-A) buckets are provisioned at
-RUNTIME, so they are appended by the operator as tenants are onboarded.
+A table's pass runs on a table in a bucket maintenance governs (`table_pass.governs`), or
+its tables would accumulate superseded versions FOREVER. This list names the buckets the
+chart itself knows of: the medallion storage zones (gold can live in its own bucket) and
+the approved multi-base data bases. A warehouse's bucket is created by an API call at
+runtime, so it is governed from the warehouse registry instead, read per task through the
+table's namespace binding: no value names it, and a deactivated warehouse's tables are
+not passed.
 
 ## `- { name: MAINTENANCE_S3_PLATFORM_BUCKETS, value: {{ include "lance.maintenancePlatformBuckets" . | quote }} }`
 

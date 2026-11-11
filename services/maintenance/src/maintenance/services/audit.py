@@ -28,6 +28,8 @@ from pydantic import BaseModel
 from lakehouse import location_claims, trash
 from lakehouse.control_emit import ControlEmitter
 from maintenance.core.config import MaintenanceSettings
+from maintenance.services.bucket_events import report_bucket_events
+from maintenance.services.clone_endings import finish_clone_endings
 from maintenance.services.credentials import end_trash, grant_census
 from maintenance.services.naming import claim_store, claimed_location
 from maintenance.services.orphan_check import FLOOR
@@ -53,6 +55,8 @@ async def run_audit(settings: MaintenanceSettings, *, queue: TaskQueue | None) -
     refuses a report whose run walked no storage (:func:`maintenance.services.purge.report_is_clean`).
     """
     payload, _, sources = await _report_and_repair(settings, walk=False)
+    if settings.store_events_expected and (bucket_events := await run_in_threadpool(report_bucket_events, settings)) is not None:
+        payload["store_events"] = bucket_events.model_dump()
     if queue is not None:
         payload["unscheduled"] = await _queue_what_holds_nothing(settings, queue, sources)
     return payload
@@ -204,6 +208,8 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
     # ADR 0146: a drop past its deadline loses its grants on every tick, ungated by the report and by the purge's
     # opt-in, since it deletes no byte. Before the purge, which then finds nothing left to revoke.
     payload["trash_release"] = await _release_expired_trash(settings)
+    # ADR 0198 §1: a clone's tag a door could not release is released by the catalog, asked here; it deletes no byte.
+    payload["clone_endings"] = (await finish_clone_endings(settings)).model_dump(mode="json")
     return payload, report, (read_sources[0] if read_sources else None)
 
 
@@ -291,7 +297,8 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
     A table's first check is held by its first pass, and each check holds its next, so a table found here lost its
     check's schedule, or predates the checks. Its check is held a jittered time within the floor rather than queued at
     once, so a lost schedules stream does not start every table's check in the same hour; held at the floor's interval,
-    since the interval a lost schedule carried is lost with it. A table in the trash gets none.
+    since the interval a lost schedule carried is lost with it. A table in the trash gets none. A trash record already
+    released, or carrying no deadline, gets no task: its task would end holding nothing and be queued again next hour.
     """
     options = settings.storage_options()
     tables = sources.live_tables() if sources is not None else None
@@ -315,6 +322,11 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
             jitter = timedelta(seconds=secrets.randbelow(int(FLOOR.total_seconds())))
             queued["checks"] += await queue.schedule_first(Task(kind="orphans", uuid=uuid, location=location), now + jitter)
     for uuid, record in trashed.items():
+        # A released or undated record's task ends holding nothing (:mod:`maintenance.services.trash_task`), so queueing
+        # one would queue it again every hour. The daily scan's purge reaches a released record without a task, and an
+        # undated one is never released (:func:`lakehouse.trash.release_at`).
+        if trash.is_released(record) or trash.release_at(record) is None:
+            continue
         task = Task(kind="trash", uuid=uuid, location=trash.location_of(record), trashed=trash.kind_of(record))
         if uuid not in covered_trash and await queue.enqueue(task):
             queued["trash"] += 1

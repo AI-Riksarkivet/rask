@@ -36,7 +36,7 @@ from nats.errors import NoRespondersError
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from lakehouse.lineage.signing import SigningKey
-from tests.loopback import free_port, free_ports
+from tests.loopback import free_ports
 
 
 if TYPE_CHECKING:
@@ -292,23 +292,49 @@ class Broker:
 class Link:
     """A TCP relay between one client and the broker that the test can cut, as a network fault or the restart of the
     server a client is attached to looks to the server that holds its consumer: the connection drops, the server stays
-    up, and the client's interest is gone until it reconnects."""
+    up, and the client's interest is gone until it reconnects.
+
+    It can also lose one subject's traffic while the rest flows (:meth:`drop`): a `PUB` or `HPUB` the client sends on a
+    subject a dropped pattern matches never reaches the broker, as a message the network lost, so a request on it goes
+    unanswered while the connection, and every other subject, stays up. Only the client's publishes are read for it: the
+    protocol frames each one as a line naming its subject and payload size, then the payload."""
 
     def __init__(self, target_port: int) -> None:
         self._target_port = target_port
-        self.port = free_port()
-        self.url = f"nats://127.0.0.1:{self.port}"
+        #: The port the relay listens on, the one it was given on its first start, kept across a cut.
+        self.port: int | None = None
         self._server: asyncio.Server | None = None
         self._writers: set[asyncio.StreamWriter] = set()
+        self._dropped: set[str] = set()
+
+    @property
+    def url(self) -> str:
+        if self.port is None:
+            raise RuntimeError("the link has not started, so it listens on no port yet")
+        return f"nats://127.0.0.1:{self.port}"
+
+    @property
+    def down(self) -> bool:
+        """Whether the cut stands: no new connection is taken, and every relayed one has closed."""
+        return self._server is None and not self._writers
 
     async def start(self) -> None:
-        self._server = await asyncio.start_server(self._relay, "127.0.0.1", self.port)
+        self._server = await asyncio.start_server(self._relay, "127.0.0.1", self.port or 0, limit=_LINE_LIMIT)
+        self.port = int(self._server.sockets[0].getsockname()[1])
 
     async def cut(self, down: float) -> None:
         """Drop every relayed connection and refuse new ones for `down` seconds."""
         await self.stop()
         await asyncio.sleep(down)
         await self.start()
+
+    def drop(self, pattern: str) -> None:
+        """Lose every publish the client sends on a subject `pattern` matches (NATS wildcards), until :meth:`flow`."""
+        self._dropped.add(pattern)
+
+    def flow(self) -> None:
+        """Pass every publish on again."""
+        self._dropped.clear()
 
     async def stop(self) -> None:
         server, self._server = self._server, None
@@ -318,21 +344,48 @@ class Link:
             writer.close()
 
     async def _relay(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
-        broker_reader, broker_writer = await asyncio.open_connection("127.0.0.1", self._target_port)
+        broker_reader, broker_writer = await asyncio.open_connection("127.0.0.1", self._target_port, limit=_LINE_LIMIT)
         self._writers |= {client_writer, broker_writer}
 
-        async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, frames: bool) -> None:
             try:
-                while chunk := await reader.read(65536):
+                while chunk := await (self._client_frame(reader) if frames else reader.read(65536)):
                     writer.write(chunk)
                     await writer.drain()
-            except (ConnectionError, OSError):
+            except (ConnectionError, OSError, asyncio.IncompleteReadError):
                 pass
             finally:
                 writer.close()
                 self._writers.discard(writer)
 
-        await asyncio.gather(pipe(client_reader, broker_writer), pipe(broker_reader, client_writer))
+        await asyncio.gather(pipe(client_reader, broker_writer, True), pipe(broker_reader, client_writer, False))
+
+    async def _client_frame(self, reader: asyncio.StreamReader) -> bytes:
+        """The client's next frame as it goes on to the broker: a protocol line, with its payload for a publish, or nothing
+        for a publish a dropped pattern matches (and the next frame in its place). Empty once the client has closed."""
+        while line := await reader.readline():
+            words = line.split()
+            if not words or words[0].upper() not in (b"PUB", b"HPUB"):
+                return line
+            payload = await reader.readexactly(int(words[-1]) + 2)
+            if not any(_matches(pattern, words[1].decode()) for pattern in self._dropped):
+                return line + payload
+        return b""
+
+
+#: The longest protocol line the relay reads: a client's CONNECT carries its user JWT.
+_LINE_LIMIT = 1 << 20
+
+
+def _matches(pattern: str, subject: str) -> bool:
+    """Whether ``subject`` matches the NATS subject ``pattern``: ``*`` is one token, a final ``>`` one or more."""
+    wanted, tokens = pattern.split("."), subject.split(".")
+    for index, token in enumerate(wanted):
+        if token == ">":
+            return len(tokens) > index
+        if index >= len(tokens) or token not in ("*", tokens[index]):
+            return False
+    return len(tokens) == len(wanted)
 
 
 class Violation(BaseModel):
@@ -419,8 +472,8 @@ class SubscriberApp:
                 else:
                     self._answer(200, b'{"status":"SUCCESS"}')
 
-        self.port = free_port()
-        self._server = ThreadingHTTPServer(("127.0.0.1", self.port), _Handler)
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        self.port = int(self._server.server_address[1])
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
 
     def markers(self, route: str) -> list[str]:

@@ -133,10 +133,17 @@ that way, and the worker asserts the audit's and the scan's schedules at its sta
 (`maintenance.services.tasks`), which brings them back after a purge. Measured on nats-server 2.15.2 with file storage
 (2026-11-09).
 
+The Job then reads MAINTENANCE_SCHEDULES back with a raw `$JS.API.STREAM.INFO` request and fails unless its config says
+`allow_msg_schedules: true`. A server older than 2.12 drops the field it does not know and reports the stream created:
+measured on nats-server 2.11.10 (2026-11-10), the Job otherwise exited 0 with a schedules stream on which no schedule
+would ever fire. The raw request is read rather than `nats stream info --json`, which re-serialises the config through the
+CLI's own types.
+
 ## `printf '%s' '{"name":"KV_MAINTENANCE_CLAIMS",...}' > "$HOME/KV_MAINTENANCE_CLAIMS.json"`
 
 The MAINTENANCE_CLAIMS key-value bucket holds the claim a pass takes on its table before it runs (ADR 0198): created only
-where none stands, renewed with each heartbeat against its revision, released only by its holder's revision, and gone one
+where none stands, renewed with each heartbeat against its revision, released only by its holder (its revision, or the revision its own token
+stands at when a renewal's answer was lost), and gone one
 ack wait after its last renewal, since the bucket's `max_age` is `maintenance.queue.ackWaitSeconds`. So a worker's claim
 outlives its lease, and a pass that finds another's claim waits it out: a settle the network held past a stale worker's
 lease, which JetStream applies late and which frees the table's task under a live pass, can no longer let a second pass of

@@ -76,6 +76,8 @@
 - { name: MAINTENANCE_ORPHAN_CHECK_ENABLED, value: {{ required "maintenance.orphanCheck.enabled is required" $check.enabled | quote }} }
 - { name: MAINTENANCE_ORPHAN_CHECK_CEILING_DAYS, value: {{ required "maintenance.orphanCheck.ceilingDays is required" $check.ceilingDays | quote }} }
 - { name: MAINTENANCE_ORPHAN_CHECK_MAX_SECONDS, value: {{ required "maintenance.orphanCheck.maxSeconds is required" $check.maxSeconds | quote }} }
+{{- /* The development store's fixture configures every bucket's events itself (deploy/fixtures/rustfs); a platform store's operator attests it. */}}
+- { name: MAINTENANCE_STORE_EVENTS_EXPECTED, value: {{ or $root.Values.objectStore.enabled ($root.Values.objectStore.events).provisioned | quote }} }
 - { name: MAINTENANCE_DRAIN_SECONDS, value: {{ $drain | quote }} }
 - { name: MAINTENANCE_WORKER_PORT, value: {{ required "maintenance.worker.port is required" $root.Values.maintenance.worker.port | quote }} }
 {{- end }}

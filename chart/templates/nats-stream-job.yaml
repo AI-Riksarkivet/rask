@@ -141,6 +141,15 @@ spec:
               converge_stream MAINTENANCE_TASKS
               printf '%s' '{"name":"MAINTENANCE_SCHEDULES","subjects":["maintenance.schedule.>","maintenance.due.>"],"retention":"workqueue","max_consumers":-1,"max_msgs":-1,"max_bytes":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"max_age":0,"storage":"file","discard":"old","num_replicas":{{ $replicas }},"duplicate_window":120000000000,"allow_msg_schedules":true,"allow_rollup_hdrs":true,"allow_direct":true}' > "$HOME/MAINTENANCE_SCHEDULES.json"
               converge_stream MAINTENANCE_SCHEDULES
+              # A server older than 2.12 drops `allow_msg_schedules` from the config it is given and reports the stream
+              # created, after which no schedule ever fires. Read from the server's own answer, since a client re-serialising
+              # the config can drop a field it does not know.
+              got=$(nats --server "$S" req '$JS.API.STREAM.INFO.MAINTENANCE_SCHEDULES' '' 2>/dev/null | tr -d ' \n')
+              case "$got" in
+                *'"allow_msg_schedules":true'*) echo "stream MAINTENANCE_SCHEDULES: message schedules allowed" ;;
+                *'"config":'*) echo "!! stream MAINTENANCE_SCHEDULES does not allow message schedules: the bus ignored allow_msg_schedules, so no maintenance schedule would fire. Message schedules need nats-server 2.12 or later."; exit 1 ;;
+                *) echo "!! could not read stream MAINTENANCE_SCHEDULES back (answer: ${got:-none}), so re-run this Job"; exit 1 ;;
+              esac
               {{- $queue := required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue }}
               {{- $ackWait := int (required "maintenance.queue.ackWaitSeconds is required" $queue.ackWaitSeconds) }}
               {{- $maxDeliver := int (required "maintenance.queue.maxDeliver is required" $queue.maxDeliver) }}

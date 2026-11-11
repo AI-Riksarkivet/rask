@@ -21,11 +21,11 @@ from pydantic import SecretStr
 from lakehouse import maintenance_policies
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
-from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget
+from maintenance.services.expiry import DatasetOpener, DatasetResult, ExpiryPolicy, ExpiryTarget
 from maintenance.services.plan import DatasetPlan
 
 
-def _refused(target: ExpiryTarget, _policy: ExpiryPolicy) -> DatasetResult:
+def _refused(target: ExpiryTarget, _policy: ExpiryPolicy, *, opener: DatasetOpener | None = None) -> DatasetResult:
     return DatasetResult(uri=target.uri).refuse("unsupported manifest feature flags: 16", gate="manifest_flags")
 
 
@@ -43,7 +43,7 @@ def test_only_a_pass_that_ran_restamps_the_cadence(
     monkeypatch: pytest.MonkeyPatch,
     maintain_one: Callable[..., DatasetResult],
     stamped: str | None,
-    refusal: Callable[[ExpiryTarget, ExpiryPolicy], DatasetResult] | None,
+    refusal: Callable[..., DatasetResult] | None,
     skipped: str | None,
     stamps: int,
 ) -> None:

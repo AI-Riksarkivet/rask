@@ -1201,6 +1201,22 @@ objectStore:
   # The store's operator configures them on every bucket the estate uses, the catalog's warehouse buckets included, as
   # it configures their versioning: the development store's fixture does it for its own buckets
   # (deploy/fixtures/rustfs), and a platform's operator does it for its store.
+  #
+  # THE EVENT BODY maintenance reads (`maintenance.services.store_events`): one JSON message on `store.events`, in S3's
+  # notification shape `{"Records": [...]}`, each record bare (S3) or under `data` (RustFS). Of each record it reads three
+  # fields and nothing else: `eventName` (a write is any `s3:ObjectCreated:...`; every other event, a delete included, is
+  # read and not acted on), `s3.bucket.name`, and `s3.object.key`, URL-encoded as S3 sends it (`+` is a space). Times,
+  # sizes, ETags, version ids, the principal and the region are ignored, so a store may send them or not. A body that is
+  # not JSON, or a record naming no bucket or no key, is ended unread and counted
+  # (`maintenance.store_events.settled{outcome="unreadable"}`, alert `MaintenanceStoreEventsEnded`). An event names a
+  # key: the worker finds its table by the location claim of the key's root, and holds that table's pass.
+  #
+  # With events expected (the development store, or `provisioned` below), the hourly audit asks the store for each governed
+  # bucket's event configuration (`GetBucketNotificationConfiguration`; maintenance's canned policy holds
+  # `s3:GetBucketNotification`) and reports each with no `s3:ObjectCreated:*` rule over the whole bucket
+  # (`maintenance.store_event_buckets.checked` by outcome, alerts `MaintenanceBucketWithoutStoreEvents` and, for a bucket the
+  # store will not answer about, `MaintenanceBucketStoreEventsUnknown`). The answer proves the
+  # configuration, not delivery: RustFS 1.0.3 takes a rule naming a target it does not have (measured 2026-11-10).
   events:
     # -- Attests that the platform's store (`objectStore.enabled=false`) delivers every object write of every rask bucket (`s3:ObjectCreated:*`) to the bus subject `store.events`, kept through a bus outage; the render refuses a platform store without it.
     provisioned: false
@@ -1401,6 +1417,10 @@ nats:
       # published, the two queue streams' info for the audit's count, and the claim a pass holds on its table in the
       # MAINTENANCE_CLAIMS bucket (created, renewed and released by revision); no stream or consumer is created or changed by
       # it. Its replies arrive on an inbox of its own (`maintenance.services.queue.INBOX_PREFIX`), which no other user reads.
+      # Its sampler (`maintenance.services.queue.sample_queue`, once a minute) reads only counts and times: each of its three
+      # streams' info (message count and oldest message's time; the two queue streams' grants serve the audit as well,
+      # STORE_EVENTS's only the sampler) and each of its three durables' info (deliveries awaiting an ack, redeliveries), no
+      # other stream's or consumer's, and no message.
       maintenance-worker:
         publish:
           - maintenance.task.>
@@ -1411,6 +1431,10 @@ nats:
           - $JS.ACK.MAINTENANCE_SCHEDULES.maintenance-due.>
           - $JS.API.STREAM.INFO.MAINTENANCE_TASKS
           - $JS.API.STREAM.INFO.MAINTENANCE_SCHEDULES
+          - $JS.API.STREAM.INFO.STORE_EVENTS
+          - $JS.API.CONSUMER.INFO.MAINTENANCE_TASKS.maintenance-worker
+          - $JS.API.CONSUMER.INFO.MAINTENANCE_SCHEDULES.maintenance-due
+          - $JS.API.CONSUMER.INFO.STORE_EVENTS.maintenance-store-events
           - $JS.API.CONSUMER.MSG.NEXT.STORE_EVENTS.maintenance-store-events
           - $JS.ACK.STORE_EVENTS.maintenance-store-events.>
           - $KV.MAINTENANCE_CLAIMS.>

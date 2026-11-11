@@ -9,7 +9,8 @@ fence (:mod:`lakehouse.history_fences`); the ref doors' side is pinned in
 
 One estate on moto: the catalog over HTTP and maintenance's own pass. While a ref write holds the table's history,
 every reclaim path deletes nothing: the catalog's ``maintenance/run`` and ``version/delete`` answer 409 code 14, and
-the sweep's pass over the table is skipped this tick and reclaims on the next.
+the sweep's pass over the table is skipped this tick and reclaims on the next. Once the pass holds the history, it reads
+the trash again, so a table dropped since its pass began is not reclaimed.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from lakehouse import maintenance_due, maintenance_policies, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
 from lakehouse.governed.store_credential import S3KeyPair
@@ -66,8 +68,8 @@ class _Estate:
     def versions(self) -> list[int]:
         return [int(version["version"]) for version in lance.dataset(self.location, storage_options=self.key.in_clear()).versions()]
 
-    def swept(self) -> DatasetResult:
-        """Maintenance's own pass over the table, every version but the current one reclaimable."""
+    def swept(self, policies: list[dict[str, object]] | None = None) -> DatasetResult:
+        """Maintenance's own pass over the table under ``policies``, every version but the current one reclaimable."""
         now = datetime.now(UTC)
         namespace = self.client.post("/v1/namespace/db/describe", json={})
         assert namespace.status_code == 200, namespace.text
@@ -86,7 +88,7 @@ class _Estate:
         ids = TableIds(by_location={normalise(self.location): TABLE}, namespace_uuids={"db": str(namespace.json()["properties"][UUID_PROPERTY])})
         readings = table_pass.PassReadings(
             table_ids=ids,
-            context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
+            context=PlanContext(policies=list(policies or []), now=now, older_than=timedelta(0)),
             table=TABLE,
             owners=policy_owners(ids, TABLE, claims=claim_store(settings)),
         )
@@ -136,3 +138,25 @@ def test_no_reclaim_deletes_a_version_while_a_ref_write_holds_the_tables_history
             assert (result.skipped, result.error, result.old_versions_removed) == ("history_fenced", None, 0), result
 
     assert estate.versions() == versions, f"{reclaim} deleted versions while a ref write held the table's history"
+
+
+def test_a_table_dropped_after_its_pass_read_the_trash_is_not_reclaimed(estate: _Estate) -> None:
+    """A recoverable drop can land after the table's pass read the trash, its vend already in hand: the pass reads the
+    trash again once it holds the table's history, reclaims nothing from a table the trash now keeps, and leaves it as a
+    table the trash keeps when its pass starts is left: off the due list, its policy's cadence unstamped."""
+    for start in (10, 20):
+        rows = encode_arrow_stream(pa.table({"id": pa.array(range(start, start + 3), pa.int64())}))
+        answer = estate.client.post(f"/v1/table/{quote(TABLE, safe='$')}/insert", content=rows, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        assert answer.status_code == 200, answer.text
+    versions = estate.versions()
+    policy: dict[str, object] = {"kind": "table", "id": TABLE, "uuid": estate.table_uuid, "compact_enabled": True, "compact_interval_hours": 24}
+    stale = maintenance_due.DueRecord(table=TABLE, uuid=estate.table_uuid, location=estate.location, version=1, evaluated_at=datetime.now(UTC))
+    maintenance_due.write_due(estate.root, estate.key, stale)
+    record = trash.make_record(TABLE, uuid=estate.table_uuid, location=estate.location, dropped_by=None, grace_days=7)
+    trash.put(estate.root, estate.key, record)
+
+    result = estate.swept([policy])
+
+    assert (result.trashed, result.error, result.old_versions_removed, estate.versions()) == (estate.table_uuid, None, 0, versions)
+    stamped = maintenance_policies.read_state(estate.root, estate.key, policy, table_uuid=estate.table_uuid, uri=estate.location)
+    assert (maintenance_due.read_due(estate.root, estate.key, estate.table_uuid), stamped) == (None, None)

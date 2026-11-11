@@ -83,3 +83,15 @@ def test_a_new_table_under_a_name_whose_release_was_lost_is_given_its_own_uuid(t
 
     held = location_claims.holder(store, LOCATION)
     assert (taken.uuid, held.uuid if held is not None else None) == (MINTED, MINTED), "the new table took the ended table's uuid"
+
+
+def test_a_release_naming_its_uuid_leaves_a_claim_the_same_name_took_since(tmp_path: Path) -> None:
+    """A release naming the uuid it owns the claim for frees only that claim: the same name registered again at the
+    location since holds the claim under a uuid of its own, and keeps it."""
+    store = ClaimStore(control_root=str(tmp_path))
+    location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves, uuid=MINTED)
+
+    refused = location_claims.release(store, LOCATION, "ns$x", uuid=ENDED)
+    owned = location_claims.release(store, LOCATION, "ns$x", uuid=MINTED)
+
+    assert (refused, owned, location_claims.holder(store, LOCATION)) == (False, True, None)

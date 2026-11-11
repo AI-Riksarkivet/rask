@@ -18,9 +18,11 @@ not the claim: the tuples each call leaves behind are. A table's tuples are what
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import timedelta
 from typing import Any, override
 from unittest.mock import MagicMock
 
@@ -31,13 +33,15 @@ import pyarrow as pa
 import pytest
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
+from lance_namespace import LanceNamespace, TableNotFoundError
 from openfga_sdk.client.models import ClientWriteRequest
 
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
-from catalog.services import warehouses
-from lakehouse import base_registry, clone_sources, location_claims, maintenance_policies, object_records, trash
+from catalog.services import native, warehouses
+from lakehouse import base_registry, clone_endings, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
 from tests.integration.openfga_grants import Options, TupleStore, act_as
@@ -360,10 +364,9 @@ def _a_store_that_will_not_delete_a_tag(source_location: str, tag: str, *, stora
     raise OSError(f"the store did not answer the delete of {tag} on {source_location}")
 
 
-def test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location(tenant: _Tenant, moto_url: str) -> None:
-    """A cascade keeping its bucket ends what the catalog promised a clone before it frees the clone's location, as the
-    deregister door does (ADR 0198 §1): a tag the store will not delete leaves the location held, so no clone registered
-    there next takes it while the old tag stands."""
+def _registered_clone(tenant: _Tenant, moto_url: str) -> tuple[lance.LanceDataset, str, dict[str, str]]:
+    """``bronze$src`` in the warehouse and a shallow clone of it registered as ``bronze$silver``: the source, the clone's
+    location and the store key."""
     tenant.bind("bronze")
     tenant.create_table("bronze$src")
     key = {"aws_endpoint": moto_url, "aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_region": "us-east-1", "aws_allow_http": "true"}
@@ -371,12 +374,152 @@ def test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location(ten
     clone = f"s3://{tenant.warehouse}/silver"
     source.shallow_clone(clone, source.version, storage_options=key)
     assert tenant.client.post("/v1/table/bronze$silver/register", json={"location": "silver"}).status_code == 200
+    return source, clone, key
+
+
+def test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location_until_the_finish(
+    tenant: _Tenant, moto_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A cascade keeping its bucket ends what the catalog promised a clone before it frees the clone's location, as the
+    deregister door does (ADR 0198 §1): a tag the store will not delete leaves the location held, so no clone registered
+    there next takes it while the old tag stands. The cascade filed the clone's ending first, so the catalog's finish door,
+    as maintenance's audit asks it, releases the tag and the location, records on the audit trail which clone it ended
+    and which sources it released, and the warehouse is then purged with its source."""
+    source, clone, key = _registered_clone(tenant, moto_url)
+    clone_uuid = str(tenant.client.post("/v1/table/bronze$silver/describe", json={}).json()["properties"]["rask.uuid"])
+    settings = get_settings()
+    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+    sources = base_registry.clone_source_locations(base_registry.read_base_record(registry, clone))
+    real_delete = clone_sources.delete_tag
     tenant.monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
 
     ended = tenant.client.delete(f"/management/v1/warehouses/{tenant.warehouse}", params={"cascade": "true"})
 
     settings = get_settings()
-    held = location_claims.holder(location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options()), clone)
+    claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
+    held = location_claims.holder(claims, clone)
     detached = tenant.client.post("/v1/table/bronze$silver/describe", json={}).status_code
     assert (ended.status_code, ended.json().get("code"), detached) == (503, 17, 404), ended.text
     assert held is not None and held.table == "bronze$silver", "the clone's location was freed with its tag still standing"
+    tenant.monkeypatch.setattr(clone_sources, "delete_tag", real_delete)
+    tenant.monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
+    (listed,) = tenant.client.get("/management/v1/clone-endings").json()["endings"]
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    finished = tenant.client.post(f"/management/v1/clone-endings/{listed['digest']}/{listed['filing']}/finish")
+    assert (finished.status_code, finished.json()) == (200, {"tags_released": 1, "kept": False}), finished.text
+    (record,) = [r.__dict__ for r in caplog.records if r.__dict__.get("audit.action") == AuditAction.CLONE_ENDING_FINISH]
+    named = (record["audit.outcome"], record["audit.resource"], record["audit.table"], record["audit.sources_released"])
+    assert named == (AuditOutcome.SUCCESS, f"table:{clone_uuid}", "bronze$silver", ",".join(sources))
+    assert [tag for tag in lance.dataset(source.uri, storage_options=key).tags.list() if tag.startswith(clone_sources.TAG_PREFIX)] == []
+    assert location_claims.holder(claims, clone) is None, "the finish left the clone's location held"
+    assert tenant.delete_warehouse().status_code == 200
+
+
+def test_a_purging_cascade_whose_clone_ending_cannot_be_filed_deletes_nothing(tenant: _Tenant, moto_url: str) -> None:
+    """A purging cascade files a clone's ending before it deletes anything: a filing the store refuses answers 503 with
+    the clone's row in place and its data directories never reached, so a re-issue finds the table whole."""
+    _registered_clone(tenant, moto_url)
+    reached: list[str] = []
+    real_directories = data_directories.delete_table_directories
+
+    def _directories(*args: Any, **kwargs: Any) -> object:  # noqa: ANN401 — the deleter's own arguments, passed on
+        reached.append(str(kwargs.get("table")))
+        return real_directories(*args, **kwargs)
+
+    def _a_store_that_will_not_file(*_args: object, **_kwargs: object) -> object:
+        raise OSError("the control root did not take the ending")
+
+    tenant.monkeypatch.setattr(data_directories, "delete_table_directories", _directories)
+    tenant.monkeypatch.setattr(clone_endings, "file", _a_store_that_will_not_file)
+
+    ended = tenant.delete_warehouse()
+
+    described = tenant.client.post("/v1/table/bronze$silver/describe", json={}).status_code
+    assert (ended.status_code, ended.json().get("code"), described, "bronze$silver" in reached) == (503, 17, 200, False), ended.text
+
+
+def _a_store_that_will_not_delete_directories(tenant: _Tenant) -> None:
+    def _refused(*_args: object, **_kwargs: object) -> object:
+        raise OSError("the store did not answer the delete")
+
+    tenant.monkeypatch.setattr(data_directories, "delete_table_directories", _refused)
+
+
+def _a_backend_that_will_not_deregister(tenant: _Tenant) -> None:
+    real_call = native.call
+
+    def _call(ns: LanceNamespace, operation: str, *args: object) -> object:
+        if operation == "deregister_table":
+            raise OSError("the namespace backend did not answer")
+        return real_call(ns, operation, *args)
+
+    tenant.monkeypatch.setattr(native, "call", _call)
+
+
+def _a_backend_that_removes_the_row_and_answers_not_found(tenant: _Tenant) -> None:
+    real_call = native.call
+    removed: list[bool] = []
+
+    def _call(ns: LanceNamespace, operation: str, *args: object) -> object:
+        if operation == "deregister_table" and not removed:
+            real_call(ns, operation, *args)
+            removed.append(True)
+            raise TableNotFoundError("another request removed the row first")
+        return real_call(ns, operation, *args)
+
+    tenant.monkeypatch.setattr(native, "call", _call)
+
+
+@pytest.mark.parametrize(
+    ("failing", "answered", "ending_stands"),
+    [
+        pytest.param(_a_store_that_will_not_delete_directories, (503, 17, 200), False, id="directory-delete-before-the-native-call"),
+        pytest.param(_a_backend_that_will_not_deregister, (503, 17, 200), True, id="the-native-call-failed"),
+        pytest.param(_a_backend_that_removes_the_row_and_answers_not_found, (200, None, 403), True, id="the-native-call-answered-not-found"),
+    ],
+)
+def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_never_reached_the_row(
+    tenant: _Tenant, moto_url: str, failing: Callable[[_Tenant], None], answered: tuple[int, int | None, int], ending_stands: bool
+) -> None:
+    """A purging cascade deletes a clone's data directories after filing its ending and before touching its row: a delete
+    that fails leaves the row, and with it the clone's holds, its own, so the cascade removes the ending it filed. A native
+    deregister that was attempted leaves the ending, whatever it answered (a failure with the row in place, or
+    TableNotFound once another request removed it): no read tells the cascade whether the row it then finds is still the
+    clone's, and the finish judges it."""
+    _registered_clone(tenant, moto_url)
+    failing(tenant)
+
+    ended = tenant.delete_warehouse()
+
+    settings = get_settings()
+    claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
+    described = tenant.client.post("/v1/table/bronze$silver/describe", json={}).status_code
+    assert (ended.status_code, ended.json().get("code"), described) == answered, ended.text
+    assert bool(clone_endings.standing(claims)) is ending_stands
+
+
+def test_a_cascade_releases_only_the_claim_of_the_table_it_identified(tenant: _Tenant) -> None:
+    """A warehouse cascade holds no fence between a table's row removal and its claim's release, so the same name can take
+    the location's claim there, under a uuid of its own: the cascade releases the claim only under the uuid it identified
+    the table by, and the new holder keeps it."""
+    tenant.bind("bronze")
+    tenant.create_table("bronze$t")
+    location = str(tenant.client.post("/v1/table/bronze$t/describe", json={}).json()["location"])
+    settings = get_settings()
+    claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
+    real_release = base_registry.release_clone_sources
+    taken: list[str] = []
+
+    def _release_then_the_same_name_takes_the_location(registry: base_registry.BaseRegistry, at: str, *, holder: str) -> list[str]:
+        released = real_release(registry, at, holder=holder)
+        taken.append(str(uuid.uuid4()))
+        location_claims.take(claims, at, holder, ["bronze", "t"], is_gone=lambda _claim: True, uuid=taken[0])
+        return released
+
+    tenant.monkeypatch.setattr(base_registry, "release_clone_sources", _release_then_the_same_name_takes_the_location)
+
+    ended = tenant.client.delete(f"/management/v1/warehouses/{tenant.warehouse}", params={"cascade": "true"})
+
+    held = location_claims.holder(claims, location)
+    assert ended.status_code == 200, ended.text
+    assert (len(taken), held.uuid if held is not None else None) == (1, taken[0] if taken else None)

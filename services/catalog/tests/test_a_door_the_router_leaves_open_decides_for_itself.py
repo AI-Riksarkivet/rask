@@ -219,6 +219,9 @@ _DOORS: list[_Door] = [
     _Refusing(method="POST", route="/management/v1/trash/{kind}/{uuid}/release", params={"kind": "table", "uuid": ROLE}),
     _Refusing(method="DELETE", route="/management/v1/trash/{kind}/{uuid}", params={"kind": "table", "uuid": ROLE}),
     _Refusing(method="POST", route="/management/v1/trash/{kind}/{uuid}/refusals", params={"kind": "table", "uuid": ROLE}, body={"reason": "a stranger's"}),
+    # Maintenance's finish of a clone's ending, on the same rung, asked before any ending is read.
+    _Refusing(method="GET", route="/management/v1/clone-endings"),
+    _Refusing(method="POST", route="/management/v1/clone-endings/{digest}/{filing}/finish", params={"digest": "c" * 64, "filing": "d" * 32}),
     # Maintenance's drift reconciler reads and repairs the estate's grants through these ([[XC-084]]).
     _Refusing(method="GET", route="/management/v1/grants/census"),
     _Refusing(method="POST", route="/management/v1/grants/ghosts/revoke", body={"objects": [f"project:{PROJECT}"]}),
