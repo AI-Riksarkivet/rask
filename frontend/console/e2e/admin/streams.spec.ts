@@ -12,6 +12,9 @@ test('the streams page names the missing NATS monitor instead of rendering an em
 	await signIn(context, { token: TOKEN.admin });
 	await mockMe(page);
 	await page.goto('/admin/streams');
-	await expect(page.getByText(/needs the NATS monitor/)).toBeVisible();
-	await expect(page.getByText(/nats/i).first()).toBeVisible();
+	// innerText: the notice reads as ONE sentence, not as text runs laid out side by side as columns.
+	await expect(page.getByText(/needs the NATS monitor/)).toHaveText(
+		"The stream view needs the NATS monitor (/jsz), which no route serves to the console. Read the bus with NATS's own tools: the nats CLI, its Prometheus exporter, or Surveyor.",
+		{ useInnerText: true },
+	);
 });

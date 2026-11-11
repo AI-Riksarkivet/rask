@@ -253,10 +253,10 @@ test('the breadcrumb truncates MIDDLE segments and always shows the current page
 	await page.goto(projectUrl(baseURL, `/catalog/tables/${encodeURIComponent(TABLES[0])}`));
 	const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
 	// The current page is the LAST crumb and is never the one that gets dropped (the label is the
-	// humanised segment — `pathCrumbs` percent-decodes and un-dashes it for display).
+	// table id, percent-decoded and otherwise as written).
 	const current = crumbs.locator('[data-slot="breadcrumb-page"]');
 	await expect(current).toBeVisible();
-	await expect(current).toHaveText(TABLES[0].replace(/-/g, ' '));
+	await expect(current).toHaveText(TABLES[0]);
 	// A middle segment is folded behind an ellipsis affordance rather than squeezing the trail…
 	const ellipsis = crumbs.locator('[data-slot="breadcrumb-ellipsis"]');
 	await expect(ellipsis).toBeVisible();
@@ -268,6 +268,34 @@ test('the breadcrumb truncates MIDDLE segments and always shows the current page
 	// The breadcrumb bar itself never overflows its row.
 	const fits = await crumbs.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
 	expect(fits).toBe(true);
+});
+
+test('the breadcrumb names the active project once, only inside it, and writes identifiers as they are', async ({
+	page,
+	baseURL,
+}) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' }).locator('li');
+	// innerText, not textContent: it is what the reader sees, CSS text-transform included, and an
+	// identifier re-cased by a stylesheet misreports the data the page is about.
+	const seen = { useInnerText: true } as const;
+
+	// A lakehouse page: the project (from the host) is the trail's root, once, and the table id is
+	// printed exactly as the catalog names it.
+	await page.goto(projectUrl(baseURL, `/catalog/tables/${encodeURIComponent(TABLES[2])}`));
+	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+	await expect(crumbs).toHaveText(['acmecorp', 'Catalog', 'Tables', TABLES[2]], seen);
+	// Separators go between crumbs: the trail starts with a name.
+	await expect(crumbs.first().locator('svg')).toHaveCount(0);
+	await expect(crumbs.nth(1).locator('svg')).toHaveCount(1);
+
+	// An estate page is outside every project: no project crumb, and no empty one either.
+	await page.goto(projectUrl(baseURL, '/settings/access'));
+	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+	await expect(crumbs).toHaveText(['Settings', 'Access'], seen);
+	await page.goto(projectUrl(baseURL, '/projects'));
+	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+	await expect(crumbs).toHaveText(['Projects'], seen);
 });
 
 test(`the sidebar is off-canvas below ${COLLAPSE_AT}px and on-canvas above it (#105)`, async ({

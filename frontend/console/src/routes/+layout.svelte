@@ -79,6 +79,7 @@
 
 <AppShell
 	pathname={page.url.pathname}
+	routeId={page.route.id}
 	user={data.user}
 	authEnabled={data.authEnabled}
 	project={data.activeProject ? { name: data.activeProject } : undefined}

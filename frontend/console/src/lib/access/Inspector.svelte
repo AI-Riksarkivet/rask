@@ -182,8 +182,15 @@
 	 *  a free-text box that has to be taught Go duration syntax by a 400. */
 	const DURATION_PRESETS = ['1h', '4h', '8h', '24h', '72h', '168h'];
 
+	/** Whether the chosen condition has what the grant must carry. A blank `timestamp` is filled with
+	 *  the moment of writing (see `grant`), so only the other parameters must be given; a time-boxed
+	 *  grant sent without its duration is a write the catalog refuses with a 400. The catalog still
+	 *  decides every write: this only keeps the dialog from sending one it knows is incomplete. */
 	const conditionReady = $derived(
-		!gCondition || conditionParams.every(([name]) => (gParams[name] ?? '').trim().length > 0),
+		!gCondition ||
+			conditionParams.every(
+				([name, type]) => type === 'timestamp' || (gParams[name] ?? '').trim().length > 0,
+			),
 	);
 
 	/**
@@ -202,7 +209,7 @@
 	async function runPreview(): Promise<void> {
 		const subject = gUser.trim();
 		const rel = gRelation.trim();
-		if (!subject || !rel || !selected) return;
+		if (!subject || !rel || !selected || !conditionReady) return;
 		previewing = true;
 		preview = null;
 		previewFailed = false;
@@ -253,7 +260,8 @@
 					}
 				: {}),
 		};
-		if (busy || !t.user || !t.relation || !t.object) return;
+		// The form also submits on Enter, so the button's guard is repeated here.
+		if (busy || !conditionReady || !t.user || !t.relation || !t.object) return;
 		busy = true;
 		try {
 			const res = await writeTuple(t);
@@ -597,7 +605,7 @@
 						size="sm"
 						variant="outline"
 						type="button"
-						disabled={previewing || !gUser.trim() || !gRelation.trim()}
+						disabled={previewing || !conditionReady || !gUser.trim() || !gRelation.trim()}
 						onclick={runPreview}
 					>
 						{previewing ? 'Checking…' : 'Simulate'}
@@ -638,7 +646,10 @@
 				<Button variant="outline" type="button" disabled={busy} onclick={() => (grantOpen = false)}>
 					Cancel
 				</Button>
-				<Button type="submit" disabled={busy || !gUser.trim() || !gRelation.trim()}>
+				<Button
+					type="submit"
+					disabled={busy || !conditionReady || !gUser.trim() || !gRelation.trim()}
+				>
 					{busy ? '…' : 'Write tuple'}
 				</Button>
 			</div>

@@ -46,6 +46,7 @@
 	// nav; `me`/`meLoading` come from the console's fetchMe() and gate the navbar's admin entries.
 	let {
 		pathname = '',
+		routeId = null,
 		project = { name: '', subtitle: 'Project' },
 		// NO fabricated default (#92). This used to default to `{ name: 'rask', email: 'local',
 		// initials: 'RA' }` — the exact identity NavbarUser's own comment records removing as a
@@ -63,6 +64,9 @@
 		children,
 	}: {
 		pathname?: string;
+		/** The route `pathname` matched (`$app/state`'s `page.route.id`): the breadcrumb prints the
+		 *  segments it declares as parameters (catalog names) exactly as written. */
+		routeId?: string | null;
 		project?: Project;
 		// `null` = no resolved identity — signed out on an auth-on stack, or auth off entirely; the
 		// navbar renders the honest signed-out state either way (the fabricated placeholder died in #92).
@@ -106,18 +110,26 @@
 	const projectName = $derived(projectSlug || project.name);
 	// Estate level (/, /projects, /settings) is OUTSIDE any project: no project crumb, and the
 	// switcher shows a neutral prompt. Inside a page the project is the breadcrumb ROOT and links
-	// back to its overview page — the way back the trail never offered.
+	// back to its overview page. A project's own page (`/projects/<id>`) names its project in the
+	// path, so a root crumb there would name it twice.
 	const estateLevel = $derived(isMainMenu(pathname));
+	const projectPage = $derived(/^\/projects\/./.test(pathname));
 	const shellProject = $derived({
 		name: projectName || 'Select project',
 		subtitle: projectName ? (project.subtitle ?? 'Project') : 'No active project',
 	});
 	const projectCrumb = $derived<Crumb[]>(
-		!estateLevel && projectName
-			? [{ id: '__project', label: projectName, href: `/projects/${projectName}` }]
+		!estateLevel && !projectPage && projectName
+			? [
+					{
+						id: '__project',
+						label: projectName,
+						href: `/projects/${encodeURIComponent(projectName)}`,
+					},
+				]
 			: [],
 	);
-	const crumbs = $derived([...projectCrumb, ...pathCrumbs(pathname)]);
+	const crumbs = $derived([...projectCrumb, ...pathCrumbs(pathname, routeId)]);
 	// A deep path (project → domain → collection → a long resource id) does not fit a narrow row, so
 	// the MIDDLE of the trail folds behind an ellipsis menu rather than squeezing every crumb into
 	// illegibility — and the current page, the one crumb worth keeping, is never the thing that
@@ -127,6 +139,8 @@
 	// Every crumb but the last is a link back up its own path; the last IS the current page, so it
 	// renders as text and carries aria-current instead.
 	const lastCrumbId = $derived(trail.tail.at(-1)?.id);
+	// A separator goes BETWEEN crumbs, so the first one has none.
+	const firstCrumbId = $derived(crumbs[0]?.id);
 
 	// Bound, so the trigger and cmd/ctrl+b open and close the rail.
 	let sidebarOpen = $state(true);
@@ -179,13 +193,11 @@
 				class="border-border/60 bg-muted/20 flex h-9 min-w-0 shrink-0 items-center overflow-hidden border-y px-4 text-sm"
 			>
 				<ol class="flex min-w-0 items-center gap-1.5">
-					<li class="text-muted-foreground shrink-0 capitalize">{projectName}</li>
 					{#each trail.lead as crumb (crumb.id)}
 						<li class="flex min-w-0 shrink-0 items-center gap-1.5">
-							<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
 							<a
 								href={crumb.href}
-								class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
+								class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm transition-colors outline-none focus-visible:ring-3"
 								>{crumb.label}</a
 							>
 						</li>
@@ -212,9 +224,7 @@
 								<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
 									{#each trail.hidden as crumb (crumb.id)}
 										<DropdownMenu.Item class="p-0">
-											<a href={crumb.href} class="w-full truncate px-2 py-1.5 capitalize"
-												>{crumb.label}</a
-											>
+											<a href={crumb.href} class="w-full truncate px-2 py-1.5">{crumb.label}</a>
 										</DropdownMenu.Item>
 									{/each}
 								</DropdownMenu.Content>
@@ -223,11 +233,13 @@
 					{/if}
 					{#each trail.tail as crumb (crumb.id)}
 						<li class="flex min-w-0 items-center gap-1.5">
-							<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
+							{#if crumb.id !== firstCrumbId}
+								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
+							{/if}
 							{#if crumb.id === lastCrumbId}
 								<span
 									aria-current="page"
-									class="text-foreground truncate font-medium capitalize"
+									class="text-foreground truncate font-medium"
 									data-slot="breadcrumb-page">{crumb.label}</span
 								>
 							{:else}
@@ -238,7 +250,7 @@
 								     do not own `/projects/…`. Pinned all-or-nothing by the app-contract gate. -->
 								<a
 									href={crumb.href}
-									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
+									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm transition-colors outline-none focus-visible:ring-3"
 									>{crumb.label}</a
 								>
 							{/if}

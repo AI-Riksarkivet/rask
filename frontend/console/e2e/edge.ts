@@ -21,12 +21,21 @@ const routes: { prefix: string; target: string | undefined }[] = [
 	{ prefix: '/oidc', target: env.OIDC_MOCK },
 ];
 
-Bun.spawn(['bun', 'serve.ts'], {
+const inner = Bun.spawn(['bun', 'serve.ts'], {
 	cwd: new URL('..', import.meta.url).pathname,
 	env: { ...process.env, PORT: String(INNER) },
 	stdout: 'inherit',
 	stderr: 'inherit',
 });
+// The edge owns its serve.ts: stopping the edge stops it, or a stopped suite leaves the console
+// listening on INNER, and the next run's edge fails to bind there.
+process.on('exit', () => inner.kill());
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
+	process.on(signal, () => {
+		inner.kill();
+		process.exit(0);
+	});
+}
 for (let tries = 0; ; tries++) {
 	const up = await fetch(`http://127.0.0.1:${INNER}/`).then(
 		(r) => r.ok,

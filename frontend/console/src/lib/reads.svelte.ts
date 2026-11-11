@@ -4,7 +4,8 @@
  * write, recorded in the reader's activity log, `activity.svelte.ts`). Each `*.api.ts` module
  * declares its reads and writes with them, and every one reaches its service's door same-origin with
  * the signed-in person's bearer. A component holds a read as
- * `await read()`, `read().current`, `read().refresh()`.
+ * `await read()`, `read().current`, `read().refresh()`, and a live cursor as `live().current` and
+ * `live().error`.
  *
  * Semantics a caller relies on:
  *  - Calling a read with the same arguments returns the SAME instance, so a write's
@@ -178,55 +179,33 @@ export function query(
 		});
 }
 
-/** One live cursor: the latest value a generator yielded. Awaiting it gives that value (the first,
- *  once it arrives), and `then` is read reactively, so a template's `await live` re-renders on each
- *  new value. */
-class LiveQuery<T> implements PromiseLike<T> {
+/** One live cursor: the latest value a generator yielded, read through `.current` (undefined until
+ *  the first value), `.connected` and `.error` (set when the generator throws, `error(403, …)`
+ *  included). It is deliberately not a promise: a template `await` of a cursor that may not answer
+ *  for seconds holds the page's first render batch open until it does, and on Svelte 5.57.3 with
+ *  `experimental.async` a state write made in that batch reads as its previous value in a concurrent
+ *  batch: bits-ui's sidebar collapsibles, constructed open, render `hidden` (measured 2026-11-11 on a
+ *  hard load of `/admin/events`, pinned by `e2e/admin/control-events.spec.ts`). */
+class LiveQuery<T> {
 	current = $state.raw<T | undefined>(undefined);
 	connected = $state(false);
 	error = $state.raw<unknown>(undefined);
-	#promise = $state.raw<Promise<T>>(new Promise<T>(() => {}));
 
 	constructor(open: () => AsyncGenerator<T>) {
-		let first: { resolve: (value: T) => void; reject: (reason: unknown) => void } | null = null;
-		this.#promise = new Promise<T>((resolve, reject) => {
-			first = { resolve, reject };
-		});
-		this.#promise.catch(() => {});
-		void this.#pump(open, () => first);
+		void this.#pump(open);
 	}
 
-	async #pump(
-		open: () => AsyncGenerator<T>,
-		pending: () => { resolve: (value: T) => void; reject: (reason: unknown) => void } | null,
-	): Promise<void> {
-		let started = false;
+	async #pump(open: () => AsyncGenerator<T>): Promise<void> {
 		try {
 			for await (const value of open()) {
 				this.current = value;
 				this.connected = true;
-				if (started) this.#promise = Promise.resolve(value);
-				else pending()?.resolve(value);
-				started = true;
 			}
 		} catch (err) {
 			this.error = err;
-			if (started) {
-				const failed = Promise.reject(err);
-				failed.catch(() => {});
-				this.#promise = failed;
-			} else pending()?.reject(err);
 		} finally {
 			this.connected = false;
 		}
-	}
-
-	// A read IS a promise of its latest value, as a SvelteKit remote query is: `await read()` is how a
-	// page holds it, and that is the point rather than an accident.
-	// oxlint-disable-next-line unicorn/no-thenable
-	get then(): Promise<T>['then'] {
-		const promise = this.#promise;
-		return promise.then.bind(promise);
 	}
 }
 

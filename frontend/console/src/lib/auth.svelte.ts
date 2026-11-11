@@ -69,7 +69,7 @@ function toSession(user: User): Session {
 
 type ConfigRead = { off: true } | { off: false; config: ConsoleConfig } | { error: string };
 
-async function readConfig(): Promise<ConfigRead> {
+async function readConfig(fetch: typeof globalThis.fetch): Promise<ConfigRead> {
 	let body: unknown;
 	try {
 		const res = await fetch('/config.json', { headers: { accept: 'application/json' } });
@@ -83,11 +83,12 @@ async function readConfig(): Promise<ConfigRead> {
 	return 'signIn' in read.output ? { off: true } : { off: false, config: read.output };
 }
 
-/** Read the config once and build the OIDC client. Idempotent; every caller awaits the same read. */
-export function initAuth(): Promise<void> {
+/** Read the config once and build the OIDC client. Idempotent; every caller awaits the same read.
+ *  The root layout's `load` calls it first, with its own `fetch`; a later caller's `fetch` is unused. */
+export function initAuth(fetch: typeof globalThis.fetch = globalThis.fetch): Promise<void> {
 	ready ??= (async () => {
 		setBearerProvider(() => auth.session?.accessToken);
-		const read = await readConfig();
+		const read = await readConfig(fetch);
 		if ('error' in read) {
 			auth.configError = read.error;
 			return;

@@ -43,7 +43,7 @@
 	});
 </script>
 
-<svelte:head><title>Stores by tier · Catalog</title></svelte:head>
+<svelte:head><title>Stores by tier · rask</title></svelte:head>
 
 <header class="head">
 	<h1><Layers size={18} /> Stores by tier</h1>

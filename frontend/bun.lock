@@ -87,7 +87,7 @@
       "name": "@rask/flow",
       "version": "0.0.0",
       "dependencies": {
-        "@xyflow/svelte": "^1.4.2",
+        "@xyflow/svelte": "^1.6.2",
         "elkjs": "^0.12.0",
       },
       "devDependencies": {

@@ -98,6 +98,26 @@ test("an estate admin passes the door and gets Lakehouse's governance columns", 
 	await expect(panel).toBeHidden();
 });
 
+test('every page is titled "<page> · rask", and a named object "<name> · <collection> · rask"', async ({
+	context,
+	page,
+}) => {
+	await signIn(context, { token: TOKEN.admin });
+	await mockMe(page, ME_ADMIN);
+	for (const [path, title] of [
+		['/admin', 'Control-plane activity · rask'],
+		['/admin/events', 'Control-plane activity · rask'],
+		['/admin/dlq', 'Lineage DLQ · rask'],
+		['/catalog/storage', 'Stores by tier · rask'],
+		['/workbench', 'Workbench · rask'],
+		['/catalog/tables/db1%24t', 'db1$t · tables · rask'],
+		['/catalog/promotions/db1%24t', 'db1$t · promotions · rask'],
+	] as const) {
+		await page.goto(path);
+		await expect(page, path).toHaveTitle(title);
+	}
+});
+
 test('an unresolvable identity (catalog outage) fails CLOSED, never open', async ({
 	context,
 	page,

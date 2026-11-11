@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { fetchMe, MeSchema, parse, type Me } from '@rask/api';
-import { requestJSON } from '@rask/api/client';
+import { timeoutSignal, upstreamJSON } from '@rask/api/client';
 import { auth, initAuth, login, sessionToUser } from '#lib/auth.svelte.ts';
 import { readActiveProject } from '#lib/active-project.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
@@ -21,9 +21,13 @@ export const prerender = false;
  * drifted", and those are opposite situations to a user, so `hasSession` rides beside it. On a stack
  * that signs nobody in, the catalog is asked anyway, with no bearer: an auth-off catalog answers for
  * its anonymous caller, and the console renders what it says.
+ *
+ * Every request here goes through `load`'s own `fetch`, as SvelteKit asks of a load function: in this
+ * browser-only app it is the browser's fetch, and it records `/config.json` and `/management/v1/me` as
+ * this load's dependencies, so `invalidate()` on either re-runs it.
  */
-export const load: LayoutLoad = async ({ params, url, untrack }) => {
-	await initAuth();
+export const load: LayoutLoad = async ({ fetch, params, url, untrack }) => {
+	await initAuth(fetch);
 	if (auth.configError) error(503, `Sign-in is not configured: ${auth.configError}`);
 	const path = untrack(() => url.pathname + url.search);
 	if (auth.enabled && !auth.session && !path.startsWith('/auth/')) {
@@ -37,14 +41,24 @@ export const load: LayoutLoad = async ({ params, url, untrack }) => {
 		hasSession: auth.session !== null,
 		activeProject: params.project ?? readActiveProject(),
 		me: auth.enabled
-			? await fetchMe({ catalogUrl: CATALOG_API, accessToken: auth.session?.accessToken })
-			: await anonymousMe(),
+			? await fetchMe({
+					catalogUrl: CATALOG_API,
+					accessToken: auth.session?.accessToken,
+					fetchFn: fetch,
+				})
+			: await anonymousMe(fetch),
 	};
 };
 
 /** `/management/v1/me` without a bearer, for a stack that signs nobody in; null on any failure. */
-async function anonymousMe(): Promise<Me | null> {
-	const res = await requestJSON(CATALOG_API, 'management/v1/me');
+async function anonymousMe(fetch: typeof globalThis.fetch): Promise<Me | null> {
+	const res = await upstreamJSON({
+		fetch,
+		base: CATALOG_API,
+		path: '/management/v1/me',
+		init: { signal: timeoutSignal() },
+		upstream: 'catalog',
+	});
 	if (!res.ok) return null;
 	try {
 		return parse(MeSchema, res.data);

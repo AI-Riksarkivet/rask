@@ -66,6 +66,9 @@ with a query is written without the leading `/`, ``resolve(`auth/login?redirect=
 (`replace`, `reset: false`, `refreshAll`) and rejects a URL that names no route. `@rask/ui` cannot import `$app/paths`, so the rule is off under
 `packages/ui/**`; its root paths are what `resolve()` gives in the console.
 
+**Page titles.** Every page's `<title>` is its heading followed by ` · rask` (`Lineage DLQ · rask`), and a
+page about one named object puts the name, as the catalog writes it, before its collection (`db1$t · tables · rask`).
+
 **Two navbars, chosen by path.** `isMainMenu(pathname)` in `@rask/ui`'s `shell/nav-config.ts` decides which bar
 renders: `/`, `/projects` and `/settings/**` are the ESTATE level (`mainMenuNav()`: Home · Projects · Settings),
 everything else — `/projects/<id>` included, opening a project is what puts you inside one — gets `topNav()`, one
@@ -150,7 +153,10 @@ answered-n with the upstream's `{detail}`, 502 contract drift (a payload that fa
 **`#lib/reads.svelte.ts` is the data layer**: `query` (a cached, refreshable read), `query.live` (a cursor that
 advances), and `command` (a write), in the browser. Every `*.api.ts` module (`#lib/remote/`, `#lib/data/remote/`,
 `#lib/admin/remote/`, `#lib/lineage/remote/`, `#lib/live/`, `#lib/storage/remote/`) declares its reads and writes with
-them, and a component holds a read as `await read()`, `read().current`, `read().refresh()`. A `command` is declared
+them, and a component holds a read as `await read()`, `read().current`, `read().refresh()`, and a live cursor as
+`live().current` and `live().error`: a live cursor is no promise, because a template `await` of one held the page's
+render batch open until its first value, and Svelte 5.57.3 read state written in that batch as its old value
+elsewhere (the sidebar's groups stayed `hidden` on a hard load of `/admin/events`). A `command` is declared
 with its label first, `command(label, schema, run)`: a string or a function of the caller's input, naming the action
 and its object for the activity log (below). Calling a read with the same
 arguments returns the SAME instance, so a write's `void read().refresh()` updates every holder; a read settled within

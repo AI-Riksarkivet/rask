@@ -50,6 +50,17 @@ describe('pathCrumbs', () => {
 			label: 'silver$features',
 			href: '/catalog/tables/silver%24features',
 		});
+		// A segment the route declares a parameter is a catalog name, printed as written even when it
+		// looks like route words: no un-dashing, no casing.
+		expect(
+			pathCrumbs('/catalog/warehouses/acme-wh', '/catalog/warehouses/[id]').map((c) => c.label),
+		).toEqual(['Catalog', 'Warehouses', 'acme-wh']);
+		// A route group names no path segment, so it does not shift the pairing.
+		expect(
+			pathCrumbs('/catalog/warehouses/acme-wh', '/(lakehouse)/catalog/warehouses/[id]').map(
+				(c) => c.label,
+			),
+		).toEqual(['Catalog', 'Warehouses', 'acme-wh']);
 	});
 
 	it('falls back to the raw segment when the escape is malformed', () => {

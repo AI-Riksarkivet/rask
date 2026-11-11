@@ -134,10 +134,15 @@
 	</div>
 
 	{#if unauthorized}
+		<!-- `.empty` is a flex row: a sentence mixing text, links and code goes in ONE span, or each run
+		     becomes a flex item of its own and the sentence breaks into columns. -->
 		<div class="empty">
 			<ShieldAlert size={15} />
-			<a href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>Sign in</a> to
-			view JetStream streams.
+			<span>
+				<a href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>Sign in</a
+				>
+				to view JetStream streams.
+			</span>
 		</div>
 	{:else if forbidden}
 		<div class="empty">
@@ -145,9 +150,11 @@
 		</div>
 	{:else if unavailable}
 		<div class="empty">
-			The stream view needs the NATS monitor (<code>/jsz</code>), which no route serves to the
-			console. Read the bus with NATS's own tools: the <code>nats</code> CLI, its Prometheus exporter,
-			or Surveyor.
+			<span>
+				The stream view needs the NATS monitor (<code>/jsz</code>), which no route serves to the
+				console. Read the bus with NATS's own tools: the <code>nats</code> CLI, its Prometheus exporter,
+				or Surveyor.
+			</span>
 		</div>
 	{:else if drifted}
 		<div class="empty">

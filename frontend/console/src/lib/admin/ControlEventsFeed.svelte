@@ -4,16 +4,18 @@
 	import { Activity, ShieldAlert } from '@lucide/svelte';
 	import { Subject } from '@rask/ui/identity';
 
-	// A live query (query.live): the server generator owns the cursor + accumulation + event_id dedup and
-	// yields the recent window on change; SvelteKit streams it here and owns reconnect. No arg → the
-	// estate-wide feed (the catalog gates it on the estate-admin relation, so a non-admin gets a terminal 403).
+	// A live cursor (query.live): the generator in admin.api.ts polls the catalog from this browser, owns
+	// the cursor, the window and event_id dedup, and yields the window when it changes. No argument: the
+	// estate-wide feed, which the catalog gates on the estate-admin relation, so a non-admin's first poll
+	// ends the feed with a 403 that renders below and is not retried.
 	const feed = controlEvents();
 
 	const label = (e: ControlEvent) => e.action.replaceAll('_', ' ');
+	const failure = (err: unknown) => (err instanceof Error ? err.message : String(err));
 	// ISO slice, not toLocaleTimeString: the feed prints the event's own UTC clock, the same on every machine.
 	const at = (iso: string) => iso.slice(11, 19);
 
-	// #70 — filter the RENDERED window, client-side. The live query's server generator owns the
+	// #70 — filter the RENDERED window, client-side. The live cursor's generator owns the
 	// cursor and the window; filtering must never re-query per keystroke or the tail dies with the
 	// eviction rule. So the filter is a pure function over the already-streamed array: typing narrows
 	// what is shown, while the stream keeps appending underneath — clearing the filter shows
@@ -42,8 +44,14 @@
 		<span class="sub">live &middot; governance changes across the estate</span>
 	</header>
 
-	<svelte:boundary>
-		{@const events = await feed}
+	{#if feed.error !== undefined}
+		<p class="empty">
+			<ShieldAlert size={15} /> Feed unavailable: {failure(feed.error)}
+		</p>
+	{:else if feed.current === undefined}
+		<p class="empty">Connecting to the live feed&hellip;</p>
+	{:else}
+		{@const events = feed.current}
 		{@const shown = events.filter(matches)}
 
 		{#if events.length === 0}
@@ -82,19 +90,7 @@
 				</ul>
 			{/if}
 		{/if}
-
-		{#snippet pending()}
-			<p class="empty">Connecting to the live feed&hellip;</p>
-		{/snippet}
-
-		{#snippet failed(err)}
-			<p class="empty">
-				<ShieldAlert size={15} /> Feed unavailable: {err instanceof Error
-					? err.message
-					: String(err)}
-			</p>
-		{/snippet}
-	</svelte:boundary>
+	{/if}
 </section>
 
 <style>

@@ -27,20 +27,24 @@ const INITIALISMS = new Set(['dlq']);
 /** Percent-decode a path segment for display, falling back to the raw text on a malformed
  *  escape (`decodeURIComponent` throws on a lone `%`). Ids like `silver$features` reach the
  *  URL encoded (`silver%24features`), and the raw form is unreadable in a breadcrumb. */
-function humanise(seg: string): string {
-	let decoded = seg;
+function decode(seg: string): string {
 	try {
-		decoded = decodeURIComponent(seg);
+		return decodeURIComponent(seg);
 	} catch {
-		// keep the raw segment
+		return seg;
 	}
-	const spaced = decoded.replace(/-/g, ' ');
+}
+
+/** A route word for display: dashes to spaces, sentence case, initialisms uppercased. */
+function humanise(seg: string): string {
+	const decoded = decode(seg);
 	// A segment that is not plain lowercase words is an IDENTIFIER — `silver$features`, `A0060198`, a
-	// uuid, a table name — and is left EXACTLY as it is. Capitalising a dataset id would misreport
-	// the data the page is about, which is a worse failure than an ugly crumb. The guard tests the
-	// WHOLE label, not just its first character: `gold$catalog` starts with a lowercase letter but is
-	// an identifier, and a first-char-only check rendered it `Gold$catalog`.
-	if (!/^[a-z][a-z ]*$/.test(spaced)) return spaced;
+	// uuid, a table name — and is left EXACTLY as it is, for a pathname whose route is unknown (a
+	// 404). Capitalising a dataset id would misreport the data the page is about, which is a worse
+	// failure than an ugly crumb. The guard tests the WHOLE label, not just its first character:
+	// `gold$catalog` starts with a lowercase letter but is an identifier.
+	if (!/^[a-z][a-z-]*$/.test(decoded)) return decoded;
+	const spaced = decoded.replace(/-/g, ' ');
 
 	// Uppercase the initialisms, then sentence-case the rest. Per-word TITLE case is still refused —
 	// it would render "api docs" as "Api Docs" — so only the first word is capitalised, and only when
@@ -55,20 +59,25 @@ function humanise(seg: string): string {
  * Crumbs for a domain-relative pathname, in order. Each segment becomes one crumb
  * keyed by its accumulated path prefix (so repeated segments like `/catalog/catalog`
  * stay unique) and carrying the `href` of that prefix, so the trail is navigable —
- * every crumb but the last links back up its own path. The human label drops dashes
- * and percent-decodes. The domain (first segment) is kept — it is the first crumb,
- * not the project.
+ * every crumb but the last links back up its own path.
+ *
+ * `routeId` is the route the pathname matched (`/catalog/tables/[table]`). A segment its route
+ * declares as a parameter is a NAME the catalog owns (a project, warehouse, namespace or table id),
+ * and its label is the percent-decoded segment, exactly as written: a URL segment alone cannot tell
+ * the id `acme-wh` from a route word, and un-dashing or capitalising an id misreports the data the
+ * page is about. Every other segment is a route word and is humanised.
+ *
+ * Route ids pair with the pathname one segment each, after dropping route groups (`(name)`), which
+ * name no path segment. Static words and single required parameters (`[id]`) are handled; rest
+ * (`[...rest]`) and optional (`[[lang]]`) parameters are not, because they match zero or several
+ * segments and the console declares neither.
  */
-export function pathCrumbs(pathname: string, pageLabels: Record<string, string> = {}): Crumb[] {
+export function pathCrumbs(pathname: string, routeId: string | null = null): Crumb[] {
 	const segs = pathname.split('/').filter(Boolean);
+	const routeSegs = routeId?.split('/').filter((seg) => seg && !/^\(.*\)$/.test(seg)) ?? [];
 	return segs.map((seg, i) => {
 		const id = segs.slice(0, i + 1).join('/');
-		// The FIRST segment is the app, and its human name is the NAVBAR's, not the directory's.
-		// A trail that read the directory name while the bar above it said the nav's name would show
-		// the same page under two names on one screen. `humanise` can only ever produce the directory
-		// name, because that is all a URL segment carries; the label lives in `topNav()`. Later
-		// segments keep `humanise`: they are in-app paths and identifiers, which have no nav entry.
-		const label = i === 0 ? (pageLabels[seg] ?? humanise(seg)) : humanise(seg);
+		const label = routeSegs[i]?.startsWith('[') ? decode(seg) : humanise(seg);
 		return { id, label, href: `/${id}` };
 	});
 }

@@ -344,8 +344,15 @@ test('a time-boxed grant sends its condition to the store', async ({ page }) => 
 	await page.getByLabel('Grant subject').fill('user:contractor');
 	await page.getByLabel('Grant relation').selectOption('reader');
 	await page.getByLabel('Time-box this grant').check();
+	// A time-boxed grant without its duration is refused by the catalog; the dialog does not send it,
+	// from the button or from Enter in the form.
+	const write = page.getByRole('button', { name: 'Write tuple' });
+	await expect(write).toBeDisabled();
+	await expect(page.getByRole('button', { name: 'Simulate' })).toBeDisabled();
+	await page.getByLabel('Grant subject').press('Enter');
 	await page.getByRole('button', { name: '4h', exact: true }).click();
-	await page.getByRole('button', { name: 'Write tuple' }).click();
+	expect((await accessState(page)).written).toHaveLength(0);
+	await write.click();
 
 	await expect.poll(async () => (await accessState(page)).written.length).toBeGreaterThan(0);
 	const written = (await accessState(page)).written.at(-1);

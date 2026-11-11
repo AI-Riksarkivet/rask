@@ -35,6 +35,11 @@ test('renders recent control-plane events on load', async ({ page }) => {
 	await page.goto('/admin/events');
 	await expect(page.getByText('warehouse deactivated')).toBeVisible({ timeout: 15_000 });
 	await expect(page.getByText('warehouse:acme')).toBeVisible();
+	// A hard load of this page renders the rail's groups open WITH their rows, as every other page does.
+	const rail = page.locator('[data-slot="sidebar"]');
+	for (const row of ['Tables', 'Events', 'Workbench']) {
+		await expect(rail.getByRole('link', { name: row, exact: true })).toBeVisible();
+	}
 });
 
 test('live-updates when a governance mutation happens elsewhere', async ({ page }) => {
