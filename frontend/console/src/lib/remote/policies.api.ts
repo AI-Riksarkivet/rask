@@ -5,8 +5,8 @@ import {
 	PolicyDeleteSchema,
 	PolicyResponseSchema,
 	ProjectPoliciesSchema,
+	type Policy,
 	type ProjectPolicies,
-	type ProjectPolicy,
 	type ProjectPolicyDelete,
 } from '#lib/policies.ts';
 import { catalogJSON, parsed } from '#lib/doors.ts';
@@ -61,7 +61,7 @@ export const fetchProjectPolicies = query(
 export const setProjectPolicy = command(
 	({ project }) => `Set the maintenance policy of project ${project}`,
 	v.object({ project: v.string(), policy: PolicyDraftSchema }),
-	async ({ project, policy }): Promise<ApiResult<ProjectPolicy>> => {
+	async ({ project, policy }): Promise<ApiResult<Policy>> => {
 		const result = parsed(
 			await catalogJSON(`/management/v1/project/${enc(project)}/policy/set`, {
 				method: 'POST',

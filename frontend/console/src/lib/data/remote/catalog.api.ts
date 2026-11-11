@@ -13,7 +13,7 @@ import {
 	type GcBounds,
 	type GcPreview,
 	type GcRunResult,
-	type Policy,
+	type PartError,
 	type TableDetail,
 	type TableLifecycleResult,
 	type TablesList,
@@ -21,6 +21,7 @@ import {
 } from '../catalog';
 
 import { catalogJSON, parsed } from '#lib/doors.ts';
+import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
 // Transport: the console's catalog door, `#lib/doors`.
 // The catalog TABLE-LIFECYCLE plane, declared with `query`/`command`: one named function per door, each
 // answering the shared `ApiResult` union, so no call site indexes a door by a client-supplied string.
@@ -29,10 +30,11 @@ import { catalogJSON, parsed } from '#lib/doors.ts';
 // catalog's own gate (can_drop / can_write_data / …) is enforced against a real user. An anonymous
 // visitor is refused by the catalog's 401, which every caller renders with its own "Sign in to …" copy.
 //
-// PARSING: every reply is parsed at this boundary, and none is invented. The lance-namespace lifecycle
-// contracts (drop/deregister/rename/declare/update/delete) are valibot-parsed HERE; the OpenAPI-generated shapes
-// (detail aggregate, policy, GC, tags, branches, indexes) were passed through untyped and
-// still are — hand-mirroring six generated schemas in valibot would be a second source of truth.
+// PARSING: the lance-namespace lifecycle contracts (drop/deregister/rename/declare/update/delete) are
+// valibot-parsed HERE, and a maintenance policy with `#lib/policies.ts`, the one schema the namespace
+// and project pages parse it with too. The other OpenAPI-generated shapes (the detail aggregate's
+// other parts, GC, tags, branches, indexes) pass through typed by the generated client: hand-mirroring
+// them in valibot would be a second source of truth.
 //
 // SINGLE-FLIGHT REFRESH, where it pays: the four writes that change WHICH TABLES EXIST
 // (declare/drop/deregister/rename) refresh `fetchTables()` in the same flight. The detail aggregate
@@ -118,10 +120,11 @@ export const undropTable = command(
 /** The detail aggregate for the table page (schema/stats/versions/tags/branches/indexes/policy): six
  *  POST-shaped catalog reads fanned out from one call.
  *
- *  Absence vs failure is kept distinct per part: a 404 becomes `null` (genuinely unset — e.g. no
- *  policy), a 5xx/403 becomes `{ error: status }` so the page renders "unavailable" instead of an
- *  affirmative "no policy" that would invite an overwriting write. `describe` gates the whole page:
- *  its status IS the page's status. */
+ *  Absence vs failure is kept distinct per part: a part's 404 becomes `null`, and so does the
+ *  policy's `set: false` (none is set); any other failure becomes `{ error: status }`, and for the
+ *  policy so do a 404 (the table went since its describe) and an answer that fails its schema
+ *  (502), so the page renders "unavailable" instead of an affirmative "no policy" that would invite
+ *  an overwriting write. `describe` gates the whole page: its status IS the page's status. */
 export const fetchTableDetail = query(
 	TableArg,
 	async ({ table }): Promise<ApiResult<TableDetail>> => {
@@ -138,6 +141,12 @@ export const fetchTableDetail = query(
 		const part = async (res: Response): Promise<unknown> => {
 			if (res.ok) return res.json();
 			return res.status === 404 ? null : { error: res.status };
+		};
+		const policyPart = async (res: Response): Promise<Policy | PartError | null> => {
+			if (!res.ok) return { error: res.status };
+			const described = v.safeParse(PolicyDescribeSchema, await res.json());
+			if (!described.success) return { error: 502 };
+			return described.output.set ? described.output : null;
 		};
 		try {
 			const describe = await read('describe?load_detailed_metadata=true&with_table_uri=true');
@@ -157,7 +166,7 @@ export const fetchTableDetail = query(
 				read('tags/list').then(part),
 				read('branches/list').then(part),
 				read('index/list').then(part),
-				read('policy/describe', management).then(part),
+				read('policy/describe', management).then(policyPart),
 			]);
 			return {
 				ok: true,
@@ -199,7 +208,10 @@ export const setTablePolicy = command(
 	({ table }) => `Set the maintenance policy of table ${table}`,
 	v.object({ table: v.string(), policy: PolicySchema }),
 	async ({ table, policy }): Promise<ApiResult<Policy>> =>
-		typedAs<Policy>(await post(`/management/v1/table/${enc(table)}/policy/set`, policy)),
+		parsed(
+			await post(`/management/v1/table/${enc(table)}/policy/set`, policy),
+			PolicyResponseSchema,
+		),
 );
 
 /** Maintenance-policy delete — idempotent removal, same owner gate. */

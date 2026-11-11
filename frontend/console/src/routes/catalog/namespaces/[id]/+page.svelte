@@ -16,7 +16,8 @@
 	import StageBadge from '#lib/data/StageBadge.svelte';
 	import { namespaceOfTable, stageOf } from '#lib/data/stage.ts';
 	import { policyRequestFrom } from '#lib/data/namespace.ts';
-	import type { AccessGraph, NamespacePolicy } from '#lib/data/namespace.ts';
+	import type { AccessGraph } from '#lib/data/namespace.ts';
+	import type { Policy } from '#lib/policies.ts';
 	import {
 		checkAccess,
 		fetchAccess,
@@ -56,10 +57,11 @@
 	let lastStatus = $state(0);
 	let settled = $state(false);
 
-	// #50 policy card state — 'none' (404: honest "global defaults apply"), 'set', 'denied' (401),
-	// 'unavailable' (5xx/offline/contract drift: never an affirmative empty state that would invite
-	// an overwriting write — the same stance as TableDetail's policyUnavailable).
-	let policy = $state<NamespacePolicy | null>(null);
+	// #50 policy card state — 'none' (the catalog answers `set: false`: honest "global defaults
+	// apply"), 'set', 'denied' (401/403), 'unavailable' (a 404, a 5xx, offline or contract drift:
+	// never an affirmative empty state that would invite an overwriting write — the same stance as
+	// TableDetail's policyUnavailable).
+	let policy = $state<Policy | null>(null);
 	let policyPart = $state<'loading' | 'none' | 'set' | 'denied' | 'unavailable'>('loading');
 	let policyDenied = $state<string | null>(null);
 	let policyError = $state<string | null>(null);
@@ -186,10 +188,7 @@
 			if (ns !== current) return;
 			if (res.ok) {
 				policy = res.data;
-				policyPart = 'set';
-			} else if (res.status === 404) {
-				policy = null;
-				policyPart = 'none';
+				policyPart = res.data === null ? 'none' : 'set';
 			} else if (res.status === 401) {
 				policyDenied = 'Sign in to view the maintenance policy.';
 				policyPart = 'denied';

@@ -16,7 +16,7 @@ const TABLES = { tables: ['bronze$events', 'gold$catalog', 'gold$metrics'] };
 const POLICY = {
 	kind: 'namespace',
 	id: 'gold',
-	path: 'lance-catalog/gold',
+	set: true,
 	compact_enabled: true,
 	retention_days: 14,
 	retain_versions: 5,
@@ -163,12 +163,13 @@ test('removing the policy deletes it and the card falls back to the global-defau
 }) => {
 	await page.goto('/catalog/namespaces/gold');
 	await expect(page.locator('.chip', { hasText: 'retention 14d' })).toBeVisible();
-	// Same single-flight refresh: after the delete the catalog describes NO policy (404), which is the
-	// honest "global defaults apply" state — not an error.
+	// Same single-flight refresh: after the delete the catalog answers that no policy is set
+	// (`set: false`), which is the honest "global defaults apply" state — not an error.
 	await seed(page, {
 		'POST /management/v1/namespace/gold/policy/describe': {
-			status: 404,
-			body: { detail: 'no policy' },
+			kind: 'namespace',
+			id: 'gold',
+			set: false,
 		},
 	});
 	await page.getByRole('button', { name: 'Remove', exact: true }).click();

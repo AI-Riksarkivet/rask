@@ -30,12 +30,19 @@ type FormKnob =
  *  whole record, so a null is an explicit erase and only an ABSENT key means inherit. */
 export type PolicySetBody = { [K in FormKnob]?: Exclude<PolicyRequest[K], null> };
 
-/** One stored policy record. The nullable fields are ABSENT rather than null on the wire (the routes
- *  serialize with `response_model_exclude_none`), so every one is `optional` AND `nullable`. */
+/** The three rungs a maintenance policy is kept on. */
+const PolicyKindSchema = v.picklist(['table', 'namespace', 'project']);
+
+/** One stored policy record, as a describe, a set and the project's listing answer it: the one parser of
+ *  that answer for the table, namespace and project pages. The nullable fields are ABSENT rather than
+ *  null on the wire (the routes serialize with `response_model_exclude_none`), so every one is
+ *  `optional` AND `nullable`. */
 export const PolicyResponseSchema = v.object({
-	kind: v.string(),
+	kind: PolicyKindSchema,
 	id: v.string(),
-	path: v.optional(v.string(), ''),
+	/** The table's or namespace's uuid; a project record carries none. */
+	uuid: v.optional(v.string()),
+	set: v.literal(true),
 	buckets: v.optional(v.nullable(v.array(v.string()))),
 	retention_days: v.optional(v.nullable(v.number())),
 	retain_versions: v.optional(v.nullable(v.number())),
@@ -46,6 +53,18 @@ export const PolicyResponseSchema = v.object({
 	optimize_indices_enabled: v.optional(v.boolean(), true),
 	scan_batch_size: v.optional(v.nullable(v.number())),
 });
+
+/** What a policy describe answers for an object that holds no policy: the object stands, and `set` is
+ *  false. */
+const PolicyUnsetSchema = v.object({
+	kind: PolicyKindSchema,
+	id: v.string(),
+	uuid: v.optional(v.string()),
+	set: v.literal(false),
+});
+
+/** A policy describe's answer: the policy, or that none is set. */
+export const PolicyDescribeSchema = v.variant('set', [PolicyResponseSchema, PolicyUnsetSchema]);
 
 /** The project-scoped LIST. `incomplete`/`skipped_bindings` are not diagnostics: a namespace→warehouse
  *  binding the catalog could not read is a namespace whose policies it could not see, so a page that
@@ -65,9 +84,9 @@ export const PolicyDeleteSchema = v.object({
 	id: v.string(),
 });
 
-/** `PolicyResponse` as the page holds it — inferred from the parser, so the type is what actually
- *  survived validation rather than what the wire claimed (the lakehouse's policy cards do the same). */
-export type ProjectPolicy = v.InferOutput<typeof PolicyResponseSchema>;
+/** `PolicyResponse` as a page holds it — inferred from the parser, so the type is what actually
+ *  survived validation rather than what the wire claimed. */
+export type Policy = v.InferOutput<typeof PolicyResponseSchema>;
 /** `ProjectPoliciesResponse` — every record governing data inside one project, plus the SCOPE it was
  *  computed from and whether that scope was complete. */
 export type ProjectPolicies = v.InferOutput<typeof ProjectPoliciesSchema>;

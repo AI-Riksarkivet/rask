@@ -936,15 +936,15 @@ def test_namespace_policy_set_requires_owner_via_can_delete(client: TestClient, 
 
 
 def test_table_policy_describe_is_reader_tier(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    """CONTRACT (#50): reading a policy is a metadata read (``can_get_metadata``) — 404 when unset is
-    only reachable after the reader gate passes."""
+    """CONTRACT (#50): reading a policy is a metadata read (``can_get_metadata``): that none is set is answered only
+    after the reader gate passes."""
     minted = claim_described("db1$users")
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=True))
 
     resp = client.post("/management/v1/table/db1$users/policy/describe", headers={"Authorization": "Bearer t"})
-    assert resp.status_code == 404  # gate passed; no policy stored in this fixture
+    assert (resp.status_code, resp.json()) == (200, {"kind": "table", "id": "db1$users", "uuid": minted, "set": False})  # gate passed; no policy is stored
     assert captured[-1] == {"user": "dex~alice", "relation": "can_get_metadata", "obj": f"table:{minted}"}
 
 

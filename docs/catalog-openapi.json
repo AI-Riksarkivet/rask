@@ -9245,6 +9245,14 @@
         "title": "PolicyDeleteResponse",
         "type": "object"
       },
+      "PolicyKind": {
+        "enum": [
+          "table",
+          "namespace",
+          "project"
+        ],
+        "type": "string"
+      },
       "PolicyRequest": {
         "description": "The maintenance policy for one table, namespace or project \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.\n\n**Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace\nrecord which shadows the project record \u2014 the winning record supplies EVERY field, and a field the\nwinner leaves unset falls to the sweep's global default rather than to the record it shadowed.\nAny surface that displays an effective policy has to say so: an inherited value rendered\nidentically to a set one is how nobody can tell what is actually governing their data.",
         "properties": {
@@ -9418,8 +9426,7 @@
             "type": "string"
           },
           "kind": {
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/PolicyKind"
           },
           "max_source_bytes": {
             "anyOf": [
@@ -9481,6 +9488,11 @@
             ],
             "title": "Scan Batch Size"
           },
+          "set": {
+            "const": true,
+            "title": "Set",
+            "type": "boolean"
+          },
           "target_rows_per_fragment": {
             "anyOf": [
               {
@@ -9506,9 +9518,45 @@
         },
         "required": [
           "kind",
-          "id"
+          "id",
+          "set"
         ],
         "title": "PolicyResponse",
+        "type": "object"
+      },
+      "PolicyUnset": {
+        "description": "What a policy describe answers for an object that holds no maintenance policy: the object, and ``set`` false.\n\nThe object stands: its door refuses a missing or hidden one before the policy is read, by resolving a table's or\nnamespace's name and by reading a project's registry record. Lance's error codes name only missing objects (code 4\nsays the table does not exist), so an absent setting is an answer, not an error.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PolicyKind"
+          },
+          "set": {
+            "const": false,
+            "title": "Set",
+            "type": "boolean"
+          },
+          "uuid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uuid"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "set"
+        ],
+        "title": "PolicyUnset",
         "type": "object"
       },
       "PrincipalDeleted": {
@@ -15133,7 +15181,7 @@
     },
     "/management/v1/namespace/{id}/policy/describe": {
       "post": {
-        "description": "The namespace's maintenance policy (reader-gated); 404 when none is set.",
+        "description": "The namespace's maintenance policy (reader-gated), or ``set: false`` when none is set.",
         "operationId": "describe_namespace_policy_management_v1_namespace__id__policy_describe_post",
         "parameters": [
           {
@@ -15169,7 +15217,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PolicyResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PolicyResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PolicyUnset"
+                    }
+                  ],
+                  "title": "Response Describe Namespace Policy Management V1 Namespace  Id  Policy Describe Post"
                 }
               }
             },
@@ -15905,7 +15961,7 @@
     },
     "/management/v1/project/{id}/policy/describe": {
       "post": {
-        "description": "The project's maintenance policy \u2014 admin-gated like set/delete (``project`` defines no\nreader-tier relation); 404 when none is set.",
+        "description": "The project's maintenance policy \u2014 admin-gated like set/delete (``project`` defines no\nreader-tier relation) \u2014 or ``set: false`` when none is set; a project the registry does not know is not found.",
         "operationId": "describe_project_policy_management_v1_project__id__policy_describe_post",
         "parameters": [
           {
@@ -15941,7 +15997,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PolicyResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PolicyResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PolicyUnset"
+                    }
+                  ],
+                  "title": "Response Describe Project Policy Management V1 Project  Id  Policy Describe Post"
                 }
               }
             },
@@ -18774,7 +18838,7 @@
     },
     "/management/v1/table/{id}/policy/describe": {
       "post": {
-        "description": "The table's maintenance policy (reader-gated); 404 when none is set.",
+        "description": "The table's maintenance policy (reader-gated), or ``set: false`` when none is set.",
         "operationId": "describe_table_policy_management_v1_table__id__policy_describe_post",
         "parameters": [
           {
@@ -18810,7 +18874,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PolicyResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PolicyResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PolicyUnset"
+                    }
+                  ],
+                  "title": "Response Describe Table Policy Management V1 Table  Id  Policy Describe Post"
                 }
               }
             },

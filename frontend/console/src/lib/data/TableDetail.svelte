@@ -24,7 +24,8 @@
 		grantAccess,
 		revokeAccess,
 	} from './remote/access-objects.api';
-	import { partErrored, type Policy, type TableStats, type TableDetail } from './catalog';
+	import type { Policy } from '#lib/policies.ts';
+	import { partErrored, type TableStats, type TableDetail } from './catalog';
 	import { fetchTableDetail } from './remote/catalog.api';
 	import DetailTabs from './DetailTabs.svelte';
 	import { fmtBytes } from './history';

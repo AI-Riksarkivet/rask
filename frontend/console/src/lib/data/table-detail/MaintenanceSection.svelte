@@ -7,7 +7,8 @@
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation — an open editor or an armed GC confirm dies with it.
 	import { Trash2 } from '@lucide/svelte';
-	import { type GcPreview, type Policy } from '../catalog';
+	import type { Policy } from '#lib/policies.ts';
+	import { type GcPreview } from '../catalog';
 	import { fmtBytes } from '../history';
 	import { policyRequestFrom } from '../namespace';
 	import {

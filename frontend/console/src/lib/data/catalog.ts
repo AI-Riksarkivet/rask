@@ -16,6 +16,7 @@ import {
 	requestBytes as requestBytesRaw,
 	requestJSON as request,
 } from '#lib/http.ts';
+import type { Policy } from '#lib/policies.ts';
 import { command } from '#lib/reads.svelte.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 
@@ -25,13 +26,13 @@ export type TableVersions = components['schemas']['ListTableVersionsResponse'];
 export type TableTags = components['schemas']['ListTableTagsResponse'];
 export type TableBranches = components['schemas']['ListTableBranchesResponse'];
 export type TableIndexes = components['schemas']['ListTableIndicesResponse'];
-export type Policy = components['schemas']['PolicyResponse'];
 export type Warehouse = components['schemas']['WarehouseResponse'];
 export type CreateWarehouse = components['schemas']['CreateWarehouseRequest'];
 
-/** A part the detail read could not resolve: `null` means genuinely absent (404 — e.g. no policy set),
- * `{ error }` means a transient upstream failure (5xx/403) — the page renders "unavailable" for the
- * latter, never an affirmative "none" that would invite an overwriting write. */
+/** A part the detail read could not resolve: `null` means genuinely absent (a part's 404, or a policy
+ * describe's `set: false`), `{ error }` means a failure (5xx/403, or a policy read's 404 or contract
+ * drift) — the page renders "unavailable" for the latter, never an affirmative "none" that would
+ * invite an overwriting write. */
 export type PartError = { error: number };
 export function partErrored<T>(part: T | PartError | null): part is PartError {
 	return part !== null && typeof part === 'object' && 'error' in part;

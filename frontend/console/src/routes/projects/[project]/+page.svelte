@@ -474,10 +474,7 @@
 					</p>
 				{:else}
 					<table>
-						<thead
-							><tr><th>tier</th><th>object</th><th>path</th><th>retention</th><th>state</th></tr
-							></thead
-						>
+						<thead><tr><th>tier</th><th>object</th><th>retention</th><th>state</th></tr></thead>
 						<tbody>
 							{#each scopedPolicies as p (`${p.kind}:${p.id}`)}
 								<tr>
@@ -492,7 +489,6 @@
 											>{p.id}</a
 										>
 									</td>
-									<td class="mono">{p.path || '—'}</td>
 									<td class="mono">{p.retention_days ? `${p.retention_days}d` : '—'}</td>
 									<td>
 										<span class="chip mono" class:off={!p.compact_enabled}

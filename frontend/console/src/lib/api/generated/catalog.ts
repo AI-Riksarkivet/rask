@@ -853,7 +853,7 @@ export interface paths {
         put?: never;
         /**
          * Describe Namespace Policy
-         * @description The namespace's maintenance policy (reader-gated); 404 when none is set.
+         * @description The namespace's maintenance policy (reader-gated), or ``set: false`` when none is set.
          */
         post: operations["describe_namespace_policy_management_v1_namespace__id__policy_describe_post"];
         delete?: never;
@@ -1065,7 +1065,7 @@ export interface paths {
         /**
          * Describe Project Policy
          * @description The project's maintenance policy — admin-gated like set/delete (``project`` defines no
-         *     reader-tier relation); 404 when none is set.
+         *     reader-tier relation) — or ``set: false`` when none is set; a project the registry does not know is not found.
          */
         post: operations["describe_project_policy_management_v1_project__id__policy_describe_post"];
         delete?: never;
@@ -1967,7 +1967,7 @@ export interface paths {
         put?: never;
         /**
          * Describe Table Policy
-         * @description The table's maintenance policy (reader-gated); 404 when none is set.
+         * @description The table's maintenance policy (reader-gated), or ``set: false`` when none is set.
          */
         post: operations["describe_table_policy_management_v1_table__id__policy_describe_post"];
         delete?: never;
@@ -8323,6 +8323,8 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** @enum {string} */
+        PolicyKind: "table" | "namespace" | "project";
         /**
          * PolicyRequest
          * @description The maintenance policy for one table, namespace or project — every field optional-with-defaults.
@@ -8388,8 +8390,7 @@ export interface components {
             compact_interval_hours?: number | null;
             /** Id */
             id: string;
-            /** Kind */
-            kind: string;
+            kind: components["schemas"]["PolicyKind"];
             /** Max Source Bytes */
             max_source_bytes?: number | null;
             /**
@@ -8405,8 +8406,33 @@ export interface components {
             retention_days?: number | null;
             /** Scan Batch Size */
             scan_batch_size?: number | null;
+            /**
+             * Set
+             * @constant
+             */
+            set: true;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;
+            /** Uuid */
+            uuid?: string | null;
+        };
+        /**
+         * PolicyUnset
+         * @description What a policy describe answers for an object that holds no maintenance policy: the object, and ``set`` false.
+         *
+         *     The object stands: its door refuses a missing or hidden one before the policy is read, by resolving a table's or
+         *     namespace's name and by reading a project's registry record. Lance's error codes name only missing objects (code 4
+         *     says the table does not exist), so an absent setting is an answer, not an error.
+         */
+        PolicyUnset: {
+            /** Id */
+            id: string;
+            kind: components["schemas"]["PolicyKind"];
+            /**
+             * Set
+             * @constant
+             */
+            set: false;
             /** Uuid */
             uuid?: string | null;
         };
@@ -11113,7 +11139,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
+                    "application/json": components["schemas"]["PolicyResponse"] | components["schemas"]["PolicyUnset"];
                 };
             };
             /** @description Validation Error */
@@ -11474,7 +11500,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
+                    "application/json": components["schemas"]["PolicyResponse"] | components["schemas"]["PolicyUnset"];
                 };
             };
             /** @description Validation Error */
@@ -12826,7 +12852,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
+                    "application/json": components["schemas"]["PolicyResponse"] | components["schemas"]["PolicyUnset"];
                 };
             };
             /** @description Validation Error */

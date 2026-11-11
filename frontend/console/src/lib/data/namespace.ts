@@ -101,27 +101,6 @@ export const AccessGraphSchema = v.object({
 	edges: v.array(v.object({ relation: v.string(), source: v.string(), target: v.string() })),
 });
 
-// The PolicyResponse wire contract (#50) — serialized with response_model_exclude_none, so the
-// nullable bounds arrive absent, not null. Parsed (not cast) at the boundary per the `#lib/api`
-// parse-don't-validate rule: a schema drift is surfaced instead of lying downstream.
-export const PolicyResponseSchema = v.object({
-	kind: v.string(),
-	id: v.string(),
-	path: v.string(),
-	compact_enabled: v.optional(v.boolean(), true),
-	compact_interval_hours: v.optional(v.nullable(v.number())),
-	retain_versions: v.optional(v.nullable(v.number())),
-	retention_days: v.optional(v.nullable(v.number())),
-	target_rows_per_fragment: v.optional(v.nullable(v.number())),
-	// Mirrors PolicyResponse. They were absent here AND on the response model, so a form save wrote
-	// the model's defaults over them; the catalog's set door now MERGES unset fields, and parsing
-	// them means the UI can show what is actually in force rather than a shape it invented.
-	cleanup_enabled: v.optional(v.boolean(), true),
-	optimize_indices_enabled: v.optional(v.boolean(), true),
-	scan_batch_size: v.optional(v.nullable(v.number())),
-});
-export type NamespacePolicy = v.InferOutput<typeof PolicyResponseSchema>;
-
 export const PolicyDeleteResponseSchema = v.object({
 	status: v.string(),
 	kind: v.string(),

@@ -109,6 +109,8 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
     assert _described(real_ns_client, "db$dst")[0] == minted, "the renamed table answers another uuid"
     assert _protected(real_ns_client, "db$dst"), "the renamed table arrived unprotected"
     assert _ok(real_ns_client, "/management/v1/table/db$dst/policy/describe")["retention_days"] == 7
+    gone = real_ns_client.post("/management/v1/table/db$src/policy/describe")
+    assert (gone.status_code, gone.json()["code"]) == (404, 4), "the name the rename left answers a policy read as a table"
     settings = MaintenanceSettings.model_validate({"MAINTENANCE_POLICY_ROOT": str(tmp_path), "MAINTENANCE_CONTROL_ROOT": str(tmp_path)})
     claims = location_claims.ClaimStore(control_root=str(tmp_path))
     held = location_claims.holder(claims, location)
@@ -164,7 +166,9 @@ def test_a_table_created_under_a_dropped_name_inherits_none_of_the_old_tables_re
     _create(real_ns_client, "db$src")
 
     assert not _protected(real_ns_client, "db$src"), "the new table was born protected by the dropped one's record"
-    assert real_ns_client.post("/management/v1/table/db$src/policy/describe").status_code == 404, "the new table inherited the dropped one's policy"
+    unset = real_ns_client.post("/management/v1/table/db$src/policy/describe")
+    expected = {"kind": "table", "id": "db$src", "uuid": _described(real_ns_client, "db$src")[0], "set": False}
+    assert (unset.status_code, unset.json()) == (200, expected), "the new table inherited the dropped one's policy"
 
 
 def test_a_rename_into_another_tenant_refuses_to_carry_a_role_the_grant_door_would_refuse(

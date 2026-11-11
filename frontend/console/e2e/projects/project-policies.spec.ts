@@ -40,7 +40,7 @@ const POLICIES = {
 		{
 			kind: 'namespace',
 			id: 'gold',
-			path: 'lance-catalog/gold',
+			set: true,
 			retention_days: 30,
 			compact_enabled: true,
 			cleanup_enabled: true,
@@ -49,7 +49,7 @@ const POLICIES = {
 		{
 			kind: 'project',
 			id: 'acme',
-			path: '',
+			set: true,
 			buckets: ['acme-bucket'],
 			retention_days: 90,
 			compact_enabled: true,
@@ -59,7 +59,7 @@ const POLICIES = {
 		{
 			kind: 'table',
 			id: 'gold$pages',
-			path: 'acme-bucket/u1_gold$pages',
+			set: true,
 			compact_enabled: false,
 			cleanup_enabled: false,
 			optimize_indices_enabled: false,
@@ -91,9 +91,9 @@ test('renders the project record and every record that shadows it', async ({ pag
 	await expect(page.getByText('retention 90d', { exact: true })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible();
 
-	// …and the tiers below it, read-only, with the record's own physical path.
+	// …and the tiers below it, read-only, each on its own rung.
 	const ns = page.getByRole('row').filter({ hasText: 'gold$pages' });
-	await expect(ns).toContainText('acme-bucket/u1_gold$pages');
+	await expect(ns.getByRole('cell').first()).toHaveText('table');
 	await expect(ns).toContainText('off'); // compact_enabled:false is a STATE, not an absence
 
 	// SCROLL FIRST, and shoot the SECTION rather than the page. `fullPage: true` produced a shot of
@@ -152,7 +152,7 @@ test('Save posts ONLY the knobs the form touched — an omitted field means inhe
 		'POST /management/v1/project/acme/policy/set': {
 			kind: 'project',
 			id: 'acme',
-			path: '',
+			set: true,
 			buckets: ['acme-bucket'],
 			retention_days: 45,
 			compact_enabled: true,

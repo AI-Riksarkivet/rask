@@ -2,7 +2,8 @@
 
 ``POST …/policy/set`` and ``…/policy/delete`` are owner-tier (the router-level ``authorize`` maps them
 to ``can_drop``/``can_delete`` — a retention policy authorizes destroying version history), and land on
-the #41 audit trail through that same gate; ``…/policy/describe`` is a reader-tier metadata read. A table
+the #41 audit trail through that same gate; ``…/policy/describe`` is a reader-tier metadata read, which answers an
+object holding no policy ``set: false`` (:class:`PolicyUnset`) and never as a missing object. A table
 or namespace record is keyed by the object's uuid (ADR 0173 §8, [[LH-523]]), which the door resolves from
 the name it is addressed by, so a rename keeps the policy and a table created later under the same name
 holds none of it; the maintenance sweep matches a dataset's table and ancestor namespaces by the uuids
@@ -32,9 +33,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     InvalidInputError,
     LanceNamespace,
-    LanceNamespaceError,
     NamespaceAlreadyExistsError,
-    NamespaceNotFoundError,
     TableNotFoundError,
 )
 
@@ -43,7 +42,8 @@ from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceD
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
-from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse, ProjectPoliciesResponse
+from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, PolicyResponse, PolicyUnset, ProjectPoliciesResponse
+from catalog.services import projects as project_registry
 from catalog.services import table_claims, warehouses
 from lakehouse import maintenance_policies as policies
 from lakehouse.control_emit import ControlEmitter, emit_control
@@ -95,20 +95,19 @@ def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[st
 
 
 def _response(record: dict[str, object]) -> PolicyResponse:
-    return PolicyResponse.model_validate(record)
+    return PolicyResponse.model_validate({**record, "set": True})
 
 
-async def _describe(settings: Settings, kind: str, key: str, canonical: str, missing: type[LanceNamespaceError]) -> PolicyResponse:
-    """Read one policy or 404, once (catalog-api-14).
+async def _describe(settings: Settings, *, kind: PolicyKind, key: str, canonical: str, uuid: str | None) -> PolicyResponse | PolicyUnset:
+    """Read one policy, once for all three rungs: its record, or :class:`PolicyUnset` where the object holds none.
 
-    The three describe handlers each carried their own copy of read-then-refuse, and the copies had
-    already drifted: table and PROJECT both raised ``TableNotFoundError`` for a missing policy while
-    namespace raised ``NamespaceNotFoundError`` — three rungs, two answers, for one condition. The
-    exception class is a parameter now, so the choice is stated at the route instead of re-derived.
+    Each route establishes its object before this read, a table's or namespace's by resolving its name and a
+    project's by reading its registry record, so an object that does not stand, or that its caller may not see,
+    never reaches it ([[LH-589]]).
     """
     record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, key)
     if record is None:
-        raise missing(f"no maintenance policy set for {kind} {canonical!r}")
+        return PolicyUnset(kind=kind, id=canonical, uuid=uuid, set=False)
     # Named as the door was addressed: the name the record kept is the one its object had when it was set.
     return _response({**record, "id": canonical})
 
@@ -160,9 +159,10 @@ async def set_table_policy(
 
 
 @table_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep) -> PolicyResponse:
-    """The table's maintenance policy (reader-gated); 404 when none is set."""
-    return await _describe(settings, "table", table.require_uuid(), fga.canonical_object_id(table.segments), TableNotFoundError)
+async def describe_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep) -> PolicyResponse | PolicyUnset:
+    """The table's maintenance policy (reader-gated), or ``set: false`` when none is set."""
+    uuid = table.require_uuid()
+    return await _describe(settings, kind="table", key=uuid, canonical=fga.canonical_object_id(table.segments), uuid=uuid)
 
 
 @table_router.post("/{id}/policy/delete", response_model_exclude_none=True)
@@ -196,10 +196,10 @@ async def set_namespace_policy(
 
 
 @namespace_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep) -> PolicyResponse:
-    """The namespace's maintenance policy (reader-gated); 404 when none is set."""
+async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep) -> PolicyResponse | PolicyUnset:
+    """The namespace's maintenance policy (reader-gated), or ``set: false`` when none is set."""
     namespace = await _namespace(id, ns, settings)
-    return await _describe(settings, "namespace", namespace.uuid, fga.canonical_object_id(namespace.segments), NamespaceNotFoundError)
+    return await _describe(settings, kind="namespace", key=namespace.uuid, canonical=fga.canonical_object_id(namespace.segments), uuid=namespace.uuid)
 
 
 @namespace_router.post("/{id}/policy/delete", response_model_exclude_none=True)
@@ -281,14 +281,15 @@ async def set_project_policy(
 
 
 @project_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_project_policy(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> PolicyResponse:
+async def describe_project_policy(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> PolicyResponse | PolicyUnset:
     """The project's maintenance policy — admin-gated like set/delete (``project`` defines no
-    reader-tier relation); 404 when none is set."""
+    reader-tier relation) — or ``set: false`` when none is set; a project the registry does not know is not found."""
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    # `TableNotFoundError` on the PROJECT rung is what the copied body already raised — the spec code
-    # is what maps to the 404, and changing it here would be a contract change, not a refactor.
-    return await _describe(settings, "project", project, project, TableNotFoundError)
+    # Read after the gate, so a caller who may not administer the project is refused alike whether it exists or not.
+    if await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project) is None:
+        raise TableNotFoundError(f"project not found: {project}")
+    return await _describe(settings, kind="project", key=project, canonical=project, uuid=None)
 
 
 @project_router.post("/{id}/policy/delete", response_model_exclude_none=True)

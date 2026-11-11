@@ -29,6 +29,7 @@ from lance_namespace import (
 )
 
 from catalog.services.dataplane import CommitReadback
+from lakehouse.naming import UUID_PROPERTY
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -526,7 +527,7 @@ def test_update_with_empty_updates_is_400(client: TestClient, monkeypatch) -> No
 
 def test_maintenance_policy_crud_round_trips(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
     # CONTRACT (#50, ADR 0173 §8): set keys the record by the uuid the table's location claim records and persists it;
-    # describe returns the record; delete is idempotent and describe 404s afterwards.
+    # describe returns the record; delete is idempotent, and describe then answers that none is set ([[LH-589]]).
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
     users = claim_described("db1$users")
     set_resp = client.post("/management/v1/table/db1$users/policy/set", json={"retention_days": 7, "compact_interval_hours": 12})
@@ -535,10 +536,23 @@ def test_maintenance_policy_crud_round_trips(client: TestClient, fake_ns: MagicM
     assert body["uuid"] == users and body["retention_days"] == 7
 
     desc = client.post("/management/v1/table/db1$users/policy/describe")
-    assert desc.status_code == 200 and desc.json()["compact_interval_hours"] == 12
+    assert (desc.status_code, desc.json()["compact_interval_hours"], desc.json()["set"]) == (200, 12, True)
 
     assert client.post("/management/v1/table/db1$users/policy/delete").status_code == 200
-    assert client.post("/management/v1/table/db1$users/policy/describe").status_code == 404
+    unset = client.post("/management/v1/table/db1$users/policy/describe")
+    assert (unset.status_code, unset.json()) == (200, {"kind": "table", "id": "db1$users", "uuid": users, "set": False})
+
+
+def test_namespace_policy_describe_answers_the_policy_its_set_door_wrote(client: TestClient, fake_ns: MagicMock) -> None:
+    # [[LH-589]]: the namespace door reads the record its set door keyed by the namespace's uuid, and says it is set.
+    uuid = fake_ns.describe_namespace.return_value.properties[UUID_PROPERTY]
+    assert client.post("/management/v1/namespace/gold/policy/set", json={"retain_versions": 5}).status_code == 200
+
+    described = client.post("/management/v1/namespace/gold/policy/describe")
+
+    # The defaults a first set writes are kept on the record, so they are part of what it reads back.
+    kept = {"retain_versions": 5, "compact_enabled": True, "cleanup_enabled": True, "optimize_indices_enabled": True}
+    assert (described.status_code, described.json()) == (200, {"kind": "namespace", "id": "gold", "uuid": uuid, **kept, "set": True})
 
 
 def _project_policy_settings(tmp_path: object):
@@ -559,13 +573,15 @@ def _project_policy_settings(tmp_path: object):
 
 def test_project_policy_crud_round_trips(client: TestClient, tmp_path: object) -> None:
     # CONTRACT (#84): set resolves the project's ACTIVE warehouse buckets from the registry at set time
-    # and persists them on the record; describe returns it; delete is idempotent, then describe 404s.
+    # and persists them on the record; describe returns it; delete is idempotent, then describe answers that none is set.
     from catalog.core.config import get_settings
+    from catalog.services import projects as proj_svc
     from catalog.services import warehouses as wh_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
+    proj_svc.put_project(s.registry_root, so, {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-b", "bucket": "acme-old", "project": "acme", "status": "deactivated"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-c", "bucket": "other-wh", "project": "other", "status": "active"})
@@ -577,10 +593,23 @@ def test_project_policy_crud_round_trips(client: TestClient, tmp_path: object) -
     assert body["kind"] == "project" and body["buckets"] == ["acme-wh"] and body["retention_days"] == 90
 
     desc = client.post("/management/v1/project/acme/policy/describe")
-    assert desc.status_code == 200 and desc.json()["buckets"] == ["acme-wh"]
+    assert (desc.status_code, desc.json()["buckets"], desc.json()["set"]) == (200, ["acme-wh"], True)
 
     assert client.post("/management/v1/project/acme/policy/delete").status_code == 200
-    assert client.post("/management/v1/project/acme/policy/describe").status_code == 404
+    unset = client.post("/management/v1/project/acme/policy/describe")
+    assert (unset.status_code, unset.json()) == (200, {"kind": "project", "id": "acme", "set": False})
+
+
+def test_project_policy_describe_of_a_project_with_no_record_is_not_found(client: TestClient, tmp_path: object) -> None:
+    # [[LH-589]]: a project exists when its registry record does, so a policy read of one without a record answers
+    # the missing project's 404 code 4, never that it holds no policy.
+    from catalog.core.config import get_settings
+
+    client.app.dependency_overrides[get_settings] = lambda: _project_policy_settings(tmp_path)
+
+    resp = client.post("/management/v1/project/ghost/policy/describe")
+
+    assert (resp.status_code, resp.json()["code"]) == (404, 4)
 
 
 def test_project_policy_set_refused_without_an_active_warehouse(client: TestClient, tmp_path: object) -> None:
@@ -787,10 +816,11 @@ def test_access_list_is_unsupported_without_fga(client: TestClient) -> None:
 
 def test_maintenance_policy_rejects_an_empty_policy(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
-    claim_described("db1$users")
+    users = claim_described("db1$users")
     resp = client.post("/management/v1/table/db1$users/policy/set", json={})
     assert resp.status_code == 422  # a body that sets nothing changes nothing — the validator refuses
-    assert client.post("/management/v1/table/db1$users/policy/describe").status_code == 404, "a refused set wrote a policy"
+    unset = client.post("/management/v1/table/db1$users/policy/describe")
+    assert (unset.status_code, unset.json()) == (200, {"kind": "table", "id": "db1$users", "uuid": users, "set": False}), "a refused set wrote a policy"
     # But an EXPLICIT compact_enabled=true is meaningful (a table-level re-enable under a disabled
     # namespace policy — the table's own record shadows the namespace record), so it must be accepted.
     resp = client.post("/management/v1/table/db1$users/policy/set", json={"compact_enabled": True})

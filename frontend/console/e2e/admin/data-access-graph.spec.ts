@@ -39,8 +39,9 @@ const DETAIL_ROUTES = {
 	[`POST /v1/table/${TABLE}/branches/list`]: { branches: {} },
 	[`POST /v1/table/${TABLE}/index/list`]: { indexes: [] },
 	[`POST /management/v1/table/${TABLE}/policy/describe`]: {
-		status: 404,
-		body: { detail: 'no policy' },
+		kind: 'table',
+		id: decodeURIComponent(TABLE),
+		set: false,
 	},
 };
 

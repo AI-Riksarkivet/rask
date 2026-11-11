@@ -172,6 +172,8 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership_and_a_new_uu
     assert {key: value for key, value in properties.items() if key != "rask.uuid"} == {"team": "b"}
     new = f"namespace:{properties['rask.uuid']}"
     assert governed.naming(old) == set(), "a grant on the replaced namespace survived it"
+    policy = real_ns_client.post("/management/v1/namespace/ghost/policy/describe", headers=AUTH)
+    assert (policy.status_code, policy.json()) == (200, {"kind": "namespace", "id": "ghost", "uuid": properties["rask.uuid"], "set": False})
     assert governed.naming(new) == {("user:dex~bob", "owner", new), *{tuple(new if part == old else part for part in edge) for edge in edges}}
     assert maintenance_policies.get_policy(str(tmp_path), StorageOptions(), "namespace", replaced) is None
     assert (warehouses.binding_for_namespace(str(tmp_path), StorageOptions(), "ghost") or {}).get("warehouse_id") == WAREHOUSE

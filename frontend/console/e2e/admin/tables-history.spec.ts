@@ -92,8 +92,9 @@ const DETAIL_ROUTES: Record<string, unknown> = {
 	},
 	[`POST /v1/table/${TABLE}/index/list`]: { indexes: [] },
 	[`POST /management/v1/table/${TABLE}/policy/describe`]: {
-		status: 404,
-		body: { detail: 'no policy' },
+		kind: 'table',
+		id: decodeURIComponent(TABLE),
+		set: false,
 	},
 	[`POST /v1/table/${TABLE}/restore`]: { version: 6 },
 };

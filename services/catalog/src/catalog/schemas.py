@@ -562,10 +562,14 @@ class PolicyRequest(BaseModel):
         return self
 
 
+#: The three rungs a maintenance policy is kept on.
+type PolicyKind = Literal["table", "namespace", "project"]
+
+
 class PolicyResponse(BaseModel):
     # The policy fields must mirror PolicyRequest — model_validate ignores extras, so a request field
     # missing here would be silently dropped from every response.
-    kind: str
+    kind: PolicyKind
     #: The table's or namespace's name as the door was addressed (as the record kept it, in a listing), or the project id.
     id: str
     #: The uuid of the table or namespace the record is kept for (ADR 0173 §8); None for a project record.
@@ -587,6 +591,25 @@ class PolicyResponse(BaseModel):
     scan_batch_size: int | None = None
     max_source_bytes: int | None = None
     repack_mode: str | None = None
+    #: A record is kept for the object; a describe of an object that holds none answers :class:`PolicyUnset`. Required,
+    #: with no default, so the schema marks it on both answers and a typed client narrows the union on it.
+    set: Literal[True]
+
+
+class PolicyUnset(BaseModel):
+    """What a policy describe answers for an object that holds no maintenance policy: the object, and ``set`` false.
+
+    The object stands: its door refuses a missing or hidden one before the policy is read, by resolving a table's or
+    namespace's name and by reading a project's registry record. Lance's error codes name only missing objects (code 4
+    says the table does not exist), so an absent setting is an answer, not an error.
+    """
+
+    kind: PolicyKind
+    #: The table's or namespace's name as the door was addressed, or the project id.
+    id: str
+    #: The uuid of the table or namespace (ADR 0173 §8); None for a project.
+    uuid: str | None = None
+    set: Literal[False]
 
 
 class PolicyDeleteResponse(BaseModel):

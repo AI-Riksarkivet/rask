@@ -3,12 +3,8 @@ import * as v from 'valibot';
 import type { ApiResult } from '#lib/api/client.ts';
 import { DropNamespaceResponseSchema, type DropNamespace } from '../catalog';
 import { fetchTables } from './catalog.api';
-import {
-	PolicyDeleteResponseSchema,
-	PolicyResponseSchema,
-	type NamespacePolicy,
-	type NamespacePolicyDelete,
-} from '../namespace';
+import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
+import { PolicyDeleteResponseSchema, type NamespacePolicyDelete } from '../namespace';
 
 import { catalogJSON, parsed } from '#lib/doors.ts';
 // Transport: the console's catalog door, `#lib/doors`.
@@ -50,17 +46,19 @@ const PolicyDraftSchema = v.object({
 	target_rows_per_fragment: v.optional(v.nullable(v.number())),
 });
 
-/** The namespace's maintenance policy (reader-gated) — 404 when none is set, which the caller
+/** The namespace's maintenance policy (reader-gated), or null when none is set, which the caller
  *  renders as the honest "no policy, global defaults apply" state (never an error). */
 export const fetchNamespacePolicy = query(
 	v.object({ namespace: v.string() }),
-	async ({ namespace }): Promise<ApiResult<NamespacePolicy>> =>
-		parsed(
+	async ({ namespace }): Promise<ApiResult<Policy | null>> => {
+		const result = parsed(
 			await catalogJSON(`/management/v1/namespace/${enc(namespace)}/policy/describe`, {
 				method: 'POST',
 			}),
-			PolicyResponseSchema,
-		),
+			PolicyDescribeSchema,
+		);
+		return result.ok ? { ok: true, data: result.data.set ? result.data : null } : result;
+	},
 );
 
 /** Set (or replace) the namespace-level maintenance policy — it governs every dataset under the
@@ -69,7 +67,7 @@ export const fetchNamespacePolicy = query(
 export const setNamespacePolicy = command(
 	({ namespace }) => `Set the maintenance policy of namespace ${namespace}`,
 	v.object({ namespace: v.string(), policy: PolicyDraftSchema }),
-	async ({ namespace, policy }): Promise<ApiResult<NamespacePolicy>> => {
+	async ({ namespace, policy }): Promise<ApiResult<Policy>> => {
 		const result = parsed(
 			await catalogJSON(`/management/v1/namespace/${enc(namespace)}/policy/set`, {
 				method: 'POST',

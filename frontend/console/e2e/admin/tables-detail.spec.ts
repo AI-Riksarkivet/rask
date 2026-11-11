@@ -53,6 +53,9 @@ const DETAIL_ROUTES: Record<string, unknown> = {
 		indexes: [{ index_name: 'id_idx', columns: ['id'], index_type: 'BTREE' }],
 	},
 	[`POST /management/v1/table/${TABLE}/policy/describe`]: {
+		kind: 'table',
+		id: decodeURIComponent(TABLE),
+		set: true,
 		retention_days: 7,
 		retain_versions: 5,
 		compact_enabled: true,
@@ -116,10 +119,7 @@ const RENAMED_ROUTES: Record<string, unknown> = {
 	'POST /v1/table/db1%24t2/tags/list': { tags: {} },
 	'POST /v1/table/db1%24t2/branches/list': { branches: {} },
 	'POST /v1/table/db1%24t2/index/list': { indexes: [] },
-	'POST /management/v1/table/db1%24t2/policy/describe': {
-		status: 404,
-		body: { detail: 'no policy' },
-	},
+	'POST /management/v1/table/db1%24t2/policy/describe': { kind: 'table', id: 'db1$t2', set: false },
 };
 
 let token: string;
@@ -286,6 +286,37 @@ test('the policy surfaces the compaction target size (#76)', async ({ page }) =>
 	await page.goto('/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Maintenance policy' });
 	await expect(section).toContainText('target 1048576 rows/frag');
+});
+
+test('a table holding no policy says the global defaults apply', async ({ page }) => {
+	await seed(page, {
+		[`POST /management/v1/table/${TABLE}/policy/describe`]: {
+			kind: 'table',
+			id: 'db1$t',
+			set: false,
+		},
+	});
+	await page.goto('/catalog/tables/db1%24t');
+	const section = page.locator('section', { hasText: 'Maintenance policy' });
+	await expect(section).toContainText('No policy — the sweep applies the global defaults.');
+	await expect(section).not.toContainText('maintenance off');
+});
+
+test('a policy read that answers not found says the policy is unavailable, never that none is set', async ({
+	page,
+}) => {
+	// The catalog answers a table holding no policy `set: false`, so a 404 here is the table gone since the
+	// page's own describe: "no policy" would invite a write against a stale read.
+	await seed(page, {
+		[`POST /management/v1/table/${TABLE}/policy/describe`]: {
+			status: 404,
+			body: { detail: 'Table not found' },
+		},
+	});
+	await page.goto('/catalog/tables/db1%24t');
+	const section = page.locator('section', { hasText: 'Maintenance policy' });
+	await expect(section).toContainText('Policy unavailable right now');
+	await expect(section).not.toContainText('No policy');
 });
 
 test('add-column posts a SQL-expression column (#74)', async ({ page }) => {
