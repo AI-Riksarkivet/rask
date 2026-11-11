@@ -442,8 +442,8 @@
 	<span class="vcell">
 		<span class="mono v">v{row.version}</span>
 		{#if row.version === currentVersion}<span class="tip" title="the table's current version"
-			>tip</span
-		>{/if}
+				>tip</span
+			>{/if}
 		{#each row.refs as name (name)}
 			<span class="tagchip mono" title="tag {name} pins v{row.version}">{name}</span>
 		{/each}
@@ -506,6 +506,7 @@
 	<!-- A chevron, not the word "details": five columns of real content already fill the card, and the
 	     word cost more width than the whole actions column is worth. The accessible name still says what it
 	     opens, and the row itself is clickable. -->
+	{@const Chevron = selectedVersion === row.version ? ChevronDown : ChevronRight}
 	<button
 		class="btn tiny ghost chev"
 		aria-label="details for v{row.version}"
@@ -515,7 +516,7 @@
 			select(row.version);
 		}}
 	>
-		{#if selectedVersion === row.version}<ChevronDown size={13} />{:else}<ChevronRight size={13} />{/if}
+		<Chevron size={13} />
 	</button>
 {/snippet}
 

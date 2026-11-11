@@ -378,7 +378,8 @@
 					     whole point: a quietly short list reads as "checked and clean". -->
 					<p class="warn">
 						<AlertTriangle size={13} />
-						This list may be short — {policies.skipped_bindings.length} namespace binding record{policies.skipped_bindings.length === 1
+						This list may be short — {policies.skipped_bindings.length} namespace binding record{policies
+							.skipped_bindings.length === 1
 							? ''
 							: 's'} could not be read, so any policy under {policies.skipped_bindings.length === 1
 							? 'that namespace'
@@ -441,9 +442,15 @@
 					</div>
 				{:else if ownPolicy}
 					<div class="refs">
-						{#if ownPolicy.retention_days}<span class="chip mono">retention {ownPolicy.retention_days}d</span>{/if}
-						{#if ownPolicy.retain_versions}<span class="chip mono">keep last {ownPolicy.retain_versions}</span>{/if}
-						{#if ownPolicy.compact_interval_hours}<span class="chip mono">every {ownPolicy.compact_interval_hours}h</span>{/if}
+						{#if ownPolicy.retention_days}<span class="chip mono"
+								>retention {ownPolicy.retention_days}d</span
+							>{/if}
+						{#if ownPolicy.retain_versions}<span class="chip mono"
+								>keep last {ownPolicy.retain_versions}</span
+							>{/if}
+						{#if ownPolicy.compact_interval_hours}<span class="chip mono"
+								>every {ownPolicy.compact_interval_hours}h</span
+							>{/if}
 						{#if ownPolicy.target_rows_per_fragment}<span class="chip mono">target {ownPolicy.target_rows_per_fragment}
 						rows/frag</span>{/if}
 						{#if !ownPolicy.compact_enabled}<span class="chip off mono">maintenance off</span>{/if}

@@ -284,13 +284,9 @@
 				</dl>
 				<div>
 					<h4 class="drawer-h">Payload (parsed staged fields)</h4>
-					<pre
-            class="payload"
-            aria-label="Staged event payload"><code>{JSON.stringify(
-							drawerEvent,
-							null,
-							2,
-						)}</code></pre>
+					<pre class="payload" aria-label="Staged event payload"><code
+              >{JSON.stringify(drawerEvent, null, 2)}</code
+            ></pre>
 				</div>
 				<div class="drawer-links">
 					{#if drawerEvent.parseable}

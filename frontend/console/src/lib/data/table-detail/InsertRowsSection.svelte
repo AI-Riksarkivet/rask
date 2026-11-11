@@ -75,8 +75,8 @@
 			{insertBusy ? '…' : 'Insert'}
 		</button>
 		{#if insertMsg}<span class="ins-msg" class:okmsg={insertMsg.ok} class:error={!insertMsg.ok}
-			>{insertMsg.text}</span
-		>{/if}
+				>{insertMsg.text}</span
+			>{/if}
 	</div>
 </section>
 

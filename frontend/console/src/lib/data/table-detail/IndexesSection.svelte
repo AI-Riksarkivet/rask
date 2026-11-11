@@ -53,7 +53,9 @@
 			{#each indexes as ix (ix.index_name)}
 				<span class="chip mono"
 					>{ix.index_name}<span class="mut">
-						· {(ix.columns ?? []).join(', ')}{ix.index_type ? ` · ${ix.index_type}` : ''}</span>
+						· {(ix.columns ?? []).join(', ')}{ix.index_type
+							? ` · ${ix.index_type}`
+							: ''}</span>
 					<button
 						class="chip-x"
 						title="drop index"

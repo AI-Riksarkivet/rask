@@ -269,11 +269,12 @@ too complex"). The app's `tsconfig.json` extends `$app/tsconfig` and covers `src
 rather than in the browser (`serve.ts`, `playwright.config.ts`, `e2e/**`, with `types: ["bun"]`). Validation is
 **valibot**.
 
-**`derived_inert` is UPSTREAM.** Svelte 5.56 and 5.57.3 warn `Reading a derived belonging to a now-destroyed effect` from bits-ui's
-dismissible layer (`watch([() => this.opts.enabled.current, () => this.opts.ref.current], …)` reading prop-boxed deriveds
-while a panel closes); `patches/bits-ui@2.18.1.patch` snapshots the global layer maps, the minor instance, and the
-watch itself cannot be patched without breaking it. To locate such a warning in a browser, use CDP
-(`Runtime.consoleAPICalled`'s `stackTrace`), not `page.on('console')`, which Vite's client re-wraps.
+**`derived_inert`.** Svelte warns `Reading a derived belonging to a now-destroyed effect` when a closing (inert) subtree's
+derived is read. bits-ui raised it from its dismissible and escape layers until 2.21.0's dismissible layer kept a
+snapshot; measured 2026-11-11 on bits-ui 2.21.0 and svelte 5.57.3 under `vite dev`, no unpatched layer open/close in the
+console (menus, the navbar panel, the bell, a select, the row drawer, single, doubled and overlapping Escapes) warns, so
+no bits-ui patch is carried. To locate such a warning in a browser, use CDP (`Runtime.consoleAPICalled`'s
+`stackTrace`), not `page.on('console')`, which Vite's client re-wraps.
 
 Run the Svelte autofixer on every `.svelte` file you touched (`svelte:svelte-code-writer`, or the `svelte` MCP when it
 connects) until it reports clean.

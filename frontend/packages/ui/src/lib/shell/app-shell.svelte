@@ -4,7 +4,6 @@
 	import { Separator } from '../components/separator/index.js';
 	import AppSidebar from './app-sidebar.svelte';
 	import TopNavbar from './top-navbar.svelte';
-	import ProjectSwitcher from './project-switcher.svelte';
 	import * as DropdownMenu from '../components/dropdown-menu/index.js';
 	import { IsMobile, SHELL_COLLAPSE_BREAKPOINT } from '../hooks/is-mobile.svelte.js';
 	import { ChevronRight, MoreHorizontal } from '@lucide/svelte';

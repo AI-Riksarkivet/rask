@@ -111,3 +111,10 @@ evaluates it at the first call; the test pins that refusal, which also fails on 
 Re-check both on an apache-arrow upgrade: the patch is regenerated from the pristine package (bun's
 cache, `~/.bun/install/cache/apache-arrow@<version>@@@1/builder/valid.{js,mjs}`) with `git diff
 --no-index`, and the test copies upstream's body.
+
+## Knip and SvelteKit's generated `$app`
+
+`console/tsconfig.json` extends `$app/tsconfig`, which `svelte-kit sync` writes; it is no package. Knip 6.45.1 reads
+the `extends` as a dependency and reports `$app` unlisted, and `ignoreDependencies` cannot silence it (knip's
+package-name parser returns nothing for a `$` specifier, so the ignore list is never consulted), so `knip.json`
+ignores the `unlisted` issue type for that one file (`ignoreIssues`).

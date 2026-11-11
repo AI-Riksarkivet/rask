@@ -70,7 +70,8 @@
 		<div class="truncate text-xs font-semibold"><Subject value={data.label} /></div>
 		<div class="text-[9.5px] uppercase tracking-wider text-muted-foreground">
 			{data.fgaType}{#if data.via}<span class={excluded ? 'text-destructive' : ''}>
-					· {data.via}</span>{/if}
+					· {data.via}</span
+				>{/if}
 		</div>
 	</div>
 	<Handle type="source" position={Position.Right} />

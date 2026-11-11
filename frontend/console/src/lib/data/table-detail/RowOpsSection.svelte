@@ -149,8 +149,8 @@
 			</button>
 		{/if}
 		{#if rowMsg}<span class="ins-msg" class:okmsg={rowMsg.ok} class:error={!rowMsg.ok}
-			>{rowMsg.text}</span
-		>{/if}
+				>{rowMsg.text}</span
+			>{/if}
 	</div>
 </section>
 

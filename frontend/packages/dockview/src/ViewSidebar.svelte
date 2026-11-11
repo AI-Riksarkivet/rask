@@ -88,8 +88,8 @@
 						<span class="name">{v.name}</span>
 						<!-- The whole point of the state model, in one dot. -->
 						{#if isActive && views.dirty}<span class="dot" title="Modified since it was saved"
-							>●</span
-						>{/if}
+								>●</span
+							>{/if}
 					</button>
 					{#if isActive}
 						<button

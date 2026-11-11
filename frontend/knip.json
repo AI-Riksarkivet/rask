@@ -4,6 +4,9 @@
 		"type": true,
 		"interface": true
 	},
+	"ignoreIssues": {
+		"console/tsconfig.json": ["unlisted"]
+	},
 	"ignoreBinaries": [
 		"make"
 	],

@@ -202,9 +202,13 @@
 		</p>
 	{:else if policy}
 		<div class="refs">
-			{#if policy.retention_days}<span class="chip mono">retention {policy.retention_days}d</span>{/if}
-			{#if policy.retain_versions}<span class="chip mono">keep last {policy.retain_versions}</span>{/if}
-			{#if policy.compact_interval_hours}<span class="chip mono">every {policy.compact_interval_hours}h</span>{/if}
+			{#if policy.retention_days}<span class="chip mono">retention {policy.retention_days}d</span
+				>{/if}
+			{#if policy.retain_versions}<span class="chip mono">keep last {policy.retain_versions}</span
+				>{/if}
+			{#if policy.compact_interval_hours}<span class="chip mono"
+					>every {policy.compact_interval_hours}h</span
+				>{/if}
 			{#if policy.target_rows_per_fragment}<span class="chip mono">target {policy.target_rows_per_fragment}
 			rows/frag</span>{/if}
 			{#if !policy.compact_enabled}<span class="chip off mono">maintenance off</span>{/if}
