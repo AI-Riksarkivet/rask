@@ -11,24 +11,30 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 from lance_namespace import NamespaceNotFoundError
 
 from catalog.api.fga_deps import GovernedObject
-from lakehouse import base_registry
+from lakehouse import base_registry, location_claims
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
-
-
-#: A registry and claim store the cascade's record-forget and claim release may be pointed at; nothing is kept there.
-_NO_RECORDS = base_registry.BaseRegistry(control_root="/nonexistent/control")
-_NO_CLAIMS = ClaimStore(control_root="/nonexistent/control")
 
 
 def _governed(kind: str, segments: list[str]) -> GovernedObject:
     """A descendant as the door identifies it, under a uuid of its own name."""
     return GovernedObject.model_validate({"kind": kind, "segments": segments, "uuid": f"uuid-{'$'.join(segments)}"})
+
+
+def _claimed(control_root: Path, descendants: list[GovernedObject]) -> ClaimStore:
+    """A claim store on ``control_root`` in which each listed table holds its location's claim under its uuid, as the
+    door that made it left it: the cascade removes a table only under the claim its name resolves to."""
+    claims = ClaimStore(control_root=str(control_root))
+    for item in descendants:
+        if item.kind == "table":
+            location_claims.take(claims, _location(item.segments), "$".join(item.segments), item.segments, is_gone=lambda _claim: False, uuid=item.uuid)
+    return claims
 
 
 def _location(segments: list[str]) -> str:
@@ -75,7 +81,7 @@ async def _drain(destroying: AsyncIterator[list[str]]) -> list[list[str]]:
     return [item async for item in destroying]
 
 
-def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
+def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to(tmp_path: Path) -> None:
     """The dir backend refuses `behavior=Cascade` for every casing, so this door must do the work:
     tables first, then namespaces deepest-first, then the root — each drop hitting an EMPTY object."""
     from catalog.api.v1.endpoints.namespaces import _destroy_subtree  # noqa: PLC2701 — the unit under test
@@ -89,7 +95,14 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
     asyncio.run(
         _drain(
             _destroy_subtree(
-                ns, ["bronze"], descendants, root_uuid="uuid-bronze", registry=_NO_RECORDS, claims=_NO_CLAIMS, storage_options=StorageOptions(), estate_roots=()
+                ns,
+                ["bronze"],
+                descendants,
+                root_uuid="uuid-bronze",
+                registry=base_registry.BaseRegistry(control_root=str(tmp_path)),
+                claims=_claimed(tmp_path, descendants),
+                storage_options=StorageOptions(),
+                estate_roots=(),
             )
         )
     )
@@ -104,10 +117,10 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
     assert not any(c.endswith(":cascade") for c in ns.calls), "the unimplementable native cascade was called"
 
 
-def test_an_already_absent_child_is_DRIFT_not_an_error() -> None:
+def test_an_already_absent_child_is_DRIFT_not_an_error(tmp_path: Path) -> None:
     """A half-finished earlier delete must not make the subtree undeletable forever: a table removed before the
     cascade's deregister reached it answers TableNotFound there and no longer describes, and that is drift, never
-    bytes reported left."""
+    bytes reported left. The cascade did not remove it, so it lifts the fence it held the table's claim by."""
     from catalog.api.v1.endpoints.namespaces import _destroy_subtree  # noqa: PLC2701
 
     class _Vanishing(_RecordingNs):
@@ -126,11 +139,21 @@ def test_an_already_absent_child_is_DRIFT_not_an_error() -> None:
 
     ns: Any = _Vanishing()
     ghost = [_governed("table", ["bronze", "ghost"])]
+    claims = _claimed(tmp_path, ghost)
     asyncio.run(
         _drain(
             _destroy_subtree(
-                ns, ["bronze"], ghost, root_uuid="uuid-bronze", registry=_NO_RECORDS, claims=_NO_CLAIMS, storage_options=StorageOptions(), estate_roots=()
+                ns,
+                ["bronze"],
+                ghost,
+                root_uuid="uuid-bronze",
+                registry=base_registry.BaseRegistry(control_root=str(tmp_path)),
+                claims=claims,
+                storage_options=StorageOptions(),
+                estate_roots=(),
             )
         )
     )
     assert "drop_namespace:bronze:restrict" in ns.calls, "one absent child blocked the whole cascade"
+    held = location_claims.holder(claims, _location(["bronze", "ghost"]))
+    assert held is not None and held.fence is None, "the cascade left its fence on a table it did not remove"

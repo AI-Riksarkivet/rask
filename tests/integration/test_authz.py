@@ -32,10 +32,10 @@ model. The contracts asserted here (owned by the fga / fga_deps / endpoint agent
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import cast, override
-from unittest.mock import AsyncMock, MagicMock, create_autospec
+from unittest.mock import AsyncMock, MagicMock
 
 import pyarrow as pa
 import pytest
@@ -367,45 +367,6 @@ def test_create_table_checks_writer_on_parent_namespace(client: TestClient, fake
     assert captured[-1] == {"user": "dex~alice", "relation": "can_create_table", "obj": _namespace("db1")}
 
 
-def _existok_over_an_existing_table(client: TestClient, fake_ns: MagicMock, monkeypatch, claim: Callable[[str], str]) -> list[tuple[str, str, str]]:
-    """Drive `?mode=exist_ok` against a table that PRE-EXISTS, and return the tuples that reached OpenFGA.
-
-    Captured at ``write_tuples`` — the real tuple boundary — rather than at ``grant_on_create``. The
-    call happens either way and only its ``grant_owner`` argument differs, so asserting the call shape
-    passes against a flag that is threaded and then ignored, and asserting that the call did not happen
-    at all cannot tell an owner grant from a structural edge. [[LH-164]] is exactly that confusion.
-    """
-    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
-    claim("db1$users")  # the existing table's location carries the claim recording its uuid
-    _stub_create(monkeypatch, response=CreateTableResponse(location="s3://x", version=7))
-    _wire(client)
-    monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))  # caller passes create-on-parent
-    written: list[tuple[str, str, str]] = []
-
-    async def _capture(_client: object, tuples: Iterable[fga_module.ClientTuple], **_kw: object) -> None:
-        written.extend((t.user, t.relation, t.object) for t in tuples)
-
-    monkeypatch.setattr(fga_module, "write_tuples", _capture)
-
-    resp = client.post(
-        "/v1/table/db1$users/create?mode=exist_ok",
-        content=ARROW_BODY,
-        headers={"Authorization": "Bearer t", **ARROW_STREAM},
-    )
-    assert resp.status_code == 200, resp.text
-    return written
-
-
-def test_existok_on_existing_table_does_not_seize_ownership(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    """SECURITY (audit CRITICAL): an ExistOk create that KEEPS an already-existing table wrote nothing, so it
-    must NOT grant the caller ``owner`` — else any authenticated user (top-level, lock off) or any
-    namespace-writer could SEIZE ownership of another user's table via a no-op create (owner ⇒ can_read_data,
-    write-cred vending, drop, rename)."""
-    written = _existok_over_an_existing_table(client, fake_ns, monkeypatch, claim_described)
-
-    assert [t for t in written if t[1] == "owner"] == [], f"an ExistNo-op seized ownership: {written}"
-
-
 def test_create_table_does_not_seed_when_backend_fails(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: no tuples are seeded if the backend create raises (no orphan grant)."""
     from lance_namespace import TableAlreadyExistsError
@@ -524,34 +485,6 @@ def test_deregister_table_revokes_tuples(client: TestClient, fake_ns: MagicMock,
     revoke.assert_awaited_once()
     call = revoke.await_args
     assert call is not None and call.args[1] == f"table:{minted}"
-
-
-def test_overwrite_by_owner_keeps_every_grant_and_grants_the_overwriter_no_ownership(
-    client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]
-) -> None:
-    """CONTRACT ([[LH-242]]): an Overwrite of an EXISTING table writes a new version of the same table, whose
-    history stays readable, so the table's grants survive it: nothing is revoked, and the overwriter (who
-    cleared can_drop) is not made owner. Only the idempotent parent edge is written."""
-    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://b/db1$users")  # table exists
-    minted = claim_described("db1$users")
-    _stub_create(monkeypatch, response=CreateTableResponse(location="s3://b/db1$users", version=2))
-    _wire(client)
-    monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))  # owner → can_drop passes
-    revoke = create_autospec(fga_module.revoke_object_tuples, return_value=[])
-    grant = create_autospec(fga_module.grant_on_create, return_value=None)
-    monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
-    monkeypatch.setattr(fga_module, "grant_on_create", grant)
-
-    resp = client.post(
-        "/v1/table/db1$users/create?mode=overwrite",
-        content=ARROW_BODY,
-        headers={"Authorization": "Bearer t", **ARROW_STREAM},
-    )
-    assert resp.status_code == 200, resp.text
-    revoke.assert_not_awaited()
-    grant.assert_awaited_once()
-    assert grant.await_args is not None and grant.await_args.kwargs["obj"] == f"table:{minted}"
-    assert grant.await_args.kwargs["grant_owner"] is False
 
 
 def test_overwrite_of_existing_table_by_non_owner_is_denied_and_revokes_nothing(

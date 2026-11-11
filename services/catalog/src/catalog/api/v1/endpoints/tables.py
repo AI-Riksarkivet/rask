@@ -12,6 +12,7 @@ import lance
 from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    ConcurrentModificationError,
     DeclareTableRequest,
     DeclareTableResponse,
     DeregisterTableRequest,
@@ -1168,25 +1169,19 @@ async def register_table(
     try:
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
-        # CONVERGE THE STRUCTURAL EDGE, THEN REFUSE ANYWAY. The spec gives this door two modes —
-        # `Create` (409) and `Overwrite` — and no ExistOk, so the 409 is the correct and unchanged
-        # answer; what is wrong is leaving the id ungoverned while refusing it.
+        # A REFUSED REGISTRATION WRITES NO TUPLE ([[LH-586]], owner 2026-11-11). The spec gives this door two
+        # modes — `Create` (409) and `Overwrite` — and no ExistOk, so the 409 is the answer, and a request that
+        # is refused changes nobody's access: not an owner for its caller, and not the table's link to this
+        # namespace either. A table a rename is moving, or left half-moved, is named here and inherits from the
+        # namespace it entered, and an edge written here put every reader the move shut out back on it (measured
+        # 2026-11-11). A table registered whose seed never ran carries no tuple at all and denies every
+        # principal: the drift report lists it as ungoverned, and the estate admin writes its edges at the
+        # tuples door.
         #
-        # A table registered whose seed never ran carries NO tuples at all, and every `table` relation
-        # resolves through a direct tuple or `X from parent` — so it denies every principal, including
-        # the identity that registered it, and no door can repair it because re-registering is exactly
-        # what lands here. Measured 2026-09-15: five of the estate's own tiers in that state, and a
-        # writer that registers its output on every run re-enters this door each time, converging on a
-        # location check that never asked whether the object was governed.
+        # THE TABLE'S BASE RECORD STILL CONVERGES, AND ONLY WHEN THE LOCATION MATCHES. A 409 at a different
+        # location is a genuine id conflict, a different table living there. Same location means this IS that
+        # table, so its record is the one a fresh registration would have written.
         #
-        # ONLY WHEN THE LOCATION MATCHES. A 409 at a different location is a genuine id conflict —
-        # a different table living there — and writing an edge for it would attach somebody else's
-        # object to this caller's namespace. Same location means this IS that table, so the edge is a
-        # restatement of a fact the catalog already holds.
-        #
-        # The EDGE ALONE: `may_grant_owner=False`, so a caller cannot acquire a rung on a table it did
-        # not create by re-registering it — the ownership-seizure refusal that guards the ExistOk arm
-        # of `create` applies identically here.
         # THE CLAIM IS CHECKED AS THE TAIL OF THE REGISTRATION, not by equality. The body carries a
         # RELATIVE location — the dir backend refuses an absolute one on this door — while the
         # registered one is absolute. Resolving both through `absolute_table_location` would be dead
@@ -1195,8 +1190,8 @@ async def register_table(
         registered = await run_in_threadpool(absolute_table_location, ns, segments, None)
         claimed = (body.location or "").strip("/")
         if registered and claimed and _registration_points_at(registered, claimed):
-            # A refused register whose detach failed also lands here on retry; a flag-256 dataset is
-            # never converged into governance, and a dataset that cannot be read is not judged clean.
+            # A refused register whose detach failed also lands here on retry; a flag-256 dataset's
+            # record is never converged, and a dataset that cannot be read is not judged clean.
             try:
                 facts = await run_in_threadpool(registered_dataset_facts, registered, so)
             except Exception as exc:
@@ -1208,9 +1203,9 @@ async def register_table(
             if facts is not None and not facts.stable_row_ids:
                 log.warning("register_converge_refused_unstable_row_ids", extra={"table": id, "location": registered})
                 raise
-            # THE RECORD CONVERGES WITH THE EDGE ([[LH-279]]). The medallion re-enters this door on
-            # every run, so a table registered before its record existed gets one here — judged exactly
-            # as a fresh registration's bases are, and never for a base nothing sanctions.
+            # THE RECORD CONVERGES ([[LH-279]]). A writer that registers its output on every run re-enters
+            # this door each time, so a table registered before its record existed gets one here — judged
+            # exactly as a fresh registration's bases are, and never for a base nothing sanctions.
             if facts is not None:
                 unsanctioned = False
                 entries: list[base_registry.RecordedBase] = []
@@ -1241,9 +1236,7 @@ async def register_table(
                 if held:
                     raise
                 await run_in_threadpool(base_registry.claim_bases, context.registry, registered, entries)
-            kept_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), registered, segments)
-            await fga_deps.seed_ownership(client, settings, token, resolver, resource="table", segments=segments, uuid=kept_uuid, may_grant_owner=False)
-            log.info("register_converged_governance", extra={"table": id, "location": registered})
+                log.info("register_converged_base_record", extra={"table": id, "location": registered})
         raise
 
     claims = table_claims.claim_store(settings)
@@ -1280,13 +1273,18 @@ async def register_table(
     # each ref's head ([[LH-550]]): every version the dataset holds now was committed past every door, and
     # the claim is what makes the table one the commit reconciler reads. Then the location's claim
     # ([[LH-204]]): a rename holding it, or a table a recoverable drop is keeping it for, refuses
-    # this registration even when the manifest shows no other row at the location.
+    # this registration even when the manifest shows no other row at the location. A rename between its two names
+    # holds the claim fenced ([[LH-586]]), and that refusal is a concurrent change (409, code 14): the location is
+    # held by a table in flight, and the same registration is judged afresh once the rename has ended.
     try:
         await run_in_threadpool(partial(commit_reconcile.mark_registered_heads, settings, so, location=claimed_location, table_uuid=table_uuid))
         try:
             await run_in_threadpool(
                 partial(table_claims.claim_new_table, ns, claims, claimed_location, table=canonical, segments=segments, table_uuid=table_uuid)
             )
+        except location_claims.LocationFencedError as fenced:
+            log.warning("register_refused_fenced_location", extra={"table": id, "location": fenced.claim.location, "holder": fenced.claim.table})
+            raise ConcurrentModificationError(f"cannot register {id}: another request is acting on the table at its location; retry") from None
         except location_claims.LocationHeldError as held:
             log.warning("register_refused_held_location", extra={"table": id, "location": held.claim.location, "holder": held.claim.table})
             raise table_bases.occupied_location_refusal(body.location) from None

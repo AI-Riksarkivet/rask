@@ -961,15 +961,15 @@ def _existing_location(ns: LanceNamespace, segments: list[str]) -> str | None:
 
 class Reparent(NamedTuple):
     """How a rename into another namespace takes along where its table inherits from, a step at a time, each called
-    from the rename's thread (:func:`rename_table`): ``leave`` and ``put_back`` while it holds the location's claim,
-    ``arrive`` once the destination is registered and the table is the destination's.
+    from the rename's thread while it holds the location's claim fenced (:func:`rename_table`): ``leave`` before the
+    name moves, ``arrive`` once the destination is registered, ``put_back`` for a rename that is undone.
 
     An internal bundle of three calls, never boundary input, so a ``NamedTuple``.
     """
 
     #: Move it to the destination, before the name moves. When it raises, it has returned what it may have moved.
     leave: Callable[[], None]
-    #: Settle it at the destination, once the name is registered there, with whatever acted on the table since.
+    #: Name the table a child of the destination, once its name is registered there.
     arrive: Callable[[], None]
     #: Return it to the source, for a rename that is undone.
     put_back: Callable[[], None]
@@ -1031,17 +1031,26 @@ def rename_table(
     no id with its claim naming the destination; a re-register of either id at the location, after the
     claim's lease, recovers it.
 
+    THE CLAIM IS FENCED FROM ITS HAND-OVER UNTIL THE TABLE IS SETTLED ([[LH-586]]). Between the hand-over and the
+    destination's registration the claim names a table the backend does not describe, which every other take reads
+    as a holder that is gone, and a registration of the destination's own name as an ended table's claim to replace
+    under a uuid of its own. The fence refuses them all, and every drop, deregister and rename of the table, until
+    this request lifts it once the table is whole under its new name, or hands the claim back under its token. A
+    RegisterTable of the destination's name attaches its row before the claim refuses it, so a destination found
+    registered at this very location as the rename registers it is that row, never another rename's: the source is
+    put back and the name's conflict answered.
+
     WHERE THE TABLE INHERITS FROM MOVES UNDER THE CLAIM ([[LH-568]]). ``reparent`` is how a rename into another
-    namespace takes it along (:class:`Reparent`). It leaves the source, and is put back, while this request holds the
-    claim, so that move and the name's have the one arbiter and only the request holding the claim makes either. It leaves the
-    source BEFORE the name moves, because the two are not one transaction either: a table that inherits from the
-    namespace it is about to enter is read by nobody its move would not admit, while one already named there and
-    still inheriting from the namespace it left is read by everyone the move should have shut out. When leaving
-    raises, the step has returned what it may have moved, and the claim is handed back. Whenever the rename is undone
-    the move is put back first, and only then is the claim handed back; where another request's finished rename
-    stands, it stands. It arrives once the destination is registered, when the table is the destination's and the
-    arrival settles with whatever acted on it since. A crash in between leaves the source inheriting from the
-    destination's namespace, which renaming it there again finishes.
+    namespace takes it along (:class:`Reparent`). It leaves the source, arrives and is put back while this request
+    holds the claim, so that move and the name's have the one arbiter and only the request holding the claim makes
+    either. It leaves the source BEFORE the name moves, because the two are not one transaction either: a table that
+    inherits from the namespace it is about to enter is read by nobody its move would not admit, while one already
+    named there and still inheriting from the namespace it left is read by everyone the move should have shut out.
+    When leaving raises, the step has returned what it may have moved, and the claim is handed back. Whenever the
+    rename is undone the move is put back first, and only then is the claim handed back. It arrives once the
+    destination is registered, before the fence is lifted, so nothing else acts on the table until its edges are
+    whole. A crash in between leaves the source inheriting from the destination's namespace, which renaming it there
+    again finishes.
     """
     segments = source.segments
     if not new_table_name.strip():
@@ -1082,10 +1091,12 @@ def rename_table(
     # code 14 before touching the backend. The source is still retired before the destination is written, so a rename never shows
     # two ids on the dataset even for the instant between the two calls. The token makes this request's
     # claim its own: two renames into the SAME destination name one holder, and only the request that
-    # stamped the claim may read it as its retry.
+    # stamped the claim may read it as its retry. The claim is handed over FENCED under that token ([[LH-586]]):
+    # until the destination is registered it names a table the backend does not describe, which a registration of
+    # the destination's name would otherwise replace under a uuid of its own.
     source_id, dest_id = CATALOG_DELIMITER.join(segments), CATALOG_DELIMITER.join(new_segments)
     try:
-        table_claims.hand_over(ns, claims, source, table=dest_id, segments=new_segments, previous=source_id, token=uuid.uuid4().hex)
+        fenced = table_claims.hand_over(ns, claims, source, table=dest_id, segments=new_segments, previous=source_id)
     except (location_claims.LocationHeldError, location_claims.ClaimChangedError) as refused:
         holder = refused.claim.table if isinstance(refused, location_claims.LocationHeldError) else None
         log.warning("rename_refused_held_location", extra={"source": source_id, "location": source_uri, "holder": holder})
@@ -1096,15 +1107,16 @@ def rename_table(
     def _hand_back(put_back: Callable[[], None] | None) -> None:
         # The source keeps its location, so it keeps the claim; left with the destination, every later
         # rename of the source would answer code 14 for the claim's lease. What followed the table goes back
-        # first, while the claim still keeps every other request off it. Logged, never raised over the
-        # failure that made the rename compensate.
+        # first, while the claim still keeps every other request off it. Under this request's token, since the
+        # claim is fenced for it, and the claim the source takes back carries no fence. Logged, never raised over
+        # the failure that made the rename compensate.
         if put_back is not None:
             try:
                 put_back()
             except Exception as exc:
                 log.error("rename_parent_not_put_back", extra={"source": source_id, "destination": dest_id, "error": str(exc)[:300]}, exc_info=True)
         try:
-            table_claims.take(ns, claims, source_uri, source_id, segments, previous=dest_id)
+            table_claims.take(ns, claims, source_uri, source_id, segments, previous=dest_id, token=fenced.token)
         except Exception as exc:
             log.error("rename_claim_not_handed_back", extra={"source": source_id, "location": source_uri, "error": str(exc)[:300]})
 
@@ -1123,15 +1135,12 @@ def rename_table(
         raise
     try:
         ns.register_table(RegisterTableRequest(id=new_segments, location=location))
-    except Exception as failed:
-        # A destination that now resolves to this location is another request's finished rename: putting
-        # the source back would make a second live id on the dataset, so its state stands and this one
-        # answers code 14.
-        if isinstance(failed, TableAlreadyExistsError) and _resolves_to(ns, new_segments, source_uri):
-            raise ConcurrentModificationError(f"cannot rename {source_id}: a concurrent rename already moved it to {dest_id}") from None
+    except Exception:
         # COMPENSATE, or a rename that trips on its destination leaves the table reachable by NO id —
         # bytes intact and invisible. The same call at the same location the source already had, and
-        # the claim handed back with it.
+        # the claim handed back with it. A destination found registered at this very location is no finished
+        # rename, since no other rename holds the claim this one fenced: it is the row a RegisterTable of the
+        # destination's name attaches before the claim refuses it, which that registration then detaches itself.
         try:
             ns.register_table(RegisterTableRequest(id=segments, location=location))
         except Exception as restore:
@@ -1150,16 +1159,9 @@ def rename_table(
         except Exception as exc:
             # The rename has happened, so nothing is raised over it: what the arrival left unwritten is logged.
             log.error("rename_arrival_not_settled", extra={"source": source_id, "destination": dest_id, "error": str(exc)[:300]}, exc_info=True)
+    # The table is settled under its new name, so the claim is every door's to act on again.
+    table_claims.lift_fence(claims, fenced)
     return new_segments, source_uri
-
-
-def _resolves_to(ns: LanceNamespace, segments: list[str], location: str) -> bool:
-    """Whether ``segments`` is registered and describes ``location``; an unreadable answer is ``False``."""
-    try:
-        described = ns.describe_table(DescribeTableRequest(id=segments))
-    except Exception:  # noqa: BLE001 — not provably the winner's table, so the caller compensates as before
-        return False
-    return decoded_path(str(described.location or "")) == decoded_path(location)
 
 
 def relative_location(location: str, *, root: str) -> str:

@@ -153,3 +153,111 @@ justification for any decision above.
 - A namespace's Overwrite ends its subtree's grants and records, so the namespace it leaves gets a new uuid.
 - `fga_deps.move_ownership` and `object_records.move_object_records` go: a rename changes the `__manifest` row and the
   claim's holder name, and nothing else.
+
+## Amendment, 2026-11-11: a rename is arbitrated against a register, a re-register and a cascade ([[LH-586]], #819)
+
+§7 arbitrates a rename against a drop, a deregister and another rename through the location's claim. Three doors were
+left outside that arbitration. Each was measured on the catalog as of `4c0092e98`, offline, on a real OpenFGA and real
+pylance.
+
+**The defects.**
+
+1. **A RegisterTable of a rename's destination, landed inside the rename.** The rename handed the claim to the
+   destination's name before the backend registered that name. Until then the claim named a table `__manifest` did not
+   describe, and a registration of that same name read it as an ended table's claim, which a new table's take replaces
+   under a uuid of its own (§2). On a registered table: landed before the rename retired the source, the register
+   answered 400 (code 13), the rename 200, and the renamed table answered a new uuid; landed before the rename
+   registered its destination, the register answered 200 and the rename 409 ("a concurrent rename already moved it"),
+   again over the table's bytes under a new uuid. Every grant is held by the uuid (§8), so none of the table's grants
+   reached it any more, and in the second case a writer of the destination namespace owned a table it held no grant on.
+2. **A registration made again after a rename into another namespace died.** That rename moves the table's `parent`
+   edge before its name ([[LH-568]]), so a rename killed between the two leaves the table named in the namespace it was
+   leaving and inheriting from the one it was entering. A RegisterTable of the source name was answered 409 (code 5)
+   and its convergence wrote the `parent` and `child` edges to the source namespace all the same: the table inherited
+   from both, and every reader the move had shut out read it again, on the word of a caller holding no grant authority
+   on it. A rename then refused that table 409 (code 14), saying it "needs an operator to repair it".
+3. **A rename landed inside a cascade.** A cascade lists its subtree once and removed each table by its name, holding
+   no fence on its claim. With both tables of a namespace renamed out as the cascade's first row was about to go: a
+   namespace's destroying cascade answered 200 and both renames 200, after which the renamed tables' bytes stood and
+   neither held a tuple, since the cascade ended every uuid it had listed, so a describe by their owner answered 404; a
+   recoverable cascade answered 404 with a trash record filed against a table that lives on under its new name; a
+   warehouse delete answered 503 `PartiallyApplied` (`tuples_revoked: 6`) with the moved table standing in the other
+   namespace and holding no tuple.
+
+**The decision.**
+
+1. **A rename hands its claim over fenced.** `location_claims.hand_over` writes the claim with the rename's own fence,
+   and a take that meets another request's fence raises `LocationFencedError`. The fence stands from the hand-over until
+   the table is whole under its new name: the destination registered and, for a rename into another namespace, its
+   `child` edge written. An undone rename hands the claim back under its token, which writes it unfenced; a dead
+   rename's fence lapses after `LEASE`, as any door's does. So:
+   - a RegisterTable of the destination landed inside the rename is refused 409 (code 14), not the occupied location's
+     400, because the same call may succeed once the rename has ended; it detaches the row it attached, as every
+     refused registration does;
+   - where that row still stands when the rename registers its destination, the rename puts the source back, hands the
+     claim back and answers the name's conflict, 409 (code 5). It no longer reads a destination registered at its own
+     location as another rename's finished work: no other rename can hold a claim this one fenced;
+   - the arrival writes the `child` edge and nothing else. The two branches that settled with whatever had acted on the
+     table since its registration are gone, since under the fence nothing has.
+2. **A refused registration writes no tuple, and no door writes a second parent** (owner, 2026-11-11, through the
+   multi-question tool: "Write nothing"). A RegisterTable answered 409 changes no grant, whatever its table lacks; it
+   still converges the table's base record ([[LH-279]]), which is no grant. A create that keeps a table under ExistOk,
+   and its owner's Overwrite, answer 200 and link the table to its name's namespace only where it has no `parent` edge
+   at all, granting their caller nothing (`fga_deps.link_an_unlinked_table`). `seed_ownership` runs only for an object
+   its request brought into being. A rename that finds its table inheriting from the namespace it leaves and the one it
+   enters both takes the first edge away in one conditional Write (`fga.leave_parent`) and goes on: its mover holds
+   what a move asks at both ends, and taking that edge away admits nobody.
+3. **A cascade removes each table as that table's own door does.** The namespace door's destroying and recoverable
+   cascades and the warehouse delete resolve each listed table's name again and fence the claim that resolution read
+   (`table_claims.fence_listed`) before the row goes. A name that names nothing by then left since the listing, by a
+   drop of its own, which ended what it held, or by a rename, under which it lives on: the cascade skips it. A name
+   another table took is refused 409 (code 14), since the cascade held that table to no protection check. A rename
+   landing after the fence answers 409 itself. Each cascade announces, tracks, clears the protection of and ends only
+   the tables it removed itself. The destroying cascade and the warehouse delete resolve a name as its turn comes; the
+   recoverable cascade resolves every name before its first write, concurrently, so a table that changed between that
+   and its turn answers the cascade 409 there, with the tables before it already in the trash and recoverable.
+
+**What goes.** `dataplane._resolves_to` and the rename's "a concurrent rename already moved it" answer;
+`seed_ownership`'s `may_grant_owner`; the register door's edge write on its 409 path; `table_claims.keep_for_trash`,
+since a table holds its claim from the door that made it and a recoverable cascade keeps it through the trash as the
+drop door does. The two cascades still release a removed table's claim under the uuid they listed it by, as ADR 0198's
+amendment of 2026-11-10 records, and now under their own fence as well: a table's bytes can take longer to go than a
+fence stands, and the uuid keeps a lapsed fence's release off a claim the same name took since.
+
+**Not taken.**
+
+- Take the claim before the native register at the register door, so that no row is attached and then detached: the
+  claim is keyed by the location as the backend resolved it, which only the native register answers, and the door's
+  overlap judge has to see this registration's own row.
+- Keep a narrowed write on the refused registration, the link of a table that has no `parent` edge and nothing else.
+  It was built first and put to the owner against the row's wording: a refused request would still change who reads a
+  table, and no reference catalog read for the question writes on that answer (Lakekeeper `08b67d7`
+  `crates/lakekeeper/src/server/tables.rs:505-573`, Polaris `02ba4b6` `LocalIcebergCatalog.java:379`, Gravitino
+  `f4056fa` `hook/TableHookDispatcher.java`). They are the comparison, not the justification: the row's own wording is.
+
+**Residuals, stated.**
+
+- A registered table whose first registration died between its claim and its seed holds no tuple and denies every
+  principal, and its registration made again no longer links it. The drift report lists it under `ungoverned_tables`,
+  and the estate admin writes its `parent` and `child` edges at `POST /management/v1/access/tuples`, after which its
+  namespace's grants reach it (measured 2026-11-11, offline, on a real OpenFGA). The cause is the order of the two
+  writes, the table first and its grants second; writing the grants first would leave grants without a table, which
+  the drift reconciler already reports and revokes. That reordering is a parked row of its own (owner, 2026-11-11).
+
+- A request that resolved the table's new name between the destination's registration and the fence's lift is answered
+  one 409 (code 14): the lift rewrites the claim, and a door opens only under the ETag its resolution read ([[LH-530]]).
+- A rename that dies after registering its destination leaves the table whole under its new name and its claim fenced:
+  a drop, a deregister, a rename or a cascade of it answers 409 until the fence lapses, at most `LEASE` (15 minutes).
+- A registration that dies between attaching its row and detaching it leaves a second name on the table's location.
+  It resolves to the table's own uuid, so it carries no grant the table does not, and a destructive drop of either name
+  is refused while the claim names the other. This predates the row, and the fence does not change it.
+- A table renamed to another name inside the subtree a cascade is removing is skipped under its old name and not
+  listed under its new one. The namespace's own drop is then refused, since the `dir` backend drops only an empty
+  namespace (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:115-130`), and the call issued again
+  lists the table where it now is.
+
+**Pinned by** `tests/integration/test_concurrent_renames_leave_one_id_per_location.py` (the registration landed at
+each point of the rename), `services/catalog/tests/test_a_rename_into_another_namespace_needs_grant_authority_and_moves_the_parent_edge_whole.py`
+(the doors that find a table standing, the table inheriting from both namespaces, the rival landed as the rename
+arrives, and both namespace cascades) and
+`tests/integration/test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py` (the warehouse delete).

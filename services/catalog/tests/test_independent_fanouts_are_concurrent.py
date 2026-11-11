@@ -33,6 +33,8 @@ from catalog.api.fga_deps import GovernedObject
 from catalog.api.v1.endpoints import namespaces as n_ep
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
+from catalog.services import table_claims
+from lakehouse import location_claims
 from lakehouse.control_events import ControlUuids
 from lakehouse.storage_options import StorageOptions
 
@@ -103,21 +105,28 @@ def test_the_protection_preflight_reads_every_descendant_concurrently(tmp_path: 
 
 def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tracker = _Tracker()
-    described = SimpleNamespace(location="s3://bkt/t.lance")
     calls: list[str] = []
+    settings = _settings(tmp_path)
+    descendants = [GovernedObject(kind="table", segments=["bronze", f"t{i}"], uuid=str(uuid4())) for i in range(8)]
+    claims = table_claims.claim_store(settings)
+    for item in descendants:
+        # Each table holds its location's claim under its uuid, as the door that made it left it: the cascade detaches
+        # a table only under the claim its name resolves to.
+        location_claims.take(
+            claims, f"s3://bkt/{item.segments[-1]}.lance", "$".join(item.segments), item.segments, is_gone=lambda _claim: False, uuid=item.uuid
+        )
 
-    def native_call(_ns: Any, op: str, _req: Any) -> Any:
+    def native_call(_ns: Any, op: str, req: Any) -> Any:
         calls.append(op)
         if op == "describe_table":
-            return _slow(tracker, described)()
+            return _slow(tracker, SimpleNamespace(location=f"s3://bkt/{req.id[-1]}.lance"))()
         return SimpleNamespace(properties=None)
 
     monkeypatch.setattr(n_ep.native, "call", native_call)
     monkeypatch.setattr(n_ep.trash, "put", lambda *_a, **_kw: None)
-    descendants = [GovernedObject(kind="table", segments=["bronze", f"t{i}"], uuid=str(uuid4())) for i in range(8)]
     own = ControlUuids(object_uuid=str(uuid4()))
 
-    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), _settings(tmp_path), None, ["bronze"], descendants, own=own, grace_days=7))
+    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), settings, None, ["bronze"], descendants, own=own, grace_days=7))
 
     assert tracker.total == 8, f"only {tracker.total} describes for 8 descendant tables"
     assert tracker.peak > 1, "the recoverable cascade describes its descendants one at a time"

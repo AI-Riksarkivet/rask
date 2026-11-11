@@ -546,6 +546,34 @@ def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder
     return DoorFence(location=table.location, token=token)
 
 
+def fence_listed(ns: LanceNamespace, store: ClaimStore, resolved: ResolvedTable, *, listed_uuid: str, verb: str) -> DoorFence | None:
+    """Fence the claim of a table a cascade listed as ``listed_uuid``, on the resolution of its name the cascade made since.
+
+    A cascade lists its subtree once and removes its tables one at a time, so each stands, and can be renamed, dropped
+    or replaced, until its own turn. So the cascade resolves each name again (:func:`resolve`) once it has listed them,
+    and acts on that resolution as the door that removes one table does ([[LH-586]]):
+
+    - the name named no table: ``None``. The listed table left since the listing, by a drop of its own, which ended what
+      it held, or by a rename, under which it lives on with every grant. It is not this cascade's to remove or to end.
+    - the name named another table than the one listed: refused. That table took the name since the listing, so the
+      cascade held it to no protection check.
+    - the name named the listed table: its claim is fenced under the ETag the resolution read (:func:`fence`), so a
+      rename landing afterwards answers 409 itself, and one that landed since the resolution answers this cascade 409.
+
+    Raises:
+        ConcurrentModificationError: Another table holds the name now, the claim changed since the resolution read
+            it, or another request is acting on the table.
+        InvalidTableStateError: Another table holds the location and still resolves to it.
+    """
+    if resolved.location is None:
+        return None
+    holder = fga.canonical_object_id(resolved.segments)
+    if resolved.uuid != listed_uuid:
+        log.warning("cascade_refused_replaced_table", extra={"table": holder, "listed": listed_uuid, "found": resolved.uuid})
+        raise ConcurrentModificationError(f"cannot {verb} {holder}: another table took its name while this request was being served; retry")
+    return fence(ns, store, resolved, holder=holder, verb=verb)
+
+
 def lift_fence(store: ClaimStore, fenced: DoorFence) -> None:
     """Lift a door's fence once it has acted, or failed to. Logged, never raised: the fence lapses on its own after its lease."""
     try:
@@ -554,8 +582,12 @@ def lift_fence(store: ClaimStore, fenced: DoorFence) -> None:
         log.error("location_claim_fence_not_lifted", extra={"location": fenced.location, "error": str(exc)[:300]})
 
 
-def hand_over(ns: LanceNamespace, store: ClaimStore, source: ResolvedTable, *, table: str, segments: list[str], previous: str, token: str) -> LocationClaim:
-    """Hand the claim ``source`` resolved to from ``previous`` to ``table``, judging a stale holder against this namespace.
+def hand_over(ns: LanceNamespace, store: ClaimStore, source: ResolvedTable, *, table: str, segments: list[str], previous: str) -> DoorFence:
+    """Hand the claim ``source`` resolved to from ``previous`` to ``table``, fenced for this request, judging a stale
+    holder against this namespace; the fence the rename then holds.
+
+    The rename lifts that fence once the table is settled under ``table`` (:func:`lift_fence`), or hands the claim
+    back to ``previous`` with a :func:`take` under the fence's token ([[LH-586]]).
 
     Raises:
         TableNotFoundError: The name named no table.
@@ -564,7 +596,8 @@ def hand_over(ns: LanceNamespace, store: ClaimStore, source: ResolvedTable, *, t
     """
     if source.location is None:
         raise TableNotFoundError(f"table not found: {previous}")
-    return location_claims.hand_over(
+    token = uuid4().hex
+    location_claims.hand_over(
         store,
         source.location,
         source.claim,
@@ -574,6 +607,7 @@ def hand_over(ns: LanceNamespace, store: ClaimStore, source: ResolvedTable, *, t
         token=token,
         is_gone=lambda claim: holder_is_gone(ns, store, claim),
     )
+    return DoorFence(location=source.location, token=token)
 
 
 def holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -> bool:
@@ -679,18 +713,6 @@ def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, tab
         is_gone=lambda claim: holder_is_gone(ns, store, claim),
         is_kept=lambda claim: kept_in_trash(store, claim),
     )
-
-
-def keep_for_trash(ns: LanceNamespace, store: ClaimStore, location: str, table: str, segments: list[str]) -> None:
-    """Hold ``location`` for a table a recoverable drop is about to detach, so no other id registers over its bytes.
-
-    A location another table already holds is left with that holder and logged: the drop is still
-    correct, the purge refuses to delete bytes a live id resolves to, and the undrop refuses to alias it.
-    """
-    try:
-        take(ns, store, location, table, segments)
-    except location_claims.LocationHeldError as held:
-        log.warning("trash_location_held_by_another_table", extra={"table": table, "holder": held.claim.table, "location": held.claim.location})
 
 
 def require_no_other_holder(ns: LanceNamespace, store: ClaimStore, location: str, table: str) -> None:

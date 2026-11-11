@@ -335,36 +335,37 @@ async def create_governed_table(
     # for, it raised and the native drop never ran. Now they are independent best-effort steps and
     # the drop — which needs no FGA — always gets its turn.
     #
-    # THE SEED IS UNCONDITIONAL AND THE OWNER GRANT IS THE FLAG, which is the distinction
-    # `grant_on_create` was given `grant_owner` for: dropping the owner tuple and dropping the `parent`
-    # EDGE look identical at a call site and are opposite in effect. An ExistOk that KEPT an existing
-    # table must not grant the caller `owner` — that is an ownership seizure, audited CRITICAL — but
-    # its edge is not an ownership question at all: it names where the table lives, it is idempotent,
-    # and it confers nothing alone. Skipping the whole call withheld both.
+    # A TABLE THIS REQUEST BROUGHT INTO BEING IS SEEDED; ONE IT ONLY FOUND IS LINKED WHERE IT HAS NO LINK. An
+    # ExistOk that KEPT an existing table, and an Overwrite of one, must not grant the caller `owner` — that is an
+    # ownership seizure, audited CRITICAL — but the table's `parent` edge is not an ownership question at all: it
+    # names where the table lives and confers nothing alone, and a table carrying none is out of every container
+    # grant's reach.
     #
     # Measured 2026-09-15: `ensure_stage_output` is describe-then-create-with-ExistOk, so once a table
-    # existed without an edge every later registration skipped the seed again and it could never
-    # acquire one. Five of the cascade's own governed tiers held ZERO tuples — no owner, no parent —
-    # and `table.maintainer`/`owner`/every other relation resolve through `... from parent`, so they
-    # were unreachable from every container grant: unmaintainable, ungrantable, unprotectable.
+    # existed without an edge every later run kept it and it could never acquire one. Five of the cascade's
+    # own governed tiers held ZERO tuples — no owner, no parent — and `table.maintainer`/`owner`/every other
+    # relation resolve through `... from parent`: unmaintainable, ungrantable, unprotectable.
     #
-    # `undo` stays conditional. Compensation undoes what THIS request created, and an ExistOk that kept
-    # an existing table created nothing to undo.
+    # So the kept table is linked, and only where it inherits from nowhere (`fga_deps.link_an_unlinked_table`,
+    # [[LH-586]]): one whose edge a rename moved ahead of its name keeps the edge where the rename put it.
+    # Compensation undoes what THIS request created, so only a new table's seed carries an `undo`.
     seeding_a_new_table = not pre_existed and not existok_kept_existing
     # The table's grants are held by the uuid its location's claim records: the one this create minted, or the kept
     # table's own under ExistOk or an Overwrite (ADR 0173 §2, [[LH-524]]).
     table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), response.location or "", segments)
-    await fga_deps.seed_ownership_or_compensate(
-        client,
-        settings,
-        token,
-        resolver,
-        resource="table",
-        segments=segments,
-        uuid=table_uuid,
-        may_grant_owner=seeding_a_new_table,
-        undo=_undo_create if (seeding_a_new_table and compensation_allowed(mode, overwrote_existing)) else None,
-    )
+    if seeding_a_new_table:
+        await fga_deps.seed_ownership_or_compensate(
+            client,
+            settings,
+            token,
+            resolver,
+            resource="table",
+            segments=segments,
+            uuid=table_uuid,
+            undo=_undo_create if compensation_allowed(mode, overwrote_existing) else None,
+        )
+    else:
+        await fga_deps.link_an_unlinked_table(client, settings, token, resolver, segments=segments, uuid=table_uuid)
     # Record provenance authoritatively: the catalog knows the verified principal. Fire-and-forget
     # (after the response, best-effort) so the lineage service can never block/fail a create. The
     # canonical id names the lineage Dataset as the catalog names the table, and the event carries the table's uuid,

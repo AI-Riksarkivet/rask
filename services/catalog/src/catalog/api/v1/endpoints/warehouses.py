@@ -39,7 +39,6 @@ from lance_namespace import (
     CreateNamespaceRequest,
     CreateNamespaceResponse,
     DeregisterTableRequest,
-    DeregisterTableResponse,
     DescribeTableRequest,
     DescribeTableResponse,
     DropNamespaceRequest,
@@ -1026,7 +1025,7 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, bound: list[
 
 
 async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[str], *, purge: bool, table_uuid: str) -> bool:
-    """Detach one table from the catalog, its bytes left in place; ``False`` when it was already gone.
+    """Detach one table the cascade listed from the catalog, its bytes left in place; ``False`` for one it did not detach.
 
     DETACH, NOT DROP: this door takes bytes only on ``?purge_bucket=true``, and that holds for the tables in its
     namespaces as much as for the bucket. A detached table's bytes stay where a later ``register_table`` can attach
@@ -1038,61 +1037,70 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     the bucket purge does not reach, and the deregister is the step a re-issued call can no longer see past, so a delete
     that fails leaves the table registered for the re-issue to detach again.
 
-    ``table_uuid`` is the uuid the cascade identified the table by before it changed anything: the cascade holds no fence
-    between the row's removal and the claim's release, so the release frees only a claim recording it, never one the same
-    name took at the location meanwhile.
+    ``table_uuid`` is the uuid the cascade listed the table by. Its name is resolved again as its turn comes and its
+    claim fenced, as the deregister door fences its table's (:func:`table_claims.fence_listed`, [[LH-586]]): a rename
+    landing while the row goes answers 409 rather than carrying the table out of a cascade that then ends its grants,
+    and a table that left since the listing, by a drop of its own or by a rename, is neither detached nor ended here.
+    The fence is lifted when the detach fails with the row in place, and goes with the claim's release when the row went.
+
+    Raises:
+        ConcurrentModificationError: The table changed, or another request is acting on it; nothing of it changed here.
     """
     canonical = fga.canonical_object_id(segments)
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     claims = table_claims.claim_store(settings)
-    try:
-        described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    except TableNotFoundError:
+    resolved = await run_in_threadpool(table_claims.resolve, ns, claims, segments)
+    fenced = await run_in_threadpool(partial(table_claims.fence_listed, ns, claims, resolved, listed_uuid=table_uuid, verb="deregister"))
+    if fenced is None:
         return False
-    # A clone's ending is filed before anything changes (ADR 0198 §1), so a filing that fails refuses with every byte and
-    # the row in place, and a tag release failing below is finished by maintenance's audit, where a re-issued cascade
-    # would no longer list the clone it belongs to.
-    ending = (
-        await run_in_threadpool(
+    try:
+        # A clone's ending is filed before anything changes (ADR 0198 §1), so a filing that fails refuses with every byte
+        # and the row in place, and a tag release failing below is finished by maintenance's audit, where a re-issued
+        # cascade would no longer list the clone it belongs to.
+        ending = await run_in_threadpool(
             partial(
                 clone_endings.file_ending,
                 registry,
                 claims,
-                str(described.location),
+                fenced.location,
                 table=canonical,
                 forget_record=purge,
                 door="warehouse_cascade",
-                filing=uuid.uuid4().hex,
+                filing=fenced.token,
             )
         )
-        if described.location
-        else None
-    )
-    if purge and described.location:
-        try:
-            await run_in_threadpool(
-                partial(data_directories.delete_table_directories, registry, described.location, table=canonical, storage_options=settings.storage_options())
-            )
-        except Exception:
-            # This request has not touched the row, so the clone's holds are its own still.
-            if ending is not None:
-                await run_in_threadpool(clone_endings.clear_ending, claims, ending)
-            raise
-    try:
-        detached: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-    except TableNotFoundError:
-        # Another request removed the row: its own end, or this ending's finish, releases what the clone held.
-        return False
-    # Any other failure of the native call leaves the ending: a describe cannot tell whether the row it followed is still
-    # the clone's, and the finish judges it on its own reads once the claim's lease has passed.
-    if detached.location:
-        # What the catalog promised a clone among the bytes ends before the location's claim does, as at the deregister
-        # door: a tag that cannot be deleted leaves the location held, and no clone registered there can hold its name.
         if purge:
-            await run_in_threadpool(partial(base_registry.forget_base_record, registry, detached.location, table=canonical))
-        else:
-            await run_in_threadpool(partial(base_registry.release_clone_sources, registry, detached.location, holder=canonical))
-        await run_in_threadpool(partial(location_claims.release, claims, detached.location, canonical, uuid=table_uuid))
+            try:
+                await run_in_threadpool(
+                    partial(data_directories.delete_table_directories, registry, fenced.location, table=canonical, storage_options=settings.storage_options())
+                )
+            except Exception:
+                # This request has not touched the row, so the clone's holds are its own still.
+                if ending is not None:
+                    await run_in_threadpool(clone_endings.clear_ending, claims, ending)
+                raise
+        await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+    except TableNotFoundError:
+        # Only the deregister answers this: the row went by a hand the fence does not bind, and this ending's finish
+        # releases what the clone held. The fence is lifted, as the deregister door lifts its own.
+        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        return False
+    except Exception:
+        # A failed native call leaves the ending: a describe cannot tell whether the row it followed is still the
+        # clone's, and the finish judges it on its own reads once the claim's lease has passed. The fence is lifted,
+        # for the re-issue that finishes the cascade.
+        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        raise
+    # What the catalog promised a clone among the bytes ends before the location's claim does, as at the deregister
+    # door: a tag that cannot be deleted leaves the location held, and no clone registered there can hold its name.
+    if purge:
+        await run_in_threadpool(partial(base_registry.forget_base_record, registry, fenced.location, table=canonical))
+    else:
+        await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, holder=canonical))
+    # Released under the uuid the cascade listed the table by, as well as under its fence: a purge's directory delete
+    # can take longer than a fence stands, and the same name registered at the location once the fence has lapsed holds
+    # the claim under a uuid of its own.
+    await run_in_threadpool(partial(location_claims.release, claims, fenced.location, canonical, uuid=table_uuid))
     if ending is not None:
         await run_in_threadpool(clone_endings.clear_ending, claims, ending)
     return True
@@ -1299,15 +1307,20 @@ async def delete_warehouse(
             trash_ended.append(f"{kind}:{canonical}")
         if ns_conn is not None:
             for subtree in subtrees:
-                identified = {tuple(item.segments): item.uuid for item in subtree.descendants if item.kind == "table"}
-                for table in subtree.tables:
+                # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
+                # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
+                removed = [item for item in subtree.descendants if item.kind == "namespace"]
+                for item in subtree.descendants:
+                    if item.kind != "table":
+                        continue
                     # What the announcement names the table by, read while it still stands (ADR 0173 §10).
-                    known = await uuids.table(table)
-                    if await _detach_table(ns_conn, settings, table, purge=purge_bucket, table_uuid=identified[tuple(table)]):
-                        tables_removed.append(fga.canonical_object_id(table))
+                    known = await uuids.table(item.segments)
+                    if await _detach_table(ns_conn, settings, item.segments, purge=purge_bucket, table_uuid=item.uuid):
+                        removed.append(item)
+                        tables_removed.append(fga.canonical_object_id(item.segments))
                         await namespaces_api._announce_removed(  # noqa: SLF001 — one announcement, deliberately
                             emitter,
-                            table,
+                            item.segments,
                             operation=DEREGISTER_TABLE,
                             token=token,
                             authorization=authorization,
@@ -1322,7 +1335,7 @@ async def delete_warehouse(
                         # here would leave a binding nobody can delete, so the catalog's own records still go.
                         log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
                     namespaces_dropped.append(fga.canonical_object_id(namespace))
-                async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=subtree.descendants, token=token):
+                async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
                     revoked += count
                 top_ns = subtree.segments[0]
                 await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, top_ns)

@@ -6,8 +6,8 @@ the cascade with the tables before it destroyed and the rest standing; the re-is
 still stands, so a grant or a policy left on a table the first attempt destroyed has nothing left to name it but the
 namespace's own `child` edge. A deregister whose answer is lost after the row went leaves a table the cascade can no
 longer describe: its bytes are deleted in place ([[LH-532]]), so the first call finishes. Either way grants and policies
-are ended only once the tables are gone. A table in the trash is not destroyed by the cascade, and keeps its grants for an
-undrop into the namespace created again.
+are ended only once the tables are gone, and each destroyed table's location is free again. A table in the trash is not
+destroyed by the cascade, and keeps its grants for an undrop into the namespace created again.
 
 The real catalog app over a real `dir` namespace on pylance, the in-memory `TupleStore` behind the real
 `lakehouse.governed.fga` seed and revoke, and a backend whose second deregister fails once, before or after the row goes.
@@ -26,7 +26,7 @@ from lance_namespace import DeregisterTableRequest, DeregisterTableResponse, Lan
 
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
-from lakehouse import maintenance_policies
+from lakehouse import location_claims, maintenance_policies
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage_options import StorageOptions
 from maintenance.services.purge import objects_held
@@ -128,4 +128,8 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
     settings = get_settings()
     left = [table for table in tables if maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", uuids[table]) is not None]
     assert left == [], "a policy outlived the table it was on"
+    claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
+    assert {table: location_claims.holder(claims, location) for table, location in locations.items()} == dict.fromkeys(tables), (
+        "a destroyed table's location stayed claimed"
+    )
     assert {t for t in governed.tuples if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"

@@ -694,15 +694,15 @@ def test_a_registration_refused_by_another_requests_fence_releases_nothing(estat
     answers = [estate.client.post("/v1/table/db$silver/register", json={"location": "silver"}) for _ in range(2)]
 
     held = location_claims.holder(claims, clone)
-    assert [(answer.status_code, answer.json().get("code")) for answer in answers] == [(400, 13), (400, 13)], [answer.text for answer in answers]
+    assert [(answer.status_code, answer.json().get("code")) for answer in answers] == [(409, 14), (409, 14)], [answer.text for answer in answers]
     assert held is not None and (held.uuid, held.fence.token if held.fence else None) == (owned.uuid, "f" * 32)
     assert estate.client.post("/v1/table/db$silver/describe", json={}).status_code == 404
 
 
 def test_a_destroying_cascade_releases_only_the_claim_of_the_table_it_identified(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A destroying namespace cascade holds no fence between a table's row removal and its claim's release, so the same
-    name can take the location's claim there, under a uuid of its own: the cascade releases the claim only under the
-    uuid it identified the table by, and the new holder keeps it."""
+    """A table's bytes can take longer to go than the fence a destroying namespace cascade holds its claim by stands. Once
+    that fence has lapsed the same name can take the location's claim, under a uuid of its own: the cascade releases the
+    claim only under the uuid it listed the table by, and the new holder keeps it."""
     assert estate.client.post("/v1/namespace/scratch/create", json={}).status_code == 200
     location = estate.create("scratch$t")
     real_forget = base_registry.forget_base_record
@@ -715,6 +715,8 @@ def test_a_destroying_cascade_releases_only_the_claim_of_the_table_it_identified
         return forgotten
 
     monkeypatch.setattr(base_registry, "forget_base_record", _forget_then_the_same_name_takes_the_location)
+    # No fence outlives the read that finds it: the cascade's has lapsed by the time its bytes are gone.
+    monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
 
     dropped = estate.client.post("/v1/namespace/scratch/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
 

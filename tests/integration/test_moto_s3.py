@@ -172,8 +172,8 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
 
 def test_create_existok_never_compensates_away_a_kept_table(moto_client: TestClient) -> None:
     """ExistOk may have KEPT a pre-existing table this request never wrote — compensation deleting it
-    would destroy someone else's data. ExistOk is retry-safe end-to-end anyway (the retry re-runs the
-    grant), so it must never trigger the delete."""
+    would destroy someone else's data. ExistOk is retry-safe end-to-end anyway (the retry links the
+    kept table again), so a kept table's failed link must never trigger the delete."""
     from lance_namespace import ServiceUnavailableError
 
     import catalog.api.v1.endpoints.data as data_ep
@@ -181,16 +181,16 @@ def test_create_existok_never_compensates_away_a_kept_table(moto_client: TestCli
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
     assert _create(moto_client, "keep$t", rows).status_code == 200
 
-    async def failing_seed(*_a: object, **_kw: object) -> None:
+    async def failing_link(*_a: object, **_kw: object) -> None:
         raise ServiceUnavailableError("fga down mid-create")
 
     with pytest.MonkeyPatch.context() as mp:  # dedicated context — never the fixture's instance
-        mp.setattr(data_ep.fga_deps, "seed_ownership", failing_seed)
+        mp.setattr(data_ep.fga_deps, "link_an_unlinked_table", failing_link)
         failed = _create(moto_client, "keep$t", rows, "?mode=exist_ok")
     assert failed.status_code == 503, failed.text
     # the pre-existing table SURVIVED the failed ExistOk…
     assert int(moto_client.post("/v1/table/keep$t/count_rows", json={}).text) == 2
-    # …and the ExistOk retry heals (grant re-runs against the kept table).
+    # …and the ExistOk retry heals (the link is tried again against the kept table).
     healed = _create(moto_client, "keep$t", rows, "?mode=exist_ok")
     assert healed.status_code == 200, healed.text
 

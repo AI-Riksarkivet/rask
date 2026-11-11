@@ -164,7 +164,8 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str) -> list[Clie
     every mocked-client test and to the API itself. The set of callers is closed, and the TID251
     banned-api entry on `lakehouse.governed.fga.hierarchy_edge_tuples` holds it that way: its callers are
     `grant_on_create` below, where the catalog's create-door seed lands, and the steps a link moves by
-    (`move_parent`, `unname_child`, `name_child`, `link_to_parent`), which leave it whole at each end of the move.
+    (`move_parent`, `leave_parent`, `unname_child`, `name_child`, `link_to_parent`), which leave it whole at each end of
+    the move.
 
     The inverse is written only when the PARENT's type declares `child` (:data:`_CHILD_EDGE_PARENT_TYPES`):
     a `child` tuple on a type that does not is accepted by the API and read by no rule.
@@ -2385,6 +2386,21 @@ async def move_parent(client: OpenFgaClient, *, obj: str, source: str, destinati
     left, _ = _link_by_direction(obj, source)
     entered, _ = _link_by_direction(obj, destination)
     return await commit_unless_changed(client, deletes=[left], writes=[entered], actor=actor, origin=origin)
+
+
+async def leave_parent(client: OpenFgaClient, *, obj: str, parent: str, actor: str, origin: TupleOrigin) -> bool:
+    """Delete ``obj``'s ``parent`` edge to ``parent`` in ONE Write; whether it committed.
+
+    For an object found inheriting from two parents, the one it is leaving and the one it is entering: the edge to
+    ``parent`` goes and the other stands, so ``obj`` inherits from the parent it enters and at no moment from neither.
+    It commits only while the edge stands (:func:`commit_unless_changed`): ``False`` says the edge is not as the caller
+    read it, and that nothing changed. The inverse ``child`` edge is its mover's to take away (:func:`unname_child`).
+
+    Raises:
+        ServiceUnavailableError: OpenFGA gave no answer, so whether the Write committed is unknown to the caller.
+    """
+    left, _ = _link_by_direction(obj, parent)
+    return await commit_unless_changed(client, deletes=[left], writes=[], actor=actor, origin=origin)
 
 
 async def name_child(client: OpenFgaClient, *, obj: str, parent: str, actor: str, origin: TupleOrigin) -> None:

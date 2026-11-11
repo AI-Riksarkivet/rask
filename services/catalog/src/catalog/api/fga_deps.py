@@ -2035,17 +2035,16 @@ async def seed_ownership(
     segments: list[str],
     uuid: str,
     parent_object: str | None = None,
-    may_grant_owner: bool = True,
 ) -> None:
     """Grant the creator ``owner`` + the ``parent`` edge on a just-created object, ``table:<uuid>`` or ``namespace:<uuid>``.
 
     The object is keyed by the uuid the create minted (ADR 0173 §8, [[LH-524]]), so no tuple an earlier object at the
     same name left can reach it: a table dropped and created again under that name is another uuid.
 
-    ``may_grant_owner=False`` writes the EDGE ALONE. The caller uses it when this request did not
-    create the object — an ExistOk that kept an existing table — where granting ``owner`` would seize
-    another caller's table, but the structural edge is still required and is safe: it names where the
-    table lives, it is idempotent, and it confers nothing by itself.
+    FOR AN OBJECT THIS REQUEST BROUGHT INTO BEING, and for no other: granting ``owner`` on a table the request only
+    found (an ExistOk that kept it, its owner's Overwrite) would seize another caller's table. A create that finds
+    one hands it to :func:`link_an_unlinked_table`, which writes no grant; a registration that finds one is refused and
+    writes nothing.
 
     No-op when FGA is off, the request is unauthenticated, or the client is unwired — so
     create endpoints call it unconditionally with one line. This is the ONE place the
@@ -2073,13 +2072,48 @@ async def seed_ownership(
     # drifts the moment a service is renamed.
     await fga.grant_on_create(  # noqa: TID251
         client,
-        grant_owner=may_grant_owner and not isinstance(token, ServicePrincipal),
+        grant_owner=not isinstance(token, ServicePrincipal),
         user_sub=token.subject,
         obj=owned_object(resource, uuid),
         actor=token.subject,
         origin="create",
         parent_object=parent_object or await parent_object_of(resolver, settings, resource, segments),
     )
+
+
+async def link_an_unlinked_table(
+    client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+) -> None:
+    """Link the table ``uuid``, which a create found standing under ``segments`` and answered 200 for, to the namespace
+    it is named in, where it inherits from nowhere. A table that inherits from a namespace is left exactly as it is.
+
+    A table whose create died before its seed carries no tuple at all: every ``table`` relation resolves through a
+    direct tuple or ``from parent``, so it denies every principal, and the retry of its create is what lands here (an
+    ExistOk that keeps it, its owner's Overwrite). The link names where the table lives and confers nothing by itself;
+    no ``owner`` is written, since this caller did not bring the table into being. A registration that finds its table
+    standing is refused, and a refused request writes no tuple, so the register door never calls this ([[LH-586]]).
+
+    ONLY WHERE THE TABLE HAS NO PARENT EDGE ([[LH-586]]). A rename into another namespace moves the edge before the
+    name (:func:`_leave_source`), so while it runs, and for good once it has died there, the table is named in one
+    namespace and inherits from the other. Linking it to its name's namespace then makes it inherit from both: every
+    reader of the namespace it left reads it again, on the word of a caller who holds no grant authority on it.
+    Reading before writing is enough of a guard: a table with no parent edge cannot be moved into another namespace,
+    since the move deletes the edge it would then lack, so nothing moves it between this read and the write.
+
+    No-op when FGA is off, the request is unauthenticated, or the client is unwired, as :func:`seed_ownership` is.
+
+    Raises:
+        NamespaceNotFoundError: The namespace the table is named in is gone.
+        ServiceUnavailableError: OpenFGA gave no answer.
+    """
+    if not (settings.fga_enabled and token is not None and client is not None):
+        return
+    obj = fga.table_object(uuid)
+    if await _parents_of(Authorization(client=client, subject=token.subject), obj):
+        return
+    parent = await parent_object_of(resolver, settings, "table", segments)
+    if parent is not None:
+        await fga.link_to_parent(client, obj=obj, parent=parent, actor=token.subject, origin="create")  # noqa: TID251
 
 
 #: Object types whose tenant resolves through the binding registry (namespace -> warehouse -> project).
@@ -2176,59 +2210,67 @@ async def _leave_source(authz: Authorization, *, obj: str, source: str, destinat
     removal ends every object its ``child`` edges name (:func:`end_removed_subtree`), and a table between its two names
     is in neither namespace's listing, so one named a child of either could be ended while it lives.
 
-    A ``parent`` edge that already names ``destination`` is a move that went no further, and stands. Otherwise the
-    edge is where no door left it, or another Write met this one in the store: nothing has been written, and the
-    rename is refused before it moves the table. When OpenFGA gives no answer at any step, whether a Write committed
-    is unknown, so both edges are returned to ``source`` before the outage is answered, as far as OpenFGA then answers
-    (:func:`_return_to_source`).
+    A move that does not commit found the edge elsewhere than ``source`` alone, and is settled on what stands
+    (:func:`_settle_an_unmoved_edge`): an earlier move into ``destination`` that went no further is finished here, and
+    anything else refuses the rename before it moves the table. When OpenFGA gives no answer at any step, whether a
+    Write committed is unknown, so both edges are returned to ``source`` before the outage is answered, as far as
+    OpenFGA then answers (:func:`_return_to_source`).
 
     Raises:
-        ConcurrentModificationError: ``obj``'s parent edge did not move and does not name ``destination``.
+        ConcurrentModificationError: ``obj``'s parent edge did not move and no earlier move into ``destination`` explains it.
         ServiceUnavailableError: OpenFGA gave no answer.
     """
     try:
         if not await fga.move_parent(authz.client, obj=obj, source=source, destination=destination, actor=authz.subject, origin="rename"):  # noqa: TID251
-            parents = await _parents_of(authz, obj)
-            if parents != [destination]:
-                log.error("rename_parent_edge_not_moved", extra={"object": obj, "source": source, "destination": destination, "parents": parents})
-                raise ConcurrentModificationError(
-                    "cannot rename the table into another namespace: where it inherits its grants from did not move, so nothing else did. "
-                    "It is not the namespace its name is in, or it changed as it was moved. A rename of it that went no further is finished "
-                    "by renaming it into that rename's namespace; a table that inherits from two namespaces needs an operator to repair it"
-                )
+            await _settle_an_unmoved_edge(authz, obj=obj, source=source, destination=destination)
         await fga.unname_child(authz.client, obj=obj, parent=source, actor=authz.subject, origin="rename")  # noqa: TID251
     except ServiceUnavailableError:
         await _return_to_source(authz, obj=obj, source=source, destination=destination)
         raise
 
 
+async def _settle_an_unmoved_edge(authz: Authorization, *, obj: str, source: str, destination: str) -> None:
+    """Settle where ``obj`` inherits from when its move from ``source`` to ``destination`` did not commit, by what stands.
+
+    - Its ``parent`` edge names ``destination`` alone: an earlier rename moved it and went no further. It stands.
+    - It names ``source`` and ``destination`` both ([[LH-586]]): the table inherits from the namespace it is leaving
+      beside the one it is entering, which no door leaves. Its mover holds what a move asks on both ends, and taking
+      the edge to ``source`` away admits nobody the move would not, so the move is finished rather than left for an
+      operator's hands on the store.
+    - Anything else is an edge where no move into ``destination`` left it, or another Write that met this one in the
+      store: nothing is written, and the rename is refused.
+
+    Raises:
+        ConcurrentModificationError: ``obj``'s parent edge is not one an earlier move into ``destination`` left.
+        ServiceUnavailableError: OpenFGA gave no answer.
+    """
+    parents = await _parents_of(authz, obj)
+    if parents == [destination]:
+        return
+    inherits_from_both = parents == sorted([source, destination])
+    if inherits_from_both and await fga.leave_parent(authz.client, obj=obj, parent=source, actor=authz.subject, origin="rename"):  # noqa: TID251
+        return
+    log.error("rename_parent_edge_not_moved", extra={"object": obj, "source": source, "destination": destination, "parents": parents})
+    raise ConcurrentModificationError(
+        "cannot rename the table into another namespace: where it inherits its grants from did not move, so nothing else did. "
+        "It is not the namespace its name is in, or it changed as it was moved. A rename of it that went no further is finished "
+        "by renaming it into that rename's namespace"
+    )
+
+
 async def _arrive_at_destination(authz: Authorization, *, obj: str, destination: str) -> None:
-    """Name ``obj`` a child of namespace ``destination`` once its name is registered there, and settle where it
-    inherits from: the end of its move.
+    """Name ``obj`` a child of namespace ``destination`` once its name is registered there: the end of its move.
 
-    The claim arbitrated the move up to the registration. From then on the table is the destination's, and another
-    request may already act on it under its new name, so this step writes nothing it cannot take back and then reads
-    what stands:
+    The rename still holds the table's claim fenced ([[LH-586]]), so between the registration and this step no other
+    rename moves the table on, no drop ends it and no cascade removes it: its ``parent`` edge is where
+    :func:`_leave_source` put it, and the ``child`` edge written here names a table that lives in ``destination``.
+    A removal of the namespace the table left ends only what it removed itself, so it takes no tuple of this table.
 
-    - the ``parent`` edge names ``destination``: the move is whole;
-    - no ``parent`` edge is left: a removal that listed the table under the namespace it left ended what it listed,
-      tuples first, and took the edge the move wrote. It is written again, so the table is reached from the namespace
-      it is named in. No rename can have moved the table on meanwhile, since moving it needs the edge that is gone;
-    - the ``parent`` edge names another namespace: a rename moved the table on before this step ran, and its own
-      steps keep its edges. The ``child`` edge written here is taken away again, or a removal of ``destination`` would
-      end a table that lives elsewhere.
-
-    The rename has happened by now, so an outage here is logged at ERROR and raised over nothing. A drop of the table
-    that lands between its registration and this step leaves edges naming no object, which nothing reads and the
-    namespace's own end removes.
+    The rename has happened by now, so an outage here is logged at ERROR and raised over nothing: the table is then
+    named a child of no namespace, which only a removal's recovery walk reads and the namespace's listing covers.
     """
     try:
         await fga.name_child(authz.client, obj=obj, parent=destination, actor=authz.subject, origin="rename")  # noqa: TID251
-        parents = await _parents_of(authz, obj)
-        if not parents:
-            await fga.link_to_parent(authz.client, obj=obj, parent=destination, actor=authz.subject, origin="rename")  # noqa: TID251
-        elif parents != [destination]:
-            await fga.unname_child(authz.client, obj=obj, parent=destination, actor=authz.subject, origin="rename")  # noqa: TID251
     except ServiceUnavailableError as exc:
         log.error("rename_arrival_not_settled", extra={"object": obj, "parent": destination, "error": str(exc)})
 
@@ -2263,8 +2305,8 @@ async def parent_edge_mover(
     A rename into another namespace moves its table while it holds the location's claim, in a thread
     (``dataplane.rename_table``), and its parent edge moves there too, so the name and where the table inherits from
     change under one arbiter: until the destination is registered no other rename moves this table's edge, and an
-    undone rename has returned the edge before the claim is free ([[LH-568]]). The arrival runs once the table is the
-    destination's, and settles with whatever acted on it since (:func:`_arrive_at_destination`). Each step runs on the
+    undone rename has returned the edge before the claim is free ([[LH-568]]). The arrival runs once the name is
+    registered, while the rename still holds the claim fenced (:func:`_arrive_at_destination`). Each step runs on the
     event loop this was built on, the request's, and the thread waits for it.
 
     Raises:
@@ -2463,7 +2505,6 @@ async def seed_ownership_or_compensate(
     uuid: str,
     undo: Callable[[], Awaitable[None]] | None,
     parent_object: str | None = None,
-    may_grant_owner: bool = True,
 ) -> None:
     """:func:`seed_ownership`, but UNDO the native create when the grant fails (diff2 F3).
 
@@ -2483,19 +2524,18 @@ async def seed_ownership_or_compensate(
     2. The revoke is attempted FIRST anyway, when it can run. A grant can commit server-side while its
        response is lost, and the uuid it names then holds tuples no object does, which drift detection reports.
 
-    ``undo=None`` means the caller has decided a native delete is unsafe here — an ExistOk that KEPT a
-    pre-existing object, or an Overwrite that replaced one whose id still carries the prior
-    incarnation's time-travel history. Dropping either escalates a transient blip into irreversible
+    ``undo=None`` means the caller has decided a native delete is unsafe here — a table made under
+    ExistOk, the mode that also keeps a table another request made, or an adopted namespace, which
+    holds datasets from before this request. Dropping either escalates a transient blip into irreversible
     loss; stranded-but-admin-recoverable beats destroyed. Passing ``None`` is a decision, not a
-    default: it leaves the stranded state reachable, and the structural repair is F3's second half.
+    default: it leaves the stranded state reachable, and the structural repair is
+    :func:`link_an_unlinked_table`, where the object's next create lands.
 
     The original grant error is always re-raised — compensation changes what is left behind, never
     what the caller is told.
     """
     try:
-        await seed_ownership(
-            client, settings, token, resolver, resource=resource, segments=segments, uuid=uuid, parent_object=parent_object, may_grant_owner=may_grant_owner
-        )
+        await seed_ownership(client, settings, token, resolver, resource=resource, segments=segments, uuid=uuid, parent_object=parent_object)
     except Exception:
         if undo is not None:
             await compensate_create(client, settings, token, resource=resource, segments=segments, uuid=uuid, undo=undo, reason="grant_failed")

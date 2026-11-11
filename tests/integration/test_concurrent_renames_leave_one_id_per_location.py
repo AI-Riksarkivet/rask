@@ -23,13 +23,15 @@ from __future__ import annotations
 import io
 import threading
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 
+import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
-from lance_namespace import ConcurrentModificationError, LanceNamespace, TableAlreadyExistsError
+from lance_namespace import ConcurrentModificationError, InvalidInputError, LanceNamespace, TableAlreadyExistsError
 
 from lakehouse import location_claims, records
 from lakehouse.storage_options import StorageOptions
@@ -50,9 +52,12 @@ def _ipc(table: pa.Table) -> bytes:
 def test_concurrent_renames_of_one_table_leave_one_live_id_on_its_location(real_ns_client: TestClient, same_destination: bool) -> None:
     client = real_ns_client
     assert client.post("/v1/namespace/ns1/create", json={}).status_code == 200
-    created = client.post("/v1/table/ns1$src/create?mode=create", content=_ipc(pa.table({"id": [1, 2, 3]})), headers=ARROW)
+    created = client.post("/v1/table/ns1$first/create?mode=create", content=_ipc(pa.table({"id": [1, 2, 3]})), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
+    # Renamed once before the race, so the renames below start from the claim a finished rename leaves: handed to the
+    # name the table has, and free of that rename's fence, or none of them could take it.
+    assert client.post("/v1/table/ns1$first/rename", json={"new_table_name": "src"}).status_code == 200
     barrier = threading.Barrier(RENAMES)
     answers: dict[int, tuple[int, dict[str, object]]] = {}
 
@@ -68,7 +73,7 @@ def test_concurrent_renames_of_one_table_leave_one_live_id_on_its_location(real_
         thread.join()
 
     resolving = {}
-    for name in ["src", *(f"d{i}" for i in range(RENAMES))]:
+    for name in ["first", "src", *(f"d{i}" for i in range(RENAMES))]:
         described = client.post(f"/v1/table/ns1${name}/describe", json={})
         if described.status_code == 200:
             resolving[name] = described.json()["location"]
@@ -84,7 +89,6 @@ def test_concurrent_renames_of_one_table_leave_one_live_id_on_its_location(real_
     # A loser learns that the source moved, never the name another request moved it to ([[LH-436]]).
     assert {body.get("detail") for body in losers} <= {
         "cannot rename ns1$src: its location is held by another table, by a concurrent rename or registration; describe it and retry",
-        "cannot rename ns1$src: a concurrent rename already moved it to ns1$d0",
         "table already exists: ns1.d0",
     }, losers
 
@@ -181,3 +185,114 @@ def test_a_door_racing_a_rename_acts_only_on_the_table_it_resolved(
         assert answered.status_code == 409, f"the {door} acted on the table the name held after it resolved: {answered.text}"
         assert answered.json().get("code") == ConcurrentModificationError.code, answered.json()
         assert resolving.get("moved") == location and resolving.get("src") not in (None, location), resolving
+
+
+#: Where the renamed table is registered, beneath the namespace root: a register cannot name the uuid directory a create
+#: lays its table out in, so only a registered table's location can be registered again.
+_HELD = "held"
+
+#: How long one request waits for the request it is interleaved with: far above what either takes, so it only bounds a hang.
+_WAIT_SECONDS = 30
+
+
+class _HeldOnceLanded:
+    """The real namespace, holding the first call of ``method`` once it has landed, until ``release`` is set."""
+
+    def __init__(self, ns: LanceNamespace, method: str) -> None:
+        self._ns, self._method, self._pending = ns, method, True
+        self.landed, self.release = threading.Event(), threading.Event()
+
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401 — forwards the backend's own methods
+        real = getattr(self._ns, name)
+        if name != self._method:
+            return real
+
+        def _call(*args: object, **kwargs: object) -> object:
+            answer = real(*args, **kwargs)
+            if self._pending:
+                self._pending = False
+                self.landed.set()
+                self.release.wait(_WAIT_SECONDS)
+            return answer
+
+        return _call
+
+
+#: A RegisterTable of the rename's destination, at the table's location, at each point of the rename where the claim
+#: names a table the backend does not describe. Landed whole it is refused as a concurrent change and the rename goes
+#: on. The register door attaches its row before the claim refuses it, so where that row still stands as the rename
+#: registers its destination, the rename finds the name taken, puts the source back and answers the conflict.
+@pytest.mark.parametrize(
+    ("rival_lands", "its_row_stands", "rival_answer", "rename_answer", "named"),
+    [
+        pytest.param("deregister_table", False, (409, ConcurrentModificationError.code), (200, None), "dst", id="before-the-rename-retires-the-source"),
+        pytest.param("register_table", False, (409, ConcurrentModificationError.code), (200, None), "dst", id="before-the-rename-registers-the-destination"),
+        pytest.param(
+            "deregister_table",
+            True,
+            (400, InvalidInputError.code),
+            (409, TableAlreadyExistsError.code),
+            "src",
+            id="with-its-row-standing-as-the-rename-registers-the-destination",
+        ),
+    ],
+)
+def test_a_register_of_a_renames_destination_landed_inside_the_rename_takes_nothing_from_the_table(
+    real_ns_client: TestClient,
+    tmp_path: Path,
+    rival_lands: str,
+    its_row_stands: bool,
+    rival_answer: tuple[int, int],
+    rename_answer: tuple[int, int | None],
+    named: str,
+) -> None:
+    # The app module builds its settings at import, so it is imported once the fixture has pinned the environment.
+    from catalog.api.dependencies import get_namespace
+    from catalog.main import app
+
+    client = real_ns_client
+    assert client.post("/v1/namespace/ns1/create", json={}).status_code == 200
+    lance.write_dataset(pa.table({"id": [1, 2, 3]}), str(tmp_path / _HELD), data_storage_version="2.2", enable_stable_row_ids=True)
+    registered = client.post("/v1/table/ns1$src/register", json={"location": _HELD})
+    assert registered.status_code == 200, registered.text
+    described = client.post("/v1/table/ns1$src/describe", json={}).json()
+    location, table_uuid = described["location"], described["properties"]["rask.uuid"]
+    rival: list[tuple[int, object]] = []
+
+    def _register_the_destination() -> None:
+        answered = client.post("/v1/table/ns1$dst/register", json={"location": _HELD})
+        rival.append((answered.status_code, answered.json().get("code")))
+
+    registering = threading.Thread(target=_register_the_destination)
+    attached = _HeldOnceLanded(cast(LanceNamespace, app.dependency_overrides[get_namespace]()), "register_table")
+    pending = [True]
+
+    def _land_the_registration() -> None:
+        # One shot, and disarmed before the rival sends anything: its own request calls the backend through this too.
+        if not pending:
+            return
+        pending.clear()
+        registering.start()
+        if its_row_stands:
+            assert attached.landed.wait(_WAIT_SECONDS), "the registration never attached its row"
+        else:
+            attached.release.set()
+            registering.join(_WAIT_SECONDS)
+
+    racing = _RivalBefore(cast(LanceNamespace, attached), rival_lands, _land_the_registration)
+    app.dependency_overrides[get_namespace] = lambda: racing
+
+    renamed = client.post("/v1/table/ns1$src/rename", json={"new_table_name": "dst"})
+
+    attached.release.set()
+    registering.join(_WAIT_SECONDS)
+    resolving = {}
+    for name in ("src", "dst"):
+        found = client.post(f"/v1/table/ns1${name}/describe", json={})
+        if found.status_code == 200:
+            resolving[name] = (found.json()["location"], found.json()["properties"]["rask.uuid"])
+    # The registrant gains nothing: the one table at the location is the one that was there, under the uuid it had, so
+    # every grant held on it still reaches it.
+    assert (rival, (renamed.status_code, renamed.json().get("code")), resolving) == ([rival_answer], rename_answer, {named: (location, table_uuid)}), (
+        renamed.text
+    )

@@ -43,6 +43,16 @@ another name, so a rename landing between the door's read and its act cannot mak
 The door lifts its fence once it has acted (:func:`lift_fence`); a fence its request never lifted lapses after
 :data:`LEASE`.
 
+A RENAME FENCES THE CLAIM IT HANDS OVER ([[LH-586]]). From its hand-over until its destination is registered, the claim
+names a table ``__manifest`` does not describe: to any other take that is a holder that is gone, and to a registration
+of the destination's own name it is an ended table's claim, which a new table's take replaces under a uuid of its own.
+An unfenced claim in that window is the table's for the taking, measured 2026-11-11 on a registered table: a
+RegisterTable of the destination at the table's location answered 200 over the renamed table's bytes under a new
+uuid, which none of the table's grants reach. The fence is the rename's mark that the claim is in flight: every other
+request's take is refused (:class:`LocationFencedError`) until the rename lifts the fence, once its table is settled
+under the new name, or hands the claim back under its token. Pinned by
+``tests/integration/test_concurrent_renames_leave_one_id_per_location.py``.
+
 A LEASE IS TIMED ON THE STORE'S CLOCK ([[LH-413]]). ``claimed_at``, a fence's ``at`` and ``released_at`` are stamped
 with the clock of the read each write follows (:attr:`lakehouse.records.StoreRead.at`, the store's
 ``Date``), and a lease is judged against the clock of the read that finds the claim, so a claim one pod wrote is aged by
@@ -139,6 +149,14 @@ class LocationHeldError(Exception):
         self.claim = claim
 
 
+class LocationFencedError(LocationHeldError):
+    """Another request is acting on the location's holder, and what it does decides who holds the location next.
+
+    Apart from a location another table holds at rest: the same take may succeed once that request has acted, so its
+    caller answers a concurrent change rather than an occupied location.
+    """
+
+
 class ClaimChangedError(Exception):
     """The claim is no longer the one the request read, or another request is acting on its table."""
 
@@ -228,7 +246,8 @@ def _taken(
     says when a take succeeds.
 
     Raises:
-        LocationHeldError: Another table holds the location, or another request is acting on its holder.
+        LocationFencedError: Another request is acting on the location's holder.
+        LocationHeldError: Another table holds the location.
     """
 
     def _claim(carried: str | None) -> LocationClaim:
@@ -237,7 +256,7 @@ def _taken(
     if current.released_at is not None:
         return _claim(uuid)
     if current.fenced_against(token, now):
-        raise LocationHeldError(current)
+        raise LocationFencedError(current)
     if current.table == table and uuid is not None:
         if is_kept(current):
             raise LocationHeldError(current)
@@ -285,6 +304,7 @@ def take(
     longer has (a rename interrupted between its hand-over and its deregister).
 
     Raises:
+        LocationFencedError: Another request is acting on the location's holder.
         LocationHeldError: Another table holds the location.
         records.RecordChangedError: The claim kept changing under the hand-over.
     """
@@ -338,13 +358,18 @@ def hand_over(
     token: str,
     is_gone: Callable[[LocationClaim], bool],
 ) -> LocationClaim:
-    """Hand ``location`` from ``previous`` to ``table`` as :func:`take` would, judged on the claim ``read_as`` found.
+    """Hand ``location`` from ``previous`` to ``table`` as :func:`take` would, judged on the claim ``read_as`` found, and
+    fence it for request ``token``.
 
     The rename's take: one conditional write over the record its request read, never a re-read, so of a rename and
-    any other door acting on the same claim, the one that writes second answers that the claim changed.
+    any other door acting on the same claim, the one that writes second answers that the claim changed. The claim it
+    writes is fenced, since ``table`` is not registered yet and every other take would read its holder as gone: the
+    rename lifts the fence once the table is settled under ``table`` (:func:`lift_fence`), or hands the claim back to
+    ``previous`` with a :func:`take` under the same ``token``, which writes it unfenced.
 
     Raises:
-        LocationHeldError: Another table holds the location, or another request is acting on its holder.
+        LocationFencedError: Another request is acting on the location's holder.
+        LocationHeldError: Another table holds the location.
         ClaimChangedError: The claim changed since ``read_as``.
     """
     now = _store_now(store, location)
@@ -354,8 +379,9 @@ def hand_over(
         held = _taken(
             read_as.claim, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=None, is_kept=lambda _claim: False, now=now
         )
-    _write_over(store, location, read_as, held)
-    return held
+    fenced = held.model_copy(update={"fence": ClaimFence(token=token, at=now)})
+    _write_over(store, location, read_as, fenced)
+    return fenced
 
 
 def fence(

@@ -47,8 +47,16 @@ Two contracts stack here, and confusing them is how bugs happen:
   (`lakehouse.location_claims`, `_locations/` on the control root, put-if-not-exists then
   ETag) from source to destination before either backend call, stamped with a per-request token so two
   renames into ONE destination are not each other's retry; the losers answer 409 code 14, and a failed
-  retire or destination register hands it back (unless the destination already resolves to the location:
-  then the winner's state stands). **A rename into another namespace takes the table's grants along, so it asks
+  retire or destination register puts the source back and hands the claim back under that token. **The claim is
+  handed over FENCED for the rename** ([[LH-586]], `location_claims.hand_over`): until the destination is registered
+  it names a table the backend does not describe, which any other take reads as a gone holder and a registration of
+  the destination's own name as an ended table's claim to replace under a new uuid (measured 2026-11-11 on a
+  registered table: that RegisterTable answered 200 over the renamed table's bytes, under a uuid none of its grants
+  reach). The fence refuses every other request's take (`LocationFencedError`), drop, deregister and rename until the
+  rename lifts it, once its `child` edge is written, so a RegisterTable of the destination landed inside the rename
+  answers 409 code 14 and detaches the row it attached; where that row still stands as the rename registers its
+  destination, the rename answers the name's conflict (409 code 5) with the source put back. A dead rename's fence
+  lapses with its claim's `LEASE`. **A rename into another namespace takes the table's grants along, so it asks
   grant authority** ([[LH-568]]): `can_move` on the table (`manage_grants and can_drop`) in `can_drop`'s place
   (`fga_deps._rename_relation`, asked by the router) and `can_accept_moved_table` on the namespace it enters in
   `can_create_table`'s (`fga_deps.require_rename_destination`), so under managed access a writer brings no table in
@@ -59,11 +67,19 @@ Two contracts stack here, and confusing them is how bugs happen:
   the one on the destination is written only once the name is registered there, because a namespace's removal ends
   every object its `child` edges name (`fga_deps.end_removed_subtree`) and a table between its two names is in
   neither namespace's listing. An undone rename returns the edge before the claim is handed back, and so does a
-  move whose answer OpenFGA lost. Once the name is registered the claim no longer keeps other requests off the
-  table, so the arrival (`fga_deps._arrive_at_destination`) writes the `child` edge and then reads where the table
-  inherits from: an edge a racing removal took is written again, and a table a rival rename moved on keeps no `child`
-  edge here. A `parent` edge already at the destination is an earlier attempt's and is finished by renaming there
-  again; one anywhere else refuses the rename 409 code 14 with nothing moved. Pinned on a real OpenFGA by
+  move whose answer OpenFGA lost. The arrival (`fga_deps._arrive_at_destination`) writes the `child` edge while the
+  rename still holds the claim fenced ([[LH-586]]), so no rival rename, drop or cascade acts on the table between its
+  registration and its edges being whole. A `parent` edge already at the destination is an earlier attempt's and is
+  finished by renaming there again, and so is the move of a table found inheriting from the namespace it is named in
+  and the one it enters both (`_settle_an_unmoved_edge` takes the first away); one anywhere else refuses the rename
+  409 code 14 with nothing moved. **A refused registration writes no tuple, and no door writes a second parent**
+  ([[LH-586]], owner 2026-11-11): a RegisterTable answered 409 changes no grant, whatever its table lacks, and a
+  create that keeps a table, or its owner's Overwrite, links it to its name's namespace only where it inherits from
+  nowhere and grants its caller nothing (`fga_deps.link_an_unlinked_table`), so none puts the readers of the namespace
+  a rename left, or died leaving, back on the table. A registered table whose seed never ran holds no tuple: the
+  drift report lists it under `ungoverned_tables`, and the estate admin writes its `parent` and `child` edges at
+  `POST /management/v1/access/tuples`, after which its namespace's grants reach it (measured 2026-11-11). Pinned on a
+  real OpenFGA by
   `services/catalog/tests/test_a_rename_into_another_namespace_needs_grant_authority_and_moves_the_parent_edge_whole.py`.
   A destructive drop or cascade refuses 409 while the claim names another
   live holder. **A door acts on the table its name resolved to** ([[LH-521]], ADR 0173 §7): the drop, deregister
@@ -74,6 +90,16 @@ Two contracts stack here, and confusing them is how bugs happen:
   rename hands it over under that ETag (`location_claims.hand_over`): a rename landing after the door's read
   answers the door 409 code 14, one landing after the fence answers 409 itself, and every take refuses a claim
   another request has fenced. Each refuses 409 while the claim names another live table, deregister included.
+  **A cascade removes each table as that door does** ([[LH-586]]): the namespace door's destroying and recoverable
+  cascades and the warehouse delete resolve each listed table's name again and fence its claim
+  (`table_claims.fence_listed`) before its row goes, so a rename landed inside a table's removal answers 409 itself.
+  A listed table whose name names nothing by then left since the listing (a drop of its own, or a rename that carried
+  it out alive): the cascade skips it and ends, announces and tracks only what it removed itself; one whose name
+  another table took answers the cascade 409. The destroying cascade and the warehouse delete resolve each name as
+  its turn comes; the recoverable cascade resolves every name before its first write (concurrently), so a table that
+  changed since answers it 409 at that table's turn. Measured 2026-11-11 without the fence: the rename answered 200,
+  the cascade 200 (the recoverable one 404, the warehouse's 503), and the moved table stood with every tuple revoked
+  or a trash record against it.
   Create, declare, register and both undrops take a claim, a recoverable drop
   keeps it for the trashed table's uuid, and destructive drops, deregister and the purge release it. A release replaces
   the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
@@ -120,7 +146,8 @@ Two contracts stack here, and confusing them is how bugs happen:
   earlier request declared keeps that declaration's, a rename hands it over, a recoverable drop and both undrops keep it,
   and a destroy or deregister releases it, so a re-created name or a re-registered location gets a new one. A new
   table's take replaces a claim its own name still holds: its door's backend call found the name free, so that claim is
-  an ended table's whose release was lost. A namespace's is its `rask.uuid` property in its `__manifest` row: both create doors and the provenance boot
+  an ended table's whose release was lost, unless another request holds it fenced, as a rename holds the claim it
+  handed to its destination ([[LH-586]]). A namespace's is its `rask.uuid` property in its `__manifest` row: both create doors and the provenance boot
   mint it (`identifiers.with_minted_uuid`), an undrop restores it from the trash record, and an Overwrite mints a new
   one. DescribeTable and DescribeNamespace answer each as `rask.uuid`, and every create, declare, register and namespace
   door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Pinned by
@@ -447,7 +474,9 @@ governing their data. The project-scoped surface is the console's project page, 
   `fga_deps.end_removed_subtree`: its protection and policy records, then its grants. The grants go last because the
   `child` edge each object left on its parent is what finds it again: a re-issue lists only what still stands, so the
   walk follows the edges as well as the catalog's listing, and ends what an earlier failed attempt left. It skips an
-  object with a live trash record, whose records and grants stay for its undrop. The namespace door's destroyed cascade
+  object with a live trash record, whose records and grants stay for its undrop. Of the tables it listed it ends only
+  those it removed itself, each under its claim's fence ([[LH-586]], "A cascade removes each table as that door does"
+  above): one a rename carried out before its turn keeps its grants. The namespace door's destroyed cascade
   (`_destroy_subtree`, a generator) announces each table to lineage as it goes and ends the subtree through the same
   walk, as do its Restrict, Skip and Overwrite paths. A part-way failure answers 503 `PartiallyApplied` naming
   `namespaces_dropped` (nested ones included), `tables_removed`, `trash_ended` and `tuples_revoked`, which counts each
@@ -721,8 +750,11 @@ governing their data. The project-scoped surface is the console's project page, 
   Never gate this on `unsupported_features()`: a table created with one external blob prefix in `initial_bases` sets flag 16 and would be
   refused. The catalog's own re-registers (table and namespace undrop) log `restored_mixed_file_versions`
   instead of refusing, so a governed table is never stranded in the trash. A re-register that lands on
-  the 409 converge path never seeds governance onto a flag-256 dataset or one declaring a base nothing
-  sanctions, and a refusal whose detach fails is a 503 `PartiallyApplied` naming `attached: true`. Only
+  the 409 path writes no tuple ([[LH-586]]); it converges the table's base record, never for a flag-256 dataset or one
+  declaring a base nothing sanctions, and a refusal
+  whose detach fails is a 503 `PartiallyApplied` naming `attached: true`. A registration whose claim another request
+  holds fenced answers 409 code 14, never the occupied-location 400: the same call is judged afresh once that
+  request has ended. Only
   `main` is judged. Pinned by `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`
   (flag 256) and `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py` (spelling,
   overlaps and bases).
@@ -930,8 +962,9 @@ governing their data. The project-scoped surface is the console's project page, 
   held for the clone gone, it FENCES the claim under that read's ETag (moved: 409 code 14), releases each source's tag,
   the base record where the bytes went and the fenced claim, and deletes the ending last. A registration at a location
   where an ending stands is refused 409 code 14 once it holds the claim (`clone_endings.refuse_registration_while_ending`),
-  so no finish can release a new clone's tags. No request releases a claim another table holds: the register undo, the
-  finish and both cascades name the uuid they own (`location_claims.release(..., uuid=...)`); the drop door and
+  so no finish can release a new clone's tags. No request releases a claim another table holds: the register undo and
+  the finish name the uuid they own (`location_claims.release(..., uuid=...)`), and so do both cascades, under their
+  own fence, since a table's bytes can take longer to go than a fence stands ([[LH-586]]); the drop door and
   deregister release by name under their own fence, which refuses every other take while it stands; the create and
   declare undos act on a location named after a uuid they minted; data-directory claims record no uuid and are released
   by name by the table the location's claim names; `trash.end` releases a claim the trash record keeps from every other

@@ -189,28 +189,30 @@ class TestThePublicDoor:
         assert _is_registered(catalog, "db$t") is (case == "clean"), "a refused registration must leave nothing attached"
 
     @pytest.mark.parametrize(("mix", "converged"), [(True, False), (False, True)])
-    def test_a_re_register_never_converges_governance_onto_a_mixed_dataset(
+    def test_a_re_register_never_converges_a_base_record_onto_a_mixed_dataset(
         self, catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch, mix: bool, converged: bool
     ) -> None:
-        """The 409 converge path is where a retried, un-detached refusal lands; a clean dataset still converges."""
-        from catalog.api import fga_deps
+        """The 409 path is where a retried, un-detached refusal lands: a clean dataset's base record still converges
+        there, and a mixed dataset's never does."""
+        from lakehouse import base_registry
 
         _create_namespace(catalog, "db")
         _write(root / "t", [1, 2], version="2.1")
         assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
         if mix:
             _mix(root / "t")
-        seeded: list[bool] = []
+        claim_bases, recorded = base_registry.claim_bases, []
 
-        async def _seed(*_a: object, **_k: object) -> None:
-            seeded.append(True)
+        def _recording(*args: Any, **kwargs: Any) -> object:  # noqa: ANN401 — the registry's own arguments, passed on
+            recorded.append(True)
+            return claim_bases(*args, **kwargs)
 
-        monkeypatch.setattr(fga_deps, "seed_ownership", _seed)
+        monkeypatch.setattr(base_registry, "claim_bases", _recording)
 
         resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
 
         assert resp.status_code == 409, resp.text
-        assert bool(seeded) is converged
+        assert bool(recorded) is converged
 
     def test_a_refusal_whose_detach_fails_is_a_503_not_a_clean_400(self, catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A 400 says nothing was attached; when the detach failed, the dataset IS attached, so the caller must hear it."""
