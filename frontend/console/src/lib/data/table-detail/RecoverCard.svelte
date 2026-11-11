@@ -13,7 +13,7 @@
 	// `onrecovered` — the undrop bumps the registry, so the parent re-reads the detail.
 	import { Undo2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
-	import { Subject } from '@rask/ui/identity';
+	import { Subject } from '#lib/access/identity/index.ts';
 	import { fetchTableTasks, undropTable, type TrashEntry } from '../remote/catalog.api';
 
 	let { table, onrecovered }: { table: string; onrecovered: () => Promise<void> } = $props();

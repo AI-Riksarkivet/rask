@@ -12,7 +12,7 @@
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation — an editor opened on table A cannot leak into B, by
 	// construction rather than by a hand-written reset list.
-	import { GatedAction } from '@rask/ui/gated-action';
+	import { GatedAction } from '#lib/access/gated-action/index.ts';
 	import { Select } from '@rask/ui/select';
 	import { RETYPE_TYPES } from '../catalog';
 	import { addColumn, dropColumn, renameColumn, retypeColumn } from '../remote/catalog.api';

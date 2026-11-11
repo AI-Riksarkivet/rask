@@ -4,7 +4,7 @@ The console is ONE SvelteKit 3 + Svelte 5 single-page app with no backend of its
 signs in to the platform's issuer (Dex in development) with OpenID Connect authorization code + PKCE as
 its own public client `rask-console`, keeps the tokens in memory, and calls the lakehouse's doors with its
 bearer, same-origin, through the platform's Gateway. The built files are served by `console/serve.ts`.
-The navbar's bell lists the reader's own writes and their outcomes, kept in the browser for the tab.
+The top bar's bell lists the reader's own writes and their outcomes, kept in the browser for the tab.
 
 ```
 frontend/

@@ -12,7 +12,7 @@
 	// part-splits, the tab bar and the page states. The workflow sections mount under `{#key table}`
 	// (the TableHistory precedent), so a navigation REMOUNTS them: every editor, draft and armed
 	// confirm belongs to one table and resets by construction, with no hand-written reset.
-	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
+	import { GrantsPanel, type GrantsClient } from '#lib/access/grants-panel/index.ts';
 	import { Database, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -68,8 +68,8 @@
 	}
 	const stageInfo = $derived(stageOfTable(table));
 
-	// The console-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API
-	// client). The panel's positional signature is bound to the data functions' single argument here.
+	// The catalog calls the grants panel makes, bound to this page's reads and writes: the panel's
+	// positional signature onto the data functions' single argument.
 	const grantsClient: GrantsClient = {
 		fetchAccess: (kind, id) => fetchAccess({ kind, id }),
 		checkAccess: (kind, id, user, relation) => checkAccess({ kind, id, user, relation }),

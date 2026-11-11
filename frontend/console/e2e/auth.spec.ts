@@ -26,32 +26,33 @@ test('/auth/logout drops the session and goes back to the landing', async ({ pag
 	await expect(page).toHaveURL(`${baseURL}/`);
 });
 
-test('the MAIN MENU navbar carries Home and Projects for an anonymous visitor — no Lakehouse, no Settings', async ({
+test("the sidebar is every page's one navigation; an anonymous visitor sees the estate-admin rows disabled, with no way in", async ({
 	page,
 }) => {
-	// The estate level (ruling 2026-08-03): standing here you choose what to work on, so the bar is the
-	// main menu, and the in-project Lakehouse entry is absent.
 	await page.goto('/');
 	const nav = page.getByRole('navigation', { name: 'Pages' });
 	await expect(nav).toBeVisible();
-	await expect(nav.getByRole('link', { name: 'Home', exact: true })).toHaveAttribute('href', '/');
-	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(
-		'href',
-		'/projects',
-	);
-	await expect(nav.getByRole('button', { name: 'Lakehouse', exact: true })).toHaveCount(0);
-	await expect(nav.getByRole('link', { name: 'Lakehouse', exact: true })).toHaveCount(0);
-	await expect(nav.getByRole('button')).toHaveCount(0);
-	await expect(nav.getByRole('link')).toHaveCount(2);
-	// SETTINGS is the third main-menu entry and it is estate-admin ONLY: `me` resolves null here, so it
-	// shows DISABLED (#143) with the sign-in reason, neither a link nor a button.
-	await expect(nav.getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
-	await expect(nav.getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
-	const settings = nav.locator('[aria-disabled="true"]', { hasText: 'Settings' });
-	await expect(settings).toBeVisible();
-	await expect(settings).toHaveAttribute('title', /sign in/i);
-	await expect(nav.getByText('Access')).toHaveCount(0);
-	await expect(page.locator('[data-slot="navigation-menu-viewport"]')).toHaveCount(0);
+	for (const [name, href] of [
+		['Home', '/'],
+		['Projects', '/projects'],
+		['Warehouses', '/catalog/warehouses'],
+		['Namespaces', '/catalog/namespaces'],
+		['Tables', '/catalog/tables'],
+		['Storage', '/catalog/storage'],
+		['Promotions', '/catalog/promotions'],
+		['Workbench', '/workbench'],
+	] as const) {
+		await expect(nav.getByRole('link', { name, exact: true })).toHaveAttribute('href', href);
+	}
+	// `me` resolves null here, so every estate-admin row is SHOWN disabled with the sign-in reason:
+	// neither a link nor a button, and none of Settings' children handed out.
+	for (const name of ['Events', 'Streams', 'DLQ', 'Settings']) {
+		await expect(nav.getByRole('link', { name, exact: true })).toHaveCount(0);
+		const row = nav.locator('[aria-disabled="true"]', { hasText: name });
+		await expect(row).toBeVisible();
+		await expect(row).toHaveAttribute('title', /sign in/i);
+	}
+	await expect(page.locator('a[href^="/admin"], a[href^="/settings"]')).toHaveCount(0);
 });
 
 test('the landing is HOME — an honest scaffold, not the project gallery', async ({ page }) => {

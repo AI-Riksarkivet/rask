@@ -1,11 +1,6 @@
 /**
- * Breadcrumb + project derivation for the shared shell — the single source of
- * truth so `app-shell`, `project-switcher`, and any future chrome can't drift.
- *
- * Project-first IA via HOST: the project IS the request host (e.g. demo.localhost),
- * so the pathname carries only the domain + in-domain trail. Every path segment is
- * a crumb (the DOMAIN is the first crumb); the project is the breadcrumb ROOT and is
- * derived from the host, never from the path.
+ * The shell's breadcrumb: every path segment of the route is a crumb, the first one the area
+ * (`catalog`, `projects`, …), each linking back up its own path.
  */
 
 export type Crumb = {
@@ -112,18 +107,4 @@ export function collapseCrumbs(crumbs: Crumb[], maxVisible: number): CrumbTrail 
 		hidden: crumbs.slice(1, crumbs.length - keepTail),
 		tail: crumbs.slice(crumbs.length - keepTail),
 	};
-}
-
-/**
- * The project label carried by a request host (e.g. `demo.localhost` -> `demo`),
- * or `null` when the host has none. Only a real subdomain is a project label: bare
- * hosts (`localhost`) and IPv4 hosts (`127.0.0.1` — a numeric first label is an
- * octet) have no project.
- */
-export function projectFromHost(host: string): string | null {
-	const labels = host.split('.');
-	if (labels.length > 1 && !/^\d+$/.test(labels[0] ?? '')) {
-		return labels[0] || null;
-	}
-	return null;
 }

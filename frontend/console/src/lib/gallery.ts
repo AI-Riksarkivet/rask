@@ -42,7 +42,8 @@ const subjectOf = (me: Me | null): string => (me === null ? '' : me.sub);
 
 /** The signed-in landing = the caller's project gallery. Memberships come straight from `me`
  *  (the frozen /management/v1/me contract, resolved in the layout); an estate admin instead sees ALL tenants
- *  via the catalog's `/management/v1/projects` (estate-observer gated), annotated with their
+ *  via the catalog's `/management/v1/projects` (every project to an estate observer, and to anyone
+ *  else the projects they are a member of), annotated with their
  *  own role where they hold one. Degrade, never 500: a failed estate listing falls back to the
  *  membership list. */
 export async function loadGallery(event: {

@@ -203,3 +203,4 @@ with its client to that client's own repository.
 | [0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) | owner | NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09) |
 | [0200](0200-the-workbench-dock-is-horizon-layout.md) | owner | The workbench's dock is horizon-layout: dockview 8 moved keyboard control into a separately licensed package (2026-11-11) |
 | [0201](0201-the-console-holds-its-api-client-and-graph-views.md) | owner | The console holds its API client and graph views; `@rask/ui` is the one package, read from source (2026-11-11) |
+| [0202](0202-the-console-has-one-navigation-and-filters-by-project-in-the-url.md) | owner | The console has one navigation, the sidebar, and filters its lists by project in the URL in place of an active project (2026-11-11) |

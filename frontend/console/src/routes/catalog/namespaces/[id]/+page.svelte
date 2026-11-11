@@ -5,9 +5,9 @@
 	// table count from the registry the /namespaces page already derives from), the kind-generalized
 	// GrantsPanel, and a maintenance-policy card mirroring the table policy form. Same stack-mode
 	// states as the registry — governed without a session ⇒ sign-in, unreachable ⇒ retrying.
-	import { GatedAction } from '@rask/ui/gated-action';
-	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
-	import { subjectDisplay } from '@rask/ui/identity';
+	import { GatedAction } from '#lib/access/gated-action/index.ts';
+	import { GrantsPanel, type GrantsClient } from '#lib/access/grants-panel/index.ts';
+	import { subjectDisplay } from '#lib/access/identity/index.ts';
 	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -39,8 +39,8 @@
 	let tab = $state('overview');
 	const stageInfo = $derived(stageOf(ns));
 
-	// The console-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API
-	// client). The panel's positional signature is bound to the data functions' single argument here.
+	// The catalog calls the grants panel makes, bound to this page's reads and writes: the panel's
+	// positional signature onto the data functions' single argument.
 	const grantsClient: GrantsClient = {
 		fetchAccess: (kind, id) => fetchAccess({ kind, id }),
 		checkAccess: (kind, id, user, relation) => checkAccess({ kind, id, user, relation }),

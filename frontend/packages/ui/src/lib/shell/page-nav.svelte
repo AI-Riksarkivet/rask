@@ -5,13 +5,13 @@
 	import { useSidebar } from '../components/sidebar/context.svelte.js';
 	import type { PageNav, PageNavLeaf } from './nav-config.js';
 
-	// The app's own routes, as LABELLED GROUPS, all soft navigations inside one router.
+	// The console's routes, in sections, all soft navigations inside one router.
 	let { pathname = '', nav = null }: { pathname?: string; nav?: PageNav | null } = $props();
 
 	// The RAIL's own collapse state. Load-bearing for `groupOpen` below: in icon mode a collapsed
 	// group renders NOTHING — `Collapsible.Content` does not mount its items — so the icons vanish,
 	// and the label you would click to get them back is itself hidden by `group-data-[collapsible=icon]`.
-	// The rail then shows a gap where a section used to be, with no way to recover it.
+	// The rail would then show a gap where a section is, with no way to recover it.
 	const sidebar = useSidebar();
 
 	/** A group is open when it is not explicitly collapsed, OR when it holds the active route — a
@@ -31,12 +31,10 @@
 
 {#snippet leafLink(leaf: PageNavLeaf, props: Record<string, unknown>)}
 	{#if leaf.unavailable}
-		<!-- SHOWN, not hidden — and not a link. Dropping the row reads as "this product has no
-		     knowledge graph"; greying it says "THIS corpus has none", which is the true statement and
-		     the one that tells you what to change. A <span> rather than a disabled <a>: an anchor with
-		     href is reachable by keyboard and by paste no matter how it is styled, and this must not
-		     navigate to a page that cannot render. `aria-disabled` + the reason as the tooltip carry
-		     it to a screen reader, which `pointer-events-none` alone would not. -->
+		<!-- SHOWN, not hidden — and not a link. A <span> rather than a disabled <a>: an anchor with an
+		     href is reachable by keyboard and by paste however it is styled, and this must not navigate
+		     to a page that cannot render. `aria-disabled` and the reason as its title carry it to a
+		     screen reader, which `pointer-events-none` alone would not. -->
 		<span
 			{...props}
 			aria-disabled="true"
@@ -58,34 +56,52 @@
 	{/if}
 {/snippet}
 
+{#snippet rows(items: PageNavLeaf[])}
+	<Sidebar.Menu>
+		{#each items as leaf (leaf.title)}
+			<Sidebar.MenuItem>
+				<Sidebar.MenuButton tooltipContent={leaf.title} isActive={isActive(leaf, pathname)}>
+					{#snippet child({ props })}
+						{@render leafLink(leaf, props)}
+					{/snippet}
+				</Sidebar.MenuButton>
+				{#if leaf.children?.length && !leaf.unavailable}
+					<!-- Sub-routes stay mounted but collapse with the parent, so the rail keeps a stable
+					     height while you move around inside a section. -->
+					<Collapsible.Root open={isActive(leaf, pathname)}>
+						<Collapsible.Content>
+							<Sidebar.MenuSub>
+								{#each leaf.children as sub (sub.title)}
+									<Sidebar.MenuSubItem>
+										<Sidebar.MenuSubButton isActive={sub.match(pathname)}>
+											{#snippet child({ props })}
+												{@render leafLink(sub, props)}
+											{/snippet}
+										</Sidebar.MenuSubButton>
+									</Sidebar.MenuSubItem>
+								{/each}
+							</Sidebar.MenuSub>
+						</Collapsible.Content>
+					</Collapsible.Root>
+				{/if}
+			</Sidebar.MenuItem>
+		{/each}
+	</Sidebar.Menu>
+{/snippet}
+
 {#if nav}
-	{#if nav.root}
-		<!-- The app ROOT, above and outside every group: it is the landing that summarises the
-		     sections, not a member of one. No GroupLabel — a one-row labelled section is noise. -->
-		<Sidebar.Group>
-			<Sidebar.GroupContent>
-				<Sidebar.Menu>
-					<Sidebar.MenuItem>
-						<Sidebar.MenuButton
-							tooltipContent={nav.root.title}
-							isActive={isActive(nav.root, pathname)}
-						>
-							{#snippet child({ props })}
-								{@render leafLink(nav.root!, props)}
-							{/snippet}
-						</Sidebar.MenuButton>
-					</Sidebar.MenuItem>
-				</Sidebar.Menu>
-			</Sidebar.GroupContent>
-		</Sidebar.Group>
-	{/if}
-	{#each nav.groups as group (group.label)}
-		{@const open = groupOpen(group.items, group.defaultCollapsed, pathname)}
-		<Collapsible.Root {open} class="group/collapsible">
+	{#each nav.groups as group, index (group.label ?? `rows-${index}`)}
+		{#if group.label === undefined}
+			<!-- Rows with no heading: the top of the rail, above every labelled section. -->
 			<Sidebar.Group>
-				{#if group.collapsible === false}
-					<Sidebar.GroupLabel>{group.label}</Sidebar.GroupLabel>
-				{:else}
+				<Sidebar.GroupContent>
+					{@render rows(group.items)}
+				</Sidebar.GroupContent>
+			</Sidebar.Group>
+		{:else}
+			{@const open = groupOpen(group.items, group.defaultCollapsed, pathname)}
+			<Collapsible.Root {open} class="group/collapsible">
+				<Sidebar.Group>
 					<Sidebar.GroupLabel>
 						{#snippet child({ props })}
 							<Collapsible.Trigger {...props}>
@@ -96,42 +112,13 @@
 							</Collapsible.Trigger>
 						{/snippet}
 					</Sidebar.GroupLabel>
-				{/if}
-				<Collapsible.Content>
-					<Sidebar.GroupContent>
-						<Sidebar.Menu>
-							{#each group.items as leaf (leaf.title)}
-								<Sidebar.MenuItem>
-									<Sidebar.MenuButton tooltipContent={leaf.title} isActive={leaf.match(pathname)}>
-										{#snippet child({ props })}
-											{@render leafLink(leaf, props)}
-										{/snippet}
-									</Sidebar.MenuButton>
-									{#if leaf.children?.length}
-										<!-- Sub-routes stay mounted but collapse with the parent, so the rail keeps
-										     a stable height while you move around inside a section. -->
-										<Collapsible.Root open={isActive(leaf, pathname)}>
-											<Collapsible.Content>
-												<Sidebar.MenuSub>
-													{#each leaf.children as sub (sub.title)}
-														<Sidebar.MenuSubItem>
-															<Sidebar.MenuSubButton isActive={sub.match(pathname)}>
-																{#snippet child({ props })}
-																	{@render leafLink(sub, props)}
-																{/snippet}
-															</Sidebar.MenuSubButton>
-														</Sidebar.MenuSubItem>
-													{/each}
-												</Sidebar.MenuSub>
-											</Collapsible.Content>
-										</Collapsible.Root>
-									{/if}
-								</Sidebar.MenuItem>
-							{/each}
-						</Sidebar.Menu>
-					</Sidebar.GroupContent>
-				</Collapsible.Content>
-			</Sidebar.Group>
-		</Collapsible.Root>
+					<Collapsible.Content>
+						<Sidebar.GroupContent>
+							{@render rows(group.items)}
+						</Sidebar.GroupContent>
+					</Collapsible.Content>
+				</Sidebar.Group>
+			</Collapsible.Root>
+		{/if}
 	{/each}
 {/if}

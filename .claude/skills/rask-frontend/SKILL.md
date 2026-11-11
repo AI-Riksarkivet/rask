@@ -1,6 +1,6 @@
 ---
 name: rask-frontend
-description: The console — rask's one SvelteKit 3 + Svelte 5 single-page app in `frontend/` with no backend of its own: its route tree and navbars, browser sign-in (OIDC + PKCE against Dex, tokens in memory, `/config.json`, the CSP `serve.ts` sends), the browser data layer (`reads.svelte.ts`, `*.api.ts`, the bearer provider, same-origin `/api/*` per service), the bell (the reader's own activity log), the `/workbench` dock (horizon-layout), and the gates (oxlint/oxfmt, svelte-check, vitest, the Playwright suite behind `e2e/edge.ts` and a mock issuer). Use when touching any `.svelte` or `frontend/` file, `#lib/api`, `#lib/flow` or `#lib/dock`; when adding a route, a page, a read or write, or a frontend dependency; when wiring nav or a guard; when building a dock or panel; when the bell lists a write wrongly or not at all; or when sign-in loops, a call 401s/404s from the browser, the CSP blocks something, or a frontend gate fails.
+description: The console — rask's one SvelteKit 3 + Svelte 5 single-page app in `frontend/` with no backend of its own: its route tree and its one navigation (the sidebar) and the project filter, browser sign-in (OIDC + PKCE against Dex, tokens in memory, `/config.json`, the CSP `serve.ts` sends), the browser data layer (`reads.svelte.ts`, `*.api.ts`, the bearer provider, same-origin `/api/*` per service), the bell (the reader's own activity log), the `/workbench` dock (horizon-layout), and the gates (oxlint/oxfmt, svelte-check, vitest, the Playwright suite behind `e2e/edge.ts` and a mock issuer). Use when touching any `.svelte` or `frontend/` file, `#lib/api`, `#lib/flow` or `#lib/dock`; when adding a route, a page, a read or write, or a frontend dependency; when wiring nav or a guard; when building a dock or panel; when the bell lists a write wrongly or not at all; or when sign-in loops, a call 401s/404s from the browser, the CSP blocks something, or a frontend gate fails.
 ---
 
 # rask frontend — the console
@@ -51,8 +51,8 @@ modules are fine, and the data layer is `reads.svelte.ts`. `tsconfig.json` exten
 | `/` | the estate landing |
 | `/projects`, `/projects/[project]` | the project gallery and one project's overview (create, delete, policies) |
 | `/settings`, `/settings/access`, `/settings/audit` | estate configuration, estate-admin only (`settings/+layout.ts`) |
-| `/catalog` | the lakehouse overview of the active project |
-| `/catalog/{warehouses,namespaces,tables,promotions,storage}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`, `promotions/[table]`) | the catalog; `storage` is the tier view, which states the catalog's refusal (below) |
+| `/catalog` | a 307 to `/catalog/tables` (`catalog/+page.ts`): the breadcrumb's Catalog crumb and an old bookmark land on a list |
+| `/catalog/{warehouses,namespaces,tables,promotions,storage}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`, `promotions/[table]`) | the catalog; the four lists take `?project=<id>` (below); `storage` is the tier view, which states the catalog's refusal (below) |
 | `/admin`, `/admin/{events,streams,dlq}` | operations, estate-admin only (`admin/+layout.ts`) |
 | `/workbench` | the dock (events, tables) |
 | `/auth/{login,callback,logout}` | the sign-in round trip, client pages |
@@ -72,12 +72,25 @@ with a query is written without the leading `/`, ``resolve(`auth/login?redirect=
 **Page titles.** Every page's `<title>` is its heading followed by ` · rask` (`Lineage DLQ · rask`), and a
 page about one named object puts the name, as the catalog writes it, before its collection (`db1$t · tables · rask`).
 
-**Two navbars, chosen by path.** `isMainMenu(pathname)` in `@rask/ui`'s `shell/nav-config.ts` decides which bar
-renders: `/`, `/projects` and `/settings/**` are the ESTATE level (`mainMenuNav()`: Home · Projects · Settings),
-everything else — `/projects/<id>` included, opening a project is what puts you inside one — gets `topNav()`, one
-**Lakehouse** entry whose panel holds Workspace and Catalog columns, plus Operations for an estate admin. Settings for
-a non-admin renders DISABLED with the FGA denial's wording, and its `items` are dropped so the entry hands out no child
-links.
+**One navigation, the sidebar, on every page** (ADR 0202). `consoleSidebar(me)` in `#lib/nav.ts` builds it: Home and
+Projects, a Catalog group (Warehouses, Namespaces, Tables, Storage, Promotions), an Operations group (Events, Streams,
+DLQ), and Workbench and Settings pinned at the foot; `@rask/ui`'s shell renders it (`app-sidebar`, `page-nav`) inside one
+`<nav aria-label="Pages">`. The top bar holds only the sidebar's toggle, the breadcrumb (the route's own path,
+`pathCrumbs`), the bell and the account menu. A row the caller may not open (Settings and the Operations rows for anyone
+but an estate admin) renders DISABLED with the FGA denial's wording, or the sign-in reason when `me` is unresolved, and
+drops its children, so a disabled row hands out no link. There is no active project: nothing about which project a
+person looks at is kept in a cookie or storage.
+
+**The project filter is a view, never a boundary.** Warehouses, namespaces, tables and promotions each have a project
+column and a `ProjectFilter` select (`#lib/data/ProjectFilter.svelte`, `project-filter.ts`): a plain value and an
+`onchange`, over the projects `GET /management/v1/projects` answers the caller. Each list's page keeps the value in its
+URL (`?project=<id>`, `project-filter-url.ts`'s `showProject`), so a reload and a shared link show the same rows, and
+"all projects" clears it; the workbench's tables panel keeps it in its own state, so choosing a project keeps the reader
+on `/workbench` (ADR 0202). The rows are the estate-wide read the catalog already answered within the caller's grants;
+the filter narrows them in the browser. A row's project comes from reads the lists already make (`ProjectIndexRead`: the
+warehouses and their estate bindings), and a namespace bound to no warehouse (`provenance`) shows a dash. While that
+index loads a filtered list shows its loading state; when it failed, `ProjectFilterNotice` says why and offers to clear
+the filter, with no rows. A project's page (`/projects/[project]`) links each list filtered to it.
 
 **The audit and streams pages cannot work.** They need the platform's telemetry store and the NATS monitor (`/jsz`),
 which no Gateway route serves to a browser; the owner kept them anyway (2026-11-04), so `audit.api.ts` and
@@ -276,7 +289,7 @@ rather than in the browser (`serve.ts`, `playwright.config.ts`, `e2e/**`, with `
 **`derived_inert`.** Svelte warns `Reading a derived belonging to a now-destroyed effect` when a closing (inert) subtree's
 derived is read. bits-ui raised it from its dismissible and escape layers until 2.21.0's dismissible layer kept a
 snapshot; measured 2026-11-11 on bits-ui 2.21.0 and svelte 5.57.3 under `vite dev`, no unpatched layer open/close in the
-console (menus, the navbar panel, the bell, a select, the row drawer, single, doubled and overlapping Escapes) warns, so
+console (menus, the bell, a select, the row drawer, single, doubled and overlapping Escapes) warns, so
 no bits-ui patch is carried. To locate such a warning in a browser, use CDP (`Runtime.consoleAPICalled`'s
 `stackTrace`), not `page.on('console')`, which Vite's client re-wraps.
 

@@ -8,7 +8,7 @@
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
-	import { GatedAction } from '@rask/ui/gated-action';
+	import { GatedAction } from '#lib/access/gated-action/index.ts';
 	import * as Table from '@rask/ui/table';
 	import { refreshAll } from '$app/navigation';
 	import ProjectCreateDialog from '#lib/ProjectCreateDialog.svelte';

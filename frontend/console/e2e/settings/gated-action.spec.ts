@@ -5,7 +5,7 @@ import { seed as seedFor } from '../mock-client';
 // #143 — "every gated action SHOWS disabled with its denial reason, never hidden."
 //
 // The estate violated the ruling in three distinct shapes, and this file exercises all three because
-// fixing one and calling it done is how the other two survive: a nav ENTRY (the main menu's Settings),
+// fixing one and calling it done is how the other two survive: a nav ENTRY (the sidebar's Settings),
 // an action BUTTON (the gallery's New project), and the ROUTE behind them (which answered 404).
 //
 // It also writes the screenshots the owner reviews. Those are evidence, not assertions — every shot
@@ -18,6 +18,8 @@ const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
 	seedFor(page, token, routes);
 
 const nav = (page: Page) => page.getByRole('navigation', { name: 'Pages' });
+/** The rail the screenshots frame: the `Pages` landmark is `display: contents`, so it has no box. */
+const rail = (page: Page) => page.locator('[data-slot="sidebar-inner"]');
 
 const NON_ADMIN = { ...ME_ADMIN, estate_admin: false, projects: [] };
 const SHOTS = 'e2e/__shots__';
@@ -27,19 +29,19 @@ test.beforeEach(async ({ context }, testInfo) => {
 	await signIn(context, { token });
 });
 
-test('the main menu: an admin gets a live Settings, a non-admin gets it DISABLED', async ({
+test('the sidebar: an admin gets a live Settings, a non-admin gets it DISABLED', async ({
 	page,
 }) => {
 	await seed(page, { 'GET /management/v1/me': ME_ADMIN });
 	await page.goto('/projects');
-	// A BUTTON, not a link: Settings carries panel rows, so an entitled caller gets the NavigationMenu
-	// trigger that opens them. (Asserting a link here fails — which is the useful shape of this test:
-	// the admin and non-admin renderings differ in kind, not just in styling.)
-	await expect(nav(page).getByRole('button', { name: 'Settings', exact: true })).toBeVisible();
+	await expect(nav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveAttribute(
+		'href',
+		'/settings',
+	);
 	await expect(nav(page).locator('[aria-disabled="true"]', { hasText: 'Settings' })).toHaveCount(0);
-	await nav(page).screenshot({ path: `${SHOTS}/143-navbar-admin.png` });
+	await rail(page).screenshot({ path: `${SHOTS}/143-sidebar-settings-admin.png` });
 
-	// The SAME bar for a non-admin: the entry does not move and does not vanish, it goes inert.
+	// The SAME sidebar for a non-admin: the entry does not move and does not vanish, it goes inert.
 	await seed(page, { 'GET /management/v1/me': NON_ADMIN });
 	await page.goto('/projects');
 	const denied = nav(page).locator('[aria-disabled="true"]', { hasText: 'Settings' });
@@ -49,20 +51,21 @@ test('the main menu: an admin gets a live Settings, a non-admin gets it DISABLED
 	await expect(nav(page).getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
 	// The reason names the RELATION — the half that turns a dead end into a request someone can make.
 	await expect(denied).toHaveAttribute('title', /can_observe_events/);
-	await nav(page).screenshot({ path: `${SHOTS}/143-navbar-nonadmin.png` });
+	await rail(page).screenshot({ path: `${SHOTS}/143-sidebar-settings-disabled.png` });
 });
 
-test('the disabled entry hands out NO panel rows — shown, but not opened into', async ({
+test('the disabled entry hands out NO child rows — shown, but not opened into', async ({
 	page,
 }) => {
-	// The fail-closed half, and the one a careless refactor loses. Settings carries a panel whose rows
+	// The fail-closed half, and the one a careless refactor loses. Settings carries child rows that
 	// reach /settings/access — the platform's whole tuple store. Showing the entry must not show those.
 	await seed(page, { 'GET /management/v1/me': NON_ADMIN });
 	await page.goto('/projects');
 	const denied = nav(page).locator('[aria-disabled="true"]', { hasText: 'Settings' });
 	await denied.click({ force: true });
-	await expect(nav(page).getByRole('link', { name: /Users & roles/ })).toHaveCount(0);
-	await expect(page.locator('a[href="/settings/access"]')).toHaveCount(0);
+	await expect(page).toHaveURL(/\/projects$/);
+	await expect(nav(page).getByText('Users & roles')).toHaveCount(0);
+	await expect(page.locator('a[href^="/settings"]')).toHaveCount(0);
 });
 
 test('the gallery: New project is SHOWN disabled to a non-admin, and does not fire', async ({

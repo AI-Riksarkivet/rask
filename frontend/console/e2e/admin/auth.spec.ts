@@ -29,14 +29,14 @@ test('signed-in: the shared nav-user shows the session identity when auth is ena
 }) => {
 	await signIn(context);
 	await mockMe(page); // estate-admin identity: the admin layout door opens
-	// Any gated page of the console proves the seam; the audit trail used to be the specimen and left
-	// with #105. The DLQ is the cheapest surviving one — no observability upstream to stand in for.
+	// Any gated page of the console proves the seam. The DLQ is the cheapest: no observability upstream
+	// to stand in for.
 	await page.goto('/admin/dlq');
 	// Back from the issuer, on the page that was asked for.
 	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toBeVisible();
 	await expect(page).toHaveURL(/\/admin\/dlq$/);
-	// The navbar profile dropdown renders the signed-in name — the id token's claims flowed
-	// session→user→AppShell→TopNavbar→nav-user and selected the signed-in branch.
+	// The account menu renders the signed-in name — the id token's claims flowed
+	// session→user→AppShell→NavbarUser and selected the signed-in branch.
 	await page.getByRole('button', { name: 'Account' }).click();
 	await expect(page.getByText(SESSION_NAME)).toBeVisible();
 });

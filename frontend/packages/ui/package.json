@@ -13,10 +13,6 @@
 			"types": "./src/lib/components/alert-dialog/index.ts",
 			"svelte": "./src/lib/components/alert-dialog/index.ts"
 		},
-		"./avatar": {
-			"types": "./src/lib/components/avatar/index.ts",
-			"svelte": "./src/lib/components/avatar/index.ts"
-		},
 		"./badge": {
 			"types": "./src/lib/components/badge/index.ts",
 			"svelte": "./src/lib/components/badge/index.ts"
@@ -33,10 +29,6 @@
 			"types": "./src/lib/components/checkbox/index.ts",
 			"svelte": "./src/lib/components/checkbox/index.ts"
 		},
-		"./collapsible": {
-			"types": "./src/lib/components/collapsible/index.ts",
-			"svelte": "./src/lib/components/collapsible/index.ts"
-		},
 		"./data-table": {
 			"types": "./src/lib/components/data-table/index.ts",
 			"svelte": "./src/lib/components/data-table/index.ts"
@@ -49,22 +41,6 @@
 			"types": "./src/lib/components/dropdown-menu/index.ts",
 			"svelte": "./src/lib/components/dropdown-menu/index.ts"
 		},
-		"./gated-action": {
-			"types": "./src/lib/components/gated-action/index.ts",
-			"svelte": "./src/lib/components/gated-action/index.ts"
-		},
-		"./grant-form": {
-			"types": "./src/lib/components/grant-form/index.ts",
-			"svelte": "./src/lib/components/grant-form/index.ts"
-		},
-		"./grants-panel": {
-			"types": "./src/lib/components/grants-panel/index.ts",
-			"svelte": "./src/lib/components/grants-panel/index.ts"
-		},
-		"./identity": {
-			"types": "./src/lib/components/identity/index.ts",
-			"svelte": "./src/lib/components/identity/index.ts"
-		},
 		"./input": {
 			"types": "./src/lib/components/input/index.ts",
 			"svelte": "./src/lib/components/input/index.ts"
@@ -72,10 +48,6 @@
 		"./motion": {
 			"types": "./src/lib/motion.ts",
 			"default": "./src/lib/motion.ts"
-		},
-		"./navigation-menu": {
-			"types": "./src/lib/components/navigation-menu/index.ts",
-			"svelte": "./src/lib/components/navigation-menu/index.ts"
 		},
 		"./popover": {
 			"types": "./src/lib/components/popover/index.ts",
@@ -85,10 +57,6 @@
 			"types": "./src/lib/components/select/index.ts",
 			"svelte": "./src/lib/components/select/index.ts"
 		},
-		"./separator": {
-			"types": "./src/lib/components/separator/index.ts",
-			"svelte": "./src/lib/components/separator/index.ts"
-		},
 		"./sheet": {
 			"types": "./src/lib/components/sheet/index.ts",
 			"svelte": "./src/lib/components/sheet/index.ts"
@@ -97,19 +65,11 @@
 			"types": "./src/lib/shell/index.ts",
 			"svelte": "./src/lib/shell/index.ts"
 		},
-		"./sidebar": {
-			"types": "./src/lib/components/sidebar/index.ts",
-			"svelte": "./src/lib/components/sidebar/index.ts"
-		},
 		"./skeleton": {
 			"types": "./src/lib/components/skeleton/index.ts",
 			"svelte": "./src/lib/components/skeleton/index.ts"
 		},
 		"./styles/tokens.css": "./src/lib/styles/tokens.css",
-		"./switch": {
-			"types": "./src/lib/components/switch/index.ts",
-			"svelte": "./src/lib/components/switch/index.ts"
-		},
 		"./table": {
 			"types": "./src/lib/components/table/index.ts",
 			"svelte": "./src/lib/components/table/index.ts"

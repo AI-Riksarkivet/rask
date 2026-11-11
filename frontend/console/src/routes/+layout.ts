@@ -2,7 +2,6 @@ import { error } from '@sveltejs/kit';
 import { fetchMe, MeSchema, parse, type Me } from '#lib/api/index.ts';
 import { timeoutSignal, upstreamJSON } from '#lib/api/client.ts';
 import { auth, initAuth, login, sessionToUser } from '#lib/auth.svelte.ts';
-import { readActiveProject } from '#lib/active-project.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import type { LayoutLoad } from './$types';
 
@@ -26,7 +25,7 @@ export const prerender = false;
  * browser-only app it is the browser's fetch, and it records `/config.json` and `/management/v1/me` as
  * this load's dependencies, so `invalidate()` on either re-runs it.
  */
-export const load: LayoutLoad = async ({ fetch, params, url, untrack }) => {
+export const load: LayoutLoad = async ({ fetch, url, untrack }) => {
 	await initAuth(fetch);
 	if (auth.configError) error(503, `Sign-in is not configured: ${auth.configError}`);
 	const path = untrack(() => url.pathname + url.search);
@@ -39,7 +38,6 @@ export const load: LayoutLoad = async ({ fetch, params, url, untrack }) => {
 		user: sessionToUser(auth.session),
 		authEnabled: auth.enabled,
 		hasSession: auth.session !== null,
-		activeProject: params.project ?? readActiveProject(),
 		me: auth.enabled
 			? await fetchMe({
 					catalogUrl: CATALOG_API,

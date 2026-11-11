@@ -28,6 +28,7 @@
 		fetchWarehouses,
 		setWarehouseActive,
 	} from './remote/warehouses.api';
+	import ProjectFilter from './ProjectFilter.svelte';
 	import RowDrawer from './RowDrawer.svelte';
 	import WarehouseDeleteDialog from './WarehouseDeleteDialog.svelte';
 	import { controlCursor } from '#lib/live/feeds.api.ts';
@@ -183,9 +184,22 @@
 		},
 	];
 
+	/** The project the rows are filtered to (`''`: every project); the warehouses page keeps it in its
+	 *  URL. A warehouse names its project, so the filter needs no other read. It narrows the rows this
+	 *  caller was given; it is a view, not a boundary. */
+	let {
+		project: projectFilter,
+		onprojectchange,
+	}: { project: string; onprojectchange: (project: string) => void } = $props();
+	const shown = $derived(
+		projectFilter
+			? (warehouses ?? []).filter((w) => w.project === projectFilter)
+			: (warehouses ?? []),
+	);
+
 	const whTable = createSvelteTable({
 		get data() {
-			return warehouses ?? [];
+			return shown;
 		},
 		columns,
 		state: {
@@ -299,11 +313,14 @@
 	{:else}
 		<div class="toolbar">
 			<DataTableTextFilter bind:value={globalFilter} placeholder="Search warehouses…" />
+			<ProjectFilter value={projectFilter} onchange={onprojectchange} />
 		</div>
 		<DataTable
 			table={whTable}
 			loading={warehouses === null}
-			emptyMessage="No warehouses provisioned — the form below creates the first."
+			emptyMessage={projectFilter
+				? `No warehouses in project ${projectFilter}.`
+				: 'No warehouses provisioned — the form below creates the first.'}
 			onrowclick={openDrawer}
 		/>
 

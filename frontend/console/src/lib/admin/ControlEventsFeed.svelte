@@ -2,7 +2,7 @@
 	import { controlEvents } from '#lib/admin/remote/admin.api.ts';
 	import type { ControlEvent } from '#lib/admin/control.ts';
 	import { Activity, ShieldAlert } from '@lucide/svelte';
-	import { Subject } from '@rask/ui/identity';
+	import { Subject } from '#lib/access/identity/index.ts';
 
 	// A live cursor (query.live): the generator in admin.api.ts polls the catalog from this browser, owns
 	// the cursor, the window and event_id dedup, and yields the window when it changes. No argument: the

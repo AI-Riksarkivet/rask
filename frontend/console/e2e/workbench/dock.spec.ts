@@ -193,3 +193,33 @@ test("a panel's data is there again after its tab was switched away and back", a
 	await tab(page, 'Tables').click();
 	await expect(page.getByRole('link', { name: TABLES[1] })).toBeVisible();
 });
+
+test("the tables panel's project filter narrows the panel and keeps the reader on the workbench", async ({
+	page,
+}) => {
+	// The filter offers the projects the catalog lists for the caller.
+	await page.route('**/api/catalog/management/v1/projects', (route) =>
+		json(route, [{ project: 'acme' }, { project: 'globex' }]),
+	);
+	await page.route('**/api/catalog/management/v1/warehouses', (route) =>
+		json(route, [
+			{ id: 'acme-wh', project: 'acme', bucket: 'a', root_uri: 's3://a', status: 'active' },
+			{ id: 'globex-wh', project: 'globex', bucket: 'g', root_uri: 's3://g', status: 'active' },
+		]),
+	);
+	await page.route('**/api/catalog/management/v1/warehouses/-/bindings', (route) =>
+		json(route, { bindings: { db1: 'acme-wh', db2: 'globex-wh' } }),
+	);
+	await answerReads(page);
+	await page.route('**/api/catalog/v1/table', (route) =>
+		json(route, { tables: ['db1$t', 'db2$u'] }),
+	);
+	await page.goto('/workbench');
+	await expect(page.getByRole('link', { name: 'db2$u' })).toBeVisible();
+
+	await page.getByLabel('Project filter').click();
+	await page.getByRole('option', { name: 'acme' }).click();
+	await expect(page.getByRole('link', { name: 'db1$t' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db2$u' })).toHaveCount(0);
+	await expect(page).toHaveURL(/\/workbench$/);
+});

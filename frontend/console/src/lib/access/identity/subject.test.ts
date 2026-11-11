@@ -2,7 +2,7 @@
 // two holders on one row rendered as "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fsroot_admin"
 // — one dex sub glued to `root_admin`, unreadable and unrecognizable as two subjects.
 import { describe, expect, it } from 'vitest';
-import { subjectDisplay } from './subject.js';
+import { subjectDisplay } from './subject.ts';
 
 const DEX_SUB = 'CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs';
 

@@ -1,17 +1,16 @@
 <script lang="ts">
-	import { onMount, type Snippet } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import * as Sidebar from '../components/sidebar/index.js';
 	import { Separator } from '../components/separator/index.js';
 	import AppSidebar from './app-sidebar.svelte';
-	import TopNavbar from './top-navbar.svelte';
+	import NavbarUser from './navbar-user.svelte';
+	import ActivityCenter from './activity-center.svelte';
 	import * as DropdownMenu from '../components/dropdown-menu/index.js';
 	import { IsMobile, SHELL_COLLAPSE_BREAKPOINT } from '../hooks/is-mobile.svelte.js';
 	import { ChevronRight, MoreHorizontal } from '@lucide/svelte';
 	import { gsap } from 'gsap';
-	import { pageNavLeaves } from './nav-config.js';
-	import type { ActivityFeed, Me, Project, NavUser, PageNav } from './nav-config.js';
-	import { collapseCrumbs, pathCrumbs, projectFromHost, type Crumb } from './breadcrumb.js';
-	import { isMainMenu } from './nav-config.js';
+	import type { ActivityFeed, NavUser, PageNav } from './nav-config.js';
+	import { collapseCrumbs, pathCrumbs } from './breadcrumb.js';
 
 	// Subtle content settle-in. Runs once when the shell MOUNTS — i.e. on a fresh
 	// document load, which is every full-page landing — so the page gently
@@ -35,104 +34,42 @@
 		return () => tween.kill();
 	}
 
-	// The shared application shell: a app-scoped sidebar (the CURRENT page's routes, from `pageNav`)
-	// + a content inset headed by TWO rows — the estate navbar (sidebar trigger, project switcher,
-	// full-page page links, identity/theme) and, under it, a slim breadcrumb bar. They used to share
-	// one row, where the breadcrumb and the app links fought for the same horizontal space and
-	// overlapped on a narrow viewport; giving each its own row is what makes the header hold up at
-	// any width. Every app wraps its routes in this so they share identical chrome (no
-	// drift). `pathname` comes from the consuming app's $app/state and drives the breadcrumb + active
-	// nav; `me`/`meLoading` come from the console's fetchMe() and gate the navbar's admin entries.
+	// The shared application shell: the console's one navigation, a sidebar of every page's routes,
+	// beside a content inset headed by one slim row — the rail's toggle, the breadcrumb, the bell and
+	// the account menu. `pathname` and `routeId` come from the app's `$app/state` and drive the
+	// breadcrumb and the rail's active row.
 	let {
 		pathname = '',
 		routeId = null,
-		project = { name: '', subtitle: 'Project' },
-		// NO fabricated default (#92). This used to default to `{ name: 'rask', email: 'local',
-		// initials: 'RA' }` — the exact identity NavbarUser's own comment records removing as a
-		// governance defect, re-injected one layer up: any page that passed no `user` rendered a
-		// signed-in account named after the product, and `signedIn = !!user` was true for a person
-		// who never signed in. Null is the honest default; NavbarUser already renders the signed-out
-		// states for both auth modes.
+		// No fabricated default: a page that passes no `user` renders the signed-out states, never an
+		// account named after the product.
 		user = null,
 		authEnabled = false,
 		pageNav = null,
-		me = null,
-		meLoading = false,
 		activity = null,
-		sidebarContent,
 		children,
 	}: {
 		pathname?: string;
 		/** The route `pathname` matched (`$app/state`'s `page.route.id`): the breadcrumb prints the
 		 *  segments it declares as parameters (catalog names) exactly as written. */
 		routeId?: string | null;
-		project?: Project;
-		// `null` = no resolved identity — signed out on an auth-on stack, or auth off entirely; the
-		// navbar renders the honest signed-out state either way (the fabricated placeholder died in #92).
+		/** `null` = no resolved identity: signed out on an auth-on stack, or auth off entirely. */
 		user?: NavUser | null;
 		authEnabled?: boolean;
-		/** The CURRENT page's own sidebar routes; null renders an empty sidebar (pre-wiring). */
+		/** The sidebar's routes; null renders an empty rail. */
 		pageNav?: PageNav | null;
-		/** The frozen /management/v1/me identity for the navbar (null = signed out / unresolved). */
-		me?: Me | null;
-		/** True while the console's fetchMe() is in flight — the navbar renders skeletons. */
-		meLoading?: boolean;
-		/** The reader's activity for the navbar's bell (see `ActivityFeed`). The shell never stores it;
-		 *  `null` renders no bell at all. */
+		/** The reader's activity for the bell (see `ActivityFeed`). The shell never stores it; `null`
+		 *  renders no bell at all. */
 		activity?: ActivityFeed | null;
-		/** Optional app-owned rail CONTENT under the app nav (e.g. the workbench's saved views).
-		 *  Forces the rail visible even for a single-leaf page — such a page's rail content IS its
-		 *  navigation, and hiding the rail also hid the project switcher and collapse trigger,
-		 *  which read as "the console forgot the shell" (the missing-variant lesson, again). */
-		sidebarContent?: Snippet;
 		children: Snippet;
 	} = $props();
 
-	// A page with one leaf has nothing to navigate — home's sole leaf was "Projects → /", a link to
-	// the page you are already on. A rail there costs horizontal width and implies areas that do not
-	// exist, so pages like the catch-all render no rail and no collapse trigger at all.
-	// Counted across every group AND nested child, so a page that splits one list into two groups
-	// does not accidentally fall under the threshold.
-	const hasNav = $derived(pageNavLeaves(pageNav).length > 1 || sidebarContent !== undefined);
-
-	// Project-first breadcrumb via HOST: the project IS the request host, so the path
-	// carries only the domain + in-project trail. The project is the breadcrumb ROOT
-	// (from the host, client-side); every path segment — the domain first — is a crumb.
-	// SSR has no host, so `projectName` falls back to the `project` prop until mount,
-	// exactly like `project-switcher` (shared `projectFromHost` keeps them in lockstep).
-	let projectSlug = $state('');
-	onMount(() => {
-		projectSlug = projectFromHost(window.location.host) ?? '';
-	});
-	// The ACTIVE project: host slug wins (host-scoped deploys), else the cookie-fed prop (#103).
-	// Empty means NO project is active — the shell must say so honestly, never invent "Default".
-	const projectName = $derived(projectSlug || project.name);
-	// Estate level (/, /projects, /settings) is OUTSIDE any project: no project crumb, and the
-	// switcher shows a neutral prompt. Inside a page the project is the breadcrumb ROOT and links
-	// back to its overview page. A project's own page (`/projects/<id>`) names its project in the
-	// path, so a root crumb there would name it twice.
-	const estateLevel = $derived(isMainMenu(pathname));
-	const projectPage = $derived(/^\/projects\/./.test(pathname));
-	const shellProject = $derived({
-		name: projectName || 'Select project',
-		subtitle: projectName ? (project.subtitle ?? 'Project') : 'No active project',
-	});
-	const projectCrumb = $derived<Crumb[]>(
-		!estateLevel && !projectPage && projectName
-			? [
-					{
-						id: '__project',
-						label: projectName,
-						href: `/projects/${encodeURIComponent(projectName)}`,
-					},
-				]
-			: [],
-	);
-	const crumbs = $derived([...projectCrumb, ...pathCrumbs(pathname, routeId)]);
-	// A deep path (project → domain → collection → a long resource id) does not fit a narrow row, so
-	// the MIDDLE of the trail folds behind an ellipsis menu rather than squeezing every crumb into
-	// illegibility — and the current page, the one crumb worth keeping, is never the thing that
-	// disappears. Same breakpoint the rest of the shell folds on.
+	// The breadcrumb is the route's own trail: every path segment is a crumb, a project's page reads
+	// Projects then the project.
+	const crumbs = $derived(pathCrumbs(pathname, routeId));
+	// A deep path does not fit a narrow row, so the MIDDLE of the trail folds behind an ellipsis menu
+	// rather than squeezing every crumb into illegibility — and the current page, the one crumb worth
+	// keeping, is never the thing that disappears. Same breakpoint the rest of the shell folds on.
 	const narrow = new IsMobile(SHELL_COLLAPSE_BREAKPOINT);
 	const trail = $derived(collapseCrumbs(crumbs, narrow.current ? 2 : 4));
 	// Every crumb but the last is a link back up its own path; the last IS the current page, so it
@@ -146,51 +83,18 @@
 </script>
 
 <Sidebar.Provider bind:open={sidebarOpen} class="h-svh overflow-hidden">
-	<!-- The rail renders in EVERY page that has somewhere to go: a page without it loses the
-	     navigation every other page gives, with no way to get it back. -->
-	{#if hasNav}
-		<AppSidebar {pathname} {pageNav} project={shellProject} content={sidebarContent} />
-	{/if}
+	<!-- The one navigation, on every page. -->
+	<AppSidebar {pathname} {pageNav} />
 	<Sidebar.Inset class="flex min-w-0 flex-col overflow-hidden">
-		<!-- STATIC on purpose. Making this `relative` (a z-30 stacking context) looked like the fix
-		     for the workbench's dock painting over the navbar dropdowns — and instead made the header
-		     the containing block for the NavigationMenu's absolutely-positioned viewport, which then
-		     rendered nothing at all (open, height 452, opacity 1, invisible — proven by comparing a
-		     page without a dock, which still worked, against the workbench, which did not). The dock is
-		     isolated on ITS side instead (a page whose content paints over chrome must lower itself,
-		     never raise the shared shell). -->
-		<header class="flex min-w-0 shrink-0 flex-col">
-			<!-- Row 1 — the estate navbar. Integrated (sidebar-07): no border, h-14 → h-12 when the
-			     sidebar is icon-collapsed. Trigger on the left; the full-page TopNavbar (page links +
-			     identity/theme) takes the rest. The project switcher moved to the SIDEBAR HEADER: it is
-			     project context, and the rail's top slot was spending itself on the app name, which the
-			     navbar highlight and the breadcrumb already say. -->
-			<!-- No border: the breadcrumb row below carries `border-y` and supplies the separation. -->
-			<div
-				class="flex h-14 min-w-0 shrink-0 items-center gap-2 px-4 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12"
-			>
-				<!-- Nothing to toggle when there is no sidebar; the switcher and identity stay either way. -->
-				{#if hasNav}
-					<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1 shrink-0" />
-					<Separator orientation="vertical" class="data-[orientation=vertical]:h-4" />
-				{/if}
-				<TopNavbar
-					{pathname}
-					{me}
-					{meLoading}
-					{user}
-					{authEnabled}
-					{activity}
-					class="min-w-0 flex-1"
-				/>
-			</div>
-			<!-- Row 2 — the breadcrumb bar. Its own slim row, so it can never be squeezed by (or
-			     overlap) the app links; within the row, a trail too long to fit folds its MIDDLE
+		<!-- STATIC on purpose: a positioned header becomes the containing block of whatever chrome it
+		     opens. A page whose content paints over chrome lowers itself (the workbench's dock isolates
+		     its own stacking context); the shared shell is never raised. -->
+		<header class="border-border/60 flex h-12 min-w-0 shrink-0 items-center gap-2 border-b px-4">
+			<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1 shrink-0" />
+			<Separator orientation="vertical" class="data-[orientation=vertical]:h-4" />
+			<!-- The breadcrumb takes the row's free width; a trail too long to fit folds its MIDDLE
 			     behind the ellipsis menu (`collapseCrumbs`) instead of shrinking the current page. -->
-			<nav
-				aria-label="Breadcrumb"
-				class="border-border/60 bg-muted/20 flex h-9 min-w-0 shrink-0 items-center overflow-hidden border-y px-4 text-sm"
-			>
+			<nav aria-label="Breadcrumb" class="flex min-w-0 flex-1 items-center overflow-hidden text-sm">
 				<ol class="flex min-w-0 items-center gap-1.5">
 					{#each trail.lead as crumb (crumb.id)}
 						<li class="flex min-w-0 shrink-0 items-center gap-1.5">
@@ -242,11 +146,8 @@
 									data-slot="breadcrumb-page">{crumb.label}</span
 								>
 							{:else}
-								<!-- The SAME conditional the lead and dropdown branches carry, and the one this
-								     branch was missing (#92): `collapseCrumbs` puts EVERYTHING in tail whenever
-								     the trail fits (breadcrumb.ts:102) — the common case — so the `__project`
-								     crumb rendered HERE as a soft link into the console from six pages that
-								     do not own `/projects/…`. Pinned all-or-nothing by the app-contract gate. -->
+								<!-- An ancestor: `collapseCrumbs` puts the whole trail in `tail` when it fits,
+								     so every crumb but the current page is a link here too. -->
 								<a
 									href={crumb.href}
 									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm transition-colors outline-none focus-visible:ring-3"
@@ -257,6 +158,17 @@
 					{/each}
 				</ol>
 			</nav>
+			<div class="ml-auto flex shrink-0 items-center">
+				{#if activity}
+					<ActivityCenter
+						entries={activity.entries}
+						unread={activity.unread}
+						onopen={activity.onopen}
+						onclear={activity.onclear}
+					/>
+				{/if}
+				<NavbarUser {user} {authEnabled} {pathname} />
+			</div>
 		</header>
 		<div
 			class="content-enter flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden"
@@ -269,8 +181,8 @@
 
 <style>
 	/* Start hidden so a fresh-document first paint never shows content before the GSAP
-	   contentEnter fades it in (no flash). The app is a hydrated SSR app (requires JS),
-	   so an initial opacity:0 is safe; GSAP sets inline opacity:1 once it runs, which
+	   contentEnter fades it in (no flash). The app renders in the browser only, so an
+	   initial opacity:0 is safe; GSAP sets inline opacity:1 once it runs, which
 	   overrides this. Reduced-motion users get it visible immediately. */
 	.content-enter {
 		opacity: 0;

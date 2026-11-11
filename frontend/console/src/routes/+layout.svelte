@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
 	import '../app.css';
 	import { onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
@@ -9,17 +8,14 @@
 	import type { Snippet } from 'svelte';
 	import { auth, expired, login } from '#lib/auth.svelte.ts';
 	import { activity } from '#lib/activity.svelte.ts';
-	import { areaOf, ESTATE_NAV, inLakehouse, lakehouseSidebar } from '#lib/nav.ts';
+	import { areaOf, consoleSidebar } from '#lib/nav.ts';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
 
-	// The sidebar follows where you are: the lakehouse's grouped rail on its own pages (admin rows
-	// shown DISABLED to a non-admin, #143), the estate's one-leaf nav — which renders no rail — on the
-	// estate pages, and the project rail on an opened project (`projectRail` below).
-	const pageNav = $derived(
-		inLakehouse(page.url.pathname) ? lakehouseSidebar(data.me?.estate_admin ?? false) : ESTATE_NAV,
-	);
+	// The one navigation: the same sidebar on every page, its estate-admin rows disabled for anyone
+	// else (`#lib/nav.ts`).
+	const pageNav = $derived(consoleSidebar(data.me));
 
 	// The WORKBENCH must fill a SIZED flex item rather than scroll inside an auto-height one: a dock
 	// lays its grid out in PIXELS, so inside the plain `overflow-y-auto` wrapper it would size to
@@ -64,29 +60,12 @@
 <ModeWatcher defaultMode="dark" />
 <Toaster />
 
-{#snippet projectRail()}
-	<!-- /projects/<id> is INSIDE a project, so it carries a rail — the rail is where the project
-	     switcher lives. The estate-level pages keep no rail: they have nothing to navigate. -->
-	<nav aria-label="Project" class="flex flex-col gap-0.5 px-2 py-1">
-		<span class="text-muted-foreground px-2 py-1 text-xs">Project</span>
-		<a
-			href={resolve('/projects')}
-			class="text-muted-foreground hover:text-foreground hover:bg-accent/40 rounded-md px-2 py-1.5 text-sm transition-colors"
-			>All projects</a
-		>
-	</nav>
-{/snippet}
-
 <AppShell
 	pathname={page.url.pathname}
 	routeId={page.route.id}
 	user={data.user}
 	authEnabled={data.authEnabled}
-	project={data.activeProject ? { name: data.activeProject } : undefined}
 	{pageNav}
-	me={data.me}
-	meLoading={false}
-	sidebarContent={/^\/projects\/./.test(page.url.pathname) ? projectRail : undefined}
 	activity={activityFeed}
 >
 	{#if canvasArea}

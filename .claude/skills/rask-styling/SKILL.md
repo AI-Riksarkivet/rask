@@ -107,12 +107,12 @@ The canonical shape — `button.svelte`, `badge.svelte`, `table-cell.svelte`, `s
 
 Six rules carry that snippet:
 
-1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets a caller put the same **chrome** on a plain element — `shell/top-navbar.svelte:86` takes `chrome = navigationMenuTriggerStyle()` and applies it (`:164, :250, :345`) to bare links and placeholders so triggers and links stay dimensionally identical.
+1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets another component put the same **chrome** on its own element — `alert-dialog-action.svelte` and `alert-dialog-cancel.svelte` import `buttonVariants` and apply it to Bits UI's primitives, so a dialog's buttons are dimensionally identical to `Button`.
 2. **`className` is the last argument to `cn()`**, so the consumer wins. `cn = twMerge(clsx(…))`.
 3. **`ref = $bindable(null)` + `bind:this={ref}`** is the ref-forwarding contract, typed by `WithElementRef<T, El>`.
 4. **`data-slot="<name>"`** on the root element — CSS descendant selectors and the e2e harness both locate by it.
 5. **Runes and snippets throughout**: `$props()` destructuring, `{@render children?.()}`. The package contains no `<slot>`. Generic components declare `<script lang="ts" generics="TData">`.
-6. **Stay transport-agnostic.** The library never owns an API client — `GrantsPanel` takes a `client` prop of async functions. Shapes are declared structurally rather than imported from the console's `#lib/api`, and `@rask/ui` imports no `$app/*` or the console's `#lib/*` (browser detection is `typeof window !== 'undefined'`).
+6. **Stay transport-agnostic.** The library never owns an API client — a component that acts takes callbacks (the bell's `ActivityCenter` is fed through props and callbacks). Shapes are declared structurally rather than imported from the console's `#lib/api`, and `@rask/ui` imports no `$app/*` or the console's `#lib/*` (browser detection is `typeof window !== 'undefined'`).
 
 Wrapping a **Bits UI** primitive that needs no skin: re-export it with an explicit `typeof` annotation: a bare re-export infers a type TypeScript cannot name in a declaration (`collapsible/index.ts`).
 

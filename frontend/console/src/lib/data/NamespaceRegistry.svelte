@@ -27,6 +27,10 @@
 	import { fetchTables } from './remote/catalog.api';
 	import { dropNamespace } from './remote/namespace.api';
 	import { fetchEstateBindings } from './remote/warehouses.api';
+	import ProjectFilter from './ProjectFilter.svelte';
+	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
+	import { projectOfNamespace } from './project-filter.ts';
+	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOf, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
@@ -50,13 +54,28 @@
 	let dropTarget = $state<string | null>(null);
 	let cascade = $state(false);
 
+	/** The project the rows are filtered to (`''`: every project); the namespaces page keeps it in
+	 *  its URL. */
+	let {
+		project: projectFilter,
+		onprojectchange,
+	}: { project: string; onprojectchange: (project: string) => void } = $props();
+
+	// Each row's project, from the warehouses and the bindings; the filter narrows the rows this
+	// caller was given, a view and never a boundary.
+	const projects = new ProjectIndexRead();
+	const filterWaits = $derived(projectFilter !== '' && projects.state.kind === 'loading');
+	const filterFailure = $derived(
+		projectFilter !== '' && projects.state.kind === 'failed' ? projects.state.reason : null,
+	);
+
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
 
 	async function load(): Promise<void> {
 		// Independent reads, so they go together: the table registry supplies COUNTS, the estate
 		// bindings supply what EXISTS. One catalog call each — no per-warehouse fan-out (#86).
-		const [res, binds] = await Promise.all([fetchTables(), fetchEstateBindings()]);
+		const [res, binds] = await Promise.all([fetchTables(), fetchEstateBindings(), projects.load()]);
 		settled = true;
 		if (res.ok) {
 			tables = [...res.data.tables].sort();
@@ -85,7 +104,14 @@
 	//
 	// The split is at the LAST `$`, never the first: namespaces NEST, so `acme$bronze$pages` belongs to
 	// `acme$bronze`, and folding it under `acme` would file it beneath an object that is not its parent.
-	type Row = { ns: string; count: number; stage: StageInfo | null; warehouse: string | null };
+	type Row = {
+		ns: string;
+		count: number;
+		stage: StageInfo | null;
+		warehouse: string | null;
+		project: string | null;
+	};
+
 	const rows = $derived.by((): Row[] => {
 		const m = new Map<string, number>();
 		// Seed with every BOUND namespace at zero, so one holding no tables still gets a row. `null`
@@ -104,7 +130,9 @@
 					count,
 					stage: stageOf(ns),
 					warehouse: bindings?.[ns] ?? null,
+					project: projects.index ? projectOfNamespace(projects.index, ns) : null,
 				}))
+				.filter((r) => !projectFilter || r.project === projectFilter)
 				.sort((a, b) => a.ns.localeCompare(b.ns))
 		);
 	});
@@ -180,6 +208,18 @@
 					onclick: column.getToggleSortingHandler(),
 				}),
 			cell: ({ row }) => renderSnippet(nsCell, row.original),
+		},
+		{
+			id: 'project',
+			accessorFn: (r) => r.project ?? '',
+			header: ({ column }) =>
+				renderComponent(DataTableHeaderButton, {
+					label: 'project',
+					sorted: column.getIsSorted(),
+					onclick: column.getToggleSortingHandler(),
+				}),
+			cell: ({ row }) => row.original.project ?? '—',
+			meta: { headerClass: 'w-32', cellClass: 'font-mono' },
 		},
 		{
 			id: 'stage',
@@ -342,13 +382,24 @@
 	{:else}
 		<div class="toolbar">
 			<DataTableTextFilter bind:value={globalFilter} placeholder="Search namespaces…" />
+			<ProjectFilter value={projectFilter} onchange={onprojectchange} />
 		</div>
-		<DataTable
-			{table}
-			loading={tables === null}
-			emptyMessage="No namespaces yet — bind one to a warehouse to create the first."
-			onrowclick={openDrawer}
-		/>
+		{#if filterFailure !== null}
+			<ProjectFilterNotice
+				project={projectFilter}
+				reason={filterFailure}
+				onclear={() => onprojectchange('')}
+			/>
+		{:else}
+			<DataTable
+				{table}
+				loading={tables === null || filterWaits}
+				emptyMessage={projectFilter
+					? `No namespaces in project ${projectFilter}.`
+					: 'No namespaces yet — bind one to a warehouse to create the first.'}
+				onrowclick={openDrawer}
+			/>
+		{/if}
 	{/if}
 </div>
 

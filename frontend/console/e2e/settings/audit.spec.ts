@@ -22,13 +22,19 @@ test('the audit page says where the trail lives instead of rendering an empty on
 	await expect(page.getByRole('row')).toHaveCount(0);
 });
 
-test('the MAIN MENU stays on, and Settings is the entry that lights', async ({ page }) => {
-	// `/settings/audit` is the ESTATE level: the bar is Home · Projects · Settings, and Settings lights
-	// on the child route, not only on `/settings`.
+test('the sidebar lights Settings and its Audit row on the child route', async ({ page }) => {
 	await page.goto('/settings/audit');
 	const nav = page.getByRole('navigation', { name: 'Pages' });
-	await expect(nav.getByRole('link', { name: 'Home', exact: true })).toBeVisible();
-	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toBeVisible();
-	await expect(nav.getByRole('button', { name: 'Settings' })).toHaveAttribute('data-active', '');
-	await expect(nav.getByRole('button', { name: 'Lakehouse' })).toHaveCount(0);
+	await expect(nav.getByRole('link', { name: 'Settings', exact: true })).toHaveAttribute(
+		'data-active',
+		'true',
+	);
+	await expect(nav.getByRole('link', { name: 'Audit', exact: true })).toHaveAttribute(
+		'data-active',
+		'true',
+	);
+	await expect(nav.getByRole('link', { name: 'Home', exact: true })).not.toHaveAttribute(
+		'data-active',
+		'true',
+	);
 });

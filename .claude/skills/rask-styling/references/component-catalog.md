@@ -1,6 +1,6 @@
 # Component catalog & packaging
 
-`frontend/packages/ui` — 173 tracked files; `src/lib/shell` alone is ~2.1k lines (measured 2026-11-04).
+`frontend/packages/ui` — the design system: components with more than one use, the shell every page renders in, and the theme; `src/lib/shell` is ~930 lines (measured 2026-11-11). Code with one consumer lives in that consumer (ADR 0201): the access-control features (`gated-action`, `grant-form`, `grants-panel`, `identity`) are the console's, under `console/src/lib/access/` (ADR 0202).
 
 ## Build
 
@@ -10,41 +10,35 @@ No build step: `package.json` `exports` name the source (`./src/lib/components/<
 
 `vite.config.ts` serves Storybook + vitest, and its `test` block is load-bearing: `include` names **both** homes — `tests/**` and `src/**` — because narrowing to one silently drops the other.
 
-## The 30 export subpaths
+## The 20 export subpaths
 
 **Components** — `src/lib/components/<name>/index.ts`, conditions `svelte` + `types` only:
 
-`alert-dialog · avatar · badge · button · card · checkbox · collapsible · data-table · dialog · dropdown-menu · gated-action · grant-form · grants-panel · identity · input · navigation-menu · popover · select · separator · sheet · sidebar · skeleton · switch · table · tooltip` (measured 2026-11-04 against `package.json` `exports`)
-
-**`./gated-action`** — ruling #143's implementation. `{ allowed, reason, action?, class?, children }`: when allowed it renders the children with NO wrapper at all; when refused it wraps them in a `Tooltip.Trigger` `child` span (`data-slot="gated-action"`, `aria-disabled="true"`, `class="contents"` so geometry is unchanged) with a capture-phase click/keydown guard. It deliberately does NOT set the native `disabled` attribute — that would kill the tooltip and drop the control from the tab order — so **a child that sets `disabled` itself defeats the mechanism**; make the child's own `disabled` conditional on the same verdict. Wrapping in a `Tooltip.Trigger` button instead of a span would nest a button inside a button.
-
-
-**`./identity`** — `Subject` + `subjectDisplay` (#87). An OIDC `sub` is an opaque base64 blob; the helper keeps readable identifiers verbatim and ellipsizes opaque ones in the middle, and the FULL subject always rides `title` so hover/copy still yields the value a tuple write needs. Render it with `<Subject value={…} />`, never `subjectDisplay(...).label` — the component is what makes the title invariant structural, where a call site reading `.label` can drop it. Its own subpath, not under `grants-panel`: the concern is any surface that prints a sub (FGA subjects, control-event actors, audit stamps).
+`alert-dialog · badge · button · card · checkbox · data-table · dialog · dropdown-menu · input · popover · select · sheet · skeleton · table · tooltip` (measured 2026-11-11 against `package.json` `exports`). `avatar`, `collapsible`, `separator` and `sidebar` are in `src/lib/components/` and exported by no subpath: the shell alone uses them, by relative import.
 
 **Non-components** (`./utils` and `./motion` carry a `default` condition; `./shell` does not — it is `types` + `svelte` like a component, and shares rough edge 3; `./styles/tokens.css` is a bare path):
 
 | Subpath | Contents |
 |---|---|
-| `./shell` | `AppShell, AppSidebar, AppError, TopNavbar, ActivityCenter, ForbiddenPage` + `nav-config` + `breadcrumb`. `ActivityCenter` is the bell and its panel over the reader's own activity log, fed through props and callbacks: the console owns the log (`rask-frontend`) |
+| `./shell` | `AppShell`, `AppError` + `nav-config` (the sidebar's and the bell's types; the route matchers are the console's, `#lib/nav-match.ts`). The frame's parts (`app-sidebar`, `page-nav`, `navbar-user`, the bell `activity-center`, `breadcrumb`) are not exported: `AppShell` mounts them. The bell is fed through props and callbacks; the console owns the log (`rask-frontend`) |
 | `./utils` | `cn`, `toDate/formatAbsolute/formatRelative/formatTimestamp`, `WithElementRef/WithoutChildren/WithoutChild/WithoutChildrenOrChild` |
 | `./motion` | GSAP `{@attach}` factories |
 | `./styles/tokens.css` | the theme |
 
-The root barrel `.` is a **curated subset** (`src/lib/index.ts`): button, badge, dialog, card, utils, select, motion, grants-panel. `README.md:30-31` names the subpaths authoritative — prefer `@rask/ui/button` over `@rask/ui`.
+The root barrel `.` is a **curated subset** (`src/lib/index.ts`): button, badge, dialog, card, utils, select, motion. `README.md:30-31` names the subpaths authoritative — prefer `@rask/ui/button` over `@rask/ui`.
 
-## Three barrel conventions
+## Two barrel conventions
 
 They coexist deliberately; match the one the component already uses.
 
-1. **shadcn dual export** — `Root` + `Sidebar` + `SidebarRoot` (`sidebar/index.ts`). Consumed as `import * as Sidebar from '@rask/ui/sidebar'`.
+1. **shadcn dual export** — `Root` + `Sidebar` + `SidebarRoot` (`sidebar/index.ts`). Consumed as `import * as Sidebar from '../components/sidebar/index.js'` by the shell.
 2. **Namespace object** — `export const Dialog = { Root, Trigger, … }` (`dialog/index.ts:7`; same for `Table`, `AlertDialog`). Consumed as `import { Dialog } from '@rask/ui/dialog'`.
-3. **Single default** — `export { default as Switch }` (`switch/index.ts`).
 
 Re-exporting a Bits UI primitive unchanged needs an explicit `typeof` annotation; a bare re-export infers a non-portable type and silently skips the `.d.ts` declaration (`collapsible/index.ts:3-4`, repeated in `dropdown-menu`, `popover`, `alert-dialog`).
 
 ## The `child` escape hatch
 
-`sidebar-menu-button.svelte:68-77` declares a local `{#snippet Button({ props })}`, merges with `mergeProps(buttonProps, props)` from `bits-ui`, and forwards to a caller-supplied `child?: Snippet<[{ props: Record<string, unknown> }]>`. `shell/page-nav.svelte` (the in-page sidebar navigation) declares a `leafLink` snippet at `:32` and passes `child` at four call sites (`:73, :90, :106, :119`): three render `leafLink` (`:74, :107, :120`) to emit an `<a>` where the component would otherwise emit a `<button>`, and one (`:90`) renders a `Collapsible.Trigger` in place of a group label. Reach for this instead of forking a component to change its tag.
+`sidebar-menu-button.svelte:68-77` declares a local `{#snippet Button({ props })}`, merges with `mergeProps(buttonProps, props)` from `bits-ui`, and forwards to a caller-supplied `child?: Snippet<[{ props: Record<string, unknown> }]>`. `shell/page-nav.svelte` (the sidebar's rows) declares a `leafLink` snippet at `:32` and passes `child` at four call sites (`:73, :90, :106, :119`): three render `leafLink` (`:74, :107, :120`) to emit an `<a>` where the component would otherwise emit a `<button>`, and one (`:90`) renders a `Collapsible.Trigger` in place of a group label. Reach for this instead of forking a component to change its tag.
 
 ## Data-table stack
 
@@ -63,9 +57,9 @@ Containment is deliberate: `Card` and the DataTable card both carry `min-w-0 max
 
 **Storybook 10.4.6** with `@storybook/svelte-vite` (not `-sveltekit` — this is a library). Addons: docs, svelte-csf, a11y. `preview.ts` imports `tokens.css`; `tags: ['autodocs']` globally. Run `make storybook` (→ `:6006`).
 
-Coverage is thin: **6 story files for 25 component subpaths** (the 30 `exports` less `.`, `./shell`, `./utils`, `./motion` and `./styles/tokens.css`, counted 2026-11-11) — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `gated-action.stories.svelte`, `shell/activity-center.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
+Coverage is thin: **5 story files for 15 component subpaths** (the 20 `exports` less `.`, `./shell`, `./utils`, `./motion` and `./styles/tokens.css`, counted 2026-11-11) — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `shell/activity-center.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
 
-Vitest suites are pure-function or SSR-string. Seven live in `tests/`; a suite may also sit beside its source (`src/lib/components/identity/subject.test.ts`) — `vite.config.ts:17` includes both homes. No jsdom and no `@testing-library/svelte` (adding either changes the workspace lockfile).
+Vitest suites are pure-function or SSR-string. Four live in `tests/`; a suite may also sit beside its source — `vite.config.ts` includes both homes, `tests/**` and `src/**`. No jsdom and no `@testing-library/svelte` (adding either changes the workspace lockfile).
 
 ## Known rough edges
 
@@ -73,5 +67,3 @@ Do not treat these as patterns to copy.
 
 1. An extensionless relative import violates the package's own `.js` convention: `motion.ts:10` → `'./gsap'`.
 2. Component subpaths declare no `default` condition — a tool resolving without the `svelte` condition gets an unresolvable specifier.
-3. Five exported subpaths have zero consumers outside the package (`avatar, collapsible, navigation-menu, sidebar, tooltip`); they exist to serve `shell/`.
-4. `GrantsPanel` (420 lines) is the largest component and is arguably domain logic: its form carries the grantable FGA relations as `GRANTABLE` (`grant-form/grant-form.svelte:58`, `['reader','writer','validator','owner','pass_grants','manage_grants']`). It lives here so the console's surfaces that grant share one copy.

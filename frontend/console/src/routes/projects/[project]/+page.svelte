@@ -11,7 +11,6 @@
 	import { ProjectHierarchy, type HierarchyHref } from '#lib/flow/hierarchy/index.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { writeActiveProject } from '#lib/active-project.ts';
 	import type { ProjectSummary } from '#lib/catalog.ts';
 	import { policyRequestFrom, type PolicyDraft, type ProjectPolicies } from '#lib/policies.ts';
 	import ProjectDeleteDialog from '#lib/ProjectDeleteDialog.svelte';
@@ -30,16 +29,7 @@
 
 	const project = $derived(page.params.project ?? '');
 
-	// Opening a project IS entering it: stamp the active project, which every page's layout load reads
-	// back, so the shell names the project you are inside. Here and not in `load`, because `app.html`
-	// preloads on hover and a hovered project card must not change which project you are in.
-	$effect(() => {
-		if (project) writeActiveProject(project);
-	});
-
-	// TODO 4a: the graph is a MAP. Every rung below the project links to the catalog page that owns
-	// it. Built HERE rather than in `@rask/ui` because these are the console's routes.
-	//
+	// The graph is a map: every rung below the project links to the catalog page that owns it.
 	// `project` returns null: from `/projects/<id>`, the project rung IS this page.
 	const rungHref: HierarchyHref = (rung) => {
 		if (rung.tier === 'project') return null;
@@ -61,11 +51,8 @@
 	let deleting = $state(false);
 
 	const unauthorized = $derived(detail === null && settled && lastStatus === 401);
-	const denied = $derived(detail === null && settled && lastStatus === 403);
 	const missing = $derived(detail === null && settled && lastStatus === 404);
-	const offline = $derived(
-		detail === null && settled && ![200, 401, 403, 404].includes(lastStatus),
-	);
+	const offline = $derived(detail === null && settled && ![200, 401, 404].includes(lastStatus));
 
 	// #65 the tenant's maintenance plane. ONE read answers all three tiers: the project's own record
 	// plus every table/namespace record inside it — a per-object `policy/describe` could not have been
@@ -240,21 +227,15 @@
 				> to view this project.
 			</p>
 		</div>
-	{:else if denied}
-		<div class="empty">
-			<ShieldAlert size={16} />
-			<p>You don't have access to this project's registry facts.</p>
-		</div>
 	{:else if missing}
-		<!-- Existence is the project REGISTRY record, not a warehouse implying one: a tenant created
-		     through POST /management/v1/projects legitimately has zero warehouses and must not read as missing.
-		     The old copy ("no warehouse claims it") stated the pre-registry definition, so an FGA-only
-		     ghost — a project you hold a role on that the catalog never recorded — showed this text
-		     while the gallery listed it, naming neither the cause nor the fix. -->
+		<!-- A project exists when its registry record does, not because a warehouse names it: one
+		     created through POST /management/v1/projects may have no warehouse yet. The catalog answers
+		     a reader who is neither an estate observer nor a member of the project exactly as it answers
+		     a project that does not exist (404), so this says both, and tells the two apart for no one. -->
 		<div class="empty">
 			<p>
-				No such project — the catalog has no registry record for <code class="mono">{project}</code
-				>.
+				No project <code class="mono">{project}</code> that you can see: it does not exist, or you are
+				not a member of it.
 			</p>
 		</div>
 	{:else if offline}
@@ -267,13 +248,19 @@
 	{:else if detail === null}
 		<div class="empty"><p>Loading…</p></div>
 	{:else}
-		<!-- The hierarchy FIRST (#104's ruling): the relationship the estate is built on —
-		     project › warehouse › namespace › table — shown the moment the page opens.
+		<!-- The catalog's lists, filtered to this project: the same estate-wide lists, narrowed in the
+		     browser by `?project=` (a view, not a boundary). -->
+		<nav class="catalog-links" aria-label="This project in the catalog">
+			<a href={resolve(`catalog/warehouses?project=${encodeURIComponent(project)}`)}>Warehouses</a>
+			<a href={resolve(`catalog/namespaces?project=${encodeURIComponent(project)}`)}>Namespaces</a>
+			<a href={resolve(`catalog/tables?project=${encodeURIComponent(project)}`)}>Tables</a>
+			<a href={resolve(`catalog/promotions?project=${encodeURIComponent(project)}`)}>Promotions</a>
+		</nav>
 
-		     The VIEW is @rask/ui's (#109 hoisted it out of the console's #lib when the lakehouse Overview
-		     needed the same picture and pages may not import each other); the TRANSPORT stays here —
-		     the library takes the two rung reads as async props and the console hands it its own remote
-		     functions, so the catalog's gate is still enforced against this user's bearer. -->
+		<!-- The hierarchy first: the relationship the estate is built on — project › warehouse ›
+		     namespace › table — shown the moment the page opens. The view (`#lib/flow/hierarchy`) takes
+		     the two rung reads as async props, so the catalog's gate is enforced against this user's
+		     bearer. -->
 		<section>
 			<h2>Hierarchy</h2>
 			<ProjectHierarchy
@@ -290,7 +277,7 @@
 				<p class="mut">No warehouses provisioned for this project.</p>
 			{:else}
 				<table>
-					<thead><tr><th>warehouse</th><th>bucket</th><th>status</th></tr></thead>
+					<thead><tr><th>warehouse</th><th>bucket</th><th>serving</th><th>status</th></tr></thead>
 					<tbody>
 						{#each detail.warehouses as w (w.id)}
 							<tr>
@@ -303,6 +290,7 @@
 									>
 								</td>
 								<td class="mono">{w.bucket}</td>
+								<td class="mono">{w.serving ?? '—'}</td>
 								<td><span class="chip mono" class:off={w.status !== 'active'}>{w.status}</span></td>
 							</tr>
 						{/each}
@@ -603,6 +591,21 @@
 	}
 	.sep {
 		color: var(--faint);
+	}
+	.catalog-links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 12px;
+		margin: -4px 0 18px;
+		font-size: 13px;
+	}
+	.catalog-links a {
+		color: var(--muted-foreground);
+		text-decoration: underline;
+		text-underline-offset: 4px;
+	}
+	.catalog-links a:hover {
+		color: var(--foreground);
 	}
 	section {
 		margin-bottom: 26px;

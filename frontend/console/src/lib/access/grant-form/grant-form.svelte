@@ -1,11 +1,9 @@
 <script lang="ts" module>
-	/** Matches the pages' status-aware `ApiResult`. Declared STRUCTURALLY rather than imported, on the
-	 *  GrantsPanel precedent: this library owns no API client, so a page hands its own remotes in. */
-	export type GrantFormResult =
-		| { ok: true; data: { user: string } }
-		| { ok: false; status: number; detail: string };
+	import type { ApiResult } from '#lib/api/client.ts';
+	import type { AccessGrant } from '#lib/data/namespace.ts';
 
-	export type GrantFormMutate = (user: string, relation: string) => Promise<GrantFormResult>;
+	/** A grant or a revoke of `relation` to `user`, bound by the page to its object. */
+	export type GrantFormMutate = (user: string, relation: string) => Promise<ApiResult<AccessGrant>>;
 
 	export type GrantFormProps = {
 		/** Names the object in every message — "…on this table" / "…on this namespace". */
@@ -28,20 +26,11 @@
 </script>
 
 <script lang="ts">
-	// THE grant/revoke form. One implementation, and that is the point of the file.
-	//
-	// It existed twice — here in `@rask/ui`'s GrantsPanel and again in the lakehouse's AccessGraph —
-	// and on 2026-08-16 three separate defects were found and fixed IN BOTH COPIES on the same day:
-	// a denial message naming the wrong gate, buttons that ignored permission entirely (#143), and a
-	// form that invited a subject id which can never match a signed-in user. Each was one bug that had
-	// to be paid for twice, and the copies had already drifted where nobody was looking — AccessGraph
-	// offered four rungs while this offered six, so `pass_grants` and `manage_grants` were ungrantable
-	// from one surface and grantable from the other with no decision behind the difference.
-	//
-	// Transport-agnostic like every component here: `grant`/`revoke` arrive as async props and the
-	// library never imports a page remote.
-	import { GatedAction } from '../gated-action/index.js';
-	import { Select } from '../select/index.js';
+	// THE grant/revoke form, the one the grants panel and the access graph both render, so the rungs
+	// offered, the gate each button names and the subject advisory are decided once. `grant` and
+	// `revoke` arrive as props, bound by the page to its object.
+	import { GatedAction } from '../gated-action/index.ts';
+	import { Select } from '@rask/ui/select';
 	import { TriangleAlert } from '@lucide/svelte';
 
 	let {
@@ -54,7 +43,7 @@
 		onmutated,
 	}: GrantFormProps = $props();
 
-	// The rung ladder, in ONE place. The two copies disagreed: four rungs against six.
+	// The rung ladder, in ONE place, so every surface that grants offers the same rungs.
 	const GRANTABLE = ['reader', 'writer', 'validator', 'owner', 'pass_grants', 'manage_grants'];
 	const RUNG_LABEL: Record<string, string> = {
 		pass_grants: 'pass_grants — may re-grant what they hold',
@@ -174,7 +163,7 @@
 		</p>
 	{/if}
 	{#if result}
-		<p class="verdict" class:ok={result.tone === 'ok'} class:fail={result.tone === 'fail'}>
+		<p class={['verdict', { ok: result.tone === 'ok', fail: result.tone === 'fail' }]}>
 			{result.text}
 		</p>
 	{/if}

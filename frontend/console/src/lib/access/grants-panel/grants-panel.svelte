@@ -1,87 +1,74 @@
 <script lang="ts">
-	// The access-review panel (#51): who holds which can_* action on a catalog object, expanded through
-	// the FGA model (roles, nested roles, the parent cascade). Kind-generalized (sweep group 3): `kind` picks
-	// the catalog surface — 'table' (the default) or 'namespace' — and the owner gate is the per-type
-	// bar (can_drop / can_delete). Owner-only by design — the catalog gates the enumeration, so a
-	// non-owner sees the denial state, never the ACL. Hoisted into @rask/ui (audit 2026-07-24: the data
-	// and lineage copies had silently drifted apart). Transport-agnostic (rask convention:
-	// the lib never owns an API client) — the app injects its own `client`,
-	// and the Grants* types are the STRUCTURAL shapes this panel reads, so any page whose generated
-	// catalog types carry these fields can pass its functions straight through without adapters.
-	// Collapsed by default: one owner-tier round-trip per dataset, with definitive outcomes (the ACL,
+	// The access-review panel: who holds which can_* action on a catalog object, expanded through the
+	// FGA model (roles, nested roles, the parent cascade). `kind` picks the object, a table (the
+	// default) or a namespace, and the owner gate is that type's bar (can_drop / can_delete). Owner-only
+	// by design: the catalog gates the enumeration, so a non-owner sees the denial, never the ACL.
+	// The page hands in its `client`, the catalog calls bound to its own reads and writes, so the panel
+	// owns the flow and the page the transport.
+	// Collapsed by default: one owner-tier round-trip per object, with definitive outcomes (the ACL,
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
 	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
-	import { GrantForm } from '../grant-form/index.js';
-	import { Select } from '../select/index.js';
+	import { Select } from '@rask/ui/select';
+	import type { ApiResult } from '#lib/api/client.ts';
+	import type {
+		AccessCheck,
+		AccessGrant,
+		AccessKind,
+		AccessList,
+		MyPermissions,
+	} from '#lib/data/namespace.ts';
+	import { GrantForm } from '../grant-form/index.ts';
 	import Subject from '../identity/subject.svelte';
 
-	export type GrantsKind = 'table' | 'namespace';
-	/** Mirrors the pages' status-aware ApiResult (http.ts): 0 = fetch-level failure/offline. */
-	export type GrantsResult<T> =
-		| { ok: true; data: T }
-		| { ok: false; status: number; detail: string };
-	export type GrantsAccessList = { grants: { relation: string; users: string[] }[] };
-	/** The console-owned catalog seam: review + #68 check + #72 grant/revoke, all owner-gated SERVER-side. */
+	/** The catalog calls the panel makes: the review, a check, and grant/revoke, all owner-gated by the
+	 *  catalog. */
 	export type GrantsClient = {
-		fetchAccess: (kind: GrantsKind, id: string) => Promise<GrantsResult<GrantsAccessList>>;
+		fetchAccess: (kind: AccessKind, id: string) => Promise<ApiResult<AccessList>>;
 		checkAccess: (
-			kind: GrantsKind,
+			kind: AccessKind,
 			id: string,
 			user: string,
 			relation: string,
-		) => Promise<GrantsResult<{ user: string; relation: string; allowed: boolean }>>;
+		) => Promise<ApiResult<AccessCheck>>;
 		grantAccess: (
-			kind: GrantsKind,
+			kind: AccessKind,
 			id: string,
 			user: string,
 			relation: string,
-		) => Promise<GrantsResult<{ user: string }>>;
+		) => Promise<ApiResult<AccessGrant>>;
 		revokeAccess: (
-			kind: GrantsKind,
+			kind: AccessKind,
 			id: string,
 			user: string,
 			relation: string,
-		) => Promise<GrantsResult<{ user: string }>>;
-		/** The caller's OWN verdicts on this object — `{ can_grant_reader: true, … }`.
-		 *
-		 *  OPTIONAL on purpose: two of the three call sites do not fetch it yet, and a required member
-		 *  would break them at the type level. Absent means "unknown", which renders the controls live
-		 *  exactly as before — this makes the gate possible, it does not make it silently fail closed on
-		 *  a caller that has not been wired up.
-		 *
-		 *  A 5th client member rather than a `permissions` prop, because the panel owns the flow and the
-		 *  page owns the transport (the rule this whole file follows). A prop would push per-dataset
-		 *  refetching into every caller. */
-		fetchMyPermissions?: (
-			kind: GrantsKind,
-			id: string,
-		) => Promise<GrantsResult<{ permissions: Record<string, boolean> }>>;
+		) => Promise<ApiResult<AccessGrant>>;
+		/** The caller's own verdicts on this object (`{ can_grant_reader: true, … }`), so a refused
+		 *  Grant or Revoke renders disabled with its reason. Optional: absent means unknown, which
+		 *  renders the controls live, so a verdict is never invented from a read that was not made. */
+		fetchMyPermissions?: (kind: AccessKind, id: string) => Promise<ApiResult<MyPermissions>>;
 	};
 
 	let {
 		dataset,
 		kind = 'table',
 		client,
-	}: { dataset: string; kind?: GrantsKind; client: GrantsClient } = $props();
+	}: { dataset: string; kind?: AccessKind; client: GrantsClient } = $props();
 
 	// #143: the caller's own verdicts, KEYED BY DATASET like `review.for` / `simFor` / `mgFor` above.
 	// An unkeyed field would let one object's permissions gate another's buttons on navigation — the
 	// exact cross-dataset bleed every other piece of state in this component is keyed to avoid.
 	let perms = $state<{ for: string; map: Record<string, boolean> } | null>(null);
-	// Keyed by dataset, like every other field here — an unkeyed map would let one object's verdicts
-	// gate another's buttons after a navigation, the cross-dataset bleed the 2026-07-16 audit fixed.
 	// `null` means UNKNOWN (no `fetchMyPermissions` wired, or the read failed), and GrantForm renders
 	// live on unknown: the gate explains a refusal, it does not invent one from a missing read.
 	const permMap = $derived(perms?.for === dataset ? perms.map : null);
 
-	// Every piece of state is keyed by the dataset it belongs to (no cross-dataset bleed, audit
-	// 2026-07-16: a single un-keyed `loading` let one dataset's in-flight review block another's):
-	// the panel is open only for the dataset it was opened on, a review/spinner/failure is shown
+	// Every piece of state is keyed by the dataset it belongs to, so one dataset's in-flight review
+	// never blocks or shows on another's: the panel is open only for the dataset it was opened on, a review/spinner/failure is shown
 	// only for the dataset it was produced for — switching datasets blanks them by derivation.
 	let openedFor = $state<string | null>(null);
 	let review = $state<{
 		for: string;
-		access: GrantsAccessList | null;
+		access: AccessList | null;
 		denied: string | null;
 	} | null>(null);
 	let loadingFor = $state<string | null>(null);
@@ -197,7 +184,7 @@
 
 <div class="grants">
 	<button class="head" onclick={toggle} aria-expanded={open}>
-		<span class="chev" class:open><ChevronRight size={12} /></span>
+		<span class={['chev', { open }]}><ChevronRight size={12} /></span>
 		<ShieldCheck size={12} />
 		<span>Access review</span>
 	</button>
@@ -264,9 +251,7 @@
 					<p class="mut">{simError}</p>
 				{:else if simVerdictShown}
 					<p
-						class="verdict"
-						class:allow={simVerdictShown.allowed}
-						class:deny={!simVerdictShown.allowed}
+						class={['verdict', { allow: simVerdictShown.allowed, deny: !simVerdictShown.allowed }]}
 					>
 						<span class="mono">{simVerdictShown.user}</span>
 						{simVerdictShown.allowed ? 'can' : 'cannot'}
@@ -277,10 +262,8 @@
 
 			<div class="sim">
 				<div class="sim-head">Manage access (grant / revoke)</div>
-				<!-- ONE implementation, shared with the lakehouse's AccessGraph. It lived in both, and on
-				     2026-08-16 three defects each had to be fixed twice while the copies had already
-				     drifted where nobody was looking (four rungs there, six here). `knownSubjects` comes
-				     from the review this panel already renders — the only subject directory that exists. -->
+				<!-- The grant form the access graph renders too. `knownSubjects` comes from the review this
+				     panel already renders, the only subject directory there is. -->
 				<GrantForm
 					{kind}
 					bind:subject={mgUser}

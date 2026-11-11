@@ -6,9 +6,9 @@
 	import { Sun, Moon, LogIn, LogOut } from '@lucide/svelte';
 	import type { NavUser } from './nav-config.js';
 
-	// The shell identity + theme control, relocated from the sidebar footer to the navbar's right side:
-	// avatar trigger + dropdown (identity, theme toggle, settings, the shared auth control). Context-free
-	// (no sidebar dependency) so it renders in the navbar of every page. The
+	// The shell's identity and theme control, at the right of the top row: an avatar trigger and its
+	// dropdown (identity, theme toggle, the auth control). Context-free (no sidebar
+	// dependency) so it renders on every page. The
 	// identity flows in as a plain prop from the app's root layout load (single-sourced via
 	// the console's sessionToUser) — the shared shell never imports app data.
 	//
@@ -23,12 +23,9 @@
 	}: { user?: NavUser | null; authEnabled?: boolean; pathname?: string } = $props();
 
 	const signedIn = $derived(!!user);
-	// The identity shown on the trigger. NEVER invent one: this used to fall back to
-	// `{ name: 'rask', email: 'local', initials: 'RA' }` when auth was off, which rendered a
-	// fabricated logged-in user named after the product — in a GOVERNANCE UI, where the whole
-	// point is knowing who you are. An operator could not distinguish "no auth configured" from
-	// "signed in as someone". Signed-out now says signed-out, in both auth modes; only the cue
-	// differs (a live sign-in link vs. a statement that this stack is ungoverned).
+	// The identity shown on the trigger. NEVER invented: in a governance UI the point is knowing who
+	// you are, so a signed-out reader is shown as signed out in both auth modes; only the cue differs
+	// (a live sign-in link, or a statement that this stack signs nobody in).
 	const identity = $derived(
 		user ??
 			(authEnabled

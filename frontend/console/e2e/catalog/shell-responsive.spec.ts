@@ -1,5 +1,4 @@
 import { test, expect, type Route, type Page } from '@playwright/test';
-import { AUTH_OFF } from '../ports';
 import { MOCK_CATALOG } from '../admin/ports';
 
 // Responsive contract for the SHARED @rask/ui shell (#105). It lives in the console because a
@@ -9,18 +8,16 @@ import { MOCK_CATALOG } from '../admin/ports';
 //
 //   1. the document never scrolls sideways (scrollWidth <= clientWidth) at any width, so a wide
 //      table scrolls INSIDE its container and page content is never sliced off the viewport;
-//   2. the account control never overlaps a navbar entry — below the shell's collapse breakpoint
-//      the app links fold into a single overflow menu instead of running under the avatar.
+//   2. the account control never overlaps the breadcrumb — the top bar's one variable-width entry;
+//   3. every page carries the same sidebar, whatever area it is in.
 //
-// Widths span the wide bar (1440, and 1024 = the collapse boundary itself), the two widths the
-// live bug was screenshotted at (900 = avatar on top of the last entry, 600 = navbar off the right
-// edge + body scrolling sideways), and 768 in between.
+// Widths span the wide layout (1440, and 1024 = the collapse boundary itself), 900 and 600 (the widths
+// a sideways-scrolling body was first screenshotted at), and 768 in between.
 
 const json = (route: Route, body: unknown, status = 200) =>
 	route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-// An estate admin: the WIDEST navbar the shell can render (the Lakehouse panel gains the
-// governance + operations columns), so the overflow assertions are made against the worst case.
+// An estate admin: every sidebar row is a live link, the fullest rail the shell renders.
 const ME_ADMIN = {
 	sub: 'user:alice',
 	name: 'Alice',
@@ -39,8 +36,8 @@ const TABLES = [
 
 const WIDTHS = [1440, 1024, 900, 768, 600];
 
-/** The shell's collapse breakpoint (`SHELL_COLLAPSE_BREAKPOINT`) — BELOW it the app links live in
- *  one overflow menu and the sidebar is an off-canvas sheet; at or above it, the wide bar. */
+/** The shell's collapse breakpoint (`SHELL_COLLAPSE_BREAKPOINT`) — BELOW it the sidebar is an
+ *  off-canvas sheet; at or above it, a rail in the document. */
 const COLLAPSE_AT = 1024;
 
 test.beforeEach(async ({ page }) => {
@@ -57,35 +54,19 @@ test.beforeEach(async ({ page }) => {
 	});
 });
 
-/**
- * Drive the shell on a PROJECT host (`acmecorp.localhost`), not the bare dev host. The estate's IA
- * is project-first — the project IS the request host — so the navbar's project switcher renders a
- * real label there instead of the "Default" placeholder, which is what made the row wide enough for
- * the last page trigger to slide under the account avatar in the first place. Asserting on the bare
- * host would measure a narrower bar than any real deployment ever shows.
- */
-function projectUrl(baseURL: string | undefined, path: string): string {
-	const url = new URL(path, baseURL ?? AUTH_OFF);
-	url.hostname = `acmecorp.${url.hostname}`;
-	return url.href;
-}
-
-/** Land on a page route with the shell fully resolved: the identity has landed (so the navbar is
- *  past its skeleton state) and the table has rendered. */
-async function openShell(
-	page: Page,
-	baseURL: string | undefined,
-	path = '/catalog/tables',
-): Promise<void> {
-	await page.goto(projectUrl(baseURL, path));
+/** Land on a page route with the shell fully resolved: the identity has landed (so the account
+ *  control is past its skeleton state) and, on the tables list, the rows have rendered. */
+async function openShell(page: Page, path = '/catalog/tables'): Promise<void> {
+	await page.goto(path);
 	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
-	await expect(page.getByRole('link', { name: TABLES[2] })).toBeVisible();
+	if (path === '/catalog/tables')
+		await expect(page.getByRole('link', { name: TABLES[2] })).toBeVisible();
 }
 
 for (const width of WIDTHS) {
-	test(`document never scrolls sideways at ${width}px (#105)`, async ({ page, baseURL }) => {
+	test(`document never scrolls sideways at ${width}px (#105)`, async ({ page }) => {
 		await page.setViewportSize({ width, height: 900 });
-		await openShell(page, baseURL);
+		await openShell(page);
 		const doc = await page.evaluate(() => ({
 			scrollWidth: document.documentElement.scrollWidth,
 			clientWidth: document.documentElement.clientWidth,
@@ -95,162 +76,87 @@ for (const width of WIDTHS) {
 		expect(doc.bodyScrollWidth).toBeLessThanOrEqual(doc.clientWidth);
 	});
 
-	test(`the account control never overlaps a navbar entry at ${width}px (#105)`, async ({
+	test(`the account control never overlaps the breadcrumb at ${width}px (#105)`, async ({
 		page,
-		baseURL,
 	}) => {
-		// #105 IS FIXED, and this is what fixed it — not a layout change. The marker here was
-		// `test.fail(width === 1024, …)`: with EIGHT entries the wide bar genuinely collided with the
-		// account control at exactly 1024px, the collapse boundary. The two-level ruling took Projects
-		// and Settings out of the in-project bar and another session retired the workbench page, so the
-		// bar is six entries and no longer overflows. The marker then failed as "expected to fail, but
-		// passed", which is precisely why it was written that way — a known defect that goes quiet on
-		// its own is a defect nobody removes. Deleted with its cause, and the geometry below now runs
-		// for real at every width.
 		await page.setViewportSize({ width, height: 900 });
-		await openShell(page, baseURL);
-
+		await openShell(page, `/catalog/tables/${encodeURIComponent(TABLES[0])}`);
 		const account = await page.getByRole('button', { name: 'Account' }).boundingBox();
+		const crumbs = await page.getByRole('navigation', { name: 'Breadcrumb' }).boundingBox();
 		expect(account).not.toBeNull();
-
-		// Every VISIBLE navbar entry: the app triggers/links on the desktop bar, or the single
-		// overflow-menu trigger below the breakpoint.
-		const entries = page.locator('[data-slot="navigation-menu-list"] > li:visible');
-		const boxes = await entries.evaluateAll((els) =>
-			els.map((el) => {
-				const r = el.getBoundingClientRect();
-				return { text: el.textContent?.trim() ?? '', ...r.toJSON() };
-			}),
-		);
-		expect(boxes.length).toBeGreaterThan(0);
-		for (const box of boxes) {
-			const overlaps =
-				box.left < account!.x + account!.width &&
-				box.right > account!.x &&
-				box.top < account!.y + account!.height &&
-				box.bottom > account!.y;
-			expect(overlaps, `navbar entry "${box.text}" overlaps the account control`).toBe(false);
-			// An entry pushed past the right edge is the same bug with a different symptom.
-			expect(box.right, `navbar entry "${box.text}" runs off the viewport`).toBeLessThanOrEqual(
-				width,
-			);
-		}
+		expect(crumbs).not.toBeNull();
+		expect(
+			crumbs!.x + crumbs!.width,
+			'the breadcrumb runs under the account control',
+		).toBeLessThanOrEqual(account!.x);
+		expect(
+			account!.x + account!.width,
+			'the account control runs off the viewport',
+		).toBeLessThanOrEqual(width);
 	});
 }
 
-test('below the breakpoint the app links collapse into one overflow menu that still reaches every destination (#105)', async ({
-	page,
-	baseURL,
-}) => {
-	await page.setViewportSize({ width: 600, height: 900 });
-	await openShell(page, baseURL);
-
-	// The desktop bar is gone: exactly one entry — the overflow trigger.
-	const entries = page.locator('[data-slot="navigation-menu-list"] > li:visible');
-	await expect(entries).toHaveCount(1);
-
-	const menu = page.getByRole('button', { name: 'Menu' });
-	await expect(menu).toBeVisible();
-	await menu.click();
-
-	// Every page, and the sub-areas underneath them, stay reachable from the one menu — one group per
-	// page (the icon contributes a leading space to the accessible text). This list is the SHELL's
-	// truth: a page missing here is the R15 defect (a page absent from the navbar), not a stale test.
-	// Projects LEADS it and Settings CLOSES it — the two groups that are not pages, both from the IA
-	// This page is inside a project, so the collapsed bar folds the IN-PROJECT bar — the Lakehouse entry
-	// the wide bar carries. Home, Projects and Settings are the estate level and are not in this bar at
-	// either width; pinning the exact list catches collapsing smuggling them back in.
-	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
-	await expect(panel.locator('[data-slot="navbar-overflow-group"]')).toHaveText([' Lakehouse']);
-	// One row per destination the wide bar reaches, the estate-admin-only operations rows included.
-	for (const href of [
-		// NO '/projects' HERE: the estate's project list is a MAIN-MENU destination.
-		'/catalog',
-		'/catalog/tables',
-		'/catalog/warehouses',
-		'/workbench',
-		'/admin/dlq',
-	]) {
-		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
-	}
-	// The panel itself stays inside the viewport — an overflow menu that hangs off the edge is the
-	// bug wearing a different hat.
-	const box = await panel.boundingBox();
-	expect(box!.x).toBeGreaterThanOrEqual(0);
-	expect(box!.x + box!.width).toBeLessThanOrEqual(600);
-});
-
-test('above the breakpoint the app links stay on the bar (no overflow menu) (#105)', async ({
-	page,
-	baseURL,
-}) => {
-	await page.setViewportSize({ width: 1440, height: 900 });
-	await openShell(page, baseURL);
-	await expect(page.getByRole('button', { name: 'Menu' })).toHaveCount(0);
-	await expect(page.getByRole('button', { name: 'Lakehouse' })).toBeVisible();
-});
-
-test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows are the way in', async ({
-	page,
-	baseURL,
-}) => {
-	// INVERTED BY RULING (2026-08-03, f5dd1f0 — pinned in top-navbar.svelte's `groups` branch). This
-	// test used to demand the opposite: a synthesized "Lakehouse · Open the console." row inside
-	// the wide panel. The ruling deleted it, and the reasoning is what this assertion now guards:
-	//   - the row linked /catalog, a redirect-to-tables page, so it said nothing a real row
-	//     (Tables, Namespaces, Warehouses, …) does not already say;
-	//   - it rendered for THIS page alone — every flat-`items` page carries a real, function-titled root
-	//     row, so their equivalent is skipped as a duplicate;
-	//   - the app root is NOT unreachable: the narrow overflow menu still prepends every page's root
-	//     uniformly, which the "below the breakpoint …" test above pins by asserting /catalog.
-	await page.setViewportSize({ width: 1440, height: 900 });
-	await openShell(page, baseURL);
-	await page.getByRole('button', { name: 'Lakehouse' }).click();
-	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
-	await expect(panel.locator('a[href="/catalog"]')).toHaveCount(0);
-	// The trigger stays a BUTTON either way — this ruling removed a row, it did not turn the trigger
-	// into a link (which would navigate instead of opening the panel and hide every column behind a
-	// page load).
-	await expect(page.getByRole('button', { name: 'Lakehouse' })).toBeVisible();
+/** What a sidebar offers, in order: each row's name and, for a link, where it goes. */
+async function sidebarRows(page: Page): Promise<string[]> {
 	const nav = page.getByRole('navigation', { name: 'Pages' });
-	await expect(nav.getByRole('link', { name: 'Lakehouse', exact: true })).toHaveCount(0);
-	// What a user clicks instead: the real rows, one per area, each resolving to a page that exists.
-	for (const href of ['/catalog/tables', '/catalog/namespaces', '/catalog/warehouses']) {
-		await expect(panel.locator(`a[href="${href}"]`)).toHaveCount(1);
-	}
-	// The tenants list is gone from this panel too, by the SAME ruling: there is ONE project concept
-	// and it is the TOP of the hierarchy (project > warehouse > namespace > table), so a tenants row
-	// inside a project-scoped page's dropdown inverted it. The IA round then deleted the route
-	// outright — the surface is the console's `/projects` — so this href resolves nowhere; the
-	// assertion stays as the guard against the dead row returning.
-	await expect(panel.locator('a[href="/catalog/projects"]')).toHaveCount(0);
+	await expect(nav.getByRole('link', { name: 'Tables', exact: true })).toBeVisible();
+	return nav
+		.locator('a, [aria-disabled="true"]')
+		.evaluateAll((els) =>
+			els.map((el) => `${el.textContent?.trim() ?? ''} ${el.getAttribute('href') ?? '(disabled)'}`),
+		);
+}
 
-	// …and the panel must still RENDER its columns. Kept from the version this test replaced, because
-	// it is the assertion that earned its keep: when the self-row briefly existed it was a sibling
-	// before the grid, giving NavigationMenu.Content two children — bits-ui sizes the shared viewport
-	// from the active content, measured 69px (the row's own height) and clipped all five columns. Every
-	// href assertion above passed anyway (the links were in the DOM and Playwright called them visible;
-	// the clip is on an ancestor). Only a screenshot caught it. So assert the rendered GEOMETRY too —
-	// now guarding the grid-only panel against the same class of collapse.
-	const box = await panel.boundingBox();
-	expect(box!.height, 'the panel is clipped — the group columns are not showing').toBeGreaterThan(
-		200,
-	);
-	// And assert on innerText, not textContent: textContent returns every panel's markup including the
-	// inactive siblings', which is how "alice sees the Governance column" passed against a 69px panel.
-	// innerText reflects RENDERED text, and the group labels are CSS-uppercased, so compare case-insensitively.
-	const visible = (await panel.innerText()).toLowerCase();
-	for (const group of ['workspace', 'catalog']) {
-		expect(visible, `the ${group} column is not visible in the panel`).toContain(group);
+test('every area carries the same sidebar: the estate pages, the catalog, the admin pages and the workbench', async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await openShell(page, '/');
+	const home = await sidebarRows(page);
+	for (const row of [
+		'Home /',
+		'Projects /projects',
+		'Tables /catalog/tables',
+		'Events /admin/events',
+		'Workbench /workbench',
+		'Settings /settings',
+	]) {
+		expect(home).toContain(row);
 	}
+	for (const path of ['/projects', '/catalog/tables', '/admin/events', '/workbench']) {
+		await page.goto(path);
+		await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
+		// Settings' child rows show while you are inside Settings only; elsewhere the rail is identical.
+		expect(await sidebarRows(page), path).toEqual(home);
+	}
+	// One header row: the rail's toggle, the breadcrumb, the bell and the account menu, and no second
+	// bar of page links.
+	const header = page.locator('header');
+	await expect(header.getByRole('navigation')).toHaveCount(1);
+	await expect(header.getByRole('navigation', { name: 'Breadcrumb' })).toBeVisible();
+});
+
+test('/catalog has no page of its own: it, and the Catalog crumb, land on the tables list', async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await page.goto('/catalog');
+	await expect(page).toHaveURL(/\/catalog\/tables$/);
+	await expect(page.getByRole('link', { name: TABLES[2] })).toBeVisible();
+
+	await page.goto(`/catalog/tables/${encodeURIComponent(TABLES[2])}`);
+	await page
+		.getByRole('navigation', { name: 'Breadcrumb' })
+		.getByRole('link', { name: 'Catalog' })
+		.click();
+	await expect(page).toHaveURL(/\/catalog\/tables$/);
 });
 
 test('the breadcrumb truncates MIDDLE segments and always shows the current page (#105)', async ({
 	page,
-	baseURL,
 }) => {
 	await page.setViewportSize({ width: 600, height: 900 });
-	await page.goto(projectUrl(baseURL, `/catalog/tables/${encodeURIComponent(TABLES[0])}`));
+	await page.goto(`/catalog/tables/${encodeURIComponent(TABLES[0])}`);
 	const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
 	// The current page is the LAST crumb and is never the one that gets dropped (the label is the
 	// table id, percent-decoded and otherwise as written).
@@ -270,40 +176,36 @@ test('the breadcrumb truncates MIDDLE segments and always shows the current page
 	expect(fits).toBe(true);
 });
 
-test('the breadcrumb names the active project once, only inside it, and writes identifiers as they are', async ({
-	page,
-	baseURL,
-}) => {
+test('the breadcrumb is the path alone, and writes identifiers as they are', async ({ page }) => {
 	await page.setViewportSize({ width: 1440, height: 900 });
 	const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' }).locator('li');
 	// innerText, not textContent: it is what the reader sees, CSS text-transform included, and an
 	// identifier re-cased by a stylesheet misreports the data the page is about.
 	const seen = { useInnerText: true } as const;
 
-	// A lakehouse page: the project (from the host) is the trail's root, once, and the table id is
-	// printed exactly as the catalog names it.
-	await page.goto(projectUrl(baseURL, `/catalog/tables/${encodeURIComponent(TABLES[2])}`));
+	// A catalog page: the trail is the path, with no project in front of it (a table belongs to the
+	// project its warehouse names, which its own page says), and the table id is printed exactly as
+	// the catalog names it.
+	await page.goto(`/catalog/tables/${encodeURIComponent(TABLES[2])}`);
 	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
-	await expect(crumbs).toHaveText(['acmecorp', 'Catalog', 'Tables', TABLES[2]], seen);
+	await expect(crumbs).toHaveText(['Catalog', 'Tables', TABLES[2]], seen);
 	// Separators go between crumbs: the trail starts with a name.
 	await expect(crumbs.first().locator('svg')).toHaveCount(0);
 	await expect(crumbs.nth(1).locator('svg')).toHaveCount(1);
 
-	// An estate page is outside every project: no project crumb, and no empty one either.
-	await page.goto(projectUrl(baseURL, '/settings/access'));
+	await page.goto('/settings/access');
 	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
 	await expect(crumbs).toHaveText(['Settings', 'Access'], seen);
-	await page.goto(projectUrl(baseURL, '/projects'));
+	await page.goto('/projects');
 	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
 	await expect(crumbs).toHaveText(['Projects'], seen);
 });
 
 test(`the sidebar is off-canvas below ${COLLAPSE_AT}px and on-canvas above it (#105)`, async ({
 	page,
-	baseURL,
 }) => {
 	await page.setViewportSize({ width: 1440, height: 900 });
-	await openShell(page, baseURL);
+	await openShell(page);
 	// Desktop: the app nav is laid out in the document.
 	await expect(page.locator('[data-slot="sidebar"][data-state="expanded"]')).toBeVisible();
 
@@ -314,12 +216,9 @@ test(`the sidebar is off-canvas below ${COLLAPSE_AT}px and on-canvas above it (#
 	await expect(page.locator('[data-sidebar="sidebar"][data-mobile="true"]')).toBeVisible();
 });
 
-test('a table wider than the viewport scrolls INSIDE its card (#105)', async ({
-	page,
-	baseURL,
-}) => {
+test('a table wider than the viewport scrolls INSIDE its card (#105)', async ({ page }) => {
 	await page.setViewportSize({ width: 600, height: 900 });
-	await openShell(page, baseURL);
+	await openShell(page);
 	const card = page.locator('[data-slot="data-table-card"]');
 	await expect(card).toBeVisible();
 	const measured = await card.evaluate((el) => {

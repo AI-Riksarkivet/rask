@@ -14,9 +14,10 @@ decides authorization — it decides **disclosure**.
 
 ## The three layers, and what each one is for
 
-1. **Information architecture** — the navbar and sidebar do not render a link to a surface the
-   identity cannot use. `estate_admin` is the only fact the nav reads
-   (`packages/ui/src/lib/shell/nav-config.ts`). This is courtesy, not security.
+1. **Information architecture** — the sidebar, the console's one navigation, renders no link to a surface
+   the identity cannot use: such a row is shown disabled with the denial's wording and hands out none of its
+   children. `estate_admin` is the only fact it reads (`frontend/console/src/lib/nav.ts`). This is courtesy,
+   not security.
 2. **The route guard** — the console's admin layout reads `/management/v1/me` in the browser and shows a
    `403` page to a non-`estate_admin` before any admin component renders. Fail-closed on every ambiguity: no
    token, a 401/403, a timeout, an unreachable catalog, or a `/management/v1/me` response that drifted from the

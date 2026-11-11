@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { seed as seedFor } from '../mock-client';
+import { cellUnder } from '../table-cell';
 
 // `/projects/<p>` — ONE project's metadata and overview, a top-level page because a project is the
 // TOP of the hierarchy. Its read is a `query` running in the browser, so the catalog answer is seeded
@@ -42,6 +43,9 @@ test('renders the project’s warehouse rows and effective admins', async ({ pag
 	const gold = page.getByRole('row').filter({ hasText: 'acme-gold' });
 	await expect(gold).toContainText('gold-bucket');
 	await expect(gold).toContainText('pending');
+	// Which warehouse serves the project's gold tier, and a dash where a warehouse serves none.
+	await expect(await cellUnder(page, 'acme-gold', 'serving')).toHaveText('gold');
+	await expect(await cellUnder(page, 'acme-wh', 'serving')).toHaveText('—');
 
 	// The effective admins, verbatim — a userset (`role:<id>#assignee`) is a real grant and must not be
 	// flattened into a plain user.
@@ -60,16 +64,29 @@ test('each warehouse row links to its catalog page', async ({ page }) => {
 	}
 	const back = page.locator('a.back');
 	await expect(back).toHaveAttribute('href', '/projects');
+	// …and the catalog's lists open filtered to this project, the filter in the URL.
+	const lists = page.getByRole('navigation', { name: 'This project in the catalog' });
+	for (const list of ['warehouses', 'namespaces', 'tables', 'promotions']) {
+		await expect(lists.locator(`a[href="/catalog/${list}?project=acme"]`)).toBeVisible();
+	}
 });
 
-test('a project the catalog refuses is named as denied, not rendered empty', async ({ page }) => {
-	await seed(page, {
-		'GET /management/v1/projects/secret': { status: 403, body: { detail: 'forbidden' } },
-	});
+test('a project the reader cannot see reads as missing or not theirs, never as an empty project', async ({
+	page,
+}) => {
+	// The catalog answers a non-member exactly as it answers a missing project: 404, code 4.
+	await page.route('**/api/catalog/management/v1/projects/secret', (route) =>
+		route.fulfill({
+			status: 404,
+			contentType: 'application/problem+json',
+			body: JSON.stringify({ code: 4, detail: 'project not found: secret' }),
+		}),
+	);
 	await page.goto('/projects/secret');
 	await expect(
-		page.getByText("You don't have access to this project's registry facts."),
+		page.getByText('that you can see: it does not exist, or you are not a member of it.'),
 	).toBeVisible();
-	// The honest failure, not a project that looks like it has nothing in it.
+	await expect(page.locator('.empty code', { hasText: 'secret' })).toBeVisible();
+	// An honest answer, not a project that looks like it has nothing in it.
 	await expect(page.getByRole('heading', { name: 'Warehouses' })).toHaveCount(0);
 });

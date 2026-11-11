@@ -12,7 +12,7 @@
 </script>
 
 <script lang="ts">
-	import { GrantForm } from '@rask/ui/grant-form';
+	import { GrantForm } from '#lib/access/grant-form/index.ts';
 	import { enter } from '@rask/ui/motion';
 	import { Network, ShieldAlert } from '@lucide/svelte';
 	import { Background, BackgroundVariant, Controls, type Edge, SvelteFlow } from '@xyflow/svelte';
@@ -149,12 +149,8 @@
 			</SvelteFlow>
 		</div>
 
-		<!-- ONE implementation of this form, shared with `@rask/ui`'s GrantsPanel. It used to live here
-		     too, and that duplication was the actual defect behind three bugs fixed on 2026-08-16 — each
-		     paid for twice — while the copies had already drifted: this one offered four rungs to the
-		     panel's six, so `pass_grants` and `manage_grants` were ungrantable from the graph and
-		     grantable from the panel, with no decision behind the difference.
-		     `bind:subject` is what keeps clicking a subject node prefilling the form. -->
+		<!-- The grant form the grants panel renders too, so both offer the same rungs behind the same
+		     gates. `bind:subject` is what keeps clicking a subject node prefilling the form. -->
 		<GrantForm
 			kind="table"
 			bind:subject={mgUser}

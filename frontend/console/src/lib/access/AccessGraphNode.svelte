@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import { Subject } from '@rask/ui/identity';
+	import { Subject } from '#lib/access/identity/index.ts';
 	import type { Node, NodeProps } from '@xyflow/svelte';
 	import type { NodeRole } from './graph';
 

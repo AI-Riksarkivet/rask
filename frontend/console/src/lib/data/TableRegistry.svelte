@@ -34,6 +34,10 @@
 	import { tableFromJSON, tableToIPC } from 'apache-arrow';
 	import { createTableWithRows } from './catalog';
 	import { declareTable, fetchTables } from './remote/catalog.api';
+	import ProjectFilter from './ProjectFilter.svelte';
+	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
+	import { projectOfTable } from './project-filter.ts';
+	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOfTable, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
@@ -45,6 +49,21 @@
 	let tables = $state<string[] | null>(lastRead?.ok ? [...lastRead.data.tables].sort() : null);
 	let lastStatus = $state(lastRead?.ok ? 200 : 0);
 	let settled = $state(lastRead !== undefined); // distinguishes "still loading" (0, unsettled) from a network error (0, settled)
+
+	/** The project the rows are filtered to (`''`: every project), held by whoever mounts the
+	 *  registry: the tables page keeps it in its URL, a workbench panel in its own state. */
+	let {
+		project: projectFilter,
+		onprojectchange,
+	}: { project: string; onprojectchange: (project: string) => void } = $props();
+
+	// Each row's project, from the warehouses and the bindings; the filter narrows the rows this caller
+	// was given, a view and never a boundary.
+	const projects = new ProjectIndexRead();
+	const filterWaits = $derived(projectFilter !== '' && projects.state.kind === 'loading');
+	const filterFailure = $derived(
+		projectFilter !== '' && projects.state.kind === 'failed' ? projects.state.reason : null,
+	);
 
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
@@ -65,7 +84,7 @@
 	const hasRows = $derived(declRows.trim().length > 0);
 
 	async function load(): Promise<void> {
-		const res = await fetchTables();
+		const [res] = await Promise.all([fetchTables(), projects.load()]);
 		settled = true;
 		if (res.ok) {
 			// A copy + sort, not toSorted() — the latter is ES2023, above the repo's Safari-16 floor.
@@ -188,14 +207,19 @@
 	}
 
 	// ── the DataTable (goal cond 4) ──
-	type Row = { id: string; namespace: string; stage: StageInfo | null };
+	type Row = { id: string; namespace: string; stage: StageInfo | null; project: string | null };
 	const rows = $derived.by((): Row[] => {
 		const all = (tables ?? []).map((id): Row => ({
 			id,
 			namespace: namespaceOfTable(id),
 			stage: stageOfTable(id),
+			project: projects.index ? projectOfTable(projects.index, id) : null,
 		}));
-		return stageFilter ? all.filter((r) => r.stage?.stage === stageFilter) : all;
+		return all.filter(
+			(r) =>
+				(!stageFilter || r.stage?.stage === stageFilter) &&
+				(!projectFilter || r.project === projectFilter),
+		);
 	});
 
 	let sorting = $state<SortingState>([]);
@@ -223,6 +247,18 @@
 					onclick: column.getToggleSortingHandler(),
 				}),
 			cell: ({ row }) => renderSnippet(tableCell, row.original),
+		},
+		{
+			id: 'project',
+			accessorFn: (r) => r.project ?? '',
+			header: ({ column }) =>
+				renderComponent(DataTableHeaderButton, {
+					label: 'project',
+					sorted: column.getIsSorted(),
+					onclick: column.getToggleSortingHandler(),
+				}),
+			cell: ({ row }) => row.original.project ?? '—',
+			meta: { headerClass: 'w-32', cellClass: 'font-mono' },
 		},
 		{
 			id: 'stage',
@@ -387,13 +423,24 @@
 					{ value: 'gold', label: 'gold' },
 				]}
 			/>
+			<ProjectFilter value={projectFilter} onchange={onprojectchange} />
 		</div>
-		<DataTable
-			{table}
-			loading={tables === null}
-			emptyMessage="No tables registered — a create makes the first."
-			onrowclick={openDrawer}
-		/>
+		{#if filterFailure !== null}
+			<ProjectFilterNotice
+				project={projectFilter}
+				reason={filterFailure}
+				onclear={() => onprojectchange('')}
+			/>
+		{:else}
+			<DataTable
+				{table}
+				loading={tables === null || filterWaits}
+				emptyMessage={projectFilter
+					? `No tables in project ${projectFilter}.`
+					: 'No tables registered — a create makes the first.'}
+				onrowclick={openDrawer}
+			/>
+		{/if}
 	{/if}
 </div>
 

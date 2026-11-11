@@ -2,12 +2,12 @@ import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { seed as seedFor } from '../mock-client';
 
-// `/settings` — the PLATFORM configuration surface and the third place in the main menu.
+// `/settings` — the PLATFORM configuration surface, the sidebar's Settings row.
 //
 // Two things are worth pinning, and only one of them is about the page: that the ROUTE exists and
-// carries what the ruling put there, and that the ROUTE itself refuses. The navbar SHOWS Settings to a
-// non-admin, disabled and with its reason (#143) — and either way the bar is presentation, not
-// authorization: anyone can type the URL, and a gate that lives only in the bar is not a gate. Since
+// carries what the ruling put there, and that the ROUTE itself refuses. The sidebar SHOWS Settings to a
+// non-admin, disabled and with its reason (#143) — and either way the sidebar is presentation, not
+// authorization: anyone can type the URL, and a gate that lives only in the sidebar is not a gate. Since
 // #105 the gate is a `+layout.ts`, so it covers `/settings/access` and `/settings/audit` too — a door
 // that has to be remembered per child is a door that will be forgotten.
 
@@ -18,8 +18,8 @@ const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
 
 const nav = (page: Page) => page.getByRole('navigation', { name: 'Pages' });
 
-/** The page's OWN rows — scoped to its sections, never the whole document. The navbar also carries a
- *  "Projects" link (it is a main-menu entry AND a settings row now), so an unscoped `getByRole('link')`
+/** The page's OWN rows — scoped to its sections, never the whole document. The sidebar also carries a
+ *  "Projects" link (it is a sidebar row AND a settings row), so an unscoped `getByRole('link')`
  *  matches two elements and fails strict mode. Scoping is also the more honest assertion: this file is
  *  about what the settings PAGE offers, not about the chrome above it. */
 const rows = (page: Page) => page.locator('section[aria-labelledby^="settings-"]');
@@ -29,7 +29,7 @@ test.beforeEach(async ({ context }, testInfo) => {
 	await signIn(context, { token });
 });
 
-test('an estate admin gets Settings in the bar, and the page carries the estate’s configuration', async ({
+test('an estate admin gets Settings in the sidebar, and the page carries the estate’s configuration', async ({
 	page,
 }) => {
 	await seed(page, { 'GET /management/v1/me': ME_ADMIN, 'GET /management/v1/projects': [] });
@@ -56,9 +56,11 @@ test('an estate admin gets Settings in the bar, and the page carries the estate�
 	}
 	await expect(page.getByText('Not wired').first()).toBeVisible();
 
-	// …and the bar here is still the MAIN MENU, because /settings is the estate level.
-	await expect(nav(page).getByRole('link', { name: 'Home', exact: true })).toBeVisible();
-	await expect(nav(page).getByRole('link', { name: 'Projects', exact: true })).toBeVisible();
+	// …and the sidebar lights Settings, the page you are on.
+	await expect(nav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveAttribute(
+		'data-active',
+		'true',
+	);
 });
 
 test('a non-admin is REFUSED /settings with the reason — the route itself refuses (#143)', async ({
@@ -69,7 +71,7 @@ test('a non-admin is REFUSED /settings with the reason — the route itself refu
 	//
 	// 403, not 404, by owner ruling (#143). GIVEN UP: a non-admin can confirm /settings exists. BOUGHT:
 	// they can find out WHY they cannot open it, and which relation to ask for. The disclosure is thin —
-	// the estate ships a documented settings surface and the navbar names it — while a 404 would cost
+	// the estate ships a documented settings surface and the sidebar names it — while a 404 would cost
 	// every legitimate user their next step.
 	await seed(page, {
 		'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
@@ -80,7 +82,7 @@ test('a non-admin is REFUSED /settings with the reason — the route itself refu
 	// ruling a bare status code would silently drop.
 	await expect(page.getByText('can_observe_events', { exact: false })).toBeVisible();
 
-	// …and the bar SHOWS it, disabled — never omitted. A link would be reachable by keyboard and by
+	// …and the sidebar SHOWS it, disabled — never omitted. A link would be reachable by keyboard and by
 	// paste however it is painted, so the disabled entry must NOT be a link.
 	await page.goto('/projects');
 	await expect(nav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);

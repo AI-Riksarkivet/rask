@@ -39,6 +39,12 @@ export const fetchProject = query(v.string(), async (project): Promise<ApiResult
 	parsed(await catalogJSON(`/management/v1/projects/${enc(project)}`), ProjectSchema),
 );
 
+/** The projects the caller can see, `GET /management/v1/projects`: every project to an estate
+ *  observer, and to anyone else the projects they are a member of. Read for their ids. */
+export const fetchVisibleProjects = query(async (): Promise<ApiResult<{ project: string }[]>> =>
+	parsed(await catalogJSON('/management/v1/projects'), v.array(v.object({ project: v.string() }))),
+);
+
 /** One control event, as `/management/v1/events` reports it — the fields the project page renders. */
 const ProjectEventSchema = v.object({
 	event_id: v.string(),
