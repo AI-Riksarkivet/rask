@@ -354,6 +354,9 @@ def test_a_rename_across_a_managed_boundary_needs_grant_authority_and_moves_the_
         named_by = {held["key"]["object"] for held in read(tuple_key={"user": mine, "relation": "child", "object": "namespace:"})}
         assert named_by == {entered}, f"the moved table is named a child of {named_by}, not of the namespace it is in alone"
     finally:
-        # The leg runs against live estates too; what it made goes, so its namespaces can be unbound.
+        # The leg runs against live estates too, so what it made goes: its tables, then its namespaces with their
+        # grants and bindings. The session's teardown would only unbind a namespace and leave its row and its tuples.
         for table in (brought, taken, moved, f"{managed}$moved"):
             requests.post(f"{server}/v1/table/{table}/drop", headers=ah, params={"force": "true", "purge": "true"}, json={}, timeout=30)
+        for namespace in (free, managed):
+            requests.post(f"{server}/v1/namespace/{namespace}/drop", headers=ah, json={}, timeout=30)
