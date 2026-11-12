@@ -14,11 +14,12 @@ it waits, up to a deadline, for the store and the model to exist, re-reading one
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Self
 
 import aiohttp
 import pytest
@@ -129,6 +130,32 @@ _ESTATE = {"id": "store-ESTATE", "name": "lance-catalog", "created_at": "2026-07
 _SCRATCH = {"id": "store-SCRATCH", "name": "fga-probe", "created_at": "2026-09-27T20:00:00Z"}
 
 
+class _VirtualTime:
+    """`asyncio` as `fga.resolve` reads it: its running loop is this object, whose clock moves only when the wait sleeps.
+
+    A wait then polls once per ``poll_seconds`` of its deadline however loaded the host is, where on real time the count of
+    reads was the host's (measured 2026-11-12: two reads fitted into a 200 ms deadline under coverage at 16 workers).
+    `resolve` asks its loop for ``time()`` alone; every other name is the real module's.
+    """
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(asyncio, name)
+
+    def get_running_loop(self) -> Self:
+        return self
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float, result: Any = None) -> Any:
+        self.now += delay
+        await asyncio.sleep(0)
+        return result
+
+
 def _install(monkeypatch: pytest.MonkeyPatch, fake: _OpenFga, image_model: dict[str, Any]) -> None:
     monkeypatch.setattr(fga, "OpenFgaClient", _client_class(fake))
     monkeypatch.setattr(fga, "load_model", lambda: copy.deepcopy(image_model))
@@ -150,6 +177,7 @@ async def test_a_wait_for_an_absent_model_rereads_one_page_per_poll_then_fails_c
     history = [_stored("model-C", NEWER), _stored("model-B", NEWER), _stored("model-A", NEWER)]
     fake = _OpenFga([[_ESTATE]], [history])
     _install(monkeypatch, fake, OLDER)
+    monkeypatch.setattr(fga, "asyncio", _VirtualTime())
 
     with pytest.raises(fga.OpenFgaModelAbsentError, match=r"^store store-ESTATE at http://fga:8080 holds no model carrying this image's model\.json$"):
         await fga.resolve("http://fga:8080", token_file=None, deadline_seconds=0.2, poll_seconds=0.02)
