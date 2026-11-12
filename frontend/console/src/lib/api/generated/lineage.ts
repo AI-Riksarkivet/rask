@@ -525,7 +525,7 @@ export interface components {
          * ReadinessStatus
          * @enum {string}
          */
-        ReadinessStatus: "starting" | "ready" | "shutting_down" | "degraded";
+        ReadinessStatus: "starting" | "ready" | "degraded" | "unhealthy" | "shutting_down";
         /** ValidationError */
         ValidationError: {
             /** Context */

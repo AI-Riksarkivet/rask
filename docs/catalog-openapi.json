@@ -10583,8 +10583,9 @@
         "enum": [
           "starting",
           "ready",
-          "shutting_down",
-          "degraded"
+          "degraded",
+          "unhealthy",
+          "shutting_down"
         ],
         "title": "ReadinessStatus",
         "type": "string"
