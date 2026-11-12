@@ -159,20 +159,6 @@ def plan_new_keys(dataset: lance.LanceDataset, rows: pa.Table, keys: Sequence[st
         return dataset.merge_insert(list(keys)).when_matched_fail().when_not_matched_insert_all().execute_uncommitted(rows)
 
 
-def refuse_keys_held(dataset: lance.LanceDataset, rows: pa.Table, keys: Sequence[str], *, door: str) -> None:
-    """Refuse ``rows`` when the table at ``dataset``'s version already holds one of their key values.
-
-    A key on a nested field is not judged here (see the module docstring).
-
-    Raises:
-        InvalidInputError: ``dataset`` holds a row with one of the key values; nothing was written.
-    """
-    if rows.num_rows == 0 or not joinable(rows, keys):
-        return
-    with _refusing_held_keys(door):
-        dataset.merge_insert(list(keys)).when_matched_fail().execute_uncommitted(_key_rows(rows, keys))
-
-
 def fragments_since(proposed: lance.LanceDataset, followed: lance.LanceDataset | None) -> tuple[list[LanceFragment], list[LanceFragment]]:
     """``proposed``'s new fragments and the ones it carries: a fragment is new when ``followed``, the version ``proposed``
     follows (``None`` for a table's first), holds no fragment of its id."""
@@ -181,14 +167,34 @@ def fragments_since(proposed: lance.LanceDataset, followed: lance.LanceDataset |
     return [fragment for fragment in fragments if fragment.fragment_id not in held], [fragment for fragment in fragments if fragment.fragment_id in held]
 
 
-def refuse_repeats_in_version(proposed: lance.LanceDataset, followed: lance.LanceDataset | None, *, door: str) -> None:
-    """Refuse ``proposed`` when two rows of its new fragments, or one of them and a row it carries, share a key value.
+def _keys_written_since(
+    proposed: lance.LanceDataset, followed: lance.LanceDataset | None, key_ids: set[int]
+) -> tuple[list[LanceFragment], list[LanceFragment]]:
+    """``proposed``'s fragments whose key values were written since ``followed``, and the ones it carries as they were.
 
-    New and carried are :func:`fragments_since`'s. Measured on pylance 13.0.0, ``update`` and ``merge_insert`` write every
-    row they change or insert to a new fragment and delete it from the fragment it left, so a key an update sets or a merge
-    inserts is read among the new rows, and the row it replaced is not read among the carried ones. A key on a field nested
-    in a struct is read through its struct, so the carried rows are narrowed by the key only where its first field is a
-    column.
+    A fragment's keys were written when ``followed`` holds no fragment of its id, or when it holds a data file the followed
+    fragment does not that carries a key field: measured on pylance 13.0.0, a ``DataReplacement`` swaps a fragment's file
+    for one whose key values are new and adds no fragment. A file carrying other fields, as ``add_columns`` writes one,
+    leaves the fragment's keys where they were.
+    """
+    held = {fragment.fragment_id: {data_file.path for data_file in fragment.metadata.files} for fragment in followed.get_fragments()} if followed else {}
+    written: list[LanceFragment] = []
+    carried: list[LanceFragment] = []
+    for fragment in proposed.get_fragments():
+        files = held.get(fragment.fragment_id)
+        keyed = files is None or any(data_file.path not in files and key_ids.intersection(data_file.fields) for data_file in fragment.metadata.files)
+        (written if keyed else carried).append(fragment)
+    return written, carried
+
+
+def refuse_repeats_in_version(proposed: lance.LanceDataset, followed: lance.LanceDataset | None, *, door: str) -> None:
+    """Refuse ``proposed`` when two rows whose keys it wrote, or one of them and a row it carries, share a key value.
+
+    Written and carried are :func:`_keys_written_since`'s. Measured on pylance 13.0.0, ``update`` and ``merge_insert`` write
+    every row they change or insert to a new fragment and delete it from the fragment it left, so a key an update sets or a
+    merge inserts is read among the written rows, and the row it replaced is not read among the carried ones. A key on a
+    field nested in a struct is read through its struct, so the carried rows are narrowed by the key only where its first
+    field is a column.
 
     Raises:
         InvalidInputError: a key value repeats; nothing was committed.
@@ -196,7 +202,7 @@ def refuse_repeats_in_version(proposed: lance.LanceDataset, followed: lance.Lanc
     keys = key_columns(proposed.lance_schema)
     if not keys:
         return
-    new, carried = fragments_since(proposed, followed)
+    new, carried = _keys_written_since(proposed, followed, {field.id() for field in proposed.lance_schema.unenforced_primary_key()})
     if not new:
         return
     rows = proposed.scanner(columns=_top_columns(keys), fragments=new).to_table()

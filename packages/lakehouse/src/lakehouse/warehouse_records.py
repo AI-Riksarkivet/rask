@@ -15,13 +15,14 @@ from __future__ import annotations
 
 from typing import Any, Final
 
+from lakehouse import control_prefixes
 from lakehouse.record_store import list_records, read_record
 from lakehouse.storage_options import StorageOptions
 
 
 #: Where the catalog writes warehouse records, a top namespace's binding to its warehouse, and which project owns a bucket.
 #: Kept in sync with `catalog/services/warehouses.py`.
-REGISTRY_PREFIX = "_warehouses"
+REGISTRY_PREFIX = control_prefixes.WAREHOUSES
 _BINDINGS_PREFIX: Final = f"{REGISTRY_PREFIX}/bindings"
 _BUCKET_CLAIMS_PREFIX: Final = f"{REGISTRY_PREFIX}/bucket-claims"
 

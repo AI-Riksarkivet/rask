@@ -43,6 +43,8 @@ pytestmark = pytest.mark.usefixtures("catalog_identity_token")
 
 CATALOG = "http://catalog:2333"
 SCOPED = StorageOptions(key_pair=S3KeyPair(access_key_id="SCOPED", secret_access_key=SecretStr("scoped-secret")))
+#: The vend as maintenance signs with it: the vend's own key pair under maintenance's store bounds, a vend naming none.
+SIGNED = SCOPED.with_options({"connect_timeout": "2000ms", "timeout": "30000ms", "client_max_retries": "0", "client_retry_timeout": "30"})
 
 
 def _settings() -> MaintenanceSettings:
@@ -80,7 +82,7 @@ def test_a_dataset_under_the_table_root_is_covered(door: respx.MockRouter, answe
 
     options = credentials.write_options_for(held, _settings(), table_id="tracka$rd2_28877454")
 
-    assert options == SCOPED, f"{held} was refused a credential vended for its own table root {answered}"
+    assert options == SIGNED, f"{held} was refused a credential vended for its own table root {answered}"
 
 
 def test_a_vend_that_names_no_location_proceeds_and_says_so(door: respx.MockRouter, caplog: pytest.LogCaptureFixture) -> None:
@@ -96,5 +98,5 @@ def test_a_vend_that_names_no_location_proceeds_and_says_so(door: respx.MockRout
     with caplog.at_level("WARNING"):
         options = credentials.write_options_for("s3://bind86-wh/medallion/silver", _settings(), table_id="bronze$events")
 
-    assert options == SCOPED
+    assert options == SIGNED
     assert any("location" in record.getMessage() for record in caplog.records), "an unverifiable vend passed silently"

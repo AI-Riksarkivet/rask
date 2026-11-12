@@ -40,6 +40,7 @@ fixture's) or a user report — not a page.
 | `CatalogManifestReclaimFailing` firing, `manifest_reclaim_failed` WARN logs | [A root's namespace index is not reclaimed](#a-roots-namespace-index-is-not-reclaimed) |
 | `ErasureDerivedAfterRelease` or `ErasureLateDerivedUnwatched` firing | [A table derived from an erased table found after the release](#a-table-derived-from-an-erased-table-found-after-the-release) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
+| `LanceObjectStoreThrottled` or `LanceObjectStoreRetriesHigh` firing: writes and passes slow, nothing failing yet | [The object store throttles or retries](#the-object-store-throttles-or-retries) |
 | FGA failing across the estate | [AGE down](#age-postgres-down--fga) |
 | `DaprConsumerWedge` firing: a sidecar retrying its app's inbound deliveries | [A subscriber retries without end](#a-subscriber-retries-without-end) |
 | `HttpServerMetricsMissing` firing | [No app reports HTTP metrics](#no-app-reports-http-metrics) |
@@ -293,6 +294,23 @@ through the catalog.
 :9000; liveness answers during startup while every S3 request still gets 503, so judge "back" by readiness.
 
 **Act.** Recover the pod/volume; for prod durability, use the platform's managed S3.
+
+## The object store throttles or retries
+
+**Symptom.** `LanceObjectStoreThrottled` (the store answers 429 or 503 for 15 minutes) or `LanceObjectStoreRetriesHigh`
+(over 5% of requests draw a 5xx, 429 or 408 for 15 minutes) fires for a service. Writes, reads and maintenance passes
+take longer; few or none fail yet.
+
+**Cause.** Lance's own store client retries those answers and backs off inside the service's store bounds
+(`LANCE_STORE_*` on the catalog, `MAINTENANCE_STORE_*` on maintenance), so a store reaching its request limits, or
+degrading, shows as latency before it shows as errors.
+
+**Diagnose.** The Storage dashboard (`lance_object_store_*`) by service and operation: which operation is throttled, and
+whether the request rate rose before it. In development, the `rustfs` fixture's log and its node's disk; in production,
+the platform store's limits for the buckets the estate uses.
+
+**Act.** Lower what drives the load (a bring-your-own job's concurrency, a burst of commits), or raise the store's
+limits. If requests begin to fail, see [Object store down](#object-store-down--data-plane).
 
 ## AGE Postgres down → FGA
 

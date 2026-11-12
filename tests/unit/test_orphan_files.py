@@ -21,6 +21,7 @@ from __future__ import annotations
 import pathlib
 import posixpath
 from collections.abc import Callable
+from datetime import timedelta
 from typing import cast
 
 import lance
@@ -67,10 +68,61 @@ def test_files_only_an_OLD_version_references_are_not_orphans(tmp_path: pathlib.
     only_v1 = {f"data/{f.path}" for fr in at_v1.get_fragments() for f in fr.data_files()}
     assert only_v1, "fixture must actually have a v1 data file"
 
-    referenced, versions, note = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
-    assert note is None
+    referenced, versions = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
     assert versions >= 2
     assert only_v1 <= referenced, "a file referenced only by an older version was treated as unreferenced"
+
+
+class _AnswersOnlyTheLayoutMarkers:
+    """Maintenance's own store session: it may ask about the dataset's ``tree`` and ``_mem_wal`` keys, and the store
+    refuses a question about any other key, a data, deletion or index file's included (rask's canned policy for
+    maintenance, [[LH-575]])."""
+
+    def __init__(self, uri: str) -> None:
+        self._inner = pafs.LocalFileSystem()
+        self._granted = {f"{uri}/tree", f"{uri}/_mem_wal"}
+
+    def get_file_info(self, arg: object) -> object:
+        asked = [arg] if isinstance(arg, str) else arg if isinstance(arg, list) else []
+        if refused := [key for key in asked if key not in self._granted]:
+            raise OSError(f"AccessDenied: HeadObject {refused[0]}")
+        return self._inner.get_file_info(arg)
+
+
+def test_the_scan_names_exactly_the_files_no_retained_version_tracks(tmp_path: pathlib.Path) -> None:
+    """The referenced set is Lance's own ``tracked_files()``: on a table carrying an index, a deletion and a tag that keeps
+    version 1 through a cleanup of the versions after it, the scan reports every file planted beside the table's and none
+    of the table's own, the tagged version's transaction file included. It does so on a store that answers it about no
+    key but the two layout markers, since the scan learns which files are present from its listing alone."""
+    uri = str(tmp_path / "t.lance")
+    lance.write_dataset(_table(), uri)
+    lance.dataset(uri).tags.create("kept", 1)
+    for _ in range(3):
+        lance.write_dataset(_table(), uri, mode="append")
+    lance.dataset(uri).create_scalar_index("id", index_type="BTREE")
+    lance.dataset(uri).delete("id = 1")
+    lance.dataset(uri).cleanup_old_versions(older_than=timedelta(0), error_if_tagged_old_versions=False)
+    planted = ["_deletions/9-9-9.arrow", "_indices/00000000-0000-0000-0000-000000000000/page_data.lance", "_transactions/9-stray.txn", "data/stray.lance"]
+    for rel in planted:
+        _plant(uri, rel)
+
+    scan = orphans.scan_dataset(cast(pafs.FileSystem, _AnswersOnlyTheLayoutMarkers(uri)), uri, prefix=uri)
+
+    assert (scan.checked, scan.reason, sorted(o.path for o in scan.orphans)) == (True, None, planted)
+
+
+def test_a_dataset_missing_a_file_it_references_is_not_certified(tmp_path: pathlib.Path) -> None:
+    """A referenced file the listing lacks lives under another root or is gone, and either way the root's listing is
+    not the dataset's files: the scan refuses the dataset by shape and names nothing."""
+    uri, prefix = _dataset(tmp_path)
+    gone = min(fragment.data_files()[0].path for fragment in lance.dataset(uri).get_fragments())
+    (pathlib.Path(uri) / "data" / gone).unlink()
+    _plant(uri, "data/stray.lance")
+
+    scan = orphans.scan_dataset(_fs(), uri, prefix=prefix)
+
+    assert (scan.checked, scan.excluded, scan.orphans) == (False, True, [])
+    assert f"1 referenced file(s) are not listed under it (e.g. data/{gone})" in (scan.reason or ""), scan.reason
 
 
 def test_a_deletion_vector_is_referenced_not_orphaned(tmp_path: pathlib.Path) -> None:
@@ -127,7 +179,7 @@ def test_a_blob_sidecar_of_a_referenced_data_file_is_not_an_orphan(tmp_path: pat
     is exactly the reclamation gap this pass exists to name.
     """
     uri, prefix = _dataset(tmp_path)
-    referenced, _, _ = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
+    referenced, _ = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
     stems = [p.removeprefix("data/").removesuffix(".lance") for p in referenced if p.endswith(".lance")]
     assert stems, "fixture must have at least one referenced data file"
 
@@ -221,7 +273,7 @@ def test_a_registered_but_unused_base_is_refused_by_the_flag(tmp_path: pathlib.P
     alt.mkdir()
     lance.dataset(uri).add_bases([DatasetBasePath(path=str(alt), name="alt")])
     # The consequence detector genuinely has nothing to go on: every referenced path is local.
-    referenced, _versions, _note = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
+    referenced, _versions = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
     assert all((tmp_path / "based.lance" / rel).exists() for rel in referenced if not rel.endswith("/"))
 
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)

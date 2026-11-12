@@ -57,14 +57,14 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import records
+from lakehouse import control_prefixes, records
 from lakehouse.record_store import record_key
 from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
 
-PREFIX: Final = "_commit_turns"
+PREFIX: Final = control_prefixes.COMMIT_TURNS
 
 #: How long a turn is held: a catalog door's commit holds it for its remaining attempts and releases it at the end, and a
 #: stock writer is handed it for its retries. Lance's own commit retries give up after 30 s (``DEFAULT_COMMIT_RETRY_TIMEOUT``,

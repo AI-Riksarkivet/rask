@@ -26,7 +26,7 @@ the file). The gates ``catalog.services.managed_versions`` runs on each data fil
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
@@ -354,7 +354,7 @@ def blob_columns(table: lance.LanceDataset) -> list[str]:
 
 
 class _Descriptor(BaseModel):
-    """One non-null blob descriptor a new fragment stores, where it lies, and the field whose data file holds it."""
+    """One non-null blob descriptor a judged fragment stores, where it lies, and the field whose data file holds it."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -370,16 +370,23 @@ class _Descriptor(BaseModel):
 
 def verify_blob_sidecars(
     detached: lance.LanceDataset,
-    fragments: Sequence[FragmentMetadata],
+    added_files: Sequence[tuple[FragmentMetadata, DataFile]],
     columns: Sequence[str],
     *,
     external_bases: Sequence[base_registry.RecordedBase],
     object_sizes: Callable[[Sequence[str]], list[int | None]],
     sidecar_sizes: Callable[[Sequence[str]], list[int | None]],
 ) -> None:
-    """Refuse fragments whose blob descriptors point at bytes that are missing, short, or not the table's.
+    """Refuse a version whose added data files hold blob descriptors pointing at bytes that are missing, short, or not the
+    table's.
 
-    ``detached`` is a detached commit of exactly these fragments: Lance reads blob descriptors only through a dataset,
+    ``added_files`` is every data file the version adds, with the fragment holding it: a new fragment's, and one a
+    ``Merge`` or a ``DataReplacement`` adds to a fragment the table holds (measured on pylance 13.0.0: a file so added that
+    names another bucket's object as an external blob commits, and ``take_blobs`` then reads that object's bytes). Every
+    descriptor an added file stores is judged, and none another file of the fragment stores, which was judged when it
+    landed.
+
+    ``detached`` is a detached commit of the version: Lance reads blob descriptors only through a dataset,
     and ``LanceFileReader`` cannot project a blob-v2 column on pylance 12.0.0 (it reads ``struct<>`` with no rows, or
     refuses the projection, measured). Every descriptor is judged, wherever its field lies beneath a Struct, List or
     LargeList (`lance_docs/lance/format/table/blob.md` § Table Schema).
@@ -402,19 +409,26 @@ def verify_blob_sidecars(
             table's external bases or missing.
         ServiceUnavailableError: The descriptors or a sidecar's size could not be read for a reason other than their content.
     """
-    written = {data_file.path for fragment in fragments for data_file in fragment.files}
-    added = [fragment for fragment in detached.get_fragments() if {data_file.path for data_file in fragment.metadata.files} <= written]
+    added = {data_file.path for _, data_file in added_files}
+    holding = {metadata.id for metadata, _ in added_files}
+    fragments = [fragment for fragment in detached.get_fragments() if fragment.fragment_id in holding]
     try:
-        scanned = detached.scanner(columns=list(columns), fragments=added, with_row_address=True).to_table()
+        scanned = detached.scanner(columns=list(columns), fragments=fragments, with_row_address=True).to_table()
     except OSError as exc:
         if _names(exc, _UNREADABLE_FILE_MARKERS):
             raise InvalidInputError(f"commit refused: the appended fragments' blob descriptors are unreadable: {exc}. Nothing was committed") from exc
         raise ServiceUnavailableError(
             f"cannot read the appended fragments' blob descriptors to verify their sidecars, so nothing was committed: {exc}"
         ) from exc
-    descriptors = list(_descriptors(scanned, detached, columns))
+    files = {fragment.fragment_id: fragment.metadata.files for fragment in fragments}
+    descriptors = [blob for blob in _descriptors(scanned, detached, columns) if (owner := _stored_by(blob, files)) is None or owner.path in added]
     _verify_external_blobs(descriptors, _external_bases(detached, external_bases), object_sizes)
-    _verify_sidecars(descriptors, {fragment.fragment_id: fragment.metadata.files for fragment in added}, sidecar_sizes)
+    _verify_sidecars(descriptors, files, sidecar_sizes)
+
+
+def _stored_by(blob: _Descriptor, files: Mapping[int, Sequence[DataFile]]) -> DataFile | None:
+    """The data file of the descriptor's fragment that holds its field, or ``None`` when none does."""
+    return next((data_file for data_file in files[blob.fragment_id] if blob.field_id in data_file.fields), None)
 
 
 def _descriptors(scanned: pa.Table, table: lance.LanceDataset, columns: Sequence[str]) -> Iterator[_Descriptor]:
@@ -483,14 +497,14 @@ def _verify_external_blobs(descriptors: Sequence[_Descriptor], bases: dict[int, 
 
 
 def _verify_sidecars(
-    descriptors: Sequence[_Descriptor], files: dict[int, Sequence[DataFile]], sidecar_sizes: Callable[[Sequence[str]], list[int | None]]
+    descriptors: Sequence[_Descriptor], files: Mapping[int, Sequence[DataFile]], sidecar_sizes: Callable[[Sequence[str]], list[int | None]]
 ) -> None:
     """Every sidecar a descriptor names exists and reaches the furthest byte any descriptor names in it."""
     furthest: dict[str, tuple[int, _Descriptor]] = {}
     for blob in descriptors:
         if blob.kind not in _SIDECAR_KINDS or not blob.size:
             continue
-        owner = next((data_file for data_file in files[blob.fragment_id] if blob.field_id in data_file.fields), None)
+        owner = _stored_by(blob, files)
         if owner is None:
             raise InvalidInputError(f"commit refused: {blob.where} is stored by no data file of its fragment. Nothing was committed")
         sidecar, end = f"{owner.path.removesuffix('.lance')}/{format(blob.blob_id, '032b')[::-1]}.blob", blob.position + blob.size

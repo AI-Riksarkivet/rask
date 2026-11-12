@@ -190,7 +190,7 @@ def test_merge_insert_reads_its_query_params_as_the_spec_states_them(real_ns_cli
     )
 
     resp = real_ns_client.post(
-        "/v1/table/db$t/merge_insert?on=id&on=rev&when_matched_update_all_filt=target.score > 0.5&timeout=30s&use_index=true",
+        "/v1/table/db$t/merge_insert?on=id&on=rev&when_matched_update_all_filt=target.score > 0.5&use_index=true",
         content=source,
         headers=ARROW_STREAM,
     )

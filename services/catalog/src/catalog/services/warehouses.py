@@ -36,7 +36,7 @@ from catalog.services.control_records import (
     with_protection,
     write_json,
 )
-from lakehouse import trash
+from lakehouse import control_prefixes, trash
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
@@ -46,11 +46,11 @@ from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_cli
 
 log = logging.getLogger(__name__)
 
-_REGISTRY_PREFIX = "_warehouses"
-_BINDINGS_PREFIX = "_warehouses/bindings"
+_REGISTRY_PREFIX = control_prefixes.WAREHOUSES
+_BINDINGS_PREFIX = f"{_REGISTRY_PREFIX}/bindings"
 #: Where a bucket's owning project is recorded, write-once. Beside the bindings because it is the same
 #: kind of fact — an immutable routing claim the store arbitrates rather than a mutable record.
-_BUCKET_CLAIMS_PREFIX = "_warehouses/bucket-claims"
+_BUCKET_CLAIMS_PREFIX = f"{_REGISTRY_PREFIX}/bucket-claims"
 
 
 #: The record fields holding a warehouse's delete profile, as strings like every record field.

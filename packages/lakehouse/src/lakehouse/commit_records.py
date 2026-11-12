@@ -35,13 +35,13 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from lakehouse import records, stored_objects
+from lakehouse import control_prefixes, records, stored_objects
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
 from lakehouse.storage_options import StorageOptions
 
 
-AUTHORS_PREFIX: Final = "_commit_authors"
-MARKS_PREFIX: Final = "_commit_marks"
+AUTHORS_PREFIX: Final = control_prefixes.COMMIT_AUTHORS
+MARKS_PREFIX: Final = control_prefixes.COMMIT_MARKS
 
 
 class CommitAuthor(BaseModel):

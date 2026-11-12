@@ -83,6 +83,9 @@ def table(real_ns_client: TestClient) -> tuple[TestClient, str]:
         pytest.param("/index/id_idx/drop", {"json": {"branch": "ghost"}}, 406, _UNSUPPORTED, id="index_drop"),
         pytest.param("/stats", {"json": {"branch": "ghost"}}, 406, _UNSUPPORTED, id="stats"),
         pytest.param("/schema_metadata/update", {"json": {"branch": "ghost", "metadata": {"k": "v"}}}, 404, _BRANCH_NOT_FOUND, id="schema_metadata"),
+        # The spec's REST form: the body is the bare metadata map, so the branch rides the query (`spec.yaml`
+        # UpdateTableSchemaMetadata's parameters).
+        pytest.param("/schema_metadata/update?branch=ghost", {"json": {"k": "v"}}, 404, _BRANCH_NOT_FOUND, id="schema_metadata-as-a-bare-map"),
         pytest.param("/restore", {"json": {"branch": "ghost", "version": 1}}, 404, _BRANCH_NOT_FOUND, id="restore"),
         # Served by the upstream op, which reports a missing branch as TableNotFound; the door opens the ref first ([[LH-406]]).
         pytest.param("/version/list?branch=ghost", {"json": {}}, 404, _BRANCH_NOT_FOUND, id="version_list"),

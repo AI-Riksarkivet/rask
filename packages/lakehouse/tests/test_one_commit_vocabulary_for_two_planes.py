@@ -12,8 +12,9 @@ word `concurrent`, so a flat set of markers answers the dangerous one with the s
 from __future__ import annotations
 
 import pytest
+from lance.commit import CommitConflictError
 
-from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
+from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
 
 
 #: Real message shapes, not invented ones: the retryable text is what six concurrent `add_columns`
@@ -30,6 +31,24 @@ from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_fai
 )
 def test_each_outcome_is_named_from_the_message_lance_actually_sends(message: str, expected: CommitVerdict) -> None:
     assert classify_commit_failure(OSError(message)) is expected, f"{message!r} classified wrongly"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        pytest.param(CommitConflictError("the table moved on", retryable=True), CommitVerdict.RETRYABLE_CONFLICT, id="retryable-in-other-words"),
+        pytest.param(
+            CommitConflictError("Retryable commit conflict: preempted by concurrent transaction", retryable=False),
+            CommitVerdict.INCOMPATIBLE,
+            id="incompatible-whatever-it-says",
+        ),
+    ],
+)
+def test_a_conflict_lance_raises_typed_is_judged_by_its_type_and_not_its_message(failure: CommitConflictError, expected: CommitVerdict) -> None:
+    """pylance 13.0.0 raises ``lance.commit.CommitConflictError`` from ``add_columns`` and ``LanceDataset.commit``, its
+    ``retryable`` saying which conflict it lost (measured): that answer stands when Lance words the message otherwise, in
+    the verdict and in the retry judgement the catalog's commit loop asks (``is_retryable_conflict``)."""
+    assert (classify_commit_failure(failure), is_retryable_conflict(failure)) == (expected, expected is CommitVerdict.RETRYABLE_CONFLICT)
 
 
 def test_INCOMPATIBLE_beats_the_bare_word_concurrent() -> None:

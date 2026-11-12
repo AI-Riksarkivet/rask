@@ -29,12 +29,13 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from lakehouse import control_prefixes
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 
 
 #: Where the records live, relative to the control root.
-GATES_PREFIX = "_gates"
+GATES_PREFIX = control_prefixes.GATES
 
 
 class GateSpec(BaseModel):

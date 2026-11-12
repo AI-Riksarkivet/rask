@@ -174,6 +174,17 @@ def respx_allows_unused_routes() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _lance_reads_commit_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run each test as a lakehouse process runs, with Lance's auto-migration off.
+
+    Every app build writes the switch into the process environment for good (`lakehouse.lance_app`), so without this a
+    test ran with it off or with Lance's default by whether an app had been built before it. The fixture sets it for
+    the test and restores the environment at teardown, whatever a build wrote.
+    """
+    monkeypatch.setenv("LANCE_AUTO_MIGRATION", "false")
+
+
+@pytest.fixture(autouse=True)
 def _a_fresh_secret_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """Give each test its own process-global cache of secret-store reads.
 

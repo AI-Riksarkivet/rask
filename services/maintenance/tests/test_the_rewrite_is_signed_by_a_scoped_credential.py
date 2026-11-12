@@ -79,7 +79,8 @@ def _door(router: respx.MockRouter) -> respx.Route:
 
 
 def test_the_pass_is_signed_by_the_vended_credential_at_maintenances_own_store_address(router: respx.MockRouter) -> None:
-    """[[LH-489]] At maintenance's own store address: the catalog vends the one a client off the cluster reaches."""
+    """[[LH-489]] At maintenance's own store address: the catalog vends the one a client off the cluster reaches. A vend
+    names no timeouts, so its calls are bounded as maintenance's own are."""
     _door(router).mock(return_value=httpx.Response(200, json=_VEND))
     settings = _settings()
 
@@ -94,6 +95,10 @@ def test_the_pass_is_signed_by_the_vended_credential_at_maintenances_own_store_a
         "allow_http": "true",
         "aws_provider_scheme": "token",
         "aws_skip_signature": "false",
+        "connect_timeout": "2000ms",
+        "timeout": "30000ms",
+        "client_max_retries": "0",
+        "client_retry_timeout": "30",
     }
 
 

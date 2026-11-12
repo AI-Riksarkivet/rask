@@ -28,6 +28,7 @@ import pyarrow.fs as pafs
 from pydantic import ValidationError
 
 from catalog.schemas import RoleRecord
+from lakehouse import control_prefixes
 from lakehouse.objectfs import fs_and_base
 from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
 from lakehouse.storage_options import StorageOptions
@@ -35,7 +36,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-_ROLES_PREFIX: Final = "_roles"
+_ROLES_PREFIX: Final = control_prefixes.ROLES
 #: The relation naming who is in a role.
 ASSIGNEE: Final = "assignee"
 

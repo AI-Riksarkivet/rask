@@ -17,7 +17,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from lance_namespace import (
@@ -29,6 +29,7 @@ from lance_namespace import (
     AlterTableBackfillColumnsResponse,
     AlterTableDropColumnsRequest,
     AlterTableDropColumnsResponse,
+    InvalidInputError,
     UpdateFieldMetadataRequest,
     UpdateFieldMetadataResponse,
     UpdateTableSchemaMetadataResponse,
@@ -46,7 +47,7 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import provenance_guard
+from catalog.core import formats, provenance_guard
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
@@ -292,9 +293,14 @@ async def update_table_schema_metadata(
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
+    branch_named: Annotated[str | None, Query(alias="branch", description="The ref to write when the body is the bare metadata map. Omit for main.")] = None,
 ) -> JSONResponse:
     """Upsert the table's schema-level metadata map — a ``null`` value DELETES that key; emits an
     UPDATE_SCHEMA_METADATA event at the version the update committed (the response omits it, so the event resolves it from the commit).
+
+    The ref is the ``branch`` query parameter the spec declares for this operation, whose REST body is the bare metadata
+    map and so carries no branch field; an envelope body (``{"metadata": ..., "branch": ...}``) names it in the body, and
+    one naming a branch the query contradicts is refused 400.
 
     The op MERGES, whatever the spec's "Replace" wording says (probed against a real ``dir`` backend:
     posting ``{owner}`` over ``{owner, tier}`` leaves ``tier`` standing). Omitting a key therefore cannot
@@ -323,19 +329,22 @@ async def update_table_schema_metadata(
         # has a JSON body, so the envelope is where it belongs — and it was reading `id` from there
         # while ignoring `branch` in the same dict.
         raw_branch = body.get("branch")
-        branch = raw_branch if isinstance(raw_branch, str) and raw_branch else None
+        branch = raw_branch if isinstance(raw_branch, str) and raw_branch else branch_named
+        if branch_named is not None and branch != branch_named:
+            raise InvalidInputError(f"the body names branch {branch!r} and the query branch {branch_named!r}; name one")
         raw = nested
     else:
-        # A FLAT body IS the metadata map, so there is no envelope to read a branch out of — the spec's
-        # query parameter is the only channel left, and this route does not serve one. Stated rather
-        # than left implicit: main is the correct target here, not an oversight.
-        branch = None
+        # A FLAT body IS the metadata map, so there is no envelope to read a branch out of: the spec's query parameter
+        # is the channel.
+        branch = branch_named
         raw = body
     # `str(v)` on a null would write the literal string "None" — the deletion signal must survive intact.
     values: dict[str, str | None] = {str(k): None if v is None else str(v) for k, v in raw.items()}
     # BEFORE the route split, so neither route can be the one that forgot ([[LH-208]]). A null counts:
     # deleting `lineage.dataset_id` erases the name maintenance files a medallion tier under.
     provenance_guard.refuse_reserved_keys(values, door="schema_metadata/update")
+    # A null takes a key away, which turns nothing on.
+    formats.refuse_flag_locking_keys([key for key, value in values.items() if value is not None], door="schema_metadata/update")
     response: UpdateTableSchemaMetadataResponse
     # THE BRANCH THE BODY NAMES IS THE REF WRITTEN: the native op carries the field and disregards it, so a branch's
     # null-free body rewrote MAIN's properties and answered 200 (verified live 2026-08-31 against the object store),

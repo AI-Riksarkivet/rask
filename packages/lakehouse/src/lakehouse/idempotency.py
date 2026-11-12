@@ -27,6 +27,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse import control_prefixes
 from lakehouse.records import RecordChangedError, RecordExistsError, create_json, mutate_json, read_json, replace_json
 from lakehouse.storage_options import StorageOptions
 
@@ -34,7 +35,7 @@ from lakehouse.storage_options import StorageOptions
 #: Where the records live under the control root. A dedicated prefix rather than a suffix inside the
 #: registry, because these expire and the registry records do not — a reclaim that can be scoped to one
 #: prefix is a reclaim somebody will actually run.
-PREFIX = "_idempotency"
+PREFIX = control_prefixes.IDEMPOTENCY
 
 #: A key is a caller-supplied token that becomes part of an object key, so it is a UUID in its canonical lower-case
 #: form, which no spelling can turn into a path segment that climbs out of the prefix. Constrained HERE and not only

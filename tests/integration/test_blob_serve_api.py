@@ -31,7 +31,7 @@ def _blob_table(payloads: list[bytes | None]) -> pa.Table:
 @pytest.fixture
 def blob_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """A TestClient over the app with a REAL dir namespace rooted in tmp_path, pre-seeded with a
-    three-row blob table (``clips``: ``b"hello-world"``, 100 ``X`` bytes, and a zero-length payload)."""
+    four-row blob table (``clips``: ``b"hello-world"``, 100 ``X`` bytes, a zero-length payload and a null)."""
     monkeypatch.setenv("LANCE_REST_IMPL", "dir")
     monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "test")
@@ -47,7 +47,7 @@ def blob_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
 
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(ns, StorageOptions(), ["db", "clips"], _blob_table([b"hello-world", b"X" * 100, b""]), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "clips"], _blob_table([b"hello-world", b"X" * 100, b"", None]), root=str(tmp_path), mode="create", registry=None)
 
     app.dependency_overrides[get_namespace] = lambda: ns
     app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
@@ -142,8 +142,7 @@ def test_get_blob_negative_row_422(blob_client: TestClient) -> None:
 
 
 def test_get_blob_zero_length_payload_200_empty(blob_client: TestClient) -> None:
-    # A zero-length (or null — stored identically at pylance 8.0.0) payload is valid empty bytes,
-    # not an error; any Range against it is unsatisfiable.
+    # A zero-length payload is valid empty bytes, not an error; any Range against it is unsatisfiable.
     resp = blob_client.get("/management/v1/table/db$clips/blobs", params={"column": "payload", "row": 2})
     assert resp.status_code == 200
     assert resp.content == b""
@@ -156,6 +155,15 @@ def test_get_blob_zero_length_payload_200_empty(blob_client: TestClient) -> None
     )
     assert ranged.status_code == 416
     assert ranged.headers["content-range"] == "bytes */0"
+
+
+def test_get_blob_null_payload_204_no_content(blob_client: TestClient) -> None:
+    """A null holds no value, which an empty payload's 200 would report as present and empty: 204, whatever the range."""
+    plain = blob_client.get("/management/v1/table/db$clips/blobs", params={"column": "payload", "row": 3})
+    ranged = blob_client.get("/management/v1/table/db$clips/blobs", params={"column": "payload", "row": 3}, headers={"Range": "bytes=0-3"})
+
+    for resp in (plain, ranged):
+        assert (resp.status_code, resp.content, resp.headers["etag"], "content-length" in resp.headers) == (204, b"", '"1-payload-3"', False)
 
 
 def test_get_blob_version_param_over_http(blob_client: TestClient, tmp_path: Path) -> None:

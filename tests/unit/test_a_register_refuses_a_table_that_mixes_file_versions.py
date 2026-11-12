@@ -103,18 +103,44 @@ def _mixed_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]
     return [r for r in caplog.records if r.levelno == logging.WARNING and "mixed_file_versions" in r.getMessage()]
 
 
+def _mixed(uri: Path) -> None:
+    _write(uri, [1, 2], version="2.1")
+    _mix(uri)
+
+
+def _opted_into_managed_blobs(uri: Path) -> None:
+    """Schema metadata that activates Managed Blobs once a newer Lance commits the table, a flag no commit clears."""
+    schema = pa.schema([pa.field("id", pa.int64())], metadata={"lance.blob.managed": "true"})
+    lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}, schema=schema), str(uri), data_storage_version="2.2", enable_stable_row_ids=True)
+
+
+def _carrying_a_mem_wal(uri: Path) -> None:
+    """A MemWAL initialised: its shards would write under `_mem_wal/`, which no credential the catalog vends may write."""
+    _write(uri, [1, 2], version="2.2")
+    lance.dataset(str(uri)).initialize_mem_wal(unsharded=True)
+
+
 class TestThePublicDoor:
-    def test_a_mixed_table_is_refused_and_the_namespace_is_unchanged(self, catalog: TestClient, root: Path) -> None:
+    @pytest.mark.parametrize(
+        ("written", "status", "code", "named"),
+        [
+            # The spec's InvalidInput code, naming the flag and the only measured remedy.
+            pytest.param(_mixed, 400, 13, ("256", "recreate"), id="mixed-file-versions"),
+            # The spec's Unsupported code: a feature the catalog does not serve.
+            pytest.param(_carrying_a_mem_wal, 406, 0, ("MemWAL", "_mem_wal/"), id="a-mem-wal"),
+            pytest.param(_opted_into_managed_blobs, 400, 13, ("lance.blob.managed", "no later commit"), id="a-flag-locking-key"),
+        ],
+    )
+    def test_a_refused_table_is_refused_and_the_namespace_is_unchanged(
+        self, catalog: TestClient, root: Path, written: Callable[[Path], None], status: int, code: int, named: tuple[str, ...]
+    ) -> None:
         _create_namespace(catalog, "db")
-        _write(root / "mixed", [1, 2], version="2.1")
-        _mix(root / "mixed")
+        written(root / "refused")
 
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "mixed"})
+        resp = catalog.post("/v1/table/db$t/register", json={"location": "refused"})
 
-        assert resp.status_code == 400, resp.text
-        assert resp.json()["code"] == 13, "the spec's InvalidInput code, which a generated client dispatches on"
-        assert "256" in resp.json()["detail"], "the refusal must name the flag"
-        assert "recreate" in resp.json()["detail"].lower(), "the refusal must name the only measured remedy"
+        assert (resp.status_code, resp.headers["content-type"], resp.json()["code"]) == (status, "application/problem+json", code), resp.text
+        assert all(word.lower() in resp.json()["detail"].lower() for word in named), resp.json()["detail"]
         assert not _is_registered(catalog, "db$t"), "a refused registration must leave nothing attached"
         listed = catalog.get("/v1/namespace/db/table/list")
         assert listed.status_code == 200, listed.text

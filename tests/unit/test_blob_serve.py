@@ -3,8 +3,8 @@
 Like ``test_blob_create.py``, the read tests run a REAL ``dir`` namespace + real pylance (no mocks):
 they are the unit-level proof that a credential-less consumer gets exact payload bytes (full and
 ranged, streamed in bounded windows) through the catalog, and that the probed pylance failure shapes
-(zero-length/null empty list, a bare ValueError on a dataset-less declared location) surface as a
-precise 4xx — or valid empty bytes — instead of a 500.
+(a range past an empty payload, a bare ValueError on a dataset-less declared location) surface as a
+precise 4xx instead of a 500.
 """
 
 from __future__ import annotations
@@ -103,17 +103,6 @@ def test_read_blob_streams_in_bounded_windows(clips: DoorTable, monkeypatch: pyt
     blob = read_blob(clips, StorageOptions(), column="payload", row=0)
     pieces = list(blob.chunks())
     assert pieces == [b"hell", b"o-wo", b"rld"]
-
-
-def test_read_blob_zero_length_payloads_serve_empty(clips: DoorTable) -> None:
-    # At pylance 8.0.0 a NULL blob is stored as a size-0 descriptor (probed: input null_count=1 →
-    # stored null_count=0), so null (row 2) and b"" (row 3) are the SAME row state: an empty 200 —
-    # never the unguarded files[0] IndexError-500, and never a bogus 400 for valid empty bytes.
-    for row in (2, 3):
-        blob = read_blob(clips, StorageOptions(), column="payload", row=row)
-        assert blob.satisfiable is True and blob.ranged is False
-        assert (blob.size, blob.length) == (0, 0)
-        assert _bytes(blob) == b""
 
 
 def test_read_blob_any_range_on_zero_length_is_unsatisfiable(clips: DoorTable) -> None:

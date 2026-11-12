@@ -30,13 +30,13 @@ from typing import Final
 
 from pydantic import BaseModel, Field
 
-from lakehouse import records
+from lakehouse import control_prefixes, records
 from lakehouse.location_claims import ClaimStore, claim_digest
 from lakehouse.record_store import delete_record
 from lakehouse.stored_objects import list_under
 
 
-PREFIX: Final = "_clone_endings"
+PREFIX: Final = control_prefixes.CLONE_ENDINGS
 _SUFFIX: Final = ".json"
 
 

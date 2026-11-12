@@ -30,6 +30,7 @@ from catalog.services.control_records import (
     with_protection,
     write_json,
 )
+from lakehouse import control_prefixes
 from lakehouse.objectfs import fs_and_base
 from lakehouse.records import RecordMissingError, create_json, mutate_json
 from lakehouse.storage_options import StorageOptions
@@ -37,7 +38,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-_PROJECTS_PREFIX = "_projects"
+_PROJECTS_PREFIX = control_prefixes.PROJECTS
 
 
 def put_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:

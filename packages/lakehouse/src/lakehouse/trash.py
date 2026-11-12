@@ -36,7 +36,7 @@ from typing import Any, Final, Literal
 
 import pyarrow.fs as pafs
 
-from lakehouse import location_claims, object_records
+from lakehouse import control_prefixes, location_claims, object_records
 from lakehouse.base_registry import BaseRegistry, forget_base_record
 from lakehouse.objectfs import fs_and_base
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
@@ -46,7 +46,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-_TRASH_PREFIX = "_trash"
+_TRASH_PREFIX = control_prefixes.TRASH
 
 #: What a trash record keeps: a dropped table, or a namespace a recoverable cascade dropped.
 type TrashKind = Literal["table", "namespace"]

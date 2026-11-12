@@ -284,7 +284,7 @@ def test_a_distributed_runs_STAGING_set_is_not_discovered_as_a_governed_dataset(
 
     A distributed stage lands its output in `<destination>/_staging/<idempotency-key>` before one merge
     converges it (LH-007). Once the destination exists that set is already invisible, because the walk
-    descends a dataset root's children ONLY into `tree/`. But on the run that CREATES the destination
+    descends into no dataset root's children. But on the run that CREATES the destination
     there is a window where the parent is a plain directory, and a crash inside it leaves a real Lance
     dataset the walk would find, compact, and count among the estate's governed tables.
 

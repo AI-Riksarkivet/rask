@@ -441,6 +441,42 @@ groups:
             cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check
             the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end
 
+      # [[LH-574]] The object store under every Lance read and write, as Lance's own client sees it. pylance 13.0.0's
+      # `lance.otel` bridge (`lakehouse.lance_metrics`, exported by the catalog and maintenance) counts each request on
+      # `lance_object_store_requests_total`, each answer a retry may clear (5xx, 429, 408) on
+      # `lance_object_store_retryable_responses_total` and each throttling answer (429, 503) on
+      # `lance_object_store_throttle_total`, each labelled with its `service_name`. The last two are created at the first
+      # such answer, so a healthy estate holds neither series. Lance backs off and retries both inside its store bounds
+      # (`LANCE_STORE_*`, `MAINTENANCE_STORE_*`), so a degrading store slows writes and passes long before one fails:
+      # these are the signal before `HttpServerErrorRatioHigh`. The 15m `for` rides out a burst.
+      - alert: LanceObjectStoreThrottled
+        expr: sum by (service_name) (rate(lance_object_store_throttle_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: fleet
+        annotations:
+          summary: "{{ $labels.service_name }} has been throttled by the object store for 15m (HTTP 429/503)"
+          description: >-
+            Lance in {{ $labels.service_name }} has met throttling answers from the object store continuously for 15m.
+            Its client backs off and retries, so writes and maintenance passes slow down rather than fail. Check the
+            store's request limits and what drives the load. Runbook: docs/runbooks/RUNBOOK-oncall.md#the-object-store-throttles-or-retries
+
+      - alert: LanceObjectStoreRetriesHigh
+        expr: >-
+          sum by (service_name) (rate(lance_object_store_retryable_responses_total[10m]))
+          / sum by (service_name) (rate(lance_object_store_requests_total[10m])) > 0.05
+        for: 15m
+        labels:
+          severity: warning
+          service: fleet
+        annotations:
+          summary: "{{ $labels.service_name }}: over 5% of object-store requests drew a retryable answer for 15m"
+          description: >-
+            More than one request in twenty from Lance in {{ $labels.service_name }} got a 5xx, 429 or 408 from the store
+            for 15m. Lance retries each inside its store bounds, so every call costs up to its retry count over: a
+            degrading store shows here before requests fail. Runbook: docs/runbooks/RUNBOOK-oncall.md#the-object-store-throttles-or-retries
+
   - name: lance-maintenance
     rules:
       # [[LH-559]] The write-event lane parks on `dlq.maintenance.arrival` once the sidecar's retry schedule is spent, and

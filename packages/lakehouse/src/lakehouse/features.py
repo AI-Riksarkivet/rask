@@ -49,6 +49,8 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel, Field
 
+from lakehouse import manifest_wire
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -219,30 +221,14 @@ def manifest_feature_flags(ds: ManifestCarrier) -> tuple[int, int]:
     Both default to 0 — proto3 omits a zero varint, so an ABSENT field is genuinely "no flags set"
     rather than "unknown". Every other field is skipped by wire type, so an unrelated manifest change
     cannot shift the read.
+
+    Raises:
+        ManifestWireError: The manifest does not parse. Every gate refuses then: flags read up to where the parse
+            stopped could miss a flag set after it, and ``(0, 0)`` passes every gate.
     """
     blob: bytes = ds._ds.serialized_manifest()  # noqa: SLF001 — pylance's own __reduce__ path uses it
-    reader = writer = 0
-    i, n = 0, len(blob)
-    while i < n:
-        key, i = _varint(blob, i)
-        field, wire = key >> 3, key & 7
-        if wire == 0:
-            value, i = _varint(blob, i)
-            if field == _MANIFEST_READER_FLAGS_FIELD:
-                reader = value
-            elif field == _MANIFEST_WRITER_FLAGS_FIELD:
-                writer = value
-        elif wire == 2:
-            length, i = _varint(blob, i)
-            i += length
-        elif wire == 5:
-            i += 4
-        elif wire == 1:
-            i += 8
-        else:
-            # A wire type we cannot skip. STOP rather than misread the remaining bytes as flags —
-            # a garbage reader value would refuse a healthy dataset forever.
-            break
+    reader = manifest_wire.varint_field(blob, _MANIFEST_READER_FLAGS_FIELD) or 0
+    writer = manifest_wire.varint_field(blob, _MANIFEST_WRITER_FLAGS_FIELD) or 0
     return reader, writer
 
 
@@ -324,19 +310,6 @@ def manifest_base_paths(ds: ManifestCarrier) -> list[str]:
     time — one source, so a pylance change cannot fix one reader and leave the other misreading.
     """
     return [ref.path for ref in manifest_base_path_refs(ds)]
-
-
-def _varint(blob: bytes, i: int) -> tuple[int, int]:
-    """One protobuf base-128 varint starting at ``i``; returns ``(value, next_index)``."""
-    value = shift = 0
-    while i < len(blob):
-        byte = blob[i]
-        i += 1
-        value |= (byte & 0x7F) << shift
-        shift += 7
-        if not byte & 0x80:
-            break
-    return value, i
 
 
 def unsupported_features(ds: ManifestCarrier) -> str | None:

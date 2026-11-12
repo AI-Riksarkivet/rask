@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import logging
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.problem import PROBLEM_JSON, occurrence, problem_body
-from lakehouse.spec_routes import is_spec_route
+from lakehouse.spec_routes import SPEC_ERROR_STATUSES, UNSUPPORTED_STATUS, is_spec_route, structural
 
 
 if TYPE_CHECKING:
@@ -287,34 +287,69 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
             media_type=PROBLEM_JSON,
         )
 
-    _declare_spec_validation_status(app)
+    _declare_spec_responses(app)
 
 
-def _declare_spec_validation_status(app: FastAPI) -> None:
-    """Make the published schema say what `handle_validation_error` actually serves.
+#: How the published schema names each error status a spec operation lists (``spec.yaml``'s own response names).
+_SPEC_ERROR_DESCRIPTIONS: Final = {
+    "400": "Bad Request",
+    "401": "Unauthorized",
+    "403": "Forbidden",
+    "404": "Not Found",
+    "406": "Unsupported Operation",
+    "409": "Conflict",
+    "503": "Service Unavailable",
+    "5XX": "Server Error",
+}
 
-    FastAPI declares a 422 on every operation that validates anything, and that declaration is what
-    `docs/catalog-openapi.json` carries to the frontend — 159 operations declaring 422 and NONE
-    declaring 400, measured 2026-09-14. Serving 400 on a spec route without moving the declaration
-    would just relocate the disagreement instead of closing it: the served status would match
-    lance-ns while this estate's own generated client still expected 422.
+#: The problem body every refusal carries (:func:`lakehouse.problem.problem_body`): RFC 9457's keys and the spec's
+#: ``ErrorResponse`` ``code`` and ``error``.
+_PROBLEM_SCHEMA: Final = {
+    "type": "object",
+    "required": ["type", "title", "status", "detail", "code", "error"],
+    "properties": {
+        "type": {"type": "string"},
+        "title": {"type": "string"},
+        "status": {"type": "integer"},
+        "detail": {"type": "string"},
+        "code": {"type": "integer", "description": "The spec's error code, which a client dispatches on"},
+        "error": {"type": "string"},
+    },
+}
 
-    Renames rather than adds, so an operation ends with exactly one validation response. Operations
-    outside :data:`SPEC_ROUTES` are untouched — a rask-only door still declares and serves 422 — and an
-    app that serves no spec route (lineage, medallion) is left byte-identical, which is why this can
-    live in the shared installer.
+_PROBLEM_RESPONSE_SCHEMA_NAME: Final = "ProblemDetails"
+
+
+def _declare_spec_responses(app: FastAPI) -> None:
+    """Make the published schema say what a spec operation answers: each error status ``spec.yaml`` lists for it and the
+    406 any of them may answer (:data:`lakehouse.spec_routes.UNSUPPORTED_STATUS`), with the problem body, and 400 where
+    FastAPI declares 422.
+
+    FastAPI declares a 422 on every operation that validates anything and no other error, so `docs/catalog-openapi.json`
+    carried 200 and 400 per spec operation where the spec lists 400, 401, 403, 404, 503 and 5XX, and 406 and 409 on some
+    (:data:`lakehouse.spec_routes.SPEC_ERROR_STATUSES`). A spec operation's 400 is the problem body
+    `handle_validation_error` serves, not FastAPI's validation schema.
+
+    Operations outside :data:`SPEC_ROUTES` are untouched — a rask-only door still declares and serves 422 — and an
+    app that serves no spec route (lineage) is left byte-identical, which is why this can live in the shared installer.
     """
     generate = app.openapi
 
     def openapi() -> dict[str, Any]:
         schema = generate()
+        problem = {"application/problem+json": {"schema": {"$ref": f"#/components/schemas/{_PROBLEM_RESPONSE_SCHEMA_NAME}"}}}
+        declared = False
         for path, item in schema.get("paths", {}).items():
             for method, operation in item.items():
                 if not isinstance(operation, dict) or not is_spec_route(method, path):
                     continue
-                responses = operation.get("responses")
-                if isinstance(responses, dict) and "422" in responses and "400" not in responses:
-                    responses["400"] = responses.pop("422")
+                responses = operation.setdefault("responses", {})
+                responses.pop("422", None)
+                for status in sorted(SPEC_ERROR_STATUSES.get((method.upper(), structural(path)), frozenset()) | {UNSUPPORTED_STATUS}):
+                    responses[status] = {"description": _SPEC_ERROR_DESCRIPTIONS[status], "content": problem}
+                declared = True
+        if declared:
+            schema.setdefault("components", {}).setdefault("schemas", {})[_PROBLEM_RESPONSE_SCHEMA_NAME] = _PROBLEM_SCHEMA
         return schema
 
     # FastAPI's own documented override point is this attribute (its `openapi()` is looked up on the

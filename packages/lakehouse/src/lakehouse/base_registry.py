@@ -36,7 +36,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lakehouse import clone_sources, location_claims, records
+from lakehouse import clone_sources, control_prefixes, location_claims, records
 from lakehouse.base_refs import decoded_path, key_uri, location_in_store, names_a_location, normalise, store_of
 from lakehouse.features import BasePathRef
 from lakehouse.record_store import delete_record, record_key
@@ -46,7 +46,7 @@ from lakehouse.storage_options import StorageOptions
 log = logging.getLogger(__name__)
 
 
-_BASES_PREFIX = "_bases"
+_BASES_PREFIX = control_prefixes.BASES
 
 #: The record kind in the key. One kind today; it travels in the key so a second relation stored here
 #: cannot collide with a table's record on the same location.

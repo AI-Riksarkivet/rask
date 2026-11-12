@@ -32,7 +32,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse import stored_objects
+from lakehouse import control_prefixes, stored_objects
 from lakehouse.objectfs import fs_and_base
 from lakehouse.record_store import delete_record, get_record, put_record
 from lakehouse.storage_options import StorageOptions
@@ -40,9 +40,9 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-PREFIX: Final = "_file_identities"
+PREFIX: Final = control_prefixes.FILE_IDENTITIES
 #: Maintenance's copy of each table's records, one object per table.
-COPY_PREFIX: Final = "_maintenance_files"
+COPY_PREFIX: Final = control_prefixes.MAINTENANCE_FILES
 
 
 class CommittedFile(BaseModel):

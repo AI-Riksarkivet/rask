@@ -49,6 +49,26 @@ def test_every_spec_operation_is_served(client: TestClient) -> None:
     assert not missing, f"spec operations with NO served route: {sorted(missing)}"
 
 
+def _error_statuses(paths: dict[str, Any]) -> dict[tuple[str, str], frozenset[str]]:
+    """(METHOD, structural path) -> the 4xx and 5xx statuses each operation declares."""
+    return {
+        (method.upper(), re.sub(r"\{[^}]+\}", "{}", path)): frozenset(str(status) for status in operation.get("responses", {}) if str(status)[0] in "45")
+        for path, item in paths.items()
+        for method, operation in item.items()
+        if method.lower() in _METHODS
+    }
+
+
+def test_every_spec_operation_publishes_the_error_statuses_the_spec_lists(client: TestClient) -> None:
+    """The catalog's OpenAPI declares on each spec operation exactly the error statuses ``spec.yaml`` lists for it
+    (``lakehouse.spec_routes.SPEC_ERROR_STATUSES``, committed because no image carries ``lance_docs/``) and the 406 any of
+    them may answer, the spec's status for code 0 (ADR 0020 row 11)."""
+    listed = _error_statuses(_spec().get("paths", {}))
+    served = _error_statuses(client.app.openapi().get("paths", {}))
+
+    assert {operation: served.get(operation) for operation in listed} == {operation: statuses | {"406"} for operation, statuses in listed.items()}
+
+
 #: The spec owns the whole of ``/v1``. rask's own surface is ``/management/v1``, and the probes sit at the root.
 _SPEC_PREFIX = "/v1/"
 

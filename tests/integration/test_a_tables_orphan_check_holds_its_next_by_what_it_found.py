@@ -469,7 +469,7 @@ def test_a_file_written_while_the_check_reads_is_no_finding(
     task = _table(bucket=bucket, options=store)
     read = orphans.referenced_paths_of
 
-    def _a_commit_lands(ds: lance.LanceDataset, uri: str) -> tuple[set[str], int, str | None]:
+    def _a_commit_lands(ds: lance.LanceDataset, uri: str) -> tuple[set[str], int]:
         found = read(ds, uri)
         _plant(moto_url, bucket, f"_transactions/9-{uuid.uuid4()}.txn")
         return found

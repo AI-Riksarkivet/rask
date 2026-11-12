@@ -47,7 +47,7 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse import location_claims, trash
+from lakehouse import control_prefixes, location_claims, trash
 from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
 from lakehouse.naming import CATALOG_DELIMITER
@@ -65,11 +65,11 @@ log = logging.getLogger(__name__)
 #: The registry prefixes, byte-identical to what the catalog writes them at. Bindings live UNDER the
 #: warehouse prefix, so every warehouse listing here is non-recursive (a recursive one would read the
 #: bindings as malformed warehouse records).
-_PROJECTS_PREFIX = "_projects"
-_WAREHOUSES_PREFIX = "_warehouses"
-_BINDINGS_PREFIX = "_warehouses/bindings"
+_PROJECTS_PREFIX = control_prefixes.PROJECTS
+_WAREHOUSES_PREFIX = control_prefixes.WAREHOUSES
+_BINDINGS_PREFIX = f"{_WAREHOUSES_PREFIX}/bindings"
 #: Trash records are keyed `<kind>/<id>` UNDER this prefix, so the listing is recursive by nature.
-_TRASH_PREFIX = "_trash"
+_TRASH_PREFIX = control_prefixes.TRASH
 
 #: The namespace spec's own object index, one per root: ``object_id``/``object_type`` rows recording
 #: every namespace and table. It is the ONLY place a namespace exists — namespaces are not directories
@@ -77,7 +77,7 @@ _TRASH_PREFIX = "_trash"
 #: Public because the #79 purge re-reads the SAME index to re-check liveness before it deletes anything.
 #: One constant rather than two copies: a purge looking at the wrong path would find no live objects and
 #: happily destroy every one of them.
-MANIFEST_DIR = "__manifest"
+MANIFEST_DIR = control_prefixes.NAMESPACE_INDEX
 _MANIFEST_NAMESPACE_TYPE = "namespace"
 _MANIFEST_TABLE_TYPE = "table"
 

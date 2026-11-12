@@ -244,6 +244,8 @@ bodies** (`application/problem+json`).
 `lakehouse/ns_errors.py::install_problem_handlers` translate — it maps all 24 codes
 (not-founds → 404, already-exists/not-empty/concurrent → 409, `InvalidInput` → 400,
 `PermissionDenied` → 403, `Unauthenticated` → 401, `Unsupported` → **406** (the spec's own status; Q3, 2026-09-02), `Throttling` → 429).
+The published OpenAPI declares on every spec operation the error statuses `spec.yaml` lists for it, with the problem
+body, and 406, which any of them may answer (`lakehouse.spec_routes.UNSUPPORTED_STATUS`, ADR 0020 row 11).
 The branch codes were MISSING until 2026-08-04 — a missing branch answered 500 on endpoints rask
 ships. `tests/unit/test_ns_errors_contract.py` now pins the map against the ENUM, so the next
 spec-added code fails a test instead of a client.
@@ -925,7 +927,9 @@ governing their data. The project-scoped surface is the console's project page, 
   asks the operation's own rung (`fga_deps.require_staged_operation`: the writer operations and a table's first version `can_write_data`, restore
   `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` plus protection,
   `Clone` and unknown operations refused); a create at 2.2 with stable row ids and no later change to either;
-  reserved schema metadata, the provenance and key columns and field-level `rask.*` metadata unchanged; no
+  reserved schema metadata, the provenance and key columns (the key read by Lance's own parser) and field-level
+  `rask.*` metadata unchanged, judged by Lance field id so a rename keeps a label (by path for an Overwrite, whose
+  ids Lance mints by position); no
   `lance.auto_cleanup.*` and no change to `rask.*` config; feature flags the commit adds; the base list unchanged and
   sanctioned, and no added file through a base; a new fragment naming a held file, no file, or (on an Append) an
   overlay, a deletion file or row ids below the table's `next_row_id`; each added file well formed, present at its

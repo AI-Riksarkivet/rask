@@ -8,7 +8,10 @@ sends whoever is on call to the wrong system. 503 is the status that says what h
 caller to retry.
 
 TEXT, NOT TYPES, because object_store flattens every failure into a bare
-`ValueError`/`OSError` carrying `LanceError(IO)` and the reason in the message. MEASURED on pylance
+`ValueError`/`OSError` carrying `LanceError(IO)` and the reason in the message, and no type tells an outage from the
+caller's bad bytes: measured on pylance 13.0.0, a footer read raises `OSError` both for a file that is not a Lance file
+and for a store that does not answer, and an open raises `ValueError` both for a missing dataset and for that store
+(`lance.commit.CommitConflictError` types a commit conflict only, `lancekit.commit_verdict`). MEASURED on pylance
 12.0.0, opening a dataset through each store fault (`lance.dataset`, bounded client timeouts):
 
     connect never completes (packets dropped)   "... Error performing GET <url> in 2.1s ... - HTTP error: error sending request"

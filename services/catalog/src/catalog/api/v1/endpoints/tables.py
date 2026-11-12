@@ -69,7 +69,7 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core import json_arrow, provenance_guard
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings
-from catalog.core.formats import reject_unsupported_properties
+from catalog.core.formats import refuse_properties_kept_nowhere, reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, rename_destination
 from catalog.core.lineage_emit import (
     DECLARE_TABLE,
@@ -362,12 +362,12 @@ async def declare_table(
     The response carries the credential the declarer writes the table with, the highest tier FGA grants
     (:func:`_vend_on_spec_door`), unless the request sets ``vend_credentials`` false.
     """
-    # LANCE-ONLY (2026-08-15 ruling). This door takes `properties` through its spec request
-    # model and never checked it, so a non-Lance format could be selected here while the create
-    # door rejected it. Before anything is reserved, and so is the reserved-namespace rule the create
-    # door holds its properties to: the table's uuid is the catalog's to mint ([[LH-519]]).
+    # LANCE-ONLY (2026-08-15 ruling): a format-selecting property answers the format's own refusal first, a platform key
+    # (the table's uuid is the catalog's to mint, [[LH-519]]) the provenance refusal, and every other property is refused
+    # as one this door keeps nowhere, before anything is reserved.
     reject_unsupported_properties(body.properties if body else None)
     provenance_guard.refuse_reserved_keys((body.properties if body else None) or {}, door="declare properties")
+    refuse_properties_kept_nowhere(body.properties if body else None, door="declare")
     if body is not None and body.location:
         raise InvalidInputError(
             f"a declaration names no location: the catalog places a table it declares under the uuid it mints for it, got {body.location!r}"
@@ -1117,11 +1117,11 @@ async def register_table(
             "catalog does not own from the table that currently points at them. Deregister the existing table "
             "first, then register the new location."
         )
-    # LANCE-ONLY (2026-08-15 ruling), as at `declare_table`, and the reserved-namespace rule the create door
-    # holds its properties to: the table's uuid is the catalog's to mint ([[LH-519]]). Shape refusals like the
-    # mode's, so before `idem.begin` for the same reason.
+    # LANCE-ONLY (2026-08-15 ruling), the platform's keys and every other property, as at `declare_table`. Shape refusals
+    # like the mode's, so before `idem.begin` for the same reason.
     reject_unsupported_properties(body.properties)
     provenance_guard.refuse_reserved_keys(body.properties or {}, door="register properties")
+    refuse_properties_kept_nowhere(body.properties, door="register")
     # LOCATION-EXCLUSIVITY, THE SHAPE HALF ([[LH-279]]) — a shape refusal like the mode's, so before
     # `idem.begin` for the same reason. What the path alone decides is refused before anything is
     # attached: the namespace root, a control prefix, the control root and every configured base.

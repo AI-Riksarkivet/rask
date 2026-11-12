@@ -118,6 +118,23 @@ _ADD_COLUMNS_VIRTUAL = {
         pytest.param(
             lambda c: c.post(f"{T}/merge_insert?on=&when_matched_update_all=true", content=_rows(), headers=ARROW), 400, 13, id="merge-on-an-empty-key"
         ),
+        pytest.param(
+            lambda c: c.post(f"{T}/merge_insert?on=id&when_matched_update_all=true&timeout=30s", content=_rows(), headers=ARROW),
+            406,
+            0,
+            id="merge-a-timeout-the-catalog-does-not-hold",
+        ),
+        # Table properties the door would keep nowhere: only a create keeps them, on the table's schema metadata.
+        pytest.param(lambda c: c.post("/v1/table/g$d/declare", json={"properties": {"owner": "alice"}}), 406, 0, id="declare-properties-kept-nowhere"),
+        pytest.param(
+            lambda c: c.post("/v1/table/g$r/register", json={"location": "elsewhere", "properties": {"owner": "alice"}}),
+            406,
+            0,
+            id="register-properties-kept-nowhere",
+        ),
+        pytest.param(
+            lambda c: c.post(f"{T}/update", json={"updates": [["id", "id + 1"]], "properties": {"owner": "alice"}}), 406, 0, id="update-properties-kept-nowhere"
+        ),
         pytest.param(lambda c: c.post(f"{T}/query", json={"k": 1, "vector": _VECTOR, "minimum_nprobes": 2}), 406, 0, id="query-a-field-the-model-drops"),
         pytest.param(
             lambda c: c.post(f"{T}/explain_plan", json={"query": {"k": 1, "vector": _VECTOR, "minimum_nprobes": 2}}),

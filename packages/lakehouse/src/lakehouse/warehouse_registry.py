@@ -21,13 +21,14 @@ import logging
 import os
 import time
 
+from lakehouse import control_prefixes
 from lakehouse.record_store import list_records
 from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
 
-_REGISTRY_PREFIX = "_warehouses"
+_REGISTRY_PREFIX = control_prefixes.WAREHOUSES
 
 #: Env override for the positive-cache TTL — operators trading resolver load against how long a
 #: DEACTIVATED warehouse may keep resolving (the stale-positive window).

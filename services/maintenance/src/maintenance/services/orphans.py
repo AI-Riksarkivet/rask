@@ -46,7 +46,6 @@ table if anyone acted on it.
 from __future__ import annotations
 
 import logging
-import posixpath
 import time
 from collections.abc import Iterator
 
@@ -56,24 +55,11 @@ from pydantic import BaseModel, Field
 
 from lakehouse.features import unsupported_features, unsupported_features_from_open_error
 from lakehouse.lancekit.versions import committed_at
-from lakehouse.storage_options import StorageOptions, on_s3
-from lakehouse.stored_objects import iter_under
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import shared_lance_session
 
 
 log = logging.getLogger(__name__)
-
-
-class _OverlaysPresent(Exception):
-    """A fragment carries data overlay files (feature flag 64), which this pass does not understand."""
-
-    def __init__(self, dataset_uri: str) -> None:
-        super().__init__(
-            f"{dataset_uri}: uses data overlay files (feature flag 64). The spec requires a reader that "
-            "does not understand overlays to REFUSE the dataset — an overlay lives in `data/` and is "
-            "referenced from DataFragment.overlays, not data_files(), so scanning would report live "
-            "cell values as reclaimable."
-        )
 
 
 class _FilesPastTheCeiling(Exception):
@@ -97,6 +83,17 @@ class _HistoryPastTheCeiling(Exception):
 
     def __init__(self, dataset_uri: str, versions: int) -> None:
         super().__init__(f"{dataset_uri}: {versions} versions exceed the {_MAX_VERSIONS}-version ceiling, so its unreferenced files were not looked for")
+
+
+class _ReferencedElsewhere(Exception):
+    """A file a retained version references is not listed under the dataset's root, so the root's listing is not the
+    dataset's files and subtracting the referenced set from it names nothing reliably."""
+
+    def __init__(self, dataset_uri: str, missing: set[str]) -> None:
+        super().__init__(
+            f"{dataset_uri}: {len(missing)} referenced file(s) are not listed under it (e.g. {min(missing)}) — a file of the"
+            " dataset lives under another root (shallow clone / multi-base) or is gone, so a listing of its root cannot be subtracted"
+        )
 
 
 #: Directories Lance owns inside a dataset. Anything here is structural, not user data.
@@ -126,6 +123,9 @@ _MEM_WAL_DIR = "_mem_wal"
 #: so a naive scan reports it once per dataset forever.
 _RESERVED_MARKER = ".lance-reserved"
 
+#: The ``type`` ``tracked_files()`` gives a data file (pylance 13.0.0), whose blob sidecar directory it does not name.
+_TRACKED_DATA_FILE = "data file"
+
 #: Ceiling on versions inspected per dataset. A table with a very long history would otherwise make
 #: one scan O(versions x fragments). A dataset past it is EXCLUDED before any version is read; it is
 #: never walked in part, because a partial referenced set would mark live files as orphans, the single
@@ -133,9 +133,9 @@ _RESERVED_MARKER = ".lance-reserved"
 #: raising the listing floor that floor-bound residue waits behind.
 _MAX_VERSIONS = 500
 
-#: Ceiling on the files one scan probes: every exact path the live versions reference is asked for by one batched call,
-#: which fans out as one HEAD per file, so a table holding more is EXCLUDED, like one past :data:`_MAX_VERSIONS`, before
-#: its probe or its listing, and a huge table does not hold a replica past its bound.
+#: Ceiling on the files one scan's referenced set holds: the set is kept whole while the listing is matched against it,
+#: so a table referencing more is EXCLUDED, like one past :data:`_MAX_VERSIONS`, before its listing, and a huge table
+#: does not hold a replica past its bound.
 _MAX_REFERENCED_FILES = 50_000
 
 #: Ceiling on the files one scan lists under a dataset, read a page at a time and never held whole: a table past it is
@@ -219,145 +219,42 @@ def open_dataset(dataset_uri: str, storage_options: StorageOptions | None = None
     return lance.dataset(dataset_uri, storage_options=None if storage_options is None else storage_options.in_clear(), session=shared_lance_session())
 
 
-def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[str], int, str | None]:
-    """Every dataset-relative path referenced by ANY live version. Returns ``(paths, versions, note)``.
+def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[str], int]:
+    """Every dataset-relative path a retained version references, and how many versions there are.
 
-    Read-only over the open handle ``ds``: checks out each version and reads its fragment metadata. The union
-    across versions is the point — see the module docstring on why the latest version alone is not the referenced set.
+    Read off Lance's own ``tracked_files()``, which names the manifest, data, deletion, transaction and index files of
+    every manifest in ``_versions/``, so a file only an old version cites is referenced (the module docstring says why
+    the latest version alone is not the referenced set). Measured on pylance 13.0.0: a tagged version kept through a
+    cleanup of the versions after it, its transaction file included, every index type's files (BTREE, BITMAP,
+    LABEL_LIST, INVERTED, IVF_PQ, and a segment a replace left to an older version), and every file under a referenced
+    index segment's directory, one planted there included. A file named through another base is returned by its path
+    under that base, which the layout gate then does not find under this prefix.
 
-    Sidecar DIRECTORIES are returned as trailing-slash entries, so the caller can prefix-test them
-    without a second return value.
+    It names no blob sidecar. A large-binary column's bytes lie in ``data/<data file stem>/*.blob`` beside the data file
+    (``lance_docs/lance/format/table/blob.md`` § Sidecar Resolution), so each tracked data file's sidecar directory is
+    returned as a trailing-slash entry the caller matches by prefix: measured live 2026-08-04 on a page-image table, a
+    scan that stopped at the ``.lance`` named 29 MB of live page images reclaimable. A sidecar whose data file no
+    retained version references is still reported, and ``reclaimable_by_lance`` says Lance's cleanup takes it.
 
-    ``note`` is non-None when the transaction files could not be read, in which case the caller must
-    treat the referenced set as INCOMPLETE and report nothing as an orphan from it.
+    The count comes from ``version_refs()``, which reads no manifest (measured on a 120-version dataset: 0.5 ms against
+    ``versions()``'s 9.3 ms), and a dataset past :data:`_MAX_VERSIONS` is excluded before any manifest is read.
 
     Raises:
         _HistoryPastTheCeiling: the dataset keeps more than :data:`_MAX_VERSIONS` versions; none was read.
     """
+    versions = len(ds.version_refs())
+    if versions > _MAX_VERSIONS:
+        raise _HistoryPastTheCeiling(dataset_uri, versions)
     referenced: set[str] = set()
-    referenced_dirs: set[str] = set()
-    # `version_refs()`, not `versions()`: pylance 11 answers it WITHOUT reading or deserializing a
-    # single manifest, and the only field used here is the number. Measured on a 120-version dataset,
-    # 9.3 ms -> 0.5 ms (18.4x) with an identical list, and equivalence re-checked on the three states
-    # this scan actually meets — fresh, tagged, and after a cleanup that removed versions (a
-    # tag-pinned version survives in both). The local number is the FLOOR: this runs against S3, where
-    # each of those manifest reads is a network round trip, over every dataset in every warehouse
-    # bucket on every tick.
-    #
-    # The count is also what `_MAX_VERSIONS` is judged on, before a single version is checked out: a
-    # dataset past it is excluded whole, so the walk below never reads versions whose referenced set
-    # could only be partial.
-    versions = [v["version"] for v in ds.version_refs()]
-    if len(versions) > _MAX_VERSIONS:
-        raise _HistoryPastTheCeiling(dataset_uri, len(versions))
-    note = None
-
-    for version in versions:
-        # checkout_version, NOT a fresh lance.dataset(): the constructor mints a new cache pair per
-        # call — up to _MAX_VERSIONS times per dataset, the scan's real N+1 (#102) — while checkout
-        # reuses the open dataset's session (its documented contract, verified empirically).
-        at = ds.checkout_version(version)
-        for fragment in at.get_fragments():
-            for data_file in fragment.data_files():
-                referenced.add(f"{_DATA_DIR}/{data_file.path}")
-                # BLOB SIDECARS. A large-binary column does not live inside the `.lance` file; its
-                # bytes sit in `data/<data-file-stem>/*.blob` beside it. `data_files()` names only the
-                # `.lance`, so a scan that stops there reports every blob in the estate as garbage —
-                # measured live 2026-08-04 on the bronze page-image table: 29 MB of real page images,
-                # named as reclaimable. Mark the sidecar DIRECTORY of every referenced data file as
-                # referenced too.
-                #
-                # Sidecars whose parent data file is referenced by NO live version are still reported,
-                # but they are NOT a reclamation gap: measured 2026-09-20 on pylance 11.0.0 with a
-                # blob-v2 column past the dedicated threshold, `cleanup_old_versions` took the `.lance`
-                # AND its sidecar (`data_files_removed: 2`, 5.2 MB freed). They are reported because a
-                # scan that omitted them could not tell a sidecar Lance will take from one it cannot
-                # see, and `reclaimable_by_lance` is what separates the two.
-                referenced_dirs.add(f"{_DATA_DIR}/{data_file.path.removesuffix('.lance')}")
-            # OVERLAY FILES (feature flag 64). An overlay writes new values for a subset of cells to
-            # `data/overlay-<uuid>.lance` — inside `data/`, where a false positive deletes real
-            # values — and is referenced from `DataFragment.overlays`, not `data_files()`. The spec
-            # settles it: "a reader or writer that does not understand overlay files must REFUSE a
-            # dataset that uses them", because ignoring one returns stale base values, "a correctness
-            # bug rather than a degraded experience". Refusing is the conforming answer.
-            #
-            # Overlays ARE writable on pylance 9.0.0 (`LanceOperation.DataOverlay`, verified by
-            # committing one), but pylance then REFUSES to open the result — so on today's pylance
-            # this branch is unreachable and the refusal arrives via the manifest feature-flag gate
-            # instead (`_unscannable_reason`, `lakehouse.features`). Kept as the second line
-            # of defence for the pylance that gains overlay READ support: that build opens the
-            # dataset, and this is the seam the walk would otherwise scan straight past.
-            if getattr(fragment.metadata, "overlays", None):
-                raise _OverlaysPresent(dataset_uri)
-            deletion = fragment.metadata.deletion_file
-            if deletion is not None:
-                # `path()` renders the on-disk name from (fragment id, read version, unique id); the
-                # naming is Lance's, so asking it beats reconstructing the convention here.
-                referenced.add(deletion.path(fragment.fragment_id))
-        # INDEX SEGMENTS. An index's files live in `_indices/<segment-uuid>/`, and no manifest walk
-        # names them: `data_files()` does not reach them and nothing here did either, so EVERY index
-        # in the estate was reported reclaimable. Measured 2026-09-09 on pylance 10.0.0 — a freshly
-        # built BTREE had both `page_data.lance` and `page_lookup.lance` named as orphans with
-        # `checked=True`, which is this module's own worst failure mode: live files certified garbage.
-        #
-        # `describe_indices()`, not `list_indices()`: the latter is deprecated on 10.0.0 (it warns),
-        # and the former is the more correct call anyway because it reports SEGMENTS — one index may
-        # hold several, each its own directory, so a uuid-per-index view under-covers a split index.
-        #
-        # Read per VERSION, like everything else here. `create_scalar_index(replace=True)` mints a new
-        # segment uuid and leaves the old directory in place; measured, v2 cites the old and v3 the
-        # new, so a referenced set built from the latest version alone reclaims the index that
-        # time-travel to v2 still reads through.
-        #
-        # A segment carrying a `base_id` resolves under ANOTHER dataset root — the multi-base layout
-        # `_unscannable_reason` refuses outright — so its directory is simply absent here and the
-        # entry matches nothing. It costs a set entry and keeps this loop free of a layout question
-        # that is already answered, once, by the gate.
-        for index in at.describe_indices():
-            for segment in index.segments:
-                referenced_dirs.add(f"{_INDICES_DIR}/{segment.uuid}")
-    # THE TRANSACTION FILE OF EVERY LIVE COMMIT IS REFERENCED, and omitting it reported the whole
-    # class as garbage. Nothing here ever added a `_transactions/*.txn` path, so a dataset with N live
-    # versions had all N of its transaction files named as orphans — including the one that produced
-    # the CURRENT version.
-    #
-    # The module docstring above is right that txn files from FAILED or rolled-back commits accumulate
-    # by design and nothing prunes them. It does not follow that every txn is garbage: the ones
-    # belonging to live versions are the provenance of the manifests being read. MEASURED live
-    # 2026-08-16 — `s3://lance-catalog/bronze/pages` has exactly ONE live version and exactly ONE txn
-    # file, and the scan reported that file as an orphan. Estate-wide, 34 of 56 `orphan_files` were
-    # this, which is why the count could never reach zero and the #79 purge gate could never certify.
-    #
-    # The name is `{read_version}-{uuid}.txn`, both fields exposed on the `Transaction`. Asked for
-    # `len(versions)` of them rather than the default 10, so the referenced set covers the same
-    # versions the loop above walked; a failure to read them is NOT fatal but DOES void the set,
-    # because a partial referenced set is exactly what makes a reclaimer delete live data.
-    try:
-        for transaction in ds.get_transactions(recent_transactions=max(len(versions), 1)):
-            if transaction is None:
-                continue
-            referenced.add(f"{_TRANSACTIONS_DIR}/{transaction.read_version}-{transaction.uuid}.txn")
-    except (KeyboardInterrupt, SystemExit):
-        raise
-    except BaseException as exc:  # noqa: BLE001 — any failure here must void the set, never narrow it
-        # BaseException, not Exception, and that is not defensive over-reach. pylance 10.0.0 PANICS in
-        # Rust on `get_transactions()` against a SHALLOW CLONE — `src/transaction.rs:735: not yet
-        # implemented` — and `pyo3_runtime.PanicException` derives from BaseException directly, so
-        # `except Exception` does not see it. Measured 2026-08-16 while upgrading pylance 9 -> 10.
-        #
-        # The consequence was the exact inversion of this function's contract: instead of voiding the
-        # referenced set for ONE dataset and carrying on, a single shallow clone anywhere in the estate
-        # took the WHOLE orphan scan down — and the scan walks every warehouse bucket. Interrupts are
-        # re-raised above so this cannot swallow a Ctrl-C or a shutdown.
-        note = note or f"{dataset_uri}: transaction files unreadable ({type(exc).__name__}) — referenced set is INCOMPLETE"
-
-    # Sidecar directories are expanded into the path set by the caller's prefix test, kept separate
-    # here so the exact-match set stays exact.
-    referenced |= {f"{d}/" for d in referenced_dirs}
-    return referenced, len(versions), note
+    for batch in ds.tracked_files():
+        for path, kind in zip(batch.column("path").to_pylist(), batch.column("type").to_pylist(), strict=True):
+            referenced.add(path)
+            if kind == _TRACKED_DATA_FILE:
+                referenced.add(f"{path.removesuffix('.lance')}/")
+    return referenced, versions
 
 
-def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: str, referenced: set[str]) -> str | None:
+def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: str) -> str | None:
     """Why this dataset CANNOT be scanned safely, or ``None`` if it can.
 
     Layouts that make the "list the prefix, subtract the referenced set" method produce false
@@ -368,9 +265,11 @@ def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: 
     answer to "is this a layout you understand", and the spec requires a reader that does not know a
     flag to refuse the dataset outright. Reading them (`lakehouse.features`) catches the whole
     class at once, including shapes with no observable consequence yet: `add_bases` registers a base
-    path that no DataFile resolves through, so the consequence check below sees nothing wrong and
-    this scan previously returned `checked=True` with orphans named on a multi-base dataset
-    (measured). The two checks are complementary, not redundant — see the base_paths note below.
+    path that no DataFile resolves through, so a referenced file is listed under the root after all
+    and only the flag tells (measured). The listing's own check (:class:`_ReferencedElsewhere`) is the
+    broader of the two: it also catches a dataset whose files do not all live here for a reason no
+    flag records. The mirror hazard is invisible from here: the SOURCE of a clone holds files that only
+    the CLONE's manifest still references, and the source carries no flag at all.
 
     **Branches.** A branch is a shallow clone of its parent whose `_versions/`, `_transactions/`,
     `_deletions/` and `_indices/` live under `tree/{branch}/`. `lance.dataset(uri)` opens the MAIN
@@ -379,13 +278,9 @@ def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: 
     including the branch's own `data/*.lance`. Branching sets NO feature flag, so the directory probe
     is the only thing that sees it.
 
-    **Multi-base / shallow clones.** A manifest's `base_paths[]` lets a DataFile, DeletionFile or
-    index resolve under ANOTHER dataset root (feature flag 16). The flag check above names it
-    directly; this consequence check — a referenced path that is not present under this prefix —
-    STAYS, because it is the broader of the two: it also catches a dataset whose files do not all
-    live here for a reason no flag records. The mirror hazard is worse and invisible from here — the
-    SOURCE of a clone holds files that only the CLONE's manifest still references, so scanning the
-    source alone would name them garbage, and the source carries no flag at all.
+    The two directory probes are the only questions the scan asks the store about a key, and neither names a file a
+    version references: maintenance's own store session reads no data, deletion or index file, so a HEAD of one is
+    refused (rask's canned policy for maintenance, [[LH-575]]).
     """
     if (refusal := unsupported_features(ds)) is not None:
         return f"{prefix}: {refusal}"
@@ -413,34 +308,6 @@ def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: 
             return f"{prefix}: layout probe for `{directory}/` failed ({type(exc).__name__}: {exc}) — cannot certify the dataset is scannable"
         if probe.type == pafs.FileType.Directory:
             return f"{prefix}: {why}"
-
-    # A referenced path that is not here means the dataset spans roots (base_paths / shallow clone).
-    # Checked against the exact-match entries only; the trailing-slash entries are sidecar DIRECTORIES.
-    #
-    # ONE BATCHED CALL, not one round trip per referenced path. This was a comprehension issuing
-    # `get_file_info(path)` per entry, sequentially — and the referenced set holds one entry per data
-    # file, deletion file, index and transaction across every live version, so a dataset with history
-    # paid a burst of serial HEADs, on every dataset in every warehouse bucket, on every reconcile
-    # tick, before a single orphan had been found. `get_file_info` takes a LIST and the filesystem
-    # answers it as a batch (pyarrow's S3 implementation fans the batch out over its IO pool rather
-    # than issuing them one behind the other). It also removes the question of short-circuiting: one
-    # call cannot be cut short, and the full answer is what the message below reports.
-    #
-    # Guarded on the SAME rule as the two directory probes above, which it did not share: a raise here
-    # left the whole orphan scan (and, through `reconcile`, the whole tick) — one dataset's transient
-    # HeadObject failure taking down a report about the entire estate. Fail CLOSED for the same reason:
-    # a layout we could not determine is one we must not certify as scannable.
-    exact = [rel for rel in sorted(referenced) if not rel.endswith("/")]
-    try:
-        present = fs.get_file_info([f"{prefix}/{rel}" for rel in exact])
-    except Exception as exc:
-        return f"{prefix}: base-path presence probe failed ({type(exc).__name__}: {exc}) — cannot certify the dataset is scannable"
-    missing = [rel for rel, info in zip(exact, present, strict=True) if info.type != pafs.FileType.File]
-    if missing:
-        return (
-            f"{prefix}: {len(missing)} referenced file(s) do not live under this prefix (e.g. {missing[0]}) — "
-            "the dataset spans base_paths (shallow clone / multi-base), so a prefix listing cannot be subtracted"
-        )
     return None
 
 
@@ -528,13 +395,13 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     read_at = time.time()
     try:
         ds = open_dataset(dataset_uri, storage_options)
-        referenced, versions, note = referenced_paths_of(ds, dataset_uri)
+        referenced, versions = referenced_paths_of(ds, dataset_uri)
         if (files := sum(1 for rel in referenced if not rel.endswith("/"))) > _MAX_REFERENCED_FILES:
             raise _FilesPastTheCeiling(dataset_uri, files)
-    except (_OverlaysPresent, _HistoryPastTheCeiling, _FilesPastTheCeiling) as exc:
-        # Exclusions that arrive as exceptions because the walk is where they become visible: an overlay
-        # by shape, a history by its length. Their own clause, so they are not sorted with the opens that
-        # merely failed.
+    except (_HistoryPastTheCeiling, _FilesPastTheCeiling) as exc:
+        # Exclusions that arrive as exceptions because the read is where they become visible: a history by its
+        # length, a referenced set by its size. Their own clause, so they are not sorted with the opens that merely
+        # failed.
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": str(exc)})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=str(exc), excluded=True)
     except Exception as exc:
@@ -550,26 +417,15 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         # OTHER reason is a scan that could succeed later and must keep blocking.
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, reason=reason, excluded=refusal is not None)
 
-    # LAYOUT GATE FIRST, then the incomplete-set note. Both refuse, so the order changes only which
-    # REASON is reported — and the layout answer is the better one: "this dataset spans base_paths" is a
-    # structural fact about the dataset, while "transaction files unreadable" is a fact about one read
-    # that failed. Ordering mattered from pylance 10.0.0, which panics on `get_transactions()` for a
-    # shallow clone: the note then fired first and shadowed the base_paths refusal, so the operator was
-    # told the least useful of the two true things.
-    if (unscannable := _unscannable_reason(ds, fs=fs, prefix=prefix, referenced=referenced)) is not None:
+    if (unscannable := _unscannable_reason(ds, fs=fs, prefix=prefix)) is not None:
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": unscannable})
         # STRUCTURAL: the orphan method does not apply to this dataset's layout, so nothing was missed
         # and this must not block reclamation. Every other `checked=False` below TRIED and failed.
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=unscannable, excluded=True)
 
-    if note:
-        return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=note)
-
     try:
-        orphans = _unreferenced(
-            _listed(fs, dataset_uri, prefix=prefix, storage_options=storage_options), referenced, dataset_uri, prefix=prefix, read_at=read_at
-        )
-    except _ListingPastTheCeiling as exc:
+        orphans = _unreferenced(_listed(ds), referenced, dataset_uri, read_at=read_at)
+    except (_ListingPastTheCeiling, _ReferencedElsewhere) as exc:
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": str(exc)})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=str(exc), excluded=True)
     except Exception as exc:
@@ -579,40 +435,44 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     return DatasetOrphanScan(dataset=dataset_uri, checked=True, orphans=orphans, versions_scanned=versions)
 
 
-def _listed(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: StorageOptions | None) -> Iterator[tuple[str, int, float]]:
-    """Every file under the dataset as ``(path, size, mtime epoch)``, the path as ``prefix`` spells its root. On S3 a
-    page at a time through the object client, so a listing past the ceiling is abandoned unread."""
-    if on_s3(dataset_uri) and storage_options is not None:
-        for stored in iter_under(f"s3://{prefix}", storage_options):
-            if not stored.path.endswith("/"):
-                yield stored.path, stored.size, stored.modified.timestamp()
-        return
-    for info in fs.get_file_info(pafs.FileSelector(prefix, allow_not_found=True, recursive=True)):
-        if info.type == pafs.FileType.File:
-            yield info.path, info.size or 0, info.mtime.timestamp() if info.mtime is not None else 0.0
+def _listed(ds: lance.LanceDataset) -> Iterator[tuple[str, int, float]]:
+    """Every file under the dataset's root as ``(path relative to the root, size, mtime epoch)``, off Lance's own
+    ``all_files()``.
+
+    Read a batch at a time, so a listing past the ceiling is abandoned unread: measured on pylance 13.0.0 over 30,000
+    files, the first 4,000-row batch arrived in 14 ms of a 107 ms listing.
+    """
+    for batch in ds.all_files():
+        paths, sizes, modified = (batch.column(name).to_pylist() for name in ("path", "size_bytes", "last_modified"))
+        for path, size, at in zip(paths, sizes, modified, strict=True):
+            yield path, size or 0, at.timestamp() if at is not None else 0.0
 
 
-def _unreferenced(listed: Iterator[tuple[str, int, float]], referenced: set[str], dataset_uri: str, *, prefix: str, read_at: float) -> list[OrphanFile]:
+def _unreferenced(listed: Iterator[tuple[str, int, float]], referenced: set[str], dataset_uri: str, *, read_at: float) -> list[OrphanFile]:
     """The listed files no live version references and the store places surely before ``read_at``.
+
+    The listing is also what says every referenced file lives here: one it lacks resolves under another root, so the
+    scan asks the store about no referenced file by its key.
 
     Raises:
         _ListingPastTheCeiling: more than :data:`_MAX_LISTED_FILES` files were listed.
+        _ReferencedElsewhere: a referenced file was not listed.
     """
     orphans: list[OrphanFile] = []
+    listed_referenced: set[str] = set()
 
     # Every referenced DIRECTORY — a data file's blob sidecar, an index segment — matched by prefix
     # rather than exactly, because what is referenced is the directory and its whole contents.
     #
-    # Materialized ONCE, outside the loop. This test used to re-filter the whole referenced set for
-    # every listed file that was not an exact match — O(files x referenced) Python-level work per
-    # dataset, on the same hot path as the probe batching above (the audit's HOUSE-RULE-16 addendum).
+    # Materialized ONCE, outside the loop: filtering the whole referenced set again for every listed file that is not an
+    # exact match is O(files x referenced) Python-level work per dataset (the audit's HOUSE-RULE-16 addendum).
     referenced_dirs = tuple(d for d in referenced if d.endswith("/"))
 
-    for count, (path, size, mtime) in enumerate(listed, start=1):
+    for count, (rel, size, mtime) in enumerate(listed, start=1):
         if count > _MAX_LISTED_FILES:
             raise _ListingPastTheCeiling(dataset_uri)
-        rel = posixpath.relpath(path, prefix)
         if rel in referenced:
+            listed_referenced.add(rel)
             continue
         # ...or it sits under a referenced directory: a data file's blob sidecar, an index segment.
         if rel.startswith(referenced_dirs):
@@ -625,4 +485,6 @@ def _unreferenced(listed: Iterator[tuple[str, int, float]], referenced: set[str]
         if not surely_before(mtime, read_at):
             continue
         orphans.append(OrphanFile(dataset=dataset_uri, path=rel, kind=_kind_of(rel), size_bytes=size, mtime_epoch=mtime))
+    if missing := {rel for rel in referenced if not rel.endswith("/")} - listed_referenced:
+        raise _ReferencedElsewhere(dataset_uri, missing)
     return orphans

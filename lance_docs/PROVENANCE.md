@@ -50,20 +50,69 @@ measuring on the installed pylance"). Measured examples of the gap:
   13.0.0 packs a struct on `true`, `1`, `yes` or `on` in any case and ignores every other value, while a 2.0 file packs
   on any value (measured 2026-10-26, `catalog.core.encoding`).
 
+### Pages that pylance 13.0.0 contradicts
+
+Measured 2026-11-12 on pylance 13.0.0 and lance-namespace 0.11.1, on local datasets. Each is a page to read with its
+correction, and the correction is what rask relies on:
+
+- **A shallow clone's base paths** (`lance/format/table/layout.md` § Shallow Clone gives the clone root at id 0 and the
+  source at id 1, named after its tag, with new files at `base_id: 0`). `shallow_clone` writes one base path, id 0, with
+  no name, naming the source's root even when cloned from a tag; inherited files carry `base_id` 0 and the clone's own
+  files carry none and resolve under the clone's root.
+- **A branch's own data files** (`lance/format/table/branch_tag.md` § Branch layout lists `_versions`, `_transactions`,
+  `_deletions` and `_indices`). A written branch holds `tree/<branch>/data/*.lance` too, and its base path 0 is the
+  parent's root as an absolute path, through which its inherited files resolve.
+- **A copied dataset** (`lance/format/table/layout.md`: a copied dataset "will function immediately"). Holds for a
+  dataset with no base paths: after copying a root and removing the original, main reads, and a branch (or a shallow
+  clone) fails `Not found` on its inherited files, which resolve through the original root's absolute path.
+- **The error codes** (`ns_catalog/namespace/operations/errors.md` lists 0 to 21). `spec.yaml` and lance-namespace
+  0.11.1 define 22 (`TableBranchNotFound`) and 23 (`TableBranchAlreadyExists`); cite `spec.yaml`.
+- **Unrendered message tables.** `lance/` holds 68 placeholders (66 `%%% proto.message.* %%%`, 2
+  `%%% mem_wal.message.* %%%`), and pylance 13.0.0 ships no `.proto`, so a message's field numbers are measured or read
+  off the binary, never off these pages (`lakehouse.manifest_wire`).
+- **A branch's ref file** (`lance/format/table/branch_tag.md` § Branch File Format). `_refs/branches/<branch>.json` also
+  carries `identifier.version_mapping`, a list of `[version, uuid]` pairs, which the page's field table omits.
+- **`cleanup_old_versions(delete_concurrency=...)`** (`lance/guide/read_and_write.md`). pylance 13.0.0 takes
+  `delete_rate_limit` and `versions` and no `delete_concurrency`, and the table config key
+  `lance.auto_cleanup.delete_concurrency` is never parsed.
+- **Tagged versions and cleanup** (`lance/guide/read_and_write.md`: tagged versions are exempt). `cleanup_old_versions`
+  refuses the whole call when an old version is tagged unless `error_if_tagged_old_versions=False`; with it, it cleans
+  the untagged versions and keeps the tagged one. Every age-bounded reclaim rask runs passes it (maintenance's expiry,
+  `maintenance/run`, the erasure's, the namespace index's); `version/delete` names its versions and passes `True`, so a
+  tagged one refuses the range whole.
+- **`lance.compaction.index_remap_mode`** (`lance/format/table/table_config.md`: `direct` or `merged`) accepts `direct`
+  and `compact`, and **`lance.compaction.compaction_mode`** takes `reencode`, `try_binary_copy` and `force_binary_copy`
+  where the page spells them with hyphens. A wrong value is refused when a compaction runs, not when it is stored; every
+  door refuses a `lance.compaction.*` key ([[LH-538]]).
+- **The `minhash_lsh` and `fmindex` scalar indexes** (`lance/format/index/scalar/`): pylance 13.0.0 registers no plugin
+  for either ("No scalar index plugin found"), so neither layout appears under `_indices/`.
+- **The fragment tree** (`_bt/`, flag 4096, listed in `lance/format/table/layout.md` § Basic Layout): pylance 13.0.0
+  writes none, as its own page says of released Lance, so the vend allow-list and the orphan scan name no `_bt/`.
+- **`LANCE_FTS_TARGET_SIZE`** (`lance/format/index/scalar/fts.md` § Configuration) is not read; the other documented
+  `LANCE_FTS_*` settings are.
+- **Branch and tag names** (`lance/format/table/branch_tag.md`). A branch's ref file percent-encodes every character a
+  file name cannot hold as it stands (`ä` is `%C3%A4.json`), not only `/`; Unicode letters are accepted in branch and
+  tag names; a branch name may start or end with `.`. The catalog's create door holds a branch to its own rule
+  (`lakehouse.branch_layout`, [[LH-203]]).
+
 ### What a pylance bump re-checks
 
 Read against these docs on 2026-10-26 (each item absent from pylance 13.0.0, measured or read off its binary):
 
 - **Managed blobs** (`FLAG_MANAGED_BLOBS`, `_blobs/<uuid>.blob`, descriptor kinds 4 and 5): the vend allow-list has no
   `_blobs/*`; `client_fragments.verify_blob_sidecars` judges kinds 1-3 only; schema metadata `lance.blob.managed =
-  "true"` turns the flag on for good, so a door either refuses the key or serves the feature; a kind-4 blob can outlive
-  the data file whose stem names it, which `base_reclaim` and the orphan scan treat as ownership.
-- **The inline transaction moves to manifest field 23** (`lance/format/table/transaction.md` § Inline Transaction
-  Sections; field 21 becomes `transaction_section_deprecated`). `catalog.core.manifest_bytes` reads field 21 only, so a
-  newer writer's staged commits would carry no transaction it can read, and every stock compaction's
-  `ReserveFragments` would be refused at `version/create`.
-- **`lance.row_lineage.spill`** stamps `FLAG_SPILLED_ROW_LINEAGE` (2^11) once a release spills on config; the table is
-  then refused by every flag gate unless the key is refused at the doors or the feature is served.
+  "true"` turns the flag on for good once a release serves it, so every door refuses the key
+  (`catalog.core.formats.FLAG_LOCKING_KEYS`) until the feature is served (pylance 13.0.0 stores it as plain schema
+  metadata and stamps no flag, measured 2026-11-12); a kind-4 blob can outlive the data file whose stem names it, which
+  `base_reclaim` and the orphan scan treat as ownership.
+- **The inline transaction may sit at manifest field 23** (`lance/format/table/transaction.md` § Inline Transaction
+  Sections; field 21 becomes `transaction_section_deprecated`). `catalog.core.manifest_bytes` reads field 23 first and
+  field 21 after it, so a staged commit from either kind of writer carries a transaction it reads; a bump re-measures
+  which field the release writes.
+- **`lance.row_lineage.spill`** stamps `FLAG_SPILLED_ROW_LINEAGE` (2^11) once a release spills on config, after which
+  every flag gate refuses the table, so every door refuses the key (`catalog.core.formats.FLAG_LOCKING_KEYS`). pylance
+  13.0.0 carries the key behind the environment gate `LANCE_ENABLE_UNSTABLE_SPILLED_ROW_LINEAGE`; with the key alone, an
+  insert stamps no flag (writer flags 8, measured 2026-11-12).
 - **Flags 2^14 to 2^17** need names in `lakehouse.features` so a refusal names them; 2^15
   (`max_allocated_field_id`) changes how field ids are minted, which `vending.labelled_fields`,
   `encoding._encoding_by_field_id` and `client_fragments` compare by; 2^17 (object metadata) must survive a commit.

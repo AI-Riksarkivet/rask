@@ -38,6 +38,8 @@ from catalog.core.formats import reject_unsupported_properties
         pytest.param({"lance.auto_cleanup.interval": "1"}, id="commit-path-auto-cleanup"),
         # [[LH-538]]: Lance plans a compaction from these when the plan names no option, over the table's maintenance policy.
         pytest.param({"lance.compaction.max_source_fragments": "2"}, id="compaction-config"),
+        # A create stamps its properties on the schema metadata, where this key activates Managed Blobs for good.
+        pytest.param({"lance.blob.managed": "true"}, id="a-feature-flag-no-commit-clears"),
     ],
 )
 def test_rejects_a_property_no_door_honours(props: dict[str, str]) -> None:

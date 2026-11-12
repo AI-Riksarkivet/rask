@@ -33,6 +33,7 @@ from lance_namespace import InvalidTableStateError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from catalog.services import publication
+from lakehouse import control_prefixes
 from lakehouse.record_store import get_record, list_records, record_key
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-HOLDS_PREFIX: Final = "_promotions"
+HOLDS_PREFIX: Final = control_prefixes.PROMOTIONS
 #: Pins the held version against version cleanup, which keeps only tagged versions past its window. Under the
 #: platform's `rask.` prefix, which the spec tag doors refuse, so no client moves or deletes it.
 HOLD_TAG: Final = "rask.held"

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse import stored_objects
+from lakehouse import control_prefixes, stored_objects
 from lakehouse.record_store import delete_record, get_record, put_record, record_key
 
 
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-DUE_PREFIX: Final = "_maintenance_due"
+DUE_PREFIX: Final = control_prefixes.MAINTENANCE_DUE
 
 
 class CompactionDue(BaseModel):

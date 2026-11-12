@@ -24,13 +24,14 @@ from pydantic import BaseModel
 
 from catalog.core.config import Settings, shared_lance_session
 from catalog.services import warehouses
+from lakehouse import control_prefixes
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
 
-MANIFEST_TABLE: Final = "__manifest"
+MANIFEST_TABLE: Final = control_prefixes.NAMESPACE_INDEX
 
 
 class RootReclaim(BaseModel):

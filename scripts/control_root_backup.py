@@ -1,9 +1,10 @@
 """Back up and RESTORE the catalog's control root — the records that define who owns what.
 
-[[LH-110]]. The control root holds the estate's governance as small JSON objects: the project registry,
-the warehouse registry and its namespace bindings, deletion protection, maintenance policies, quality
-gates, transform declarations, the task registry, and the trash records that make a drop recoverable.
-Lose them and the Lance data survives while every statement about who may touch it does not.
+[[LH-110]]. The control root holds the estate's governance as small JSON objects, the records
+`lakehouse.control_prefixes` names: the project and warehouse registries, every table's location claim (which holds
+its uuid, and so every grant), protection, maintenance policies, quality gates, erasure obligations, roles, and the
+trash records that make a drop recoverable. Lose them and the Lance data survives while every statement about who may
+touch it does not.
 
 WHAT THE CHART OFFERS DOES NOT COVER THIS, measured 2026-09-14. `backups.pgDump` dumps the OpenFGA
 database; `backups.volumeSnapshot` takes a CSI VolumeSnapshot of the object store's PVCs. Both default
@@ -47,29 +48,21 @@ from typing import Any
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
+from lakehouse.control_prefixes import BACKUPS, CONTROL_PREFIXES, RECORD_PREFIXES
 from lakehouse.store_session import JobStoreIdentity, job_client
 
 
-#: The record prefixes a restore must bring back. Named explicitly rather than globbed on a leading
-#: underscore: the set is a decision about what is a RECORD, and a glob would silently adopt whatever
-#: the next feature happens to create under one.
-CONTROL_PREFIXES: tuple[str, ...] = (
-    "_projects/",
-    "_warehouses/",
-    "_trash/",
-    "_protection/",
-    "_policies/",
-    "_gates/",
-    "_bases/",
-)
+#: The record prefixes a restore must bring back: the registry's records (`lakehouse.control_prefixes`), never a glob
+#: on a leading underscore, so what a backup copies is what the estate declares a record and nothing a feature leaves.
+BACKED_UP_PREFIXES: tuple[str, ...] = tuple(f"{prefix}/" for prefix in sorted(RECORD_PREFIXES))
 
-#: Queues, not records — and restoring a queue re-publishes what the estate already handled. Listed
-#: rather than merely omitted so the omission reads as a decision and a later reader does not "fix" it.
-SKIPPED_PREFIXES: tuple[str, ...] = ("_control_outbox/", "_lineage_outbox/")
+#: Every other control prefix, named in the backup's manifest so the omission reads as a decision: the queues, whose
+#: restore would publish what the estate already handled, the leases, which lapse, and what is not a record.
+SKIPPED_PREFIXES: tuple[str, ...] = tuple(f"{prefix}/" for prefix in sorted(CONTROL_PREFIXES - RECORD_PREFIXES))
 
 #: Where a backup lands when `--dest` is not given, under the control root itself. Matches the
 #: convention `backups.pgDump` already uses (`_backups/pg/<date>/`).
-DEFAULT_DEST_PREFIX = "_backups/control"
+DEFAULT_DEST_PREFIX = f"{BACKUPS}/control"
 
 MANIFEST_KEY = "MANIFEST.json"
 
@@ -133,7 +126,7 @@ def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[s
     manifest: dict[str, Any] = {
         "created": stamp,
         "source": f"s3://{src_bucket}/{src_prefix}".rstrip("/"),
-        "prefixes": list(CONTROL_PREFIXES),
+        "prefixes": list(BACKED_UP_PREFIXES),
         "skipped_prefixes": list(SKIPPED_PREFIXES),
         "objects": {},
         # Stated in the artefact, not only in this file's docstring: whoever finds this backup during an
@@ -145,7 +138,7 @@ def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[s
 
     copied = 0
     raced: list[str] = []
-    for prefix in CONTROL_PREFIXES:
+    for prefix in BACKED_UP_PREFIXES:
         for key, listed_etag in list_objects(client, src_bucket, _join(src_prefix, prefix)).items():
             if is_directory_marker(key):
                 continue

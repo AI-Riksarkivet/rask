@@ -40,9 +40,10 @@ what it owns is the part that is identical in all of them:
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from typing import Any
+from typing import Any, Final
 
 from fastapi import APIRouter, FastAPI
 from starlette.middleware import Middleware
@@ -56,6 +57,23 @@ from lakehouse.middleware import RequestIDMiddleware
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.panic_catcher import PanicCatcherMiddleware
 from lakehouse.probes import LiveCheck, ReadyCheck, make_probes_router
+
+
+#: Lance's switch for the migration a read commits. A dataset whose fragment metadata is out of date, or whose index
+#: segments overlap, is migrated by a commit from whichever read noticed, ``index_stats`` among them, unless it is
+#: ``false``. Lance reads it at the call, not at import (measured on pylance 13.0.0).
+_AUTO_MIGRATION: Final = "LANCE_AUTO_MIGRATION"
+
+
+def _forbid_migrations_on_read() -> None:
+    """Keep every Lance read in this process from committing to the table it reads.
+
+    No lakehouse plane writes a table but through a door that judged the write. Measured on pylance 13.0.0: an
+    ``index_stats`` read of two index segments covering one fragment committed 472 migrations and then crashed the
+    process; with the switch off the read raises and the table is unchanged. Set whatever the environment names, as
+    a write a read makes is never one this process may make.
+    """
+    os.environ[_AUTO_MIGRATION] = "false"
 
 
 def build_lance_service_app(
@@ -104,6 +122,7 @@ def build_lance_service_app(
     """
     setup_logging()
     configure_audit(enabled=audit_enabled)
+    _forbid_migrations_on_read()
     app = FastAPI(
         title=title,
         version=version,

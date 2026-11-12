@@ -9,7 +9,6 @@ from __future__ import annotations
 import pyarrow.fs as pafs
 from pydantic import BaseModel
 
-from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_REFS_DIR, branch_name_from_ref_file
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 
 
@@ -97,32 +96,14 @@ def _is_a_prefix_of_an_existing_bucket(fs: pafs.FileSystem, root: str) -> bool:
     return isinstance(fs, pafs.S3FileSystem) and bool(prefix) and fs.get_file_info(bucket).type == pafs.FileType.Directory
 
 
-def _branch_refs(fs: pafs.FileSystem, root: str) -> list[str]:
-    """The branches ``root``'s ``_refs/branches`` names, sorted ([[LH-203]]).
-
-    THE REFS, NOT THE ``tree/`` DIRECTORY. A branch name may contain ``/`` and the format lays ``a/b`` at
-    ``tree/a/b/`` (`lance_docs/lance/format/table/branch_tag.md` § "Branch Dataset Layout"), so a walk of ``tree/``'s children finds
-    ``tree/a`` and never ``a/b`` inside it, and finds ``tree/a`` again after ``a`` is deleted, from
-    the files Lance leaves behind while ``a/b`` exists. The refs are the format's own list of branches
-    (`lance_docs/lance/format/table/branch_tag.md` § "Branch Metadata Path", one ``<name>.json`` per branch with ``/`` written
-    ``%2F``), read with one listing, which is what the ``tree/`` probe cost.
-
-    A listing that fails raises rather than answering "no branches": both callers catch per bucket and
-    report it, where an empty answer would leave every branch of this dataset unmaintained in silence.
-    """
-    selector = pafs.FileSelector(f"{root}/{BRANCH_REFS_DIR}", recursive=False, allow_not_found=True)
-    names = (branch_name_from_ref_file(info.base_name) for info in fs.get_file_info(selector) if info.type == pafs.FileType.File)
-    return sorted(name for name in names if name is not None)
-
-
 def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -> Discovery:
     """Lance datasets under ``bucket`` — a directory IS a dataset iff it has a ``_versions/`` child
     (the Lance table-layout marker); any other directory is a namespace prefix and is recursed into
-    (bounded by ``max_depth``). Every branch a dataset's ``_refs/branches`` names is listed as well, at
-    ``<dataset>/tree/<branch>``, because a BRANCH is a full dataset the parent contains rather than part
-    of it; none of a dataset's children is walked. Skips ``__`` bookkeeping dirs (the catalog's ``__manifest``) and the
-    control-plane registries (``_warehouses``, ``_policies``, ``_protection``, ``_trash``) — no dataset ever
-    lives under them, and probing them is wasted S3 round-trips on the hot discovery path.
+    (bounded by ``max_depth``). Nothing inside a dataset is walked, its branches included: a branch is part of its
+    table, whose pass lists its branches through Lance's own ``branches.list()`` and maintains each
+    (``table_pass._datasets_of``), and the drift report judges a table by its root. Skips ``__`` bookkeeping dirs (the
+    catalog's ``__manifest``) and the control-plane registries (``_warehouses``, ``_policies``, ``_protection``,
+    ``_trash``) — no dataset ever lives under them, and probing them is wasted S3 round-trips on the hot discovery path.
 
     The catalog lays top-level tables out as ``<uuid>_<table_id>/``, but a registered table's dataset
     may sit below a prefix of the writer's choosing (``pipeline/bronze``, ``pipeline/silver`` …) — without
@@ -157,20 +138,6 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
             marker = fs.get_file_info(f"{info.path}/_versions")
             if marker.type == pafs.FileType.Directory:
                 found.uris.append(f"s3://{info.path}")
-                # A BRANCH IS A WHOLE DATASET THIS ONE CONTAINS, and stopping here would leave every
-                # branch in the estate invisible: `tree/<name>/` carries its own `_versions/` and `_transactions/`,
-                # so it accumulates versions with nothing ever reclaiming them. Measured 2026-09-07:
-                # 85 of the deployed estate's 250 tables carry at least one.
-                #
-                # From the REFS, never by walking the dataset's children (`_branch_refs`). `data/`,
-                # `_indices/`, `_deletions/` and `_transactions/` are not datasets, and `tree/`'s
-                # children are directories, not branches: a branch named `a/b` sits two levels down.
-                #
-                # A branch sets `base_paths` (measured (16, 16), data files identical to the parent's at
-                # `base_id` 0, no `data/` of its own), so the compaction gate and the orphan scan refuse
-                # it on that flag while root-scoped `cleanup_old_versions` permits it via
-                # `SUPPORTED_FOR_GC`.
-                found.uris.extend(f"s3://{info.path}/{BRANCH_CONTAINER}/{name}" for name in _branch_refs(fs, info.path))
             elif depth < max_depth:
                 _walk(info.path, depth + 1)
             elif _may_hide_a_dataset(fs, info.path):

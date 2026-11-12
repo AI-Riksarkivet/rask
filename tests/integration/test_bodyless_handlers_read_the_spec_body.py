@@ -190,9 +190,16 @@ def test_get_table_stats_refuses_a_body_branch(client: TestClient, fake_ns: Magi
         pytest.param(
             "/v1/table/db1$users/schema_metadata/update", {"id": ["db1", "other"], "metadata": {"owner": "alice"}}, None, id="schema-metadata-envelope"
         ),
+        # The index doors carry the index's name in the path as well as the body (`DropTableIndexRequest.index_name`).
+        pytest.param("/v1/table/db$t/index/vec_idx/drop", {"id": ["db", "other"]}, None, id="drop-index"),
+        pytest.param("/v1/table/db$t/index/vec_idx/drop", {"index_name": "other_idx"}, None, id="drop-index-naming-another-index"),
+        pytest.param("/v1/table/db$t/index/vec_idx/stats", {"index_name": "other_idx"}, "describe_table_index_stats", id="index-stats-naming-another-index"),
+        pytest.param("/v1/table/db$t/create_index", {"id": ["db", "other"], "column": "v", "index_type": "BTREE"}, None, id="create-index"),
     ],
 )
-def test_a_table_door_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock, path: str, body: dict[str, Any], backend: str | None) -> None:
+def test_a_table_door_refuses_a_body_contradicting_its_path(
+    client: TestClient, fake_ns: MagicMock, path: str, body: dict[str, Any], backend: str | None
+) -> None:
     fake_ns.deregister_table.return_value = DeregisterTableResponse()
     resp = client.post(path, json=body)
     assert resp.status_code == 400, resp.text

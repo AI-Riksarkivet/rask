@@ -18,7 +18,7 @@ from pydantic import AfterValidator, AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
+from lakehouse.objectfs import StoreTimeouts, lance_storage_options
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.signature_doors import SignatureDoorSettings
 from lakehouse.storage_options import StorageOptions
@@ -167,6 +167,19 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")
+    #: How long one call of maintenance's to the store may take (`lakehouse.objectfs.StoreTimeouts`): every open,
+    #: listing, manifest read and delete a pass or a check makes, under its own session and under a vend alike. Without
+    #: them Lance runs on object_store's defaults, on which one open against a store that never answers outlasted 300 s
+    #: (`StoreTimeouts`), so a stalled store held a replica up to the end its pass bound sets. Maintenance moves no rows,
+    #: so the request bound is a metadata call's with room for a large manifest from a slow store; the connect bound finds
+    #: a store that has left the network in seconds. NO CLIENT RETRY: Lance re-issues a listing itself and its throttle
+    #: retries a 429 or a 503, and a pass that fails is tried again after `retry_seconds`. Measured with these defaults on
+    #: pylance 13.0.0: one open against a store that never answers gave up in 182.6 s (six listings of 30 s), against one
+    #: that drops packets in 14.5 s.
+    store_connect_timeout_s: float = Field(default=2.0, gt=0, alias="MAINTENANCE_STORE_CONNECT_TIMEOUT_S")
+    store_request_timeout_s: float = Field(default=30.0, gt=0, alias="MAINTENANCE_STORE_REQUEST_TIMEOUT_S")
+    store_max_retries: int = Field(default=0, ge=0, alias="MAINTENANCE_STORE_MAX_RETRIES")
+    store_retry_window_s: int = Field(default=30, ge=0, alias="MAINTENANCE_STORE_RETRY_WINDOW_S")
     # Maintenance's identity at the store is `StoreIdentitySettings`' (MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE and the
     # rest): its own reads and records sign with sessions its token is exchanged for, and a rewrite signs with its table's
     # vend alone (`services/credentials.py`).
@@ -443,11 +456,22 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
         """
         return key_pair_in_force(self.web_identity, self.env_pair)
 
+    @property
+    def store_timeouts(self) -> StoreTimeouts:
+        """The bound on each of maintenance's store calls, which every ``storage_options`` it opens with carries."""
+        return StoreTimeouts(
+            connect_s=self.store_connect_timeout_s,
+            request_s=self.store_request_timeout_s,
+            max_retries=self.store_max_retries,
+            retry_window_s=self.store_retry_window_s,
+        )
+
     def storage_options(self) -> StorageOptions:
-        """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint, under the key pair in force."""
+        """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint, under the key pair in force and
+        maintenance's :attr:`store_timeouts`."""
         # Via the shared builder — which also stamps path-style addressing; the hand-rolled copy here had
         # silently dropped it (audit 2026-07-15), leaving the sweep one object-store default away from 403s.
-        return lance_storage_options(self.s3_endpoint, self.s3_key_pair(), self.s3_region)
+        return lance_storage_options(self.s3_endpoint, self.s3_key_pair(), self.s3_region).with_options(self.store_timeouts.storage_options())
 
 
 def shared_lance_session() -> lance.Session:

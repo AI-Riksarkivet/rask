@@ -262,8 +262,13 @@ def _committed(estate: _Estate) -> _Staged:
 
 def _commit(staged: _Staged, fragments: list[dict[str, Any]], read_version: int) -> httpx.Response | None:
     """Commit ``fragments`` as an Append through the namespace; on a refusal, the catalog's answer to the retained staged manifest."""
-    table_id = staged.table.split("$")
     operation = lance.LanceOperation.Append([lance.FragmentMetadata.from_json(json.dumps(fragment)) for fragment in fragments])
+    return _commit_operation(staged, operation, read_version)
+
+
+def _commit_operation(staged: _Staged, operation: lance.LanceOperation.BaseOperation, read_version: int) -> httpx.Response | None:
+    """Commit ``operation`` through the namespace; on a refusal, the catalog's answer to the retained staged manifest."""
+    table_id = staged.table.split("$")
     transaction = Transaction(read_version=read_version, operation=operation, uuid=staged.transaction_uuid or str(uuid.uuid4()))
     try:
         lance.LanceDataset.commit(
@@ -440,6 +445,29 @@ def test_a_forged_fragment_is_refused_and_the_table_is_unchanged(
     assert estate.open(staged.location).version == before, "the refused commit still minted a version"
     assert estate.ids(staged.location) == rows
     assert estate.version_residue(staged.location) == []
+
+
+def test_a_blob_written_into_a_fragment_the_table_holds_is_judged_as_a_new_fragments_blob_is(estate: _Estate) -> None:
+    """A ``DataReplacement`` adds a data file to a fragment the table holds, and its blob descriptors are judged as a new
+    fragment's are: measured on pylance 13.0.0, Lance commits one whose file names another bucket's object as an external
+    blob, and ``take_blobs`` then reads that object's bytes, which the blob door would read with the catalog's own key."""
+    staged = _bronze_with_a_base(estate)
+    assert _commit(staged, [staged.copy()], estate.open(staged.location).version) is None
+    held = estate.open(staged.location).get_fragments()[0]
+    before, rows = estate.open(staged.location).version, estate.ids(staged.location)
+    secret = f"s3://{estate.bucket}/elsewhere/secret.bin"
+    estate.put_uri(secret, b"SECRET")
+    kept = held.to_table(columns=["id", "source_uri"])
+    pointers = kept.append_column(_BLOB_SCHEMA.field("payload"), blob_array([Blob.from_uri(secret)] * kept.num_rows))
+    (written,) = lance.fragment.write_fragments(pointers, staged.location, storage_options=estate.key.in_clear(), allow_external_blob_outside_bases=True)
+    replacement = lance.LanceOperation.DataReplacement([lance.LanceOperation.DataReplacementGroup(held.fragment_id, written.files[0])])
+
+    resp = _commit_operation(staged, replacement, before)
+
+    assert resp is not None, "the replacement was finalized"
+    assert (resp.status_code, resp.json().get("code")) == (400, _INVALID_INPUT), resp.text
+    assert "an external blob is a path relative to" in resp.json()["detail"], resp.text
+    assert (estate.open(staged.location).version, estate.ids(staged.location)) == (before, rows)
 
 
 def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate) -> None:

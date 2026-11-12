@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import io
 import itertools
+import json
 import logging
 import re
 import tempfile
@@ -135,7 +136,7 @@ from lakehouse.base_refs import decoded_path, decoded_segments, location_in_stor
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.features import manifest_base_path_refs
 from lakehouse.history_fences import HistoryWork
-from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
+from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
@@ -256,10 +257,9 @@ def committed_version(table: table_claims.DoorTable, so: StorageOptions, transac
         dataset = open_resolved_dataset_unchecked(table.location, so, table_id, branch=branch)
         head = int(dataset.version)
         # THE WALK STOPS ABOVE THE BRANCH POINT. A branch's first manifest carries the parent's version
-        # number and no transaction a write could have made, and on pylance 12.0.0 `read_transaction` on
-        # it PANICS (`pyo3_runtime.PanicException: not yet implemented`) while one version lower raises
-        # OSError (no manifest of the branch's own). Nothing at or below `parent_version` is this
-        # branch's commit, so neither is read.
+        # number and the `Clone` that made the branch, never a write's transaction (measured on pylance
+        # 13.0.0), and one version lower raises OSError (no manifest of the branch's own). Nothing at or
+        # below `parent_version` is this branch's commit, so neither is read.
         listed = dataset.branches.list().get(cast(str, recorded_branch(branch))) or {}
         parent = listed.get("parent_version")
         floor = max(head - _TRANSACTION_SEARCH_DEPTH, int(parent) if isinstance(parent, int) else 0)
@@ -505,7 +505,7 @@ def read_arrow_body(data: bytes, *, max_bytes: int) -> pa.Table:
     re-encodes to the same cap.
     """
     try:
-        return decode_arrow_body(data, max_bytes=max_bytes, framing="stream")
+        rows = decode_arrow_body(data, max_bytes=max_bytes, framing="stream")
     except ArrowBodyTooLargeError as exc:
         raise InvalidInputError(
             f"the request body is too large once decoded: {exc}; write large payloads directly to object storage with vended credentials"
@@ -513,6 +513,59 @@ def read_arrow_body(data: bytes, *, max_bytes: int) -> pa.Table:
         ) from exc
     except ArrowBodyError as exc:
         raise InvalidInputError(f"the request body is not a valid Arrow IPC stream: {exc}") from exc
+    _refuse_values_that_are_not_json(rows)
+    return rows
+
+
+def _refuse_values_that_are_not_json(rows: pa.Table) -> None:
+    """Every JSON value in ``rows`` parses as JSON, wherever its column nests it.
+
+    Lance parses a JSON value only when it encodes it, deep in the write, and reports one that does not parse as an
+    untyped ``OSError`` ("Failed to encode JSON"), which a door answered 500. Measured on pylance 13.0.0, it encodes a
+    JSON value beneath a struct, a list, a large list and a map, and beneath a null struct or a null list too, so every
+    child slot is read here, whatever its parent's validity. Each chunk is read as it came: pyarrow cannot combine an
+    extension column of no chunks, an empty blob column among them (measured on pyarrow 25.0.0).
+
+    Raises:
+        InvalidInputError: A JSON value does not parse; the detail names its path and its position among that path's
+            values, which for a column outside every list is its row.
+    """
+    for field in rows.schema:
+        seen: Counter[str] = Counter()
+        for chunk in rows.column(field.name).chunks:
+            for path, values in _json_values(field.name, chunk):
+                for position, value in enumerate(values.storage.to_pylist(), start=seen[path]):
+                    if value is None:
+                        continue
+                    try:
+                        json.loads(value)
+                    except ValueError as exc:
+                        raise InvalidInputError(f"column {path!r} holds a value that is not JSON at position {position}: {exc}") from exc
+                seen[path] += len(values)
+
+
+#: The nested types whose ``values`` hold one child array: every list, and a map, whose child is its key and value struct.
+_LIST_LIKE: Final[tuple[Callable[[pa.DataType], bool], ...]] = (
+    pa.types.is_list,
+    pa.types.is_large_list,
+    pa.types.is_fixed_size_list,
+    pa.types.is_list_view,
+    pa.types.is_large_list_view,
+    pa.types.is_map,
+)
+
+
+def _json_values(path: str, values: pa.Array) -> Iterator[tuple[str, pa.ExtensionArray]]:
+    """Each JSON array within ``values``, by its path (``.`` into a struct field, ``[]`` into a list's or a map's values)."""
+    kind = values.type
+    if isinstance(kind, pa.JsonType):
+        yield path, cast("pa.ExtensionArray", values)
+    elif pa.types.is_struct(kind):
+        struct = cast("pa.StructArray", values)
+        for index, field in enumerate(kind):
+            yield from _json_values(f"{path}.{field.name}", struct.field(index))
+    elif any(is_kind(kind) for is_kind in _LIST_LIKE):
+        yield from _json_values(f"{path}[]", cast("pa.ListArray", values).values)
 
 
 #: The marker the `dir` catalog's DeclareTable writes at a table's location, so that a declared table's directory holds
@@ -1631,11 +1684,6 @@ class _StagedCapture(Exception):
     """Raised by :class:`_CapturingNamespace` in place of a finalize, ending the operation that staged its manifest."""
 
 
-#: How Lance words a commit that met a conflicting one committed since it was planned (pylance 13.0.0:
-#: ``Retryable commit conflict for version 5: This Merge transaction was preempted by concurrent transaction ...``).
-_LANCE_RETRYABLE_CONFLICT: Final = "retryable commit conflict"
-
-
 class _PlannedOnAStaleVersion(Exception):
     """A captured operation met a version committed after the one it was planned on: :func:`commit_stamped` plans again.
 
@@ -1769,9 +1817,9 @@ def captured[T](
             operation(handle)
         except Exception as exc:
             if namespace.staged is None:
-                # Lance's own wording for it, never the broad conflict markers: a column a caller named `concurrent` is
+                # Lance's own answer for it, never the broad conflict markers: a column a caller named `concurrent` is
                 # missing, not raced.
-                if _LANCE_RETRYABLE_CONFLICT in str(exc).lower():
+                if is_retryable_conflict(exc):
                     raise _PlannedOnAStaleVersion from exc
                 # Lance gave up against the planned version, which this namespace keeps answering as the latest, while
                 # another writer's version stood after it ([[LH-542]]): measured on pylance 13.0.0, a delete exhausts its
@@ -3191,9 +3239,9 @@ def _window_spans(dataset: lance.LanceDataset, begin: int, end: int, branch: str
     A branch's own versions start above its `parent_version`; everything at or below it is its parent's
     history, read on the parent's handle at that version (`checkout_version((parent_branch, v))`, where
     `None` is main; measured on pylance 12.0.0, nested branches included). The branch's first manifest
-    carries the parent's version number and no transaction a write made, and `read_transaction` on it
-    PANICS on 12.0.0 (`not yet implemented`), while the versions below it do not exist on the branch at
-    all — so no span ever asks a branch for a version at or below its branch point.
+    carries the parent's version number and the `Clone` that made the branch, never a write's transaction
+    (measured on pylance 13.0.0), while the versions below it do not exist on the branch at all — so no
+    span ever asks a branch for a version at or below its branch point.
     """
     spans: list[_WindowSpan] = []
     handle, high, name = dataset, end, recorded_branch(branch)
@@ -3380,6 +3428,7 @@ def coerce_insert_arrow(
     incoming = read_arrow_body(data, max_bytes=max_bytes)
     if overwrite:
         provenance_guard.refuse_reserved_keys((incoming.schema.metadata or {}).keys(), door="insert?mode=overwrite payload")
+        formats.refuse_flag_locking_keys((incoming.schema.metadata or {}).keys(), door="insert?mode=overwrite payload")
     # THE REF THE REQUEST NAMES, never main. This alignment DROPS columns the target does not have, so
     # aligning a branch-targeted insert to main's schema silently deletes any column the branch has and
     # main does not — and then the insert succeeds, reporting rows it quietly rewrote. A branch whose

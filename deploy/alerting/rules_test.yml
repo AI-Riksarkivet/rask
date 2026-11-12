@@ -211,6 +211,53 @@ tests:
         alertname: DaprConsumerWedge
         exp_alerts: []
 
+  # 9a. [[LH-574]] Lance throttled by the store for over 15m → LanceObjectStoreThrottled fires, naming the service; a store
+  #     that throttled for a minute and recovered does not page, and neither does one that never throttled, since the
+  #     series exists only once a throttling answer has come.
+  - interval: 1m
+    input_series:
+      - series: 'lance_object_store_throttle_total{service_name="catalog",operation="put"}'
+        values: "0+2x20" # two throttled requests every scrape
+      - series: 'lance_object_store_throttle_total{service_name="maintenance",operation="list"}'
+        values: "0 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3" # a minute's burst, then none
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: LanceObjectStoreThrottled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fleet
+              service_name: catalog
+            exp_annotations:
+              summary: "catalog has been throttled by the object store for 15m (HTTP 429/503)"
+              description: "Lance in catalog has met throttling answers from the object store continuously for 15m. Its client backs off and retries, so writes and maintenance passes slow down rather than fail. Check the store's request limits and what drives the load. Runbook: docs/runbooks/RUNBOOK-oncall.md#the-object-store-throttles-or-retries"
+
+  # 9a'. One request in ten drawing a retryable answer for over 15m → LanceObjectStoreRetriesHigh fires; one in a hundred
+  #      does not, nor a service with no retryable answer at all (no series).
+  - interval: 1m
+    input_series:
+      - series: 'lance_object_store_requests_total{service_name="catalog",operation="get"}'
+        values: "0+10x30"
+      - series: 'lance_object_store_retryable_responses_total{service_name="catalog",operation="get"}'
+        values: "0+1x30" # 10% of requests
+      - series: 'lance_object_store_requests_total{service_name="maintenance",operation="list"}'
+        values: "0+100x30"
+      - series: 'lance_object_store_retryable_responses_total{service_name="maintenance",operation="list"}'
+        values: "0+1x30" # 1% of requests
+      - series: 'lance_object_store_requests_total{service_name="lineage",operation="get"}'
+        values: "0+10x30" # no retryable answer, so no retryable series
+    alert_rule_test:
+      - eval_time: 26m
+        alertname: LanceObjectStoreRetriesHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fleet
+              service_name: catalog
+            exp_annotations:
+              summary: "catalog: over 5% of object-store requests drew a retryable answer for 15m"
+              description: "More than one request in twenty from Lance in catalog got a 5xx, 429 or 408 from the store for 15m. Lance retries each inside its store bounds, so every call costs up to its retry count over: a degrading store shows here before requests fail. Runbook: docs/runbooks/RUNBOOK-oncall.md#the-object-store-throttles-or-retries"
+
   # 9b. [[LH-559]] The two lakehouse lanes whose parks nothing reads: daprd's own count is the record. A pod's first park
   #     is a series appearing at 1 (daprd creates it on the first event it books), so the alert must fire on it, and a
   #     second park later on the same series fires through `increase`. An app's own DROP answer (`status="success"`)

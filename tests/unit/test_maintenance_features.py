@@ -25,6 +25,7 @@ import pytest
 from lance.dataset import DatasetBasePath
 
 from lakehouse import features
+from lakehouse.manifest_wire import ManifestWireError
 from lakehouse.objectfs import dataset_root_probe, same_store_uri
 from lakehouse.storage_options import StorageOptions
 
@@ -163,20 +164,31 @@ def test_a_data_overlay_makes_pylance_refuse_the_open_and_we_classify_it(tmp_pat
     assert "64" in reason and "overlay" in reason.lower(), f"the refusal must NAME the flag, got: {reason}"
 
 
-def test_a_wire_type_it_cannot_skip_stops_rather_than_misreading() -> None:
-    """The parser must never invent flags out of bytes it does not understand — a garbage reader
-    value would refuse a healthy dataset forever, and the whole estate with it."""
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        # field 3, wire type 3 (a group start, removed from proto3), before the reader flags
+        pytest.param(bytes([3 << 3 | 3, 0xFF, 0xFF, 9 << 3, 64]), id="a-wire-type-proto3-does-not-carry"),
+        # the writer flags' varint cut after its continuation byte
+        pytest.param(bytes([9 << 3, 0x80 | 64, 0x01, 10 << 3, 0x80 | 64]), id="a-varint-cut-short"),
+        # field 18 (length 200) runs past the end, hiding the flags after it
+        pytest.param(bytes([18 << 3 | 2, 200, 1, 2, 3]), id="a-length-delimited-field-past-the-end"),
+    ],
+)
+def test_a_manifest_that_does_not_parse_is_refused_by_every_flag_gate(manifest: bytes) -> None:
+    """A manifest read up to where its parse stops answers no flags for what lies beyond, and ``(0, 0)`` passes every
+    gate: the flags are refused whole, so every gate, which reads them here, refuses with them."""
 
     class _Manifest:
         def serialized_manifest(self) -> bytes:
-            # field 3, wire type 3 (group start — removed from proto3 and unskippable here)
-            return bytes([3 << 3 | 3, 0xFF, 0xFF])
+            return manifest
 
     # A `ManifestCarrier`, structurally: the one private attribute the detector reads is all it declares.
     class _Dataset:
         _ds = _Manifest()
 
-    assert features.manifest_feature_flags(_Dataset()) == (0, 0)
+    with pytest.raises(ManifestWireError):
+        features.manifest_feature_flags(_Dataset())
 
 
 # --------------------------------------------------------------------------- #

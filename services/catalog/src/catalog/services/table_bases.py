@@ -29,9 +29,11 @@ from lance_namespace import (
     PermissionDeniedError,
     ServiceUnavailableError,
     TableNotFoundError,
+    UnsupportedOperationError,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
+from catalog.core import formats
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
@@ -39,7 +41,7 @@ from catalog.core.namespace import registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import native, table_claims, table_inputs
-from lakehouse import base_registry, blobs, clone_sources, location_claims
+from lakehouse import base_registry, blobs, clone_sources, control_prefixes, location_claims
 from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.history_fences import HistoryFencedError
@@ -52,7 +54,7 @@ log = logging.getLogger(__name__)
 #: The spec's object index on a ``dir`` root (``<root>/__manifest``): one row per namespace and table,
 #: and for a table its ``location`` relative to the root (lh279 s1). The only location index the
 #: exclusivity rule needs.
-_MANIFEST_DIR = "__manifest"
+_MANIFEST_DIR = control_prefixes.NAMESPACE_INDEX
 _TABLE_ROW = "table"
 
 #: Rows a namespace root's manifest can hold for one location are the registering table's own and,
@@ -632,6 +634,12 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
             f"the dataset at {location!r} carries {facts.compaction_config} in its manifest config, which Lance would plan a compaction "
             "from in place of the table's maintenance policy. Delete those keys (delete_config_keys), then register it."
         )
+    if facts.flag_locking:
+        log.warning("register_refused_flag_locking_keys", extra={"table": table, "location": location, "keys": facts.flag_locking})
+        formats.refuse_flag_locking_keys(facts.flag_locking, door=f"the dataset at {location!r} cannot be registered")
+    if facts.mem_wal:
+        log.warning("register_refused_mem_wal", extra={"table": table, "location": location})
+        raise UnsupportedOperationError(f"the dataset at {location!r} cannot be registered: {formats.MEM_WAL_NOT_SERVED}")
     clone = admit_clone(facts.clone, facts.bases, location=location, context=context)
     entries = entries_for_registration(
         location,

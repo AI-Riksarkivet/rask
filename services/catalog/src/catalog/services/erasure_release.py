@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.dataplane import recorded_branch
 from catalog.services.erasure import Pin
+from lakehouse import control_prefixes
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.record_store import delete_record, list_records
 from lakehouse.records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
@@ -50,7 +51,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-RELEASE_PREFIX = "_erasure_releases"
+RELEASE_PREFIX = control_prefixes.ERASURE_RELEASES
 
 #: How long a claimed release stays a tick's own before another may resume it. Longer than a release takes
 #: (a handful of ref deletes and creates), so a slow tick is not overtaken; a tick that fails hands its lease

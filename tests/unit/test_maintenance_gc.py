@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from catalog.services import maintenance
+from lakehouse.manifest_wire import encode_varint
 from lakehouse.storage_options import StorageOptions
 
 
@@ -29,23 +30,13 @@ class _Manifest:
     def __init__(self, reader: int = 0, writer: int = 0) -> None:
         blob = b""
         if reader:
-            blob += bytes([9 << 3]) + _varint(reader)
+            blob += bytes([9 << 3]) + encode_varint(reader)
         if writer:
-            blob += bytes([10 << 3]) + _varint(writer)
+            blob += bytes([10 << 3]) + encode_varint(writer)
         self._blob = blob
 
     def serialized_manifest(self) -> bytes:
         return self._blob
-
-
-def _varint(value: int) -> bytes:
-    out = bytearray()
-    while True:
-        byte = value & 0x7F
-        value >>= 7
-        out.append(byte | (0x80 if value else 0))
-        if not value:
-            return bytes(out)
 
 
 class _FakeDs:

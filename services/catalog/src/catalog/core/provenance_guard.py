@@ -17,7 +17,9 @@ THE PROVENANCE COLUMN. A governed row needs no column (ADR 0156 C9): its run and
 (`lakehouse.stage_stamp`), an opt-in that traces a row to the source row it descends from, and every
 reader resolves it by that name, so it is protected by name wherever it appears. The row identity is protected by Lance's own declaration instead: any
 field carrying `lance-schema:unenforced-primary-key`, and each of its ancestors, in any table
-(`lance_docs/lance/format/table/index.md` § Unenforced Primary Key). Measured on pylance 12.0.0:
+(`lance_docs/lance/format/table/index.md` § Unenforced Primary Key), read through Lance's own parser
+(`primary_keys.declared_key`), so the key protected here is the key Lance dedupes and merges on: measured on
+pylance 13.0.0, Lance reads `Y` and `on` as a key and ` true` as none. Measured on pylance 12.0.0:
 
 * `drop_columns(["id"])` is accepted and leaves a table with no key;
 * `alter_columns` with a `data_type`, even int64 -> int64, is accepted, strips the key metadata and
@@ -41,29 +43,25 @@ from typing import Final
 import pyarrow as pa
 from lance_namespace import InvalidInputError
 
+from catalog.services import primary_keys
 from lakehouse.stage_stamp import SOURCE_ROWID_COLUMN
 
 
 #: Schema-metadata namespaces only the platform writes. A key under either is refused at every write door.
 RESERVED_METADATA_PREFIXES: Final = ("lineage.", "rask.")
 
-#: Lance's field-metadata key declaring a field part of the unenforced primary key.
-PRIMARY_KEY_METADATA: Final = b"lance-schema:unenforced-primary-key"
-
-#: The values Lance reads as "this field is in the key" (`lance_docs/lance/format/table/index.md`: `true`, `1` or `yes`, case-insensitive).
-_PRIMARY_KEY_TRUE: Final = frozenset({b"true", b"1", b"yes"})
-
 #: The platform's provenance column, by the name `stage_stamp` writes and every reader resolves.
 PROVENANCE_COLUMNS: Final = frozenset({SOURCE_ROWID_COLUMN})
 
 
-def _text(key: str | bytes) -> str:
+def metadata_text(key: str | bytes) -> str:
+    """An Arrow metadata key or value as text: Arrow keeps a schema's or a field's in bytes, a caller's map in str."""
     return key.decode() if isinstance(key, bytes) else key
 
 
 def is_reserved_key(key: str | bytes) -> bool:
     """Whether a schema-metadata key belongs to the platform rather than to the table's writer."""
-    return _text(key).startswith(RESERVED_METADATA_PREFIXES)
+    return metadata_text(key).startswith(RESERVED_METADATA_PREFIXES)
 
 
 def refuse_reserved_keys(keys: Iterable[str | bytes], *, door: str) -> None:
@@ -72,7 +70,7 @@ def refuse_reserved_keys(keys: Iterable[str | bytes], *, door: str) -> None:
     Raises:
         InvalidInputError: One or more keys sit under a reserved namespace.
     """
-    reserved = sorted({_text(key) for key in keys if is_reserved_key(key)})
+    reserved = sorted({metadata_text(key) for key in keys if is_reserved_key(key)})
     if reserved:
         raise InvalidInputError(
             f"{door}: schema metadata under {', '.join(p + '*' for p in RESERVED_METADATA_PREFIXES)} is written by the platform only; "
@@ -86,7 +84,7 @@ def field_labels(schema: pa.Schema) -> dict[str, dict[str, str]]:
 
     def walk(field: pa.Field, prefix: str) -> None:
         path = f"{prefix}{field.name}"
-        if governed := {_text(key): _text(value) for key, value in (field.metadata or {}).items() if _text(key).startswith("rask.")}:
+        if governed := {metadata_text(key): metadata_text(value) for key, value in (field.metadata or {}).items() if metadata_text(key).startswith("rask.")}:
             found[path] = governed
         if pa.types.is_struct(field.type):
             for index in range(field.type.num_fields):
@@ -97,22 +95,6 @@ def field_labels(schema: pa.Schema) -> dict[str, dict[str, str]]:
     return found
 
 
-def _is_primary_key(field: pa.Field) -> bool:
-    value = (field.metadata or {}).get(PRIMARY_KEY_METADATA)
-    return value is not None and value.strip().lower() in _PRIMARY_KEY_TRUE
-
-
-def _key_paths(field: pa.Field, prefix: str = "") -> list[str]:
-    """Every primary-key leaf at or under ``field``, as the dotted path Lance's column ops take."""
-    path = f"{prefix}{field.name}"
-    if _is_primary_key(field):
-        return [path]
-    if pa.types.is_struct(field.type):
-        struct = field.type
-        return [p for i in range(struct.num_fields) for p in _key_paths(struct.field(i), f"{path}.")]
-    return []
-
-
 def protected_paths(schema: pa.Schema) -> dict[str, str]:
     """Each column path a writer may not drop, rename or re-type, with why it is protected.
 
@@ -120,12 +102,11 @@ def protected_paths(schema: pa.Schema) -> dict[str, str]:
     it, and renaming one moves the path a key-less merge resolves.
     """
     protected: dict[str, str] = {name: "a provenance column" for name in schema.names if name in PROVENANCE_COLUMNS}
-    for field in schema:
-        for key in _key_paths(field):
-            protected[key] = "the table's primary key"
-            parts = key.split(".")
-            for depth in range(1, len(parts)):
-                protected.setdefault(".".join(parts[:depth]), f"an ancestor of primary key {key!r}")
+    for key in primary_keys.declared_key(schema):
+        protected[key] = "the table's primary key"
+        parts = key.split(".")
+        for depth in range(1, len(parts)):
+            protected.setdefault(".".join(parts[:depth]), f"an ancestor of primary key {key!r}")
     return protected
 
 

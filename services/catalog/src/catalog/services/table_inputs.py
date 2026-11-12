@@ -34,13 +34,13 @@ from lance_namespace import InternalError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from catalog.core.run_context import RunInput
-from lakehouse import derived_tables
+from lakehouse import control_prefixes, derived_tables
 from lakehouse.record_store import list_records, record_key
 from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json_at, replace_json
 from lakehouse.storage_options import StorageOptions
 
 
-PREFIX: Final = "_table_inputs"
+PREFIX: Final = control_prefixes.TABLE_INPUTS
 
 #: How often a record write reads again after another commit's write landed between its read and its write.
 _ATTEMPTS: Final = 8

@@ -112,11 +112,12 @@ def clone_reference(clone: lance.LanceDataset) -> CloneReference | None:
 
     A Clone can only be a dataset's first operation (`lance_docs/lance/format/table/transaction.md` § Clone
     Compatibility), and a shallow clone takes the source's version number (measured on pylance 13.0.0: a clone of
-    version 2 starts at version 2), so the first version listed holds it.
+    version 2 starts at version 2), so the first version listed holds it. Listed with ``version_refs()``, a listing of
+    ``_versions/`` that reads no manifest, where ``versions()`` reads every one.
     """
     import lance
 
-    first = min(int(entry["version"]) for entry in clone.versions())
+    first = min(int(entry["version"]) for entry in clone.version_refs())
     transaction = clone.read_transaction(first)
     operation = transaction.operation if transaction is not None else None
     if not isinstance(operation, lance.LanceOperation.Clone) or not operation.is_shallow:
@@ -144,11 +145,12 @@ def _dataset_key(location: str) -> str:
 
 
 def _holds(dataset: lance.LanceDataset, source: CloneSource) -> bool:
-    """Whether the source still keeps the version the clone reads, on the branch the clone reads it from."""
+    """Whether the source still keeps the version the clone reads, on the branch the clone reads it from, read off the
+    ref's ``_versions/`` listing (``version_refs()``, which reads no manifest)."""
     if source.branch is not None and source.branch not in dataset.branches.list():
         return False
     ref = dataset if source.branch is None else dataset.checkout_version((source.branch, None))
-    return any(int(entry["version"]) == source.version for entry in ref.versions())
+    return any(int(entry["version"]) == source.version for entry in ref.version_refs())
 
 
 def take(source: CloneSource, *, clone_location: str, control_root: str, storage_options: StorageOptions) -> None:

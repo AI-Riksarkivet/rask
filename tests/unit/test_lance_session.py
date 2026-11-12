@@ -40,9 +40,8 @@ def test_referenced_paths_walks_versions_on_the_HEAD_dataset_cache(tmp_path: Pat
         return real(uri_arg, *args, **kwargs)
 
     monkeypatch.setattr(orphans.lance, "dataset", counting)
-    referenced, count, note = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
+    referenced, count = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
     assert count >= 4 and referenced, "the walk saw the versions and files"
-    assert note is None
     assert len(calls) == 1, f"per-version REOPENS are back ({len(calls)} constructor calls) — the #102 N+1"
 
 

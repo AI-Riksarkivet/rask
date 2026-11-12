@@ -75,12 +75,12 @@ from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field
 
-from lakehouse import record_store, records
+from lakehouse import control_prefixes, record_store, records
 from lakehouse.base_refs import decoded_path
 from lakehouse.storage_options import StorageOptions
 
 
-_PREFIX = "_locations"
+_PREFIX = control_prefixes.LOCATIONS
 
 #: How long a claim protects a holder that does not (yet) resolve to its location. A take precedes the
 #: attach by one backend call, milliseconds in practice; the lease is minutes so that a slow attach is

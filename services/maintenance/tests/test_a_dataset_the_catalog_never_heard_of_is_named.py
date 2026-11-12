@@ -50,8 +50,8 @@ _TABLE = "s3://acme-wh/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
             ["s3://lance-catalog/m2proof_silver$m2-proof-1788537252"],
             id="no-table-record",
         ),
-        # The control: a table is registered when a `__manifest` row names its location, and its branch, which discovery
-        # lists as a dataset of its own, through the table's row ([[LH-520]]). No name is read off a location.
+        # The control: a table is registered when a `__manifest` row names its location, and a dataset under its `tree/`
+        # through the table's row, as a table's pass names its branches ([[LH-520]]). No name is read off a location.
         pytest.param([_TABLE, f"{_TABLE}/tree/work"], [_TABLE], set(), [], id="registered-with-its-branch"),
         # A dropped table's bytes stay on disk under a trash record that names them, and its table record is
         # gone by definition. Counting those would make the category loudest exactly when the estate is

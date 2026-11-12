@@ -269,19 +269,22 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str)
     # lives, so the crossing is only detectable once there is an answer to read.
     _refuse_a_credential_that_does_not_cover(uri=uri, table_id=table_id, location=vended.location)
     logger.info("write credential SCOPED for %s — this pass is signed by a table-scoped credential", table_id)
-    return _at_own_store(vended.storage_options, settings.s3_endpoint)
+    return _at_own_store(vended.storage_options, settings)
 
 
-def _at_own_store(options: StorageOptions, endpoint: str) -> StorageOptions:
-    """The vended credential, used at maintenance's own store address ([[LH-489]]).
+def _at_own_store(options: StorageOptions, settings: MaintenanceSettings) -> StorageOptions:
+    """The vended credential, used at maintenance's own store address ([[LH-489]]) under its own store timeouts.
 
     The catalog vends the address a client off the cluster reaches the store at, which may be the store's
     public edge; maintenance runs in the cluster and reaches the store where its own settings say. The key, the
-    scope and the encryption stay the vend's. A vend naming no endpoint is AWS proper and is used as vended.
+    scope and the encryption stay the vend's. A vend naming no endpoint is AWS proper and is used at that address.
+    A vend names no timeouts, so a call signed with one is bounded as maintenance's own are
+    (:attr:`MaintenanceSettings.store_timeouts`).
     """
+    bounded = options.with_options(settings.store_timeouts.storage_options())
     if options.endpoint is None:
-        return options
-    return options.with_endpoint(endpoint)
+        return bounded
+    return bounded.with_endpoint(settings.s3_endpoint)
 
 
 def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, location: str | None) -> None:
@@ -406,7 +409,7 @@ def reclaim_options_for(kind: TrashKind, uuid: str, settings: MaintenanceSetting
         VendUndecided: The door could not be asked or decided nothing; the next tick retries the record.
     """
     door = _trash_door(kind, uuid, settings, act="/credentials", answer="a reclaim session")
-    return _at_own_store(_vended_from(_answered(settings, door), asked_for=door.asked_for).storage_options, settings.s3_endpoint)
+    return _at_own_store(_vended_from(_answered(settings, door), asked_for=door.asked_for).storage_options, settings)
 
 
 def release_trash(kind: TrashKind, uuid: str, settings: MaintenanceSettings) -> TrashReleased:

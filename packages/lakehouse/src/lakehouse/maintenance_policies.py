@@ -40,7 +40,7 @@ from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse import stored_objects, warehouse_records
+from lakehouse import control_prefixes, stored_objects, warehouse_records
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, read_record, record_key
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, on_s3
@@ -49,7 +49,7 @@ from lakehouse.storage_options import StorageOptions, on_s3
 log = logging.getLogger(__name__)
 
 #: Where the records live on the control root, one per object under ``record_key(PREFIX, kind, policy_key(record))``.
-PREFIX: Final = "_policies"
+PREFIX: Final = control_prefixes.POLICIES
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "maintenance_policy"

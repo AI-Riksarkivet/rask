@@ -28,12 +28,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Final
 
+from lakehouse import control_prefixes
 from lakehouse.record_store import delete_record, get_record, put_record, record_key
 from lakehouse.storage_options import StorageOptions
 
 
 #: Where the records live on the control root, one per object under ``record_key(PREFIX, kind, uuid)``.
-PREFIX: Final = "_protection"
+PREFIX: Final = control_prefixes.PROTECTION
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "protection_record"

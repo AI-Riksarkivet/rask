@@ -154,7 +154,8 @@ It also resets the process-global state the `lakehouse` library and its `dapr` d
 `respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it bounds the Dapr sidecar
 handshake to 1 s, gives the test a fresh cache of secret-store reads
 (`lakehouse.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its own clock),
-and writes the projected service-account token files the catalog's and lineage's doors read. A new fixture guarding
+writes the projected service-account token files the catalog's and lineage's doors read, and sets `LANCE_AUTO_MIGRATION`
+to `false` as every app build does for its process (`lakehouse.lance_app`), restoring it after. A new fixture guarding
 such state goes there too, so every suite in the repository gets it.
 
 ## What stands in for what

@@ -21,9 +21,11 @@ was answered `409 re-read and re-send` — the one thing the caller must not do,
 own classifier calls "how you corrupt a table". Ordering the markers is the whole fix, and it is why
 this is a shared ordered function rather than a shared tuple of strings.
 
-TEXT, NOT TYPES, and that is forced: pylance 9.0.0 exposes no typed error for a lost commit race
-(probed — neither `lance.error` nor the native module carries one), and the same bad predicate arrives
-as a `ValueError` from `update()` and an `OSError` from `delete()`. A phrase that is not listed falls
+THE TYPE FIRST, LANCE'S WORDING WHERE IT RAISES NO TYPE. pylance 13.0.0 raises `lance.commit.CommitConflictError`, whose
+`retryable` says which conflict the commit lost, from `add_columns` and `LanceDataset.commit`; every other path raises a
+plain `OSError` carrying Lance's wording: the retryable conflicts of `drop_columns` and a compaction, and the
+incompatible ones of `delete`, `update`, `merge_insert`, `insert` and `write_dataset` (measured 2026-11-12). The same bad
+predicate arrives as a `ValueError` from `update()` and an `OSError` from `delete()`. A phrase that is not listed falls
 through to `STORE_UNAVAILABLE`, which is the safe direction for a new store's wording: a caller told
 "the store is unavailable" retries later and loses nothing, where one told "your input is wrong" stops.
 """
@@ -31,9 +33,12 @@ through to `STORE_UNAVAILABLE`, which is the safe direction for a new store's wo
 from __future__ import annotations
 
 from enum import Enum
+from typing import Final
+
+from lance.commit import CommitConflictError
 
 
-__all__ = ["CommitVerdict", "classify_commit_failure"]
+__all__ = ["CommitVerdict", "classify_commit_failure", "is_retryable_conflict"]
 
 
 class CommitVerdict(Enum):
@@ -78,8 +83,22 @@ _INCOMPATIBLE = ("incompatible transaction",)
 _CONFLICT = ("commit conflict", "concurrent")
 
 
+#: How Lance words a retryable conflict it raises untyped, its own phrase and none of the broad markers: a column a
+#: caller named ``concurrent`` is missing, not raced.
+_LANCE_RETRYABLE_CONFLICT: Final = "retryable commit conflict"
+
+
+def is_retryable_conflict(exc: BaseException) -> bool:
+    """Whether Lance names ``exc`` a retryable commit conflict: by its type where it raises one, else in its own words."""
+    if isinstance(exc, CommitConflictError):
+        return exc.retryable
+    return _LANCE_RETRYABLE_CONFLICT in str(exc).lower()
+
+
 def classify_commit_failure(exc: BaseException) -> CommitVerdict:
     """What this commit failure means. Each plane maps the verdict to its own error type."""
+    if isinstance(exc, CommitConflictError):
+        return CommitVerdict.RETRYABLE_CONFLICT if exc.retryable else CommitVerdict.INCOMPATIBLE
     message = str(exc).lower()
     for markers, verdict in (
         (_NO_BASE, CommitVerdict.NO_BASE),

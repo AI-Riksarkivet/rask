@@ -33,6 +33,8 @@ from typing import Any, cast
 import pytest
 from botocore.exceptions import ClientError
 
+from lakehouse.control_prefixes import CONTROL_PREFIXES, RECORD_PREFIXES
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SPEC = importlib.util.spec_from_file_location("control_root_backup", REPO_ROOT / "scripts" / "control_root_backup.py")
@@ -67,6 +69,9 @@ SEED = {
     "_bases/0123456789abcdef01234567.json": b'{"location": "acme-bucket/silver", "entries": []}',
     "_control_outbox/pending-0001.json": b'{"action": "grant_added"}',
     "_lineage_outbox/pending-0002.json": b'{"eventType": "COMPLETE"}',
+    # One object under every prefix the registry names, so the backup is held to the registry's records and to nothing
+    # under its queues, leases and the rest.
+    **{f"{prefix}/seeded.json": b"{}" for prefix in CONTROL_PREFIXES},
 }
 
 
@@ -118,7 +123,7 @@ def test_a_backup_captures_every_RECORD_prefix(s3: Any) -> None:
 
     manifest = crb.read_manifest(s3, result["backup"])
     captured = set(manifest["objects"])
-    records = {k for k in SEED if not k.startswith(("_control_outbox/", "_lineage_outbox/")) and not k.endswith("/")} | {STREAMED}
+    records = {k for k in SEED if k.split("/", 1)[0] in RECORD_PREFIXES and not k.endswith("/")} | {STREAMED}
 
     assert captured == records, f"the backup does not match the record set; missing={records - captured} extra={captured - records}"
     assert result["objects"] == len(records)
@@ -135,7 +140,7 @@ def test_a_RESTORE_puts_the_bytes_back_and_proves_it(s3: Any) -> None:
     assert restored["verified"], restored
     assert not restored["mismatched"], restored
     for key, body in SEED.items():
-        if key.startswith(("_control_outbox/", "_lineage_outbox/")) or key.endswith("/"):
+        if key.split("/", 1)[0] not in RECORD_PREFIXES or key.endswith("/"):
             continue
         got = s3.get_object(Bucket=BUCKET, Key=f"_restore_probe/{key}")["Body"].read()
         assert got == body, f"{key} came back with different bytes"

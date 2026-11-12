@@ -50,7 +50,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import encoding, provenance_guard
+from catalog.core import encoding, formats, provenance_guard
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
@@ -172,6 +172,7 @@ async def create_table(
     # The payload's schema metadata becomes the table's, so a reserved key in it is a forged claim
     # whether or not the lineage stamp would later overwrite it ([[LH-208]]).
     provenance_guard.refuse_reserved_keys((table.schema.metadata or {}).keys(), door="create payload")
+    formats.refuse_flag_locking_keys((table.schema.metadata or {}).keys(), door="create payload")
     # The table keeps the payload's field metadata, so its encoding knobs meet the properties' rule ([[LH-246]]).
     encoding.require_valid_field_encoding(table.schema)
     namespace = parse_identifier(id)[:-1]
@@ -333,6 +334,10 @@ async def merge_insert_into_table(
     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162)."""
     segments = parse_identifier(id)
+    if timeout is not None:
+        # The catalog plans and commits the merge itself, under the table's commit turn and its own attempt budget
+        # (`dataplane.commit_stamped`), so a timeout the caller names would bound nothing the merge waits on.
+        raise UnsupportedOperationError("timeout cannot be served: the catalog commits a merge under its own commit turn and attempt budget; omit it")
     # `on` travels beside the request ([[LH-537]]): the installed lance-namespace 0.11.1 model types it as one string,
     # where `spec.yaml` makes it the composite key.
     req = MergeInsertIntoTableRequest(
@@ -342,7 +347,6 @@ async def merge_insert_into_table(
         when_not_matched_insert_all=when_not_matched_insert_all,
         when_not_matched_by_source_delete=when_not_matched_by_source_delete,
         when_not_matched_by_source_delete_filt=when_not_matched_by_source_delete_filt,
-        timeout=timeout,
         use_index=use_index,
         branch=branch,
     )
@@ -397,6 +401,7 @@ async def update_table(
     # made as Lance could otherwise be asked to change format afterwards, and the guard's contract is
     # that a format-selecting property is never silently ignored — on any door that accepts one.
     reject_unsupported_properties(body.properties)
+    formats.refuse_properties_kept_nowhere(body.properties, door="update")
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     expressions = [expression for _, expression in body.updates or []]
@@ -503,7 +508,19 @@ def _serves(media_type: str) -> dict[int | str, dict[str, object]]:
     return {200: {"content": {media_type: {"schema": {"type": "string", "format": "binary"}}}}}
 
 
-@management_router.get("/{id}/blobs", responses=_serves(_OCTET_STREAM), response_class=OctetStreamResponse)
+#: What the blob door answers besides a whole payload's 200: a range's 206, a null's 204, an unsatisfiable range's 416.
+_BLOB_RESPONSES: Final[dict[int | str, dict[str, object]]] = {
+    **_serves(_OCTET_STREAM),
+    206: {
+        "description": "The bytes a `Range` asked for, with `Content-Range`.",
+        "content": {_OCTET_STREAM: {"schema": {"type": "string", "format": "binary"}}},
+    },
+    204: {"description": "The row holds no value: a null blob, which an empty payload's 200 is not."},
+    416: {"description": "No byte the `Range` names lies in the payload; `Content-Range` gives its size."},
+}
+
+
+@management_router.get("/{id}/blobs", responses=_BLOB_RESPONSES, response_class=OctetStreamResponse)
 async def read_table_blob(
     id: str,
     table: DoorTableDep,
@@ -556,6 +573,10 @@ async def read_table_blob(
     # Before the 416 branch on purpose: an unsatisfiable RANGE still told the caller the object's size
     # and ETag, which is a probe worth having in the log.
     audit_read(subject=_reader(token), resource=id, version=blob.version, columns=[column], row=row, offset=blob.start, length=blob.length)
+    if blob.null:
+        # A null holds no value, which an empty payload's 200 would misreport as present and empty; a 204 carries no
+        # Content-Length (RFC 9110 §8.6) and no range applies to it.
+        return Response(status_code=204, headers={"ETag": blob.etag})
     headers = {"Accept-Ranges": "bytes", "ETag": blob.etag}
     if not blob.satisfiable:
         headers["Content-Range"] = f"bytes */{blob.size}"

@@ -67,6 +67,8 @@ class BlobStream(BaseModel):
     etag: str
     ranged: bool
     satisfiable: bool
+    #: The row holds no value: a null blob, which has no bytes, as opposed to an empty payload, which has none to send.
+    null: bool = False
     handle: Any = Field(default=None, exclude=True)
     dataset: Any = Field(default=None, exclude=True)
 
@@ -119,12 +121,12 @@ def read_blob(
     row-address internals dump); a ``version`` with no manifest → 404 ``TableVersionNotFoundError``
     and a table whose declared location holds NO dataset (declared-only, or wiped storage) → 404
     ``TableNotFoundError`` (both are bare ValueErrors from lance, told apart by the manifest-path
-    shape). A ZERO-LENGTH payload streams as an empty 200 — at pylance 8.0.0 a NULL blob is stored
-    as a size-0 descriptor (probed: input ``null_count=1`` → stored ``null_count=0``), so null and
-    ``b""`` are the same row state and ``take_blobs`` returns an EMPTY list for both (unguarded
-    ``[0]`` would 500); any Range against it is unsatisfiable. Range resolution clamps ``last`` to
-    the blob size (RFC 9110 §14.1.2) and reports ``first >= size`` as unsatisfiable rather than
-    erroring (``read_range`` rejects over-length windows).
+    shape). A NULL blob and an EMPTY payload are two row states: measured on pylance 13.0.0,
+    ``take_blobs`` answers ``None`` in a null row's slot and a size-0 ``BlobFile`` for ``b""``. A null
+    is read as :attr:`BlobStream.null`, whatever the range; an empty payload streams as an empty body,
+    and any Range against it is unsatisfiable. Range resolution clamps ``last`` to the blob size
+    (RFC 9110 §14.1.2) and reports ``first >= size`` as unsatisfiable rather than erroring
+    (``read_range`` rejects over-length windows).
     """
     try:
         dataset = table.open(so, version=version)
@@ -153,16 +155,9 @@ def read_blob(
     if if_range is not None and if_range.strip() != etag:
         range_spec = None  # validator mismatch (or an If-Range date) → full current payload
     files = dataset.take_blobs(column, indices=[row])
-    # `not files` OR a `None` in the slot — the two spellings of "no payload here", one per pylance
-    # major. Through 9.0.0 `take_blobs` OMITTED a null row, so the empty-list test below was the whole
-    # check; 10.0.0 returns a same-length list with `None` instead (measured 2026-08-16). Without the
-    # `files[0] is None` half, serving a null payload reached `None.size()` and answered 500 on a row
-    # the endpoint is supposed to serve as an empty body — a user-facing break, on the exact case the
-    # zero-length contract exists for.
-    if not files or files[0] is None:  # zero-length payload (null collapses to size-0 at write)
-        if range_spec is None:
-            return BlobStream(version=served, size=0, start=0, length=0, etag=etag, ranged=False, satisfiable=True)
-        return BlobStream(version=served, size=0, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
+    # A null row's slot holds `None`, and a list with no slot names no blob either: neither has a byte to read.
+    if not files or files[0] is None:
+        return BlobStream(version=served, size=0, start=0, length=0, etag=etag, ranged=False, satisfiable=True, null=True)
     handle = files[0]
     size: int = handle.size()
 

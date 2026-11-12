@@ -38,6 +38,7 @@ from lance_namespace import InvalidInputError, InvalidTableStateError
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.erasure import OPEN_OUTCOMES, ErasureReport, PinRelease, SurfaceResult, shown
+from lakehouse import control_prefixes
 from lakehouse.record_store import list_records
 from lakehouse.records import RecordMissingError, create_json, mutate_json, read_json
 from lakehouse.storage_options import StorageOptions
@@ -45,7 +46,7 @@ from lakehouse.storage_options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-OBLIGATION_PREFIX: Final = "_erasure_obligations"
+OBLIGATION_PREFIX: Final = control_prefixes.ERASURE_OBLIGATIONS
 
 #: An obligation id as the door mints it (`uuid4().hex`), so a path segment can never name another control-root key.
 _OBLIGATION_ID: Final = re.compile(r"[0-9a-f]{32}")

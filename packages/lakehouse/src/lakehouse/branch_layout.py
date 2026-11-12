@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Final
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 
 #: The directories a branch writes its own files into under ``tree/<branch>/``. `lance_docs/lance/format/table/branch_tag.md` § "Branch
@@ -36,10 +36,6 @@ BRANCH_FILE_DIRS: Final = ("_versions", "_transactions", "_deletions", "_indices
 #: directory would shadow (``_refs``, ``_mem_wal``, and ``tree`` itself). A segment equal to one of them
 #: puts the branch's files where Lance looks for another ref's.
 RESERVED_SEGMENTS: Final = frozenset({*BRANCH_FILE_DIRS, "_refs", "_mem_wal", "tree"})
-
-#: Where Lance keeps one JSON file per branch, `lance_docs/lance/format/table/branch_tag.md` § "Branch Metadata Path". A ``/`` in a
-#: branch name is written ``%2F`` in the file name.
-BRANCH_REFS_DIR: Final = "_refs/branches"
 
 #: The directory a dataset root keeps its branches under.
 BRANCH_CONTAINER: Final = "tree"
@@ -84,13 +80,6 @@ def ref_file_name(name: str) -> str:
     `quote` with nothing kept safe.
     """
     return f"{quote(name, safe='')}.json"
-
-
-def branch_name_from_ref_file(file_name: str) -> str | None:
-    """The branch a ``_refs/branches`` entry names, or ``None`` for anything that is not a ref file."""
-    if not file_name.endswith(".json"):
-        return None
-    return unquote(file_name.removesuffix(".json")) or None
 
 
 def branch_named_by(location: str, branches: Iterable[str]) -> str | None:

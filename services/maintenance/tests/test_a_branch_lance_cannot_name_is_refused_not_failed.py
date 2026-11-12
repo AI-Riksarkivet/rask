@@ -10,11 +10,9 @@ tests/e2e-py/test_maintenance_e2e.py`: eleven datasets report
     tree/feat.lock   Branch name cannot end with '.lock'
     tree/trailing    Branch name cannot start or end with a '/'
 
-WHERE THEY COME FROM. `discover_datasets` descends into `<dataset>/tree/` and treats each child
-directory as a dataset URI, so a branch is swept like any other dataset. These particular names are
-residue from the suite that pins the door's refusal of malformed branch names — the door is fixed, the
-directories it created before that are still on disk. Same shape as the estate's other residues: the
-producer is closed and the leftovers remain.
+WHERE THEY COME FROM. A table's pass maintains each branch its refs name as a dataset of its own. These
+particular names are residue from the suite that pins the door's refusal of malformed branch names — the door
+refuses them, and the refs it wrote before that are still on disk.
 
 WHY IT MUST NOT BE AN `error`. `DatasetResult.refused` already exists precisely for this distinction,
 and its own comment draws it: a skip is "not this tick", an error is "something failed", and a refusal

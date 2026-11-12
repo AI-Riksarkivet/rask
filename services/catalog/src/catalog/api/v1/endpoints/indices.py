@@ -23,6 +23,7 @@ from lance_namespace import (
     DescribeTableIndexStatsResponse,
     DropTableIndexRequest,
     DropTableIndexResponse,
+    InvalidInputError,
     ListTableIndicesRequest,
     ListTableIndicesResponse,
     UnsupportedOperationError,
@@ -49,15 +50,28 @@ _BUILD_IT_YOURSELF = (
 )
 
 
+def _index_named(index_name: str, body_name: str | None) -> str:
+    """The index the path names, refusing a body that names another, as :func:`reconcile_body_id` refuses another id.
+
+    Raises:
+        InvalidInputError: The body's ``index_name`` is not the path's.
+    """
+    if body_name and body_name != index_name:
+        raise InvalidInputError(f"request body index_name {body_name!r} does not match the path's index {index_name!r}")
+    return index_name
+
+
 @router.post("/{id}/create_index", response_model_exclude_none=True)
 def create_index(id: str, body: CreateTableIndexRequest) -> CreateTableIndexResponse:
     """Refused 406: a vector index is built on the caller's compute and committed through ``version/create``."""
+    reconcile_body_id(parse_identifier(id), body.id)
     raise UnsupportedOperationError(_BUILD_IT_YOURSELF)
 
 
 @router.post("/{id}/create_scalar_index", response_model_exclude_none=True)
 def create_scalar_index(id: str, body: CreateTableIndexRequest) -> CreateTableScalarIndexResponse:
     """Refused 406: a scalar index is built on the caller's compute and committed through ``version/create``."""
+    reconcile_body_id(parse_identifier(id), body.id)
     raise UnsupportedOperationError(_BUILD_IT_YOURSELF)
 
 
@@ -114,6 +128,7 @@ def describe_table_index_stats(
     same name can exist on both refs with different coverage, so answering from main is a plausible
     wrong number rather than a visible failure."""
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
+    index_name = _index_named(index_name, body.index_name if body else None)
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
     req = DescribeTableIndexStatsRequest(id=segments, index_name=index_name, branch=branch, version=body.version if body else None)
@@ -156,7 +171,8 @@ async def drop_table_index(
     object. The drop is Lance's own on the handle opened at the door's location, committed with the door's stamp
     ([[LH-497]], `dataplane.drop_index`), with the `dir` backend's own refusals of a system index and a missing one.
     """
-    segments = parse_identifier(id)
+    segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
+    index_name = _index_named(index_name, body.index_name if body else None)
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="drop_table_index")

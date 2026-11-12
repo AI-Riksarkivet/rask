@@ -27,11 +27,11 @@ import struct
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import boto3
@@ -43,14 +43,14 @@ import pytest
 import uvicorn
 from lance.bitmap import Bitmap
 from lance.commit import CommitConflictError
-from lance.dataset import Index, Transaction
+from lance.dataset import AlterColumn, Index, Transaction
 from lance.optimize import Compaction
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
 from catalog.services import dataplane, table_claims
-from lakehouse import commit_records, commit_turns, records
+from lakehouse import commit_records, commit_turns, manifest_wire, records
 from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -298,20 +298,91 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
     assert signed == [("dex~alice", True)] * 6
 
 
-def _compact_distributed(dataset: lance.LanceDataset) -> None:
+def test_a_stock_client_renames_a_labelled_column_and_its_label_goes_with_it(served: Served) -> None:
+    """A label belongs to a field, which Lance identifies by its id, and a rename keeps both (pylance 13.0.0): a stock
+    client's rename commits through ``version/create`` as the catalog's own ``alter_columns`` door commits it."""
+    stock = served.stock()
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    _create_a_labelled_table(stock)
+
+    # pylance types each alteration as an iterable of them and takes the mapping itself (13.0.0).
+    lance.dataset(namespace_client=stock, table_id=["db", "u"]).alter_columns(cast("Iterable[AlterColumn]", {"path": "v", "name": "w"}))
+
+    renamed = lance.dataset(namespace_client=stock, table_id=["db", "u"])
+    assert (renamed.version, renamed.schema.names, renamed.schema.field("w").metadata) == (2, ["id", "w"], {b"rask.classification": b"pii"})
+
+
+def _compact_distributed(served: Served, stock: lance_namespace.LanceNamespace) -> None:
+    dataset = _opened(stock, served.storage_options)
     plan = Compaction.plan(dataset, {"target_rows_per_fragment": 1024})
     Compaction.commit(dataset, [task.execute(dataset) for task in plan.tasks])
 
 
-def _compact_files(dataset: lance.LanceDataset) -> None:
-    dataset.optimize.compact_files(target_rows_per_fragment=1024)
+def _compact_files(served: Served, stock: lance_namespace.LanceNamespace) -> None:
+    _opened(stock, served.storage_options).optimize.compact_files(target_rows_per_fragment=1024)
+
+
+def _compact_files_as_a_newer_writer(served: Served, stock: lance_namespace.LanceNamespace) -> None:
+    """``compact_files`` staged as a writer newer than pylance 13.0.0 stages it: each manifest keeps its inline transaction
+    at ``transaction_section`` (field 23) and leaves the deprecated field 21 absent
+    (``lance_docs/lance/format/table/transaction.md`` § Inline Transaction Sections). pylance models no class for
+    ``ReserveFragments``, so the inline copy is the only place its operation is named."""
+    _compact_files(served, _HookedCommits(stock, before=_moving_the_inline_transaction_to_field_23(served)))
+
+
+def _moving_the_inline_transaction_to_field_23(served: Served) -> Callable[[lance_namespace.CreateTableVersionRequest], None]:
+    """Rewrites the manifest a commit staged on ``served``'s store before the commit reaches the catalog."""
+    location = httpx.post(f"{served.url}/v1/table/{'$'.join(_TABLE)}/describe", json={"vend_credentials": False}, headers=_TOKEN).json()["location"]
+    bucket, store = location.removeprefix("s3://").partition("/")[0], _s3(served)
+
+    def _move(request: lance_namespace.CreateTableVersionRequest) -> None:
+        # pylance hands a namespace a mapping of the request's fields, not the model (13.0.0).
+        key = str(dict(request)["manifest_path"])
+        staged = store.get_object(Bucket=bucket, Key=key)["Body"].read()
+        store.put_object(Bucket=bucket, Key=key, Body=_with_the_transaction_at_field_23(staged))
+
+    return _move
+
+
+def _with_the_transaction_at_field_23(manifest: bytes) -> bytes:
+    """``manifest`` with its ``Manifest`` message's field 21 written as field 23, every other field as it was."""
+    return _with_message_fields(manifest, lambda number, value: _varint_field(23, value) if number == 21 else None)
+
+
+def _with_varint_field(manifest: bytes, number: int, value: int) -> bytes:
+    """``manifest`` with its ``Manifest`` message's varint field ``number`` set to ``value``, every other field as it was."""
+    return _with_message_fields(manifest, lambda field, _: _varint_field(number, value) if field == number else None)
+
+
+def _varint_field(number: int, value: int | bytes | None) -> bytes:
+    """Varint field ``number`` holding ``value``, as the wire carries it."""
+    assert isinstance(value, int), f"field {number} holds no varint"
+    return manifest_wire.encode_varint(number << 3) + manifest_wire.encode_varint(value)
+
+
+def _with_message_fields(manifest: bytes, edit: Callable[[int, int | bytes | None], bytes | None]) -> bytes:
+    """``manifest`` with each top-level field of its ``Manifest`` message written as ``edit(number, value)`` answers, or as
+    it was where it answers ``None``."""
+    message, at, written = manifest_bytes.manifest_message(manifest), 0, bytearray()
+    while at < len(message):
+        start = at
+        number, value, at = manifest_wire.next_field(message, at)
+        edited = edit(number, value)
+        written += message[start:at] if edited is None else edited
+    offset, major, minor, magic = struct.unpack("<QHH4s", manifest[-16:])
+    return manifest[:offset] + struct.pack("<I", len(written)) + bytes(written) + struct.pack("<QHH4s", offset, major, minor, magic)
 
 
 @pytest.mark.parametrize(
-    "compact", [pytest.param(_compact_distributed, id="the-distributed-plan-and-commit"), pytest.param(_compact_files, id="compact-files")]
+    "compact",
+    [
+        pytest.param(_compact_distributed, id="the-distributed-plan-and-commit"),
+        pytest.param(_compact_files, id="compact-files"),
+        pytest.param(_compact_files_as_a_newer_writer, id="a-newer-writer-keeping-its-transaction-at-field-23"),
+    ],
 )
 def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_create(
-    served_on_s3: Served, caplog: pytest.LogCaptureFixture, compact: Callable[[lance.LanceDataset], None]
+    served_on_s3: Served, caplog: pytest.LogCaptureFixture, compact: Callable[[Served, lance_namespace.LanceNamespace], None]
 ) -> None:
     """Lance's own compactions (``lance_docs/lance/format/table/transaction.md`` § Rewrite) reserve the new fragment ids, then
     commit the rewrite; measured on pylance 13.0.0, ``compact_files`` makes the same two commits as the distributed
@@ -326,7 +397,7 @@ def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_c
     caplog.clear()
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
-        compact(_opened(stock, served_on_s3.storage_options))
+        compact(served_on_s3, stock)
 
     compacted = _opened(stock, served_on_s3.storage_options)
     assert (compacted.version, len(compacted.get_fragments())) == (6, 1)
@@ -533,6 +604,14 @@ def _steer_compaction(stock: lance_namespace.LanceNamespace) -> None:
     _opened(stock).update_config({"lance.compaction.max_source_fragments": "2"})
 
 
+def _opt_into_managed_blobs(stock: lance_namespace.LanceNamespace) -> None:
+    _opened(stock).update_schema_metadata({"lance.blob.managed": "true"})
+
+
+def _opt_into_spilled_row_lineage(stock: lance_namespace.LanceNamespace) -> None:
+    _opened(stock).update_config({"lance.row_lineage.spill": "true"})
+
+
 def _stamp_a_scheme_lance_does_not_know(stock: lance_namespace.LanceNamespace) -> None:
     _opened(stock).update_field_metadata({"v": {"lance-encoding:compression": "bogus"}})
 
@@ -664,6 +743,22 @@ def _append_under_a_transaction_whose_record_is_unreadable(stock: lance_namespac
     )
 
 
+def _replace_a_key_with_a_held_one(stock: lance_namespace.LanceNamespace) -> None:
+    """A ``DataReplacement`` of the last fragment's one data file by a file whose key repeats the first fragment's: it adds
+    no fragment, so only a key judge reading a replaced file sees the repeat."""
+    dataset = _opened(stock)
+    last = dataset.get_fragments()[-1]
+    (written,) = lance.fragment.write_fragments(_keyed([1], ["d"]), dataset)
+    replacement = lance.LanceOperation.DataReplacement([lance.LanceOperation.DataReplacementGroup(last.fragment_id, written.files[0])])
+    lance.LanceDataset.commit(
+        dataset, replacement, read_version=dataset.version, namespace_client=stock, table_id=_TABLE, namespace_client_managed_versioning=True
+    )
+
+
+def _initialise_mem_wal(stock: lance_namespace.LanceNamespace) -> None:
+    _opened(stock).initialize_mem_wal(unsharded=True)
+
+
 def _index_read_through_a_base(stock: lance_namespace.LanceNamespace) -> None:
     _commit_an_index(stock, _index(base_id=0))
 
@@ -681,7 +776,7 @@ def _detached(root: Path, operation: lance.LanceOperation.BaseOperation, read_ve
 def _carrying(manifest: bytes, transaction: bytes) -> bytes:
     """``manifest`` with ``transaction`` as its inline transaction, which Lance 13 keeps at offset 0 ahead of the message."""
     message = manifest_bytes.manifest_message(manifest)
-    assert manifest_bytes.varint_field(message, manifest_bytes.TRANSACTION_SECTION_FIELD) == 0
+    assert manifest_bytes.varint_field(message, manifest_bytes.DEPRECATED_TRANSACTION_SECTION_FIELD) == 0
     section = struct.pack("<I", len(transaction)) + transaction
     major, minor = struct.unpack_from("<HH", manifest, len(manifest) - 8)
     return section + struct.pack("<I", len(message)) + message + struct.pack("<QHH4s", len(section), major, minor, b"LANC")
@@ -704,19 +799,55 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
     staged.write_bytes(manifest_bytes.with_manifest_version(_carrying(appended, label), dataset.version + 1))
 
 
+def _an_append(dataset: lance.LanceDataset) -> lance.LanceOperation.BaseOperation:
+    (written,) = lance.fragment.write_fragments(_keyed([9], ["z"]), dataset)
+    return lance.LanceOperation.Append([written])
+
+
+def _a_delete_of_the_newest_fragment(dataset: lance.LanceDataset) -> lance.LanceOperation.BaseOperation:
+    """A delete of every row of the table's newest fragment, which removes the fragment: every fragment it keeps lies
+    below the id the table held, so a ``max_fragment_id`` lowered to the highest it keeps leaves no fragment beyond it."""
+    newest = max(dataset.get_fragments(), key=lambda fragment: fragment.fragment_id)
+    ids = ", ".join(str(row_id) for row_id in newest.to_table(columns=["id"]).column("id").to_pylist())
+    return lance.LanceOperation.Delete(updated_fragments=[], deleted_fragment_ids=[newest.fragment_id], predicate=f"id IN ({ids})")
+
+
+def _staged_with(
+    operation: Callable[[lance.LanceDataset], lance.LanceOperation.BaseOperation], number: int, value: int
+) -> Callable[[lance_namespace.LanceNamespace], None]:
+    """``operation``'s own manifest, staged by hand as the table's next version with its varint field ``number`` set to
+    ``value``: ``next_row_id`` (14) or ``max_fragment_id`` (11), each a counter only the manifest a writer stages carries."""
+
+    def stage(stock: lance_namespace.LanceNamespace) -> None:
+        dataset = _opened(stock)
+        root = Path(dataset.uri.removeprefix("file://"))
+        manifest = _detached(root, operation(dataset), dataset.version)
+        staged = root / f"_versions/{(1 << 64) - 1 - (dataset.version + 1)}.manifest-{uuid.uuid4()}"
+        staged.write_bytes(manifest_bytes.with_manifest_version(_with_varint_field(manifest, number, value), dataset.version + 1))
+
+    return stage
+
+
 @pytest.mark.parametrize(
     ("stage", "denied", "protect", "status", "code", "staged_at"),
     [
         pytest.param(_append_at_file_version_2_1, set(), False, 400, 13, ("db$t", 4), id="foreign-data-file-versions-are-refused"),
         pytest.param(_create_at_file_version_2_1, set(), False, 400, 13, ("db$u", 1), id="a-create-is-at-2.2-with-stable-row-ids"),
         pytest.param(_append_a_held_key, set(), False, 400, 13, ("db$t", 4), id="a-held-primary-key-is-refused"),
+        pytest.param(_replace_a_key_with_a_held_one, set(), False, 400, 13, ("db$t", 4), id="a-held-primary-key-is-refused-in-a-replaced-file"),
         pytest.param(_drop_the_key_column, set(), False, 400, 13, ("db$t", 4), id="the-key-column-is-kept"),
         pytest.param(_re_append_a_held_file, set(), False, 400, 13, ("db$t", 4), id="a-held-data-file-is-not-appended-again"),
         pytest.param(_undelete_as_an_update, set(), False, 400, 13, ("db$t", 4), id="a-deleted-row-does-not-come-back-whatever-the-label"),
         pytest.param(_reuse_live_row_ids_as_an_update, set(), False, 400, 13, ("db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
+        pytest.param(_staged_with(_an_append, 14, 1), set(), False, 400, 13, ("db$t", 4), id="the-next-row-id-never-falls"),
+        pytest.param(_staged_with(_a_delete_of_the_newest_fragment, 11, 0), set(), False, 400, 13, ("db$t", 4), id="the-max-fragment-id-never-falls"),
+        # The table's next row id is 4 and the appended row takes 4: the counter holds, and the next append would mint 4.
+        pytest.param(_staged_with(_an_append, 14, 4), set(), False, 400, 13, ("db$t", 4), id="the-next-row-id-passes-every-new-row"),
         pytest.param(_append_at_file_version_2_1, set(), False, 409, 14, ("db$t", 3), id="a-version-the-table-already-holds-is-taken"),
         pytest.param(_arm_auto_cleanup, set(), False, 400, 13, ("db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
         pytest.param(_steer_compaction, set(), False, 400, 13, ("db$t", 4), id="compaction-is-not-steered-by-a-commit"),
+        pytest.param(_opt_into_managed_blobs, set(), False, 400, 13, ("db$t", 4), id="managed-blobs-are-not-opted-into"),
+        pytest.param(_opt_into_spilled_row_lineage, set(), False, 400, 13, ("db$t", 4), id="spilled-row-lineage-is-not-opted-into"),
         pytest.param(_stamp_a_scheme_lance_does_not_know, set(), False, 400, 13, ("db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"),
         pytest.param(_restore_version_1, {"can_restore"}, False, 403, 15, ("db$t", 4), id="a-writer-cannot-stage-a-restore"),
         pytest.param(_overwrite, set(), True, 409, 19, ("db$t", 4), id="an-overwrite-of-a-protected-table-is-refused"),
@@ -729,6 +860,7 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
         pytest.param(_rewrite_changing_a_carried_rows_value, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-changes-no-value"),
         pytest.param(_index_read_through_a_base, set(), False, 400, 13, ("db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
         pytest.param(_index_with_no_files, set(), False, 400, 13, ("db$t", 4), id="an-index-names-files-that-are-there"),
+        pytest.param(_initialise_mem_wal, set(), False, 406, 0, ("db$t", 4), id="a-mem-wal-is-not-served"),
         pytest.param(_data_staged_under_an_index_label, set(), False, 400, 13, ("db$t", 4), id="an-index-commit-changes-no-data"),
         pytest.param(
             _append_under_a_transaction_recorded_for_another_commit, set(), False, 400, 13, ("db$t", 4), id="another-commits-transaction-is-not-reused"
@@ -820,6 +952,30 @@ def _its_staged_version_read(served: Served, location: str) -> Callable[[store_r
     """The reads of the detached copy the catalog plants to open the staged version through (``managed_versions.stage``)."""
     detached = re.compile(rf"/{re.escape(location.removeprefix('s3://'))}/_versions/d[0-9]+\.manifest")
     return lambda request: request.method in ("HEAD", "GET") and detached.fullmatch(request.path) is not None
+
+
+def test_index_segments_that_overlap_are_refused_before_any_read_of_their_statistics(served: Served) -> None:
+    """Two segments of one index covering one fragment: measured on pylance 13.0.0, Lance commits them, and a read of the
+    index's statistics then migrates the table from the reader, 472 commits before the process crashed. The judge reads
+    every index's statistics, so it refuses the overlap first and names it."""
+    stock = _created(served)
+    dataset = _opened(stock)
+    overlapping = [dataset.create_index_uncommitted("id", index_type="BTREE", name="id_idx", fragment_ids=[0]) for _ in range(2)]
+
+    with contextlib.suppress(OSError):
+        lance.LanceDataset.commit(
+            dataset,
+            lance.LanceOperation.CreateIndex(new_indices=overlapping, removed_indices=[]),
+            read_version=dataset.version,
+            namespace_client=stock,
+            table_id=_TABLE,
+            namespace_client_managed_versioning=True,
+        )
+
+    status, code, detail = _answer_to_the_staged_commit(served, "db$t", 2)
+    assert (status, code) == (400, 13), detail
+    assert "are covered by more than one of its segments" in detail, detail
+    assert _opened(stock).version == 1
 
 
 @pytest.mark.parametrize(
@@ -1106,11 +1262,17 @@ def _row(row: int) -> pa.Table:
 _ESTATE_ROUND_TRIP_SECONDS = 2.5
 
 
-class _SlowRoundTrip(lance_namespace.LanceNamespace):
-    """pylance's REST namespace with each commit reaching the catalog ``delay`` seconds late, ``before`` called ahead of
-    it; the other calls pylance makes for a commit pass straight through."""
+class _HookedCommits(lance_namespace.LanceNamespace):
+    """pylance's REST namespace with ``before`` called with each commit's request and the commit reaching the catalog
+    ``delay`` seconds later; the other calls pylance makes for a commit pass straight through."""
 
-    def __init__(self, inner: lance_namespace.LanceNamespace, delay: float, *, before: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        inner: lance_namespace.LanceNamespace,
+        *,
+        delay: float = 0.0,
+        before: Callable[[lance_namespace.CreateTableVersionRequest], None] | None = None,
+    ) -> None:
         self._inner, self._delay, self._before = inner, delay, before
 
     def namespace_id(self) -> str:
@@ -1127,7 +1289,7 @@ class _SlowRoundTrip(lance_namespace.LanceNamespace):
 
     def create_table_version(self, request: lance_namespace.CreateTableVersionRequest) -> lance_namespace.CreateTableVersionResponse:
         if self._before is not None:
-            self._before()
+            self._before(request)
         time.sleep(self._delay)
         return self._inner.create_table_version(request)
 
@@ -1152,7 +1314,7 @@ def test_a_stock_writer_beside_a_writer_appending_through_insert_in_a_tight_loop
     stock = served.stock()
     stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
     lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
-    through_version_create = _SlowRoundTrip(served.stock(), round_trip_seconds) if round_trip_seconds else served.stock()
+    through_version_create = _HookedCommits(served.stock(), delay=round_trip_seconds) if round_trip_seconds else served.stock()
     through_insert = served.stock()
     writers = [
         _Appender(lambda row: lance.write_dataset(_row(row), namespace_client=through_version_create, table_id=_APPENDED_TO, mode="append"), 1),
@@ -1191,7 +1353,7 @@ def test_a_stock_schema_change_that_loses_to_a_writer_appending_through_insert_h
             assert time.monotonic() < deadline, "the writer appending through /insert never got going"
             time.sleep(0.01)
         with pytest.raises(CommitConflictError, match="Merge transaction was preempted by concurrent transaction Append"):
-            lance.dataset(namespace_client=_SlowRoundTrip(served.stock(), _ESTATE_ROUND_TRIP_SECONDS), table_id=_APPENDED_TO).add_columns(
+            lance.dataset(namespace_client=_HookedCommits(served.stock(), delay=_ESTATE_ROUND_TRIP_SECONDS), table_id=_APPENDED_TO).add_columns(
                 {"n": "cast(NULL as string)"}
             )
         refused = time.monotonic()
@@ -1249,14 +1411,14 @@ def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served
             await asyncio.to_thread(competitor.insert_into_table, lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(1)))
         return kept
 
-    def _note_the_turn() -> None:
+    def _note_the_turn(_request: lance_namespace.CreateTableVersionRequest) -> None:
         if beaten:
             turns = _turns(stock, tmp_path)
             at_the_retry.append((turns.keeps(beaten[0]), turns.poll(None, handed=False)))
 
     monkeypatch.setattr(table_claims.DoorTable, "wait_for_turn_in_loop", _waited_then_beaten)
 
-    lance.write_dataset(_row(2), namespace_client=_SlowRoundTrip(served.stock(), 0.0, before=_note_the_turn), table_id=_APPENDED_TO, mode="append")
+    lance.write_dataset(_row(2), namespace_client=_HookedCommits(served.stock(), before=_note_the_turn), table_id=_APPENDED_TO, mode="append")
 
     landed = lance.dataset(namespace_client=stock, table_id=_APPENDED_TO)
     ids = landed.to_table(columns=["id"]).column("id").to_pylist()

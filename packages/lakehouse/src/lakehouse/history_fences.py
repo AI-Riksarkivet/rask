@@ -42,14 +42,14 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import records
+from lakehouse import control_prefixes, records
 from lakehouse.record_store import record_key
 from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
 
-PREFIX: Final = "_history_fences"
+PREFIX: Final = control_prefixes.HISTORY_FENCES
 
 
 def fence_key(table_uuid: str) -> str:

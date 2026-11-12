@@ -15,6 +15,7 @@ import weakref
 from collections.abc import Callable
 
 import lance
+from lance.namespace import DirectoryNamespace
 from lance_namespace import (
     LanceNamespace,
     ServiceUnavailableError,
@@ -41,9 +42,21 @@ from lakehouse.storage_options import StorageOptions
 log = logging.getLogger(__name__)
 
 
+#: The ``lance_namespace.connect`` alias of the directory namespace the chart runs (``LANCE_REST_IMPL``).
+_DIRECTORY = "dir"
+
+
 def build_namespace(settings: Settings, *, plane: StorePlane = "metadata") -> LanceNamespace:
-    """The estate-rooted namespace connection, its object-store calls bounded for ``plane`` (`CatalogReadBounds`)."""
-    return connect(settings.impl, settings.namespace_properties(plane=plane))
+    """The estate-rooted namespace connection, its object-store calls bounded for ``plane`` (`CatalogReadBounds`).
+
+    The directory namespace opens on the process's shared Lance session, which pylance 13.0.0's ``DirectoryNamespace``
+    takes to share its object stores with every table the catalog opens (``lance.namespace.DirectoryNamespace``);
+    ``lance_namespace.connect`` passes none, so each connection kept stores of its own.
+    """
+    properties = settings.namespace_properties(plane=plane)
+    if settings.impl == _DIRECTORY:
+        return DirectoryNamespace(session=shared_lance_session(), **properties)
+    return connect(settings.impl, properties)
 
 
 type _ConnectionKey = tuple[S3KeyPair, str, str | None, StorePlane]
@@ -330,6 +343,12 @@ class RegisteredDataset(BaseModel):
     #: What the dataset's first transaction says it is a shallow clone of, read only when it declares a dataset-root
     #: base (ADR 0198 §1); ``None`` otherwise.
     clone: CloneReference | None = None
+    #: It carries a MemWAL (Lance's ``mem_wal_index_details()``). False when the open was refused over flag 256, which the
+    #: door refuses first.
+    mem_wal: bool = False
+    #: The config and schema metadata keys it carries that lock a table to a feature flag
+    #: (:data:`catalog.core.formats.FLAG_LOCKING_KEYS`). Empty when the open was refused over flag 256.
+    flag_locking: list[str] = Field(default_factory=list)
 
 
 def registered_dataset_facts(location: str, storage_options: StorageOptions) -> RegisteredDataset | None:
@@ -356,6 +375,8 @@ def registered_dataset_facts(location: str, storage_options: StorageOptions) -> 
         bases=bases,
         compaction_config=formats.compaction_config_keys(dataset.config()),
         clone=clone_reference(dataset) if any(ref.is_dataset_root for ref in bases) else None,
+        mem_wal=dataset.mem_wal_index_details() is not None,
+        flag_locking=formats.flag_locking_keys([*dataset.config(), *(dataset.schema.metadata or {})]),
     )
 
 
