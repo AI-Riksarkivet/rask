@@ -335,48 +335,51 @@ def release_claim(registry: BaseRegistry, claim: BaseClaim) -> None:
         return
 
 
-def forget_base_record(registry: BaseRegistry, location: str, *, table: str) -> bool:
-    """Remove the whole record for a table whose bytes are gone, and ``table``'s claims on its data directories; ``False`` when there was no record.
+def forget_base_record(registry: BaseRegistry, location: str, *, uuid: str | None) -> bool:
+    """Remove the whole record of the table ``uuid``, whose bytes are gone, and its claims on its data directories;
+    ``False`` when there was no record.
 
     The one removal that is not a claim's undo: a record outliving the manifest it describes would
     sanction those bases for whatever is next written at the location.
 
     THE DATA DIRECTORIES AND THE CLONE TAGS GO FIRST. Each ``data`` entry names the table's own directory
-    beneath an approved data base, held for ``table`` by a location claim on the same control root
+    beneath an approved data base, held for the table's uuid by a claim on the same control root
     (:func:`claim_data_directories`, [[LH-252]]), and each ``derived_from`` entry a source whose version a tag keeps
     for this clone (:mod:`lakehouse.clone_sources`, ADR 0198); the record is the one place that still lists them, so
-    they are released before it is deleted, and a failure leaves the record for the retry. A claim another table
-    holds is left alone (:func:`~lakehouse.location_claims.release`).
+    they are released before it is deleted, and a failure leaves the record for the retry. A directory another table
+    holds is left alone (:func:`~lakehouse.location_claims.release_directory`).
 
-    The record is keyed by the location, so while the location's claim names another table the record is that table's:
-    an end of ``table`` landing after a registration there forgets nothing and answers ``False``, as it keeps that
-    table's tags (:func:`release_clone_sources`).
+    The record is keyed by the location, so while the location's claim records another table's uuid the record is that
+    table's: an end of this table landing after a registration there forgets nothing and answers ``False``, as it keeps
+    that table's tags (:func:`release_clone_sources`). Judged by the uuid, never by the name, which a table registered
+    there under the same name shares ([[LH-575]]); ``None`` for a table whose claim records none ([[LH-534]]).
 
     Raises:
         OSError: The store refused the claim's read, or a source's tag read or delete; the record stands.
         ValueError: The claim is not one.
     """
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
-    if (claimed := location_claims.holder(claims, location)) is not None and claimed.table != table:
-        log.warning("base_record_kept_for_another_holder", extra={"location": location, "holder": claimed.table, "ending": table})
+    if (claimed := location_claims.holder(claims, location)) is not None and claimed.uuid != uuid:
+        log.warning("base_record_kept_for_another_holder", extra={"location": location, "holder": claimed.uuid, "ending": uuid})
         return False
     record = read_base_record(registry, location)
     for entry in record.entries if record is not None else []:
         if entry.role is BaseRole.DATA:
-            location_claims.release(claims, entry.path, table)
-    release_clone_sources(registry, location, holder=table, record=record)
+            location_claims.release_directory(claims, entry.path, uuid=uuid)
+    release_clone_sources(registry, location, uuid=uuid, record=record)
     return delete_record(registry.control_root, registry.storage_options, record_key_for(location))
 
 
-def release_clone_sources(registry: BaseRegistry, location: str, *, holder: str, record: BaseRecord | None = None) -> list[str]:
-    """Delete the tag the clone ``holder`` at ``location`` holds on each source its record names as ``derived_from``; the
-    sources a tag was deleted on (ADR 0198 §1). ``record`` is the clone's, when the caller already read it.
+def release_clone_sources(registry: BaseRegistry, location: str, *, uuid: str | None, record: BaseRecord | None = None) -> list[str]:
+    """Delete the tag the clone ``uuid`` at ``location`` holds on each source its record names as ``derived_from``; the
+    sources a tag was deleted on (ADR 0198 §1). ``record`` is the clone's, when the caller already read it. ``uuid`` is
+    ``None`` for a clone whose claim records none, which only the estate admin's deregister reaches ([[LH-534]]).
 
     Every door that stops governing a clone asks it, before it releases the location's claim: one that forgets the record
     (:func:`forget_base_record`), and a deregister, which keeps the record for the bytes it leaves in place and ends what
     the catalog promised them. A tag is named for its clone's location (:func:`clone_sources.tag_of`), so a clone
-    registered there since holds a tag of the same name: while the location's claim names another table, the tags are
-    that table's, and none is deleted.
+    registered there since holds a tag of the same name: while the location's claim records another table's uuid, the
+    tags are that table's, and none is deleted.
 
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
@@ -384,8 +387,8 @@ def release_clone_sources(registry: BaseRegistry, location: str, *, holder: str,
         ValueError: The claim is not one, a source's dataset stands and could not be opened, or its tag could not be deleted.
     """
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
-    if (claimed := location_claims.holder(claims, location)) is not None and claimed.table != holder:
-        log.warning("clone_source_tags_kept_for_another_holder", extra={"location": location, "holder": claimed.table, "ending": holder})
+    if (claimed := location_claims.holder(claims, location)) is not None and claimed.uuid != uuid:
+        log.warning("clone_source_tags_kept_for_another_holder", extra={"location": location, "holder": claimed.uuid, "ending": uuid})
         return []
     held = record if record is not None else read_base_record(registry, location)
     return clone_sources.release_all(clone_source_locations(held), clone_location=location, storage_options=registry.storage_options)
@@ -401,17 +404,15 @@ def clone_source_locations(record: BaseRecord | None) -> list[str]:
     return list(dict.fromkeys(key_uri(entry.store, entry.source_table or entry.path) for entry in derived))
 
 
-def claim_data_directories(
-    registry: BaseRegistry, entries: Sequence[RecordedBase], table: str, segments: list[str], *, is_gone: Callable[[location_claims.LocationClaim], bool]
-) -> list[str]:
-    """Make ``table`` the one holder of every ``data`` entry's directory, put-if-not-exists ([[LH-252]]).
+def claim_data_directories(registry: BaseRegistry, entries: Sequence[RecordedBase], claimant: location_claims.DirectoryClaimant) -> list[str]:
+    """Make ``claimant`` the one holder of every ``data`` entry's directory, put-if-not-exists ([[LH-252]]).
 
     A data base's directory is one table's: its fragments live there and a vend grants exactly that
     prefix. A manifest is a writer's claim, so a second table declaring a directory another holds would
     read the holder's fragments through it and be vended GET on them. The store arbitrates the holder
-    as it does for a table location ([[LH-204]]); the claims sit beside them under ``_locations/`` on the
-    control root, and :func:`forget_base_record` releases them with the record. All or nothing: a
-    directory another table holds releases the ones this call took.
+    as it does for a table location ([[LH-204]]), by the holder's uuid (:func:`location_claims.take_directory`); the
+    claims sit beside them under ``_locations/`` on the control root, and :func:`forget_base_record` releases them with
+    the record. All or nothing: a directory another table holds releases the ones this call took.
 
     Returns:
         The directories claimed, for the caller's undo.
@@ -425,44 +426,19 @@ def claim_data_directories(
         for entry in entries:
             if entry.role is not BaseRole.DATA:
                 continue
-            location_claims.take(claims, entry.path, table, segments, is_gone=is_gone)
+            location_claims.take_directory(claims, entry.path, claimant)
             taken.append(entry.path)
     except Exception:
-        release_data_directories(registry, taken, table)
+        release_data_directories(registry, taken, uuid=claimant.uuid)
         raise
     return taken
 
 
-def hand_over_data_directories(registry: BaseRegistry, location: str, *, previous: str, table: str, segments: list[str]) -> list[str]:
-    """Hand ``previous``'s claims on the data directories of the table rooted at ``location`` to ``table``, its new name ([[LH-215]]).
-
-    A claim's holder is the table's name, and a holder no longer named is judged gone once the claim's lease has run,
-    so a rename that left them with the old name would admit the next registration declaring the directory. Each
-    claim is handed over as the location's own is, through :func:`location_claims.take` with ``previous``; a claim
-    another table holds is not taken from it.
-
-    Returns:
-        The directories handed over.
-
-    Raises:
-        location_claims.LocationHeldError: Another table holds one of the directories.
-    """
-    record = read_base_record(registry, location)
-    claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
-    handed: list[str] = []
-    for entry in record.entries if record is not None else []:
-        if entry.role is not BaseRole.DATA:
-            continue
-        location_claims.take(claims, entry.path, table, segments, previous=previous, is_gone=lambda _claim: False)
-        handed.append(entry.path)
-    return handed
-
-
-def release_data_directories(registry: BaseRegistry, directories: Sequence[str], table: str) -> None:
-    """Release ``table``'s claims on ``directories`` — the undo of :func:`claim_data_directories`."""
+def release_data_directories(registry: BaseRegistry, directories: Sequence[str], *, uuid: str) -> None:
+    """Release the table ``uuid``'s claims on ``directories`` — the undo of :func:`claim_data_directories`."""
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
     for directory in directories:
-        location_claims.release(claims, directory, table)
+        location_claims.release_directory(claims, directory, uuid=uuid)
 
 
 def _standing_without_a_read(table_root: str, ref: BasePathRef, configured: Sequence[str]) -> BaseStanding | None:

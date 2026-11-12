@@ -93,7 +93,7 @@ async def vend_reclaim_credentials(
         or await run_in_threadpool(trash_reclaim.clone_refusal, settings, record)
     ) is not None:
         raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
-    scope = await run_in_threadpool(trash_reclaim.scope_of, settings, record)
+    scope = await run_in_threadpool(partial(trash_reclaim.scope_of, settings, record, uuid=uuid))
     vended = await run_in_threadpool(partial(reclaim_or_refuse, vendor, scope, session_name=role_session_name(subject)))
     if vended is None:
         return CredentialResponse(mode="server_mediated")

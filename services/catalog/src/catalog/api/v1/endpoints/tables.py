@@ -837,8 +837,8 @@ async def drop_table(
     else:
         # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
         # table registered at this location. The location's claim goes too ([[LH-204]]), and the clone's ending last.
-        await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
-        await run_in_threadpool(location_claims.release, claims, location, canonical)
+        await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, uuid=table_uuid))
+        await run_in_threadpool(partial(location_claims.release, claims, location, canonical, uuid=table_uuid))
         if ending is not None:
             await run_in_threadpool(clone_endings.clear_ending, claims, ending)
     # What was kept for the table under its uuid ends with it ([[LH-523]]); a table created later at this name holds
@@ -991,7 +991,7 @@ async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, 
     # first, while the fence still holds the location, so no clone registered there meanwhile can hold a tag of the same
     # name, and a tag that cannot be deleted leaves the location held rather than free with the tag standing.
     try:
-        await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, holder=canonical))
+        await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, uuid=table.uuid))
     except (OSError, ValueError, base_registry.UnreadableBaseRecordError) as exc:
         log.error("deregister_clone_tags_kept", extra={"table": canonical, "location": fenced.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
         raise PartiallyApplied(
@@ -1227,10 +1227,16 @@ async def register_table(
                 if unsanctioned:
                     log.warning("register_converge_refused_unrecorded_bases", extra={"table": id, "location": registered})
                     raise
-                # [[LH-252]] A data directory another table holds is never converged into this one's record.
+                # [[LH-252]] A data directory another table holds is never converged into this one's record, and one is
+                # claimed only for the uuid the location's claim records ([[LH-575]]).
+                standing = await run_in_threadpool(location_claims.holder, table_claims.claim_store(settings), registered)
+                if standing is None or standing.uuid is None:
+                    log.warning("register_converge_refused_unidentified", extra={"table": id, "location": registered})
+                    raise
+                claimant = location_claims.DirectoryClaimant(uuid=standing.uuid, root=registered, table=context.holder, segments=segments)
                 held = False
                 try:
-                    await run_in_threadpool(table_bases.claim_registered_directories, ns, context.registry, entries, context.holder, segments)
+                    await run_in_threadpool(table_bases.claim_registered_directories, context.registry, entries, claimant)
                 except InvalidInputError:
                     held = True
                 if held:
@@ -1298,7 +1304,7 @@ async def register_table(
             log.warning("register_refused_unasked_clone_source", extra={"table": id, "sources": [source.table for source in unasked]})
             raise table_bases.refused_clone(unasked[0].location)
         admitted = await run_in_threadpool(
-            partial(table_bases.admit_registered_table, ns, so, segments=segments, verdict=verdict, clone_uuid=table_uuid, context=context)
+            partial(table_bases.admit_registered_table, so, segments=segments, verdict=verdict, clone_uuid=table_uuid, context=context)
         )
     except Exception as refusal:
         try:
@@ -1582,22 +1588,6 @@ async def set_table_protection(
     return ProtectionResponse(id=canonical, protected=body.protected)
 
 
-async def _hand_over_data_directories(settings: Settings, location: str, *, source: list[str], destination: list[str]) -> None:
-    """Hand the renamed table's claims on its data directories to its new name ([[LH-252]]).
-
-    Left with the old name, a directory's holder no longer resolves and the next registration declaring it is admitted
-    once the claim's lease has run. Logged, never raised: the native rename has committed, and a failure here must not
-    strand the caller after it; what failed to move stays under the old name, where an operator reading the log finds it.
-    """
-    old = fga.canonical_object_id(source)
-    new = fga.canonical_object_id(destination)
-    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-    try:
-        await run_in_threadpool(partial(base_registry.hand_over_data_directories, registry, location, previous=old, table=new, segments=destination))
-    except Exception as exc:  # noqa: BLE001 — the rename has committed; what did not move is logged, not raised
-        log.error("rename_data_directories_not_handed_over", extra={"source": old, "destination": new, "error": str(exc)[:300]})
-
-
 @router.post("/{id}/rename", response_model_exclude_none=True)
 async def rename_table(
     id: str,
@@ -1635,8 +1625,8 @@ async def rename_table(
     could bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,
     out. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge
     in one write before the name, its ``child`` edge taken from the source with it and written on the destination once
-    the name is there, and both go back if the rename is undone; its data directories' claims move to its new name
-    (``_hand_over_data_directories``). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
+    the name is there, and both go back if the rename is undone. Its data directories' claims stay as they are: each
+    records the table's uuid and location, which a rename changes neither of ([[LH-575]]). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
     lifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped
     and another created ([[LH-554]]). Source missing → 404
     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
@@ -1683,7 +1673,6 @@ async def rename_table(
             reparent=reparent,
         )
     )
-    await _hand_over_data_directories(settings, location, source=segments, destination=new_segments)
     # A rename keeps the table's uuid (ADR 0173 §2): the event and the control event name the one the door resolved.
     destination_ids = await uuids.table(new_segments, uuid=table.uuid)
     # Versionless: the version history moved with the pointer, and the event names none of it. The location rides it so

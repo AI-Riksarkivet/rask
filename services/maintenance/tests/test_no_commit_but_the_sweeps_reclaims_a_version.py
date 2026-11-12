@@ -8,9 +8,11 @@ so a pass removes every key before any gate can return.
 
 Driven on real pylance through one dataset's pass, `table_pass.maintain_dataset`. The pass is the backstop for a table
 nobody commits on; a table that is committed on is disarmed by the committing door first
-(`tests/integration/test_an_ordinary_append_never_deletes_a_version.py`). A held table, whose policy keeps its whole
-history, is the exception: the catalog vends it no maintain tier ([[XC-084]]), so the pass writes nothing there, its
-disarm included, and its keys wait for a door's commit, which disarms first.
+(`tests/integration/test_an_ordinary_append_never_deletes_a_version.py`, which drives the catalog's disarm door too). The
+disarm is the catalog's commit, asked at its maintainer door, since maintenance's vend puts nothing of a table
+([[LH-575]]). A held table, whose policy keeps its whole history, is the exception: the catalog vends it no maintain tier
+([[XC-084]]), so the pass asks for nothing there, its disarm included, and its keys wait for a door's commit, which
+disarms first.
 """
 
 from __future__ import annotations
@@ -56,21 +58,28 @@ def _auto_cleanup_keys(uri: str) -> dict[str, str]:
 
 
 def _vend_covering(uri: str) -> httpx.Response:
-    """The catalog's maintain-tier vend for the table at ``uri``: the disarm is a commit, signed by it alone ([[LH-219]])."""
+    """The catalog's maintain-tier vend for the table at ``uri``, which admits a pass that writes ([[LH-219]])."""
     vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
     return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}, "location": uri})
 
 
-def test_a_pass_disarms_an_armed_table_under_its_vend(tmp_path: Path, maintain_one: Callable[..., DatasetResult]) -> None:
-    """The keys' removal is a commit, so it is signed by the table's maintain-tier vend alone ([[LH-219]])."""
+def test_a_pass_has_the_catalog_disarm_an_armed_table_and_commits_nothing_itself(tmp_path: Path, maintain_one: Callable[..., DatasetResult]) -> None:
+    """The keys' removal is a commit, so the catalog makes it at its disarm door, on the ref the pass passes; the pass
+    commits nothing of its own ([[LH-575]]). The door here answers without acting, so the table's version is the pass's
+    own count of its commits."""
     uri = _armed_table(tmp_path)
+    version = lance.dataset(uri).version
     settings = MaintenanceSettings.model_validate({"s3_bucket": "unused", "catalog_url": CATALOG})
 
     with respx.mock(assert_all_called=False) as door:
-        vend = door.post(f"{CATALOG}/management/v1/table/db$t/credentials", params={"tier": "maintain"}).mock(return_value=_vend_covering(uri))
-        maintain_one(uri, settings, plan=DatasetPlan(older_than=timedelta(0)))
+        door.post(f"{CATALOG}/management/v1/table/db$t/credentials", params={"tier": "maintain"}).mock(return_value=_vend_covering(uri))
+        disarm = door.post(f"{CATALOG}/management/v1/table/db$t/maintenance/disarm").mock(
+            return_value=httpx.Response(200, json={"version": version + 1, "disarmed": sorted(_ARMED)})
+        )
+        result = maintain_one(uri, settings, plan=DatasetPlan(older_than=timedelta(0)))
 
-    assert (_auto_cleanup_keys(uri), vend.called) == ({}, True)
+    assert (disarm.call_count, dict(disarm.calls.last.request.url.params), result.error) == (1, {}, None)
+    assert (lance.dataset(uri).version, _auto_cleanup_keys(uri)) == (version, _ARMED)
 
 
 def test_a_held_table_keeps_its_keys_and_its_history(tmp_path: Path, maintain_one: Callable[..., DatasetResult]) -> None:
@@ -81,7 +90,8 @@ def test_a_held_table_keeps_its_keys_and_its_history(tmp_path: Path, maintain_on
 
     with respx.mock(assert_all_called=False) as door:
         vend = door.post(f"{CATALOG}/management/v1/table/db$t/credentials", params={"tier": "maintain"}).mock(return_value=_vend_covering(uri))
+        disarm = door.post(f"{CATALOG}/management/v1/table/db$t/maintenance/disarm").mock(return_value=httpx.Response(200, json={"version": 1}))
         result = maintain_one(uri, settings, plan=DatasetPlan(older_than=timedelta(0), cleanup_enabled=False))
 
-    assert (_auto_cleanup_keys(uri), vend.called, result.old_versions_removed) == (_ARMED, False, 0)
+    assert (_auto_cleanup_keys(uri), vend.called, disarm.called, result.old_versions_removed) == (_ARMED, False, False, 0)
     assert versions <= {version["version"] for version in lance.dataset(uri).versions()}, "a version the held table kept is gone"

@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 from moto.iam.access_control import IAMPolicy, PermissionResult
 from pydantic import SecretStr
 
+from catalog.core.config import get_settings
 from lakehouse import location_claims
 from lakehouse.features import manifest_base_path_refs
 from lakehouse.governed.store_credential import S3KeyPair
@@ -101,7 +102,16 @@ def _capture_policy(client: TestClient) -> dict[str, Any]:
     return sent
 
 
-@pytest.mark.parametrize("second_table", ["created", "created-and-maintained", "registered-over-its-directory", "registered-over-a-renamed-tables-directory"])
+@pytest.mark.parametrize(
+    "second_table",
+    [
+        "created",
+        "created-and-maintained",
+        "registered-over-its-directory",
+        "registered-over-a-renamed-tables-directory",
+        "registered-under-a-dropped-tables-name-over-its-directory",
+    ],
+)
 def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
     two_store_catalog: TestClient,
     two_stores: Any,
@@ -110,12 +120,21 @@ def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, owner_location = _create(two_store_catalog, plain_base, _ids(1, 2))
+    thief = f"mb$thief{uuid.uuid4().hex[:8]}"
     if second_table == "registered-over-a-renamed-tables-directory":
-        # A directory's holder is its table's NAME ([[LH-215]]), and a holder no longer named is taken over once its
-        # lease has run: the rename must hand the directory to the new name. The lease is spent at once here.
+        # A holder no longer named is taken over once its lease has run, so the rename must keep the directory's claim
+        # its table's ([[LH-215]]). The lease is spent at once here.
         renamed = two_store_catalog.post(f"/v1/table/{owner}/rename", json={"new_table_name": f"{owner.partition('$')[2]}r"})
         assert renamed.status_code == 200, renamed.text
         monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
+    if second_table == "registered-under-a-dropped-tables-name-over-its-directory":
+        # A recoverable drop frees the name and keeps the directory for the undrop: a table registered under the name is
+        # another table, whose pass would reclaim the dropped one's bytes and whose purge would delete its own ([[LH-575]]).
+        monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "1")
+        get_settings.cache_clear()
+        dropped = two_store_catalog.post(f"/v1/table/{owner}/drop", json={})
+        assert dropped.status_code == 200, dropped.text
+        thief = owner
     owner_keys = _fragment_keys(two_stores, _directory(two_stores, owner_location))
     sent = _capture_policy(two_store_catalog)
 
@@ -143,7 +162,7 @@ def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
             enable_stable_row_ids=True,
             initial_bases=[lance.DatasetBasePath(_directory(two_stores, owner_location), is_dataset_root=False, name="data")],
         )
-        registered = two_store_catalog.post(f"/v1/table/mb$thief{uuid.uuid4().hex[:8]}/register", json={"location": thief_location})
+        registered = two_store_catalog.post(f"/v1/table/{thief}/register", json={"location": thief_location})
 
         assert registered.status_code == 400, f"a registration declaring {owner}'s data directory was admitted: {registered.text}"
         # The directory is the caller's own manifest's to name; the table holding it is not ([[LH-436]]).

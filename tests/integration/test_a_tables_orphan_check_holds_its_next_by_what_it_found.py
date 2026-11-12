@@ -29,7 +29,7 @@ import httpx
 import lance
 import pyarrow as pa
 import pytest
-import respx
+from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, DescribeTableRequest, RegisterTableRequest
 from moto.server import ThreadedMotoServer
@@ -38,6 +38,7 @@ from pydantic import BaseModel, SecretStr
 from lakehouse import location_claims, maintenance_policies, record_store, trash
 from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
@@ -45,12 +46,12 @@ from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services import orphans
-from maintenance.services.floor import FLOOR_KEY, raise_listing_floor
+from maintenance.services.floor import raise_listing_floor
 from maintenance.services.orphan_check import OrphanCheckIncompleteError
 from maintenance.services.orphans import OrphanFile
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.tasks import run_task
-from tests.integration.maintenance_vend_doors import CATALOG_URL, MAINTAIN_TIER_DOOR, maintain_tier_door
+from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 from tests.integration.store_requests import StoreRequest, counted
 
 
@@ -85,6 +86,30 @@ def bucket(moto_url: str) -> str:
 @pytest.fixture
 def store(moto_url: str) -> StorageOptions:
     return lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
+
+
+@pytest.fixture
+def catalog(moto_url: str, bucket: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """The real catalog over this test's bucket, whose maintainer doors answer the check's floor raise ([[LH-575]]): the
+    table a test registers there and claims under its uuid is the table the door resolves."""
+    for key, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": f"s3://{bucket}",
+        "LANCE_CONTROL_ROOT": f"s3://{bucket}",
+        "LANCE_S3_ENDPOINT": moto_url,
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        "LANCE_CONTROL_EMIT_ENABLED": "false",
+    }.items():
+        monkeypatch.setenv(key, value)
+    from catalog.core.config import get_settings
+
+    get_settings.cache_clear()
+    from catalog.main import app
+
+    with TestClient(app) as client:
+        yield client
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -171,11 +196,12 @@ def _a_second_after(listed: float) -> None:
         assert time.monotonic() < deadline, "the clock did not move"
 
 
-def _check(task: Task, settings: MaintenanceSettings) -> _Queue:
+def _check(task: Task, settings: MaintenanceSettings, *, catalog: TestClient | None = None) -> _Queue:
+    """Run ``task``, its vends answered over the table's location, and with ``catalog`` its maintainer doors by that app."""
     import asyncio
 
     queue = _Queue()
-    with maintain_tier_door(lambda _table: task.location):
+    with maintain_tier_door(lambda _table: task.location, catalog=catalog):
         asyncio.run(run_task(task, settings=settings, queue=cast(TaskQueue, queue), emitter=NoopEmitter(), control=NoopControlEmitter()))
     return queue
 
@@ -313,26 +339,28 @@ def _policy(**settings: object) -> Callable[[str], bytes]:
 
 
 @pytest.mark.parametrize(
-    ("env", "denied", "policy", "raised", "outcome"),
+    ("env", "denied", "policy", "answered", "raised", "outcome"),
     [
-        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, False, None, True, "raised", id="raised-under-the-tables-vend"),
-        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "true"}, False, None, False, "stranded", id="a-dry-run-writes-nothing"),
-        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, True, None, False, "stranded", id="a-catalog-denial-writes-nothing"),
+        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, False, None, 200, True, "raised", id="raised-at-the-catalogs-door"),
+        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "true"}, False, None, 200, False, "stranded", id="a-dry-run-is-answered-and-writes-nothing"),
+        pytest.param({"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"}, True, None, 403, False, "stranded", id="a-catalog-denial-writes-nothing"),
         pytest.param(
             {"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"},
             False,
             _policy(cleanup_enabled=False),
+            None,
             False,
             "stranded",
-            id="a-table-kept-whole-is-asked-no-vend-and-written-nothing",
+            id="a-table-kept-whole-asks-no-raise-and-is-written-nothing",
         ),
         pytest.param(
             {"MAINTENANCE_FLOOR_RAISE_DRY_RUN": "false"},
             False,
             lambda _uuid: b'{"kind": "table", "cleanup_enabled": fal',
+            None,
             False,
             "policy_unreadable",
-            id="a-table-whose-policy-is-no-policy-is-asked-no-vend-and-written-nothing",
+            id="a-table-whose-policy-is-no-policy-asks-no-raise-and-is-written-nothing",
         ),
     ],
 )
@@ -341,20 +369,22 @@ def test_a_stranded_table_has_its_floor_raised_and_its_pass_held(
     moto_url: str,
     bucket: str,
     store: StorageOptions,
+    catalog: TestClient,
     settings: Callable[..., MaintenanceSettings],
     monkeypatch: pytest.MonkeyPatch,
     env: dict[str, str],
     denied: bool,
     policy: Callable[[str], bytes] | None,
+    answered: int | None,
     raised: bool,
     outcome: str,
 ) -> None:
-    """The raise is ONE metadata-only commit, signed by the table's vend ([[LH-219]]), that moves the floor above the
+    """The raise is ONE metadata-only commit, the catalog's at its floor door ([[LH-575]]), that moves the floor above the
     stranded file once a pass cleans beneath it: the check holds that pass, and its own next check past the retention
-    the cleanup waits on. A dry run, or a vend the catalog refuses, writes nothing and holds the next check at the floor.
-    A table whose policy keeps its whole history is never cleaned, so a raise would buy it only a version: none is
-    written and no vend asked. A policy record that cannot be read as a policy may be a legal hold, so the check, as the
-    table's pass, takes it for no defaults: it scans nothing, asks no vend, and counts why ([[LH-572]])."""
+    the cleanup waits on. A dry run, answered at the same door, or a raise the catalog refuses, writes nothing and holds
+    the next check at the floor; the real catalog answers the door, so what maintenance sends is what it reads. A table whose policy keeps its whole history is never cleaned, so a raise would buy it only a
+    version: none is asked for. A policy record that cannot be read as a policy may be a legal hold, so the check, as the
+    table's pass, takes it for no defaults: it scans nothing, asks no raise, and counts why ([[LH-572]])."""
     task = _table(bucket=bucket, options=store)
     if policy is not None:
         _s3(moto_url).put_object(Bucket=bucket, Key=record_store.record_key(maintenance_policies.PREFIX, "table", task.uuid), Body=policy(task.uuid))
@@ -366,14 +396,10 @@ def test_a_stranded_table_has_its_floor_raised_and_its_pass_held(
     queue = _Queue()
     import asyncio
 
-    with respx.mock(assert_all_called=False) as router:
-        door = router.post(url__regex=MAINTAIN_TIER_DOOR, params={"tier": "maintain"})
+    with maintain_tier_door(lambda _table: task.location, catalog=catalog) as router:
+        door = router["maintainer"]
         if denied:
             door.mock(return_value=httpx.Response(403, json={"code": 13, "detail": "not yours"}))
-        else:
-            vended = {"aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_endpoint": "http://store.vended.example"}
-            door.mock(return_value=httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}, "location": task.location}))
-        router.route().pass_through()
         asyncio.run(
             run_task(
                 task,
@@ -386,7 +412,8 @@ def test_a_stranded_table_has_its_floor_raised_and_its_pass_held(
 
     dataset = lance.dataset(task.location, storage_options=store.in_clear())
     follow_ups = [(entry.task.kind, entry.task.uuid) for entry in queue.held if entry.follow_up]
-    assert (door.called, FLOOR_KEY in dataset.config(), follow_ups) == (policy is None, raised, [("table", task.uuid)] if raised else [])
+    status = door.calls.last.response.status_code if door.called else None
+    assert (status, FLOOR_KEY in dataset.config(), follow_ups) == (answered, raised, [("table", task.uuid)] if raised else [])
     assert _next(queue, task, started) == ((24 * (RETENTION + DAY).days, RETENTION + DAY) if raised else (24, DAY))
     assert counted_as == [{"outcome": outcome}]
 
@@ -399,7 +426,14 @@ def test_a_stranded_table_has_its_floor_raised_and_its_pass_held(
     ],
 )
 def test_a_stamped_table_is_raised_again_only_once_its_floor_has_moved(
-    *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings], cleaned: bool, raised_again: bool
+    *,
+    moto_url: str,
+    bucket: str,
+    store: StorageOptions,
+    catalog: TestClient,
+    settings: Callable[..., MaintenanceSettings],
+    cleaned: bool,
+    raised_again: bool,
 ) -> None:
     """A commit alone does not move the floor: the manifests beneath it must be cleaned. While they stand another raise
     buys only a version, so a stamped table is not raised; once a pass has cleaned them the floor sits at the raise, and
@@ -416,13 +450,13 @@ def test_a_stamped_table_is_raised_again_only_once_its_floor_has_moved(
     _a_second_after(_plant(moto_url, bucket, f"_transactions/9-{uuid.uuid4()}.txn"))
     version = lance.dataset(task.location, storage_options=store.in_clear()).version
 
-    _check(task, settings(MAINTENANCE_FLOOR_RAISE_ENABLED="true", MAINTENANCE_FLOOR_RAISE_DRY_RUN="false"))
+    _check(task, settings(MAINTENANCE_FLOOR_RAISE_ENABLED="true", MAINTENANCE_FLOOR_RAISE_DRY_RUN="false"), catalog=catalog)
 
     assert lance.dataset(task.location, storage_options=store.in_clear()).version == (version + 1 if raised_again else version)
 
 
 def test_a_raise_reads_its_floor_and_its_stamp_as_one_reading(
-    *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings]
+    *, moto_url: str, bucket: str, store: StorageOptions, catalog: TestClient, settings: Callable[..., MaintenanceSettings]
 ) -> None:
     """The floor and the last raise's stamp are judged together, so they are read off one handle: a store that answers
     the floor's reads and then fails a second open leaves no "never raised" to act on, and a table raised already, whose
@@ -431,7 +465,7 @@ def test_a_raise_reads_its_floor_and_its_stamp_as_one_reading(
     Driven at the raise itself, since the fault is placed by the store requests the raise makes: measured on pylance
     13.0.0, the floor's open lists the table's ``_versions/`` once and its version listing once more, so a later listing
     is another open's. The store answers each later listing 503, as one that cannot serve it does, until the raise asks
-    the catalog for the table's vend, so a raise that read "never raised" commits on a store that answers again."""
+    the catalog's floor door, so a raise that read "never raised" commits on a store that answers again."""
     task = _table(bucket=bucket, options=store)
     lance.dataset(task.location, storage_options=store.in_clear()).update_config({FLOOR_KEY: str(time.time())})
     planted = f"_transactions/9-{uuid.uuid4()}.txn"
@@ -440,21 +474,19 @@ def test_a_raise_reads_its_floor_and_its_stamp_as_one_reading(
     ]
     version = lance.dataset(task.location, storage_options=store.in_clear()).version
     listings: list[StoreRequest] = []
-    vended: list[str] = []
 
-    def _another_open_before_the_vend(request: StoreRequest) -> bool:
-        if not request.lists(f"{LOCATION}/_versions/"):
-            return False
-        listings.append(request)
-        return len(listings) > 2 and not vended
+    with counted(moto_url) as proxy, maintain_tier_door(lambda _table: task.location, catalog=catalog) as router:
+        floor_door = router["maintainer"]
 
-    def _vend(table: str) -> str:
-        vended.append(table)
-        return task.location
+        def _another_open_before_the_raise(request: StoreRequest) -> bool:
+            if not request.lists(f"{LOCATION}/_versions/"):
+                return False
+            listings.append(request)
+            return len(listings) > 2 and not floor_door.called
 
-    with counted(moto_url) as proxy, maintain_tier_door(_vend), proxy.answering_unavailable(_another_open_before_the_vend):
-        configured = settings(MAINTENANCE_S3_ENDPOINT=proxy.url, MAINTENANCE_FLOOR_RAISE_ENABLED="true", MAINTENANCE_FLOOR_RAISE_DRY_RUN="false")
-        raised = raise_listing_floor(task.location, table=TABLE, stranded=stranded, settings=configured)
+        with proxy.answering_unavailable(_another_open_before_the_raise):
+            configured = settings(MAINTENANCE_S3_ENDPOINT=proxy.url, MAINTENANCE_FLOOR_RAISE_ENABLED="true", MAINTENANCE_FLOOR_RAISE_DRY_RUN="false")
+            raised = raise_listing_floor(task.location, table=TABLE, stranded=stranded, settings=configured)
 
     after = lance.dataset(task.location, storage_options=store.in_clear()).version
     assert (raised.version, after, (raised.refused or "").startswith("already raised")) == (None, version, True), raised

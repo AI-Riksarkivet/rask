@@ -116,10 +116,10 @@ FLAG_BASE_PATHS = 16
 #: THE BITS ABOVE 16. Upstream's `rust/lance-table/src/feature_flags.rs` at v13.0.0 allocates FOURTEEN
 #: flags and puts its `FLAG_UNKNOWN` sentinel at `1 << 14`. The vendored `lance_docs/lance/format/table/versioning.md`
 #: § Current Feature Flags names eighteen (2^0 to 2^17, bits 16 and 17 reserved), of which pylance 13.0.0 allocates
-#: the fourteen named here; see `lance_docs/PROVENANCE.md` § "These docs run ahead of the installed pylance". Named here so a refusal says WHICH feature it
-#: declined instead of "32 (unknown)": an operator can act on "disable_transaction_file", not on a bare
-#: bit. **Naming is not supporting** — none of them enters :data:`SUPPORTED`, so all of them still
-#: refuse.
+#: the fourteen named here before :data:`FLAG_MANAGED_BLOBS`; see `lance_docs/PROVENANCE.md` § "These docs run ahead
+#: of the installed pylance". Named here so a refusal says WHICH feature it declined instead of "32 (unknown)": an
+#: operator can act on "disable_transaction_file", not on a bare bit. **Naming is not supporting** — none of them enters
+#: :data:`SUPPORTED`, so all of them still refuse.
 #:
 #: 32 is WRITER-REQUIRED ONLY, which is why it is the concrete case for the reader/writer split: a
 #: dataset that sets it writer-side is one a read-only pass may safely scan.
@@ -148,6 +148,13 @@ FLAG_FRAGMENT_REUSE_INDEX = 1024
 FLAG_SPILLED_ROW_LINEAGE = 2048
 FLAG_FRAGMENT_TREE = 4096
 FLAG_INDEPENDENT_COVERING_FIELDS = 8192
+#: MANAGED BLOBS, the first bit pylance 13.0.0 does not allocate (its `FLAG_UNKNOWN`), so its open refuses a table that
+#: carries it. Committing schema metadata ``lance.blob.managed = "true"`` sets it in both fields, for good
+#: (`lance_docs/lance/format/table/blob.md` § Capability and Compatibility). A blob descriptor then addresses its object
+#: directly, under ``_blobs/`` or at a sidecar path whose data file is gone, and stays live while any protected snapshot's
+#: rows reference it (§ Garbage Collection), so a file no fragment names is no longer unreferenced:
+#: :func:`manages_blobs` is judged on its own wherever rask deletes a table's files by what its fragments name.
+FLAG_MANAGED_BLOBS = 16384
 
 #: Flags this pass can compact / GC / scan without being wrong.
 #:
@@ -200,6 +207,7 @@ _FLAG_NAMES = {
     FLAG_SPILLED_ROW_LINEAGE: "spilled row lineage (unstable)",
     FLAG_FRAGMENT_TREE: "fragment tree (reserved)",
     FLAG_INDEPENDENT_COVERING_FIELDS: "independent covering fields (reserved)",
+    FLAG_MANAGED_BLOBS: "managed blobs",
 }
 
 #: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented
@@ -442,6 +450,13 @@ _LANCE_V2_FILE_VERSIONS: Final = frozenset({(2, 0), (2, 1), (2, 2), (2, 3)})
 def _format_version(major: int, minor: int) -> tuple[int, int]:
     """A data file's format version as Lance reads it: ``(0, 3)`` is 2.0."""
     return (2, 0) if (major, minor) == (0, 3) else (major, minor)
+
+
+def manages_blobs(reader: int, writer: int) -> bool:
+    """Whether a manifest's flags activate Managed blobs (:data:`FLAG_MANAGED_BLOBS`): either bit, since a manifest
+    setting only one is invalid (`lance_docs/lance/format/table/versioning.md` § Current Feature Flags) and is read as
+    the capability it half-declares."""
+    return bool((reader | writer) & FLAG_MANAGED_BLOBS)
 
 
 def mixes_data_file_versions(reader: int) -> bool:

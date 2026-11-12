@@ -7,11 +7,13 @@ deleted versions 1 and 2, because the sweep that disarms a table had not reached
 commits disarms the ref first, and the append rebases onto that config-only commit and deletes nothing
 (measured on pylance 12.0.0).
 
-The table is armed out of band, straight through pylance, the way a maintain-tier credential can: no catalog
-door writes manifest config, and the property doors refuse the keys. Driven through the real catalog app on
-a real pylance ``dir`` backend, through the append door ``/insert`` (the catalog writes the rows) and the erasure door,
-which disarms every ref so that the bring-your-own job's commits are admitted at ``version/create`` ([[LH-493]]) and
-commits nothing else.
+The table is armed out of band, straight through pylance, the way only a credential that can put a final manifest
+could: no catalog door writes those keys, the property doors refuse them, and no vend puts a final manifest
+([[LH-575]]). Driven through the real catalog app on a real pylance ``dir`` backend, through the append door ``/insert``
+(the catalog writes the rows), the erasure door, which disarms every ref so that the bring-your-own job's commits are
+admitted at ``version/create`` ([[LH-493]]) and commits nothing else, and maintenance's disarm door, the backstop for a
+table no door commits on, asked by maintenance's own client on main and on a branch, so the door it reaches, the query
+naming the ref and the answer it reads are the catalog's own.
 """
 
 from __future__ import annotations
@@ -24,6 +26,10 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
+
+from maintenance.core.config import MaintenanceSettings
+from maintenance.services import credentials
+from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -50,8 +56,10 @@ def _append(client: TestClient, marker: int) -> None:
     assert response.status_code == 200, response.text
 
 
-@pytest.mark.parametrize("door", ["insert", "erasure"])
-def test_door_commits_on_an_armed_table_keep_every_version(real_ns_client: TestClient, door: Literal["insert", "erasure"]) -> None:
+@pytest.mark.parametrize("door", ["insert", "erasure", "maintenance/disarm"])
+def test_door_commits_on_an_armed_table_keep_every_version(
+    real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: Literal["insert", "erasure", "maintenance/disarm"]
+) -> None:
     assert real_ns_client.post("/v1/namespace/lh245/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=_ipc(_rows(1)), headers=ARROW)
     assert created.status_code == 200, created.text
@@ -63,6 +71,15 @@ def test_door_commits_on_an_armed_table_keep_every_version(real_ns_client: TestC
     if door == "erasure":
         erased = real_ns_client.post(f"/management/v1/table/{TABLE}/erasure", json={"predicate": "id = 2", "retain_days": 30})
         assert erased.status_code == 202, erased.text
+    elif door == "maintenance/disarm":
+        lance.dataset(location).create_branch("work", lance.dataset(location).version)
+        lance.dataset(location).checkout_version(("work", None)).update_config(_ARMED)
+        monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
+        settings = MaintenanceSettings.model_validate({"s3_bucket": "unused", "catalog_url": CATALOG_URL})
+        with maintain_tier_door(lambda _table: location, catalog=real_ns_client):
+            answered = [credentials.disarm_cleanup(TABLE, settings, branch=ref).disarmed for ref in (None, "work")]
+        work = lance.dataset(location).checkout_version(("work", None)).config()
+        assert (answered, [key for key in work if key.startswith("lance.auto_cleanup.")]) == ([sorted(_ARMED), sorted(_ARMED)], [])
     else:
         for marker in (10, 11, 12):
             _append(real_ns_client, marker)
@@ -72,4 +89,4 @@ def test_door_commits_on_an_armed_table_keep_every_version(real_ns_client: TestC
         f"a commit through /{door} deleted versions {sorted(kept - {v['version'] for v in after.versions()})}"
     )
     assert not [key for key in after.config() if key.startswith("lance.auto_cleanup.")], f"/{door} left the table armed: {after.config()}"
-    assert sorted(after.to_table()["id"].to_pylist()) == ([1, 2] if door == "erasure" else [1, 2, 10, 11, 12])
+    assert sorted(after.to_table()["id"].to_pylist()) == ([1, 2, 10, 11, 12] if door == "insert" else [1, 2])

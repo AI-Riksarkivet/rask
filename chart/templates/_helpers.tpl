@@ -576,9 +576,13 @@ buckets as the estate's reads already are. */ -}}
 {{- define "lance.objectStorePolicy.maintenance" -}}
 {{- $control := .Values.objectStore.bucket -}}
 {{- $own := list (printf "arn:aws:s3:::%s/_maintenance_due/*" $control) (printf "arn:aws:s3:::%s/_maintenance_files/*" $control) (printf "arn:aws:s3:::%s/_policies/state/*" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control) -}}
+{{- $judged := list -}}
+{{- range (list "_locations" "_trash" "_policies" "_warehouses" "_projects" "_bases" "_file_identities" "_maintenance_due" "_maintenance_files" "_lineage_outbox") }}{{- $judged = append $judged (printf "arn:aws:s3:::%s/%s/*" $control .) }}{{- end -}}
 {{- toJson (list
   (dict "Sid" "ListAccountForReconcileDriftReport" "Effect" "Allow" "Action" (list "s3:ListAllMyBuckets") "Resource" (list "arn:aws:s3:::*"))
-  (dict "Sid" "ReadTheEstateItSweeps" "Effect" "Allow" "Action" (list "s3:ListBucket" "s3:GetBucketLocation" "s3:GetObject") "Resource" (list "arn:aws:s3:::*" "arn:aws:s3:::*/*"))
+  (dict "Sid" "ListEveryBucketItSweeps" "Effect" "Allow" "Action" (list "s3:ListBucket" "s3:GetBucketLocation") "Resource" (list "arn:aws:s3:::*"))
+  (dict "Sid" "ReadEachTablesHistoryAndNoData" "Effect" "Allow" "Action" (list "s3:GetObject") "Resource" (list "arn:aws:s3:::*/_versions" "arn:aws:s3:::*/_versions/*.manifest" "arn:aws:s3:::*/_refs/*.json" "arn:aws:s3:::*/_transactions/*.txn" "arn:aws:s3:::*/__manifest/*" "arn:aws:s3:::*/tree" "arn:aws:s3:::*/_mem_wal"))
+  (dict "Sid" "ReadTheRecordsItJudgesBy" "Effect" "Allow" "Action" (list "s3:GetObject") "Resource" $judged)
   (dict "Sid" "ReadEachBucketsEventConfiguration" "Effect" "Allow" "Action" (list "s3:GetBucketNotification") "Resource" (list "arn:aws:s3:::*"))
   (dict "Sid" "WriteItsOwnRecordsAndNothingElse" "Effect" "Allow" "Action" (list "s3:PutObject" "s3:DeleteObject") "Resource" $own)) -}}
 {{- end -}}

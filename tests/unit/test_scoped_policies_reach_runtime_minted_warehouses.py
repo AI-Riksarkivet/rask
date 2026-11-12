@@ -1,4 +1,9 @@
-"""Maintenance's own identity reads every bucket it sweeps and writes nothing but its own records ([[XC-084]]).
+"""Maintenance's own identity reads every table's history and writes nothing but its own records ([[XC-084]], [[LH-575]]).
+
+WHAT IT READS IS HISTORY, NEVER DATA. Its own session lists every bucket, and gets only what a pass, the audit and the
+scan read under it (measured on pylance 13.0.0 behind a counting proxy): manifests, refs, transactions, each root's
+``__manifest`` index and the control records it judges by. A data file, an index file and a backup stay out of its reach,
+so a compromised maintenance pod reads no tenant's rows.
 
 THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so the read grant enumerates none. `catalog.warehouses.enabled` (on by
 default) provisions one physically separate bucket per warehouse at `POST /management/v1/warehouses`, with an
@@ -114,7 +119,17 @@ def maintenance() -> dict:
     ("action", "bucket", "key", "granted"),
     [
         pytest.param("s3:GetObject", RUNTIME_BUCKET, "medallion/_versions/1.manifest", True, id="reads-a-runtime-warehouse"),
-        pytest.param("s3:GetObject", CONTROL_BUCKET, "_protection/table-x.json", True, id="reads-the-records-it-judges-by"),
+        pytest.param("s3:GetObject", RUNTIME_BUCKET, "medallion/_refs/tags/t.json", True, id="reads-a-tag"),
+        pytest.param("s3:GetObject", RUNTIME_BUCKET, "__manifest/data/0-a.lance", True, id="reads-a-roots-index"),
+        # pyarrow asks whether a directory is there by a HEAD of its bare key before it lists it.
+        pytest.param("s3:GetObject", RUNTIME_BUCKET, "medallion/_versions", True, id="probes-a-dataset-root"),
+        pytest.param("s3:GetObject", CONTROL_BUCKET, "_locations/table-x.json", True, id="reads-the-records-it-judges-by"),
+        pytest.param("s3:GetObject", RUNTIME_BUCKET, "medallion/data/0-a.lance", False, id="reads-no-data-file"),
+        # A grant's `*` spans `/`, so each history grant is anchored on its file's suffix: a writer's data directory may be
+        # named `_versions`, and no data, deletion, index or blob file ends in `.manifest`, `.json` or `.txn`.
+        pytest.param("s3:GetObject", RUNTIME_BUCKET, "base/_versions/data/0-a.lance", False, id="reads-no-data-file-under-a-directory-named-for-history"),
+        pytest.param("s3:GetObject", RUNTIME_BUCKET, "medallion/_indices/u/page_lookup.lance", False, id="reads-no-index-file"),
+        pytest.param("s3:GetObject", CONTROL_BUCKET, "_backups/pg/openfga.dump", False, id="reads-no-backup"),
         pytest.param("s3:PutObject", CONTROL_BUCKET, "_maintenance_due/table-x.json", True, id="writes-its-due-records"),
         pytest.param("s3:PutObject", CONTROL_BUCKET, "_policies/state/u/cadence-x.json", True, id="writes-its-cadence-stamps"),
         pytest.param("s3:DeleteObject", CONTROL_BUCKET, "_lineage_outbox/run.json", True, id="drains-its-own-outbox"),

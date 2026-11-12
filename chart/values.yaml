@@ -844,11 +844,13 @@ maintenance:
   # -- Dead-letter topic of the write-event lane, for deliveries that exhaust their retries; set only with `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.
   arrivalDlqTopic: dlq.maintenance.arrival
   # THE CATALOG'S VENDING DOOR IS THE ONLY CREDENTIAL MAINTENANCE'S REWRITES ARE SIGNED WITH ([[LH-219]]). Version
-  # expiry IS a write — it deletes data files and commits a manifest — and so is the listing-floor raise, so each pass
-  # asks the door for a `maintain`-tier credential scoped to its one table and expiring in 900 s, which
-  # `can_vend_maintain` opens to this identity alone: the `maintenance` rung the catalog writes on every warehouse and
-  # the bootstrap hook converges (`lance.fgaMaintainers`). Maintenance's own session reads the whole estate and signs
-  # no table's rewrite. The URL is rendered by this chart, so "catalog reachable" is a property of the deployment.
+  # expiry deletes manifests and data files, so each pass asks the door for a `maintain`-tier credential scoped to its
+  # one table and expiring in 900 s, which gets and deletes and puts nothing of the table, and which `can_vend_maintain`
+  # opens to this identity alone: the `maintenance` rung the catalog writes on every warehouse and the bootstrap hook
+  # converges (`lance.fgaMaintainers`). Maintenance commits nothing: the disarm of commit-path cleanup and the
+  # listing-floor raise are the catalog's commits, at its maintainer doors (ADR 0204). Maintenance's own session reads
+  # the whole estate and signs no table's rewrite. The URL is rendered by this chart, so "catalog reachable" is a
+  # property of the deployment.
   #
   # Off, the chart wires no door and declares no rung, and the bootstrap hook takes the rung back: every rewrite is
   # refused (gate `vending_not_direct`), so reclamation pauses while discovery, the due list and the drift report run.

@@ -215,7 +215,7 @@ def _finished(ns: LanceNamespace, settings: Settings, claims: location_claims.Cl
         released = clone_sources.release_all(ending.sources, clone_location=ending.location, storage_options=so)
         if ending.forget_record and not _bytes_stand(ending.location, so):
             registry = BaseRegistry(control_root=settings.registry_root, storage_options=so)
-            base_registry.forget_base_record(registry, ending.location, table=claim.table if claim is not None else ending.table)
+            base_registry.forget_base_record(registry, ending.location, uuid=ending.uuid)
         if claim is not None:
             location_claims.release(claims, ending.location, claim.table, uuid=claim.uuid)
         clone_endings.remove(claims, ending)

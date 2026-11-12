@@ -1878,6 +1878,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/table/{id}/maintenance/disarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disarm Commit Path Cleanup
+         * @description Remove every ``lance.auto_cleanup.*`` key from the ref, so no commit on it deletes versions inside itself ([[LH-245]]).
+         *
+         *     Lance runs version cleanup inside a commit whose manifest carries those keys, past every hold and with nothing
+         *     recording it; every door disarms its ref before it commits, and this is the backstop maintenance asks for a table no
+         *     door commits on. A config-only commit, made only when a key is set; the answer names the keys it removed.
+         */
+        post: operations["disarm_commit_path_cleanup_management_v1_table__id__maintenance_disarm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/maintenance/floor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Raise Listing Floor
+         * @description Commit the listing-floor stamp ``rask.maintenance.floor_raised_at`` on main: a version that changes no row, so the
+         *     table's next cleanup can drop the manifests beneath it and with them the floor Lance lists its transaction and
+         *     deletion files above ([[LH-094]]).
+         *
+         *     The catalog stamps it on its own clock and records the caller as the version's author (ADR 0187). A ``dry_run`` is
+         *     judged as the raise is, the caller's rung and the table's name, and commits nothing.
+         */
+        post: operations["raise_listing_floor_management_v1_table__id__maintenance_floor_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/table/{id}/maintenance/preview": {
         parameters: {
             query?: never;
@@ -3787,8 +3836,8 @@ export interface paths {
          *     could bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,
          *     out. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge
          *     in one write before the name, its ``child`` edge taken from the source with it and written on the destination once
-         *     the name is there, and both go back if the rename is undone; its data directories' claims move to its new name
-         *     (``_hand_over_data_directories``). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
+         *     the name is there, and both go back if the rename is undone. Its data directories' claims stay as they are: each
+         *     records the table's uuid and location, which a rename changes neither of ([[LH-575]]). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
          *     lifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped
          *     and another created ([[LH-554]]). Source missing → 404
          *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
@@ -5477,6 +5526,16 @@ export interface components {
              * Format: date-time
              */
             occurred_at?: string;
+        };
+        /**
+         * CleanupDisarmed
+         * @description What the disarm of a ref's commit-path cleanup did ([[LH-575]]).
+         */
+        CleanupDisarmed: {
+            /** Disarmed */
+            disarmed?: string[];
+            /** Version */
+            version: number;
         };
         /**
          * CloneEndingEntry
@@ -7301,6 +7360,28 @@ export interface components {
              * @default false
              */
             verbose?: boolean | null;
+        };
+        /**
+         * FloorRaiseRequest
+         * @description A raise of a table's listing floor, or its dry run. A field it does not name is refused, since a misnamed
+         *     ``dry_run`` would otherwise commit the raise its caller only meant to preview.
+         */
+        FloorRaiseRequest: {
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run?: boolean;
+        };
+        /**
+         * FloorRaised
+         * @description What a raise of a table's listing floor committed ([[LH-094]], [[LH-575]]); nothing on a dry run.
+         */
+        FloorRaised: {
+            /** Raised At */
+            raised_at?: number | null;
+            /** Version */
+            version?: number | null;
         };
         /**
          * FragmentStats
@@ -12742,6 +12823,80 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disarm_commit_path_cleanup_management_v1_table__id__maintenance_disarm_post: {
+        parameters: {
+            query?: {
+                /** @description The ref to disarm. Omit for main. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CleanupDisarmed"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    raise_listing_floor_management_v1_table__id__maintenance_floor_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FloorRaiseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FloorRaised"];
                 };
             };
             /** @description Validation Error */

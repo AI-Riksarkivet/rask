@@ -32,8 +32,15 @@ release it.
 A CLAIM CARRIES ITS TABLE'S UUID (ADR 0173 §6). The claim's life is a uuid's: a rename hands it to the new name,
 a recoverable drop keeps it for the undrop, and a destroy or a deregister releases it, so a table registered at
 the location afterwards is given a uuid of its own. The uuid lives here, outside Lance context, because
-RegisterTable keeps no properties (measured on pylance 13.0.0) and the rename and both undrops re-register. A
-data directory's claim ([[LH-252]]) names its holder and records no uuid.
+RegisterTable keeps no properties (measured on pylance 13.0.0) and the rename and both undrops re-register.
+
+A DATA DIRECTORY'S CLAIM IS ITS TABLE'S BY UUID ([[LH-252]], [[LH-575]]). It records the uuid of the table that holds the
+directory and that table's own location, its root, and every take, release and judgement of it compares the uuid alone
+(:func:`take_directory`, :func:`release_directory`): a name is free once its table is dropped, and a table registered
+under the name is another table, which must neither read through the dropped table's directory nor have its pass reclaim,
+or its purge delete, the dropped table's bytes there. A table never moves (a rename moves its name, an undrop
+re-registers it where it was), so the directory's holder stands for as long as its root's claim records the same uuid
+(:func:`directory_holder_stands`), which a recoverable drop keeps for the undrop.
 
 A DOOR ACTS ON THE CLAIM IT READ (ADR 0173 §7, [[LH-521]]). A drop, a deregister and a rename change which table
 ``__manifest`` names at a location, by name, so each reads the claim once when its request reaches it and writes
@@ -73,7 +80,7 @@ import hashlib
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse import control_prefixes, record_store, records
 from lakehouse.base_refs import decoded_path
@@ -116,8 +123,10 @@ class LocationClaim(BaseModel):
     table: str
     #: The holder's identifier segments, so a caller can describe it without knowing the delimiter.
     segments: list[str]
-    #: The holder table's uuid, which the catalog minted when the table came into being; a data directory's claim has none.
+    #: The holder table's uuid, which the catalog minted when the table came into being.
     uuid: str | None = None
+    #: On a data directory's claim, the location of the table that holds the directory; ``None`` on a table's own claim.
+    root: str | None = None
     claimed_at: datetime
     #: The request that took it, when the taker named one: only that request's retry is a retry.
     token: str | None = None
@@ -453,15 +462,24 @@ def release(store: ClaimStore, location: str, table: str, *, uuid: str | None = 
     Raises:
         records.RecordChangedError: The claim kept changing under the release.
     """
+    return _release_where(store, location, lambda current: current.table == table and (uuid is None or current.uuid == uuid))
 
+
+def _release_where(store: ClaimStore, location: str, owned: Callable[[LocationClaim], bool]) -> bool:
+    """Release ``location``'s claim when it is held and ``owned`` says it is the caller's; ``False`` when it is not.
+
+    Re-judged on every round, as a take is: a claim written since the read is judged afresh.
+
+    Raises:
+        records.RecordChangedError: The claim kept changing under the release.
+    """
     key = claim_key(location)
-    # Re-judged on every round, as a take is: a claim written since the read is judged afresh.
     for _ in range(_TAKE_ATTEMPTS):
         found = records.read_json_at(store.control_root, store.storage_options, key)
         if found.stored is None:
             return False
         current = LocationClaim.model_validate(found.stored.record)
-        if current.released_at is not None or current.table != table or (uuid is not None and current.uuid != uuid):
+        if current.released_at is not None or not owned(current):
             return False
         released = current.model_copy(update={"released_at": found.at}).model_dump(mode="json")
         try:
@@ -470,3 +488,89 @@ def release(store: ClaimStore, location: str, table: str, *, uuid: str | None = 
             continue
         return True
     raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
+
+
+def directory_holder_stands(store: ClaimStore, claim: LocationClaim) -> bool:
+    """Whether the table holding a data directory's ``claim`` still stands: its root's claim records the same uuid.
+
+    A recoverable drop keeps the root's claim for the undrop, so a table in the trash stands; a destroy and a deregister
+    release it, and a table registered at the root since holds it under a uuid of its own. A claim recording no uuid or
+    no root names no holder this can find, and stands, so that no take can reach the bytes of a table it cannot judge.
+
+    Raises:
+        ValueError: The root's record is not a claim.
+    """
+    if claim.uuid is None or claim.root is None:
+        return True
+    root = holder(store, claim.root)
+    return root is not None and root.uuid == claim.uuid
+
+
+class DirectoryClaimant(BaseModel):
+    """The table a data directory is claimed for: its uuid and root, which the claim is judged by, and its name now."""
+
+    model_config = ConfigDict(frozen=True)
+
+    uuid: str
+    #: The table's own location, where its claim records ``uuid`` while the table stands.
+    root: str
+    #: The name it is called by, recorded for an operator reading the claim; a rename leaves it, since nothing judges by it.
+    table: str
+    segments: list[str]
+
+
+def take_directory(store: ClaimStore, directory: str, claimant: DirectoryClaimant) -> LocationClaim:
+    """Make ``claimant`` the one holder of the data directory ``directory`` ([[LH-252]]), and answer the claim it holds.
+
+    A claim recording the claimant's uuid is its own and is answered as it is (a retry, or an undrop re-registering the
+    table). An unclaimed or released directory is taken. Any other claim refuses the take while it is inside
+    :data:`LEASE` or its holder stands (:func:`directory_holder_stands`), whatever name either table has: of a table
+    dropped into the trash and a table registered under its name since, the directory stays the dropped one's
+    ([[LH-575]]).
+
+    Raises:
+        LocationHeldError: Another table holds the directory.
+        ValueError: The stored record is not a claim.
+        records.RecordChangedError: The claim kept changing under the take.
+    """
+    key = claim_key(directory)
+    for _ in range(_TAKE_ATTEMPTS):
+        found = records.read_json_at(store.control_root, store.storage_options, key)
+        mine = LocationClaim(
+            location=decoded_path(directory),
+            table=claimant.table,
+            segments=list(claimant.segments),
+            uuid=claimant.uuid,
+            root=claimant.root,
+            claimed_at=found.at,
+        )
+        if found.stored is None:
+            try:
+                records.create_json(store.control_root, store.storage_options, key, mine.model_dump(mode="json"))
+            except records.RecordExistsError:
+                continue
+            return mine
+        current = LocationClaim.model_validate(found.stored.record)
+        if current.released_at is None and current.uuid == claimant.uuid:
+            return current
+        if current.released_at is None and (current.within_lease(found.at) or directory_holder_stands(store, current)):
+            raise LocationHeldError(current)
+        try:
+            records.replace_json(store.control_root, store.storage_options, key, mine.model_dump(mode="json"), etag=found.stored.etag)
+        except records.RecordChangedError:
+            continue
+        return mine
+    raise records.RecordChangedError(f"the claim on {decoded_path(directory)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
+
+
+def release_directory(store: ClaimStore, directory: str, *, uuid: str | None) -> bool:
+    """Release the claim the table ``uuid`` holds on the data directory ``directory``; ``False`` when it holds none.
+
+    By uuid alone ([[LH-575]]): the table registered under a dropped table's name is another table, and an end of
+    either must not free the other's directory. ``None`` releases a claim recording no uuid, which only a table whose own
+    claim records none can hold ([[LH-534]]).
+
+    Raises:
+        records.RecordChangedError: The claim kept changing under the release.
+    """
+    return _release_where(store, directory, lambda current: current.uuid == uuid)

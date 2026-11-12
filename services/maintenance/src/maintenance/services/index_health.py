@@ -3,16 +3,22 @@
 Read-only. Maintenance builds and optimizes no index (ADR 0156 C6); it names the ones a bring-your-own job should
 optimize, on the table's due record (:mod:`lakehouse.maintenance_due`).
 
-MEASURED against pylance 9.0.0. ``stats.index_stats(name)`` returns ``num_indexed_rows``, ``num_unindexed_rows``,
-``num_indexed_fragments``, ``num_unindexed_fragments`` and ``num_indices`` (the delta segments a query fans out over);
-``describe_indices()`` returns ``IndexDescription`` OBJECTS — not dicts — with ``name``, ``index_type`` and
-``field_names``.
+READ OFF THE MANIFEST ALONE ([[LH-575]]). ``describe_indices()`` lists each index's segments with the fragments each
+covers, and each fragment's live rows are its physical rows less the deletions its manifest entry records; neither
+reads an object. Measured on pylance 13.0.0, the rows left unindexed and the segment count read this way equal
+``stats.index_stats``' ``num_unindexed_rows`` and ``num_indices`` on a covering BTREE, a BTREE after an append, one
+whose unindexed fragment lost rows to a delete, an IVF_FLAT after five plain optimizes and one after an append beside
+them. ``index_stats`` is asked nothing: it reads the
+index's own files under ``_indices/``, which maintenance's store session is granted no read on, since they hold the
+table's values; it panics on a JSON index (``lance-index/src/scalar/json.rs:95``, a ``todo!()``); and with two segments
+covering one fragment it commits index migrations, then crashes the process (measured on #796's work, 2026-11-12).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+
+import lance
 
 from lakehouse.maintenance_due import IndexDue
 
@@ -24,56 +30,29 @@ log = logging.getLogger(__name__)
 DEFAULT_MAX_DELTAS = 4
 
 
-def _stats(ds: Any, name: str) -> dict[str, Any] | None:  # noqa: ANN401 — LanceDataset, no protocol
-    """The index's statistics, or ``None`` when they cannot be read.
-
-    `BaseException`, deliberately. `index_stats` PANICS on index types Lance has no stats implementation for, and a
-    pyo3 panic surfaces as `pyo3_runtime.PanicException`, which derives from BaseException. Measured on the live estate
-    2026-08-16: the panic escaped a narrower handler and answered the whole sweep with HTTP 500. The class cannot be
-    caught by name because pyo3 synthesises `pyo3_runtime` lazily and it is not importable.
-    """
-    try:
-        stats = ds.stats.index_stats(name)
-    except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
-        if isinstance(exc, KeyboardInterrupt | SystemExit):
-            raise
-        log.warning("index_stats_unreadable", extra={"index": name, "error": str(exc), "error_type": type(exc).__name__})
-        return None
-    return stats if isinstance(stats, dict) else None
+def _live_rows(fragment: lance.LanceFragment) -> int:
+    """The rows ``fragment`` holds, as its manifest entry records them: its physical rows less the ones it deleted."""
+    deleted = fragment.metadata.deletion_file.num_deleted_rows if fragment.metadata.deletion_file is not None else 0
+    return fragment.metadata.physical_rows - (deleted or 0)
 
 
-def _readable_stats(ds: Any, index: Any) -> tuple[str, dict[str, Any]] | None:  # noqa: ANN401 — LanceDataset / IndexDescription
-    """A user index's name and statistics, or ``None`` for a system index or one whose health is unknown.
-
-    A JSON index is never asked: `index_stats` on one hits a `todo!()` in Lance (`lance-index/src/scalar/json.rs:95`),
-    and the panic writes a Rust backtrace to the pod's stderr on every tick. An index whose health is unknown is not
-    due: there is nothing an optimize is known to fix.
-    """
-    name = str(getattr(index, "name", "") or "")
-    if not name or name.startswith("__"):
-        return None
-    if str(getattr(index, "index_type", "") or "").strip().lower() == "json":
-        return None
-    stats = _stats(ds, name)
-    return None if stats is None else (name, stats)
-
-
-def due_indices(ds: Any, *, max_deltas: int = DEFAULT_MAX_DELTAS) -> list[IndexDue]:  # noqa: ANN401 — LanceDataset, no protocol
-    """Every user index an optimize is due on: one with unindexed rows, or with more than ``max_deltas`` deltas, which
-    names the merge that clears them (:attr:`IndexDue.num_indices_to_merge`)."""
+def due_indices(ds: lance.LanceDataset, *, max_deltas: int = DEFAULT_MAX_DELTAS) -> list[IndexDue]:
+    """Every user index an optimize is due on: one leaving live rows in a fragment no segment covers, or with more than
+    ``max_deltas`` segments, which names the merge that clears them (:attr:`IndexDue.num_indices_to_merge`). A system
+    index (``__``-named) is the table's own and never listed."""
     try:
         described = list(ds.describe_indices())
+        live = {fragment.fragment_id: _live_rows(fragment) for fragment in ds.get_fragments()}
     except Exception as exc:
         log.warning("describe_indices_failed", extra={"error": str(exc)})
         return []
     due: list[IndexDue] = []
     for index in described:
-        readable = _readable_stats(ds, index)
-        if readable is None:
+        if not index.name or index.name.startswith("__"):
             continue
-        name, stats = readable
-        unindexed_rows = int(stats.get("num_unindexed_rows") or 0)
-        deltas = int(stats.get("num_indices") or 0)
+        covered = {fragment_id for segment in index.segments for fragment_id in segment.fragment_ids}
+        unindexed_rows = sum(rows for fragment_id, rows in live.items() if fragment_id not in covered)
+        deltas = len(index.segments)
         if unindexed_rows > 0 or deltas > max_deltas:
-            due.append(IndexDue(name=name, unindexed_rows=unindexed_rows, deltas=deltas, num_indices_to_merge=deltas if deltas > max_deltas else None))
+            due.append(IndexDue(name=index.name, unindexed_rows=unindexed_rows, deltas=deltas, num_indices_to_merge=deltas if deltas > max_deltas else None))
     return due

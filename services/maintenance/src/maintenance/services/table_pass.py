@@ -49,6 +49,7 @@ from lakehouse.storage_options import StorageOptions, on_s3
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
+    CatalogRefusal,
     record_base_fragments_holding_deleted_rows,
     record_dataset_swept,
     record_failed,
@@ -131,6 +132,9 @@ class WriteProbe(BaseModel):
     """What one pre-vend open of a dataset tells us: whether expiry could write, and the manifest facts it reports."""
 
     may_write: bool
+    #: Whether the ref carries a ``lance.auto_cleanup.*`` key, which the pass has the catalog remove ([[LH-575]]); also
+    #: ``True`` for a dataset the probe could not read, so the catalog reads it itself.
+    armed: bool = False
     data_storage_version: str | None = None
     mixed_data_file_versions: bool = False
     #: The versions the policy would reclaim, as Lance counted them on the probe's handle; ``None`` when not counted.
@@ -164,7 +168,8 @@ def _probe_before_vending(
 
     THE COST IT REMOVES, measured 2026-09-11: the store mints one STS identity record per vend and prunes none — 280 per
     minute on this estate — and the previous store became unable to restart at 107,485 of them. Expiry writes only
-    when commit-path cleanup is armed (the disarm commits), when the policy's threshold of reclaimable versions is met,
+    when commit-path cleanup is armed (the pass then has the catalog disarm it), when the policy's threshold of
+    reclaimable versions is met,
     counted by the same rule the pass itself applies, or when the table's data directories hold a file the pass would
     delete ([[LH-286]]), found by the rule the pass applies again under its vend (`base_reclaim.unreferenced`). A held
     table, whose policy keeps its whole history, is written nothing, its disarm included: the catalog vends it no
@@ -183,16 +188,17 @@ def _probe_before_vending(
         counted = count_reclaimable(ds, policy) if policy.cleanup_enabled else None
         reclaimable = counted is not None and counted >= policy.min_reclaimable
         stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
-        lost = policy.cleanup_enabled and any(modified <= now - policy.staged_grace for _, modified in lost_staged_manifests(uri, options, version=ds.version))
+        lost = policy.cleanup_enabled and bool(lost_staged_manifests(uri, options, version=ds.version).past(policy.staged_grace))
         return WriteProbe(
             may_write=armed or reclaimable or stranded or lost,
+            armed=armed,
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
             reclaimable_versions=counted,
         )
     except Exception as exc:
         log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
-        return WriteProbe(may_write=True, mixed_data_file_versions=mixes_data_file_versions(flags_from_open_error(exc) or 0))
+        return WriteProbe(may_write=True, armed=True, mixed_data_file_versions=mixes_data_file_versions(flags_from_open_error(exc) or 0))
 
 
 def _on_governed_elsewhere(result: DatasetResult, exc: Exception, _table_id: str | None) -> None:
@@ -236,6 +242,10 @@ _VEND_ANSWERS: dict[type[Exception], tuple[str, Callable[[DatasetResult, Excepti
 #: Every answer of the vend door that stops a write, caught as one.
 _VEND_STOPS: Final = tuple(_VEND_ANSWERS)
 
+#: The catalog's answers about the name a pass asked its vend under. A rename or a drop landing during the pass changes
+#: them, so a table they park is asked about again after ``retry_seconds`` ([[LH-575]]).
+_ASKED_AGAIN: Final[frozenset[CatalogRefusal]] = frozenset({"vend_denied", "table_not_governed"})
+
 
 def _record_vend_answer(result: DatasetResult, exc: Exception, *, table_id: str | None) -> None:
     """Log the vend door's answer that stopped a write, and record it on ``result`` unless the result already carries
@@ -246,6 +256,46 @@ def _record_vend_answer(result: DatasetResult, exc: Exception, *, table_id: str 
         record(result, exc, table_id)
 
 
+class DisarmOutcome(BaseModel):
+    """The failure :func:`_disarm` met, if any, carried onto whichever result the pass returns."""
+
+    error: str | None = None
+    error_type: str | None = None
+
+    def onto(self, result: DatasetResult) -> DatasetResult:
+        if self.error is not None and result.error is None:
+            result.error, result.error_type = self.error, self.error_type
+        return result
+
+
+def _branch_of(uri: str, table: str, *, readings: PassReadings) -> str | None:
+    """The branch the dataset at ``uri`` is, the path past its table's ``tree/``; ``None`` for the table's main."""
+    location = readings.table_ids.location_of(table)
+    path = base_refs.normalise(uri)
+    prefix = f"{location}/{BRANCH_CONTAINER}/"
+    return path.removeprefix(prefix) if location is not None and path.startswith(prefix) else None
+
+
+def _disarm(uri: str, table: str, *, readings: PassReadings, settings: MaintenanceSettings) -> DisarmOutcome:
+    """Have the catalog remove every ``lance.auto_cleanup.*`` key from the ref ``uri`` is: the backstop for a table no door
+    commits on ([[LH-245]], [[LH-575]]).
+
+    Every catalog door that commits disarms its ref first (:mod:`lakehouse.auto_cleanup` records the measurements); a
+    table nobody commits on is disarmed here, before the pass's gates, so it does not stay armed until a later commit
+    reclaims behind them. The commit is the catalog's, at its maintainer door, since maintenance's vend puts nothing of a
+    table. A failure is reported on the result, never raised: the dataset stays armed, which an operator must see, and the
+    next pass retries.
+    """
+    try:
+        answered = credentials.disarm_cleanup(table, settings, branch=_branch_of(uri, table, readings=readings))
+    except _VEND_STOPS as exc:
+        log.warning("auto_cleanup_disarm_failed", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        return DisarmOutcome(error=f"auto_cleanup: {exc}", error_type=type(exc).__name__)
+    if answered.disarmed:
+        log.warning("auto_cleanup_disarmed", extra={"uri": uri, "keys": answered.disarmed, "version": answered.version})
+    return DisarmOutcome()
+
+
 def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) -> DatasetResult:
     """The result of a dataset the vend door's answer stopped, carrying the census the probe already read."""
     stopped = DatasetResult(uri=target.uri, data_storage_version=probe.data_storage_version, mixed_data_file_versions=probe.mixed_data_file_versions)
@@ -254,17 +304,18 @@ def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) ->
 
 
 def _data_directories(
-    uri: str, *, readings: PassReadings, settings: MaintenanceSettings, options: StorageOptions, opened: DatasetOpener
+    uri: str, *, uuid: str, readings: PassReadings, settings: MaintenanceSettings, options: StorageOptions, opened: DatasetOpener
 ) -> list[base_registry.RecordedBase]:
-    """The data directories the table at ``uri`` holds, as its base record names them ([[LH-286]]).
+    """The data directories the table ``uuid`` at ``uri`` holds, as its base record names them ([[LH-286]]).
 
     None for a branch, whose files are its table's, and none for a table whose manifest declares no plain base outside
     its own root: the record is read only for a table that could hold a directory. A record that cannot be read names
     none this pass, so the pass reclaims nothing on the base and expires the table's versions as usual; the next pass
-    reads it again. Only a directory the record names and whose claim the table holds is ever listed, so neither a base a
-    writer planted in the manifest nor one another table holds is reclaimed.
+    reads it again. Only a directory the record names and whose claim records the table's uuid is ever listed, so neither
+    a base a writer planted in the manifest nor one another table holds is reclaimed, a table the trash keeps under this
+    table's name included ([[LH-575]]).
     """
-    if (table := readings.table_ids.of(uri)) is None:
+    if readings.table_ids.of(uri) is None:
         return []
     try:
         declared = manifest_base_path_refs(opened())
@@ -275,12 +326,12 @@ def _data_directories(
         return []
     try:
         recorded = data_directories.recorded_directories(base_record_reader(settings, options)(uri))
-        held = [directory for directory in recorded if data_directories.claimed_by(claim_store(settings), directory, table)]
+        held = [directory for directory in recorded if data_directories.claimed_by(claim_store(settings), directory, uuid)]
     except (base_registry.UnreadableBaseRecordError, ClientError, BotoCoreError, OSError, ValueError) as exc:
         log.warning("maintenance_base_record_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return []
     if unheld := [directory.path for directory in recorded if directory not in held]:
-        log.warning("maintenance_data_directory_not_held", extra={"uri": uri, "table": table, "directories": unheld})
+        log.warning("maintenance_data_directory_not_held", extra={"uri": uri, "uuid": uuid, "directories": unheld})
     return held
 
 
@@ -308,7 +359,7 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
     table = named.table
     options = settings.storage_options()
     policy = _expiry_policy(uri, plan, settings=settings, opened=opened)
-    directories = _data_directories(uri, readings=readings, settings=settings, options=options, opened=opened)
+    directories = _data_directories(uri, uuid=named.owners.table_uuid, readings=readings, settings=settings, options=options, opened=opened)
     now = readings.context.now
     probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=now, opened=opened)
     target = ExpiryTarget(uri=uri, storage_options=options, table_id=table, data_directories=directories, now=now)
@@ -319,9 +370,10 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
         vended = credentials.write_options_for(uri, settings, table_id=table)
     except _VEND_STOPS as exc:
         return _stopped_by_vend(probe, target, exc)
+    disarm = _disarm(uri, table, readings=readings, settings=settings) if probe.armed else DisarmOutcome()
     history = TableHistory(control_root=settings.resolved_control_root, storage_options=vended, table_uuid=named.owners.table_uuid)
     held = {"write_options": vended, "history": history, "table_uuid": named.owners.table_uuid, "control_root": settings.resolved_control_root}
-    return expire_versions(target.model_copy(update=held), policy)
+    return disarm.onto(expire_versions(target.model_copy(update=held), policy))
 
 
 def _expire_in_span(
@@ -840,21 +892,24 @@ def versions_due_at(ds: lance.LanceDataset, policy: ExpiryPolicy, *, now: dateti
     return upcoming
 
 
-def staged_due_at(ds: lance.LanceDataset, uri: str, *, policy: ExpiryPolicy, options: StorageOptions) -> datetime | None:
-    """When the oldest manifest a stock writer staged for a version this ref already holds passes its grace ([[LH-529]]),
-    or ``None`` when there is none, or the table's policy keeps its whole history, under which no pass removes one."""
+def staged_due_at(ds: lance.LanceDataset, uri: str, *, policy: ExpiryPolicy, options: StorageOptions, now: datetime) -> datetime | None:
+    """When, on the pass's clock ``now``, the oldest manifest a stock writer staged for a version this ref already holds
+    passes its grace ([[LH-529]]), or ``None`` when there is none, or the table's policy keeps its whole history, under
+    which no pass removes one. The time left is the store's reading (:meth:`LostManifests.due_in`), so a pod whose clock
+    differs from the store's schedules the pass that removes it neither early nor late ([[LH-575]])."""
     if not policy.cleanup_enabled:
         return None
-    lost = [modified for _, modified in lost_staged_manifests(uri, options, version=ds.version)]
-    return min(lost) + policy.staged_grace if lost else None
+    left = lost_staged_manifests(uri, options, version=ds.version).due_in(policy.staged_grace)
+    return now + left if left is not None else None
 
 
 def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: MaintenanceSettings) -> datetime | None:
     """When the dataset ``result`` names next needs a pass, read afresh after this one: its versions, its staged
-    manifests and its policy's cadence. A dataset the pass could not decide on is retried after ``retry_seconds``; a
-    refused one, and one nothing comes due on, waits for its next commit or the recheck."""
+    manifests and its policy's cadence. A dataset the pass could not decide on, or that the catalog's answer about its
+    name parked, is retried after ``retry_seconds``; a refused one, and one nothing comes due on, waits for its next
+    commit or the recheck."""
     now = readings.context.now
-    if result.error is not None or result.skipped == HISTORY_FENCED:
+    if result.error is not None or result.skipped == HISTORY_FENCED or result.refused_by in _ASKED_AGAIN:
         return now + timedelta(seconds=settings.retry_seconds)
     if result.refused is not None or result.trashed is not None:
         return None
@@ -867,7 +922,7 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
     policy = _expiry_policy(result.uri, plan, settings=settings, opened=opened)
     try:
         ds = opened()
-        due = [at for at in (versions_due_at(ds, policy, now=now), staged_due_at(ds, result.uri, policy=policy, options=options)) if at is not None]
+        due = [at for at in (versions_due_at(ds, policy, now=now), staged_due_at(ds, result.uri, policy=policy, options=options, now=now)) if at is not None]
     except (OSError, ValueError) as exc:
         # A dataset the store or Lance could not read is retried, as one the pass failed on. Any other error is a fault
         # of this code's, which fails the task: retried every `retry_seconds` it would repeat for ever, unseen.

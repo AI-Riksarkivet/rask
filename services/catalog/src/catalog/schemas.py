@@ -429,6 +429,34 @@ class GcRunResult(BaseModel):
     bytes_removed: int
 
 
+class CleanupDisarmed(BaseModel):
+    """What the disarm of a ref's commit-path cleanup did ([[LH-575]])."""
+
+    #: The ref's version after it: the config-only commit it made, or the version it found when no key was set.
+    version: int
+    #: The ``lance.auto_cleanup.*`` keys it removed; empty when none was set.
+    disarmed: list[str] = Field(default_factory=list)
+
+
+class FloorRaiseRequest(BaseModel):
+    """A raise of a table's listing floor, or its dry run. A field it does not name is refused, since a misnamed
+    ``dry_run`` would otherwise commit the raise its caller only meant to preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Answer as the raise would be answered, the caller's rung and the table's name judged, and commit nothing.
+    dry_run: bool = False
+
+
+class FloorRaised(BaseModel):
+    """What a raise of a table's listing floor committed ([[LH-094]], [[LH-575]]); nothing on a dry run."""
+
+    #: The version the raise committed.
+    version: int | None = None
+    #: The epoch the ``rask.maintenance.floor_raised_at`` stamp it committed names.
+    raised_at: float | None = None
+
+
 class DueTable(BaseModel):
     """One table a compaction or an index optimize is due on, as its maintenance pass measured it (ADR 0162)."""
 

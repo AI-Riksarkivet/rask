@@ -731,10 +731,22 @@ with none fails the render as an undefined template.
 
 - `catalog`: the whole data plane it governs, buckets included, since every vend is a session policy narrowed from it.
 - `lineage`: list, get and delete under `<control bucket>/_lineage_outbox/` and nothing else: the one outbox it drains.
-- `maintenance`: `ListAllMyBuckets`; list, `GetBucketLocation` and get on every bucket and key; put and delete only on
-  `<control bucket>/_maintenance_due/*`, `<control bucket>/_maintenance_files/*` (its copy of the commit records it has
-  read, `lakehouse.file_identities`, which no erasure or hold reads), `<control bucket>/_policies/state/*` and
-  `<control bucket>/_lineage_outbox/*`.
+- `maintenance`: `ListAllMyBuckets`; list and `GetBucketLocation` on every bucket; get on each table's history and no
+  data ([[LH-575]]): `_versions/*.manifest`, `_refs/*.json` and `_transactions/*.txn` under any key, each root's
+  `__manifest/` index, and the bare `_versions`, `tree` and `_mem_wal` keys, which pyarrow HEADs before it lists a
+  directory, a refused HEAD raising where an absent one answers "not there". Each history grant is anchored on its file's
+  suffix because a grant's `*` spans `/`, and a writer may name a data directory `_versions`: no data, deletion, index or
+  blob file ends in `.manifest`, `.json` or `.txn`. Get on the control-root records it judges by (`_locations`, `_trash`,
+  `_policies`, `_warehouses`, `_projects`, `_bases`, `_file_identities`, `_maintenance_due`, `_maintenance_files`,
+  `_lineage_outbox`), and no backup; put and delete only on `<control bucket>/_maintenance_due/*`,
+  `<control bucket>/_maintenance_files/*` (its copy of the commit records it has read, `lakehouse.file_identities`, which
+  no erasure or hold reads), `<control bucket>/_policies/state/*` and `<control bucket>/_lineage_outbox/*`. What a pass,
+  the audit and the scan read under it was measured on pylance 13.0.0 behind a counting proxy: opens, version lists,
+  `explain_cleanup_old_versions`, transactions, `tracked_files()` and the compaction planner read only listings,
+  `_versions/` and `_refs/`, and index health reads `describe_indices()`, which reads no index file; a table's whole pass
+  over a table with a tag, a branch, a deletion and an index (re-measured 2026-11-12) got only `.manifest` and `.json`
+  keys under them, the `__manifest` index and the control records. A data file, an index file, a deletion vector and a
+  backup are out of its reach, so a compromised maintenance pod reads no tenant's rows.
   Owner, 2026-11-03: a compromised maintenance pod must not be able to defeat an erasure or a hold, so every other
   maintenance write is signed by a catalog vend (the table's `maintain` tier, or a session deleting one due trash
   record's bytes), and the trash records themselves are the catalog's to write (ADR 0197).

@@ -134,7 +134,7 @@ def end_refusal(settings: Settings, record: dict[str, Any], claim: LocationClaim
         return None
     if (misplaced := _place_refusal(location, claim, uuid=uuid)) is not None:
         return misplaced
-    if held := _objects_held(settings, record):
+    if held := _objects_held(settings, record, uuid=uuid):
         return f"its place still holds {held} object(s); the purge deletes them first"
     return None
 
@@ -146,7 +146,7 @@ def release_refusal(record: dict[str, Any], *, now: datetime) -> str | None:
     return f"the record is not {trash.RELEASE_SETTLE} past its deadline, so an undrop admitted at it may still be finishing"
 
 
-def scope_of(settings: Settings, record: dict[str, Any]) -> ReclaimScope:
+def scope_of(settings: Settings, record: dict[str, Any], *, uuid: str) -> ReclaimScope:
     """What the purge of ``record`` deletes: its table's bytes at its location, and in the data directories its claim
     names ([[LH-286]], :func:`lakehouse.data_directories.directories_to_end`).
 
@@ -155,7 +155,7 @@ def scope_of(settings: Settings, record: dict[str, Any]) -> ReclaimScope:
         botocore.exceptions.ClientError: The store refused a read of the record or a claim.
     """
     location = trash.location_of(record)
-    directories = directories_to_end(_registry(settings), location, table=trash.name_of(record))
+    directories = directories_to_end(_registry(settings), location, uuid=uuid)
     return ReclaimScope(location=location, data_directories=tuple(directory_uri(directory) for directory in directories))
 
 
@@ -193,9 +193,9 @@ def _place_refusal(location: str, claim: LocationClaim | None, *, uuid: str) -> 
     return None
 
 
-def _objects_held(settings: Settings, record: dict[str, Any]) -> int:
+def _objects_held(settings: Settings, record: dict[str, Any], *, uuid: str) -> int:
     """How many objects the record's location, in both spellings, and the data directories its claim names still hold."""
     so = settings.storage_options()
     location = trash.location_of(record)
-    directories = directories_to_end(_registry(settings), location, table=trash.name_of(record))
+    directories = directories_to_end(_registry(settings), location, uuid=uuid)
     return len(objects_at(location, so)) + sum(len(list_under(directory_uri(directory), so)) for directory in directories)

@@ -107,5 +107,5 @@ def test_a_declared_base_is_granted_READ_even_at_the_maintain_tier() -> None:
     table = next(st for st in objects if "tables/db1$users" in st["Resource"])
     base = next(st for st in objects if "shared/src.lance" in st["Resource"])
 
-    assert "s3:PutObject" in table["Action"], "the table's own prefix keeps its maintain tier"
+    assert table["Action"] == ["s3:GetObject", "s3:DeleteObject"], "the table's own prefix keeps its maintain tier"
     assert base["Action"] == ["s3:GetObject"], f"a base must be readable and never writable: {base['Action']}"

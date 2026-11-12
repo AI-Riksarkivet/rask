@@ -12,15 +12,16 @@ through pyarrow's filesystem.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from typing import Final
+from typing import Any, Final
 
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.objectfs import fs_and_base
+from lakehouse.records import store_clock
 from lakehouse.storage.client import MAX_POOL_CONNECTIONS
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
@@ -59,16 +60,48 @@ def iter_under(uri: str, storage_options: StorageOptions) -> Iterator[StoredObje
     """:func:`list_under` a page at a time, a thousand objects a request on S3, so a caller that stops early has asked
     the store for no more than it read."""
     if on_s3(uri):
-        bucket, _, key = uri.removeprefix("s3://").partition("/")
-        pages = object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
+        bucket, pages = _s3_pages(uri, storage_options)
         for page in pages:
-            for entry in page.get("Contents", []):
-                yield StoredObject(path=f"{bucket}/{entry['Key']}", size=int(entry.get("Size", 0)), modified=entry["LastModified"])
+            yield from _on_page(bucket, page)
         return
     fs, base = fs_and_base(uri, storage_options)
     for info in fs.get_file_info(pafs.FileSelector(base.rstrip("/"), recursive=True, allow_not_found=True)):
         if info.type == pafs.FileType.File and info.mtime is not None:
             yield StoredObject(path=info.path, size=int(info.size or 0), modified=info.mtime if info.mtime.tzinfo else info.mtime.replace(tzinfo=UTC))
+
+
+class StoreListing(BaseModel):
+    """The objects under one prefix, and the store's clock when it listed them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    objects: list[StoredObject]
+    #: The store's clock when it answered the listing's first page (:func:`lakehouse.records.store_clock`), the local
+    #: clock on a local root, read before the listing: an object's age is this, less the stamp the same store put on it.
+    at: datetime
+
+
+def list_under_at(uri: str, storage_options: StorageOptions) -> StoreListing:
+    """:func:`list_under`, with the store's clock at the listing, so an object's age is read off the one clock that
+    stamped it and never off a pod's (ADR 0179)."""
+    if not on_s3(uri):
+        at = datetime.now(UTC)
+        return StoreListing(objects=list_under(uri, storage_options), at=at)
+    bucket, pages = _s3_pages(uri, storage_options)
+    # A paginator always answers a first page, an empty listing's included.
+    first = next(pages)
+    return StoreListing(objects=[*_on_page(bucket, first), *(listed for page in pages for listed in _on_page(bucket, page))], at=store_clock(first))
+
+
+def _s3_pages(uri: str, storage_options: StorageOptions) -> tuple[str, Iterator[Mapping[str, Any]]]:
+    """The bucket ``uri`` names, and the pages of a listing of everything beneath its key."""
+    bucket, _, key = uri.removeprefix("s3://").partition("/")
+    return bucket, iter(object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/"))
+
+
+def _on_page(bucket: str, page: Mapping[str, Any]) -> Iterator[StoredObject]:
+    for entry in page.get("Contents", []):
+        yield StoredObject(path=f"{bucket}/{entry['Key']}", size=int(entry.get("Size", 0)), modified=entry["LastModified"])
 
 
 class ObjectIdentity(BaseModel):

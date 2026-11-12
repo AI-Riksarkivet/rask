@@ -1,10 +1,15 @@
-"""A maintainer holding no reader grant is vended no read credential ([[LH-560]]).
+"""A maintainer holding no reader grant is vended no read credential ([[LH-560]]), and the maintainer doors are a
+maintainer's and no writer's ([[LH-575]]).
 
 The model keeps a maintainer from reading (`model.fga`: a table's ``can_read_data`` is ``reader``), and a vend is a read
 of the whole table: the read tier's session policy gets every object under its prefix. So the vend door asks the reader
 rung at the read tier, and admits a maintainer only at the maintain tier, whose own rung (``can_vend_maintain``) the
 maintenance identity alone holds. A read handed to a maintainer would be a data read no ``reader`` grant wrote, and
 ``can_grant_maintainer`` (``maintainer and pass_grants``) would let any maintainer hand it on.
+
+The disarm and the floor raise are maintenance's two commits, which the catalog makes under its own credential at doors
+on the maintainer rung (``can_maintain``), since the maintain tier puts nothing of a table: a writer, who may change the
+table's rows, may not make them.
 
 Every decision is the real model's, on a store of this test's own: alice owns ``db`` and ``db$t`` and grants bob
 ``maintainer`` on ``db$t`` through its own door. The vendor records every call, since a credential minted and then
@@ -65,3 +70,23 @@ def test_a_maintainer_holding_no_reader_grant_is_refused_a_read_vend(maintained:
 
     assert (refused.status_code, refused.json().get("code")) == (403, PERMISSION_DENIED), refused.text
     assert vendor.calls == []
+
+
+def test_the_maintainer_doors_answer_a_maintainer_and_refuse_a_writer(maintained: tuple[Any, _Vendor]) -> None:
+    catalog, _ = maintained
+    granted = catalog.client.post("/management/v1/table/db$t/access/grant", json={"user": "dex~carol", "relation": "writer"}, headers=catalog.bearer("alice"))
+    assert granted.status_code == 200, granted.text
+    doors = {"maintenance/disarm": None, "maintenance/floor": {"dry_run": True}}
+
+    answered = {
+        (who, door): catalog.client.post(f"/management/v1/table/db$t/{door}", json=body, headers=catalog.bearer(who)).status_code
+        for who in ("bob", "carol")
+        for door, body in doors.items()
+    }
+
+    assert answered == {
+        ("bob", "maintenance/disarm"): 200,
+        ("bob", "maintenance/floor"): 200,
+        ("carol", "maintenance/disarm"): 403,
+        ("carol", "maintenance/floor"): 403,
+    }

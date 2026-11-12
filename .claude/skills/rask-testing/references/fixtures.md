@@ -34,8 +34,9 @@ Every service builds `app` at module import. Pick the fixture by how settings re
    A maintenance pass that rewrites a table asks the catalog's maintain-tier door first ([[LH-219]]), and one that
    purges, releases or sweeps the trash, or repairs grants, asks the catalog's trash and grant doors ([[XC-084]]): give
    it `catalog_url` and answer the doors with respx (`tests/integration/maintenance_vend_doors.py`:
-   `maintain_tier_door` over each table's location from a real catalog, `MAINTAIN_TIER_DOOR` for a door of a test's
-   own; `trash_doors` acting on a control root as the catalog's doors act, its routes named and its end handler
+   `maintain_tier_door` over each table's location from a real catalog, and with `store` the maintainer doors
+   (`maintenance/disarm`, `maintenance/floor`) committing as the catalog does, its routes named `vend` and `maintainer`;
+   `MAINTAIN_TIER_DOOR` for a door of a test's own; `trash_doors` acting on a control root as the catalog's doors act, its routes named and its end handler
    `end_door` reusable; `catalog_doors` forwarding the trash and grant doors to a real catalog app).
 2. `.cache_clear()` on that getter, or the previous test's values survive.
 3. Import the app **inside** the fixture.

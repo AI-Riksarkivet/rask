@@ -236,6 +236,11 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # retention policy that schedules them.
         "maintenance/preview": "can_drop",
         "maintenance/run": "can_drop",
+        # [[LH-575]] the two commits maintenance's passes make, which are the catalog's, since its vend puts nothing of a
+        # table: a disarm removes Lance's commit-path cleanup keys and a floor raise commits a stamp, neither changing a row
+        # or which versions a cleanup may reach. The maintainer rung the sweep holds, which every owner keeps.
+        "maintenance/disarm": "can_maintain",
+        "maintenance/floor": "can_maintain",
         # [[LH-073]] erasure destroys the table's PAST — every ref's rows, the tags pinning the versions
         # that held them, and the history itself. That is a stronger claim than a drop, and `can_drop`
         # is the highest rung there is, so it gates here. The writer rung would let a plain data writer

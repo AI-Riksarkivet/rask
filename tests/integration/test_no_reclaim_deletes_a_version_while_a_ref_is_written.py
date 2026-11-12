@@ -15,9 +15,11 @@ the trash again, so a table dropped since its pass began is not reclaimed.
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import quote
 
 import boto3
@@ -27,7 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from lakehouse import maintenance_due, maintenance_policies, trash
+from lakehouse import history_fences, maintenance_due, maintenance_policies, records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
 from lakehouse.governed.store_credential import S3KeyPair
@@ -138,6 +140,40 @@ def test_no_reclaim_deletes_a_version_while_a_ref_write_holds_the_tables_history
             assert (result.skipped, result.error, result.old_versions_removed) == ("history_fenced", None, 0), result
 
     assert estate.versions() == versions, f"{reclaim} deleted versions while a ref write held the table's history"
+
+
+def _past_the_holds_first_take(estate: _Estate) -> None:
+    """Wait until the store's clock, which judges a hold, passes the end the reclaim's first take of the history had."""
+    key = history_fences.fence_key(estate.table_uuid)
+    first = records.read_json_at(estate.root, estate.key, key).stored
+    assert first is not None, "precondition: the reclaim holds the table's history"
+    ends = max(history_fences.Holder.model_validate(holder).taken_at for holder in first.record["holders"]) + history_fences.HOLD
+    deadline = time.monotonic() + 30
+    while records.read_json_at(estate.root, estate.key, key).at <= ends:
+        assert time.monotonic() < deadline, "the store's clock did not pass the first take's hold"
+        time.sleep(0.2)
+
+
+def test_a_reclaim_that_outlasts_one_hold_refuses_a_tag_on_a_version_it_deletes(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cleanup can run longer than one take of the table's history holds it (a pass may run 1,800 s, a hold lasts 15
+    minutes): its hold is kept for as long as it runs, so a tag asked for once the first take's hold has run out is
+    refused, and no tag names a version the cleanup deletes ([[LH-575]]). The hold is two seconds here."""
+    monkeypatch.setattr(history_fences, "HOLD", timedelta(seconds=2))
+    asked: list[tuple[int, int | None]] = []
+    real_cleanup = lance.LanceDataset.cleanup_old_versions
+
+    def _a_cleanup_past_its_first_hold(ds: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — Lance's own signature
+        _past_the_holds_first_take(estate)
+        answer = estate.client.post(f"/v1/table/{quote(TABLE, safe='$')}/tags/create", json={"tag": "kept", "version": 1})
+        asked.append((answer.status_code, answer.json().get("code")))
+        return real_cleanup(ds, *args, **kwargs)
+
+    monkeypatch.setattr(lance.LanceDataset, "cleanup_old_versions", _a_cleanup_past_its_first_hold)
+
+    result = estate.swept()
+
+    assert (asked, result.error, result.old_versions_removed) == ([(409, 14)], None, 2), result
+    assert "kept" not in lance.dataset(estate.location, storage_options=estate.key.in_clear()).tags.list()
 
 
 def test_a_table_dropped_after_its_pass_read_the_trash_is_not_reclaimed(estate: _Estate) -> None:

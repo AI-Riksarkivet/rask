@@ -40,7 +40,7 @@ from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.core.namespace import registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
-from catalog.services import native, table_claims, table_inputs
+from catalog.services import native, table_inputs
 from lakehouse import base_registry, blobs, clone_sources, control_prefixes, location_claims
 from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
@@ -562,6 +562,8 @@ class RegistrationVerdict(BaseModel):
 class Admitted(BaseModel):
     """What :func:`admit_registered_table` wrote, which the door's undo releases."""
 
+    #: The registered table's uuid, which its data directories are claimed for ([[LH-575]]).
+    uuid: str
     #: ``None`` when the dataset had no bases to record.
     claim: base_registry.BaseClaim | None = None
     #: The data directories claimed for the table ([[LH-252]]).
@@ -653,9 +655,7 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
     return RegistrationVerdict(location=location, entries=entries, sources=clone.sources, holds_dataset=True)
 
 
-def admit_registered_table(
-    ns: LanceNamespace, so: StorageOptions, *, segments: list[str], verdict: RegistrationVerdict, clone_uuid: str, context: RegistrationContext
-) -> Admitted:
+def admit_registered_table(so: StorageOptions, *, segments: list[str], verdict: RegistrationVerdict, clone_uuid: str, context: RegistrationContext) -> Admitted:
     """Write what a judged registration is admitted with: each clone source's tag, the data directories, the record.
 
     The tags first, so the record never names a source whose version nothing keeps; the record last, since it is
@@ -667,12 +667,13 @@ def admit_registered_table(
             data directories.
         ConcurrentModificationError: A reclaim holds a source's history; nothing was written for it.
     """
-    admitted = Admitted()
+    admitted = Admitted(uuid=clone_uuid)
     try:
         for source in verdict.sources:
             _tag(source, clone_location=verdict.location, so=so, context=context)
             admitted.tagged.append(source.location)
-        admitted.directories = claim_registered_directories(ns, context.registry, verdict.entries, context.holder, segments)
+        claimant = location_claims.DirectoryClaimant(uuid=clone_uuid, root=verdict.location, table=context.holder, segments=segments)
+        admitted.directories = claim_registered_directories(context.registry, verdict.entries, claimant)
         admitted.claim = base_registry.claim_bases(context.registry, verdict.location, verdict.entries) if verdict.holds_dataset else None
         if verdict.sources:
             # A clone holds its sources' rows, so an erasure on a source is held until the clone follows it (ADR 0178).
@@ -700,26 +701,27 @@ def release_admitted(admitted: Admitted, *, clone_location: str, so: StorageOpti
     """Undo :func:`admit_registered_table`: the record's entries, the directories' claims, then each source's tag."""
     if admitted.claim is not None:
         base_registry.release_claim(context.registry, admitted.claim)
-    base_registry.release_data_directories(context.registry, admitted.directories, context.holder)
+    base_registry.release_data_directories(context.registry, admitted.directories, uuid=admitted.uuid)
     clone_sources.release_all(admitted.tagged, clone_location=clone_location, storage_options=so)
 
 
 def claim_registered_directories(
-    ns: LanceNamespace, registry: base_registry.BaseRegistry, entries: Sequence[base_registry.RecordedBase], holder: str, segments: list[str]
+    registry: base_registry.BaseRegistry, entries: Sequence[base_registry.RecordedBase], claimant: location_claims.DirectoryClaimant
 ) -> list[str]:
-    """Claim each admitted data directory for ``holder``, refusing one another live table holds ([[LH-252]]).
+    """Claim each admitted data directory for ``claimant``, refusing one another table holds ([[LH-252]]): one that
+    stands, a table the trash keeps for its undrop included, whatever name it is called by ([[LH-575]]).
 
     Raises:
         InvalidInputError: Another table holds one of the directories — a registration declaring it would
             read that table's fragments and be vended GET on them.
     """
-    store = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
     try:
-        return base_registry.claim_data_directories(
-            registry, entries, holder, segments, is_gone=lambda held: table_claims.data_directory_holder_is_gone(ns, store, held)
-        )
+        return base_registry.claim_data_directories(registry, entries, claimant)
     except location_claims.LocationHeldError as held:
-        log.warning("register_refused_held_data_directory", extra={"table": holder, "directory": held.claim.location, "holder": held.claim.table})
+        log.warning(
+            "register_refused_held_data_directory",
+            extra={"table": claimant.table, "directory": held.claim.location, "holder": held.claim.uuid},
+        )
         raise InvalidInputError(
             f"the dataset declares the data directory {held.claim.location!r}, which another table holds; a table's data "
             "directory is its own, so the catalog does not admit a second table reading through it"

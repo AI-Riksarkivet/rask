@@ -649,27 +649,6 @@ def holder_stands(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -
     return decoded_path(str(described.location or "")) == claim.location
 
 
-def data_directory_holder_is_gone(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -> bool:
-    """Whether a data directory's holder no longer exists ([[LH-252]]).
-
-    Unlike a table location, a data directory is never the holder's described location, so the holder
-    is judged by existence alone: a table the namespace still describes, or one the trash holds under its name awaiting
-    undrop (a data directory's claim records no uuid), keeps its directory. Any read that fails answers "not gone", so
-    an outage never frees one.
-    """
-    try:
-        if trash.named(store.control_root, store.storage_options, claim.table):
-            return False
-        try:
-            native.call(ns, "describe_table", DescribeTableRequest(id=claim.segments))
-        except TableNotFoundError:
-            return True
-        return False
-    except Exception as exc:  # noqa: BLE001 — an unreadable holder is a live one
-        log.warning("data_directory_holder_unreadable", extra={"table": claim.table, "location": claim.location, "error": str(exc)[:300]})
-        return False
-
-
 def kept_in_trash(store: ClaimStore, claim: LocationClaim) -> bool:
     """Whether ``claim`` is kept for the trashed table its uuid names, which a recoverable drop left at this location."""
     record = trash.get(store.control_root, store.storage_options, claim.uuid) if claim.uuid is not None else None

@@ -148,12 +148,12 @@ class StoreRead(BaseModel):
     at: datetime
 
 
-def _store_clock(response: Mapping[str, Any]) -> datetime:
+def store_clock(response: Mapping[str, Any]) -> datetime:
     """The ``Date`` an S3 response carries; the local clock, logged, for a store that sends none."""
     header = response.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("date")
     if header:
         return parsedate_to_datetime(header).astimezone(UTC)
-    log.warning("store_answered_no_date", extra={"reason": "a lease is timed on this pod's clock while the store sends no Date"})
+    log.warning("store_answered_no_date", extra={"reason": "this pod's clock stands in for the store's, which sent no Date"})
     return datetime.now(UTC)
 
 
@@ -172,10 +172,10 @@ def read_json_at(root_uri: str, storage_options: StorageOptions, key: str) -> St
             got = object_client(storage_options).get_object(Bucket=bucket, Key=full_key)
         except ClientError as exc:
             if str(exc.response.get("Error", {}).get("Code", "")) in {"NoSuchKey", "404"}:
-                return StoreRead(stored=None, at=_store_clock(exc.response))
+                return StoreRead(stored=None, at=store_clock(exc.response))
             raise
         body = json.loads(got["Body"].read().decode("utf-8"))
-        return StoreRead(stored=Stored(record=body, etag=str(got["ETag"]).strip('"')), at=_store_clock(got))
+        return StoreRead(stored=Stored(record=body, etag=str(got["ETag"]).strip('"')), at=store_clock(got))
 
     fs, path = pafs.FileSystem.from_uri(root_uri)
     if not isinstance(fs, pafs.LocalFileSystem):

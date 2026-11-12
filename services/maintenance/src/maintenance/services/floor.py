@@ -1,6 +1,6 @@
 """Raising a dataset's LISTING FLOOR so Lance can reclaim residue it has gone blind to ([[LH-094]]).
 
-**This module deletes nothing, and that is the whole design.** It writes ONE metadata-only commit to a
+**This module deletes nothing, and that is the whole design.** It has the catalog write ONE metadata-only commit to a
 dataset whose orphans sit above its listing floor, which moves the floor above them; the DELETE is then
 `cleanup_old_versions`'s on the table's next pass, under Lance's own rule. So the orphan half of
 reclamation stays what `purge.py` says it is — report-only, never a path this service names and removes.
@@ -44,34 +44,32 @@ So a table carrying :data:`FLOOR_KEY` is raised again only once its floor has mo
 has run beneath the last raise, and a file stranded since earns a raise of its own (measured 2026-11-10 on pylance
 13.0.0: a second raise over a moved floor, then one cleanup, removed the transaction file stranded after the first).
 
-THE COMMIT IS SIGNED BY A VENDED, TABLE-SCOPED CREDENTIAL, and a catalog denial REFUSES the raise.
-A config commit on a table the catalog refused, signed by whatever opened the dataset, is signed by the
-deployment's ambient key: the bypass `credentials.MaintenanceDenied` exists to stop, and version expiry
-refuses for the same reason. `write_options_for` returns the scoped credential the door vends and nothing else
-([[LH-219]]): it raises `MaintenanceDenied` on a 401/403 and, as its `VendingNotDirect`, where the deployment vends no
-direct credential, `TableNotGoverned` on a 404 naming no table and `VendUndecided` when the door cannot be asked or
-decides nothing, and each refuses the raise. It is asked only about the table the catalog's ``__manifest`` names the
-dataset as: a dataset no row names is refused unvended and unwritten ([[LH-520]]).
+THE CATALOG MAKES THE COMMIT, and a refusal there REFUSES the raise ([[LH-575]]). Maintenance's vend puts nothing
+of a table, so the raise is asked at the catalog's maintainer door (`credentials.raise_floor`, `POST
+/management/v1/table/{id}/maintenance/floor`), which stamps :data:`FLOOR_KEY` on the clock that times the raise's own
+manifest and records this identity as the version's author (ADR 0187). The door raises `MaintenanceDenied` on a 401,
+403 or 409 and, as its `VendingNotDirect`, where no catalog door is configured, `TableNotGoverned` on a 404 naming no
+table and `VendUndecided` when it cannot be asked or decides nothing, and each refuses the raise. It is asked only about
+the table the catalog's ``__manifest`` names the dataset as: a dataset no row names is refused unasked and unwritten
+([[LH-520]]).
 
-THE LINEAGE PLANE ALREADY ANTICIPATES THIS SHAPE. Lance records the operation as `UpdateConfig`, which
-`lineage.core.reconcile.MAINTENANCE_OPERATIONS` lists — so lineage's reconcile neither reports the version as a
-provenance hole nor back-fills it with a run that never existed. Verified against pylance 11.0.0:
-`read_version_operations` answers `'UpdateConfig'` for a config commit.
+NO FEED ANNOUNCES IT. The raise changes no row, so the catalog announces nothing for it, and its commit reconciler, which
+counts a version committed past every door, confirms this one by the author its door recorded.
 """
 
 from __future__ import annotations
 
 import logging
-import time
 from typing import TYPE_CHECKING
 
 import lance
 from pydantic import BaseModel
 
 from lakehouse.lancekit.versions import committed_at
+from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import shared_lance_session
-from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, write_options_for
+from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, raise_floor
 from maintenance.services.orphans import OrphanFile, listed_at_or_below
 
 
@@ -79,12 +77,6 @@ if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
 
 log = logging.getLogger(__name__)
-
-
-#: The config key the commit writes. Namespaced, and carrying the epoch it was raised at, so an
-#: operator reading a dataset's config can tell this commit apart from a real one without the register. To the
-#: fraction, as the floor is: a stamp cut to its second could read as passed by a manifest written earlier in it.
-FLOOR_KEY = "rask.maintenance.floor_raised_at"
 
 
 class FloorRaise(BaseModel):
@@ -170,8 +162,8 @@ def raise_stands(dataset: lance.LanceDataset) -> bool:
 
 
 def raise_listing_floor(uri: str, *, table: str, stranded: list[OrphanFile], settings: MaintenanceSettings) -> FloorRaise:
-    """Write one metadata-only commit to the table at ``uri`` (the table ``__manifest`` names ``table``), whose ``stranded``
-    files lie above its listing floor, so its next pass can reclaim them; or why not.
+    """Have the catalog write one metadata-only commit to the table at ``uri`` (the table ``__manifest`` names ``table``),
+    whose ``stranded`` files lie above its listing floor, so its next pass can reclaim them; or why not.
 
     Its table's own orphan check calls it, on that check's findings alone, after the guards the table's pass applies
     (the claim records the task's uuid, no trash record keeps the table, the bucket is governed, a ``__manifest`` row
@@ -206,23 +198,10 @@ def raise_listing_floor(uri: str, *, table: str, stranded: list[OrphanFile], set
         return outcome.model_copy(update={"refused": beneath})
     if all(listed_at_or_below(orphan.mtime_epoch, reading.floor) for orphan in stranded):
         return outcome.model_copy(update={"refused": "floor already covers these orphans"})
-    # THE CREDENTIAL IS RESOLVED BEFORE THE DRY-RUN BRANCH, so a preview reports the denial it
-    # would hit rather than a plan it could never carry out. A dry run that lists a table the
-    # catalog will refuse is the preview telling an operator the opposite of what happens.
+    # A DRY RUN IS ASKED AT THE SAME DOOR, judged as the raise is, so a preview reports the refusal it would meet rather
+    # than a plan it could never carry out.
     try:
-        write_options = write_options_for(uri, settings, table_id=table)
+        raised = raise_floor(table, settings, dry_run=settings.floor_raise_dry_run)
     except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
         return outcome.model_copy(update={"refused": str(exc)})
-    if settings.floor_raise_dry_run:
-        return outcome
-    try:
-        # THE SHARED SESSION, like every other dataset open in this service. This pod runs against
-        # a 512Mi limit it has already been OOMKilled against, and a store rebuild strands datasets
-        # in bulk — a per-dataset session here is the shape that turns a recovery into an eviction.
-        written = lance.dataset(uri, storage_options=write_options.in_clear(), session=shared_lance_session())
-        written.update_config({FLOOR_KEY: str(time.time())})
-        # The handle the commit moved: measured on pylance 13.0.0, `update_config` leaves it at the version it made.
-        outcome.version = written.version
-    except Exception as exc:  # noqa: BLE001 — a failed commit refuses this raise, and the check holds its next at the floor
-        return outcome.model_copy(update={"refused": f"commit failed: {exc}"})
-    return outcome
+    return outcome.model_copy(update={"version": raised.version})

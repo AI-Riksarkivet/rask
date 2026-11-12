@@ -54,6 +54,7 @@ from lance.fragment import write_fragments
 from lance.namespace import DirectoryNamespace
 from lance_namespace import DescribeTableRequest, DescribeTableResponse, InternalError, PermissionDeniedError
 
+from lakehouse.listing_floor import FLOOR_KEY
 from tests.integration.lineage_app import live_catalog, live_lineage, serve
 from tests.loopback import free_port
 
@@ -341,6 +342,17 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                     ("db$t", "delete", "3", author),
                     ("db$t", "insert", "5", author),
                 ]
+
+                # Config commits ([[LH-575]]): a floor raise through its door, its author recorded and announced on no feed;
+                # a floor stamp set straight at the store, past every door, counted; and a disarm, the commit every door
+                # makes before its own, neither.
+                raised = catalog.post("/management/v1/table/db$t/maintenance/floor", json={})
+                assert (raised.status_code, raised.json()["version"] is not None) == (200, True), raised.text
+                lance.dataset(location).update_config({FLOOR_KEY: "1"})
+                lance.dataset(location).delete_config_keys(["lance.auto_cleanup.interval"])
+                configs = catalog.post(f"/{_TICK}")
+                assert (configs.json()["reannounced"], configs.json()["unauthored"]) == (0, 1), configs.json()
+                assert len(_commits(_follow(lineage), "db$t")) == 4
 
                 # A dataset written outside the catalog, registered, then written through the catalog while the gate is
                 # down again: only that last write's announcement is the catalog's, and lost.

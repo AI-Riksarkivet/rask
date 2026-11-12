@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterator
 from datetime import timedelta
 from typing import Any, override
 from unittest.mock import MagicMock
+from uuid import uuid4 as _uuid4
 
 import boto3
 import httpx
@@ -42,6 +43,7 @@ from catalog.services import native, warehouses
 from lakehouse import base_registry, clone_endings, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
 from tests.integration.openfga_grants import Options, TupleStore, act_as
@@ -464,7 +466,7 @@ def test_a_purging_cascade_whose_clone_ending_cannot_be_filed_deletes_nothing(te
     real_directories = data_directories.delete_table_directories
 
     def _directories(*args: Any, **kwargs: Any) -> object:  # noqa: ANN401 — the deleter's own arguments, passed on
-        reached.append(str(kwargs.get("table")))
+        reached.append(str(kwargs.get("uuid")))
         return real_directories(*args, **kwargs)
 
     def _a_store_that_will_not_file(*_args: object, **_kwargs: object) -> object:
@@ -475,8 +477,9 @@ def test_a_purging_cascade_whose_clone_ending_cannot_be_filed_deletes_nothing(te
 
     ended = tenant.delete_warehouse()
 
-    described = tenant.client.post("/v1/table/bronze$silver/describe", json={}).status_code
-    assert (ended.status_code, ended.json().get("code"), described, "bronze$silver" in reached) == (503, 17, 200, False), ended.text
+    described = tenant.client.post("/v1/table/bronze$silver/describe", json={})
+    silver = described.json().get("properties", {}).get(UUID_PROPERTY)
+    assert (ended.status_code, ended.json().get("code"), described.status_code, silver in reached) == (503, 17, 200, False), ended.text
 
 
 def _a_store_that_will_not_delete_directories(tenant: _Tenant) -> None:
@@ -596,10 +599,10 @@ def test_a_cascade_releases_only_the_claim_of_the_table_it_identified(tenant: _T
     real_release = base_registry.release_clone_sources
     taken: list[str] = []
 
-    def _release_then_the_same_name_takes_the_location(registry: base_registry.BaseRegistry, at: str, *, holder: str) -> list[str]:
-        released = real_release(registry, at, holder=holder)
-        taken.append(str(uuid.uuid4()))
-        location_claims.take(claims, at, holder, ["bronze", "t"], is_gone=lambda _claim: True, uuid=taken[0])
+    def _release_then_the_same_name_takes_the_location(registry: base_registry.BaseRegistry, at: str, *, uuid: str | None) -> list[str]:
+        released = real_release(registry, at, uuid=uuid)
+        taken.append(str(_uuid4()))
+        location_claims.take(claims, at, "bronze$t", ["bronze", "t"], is_gone=lambda _claim: True, uuid=taken[0])
         return released
 
     tenant.monkeypatch.setattr(base_registry, "release_clone_sources", _release_then_the_same_name_takes_the_location)

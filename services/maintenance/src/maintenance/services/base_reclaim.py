@@ -18,6 +18,12 @@ plain base (:mod:`lakehouse.data_directories` holds the rule). A dataset-root ba
 clone's source, a branch's parent) and is never listed here, and a record naming a directory whose claim the table does
 not hold, such as an approved base itself, which every table naming it once shared, is never listed either.
 
+A TABLE THAT MANAGES ITS BLOBS IS LEFT WHOLE ([[LH-575]]). Under :data:`lakehouse.features.FLAG_MANAGED_BLOBS` a live
+row's blob descriptor addresses its object directly, under ``_blobs/`` or at a sidecar path whose data file a rewrite
+removed, and cleanup keeps it while any protected snapshot's rows reference it
+(`lance_docs/lance/format/table/blob.md` § Garbage Collection), so a file no fragment names may still be live. A table
+whose main or any branch carries the flag has nothing reclaimed here, whatever flags the pass otherwise admits.
+
 A DELETED ROW IS REPORTED, NOT RECLAIMED (owner, 2026-10-24). Its fragment stays referenced behind a deletion vector and
 only a compaction rewrites it; pylance 13.0.0's ``CompactionOptions`` carries no ``target_bases``, so that rewrite would
 move the table's rows off the base into its root.
@@ -33,6 +39,7 @@ from typing import Final
 import lance
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse import features
 from lakehouse.base_refs import decoded_path, store_of
 from lakehouse.base_registry import RecordedBase
 from lakehouse.data_directories import directory_uri
@@ -127,7 +134,8 @@ def unreferenced(
     """The objects in ``directories`` no retained version references and older than :data:`UNVERIFIED_AGE`, by directory path.
 
     The listing comes first and the manifests only for what it leaves: a directory holding nothing past the age costs one
-    listing, and one whose old files the heads still reference costs the heads' manifests and no more.
+    listing, and one whose old files the heads still reference costs the heads' manifests and no more. Nothing is
+    unreferenced in a table one of whose heads manages its blobs (:func:`lakehouse.features.manages_blobs`).
     """
     cutoff = now - UNVERIFIED_AGE
     listed = {directory.path: list_under(directory_uri(directory), storage_options) for directory in directories}
@@ -135,7 +143,11 @@ def unreferenced(
     prefixes = {directory.path: _listed_prefix(directory) for directory in directories}
     if not any(candidates.values()):
         return {}
-    referenced = {file for head in _heads(ds) for file in _referenced_by(head, directories)}
+    heads = list(_heads(ds))
+    if any(features.manages_blobs(*features.manifest_feature_flags(head)) for head in heads):
+        log.warning("maintenance_base_reclaim_refused", extra={"uri": ds.uri, "reason": "the table manages its blobs, which a fragment's files do not name"})
+        return {}
+    referenced = {file for head in heads for file in _referenced_by(head, directories)}
     if not (candidates := _unheld(candidates, prefixes, referenced)):
         return {}
     referenced |= {file for _, version in every_retained_version(ds) for file in _referenced_by(version, directories)}

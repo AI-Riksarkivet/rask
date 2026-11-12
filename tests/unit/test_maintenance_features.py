@@ -93,6 +93,23 @@ def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Pat
     assert "mixed" in refusal.lower(), f"the refusal should name the feature upstream calls it: {refusal}"
 
 
+@pytest.mark.parametrize(
+    ("reader", "writer", "manages"),
+    [
+        pytest.param(1 << 14, 0, True, id="the-reader-bit"),
+        pytest.param(0, 1 << 14, True, id="the-writer-bit-of-a-half-set-manifest"),
+        pytest.param((1 << 13) | (1 << 15), (1 << 13) | (1 << 15), False, id="the-bits-beside-it"),
+    ],
+)
+def test_a_manifest_manages_its_blobs_by_either_bit_of_its_flag(reader: int, writer: int, manages: bool) -> None:
+    """Committing ``lance.blob.managed = "true"`` sets ``FLAG_MANAGED_BLOBS = 16384`` (``1 << 14``) in both fields, and a
+    manifest setting one alone is invalid (`lance_docs/lance/format/table/blob.md` § Capability and Compatibility), so
+    either bit makes base reclaim, which judges a file live only by the fragments that name it, delete nothing
+    ([[LH-575]]). No pylance this estate runs writes the flag, and 13.0.0 refuses to open a table carrying its reader bit,
+    so the judgement is pinned here rather than on a table."""
+    assert features.manages_blobs(reader, writer) is manages
+
+
 # --------------------------------------------------------------------------- #
 # flag 16 — base_paths. Genuinely unsafe in compaction today.
 # --------------------------------------------------------------------------- #

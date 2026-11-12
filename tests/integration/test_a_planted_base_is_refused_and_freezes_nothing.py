@@ -36,6 +36,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4 as _uuid4
 
 import boto3
 import httpx
@@ -748,10 +749,10 @@ def test_a_destroying_cascade_releases_only_the_claim_of_the_table_it_identified
     real_forget = base_registry.forget_base_record
     taken: list[str] = []
 
-    def _forget_then_the_same_name_takes_the_location(registry: base_registry.BaseRegistry, at: str, *, table: str) -> bool:
-        forgotten = real_forget(registry, at, table=table)
-        taken.append(str(uuid.uuid4()))
-        location_claims.take(_claims(estate), at, table, ["scratch", "t"], is_gone=lambda _claim: True, uuid=taken[0])
+    def _forget_then_the_same_name_takes_the_location(registry: base_registry.BaseRegistry, at: str, *, uuid: str | None) -> bool:
+        forgotten = real_forget(registry, at, uuid=uuid)
+        taken.append(str(_uuid4()))
+        location_claims.take(_claims(estate), at, "scratch$t", ["scratch", "t"], is_gone=lambda _claim: True, uuid=taken[0])
         return forgotten
 
     monkeypatch.setattr(base_registry, "forget_base_record", _forget_then_the_same_name_takes_the_location)
@@ -1028,12 +1029,16 @@ def test_a_trashed_clone_whose_end_cannot_delete_its_tag_keeps_its_location(esta
     assert held is not None and held.table == "db$silver", "the clone's location was freed with its tag still standing"
 
 
+#: The uuid of a table that held the clone's location before the clone was registered there.
+_A_FORMER_HOLDERS_UUID = "5f0c4a3e-2b7d-4c1e-9a6f-0d8b7e2c1a90"
+
+
 def test_a_late_end_of_a_former_clone_keeps_the_tag_of_the_clone_there_now(estate: _Estate) -> None:
     """A clone's tag is named for its location, so a clone registered there since holds a tag of the same name: an end of
     the table that held the location before, landing late, leaves that tag while the location's claim names the clone."""
     bronze, clone = _registered_clone(estate)
 
-    released = base_registry.release_clone_sources(estate.registry, clone, holder="db$gone")
+    released = base_registry.release_clone_sources(estate.registry, clone, uuid=_A_FORMER_HOLDERS_UUID)
 
     assert (released, clone_sources.tag_of(clone) in estate.open(bronze).tags.list()) == ([], True)
 
@@ -1044,7 +1049,7 @@ def test_a_late_end_of_a_former_clone_keeps_the_record_of_the_clone_there_now(es
     names the tags its own end deletes."""
     _, clone = _registered_clone(estate)
 
-    forgotten = base_registry.forget_base_record(estate.registry, clone, table="db$gone")
+    forgotten = base_registry.forget_base_record(estate.registry, clone, uuid=_A_FORMER_HOLDERS_UUID)
 
     assert (forgotten, base_registry.read_base_record(estate.registry, clone) is not None) == (False, True)
 

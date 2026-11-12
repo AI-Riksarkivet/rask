@@ -17,7 +17,10 @@ walk that finds no verb fails collection (`empty_parameter_set_mark` in the root
 `/maintenance/` specifically, rather than every table suffix, because this sub-path is where the
 catalog's non-spec composite verbs live. They share one property that makes the rule stateable: each
 either destroys version history, rewrites fragments, or replaces an index, so `can_drop` is the floor
-for all of them and a cheaper answer is always wrong.
+for all of them and a cheaper answer is always wrong. The two maintainer doors are the stated exception
+(ADR 0204, [[LH-575]]): a disarm removes the keys that would let a commit delete versions, and a floor raise
+commits a stamp that changes no row, so they sit at the maintainer rung the sweep holds, and every verb added
+next still meets the owner bar.
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ from catalog.api.fga_deps import _action_relation
 
 
 OWNER_RELATION = "can_drop"
+#: The maintainer doors: neither destroys history, rewrites a fragment nor replaces an index.
+MAINTAINER_DOORS = {"maintenance/disarm": "can_maintain", "maintenance/floor": "can_maintain"}
 
 
 def _maintenance_suffixes() -> list[str]:
@@ -39,6 +44,6 @@ def _maintenance_suffixes() -> list[str]:
 
 
 @pytest.mark.parametrize("suffix", _maintenance_suffixes())
-def test_a_maintenance_verb_clears_the_owner_bar(suffix: str) -> None:
+def test_a_maintenance_verb_clears_the_owner_bar_and_a_maintainer_door_the_maintainer_rung(suffix: str) -> None:
     """Asserted through the resolver, not the dict: the mapping is only load-bearing if it is consulted."""
-    assert _action_relation("table", suffix) == OWNER_RELATION
+    assert _action_relation("table", suffix) == MAINTAINER_DOORS.get(suffix, OWNER_RELATION)

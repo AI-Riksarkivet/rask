@@ -47,9 +47,9 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.core import lineage_emit, run_context
 from catalog.core.config import Settings
-from catalog.services import dataplane, managed_versions, provenance_namespace
+from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
 from catalog.services.publication import PUBLISHED_TAG
-from lakehouse import commit_records
+from lakehouse import auto_cleanup, commit_records
 from lakehouse.features import flags_from_open_error
 from lakehouse.governed import fga
 from lakehouse.lancekit.filters import sql_literal
@@ -61,9 +61,11 @@ from lakehouse.storage_options import StorageOptions
 log = logging.getLogger(__name__)
 
 #: Lance operations a version can carry that no door announces: a branch's first version (Lance's own ``create_branch``
-#: commits a ``Clone``), and a commit changing only the manifest's config (the doors' and the sweep's disarm of
-#: commit-path cleanup, [[LH-245]]).
+#: commits a ``Clone``). A disarm of commit-path cleanup is the other version no door announces (:func:`_only_disarms`).
 _UNANNOUNCED: Final = frozenset({"Clone"})
+#: The operations a door stamps on a commit the feed announces nothing for: the pass asks for its recorded author, as for
+#: any door's commit (ADR 0187), and announces none ([[LH-575]]).
+_AUTHORED_UNANNOUNCED: Final = frozenset({maintenance_commits.RAISE_LISTING_FLOOR})
 
 
 class Commit(BaseModel):
@@ -95,7 +97,7 @@ class RefScan(BaseModel):
     branch_identifier: str | None
     #: The versions to announce, oldest first.
     missing: tuple[Commit, ...] = ()
-    #: Versions of an operation the doors announce for which the catalog recorded no author: committed past every door, so
+    #: Versions of an operation a door commits for which the catalog recorded no author: committed past every door, so
     #: unannounceable.
     unauthored: tuple[int, ...] = ()
     #: The commits whose recorded author is no longer needed: their versions are on the feed, past the horizon, or counted
@@ -260,6 +262,8 @@ def scan_ref(
     whose transaction cannot be read, or whose operation no door commits. ``unannounced`` answers, for an operation,
     whether the emitter leaves it unannounced on this table (a row write in the provenance namespace,
     `catalog.services.provenance_namespace`), which the feed then holds no row for and the catalog keeps no author for.
+    A version of an operation a door stamps and the feed announces nothing for (:data:`_AUTHORED_UNANNOUNCED`, a floor
+    raise) is confirmed once its author is recorded, and counted otherwise, never announced.
 
     Raises:
         ReconcileReadError: A retained version, or its commit time, could not be read; the mark stops before it.
@@ -288,6 +292,12 @@ def scan_ref(
             commit = None
         if commit is None or unannounced(commit.operation):
             pass
+        elif commit.operation in _AUTHORED_UNANNOUNCED:
+            record = record_of(commit.transaction_uuid, version, key)
+            if _signed_for(record, ref_location, so, version) is None and authenticates:
+                unauthored.append(version)
+            if record is not None:
+                forget.append(commit)
         elif on_feed:
             forget.append(commit)
         else:
@@ -368,7 +378,7 @@ def _commit_at(handle: lance.LanceDataset, version: int, *, branch: str | None, 
         raise UnidentifiedCommitError(f"version {version} names no transaction")
     properties = dict(transaction.transaction_properties or {})
     name = type(transaction.operation).__name__
-    if name in _UNANNOUNCED or _only_changes_config(transaction.operation):
+    if name in _UNANNOUNCED or _only_disarms(transaction.operation):
         return None
     operation = properties.get(run_context.OPERATION_PROPERTY) or _operation_of(name, version=version, branch=branch)
     if operation is None:
@@ -402,11 +412,22 @@ def _operation_of(name: str, *, version: int, branch: str | None) -> str | None:
     return managed_versions.LINEAGE_OPERATION.get(name)
 
 
-def _only_changes_config(operation: object) -> bool:
-    """Whether an ``UpdateConfig`` changes the manifest's config alone: a disarm of commit-path cleanup, announced by no door."""
+def _only_disarms(operation: object) -> bool:
+    """Whether a version disarms commit-path cleanup and does nothing else: an ``UpdateConfig`` removing
+    ``lance.auto_cleanup.*`` keys alone (:func:`lakehouse.auto_cleanup.disarm`), which every door commits before its own
+    and no feed announces ([[LH-245]]). It deletes nothing and reaches no row, so it needs no author. Any other config
+    commit is a door's, its author recorded, or was made past every door ([[LH-575]]). Measured on pylance 13.0.0:
+    ``delete_config_keys`` records each key in ``config_updates`` mapped to ``None``, ``replace`` false, and the other three
+    maps empty."""
     if type(operation).__name__ != "UpdateConfig":
         return False
-    return not any(getattr(operation, field, None) for field in ("table_metadata_updates", "schema_metadata_updates", "field_metadata_updates"))
+    if any(getattr(operation, field, None) for field in ("table_metadata_updates", "schema_metadata_updates", "field_metadata_updates")):
+        return False
+    config = getattr(operation, "config_updates", None)
+    updates = getattr(config, "updates", None)
+    if not updates or getattr(config, "replace", False):
+        return False
+    return all(value is None and str(key).startswith(auto_cleanup.AUTO_CLEANUP_PREFIX) for key, value in dict(updates).items())
 
 
 def grace_bound(now: datetime, grace_seconds: int) -> datetime:

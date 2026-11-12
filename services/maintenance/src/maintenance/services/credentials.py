@@ -396,6 +396,21 @@ class _TrashNoted(BaseModel):
     attempts: int | None = None
 
 
+class Disarmed(BaseModel):
+    """What the catalog's disarm of a ref's commit-path cleanup did: the ref's version after it, and the keys it removed."""
+
+    version: int
+    disarmed: list[str] = Field(default_factory=list)
+
+
+class FloorRaised(BaseModel):
+    """What the catalog's raise of a table's listing floor committed: its version and the epoch its stamp names, neither
+    on a dry run."""
+
+    version: int | None = None
+    raised_at: float | None = None
+
+
 def reclaim_options_for(kind: TrashKind, uuid: str, settings: MaintenanceSettings) -> StorageOptions:
     """The session that deletes the bytes of the trashed table ``uuid`` names: the catalog's vend for that record, and
     nothing else ([[XC-084]]). It lists and deletes at the table's location, in both spellings, and in its own data
@@ -453,6 +468,36 @@ def note_trash_refusal(kind: TrashKind, uuid: str, settings: MaintenanceSettings
     """
     door = _trash_door(kind, uuid, settings, act="/refusals", answer="a note of its refusal", body={"reason": reason})
     return _parsed(_answered(settings, door), _TrashNoted, asked_for=door.asked_for).attempts
+
+
+def disarm_cleanup(table_id: str, settings: MaintenanceSettings, *, branch: str | None) -> Disarmed:
+    """Have the catalog remove every ``lance.auto_cleanup.*`` key from the ref ``branch`` (``None`` = main) of ``table_id``,
+    under its own credential: maintenance's vend puts nothing of a table ([[LH-575]]).
+
+    Raises:
+        VendingNotDirect: No catalog door is configured.
+        MaintenanceDenied: The door refused: this identity holds no can_maintain on the table (403), or the table changed
+            since the door resolved it (409).
+        TableNotGoverned: The catalog names the table absent.
+        VendUndecided: The door could not be asked or decided nothing.
+    """
+    door = _maintainer_door(table_id, settings, act="disarm", answer="a disarm of its commit-path cleanup", params={"branch": branch} if branch else {})
+    return _parsed(_answered(settings, door), Disarmed, asked_for=door.asked_for)
+
+
+def raise_floor(table_id: str, settings: MaintenanceSettings, *, dry_run: bool) -> FloorRaised:
+    """Have the catalog commit the listing-floor stamp on ``table_id``'s main, recording this identity as the version's
+    author; a ``dry_run`` is judged as the raise is and commits nothing ([[LH-094]], [[LH-575]]).
+
+    Raises:
+        VendingNotDirect: No catalog door is configured.
+        MaintenanceDenied: The door refused: this identity holds no can_maintain on the table (403), or the table changed
+            since the door resolved it (409).
+        TableNotGoverned: The catalog names the table absent.
+        VendUndecided: The door could not be asked or decided nothing.
+    """
+    door = _maintainer_door(table_id, settings, act="floor", answer="a raise of its listing floor", body={"dry_run": dry_run})
+    return _parsed(_answered(settings, door), FloorRaised, asked_for=door.asked_for)
 
 
 class CloneEndingListed(BaseModel):
@@ -549,13 +594,28 @@ def _maintain_door(table_id: str, settings: MaintenanceSettings) -> Door:
     ``params``, NOT a body: the door declares ``tier: Annotated[Tier, Query()] = "read"``, and FastAPI ignores an unknown
     body on a query parameter, so a body-borne tier came back READ with a 200 and the write then failed at the object
     store as ``403 AccessDenied`` on a PUT (measured in-cluster 2026-09-03 on the ingest client). ``maintain`` is the
-    tier ``can_vend_maintain`` opens to this identity alone ([[LH-202]], [[LH-473]]): a disarm commits a version and a
-    reclaim deletes versions, and the writer tier reaches ``data/`` only.
+    tier ``can_vend_maintain`` opens to this identity alone ([[LH-202]], [[LH-473]]): a reclaim deletes versions, and the
+    writer tier deletes nothing.
     """
     return Door(
         path=f"/management/v1/table/{table_id}/credentials",
         params={"tier": "maintain"},
         answer="a write credential",
+        asked_for=table_id,
+        denial=denial_remedy(asked_for=table_id, identity=settings.catalog_service_identity),
+    )
+
+
+def _maintainer_door(
+    table_id: str, settings: MaintenanceSettings, *, act: str, answer: str, params: dict[str, str] | None = None, body: dict[str, object] | None = None
+) -> Door:
+    """The maintainer door ``act`` names on ``table_id`` (``/management/v1/table/{id}/maintenance/<act>``), asked at
+    ``can_maintain``."""
+    return Door(
+        path=f"/management/v1/table/{table_id}/maintenance/{act}",
+        params=params or {},
+        body=body,
+        answer=answer,
         asked_for=table_id,
         denial=denial_remedy(asked_for=table_id, identity=settings.catalog_service_identity),
     )

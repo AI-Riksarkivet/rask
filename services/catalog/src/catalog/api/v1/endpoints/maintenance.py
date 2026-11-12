@@ -10,6 +10,10 @@ and still time-travelled), and an answer about one ref is never reported as anot
 ``GET /management/v1/maintenance/due`` lists the tables a compaction or an index optimize is due on, as the
 maintenance sweep wrote them (ADR 0162), to the callers that may maintain each. A bring-your-own job pulls it,
 rewrites on its own compute, and commits through ``version/create``, which judges the result.
+
+``maintenance/disarm`` and ``maintenance/floor`` make the two commits maintenance's passes need, under the catalog's own
+credential, since its vend puts nothing of a table ([[LH-575]], :mod:`catalog.services.maintenance_commits`). Both sit at
+the maintainer rung (``can_maintain``), which the maintenance identity holds and every owner keeps.
 """
 
 from __future__ import annotations
@@ -23,11 +27,11 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api import fga_deps
+from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
-from catalog.schemas import DueTable, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
-from catalog.services import maintenance, table_claims
+from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
+from catalog.services import maintenance, maintenance_commits, table_claims
 from lakehouse import maintenance_due
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryWork
@@ -103,6 +107,37 @@ async def run_maintenance(
             return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch)
 
     return GcRunResult(**await run_in_threadpool(_reclaim))
+
+
+@table_router.post("/{id}/maintenance/disarm")
+async def disarm_commit_path_cleanup(
+    id: str,
+    table: DoorTableDep,
+    so: StorageOptionsDep,
+    branch: Annotated[str | None, Query(description="The ref to disarm. Omit for main.")] = None,
+) -> CleanupDisarmed:
+    """Remove every ``lance.auto_cleanup.*`` key from the ref, so no commit on it deletes versions inside itself ([[LH-245]]).
+
+    Lance runs version cleanup inside a commit whose manifest carries those keys, past every hold and with nothing
+    recording it; every door disarms its ref before it commits, and this is the backstop maintenance asks for a table no
+    door commits on. A config-only commit, made only when a key is set; the answer names the keys it removed."""
+    version, disarmed = await run_in_threadpool(partial(maintenance_commits.disarm, table, so, branch=branch))
+    return CleanupDisarmed(version=version, disarmed=disarmed)
+
+
+@table_router.post("/{id}/maintenance/floor")
+async def raise_listing_floor(id: str, body: FloorRaiseRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken) -> FloorRaised:
+    """Commit the listing-floor stamp ``rask.maintenance.floor_raised_at`` on main: a version that changes no row, so the
+    table's next cleanup can drop the manifests beneath it and with them the floor Lance lists its transaction and
+    deletion files above ([[LH-094]]).
+
+    The catalog stamps it on its own clock and records the caller as the version's author (ADR 0187). A ``dry_run`` is
+    judged as the raise is, the caller's rung and the table's name, and commits nothing."""
+    if body.dry_run:
+        return FloorRaised()
+    properties = lineage_deps.door_stamp(token, maintenance_commits.RAISE_LISTING_FLOOR)
+    version, raised_at = await run_in_threadpool(partial(maintenance_commits.raise_listing_floor, table, so, transaction_properties=properties))
+    return FloorRaised(version=version, raised_at=raised_at)
 
 
 @due_router.get("/due")

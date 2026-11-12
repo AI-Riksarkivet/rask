@@ -319,6 +319,10 @@ async def create_governed_table(
     # so granting the caller `owner` on either would seize it (audit: CRITICAL) — the existing owner (or the
     # /declare-r of a declared-only table) keeps ownership. Skipping the seed also
     # skips the compensation (there is nothing this request wrote to compensate).
+    # The table's grants are held by the uuid its location's claim records: the one this create minted, or the kept
+    # table's own under ExistOk or an Overwrite (ADR 0173 §2, [[LH-524]]).
+    table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), response.location or "", segments)
+
     async def _undo_create() -> None:
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
         # The bytes are gone with the table, so its base record goes too: a record that outlives the
@@ -326,9 +330,9 @@ async def create_governed_table(
         # directories go before it ([[LH-286]]), and its location's claim goes with it.
         if response.location:
             await run_in_threadpool(
-                partial(data_directories.end_base_record, registry, response.location, table=table_id, storage_options=settings.storage_options())
+                partial(data_directories.end_base_record, registry, response.location, uuid=table_uuid, storage_options=settings.storage_options())
             )
-            await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), response.location, table_id)
+            await run_in_threadpool(partial(location_claims.release, table_claims.claim_store(settings), response.location, table_id, uuid=table_uuid))
 
     # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
     # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists
@@ -350,9 +354,6 @@ async def create_governed_table(
     # [[LH-586]]): one whose edge a rename moved ahead of its name keeps the edge where the rename put it.
     # Compensation undoes what THIS request created, so only a new table's seed carries an `undo`.
     seeding_a_new_table = not pre_existed and not existok_kept_existing
-    # The table's grants are held by the uuid its location's claim records: the one this create minted, or the kept
-    # table's own under ExistOk or an Overwrite (ADR 0173 §2, [[LH-524]]).
-    table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), response.location or "", segments)
     if seeding_a_new_table:
         await fga_deps.seed_ownership_or_compensate(
             client,

@@ -59,10 +59,10 @@ def _actions(policy: dict[str, object], sid: str) -> list[str]:
 EVALUATED_PREFIX = "3c099c25_acme-silver"
 
 
-def _may_put(policy: dict[str, object], key: str) -> bool:
+def _may_delete(policy: dict[str, object], key: str) -> bool:
     """Evaluated by moto's IAM policy engine, so the answer is IAM's wildcard semantics rather than a
     string comparison this file would have to get right itself."""
-    verdict = IAMPolicy(json.dumps(policy)).is_action_permitted("s3:PutObject", f"arn:aws:s3:::{BUCKET}/{EVALUATED_PREFIX}/{key}")
+    verdict = IAMPolicy(json.dumps(policy)).is_action_permitted("s3:DeleteObject", f"arn:aws:s3:::{BUCKET}/{EVALUATED_PREFIX}/{key}")
     return verdict == PermissionResult.PERMITTED
 
 
@@ -76,12 +76,13 @@ def _may_put(policy: dict[str, object], key: str) -> bool:
         pytest.param("tree/a/b/_versions/1.manifest", False, id="nested-branch"),
     ],
 )
-def test_a_branch_MAINTAIN_may_write_only_that_branchs_own_files(key: str, allowed: bool) -> None:
-    """The maintain tier names the branch's file directories; the write tier's `data/`-only grant is
-    pinned in `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py` ([[LH-202]])."""
+def test_a_branch_MAINTAIN_may_delete_only_that_branchs_own_files(key: str, allowed: bool) -> None:
+    """The maintain tier names the branch's file directories, where its cleanup deletes; that it puts nothing, and the
+    write tier's `data/`-only grant, are pinned in `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py`
+    ([[LH-202]], [[LH-575]])."""
     policy = build_session_policy(BUCKET, EVALUATED_PREFIX, "maintain", branch="a")
 
-    assert _may_put(policy, key) is allowed
+    assert _may_delete(policy, key) is allowed
 
 
 def test_a_branch_name_that_CLIMBS_OUT_is_refused_AS_A_CLIENT_ERROR() -> None:

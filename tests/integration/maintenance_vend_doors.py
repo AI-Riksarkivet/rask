@@ -1,5 +1,6 @@
-"""The catalog's doors as maintenance asks them: the maintain tier, answered over each table's own location, and the trash
-doors, answered as the catalog's own act on a trash record ([[XC-084]]).
+"""The catalog's doors as maintenance asks them: the maintain tier, answered over each table's own location, the maintainer
+doors, answered by a real catalog app ([[LH-575]]), and the trash doors, answered as the catalog's own act on a trash
+record ([[XC-084]]).
 
 Maintenance signs every write with its table's vend ([[LH-219]]), and the trash is the catalog's to end record by record.
 The answers here are shaped as the catalog's are (`mode`, `credentials.storage_options`, `location`; a release's and an
@@ -32,6 +33,8 @@ CATALOG_URL = "http://catalog.test"
 VENDED = {"aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_endpoint": "http://store.vended.example"}
 #: The maintain-tier door's path, the table's id named: `/management/v1/table/{id}/credentials?tier=maintain`.
 MAINTAIN_TIER_DOOR = rf"^{CATALOG_URL}/management/v1/table/(?P<table>[^/]+)/credentials"
+#: A maintainer door's path, the table's id and the door named: `/management/v1/table/{id}/maintenance/{disarm|floor}`.
+MAINTAINER_DOOR = rf"^{CATALOG_URL}/management/v1/table/(?P<table>[^/]+)/maintenance/(?P<act>disarm|floor)"
 
 
 def described_by(catalog: httpx.Client) -> Callable[[str], str]:
@@ -45,16 +48,36 @@ def described_by(catalog: httpx.Client) -> Callable[[str], str]:
     return _location
 
 
+def _forwarded_to(catalog: TestClient) -> Callable[..., httpx.Response]:
+    """A route's side effect sending the request maintenance made to the real catalog app ``catalog``, its path and query
+    as sent, and answering with what the app answered."""
+
+    def _forward(request: httpx.Request, **_named: str) -> httpx.Response:
+        answered = catalog.request(request.method, request.url.raw_path.decode("ascii"), content=request.content, headers={"Content-Type": "application/json"})
+        return httpx.Response(
+            answered.status_code, headers={"Content-Type": answered.headers.get("content-type", "application/json")}, content=answered.content
+        )
+
+    return _forward
+
+
 @contextmanager
-def maintain_tier_door(location_of: Callable[[str], str]) -> Generator[respx.MockRouter]:
-    """Answer each maintain-tier vend maintenance asks `CATALOG_URL` for, over the location ``location_of`` gives the table."""
+def maintain_tier_door(location_of: Callable[[str], str], *, catalog: TestClient | None = None) -> Generator[respx.MockRouter]:
+    """Answer each maintain-tier vend maintenance asks `CATALOG_URL` for, over the location ``location_of`` gives the table.
+
+    With ``catalog``, the real catalog app answers maintenance's maintainer doors too (the route named ``maintainer``):
+    the disarm and the floor raise are that app's own commits (`catalog.services.maintenance_commits`), so their path,
+    query, body and answer are the app's, never a copy of them here ([[LH-575]]).
+    """
 
     def _vend(_request: httpx.Request, table: str) -> httpx.Response:
         location = location_of(unquote(table))
         return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": VENDED}, "location": location})
 
     with respx.mock(assert_all_called=False) as router:
-        router.post(url__regex=MAINTAIN_TIER_DOOR, params={"tier": "maintain"}).mock(side_effect=_vend)
+        router.post(url__regex=MAINTAIN_TIER_DOOR, params={"tier": "maintain"}, name="vend").mock(side_effect=_vend)
+        if catalog is not None:
+            router.post(url__regex=MAINTAINER_DOOR, name="maintainer").mock(side_effect=_forwarded_to(catalog))
         router.route().pass_through()
         yield router
 
@@ -133,11 +156,7 @@ def catalog_doors(catalog: TestClient) -> Generator[respx.MockRouter]:
     app's own vendor vends nothing direct here: what its policy narrows is
     `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py`'s claim)."""
 
-    def _forward(request: httpx.Request, **_named: str) -> httpx.Response:
-        answered = catalog.request(request.method, request.url.raw_path.decode("ascii"), content=request.content, headers={"Content-Type": "application/json"})
-        return httpx.Response(
-            answered.status_code, headers={"Content-Type": answered.headers.get("content-type", "application/json")}, content=answered.content
-        )
+    _forward = _forwarded_to(catalog)
 
     with respx.mock(assert_all_called=False) as router:
         router.post(url__regex=rf"{_TRASH_DOOR}/credentials$", name="credentials").mock(return_value=httpx.Response(200, json=_RECLAIM_SESSION))

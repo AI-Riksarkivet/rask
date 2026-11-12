@@ -2872,6 +2872,27 @@
         "title": "CatalogControlEvent",
         "type": "object"
       },
+      "CleanupDisarmed": {
+        "description": "What the disarm of a ref's commit-path cleanup did ([[LH-575]]).",
+        "properties": {
+          "disarmed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Disarmed",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "CleanupDisarmed",
+        "type": "object"
+      },
       "CloneEndingEntry": {
         "description": "One registered clone's ending that its door could not clear (ADR 0198 \u00a71): the digest its finish is asked by.",
         "properties": {
@@ -7007,6 +7028,48 @@
           "query"
         ],
         "title": "ExplainTableQueryPlanRequest",
+        "type": "object"
+      },
+      "FloorRaiseRequest": {
+        "additionalProperties": false,
+        "description": "A raise of a table's listing floor, or its dry run. A field it does not name is refused, since a misnamed\n``dry_run`` would otherwise commit the raise its caller only meant to preview.",
+        "properties": {
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "title": "FloorRaiseRequest",
+        "type": "object"
+      },
+      "FloorRaised": {
+        "description": "What a raise of a table's listing floor committed ([[LH-094]], [[LH-575]]); nothing on a dry run.",
+        "properties": {
+          "raised_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raised At"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "title": "FloorRaised",
         "type": "object"
       },
       "FragmentStats": {
@@ -18632,6 +18695,166 @@
         ]
       }
     },
+    "/management/v1/table/{id}/maintenance/disarm": {
+      "post": {
+        "description": "Remove every ``lance.auto_cleanup.*`` key from the ref, so no commit on it deletes versions inside itself ([[LH-245]]).\n\nLance runs version cleanup inside a commit whose manifest carries those keys, past every hold and with nothing\nrecording it; every door disarms its ref before it commits, and this is the backstop maintenance asks for a table no\ndoor commits on. A config-only commit, made only when a key is set; the answer names the keys it removed.",
+        "operationId": "disarm_commit_path_cleanup_management_v1_table__id__maintenance_disarm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ref to disarm. Omit for main.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The ref to disarm. Omit for main.",
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupDisarmed"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Disarm Commit Path Cleanup",
+        "tags": [
+          "maintenance"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/maintenance/floor": {
+      "post": {
+        "description": "Commit the listing-floor stamp ``rask.maintenance.floor_raised_at`` on main: a version that changes no row, so the\ntable's next cleanup can drop the manifests beneath it and with them the floor Lance lists its transaction and\ndeletion files above ([[LH-094]]).\n\nThe catalog stamps it on its own clock and records the caller as the version's author (ADR 0187). A ``dry_run`` is\njudged as the raise is, the caller's rung and the table's name, and commits nothing.",
+        "operationId": "raise_listing_floor_management_v1_table__id__maintenance_floor_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FloorRaiseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FloorRaised"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Raise Listing Floor",
+        "tags": [
+          "maintenance"
+        ]
+      }
+    },
     "/management/v1/table/{id}/maintenance/preview": {
       "post": {
         "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that\nneeds no containment argument: it calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with\nwhat ``/run`` deletes on that ref rather than asserting which ref the door opened.",
@@ -27749,7 +27972,7 @@
     },
     "/v1/table/{id}/rename": {
       "post": {
-        "description": "Rename the table at ``id`` by moving its POINTER, and emit lineage; its grants stay on its uuid.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` answers only Unsupported, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nWithin its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router\n``authorize``) AND ``can_create_table`` on that namespace. The table keeps its uuid, so every record and every grant\nkept for it stays where it is ([[LH-523]], [[LH-524]]), and a rename into ANOTHER namespace therefore takes its grants\nalong: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,\nwhich under managed access need grant authority on the table and on the destination ([[LH-568]]), else a writer\ncould bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,\nout. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge\nin one write before the name, its ``child`` edge taken from the source with it and written on the destination once\nthe name is there, and both go back if the rename is undone; its data directories' claims move to its new name\n(``_hand_over_data_directories``). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard\nlifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped\nand another created ([[LH-554]]). Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
+        "description": "Rename the table at ``id`` by moving its POINTER, and emit lineage; its grants stay on its uuid.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` answers only Unsupported, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nWithin its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router\n``authorize``) AND ``can_create_table`` on that namespace. The table keeps its uuid, so every record and every grant\nkept for it stays where it is ([[LH-523]], [[LH-524]]), and a rename into ANOTHER namespace therefore takes its grants\nalong: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,\nwhich under managed access need grant authority on the table and on the destination ([[LH-568]]), else a writer\ncould bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,\nout. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge\nin one write before the name, its ``child`` edge taken from the source with it and written on the destination once\nthe name is there, and both go back if the rename is undone. Its data directories' claims stay as they are: each\nrecords the table's uuid and location, which a rename changes neither of ([[LH-575]]). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard\nlifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped\nand another created ([[LH-554]]). Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
         "operationId": "rename_table_v1_table__id__rename_post",
         "parameters": [
           {

@@ -159,11 +159,13 @@ def _staged(bucket: str, moto_url: str, location: str, version: int) -> str:
 
 
 @pytest.mark.parametrize(
-    ("grace_seconds", "policy", "lost_stays", "next_pass"),
+    ("grace_seconds", "policy", "pod_ahead", "lost_stays", "next_pass"),
     [
-        pytest.param("0", KEEP_ONE, False, timedelta(hours=24), id="a-manifest-staged-for-a-committed-version-goes"),
-        pytest.param("3600", KEEP_ONE, True, timedelta(hours=1), id="one-inside-its-grace-stays-until-the-grace-ends"),
-        pytest.param("0", {"cleanup_enabled": False}, True, timedelta(hours=24), id="one-whose-table-keeps-its-whole-history-stays"),
+        pytest.param("0", KEEP_ONE, timedelta(0), False, timedelta(hours=24), id="a-manifest-staged-for-a-committed-version-goes"),
+        # The grace is the store's clock against the store's own stamp: a pod's clock running ahead removes nothing early,
+        # and the next pass still comes when the grace ends.
+        pytest.param("3600", KEEP_ONE, timedelta(hours=2), True, timedelta(hours=1), id="one-inside-its-grace-by-the-stores-clock-stays-until-it-ends"),
+        pytest.param("0", {"cleanup_enabled": False}, timedelta(0), True, timedelta(hours=24), id="one-whose-table-keeps-its-whole-history-stays"),
     ],
 )
 def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
@@ -175,6 +177,7 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
     monkeypatch: pytest.MonkeyPatch,
     grace_seconds: str,
     policy: dict[str, Any],
+    pod_ahead: timedelta,
     lost_stays: bool,
     next_pass: timedelta,
 ) -> None:
@@ -182,12 +185,13 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
     ``cleanup_old_versions`` never reclaims ([[LH-529]]); a pass removes it once past its grace, on a table no version of
     which is due yet, and next passes the table at its recheck. One staged for the version after the latest is a commit
     still in flight and stays. The table's next pass comes when what it holds next comes due: the grace's end, or its
-    recheck (a day, `MAINTENANCE_RECHECK_HOURS`)."""
+    recheck (a day, `MAINTENANCE_RECHECK_HOURS`). The grace is judged on the store's clock, which stamped the manifest,
+    never on the pod's ([[LH-575]], ADR 0179)."""
     monkeypatch.setenv("MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS", grace_seconds)
     task = _table_with(THRESHOLD, bucket=bucket, options=store, policy=policy)
     lost = _staged(bucket, moto_url, LOCATION, 2)
     in_flight = _staged(bucket, moto_url, LOCATION, THRESHOLD + 1)
-    now = datetime.now(UTC)
+    now = datetime.now(UTC) + pod_ahead
 
     with maintain_tier_door(lambda _table: task.location):
         outcome = run_table_pass(task, settings(), now=now)
@@ -203,12 +207,17 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
 
 
 def _outcome(kind: str, uri: str) -> DatasetResult:
-    """A dataset's result as the pass leaves it: failed, fenced off by a ref write, refused, dropped mid-pass, or run."""
+    """A dataset's result as the pass leaves it: failed, fenced off by a ref write, parked by the catalog's answer about
+    the name it asked under, refused, dropped mid-pass, or run."""
     match kind:
         case "failed":
             return DatasetResult(uri=uri, error="maintain: the store refused the cleanup")
         case "fenced":
             return DatasetResult(uri=uri, skipped=HISTORY_FENCED)
+        case "parked":
+            parked = DatasetResult(uri=uri)
+            parked.park(f"the catalog answered 404 TableNotFound for {TABLE}", gate="table_not_governed", table_id=TABLE)
+            return parked
         case "refused":
             return DatasetResult(uri=uri, refused="the manifest carries a flag maintenance refuses", refused_by="manifest_flags")
         case "trashed":
@@ -228,6 +237,8 @@ _RECHECK = timedelta(hours=72)
     [
         pytest.param(KEEP_ONE, None, "failed", lambda now, _: now + _RETRY, id="a-failed-pass-is-retried"),
         pytest.param(KEEP_ONE, None, "fenced", lambda now, _: now + _RETRY, id="a-history-fenced-pass-is-retried"),
+        # A rename or a drop landing during the pass changes the catalog's answer about the name it asked under.
+        pytest.param(KEEP_ONE, None, "parked", lambda now, _: now + _RETRY, id="a-table-the-catalog-parked-is-asked-again"),
         pytest.param({"retention_days": 1}, None, "refused", lambda now, _: now + _RECHECK, id="a-refused-dataset-waits-for-the-recheck"),
         pytest.param({"retention_days": 1}, None, "trashed", lambda now, _: now + _RECHECK, id="one-dropped-mid-pass-waits-for-the-recheck"),
         pytest.param(
@@ -252,8 +263,8 @@ def test_a_tables_next_pass_comes_when_its_first_dataset_needs_one(
     expected: _Expected,
 ) -> None:
     """The time a pass schedules for the table (`table_pass.next_due`), read afresh after the pass: a dataset the pass
-    failed on, or found fenced, is tried again after the retry; a refused one, and one dropped mid-pass, waits for the
-    recheck; the versions the
+    failed on, found fenced, or that the catalog parked, is tried again after the retry ([[LH-575]]); a refused one, and
+    one dropped mid-pass, waits for the recheck; the versions the
     policy keeps come due as they age, held to the policy's cadence once it has stamped one; and none comes sooner than a
     minute, however soon a staged manifest's grace ends."""
     monkeypatch.setenv("MAINTENANCE_RECHECK_HOURS", str(int(_RECHECK.total_seconds() // 3600)))

@@ -7,9 +7,11 @@ is forgotten no maintenance pass and no purge finds them again: both read a tabl
 every path that ends a table with its bytes, the catalog's destructive drops and purging cascades and maintenance's
 purge, deletes the table's directories before the record goes (:func:`end_base_record`).
 
-ONLY A DIRECTORY THE TABLE'S CLAIM NAMES IS DELETED: a ``data`` entry on a plain base whose claim names the table, held
-or released by it (:func:`last_claimed_by`). A claim naming another table, or none, as an approved base itself has where
-a record was written before [[LH-252]], leaves that directory to whoever's bytes it holds, and the table still ends.
+ONLY A DIRECTORY THE TABLE'S CLAIM NAMES IS DELETED: a ``data`` entry on a plain base whose claim records the table's
+uuid, held or released by it (:func:`last_claimed_by`). A claim recording another table's uuid, or none, as an approved
+base itself has where a record was written before [[LH-252]], leaves that directory to whoever's bytes it holds, and the
+table still ends. By uuid, never by name ([[LH-575]]): a table registered under a dropped table's name shares the name and
+none of its bytes.
 """
 
 from __future__ import annotations
@@ -49,19 +51,19 @@ def directory_uri(directory: RecordedBase) -> str:
     return key_uri(directory.store, directory.path)
 
 
-def claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, table: str) -> bool:
-    """Whether ``table`` holds ``directory``'s claim now: what maintenance may reclaim in for a live table.
+def claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, uuid: str) -> bool:
+    """Whether the table ``uuid`` holds ``directory``'s claim now: what maintenance may reclaim in for a live table.
 
     Raises:
         ValueError: The stored claim is not a claim.
         botocore.exceptions.ClientError: The store refused the read.
     """
     held = location_claims.holder(claims, directory.path)
-    return held is not None and held.table == table
+    return held is not None and held.uuid == uuid
 
 
-def last_claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, table: str) -> bool:
-    """Whether ``directory``'s claim names ``table``, held or released by it: what ending that table may delete.
+def last_claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, uuid: str) -> bool:
+    """Whether ``directory``'s claim records the table ``uuid``, held or released by it: what ending that table may delete.
 
     A path that forgot the table's base record part-way has released the record's directory claims already
     (:func:`forget_base_record` releases them first), so the attempt that finishes it finds them released.
@@ -71,11 +73,11 @@ def last_claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase,
         botocore.exceptions.ClientError: The store refused the read.
     """
     found = location_claims.read(claims, directory.path)
-    return found is not None and found.claim.table == table
+    return found is not None and found.claim.uuid == uuid
 
 
-def directories_to_end(registry: BaseRegistry, location: str, *, table: str) -> list[RecordedBase]:
-    """The data directories ending the table at ``location`` deletes; the record's others are left, logged.
+def directories_to_end(registry: BaseRegistry, location: str, *, uuid: str) -> list[RecordedBase]:
+    """The data directories ending the table ``uuid`` at ``location`` deletes; the record's others are left, logged.
 
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
@@ -84,9 +86,9 @@ def directories_to_end(registry: BaseRegistry, location: str, *, table: str) -> 
     """
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
     directories = recorded_directories(read_base_record(registry, location))
-    owned = [directory for directory in directories if last_claimed_by(claims, directory, table)]
+    owned = [directory for directory in directories if last_claimed_by(claims, directory, uuid)]
     if left := [directory.path for directory in directories if directory not in owned]:
-        log.warning("data_directory_left_to_its_claim", extra={"location": location, "table": table, "directories": left})
+        log.warning("data_directory_left_to_its_claim", extra={"location": location, "uuid": uuid, "directories": left})
     return owned
 
 
@@ -106,8 +108,8 @@ def delete_directories(directories: list[RecordedBase], storage_options: Storage
     return Deleted(files=files, bytes=size)
 
 
-def delete_table_directories(registry: BaseRegistry, location: str, *, table: str, storage_options: StorageOptions) -> Deleted:
-    """Delete the data directories the table at ``location`` holds, leaving the record that names them.
+def delete_table_directories(registry: BaseRegistry, location: str, *, uuid: str, storage_options: StorageOptions) -> Deleted:
+    """Delete the data directories the table ``uuid`` at ``location`` holds, leaving the record that names them.
 
     For a path whose commit point comes after the delete, so a failure leaves the table, and its record, to the retry.
 
@@ -116,11 +118,11 @@ def delete_table_directories(registry: BaseRegistry, location: str, *, table: st
         OSError: The store refused a delete.
         botocore.exceptions.ClientError: The store refused a read.
     """
-    return delete_directories(directories_to_end(registry, location, table=table), storage_options)
+    return delete_directories(directories_to_end(registry, location, uuid=uuid), storage_options)
 
 
-def end_base_record(registry: BaseRegistry, location: str, *, table: str, storage_options: StorageOptions) -> Deleted:
-    """Delete the data directories the table at ``location`` holds, then forget its base record and their claims.
+def end_base_record(registry: BaseRegistry, location: str, *, uuid: str, storage_options: StorageOptions) -> Deleted:
+    """Delete the data directories the table ``uuid`` at ``location`` holds, then forget its base record and their claims.
 
     The record goes last: it is what names the directories, so a failure part-way leaves it for the next attempt.
 
@@ -129,6 +131,6 @@ def end_base_record(registry: BaseRegistry, location: str, *, table: str, storag
         OSError: The store refused a delete; the record stands.
         botocore.exceptions.ClientError: The store refused a read.
     """
-    deleted = delete_table_directories(registry, location, table=table, storage_options=storage_options)
-    forget_base_record(registry, location, table=table)
+    deleted = delete_table_directories(registry, location, uuid=uuid, storage_options=storage_options)
+    forget_base_record(registry, location, uuid=uuid)
     return deleted

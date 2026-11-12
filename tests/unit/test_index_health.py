@@ -2,10 +2,8 @@
 
 Maintenance optimizes no index; it names the indices a bring-your-own job should optimize. An index is due when it
 leaves rows unindexed — queries touching them fall back to a flat scan — or carries more delta segments than a query
-should fan out over. An index whose statistics cannot be read is not due: nothing an optimize is known to fix.
-
-MEASURED, not assumed. pylance 9.0.0's `stats.index_stats(name)` exposes `num_unindexed_rows` and `num_indices`;
-`describe_indices()` gives `name`, `index_type` and `field_names`.
+should fan out over. Both are read off the manifest (``describe_indices()``'s segments and the fragments' recorded rows),
+which on pylance 13.0.0 answer what ``stats.index_stats`` does without reading the index's files ([[LH-575]]).
 """
 
 from __future__ import annotations
@@ -15,10 +13,8 @@ from pathlib import Path
 import lance
 import numpy as np
 import pyarrow as pa
-import pytest
 
 from lakehouse.maintenance_due import IndexDue
-from maintenance.services import index_health
 from maintenance.services.index_health import due_indices
 
 
@@ -35,6 +31,19 @@ def test_UNINDEXED_ROWS_make_the_index_due(tmp_path: Path) -> None:
     lance.write_dataset(pa.table({"id": pa.array(range(200, 260), pa.int64())}), uri, mode="append")
 
     assert due_indices(lance.dataset(uri)) == [IndexDue(name="id_btree", unindexed_rows=60, deltas=1)]
+
+
+def test_rows_deleted_from_an_unindexed_fragment_are_not_left_unindexed(tmp_path: Path) -> None:
+    """A fragment's live rows are its physical rows less those its deletion file records, as ``stats.index_stats`` counts
+    them: the test asks it as the oracle, which maintenance never does."""
+    uri = _indexed(tmp_path)
+    lance.write_dataset(pa.table({"id": pa.array(range(200, 260), pa.int64())}), uri, mode="append")
+    lance.dataset(uri).delete("id >= 250")
+    ds = lance.dataset(uri)
+
+    due = due_indices(ds)
+
+    assert (due, ds.stats.index_stats("id_btree")["num_unindexed_rows"]) == ([IndexDue(name="id_btree", unindexed_rows=50, deltas=1)], 50)
 
 
 def _vectors(rows: int, *, seed: int) -> pa.FixedSizeListArray:
@@ -57,22 +66,3 @@ def test_a_vector_index_a_plain_optimize_only_appends_to_is_due_naming_the_merge
 
 def test_a_covering_index_is_not_due(tmp_path: Path) -> None:
     assert due_indices(lance.dataset(_indexed(tmp_path))) == []
-
-
-def test_a_JSON_index_is_never_asked_for_its_stats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`index_stats` on a JSON index panics in Lance (`scalar/json.rs:95`, a `todo!()`), and a pyo3 panic writes a Rust
-    backtrace to stderr every tick. `describe_indices` already reports the type, so the call is skipped and the index,
-    whose health is unknown, is not listed as due."""
-    uri = _indexed(tmp_path)
-
-    class _JsonIndex:
-        name = "lineage_run_id_idx"
-        field_names = ("lineage",)
-        index_type = "Json"
-
-    monkeypatch.setattr(lance.LanceDataset, "describe_indices", lambda self: [_JsonIndex()], raising=False)
-    called: list[str] = []
-    monkeypatch.setattr(index_health, "_stats", lambda ds, name: called.append(name))
-
-    assert due_indices(lance.dataset(uri)) == []
-    assert called == [], f"stats must not be asked of a JSON index — that is the panic: {called}"

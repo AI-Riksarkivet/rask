@@ -578,9 +578,10 @@ type table
     # admits either rung here and then asks the operation's own (`can_write_data` for an append, `can_maintain` for a
     # compaction's two commits), so a compaction job commits as a maintainer and holds no writer rung (ADR 0162).
     define can_create_version: writer or maintainer
-    # The maintain storage tier puts and deletes the whole table prefix, `_versions/` and `_refs/` included, so
-    # it could finalize a version or move a tag around `version/create`; only the maintenance identity is
-    # vended it (ADR 0156 C4). An owner keeps every maintainer DOOR, which the catalog judges, and not this.
+    # The maintain storage tier deletes across the whole table prefix but its refs, `_versions/` included, so it
+    # could remove versions around every door's judgement; only the maintenance identity is vended it (ADR 0156 C4).
+    # It puts nothing: maintenance's commits are the catalog's, at its maintainer doors ([[LH-575]]). An owner keeps
+    # every maintainer DOOR, which the catalog judges, and not this.
     define can_vend_maintain: maintenance
     # Writing a governance key on a FIELD (`rask.*` field metadata — today the classification that makes
     # a table unvendable as raw bytes). `classifier`, never `writer`: the whole point is that someone may

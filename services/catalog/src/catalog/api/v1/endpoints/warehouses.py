@@ -1074,7 +1074,7 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
         if purge:
             try:
                 await run_in_threadpool(
-                    partial(data_directories.delete_table_directories, registry, fenced.location, table=canonical, storage_options=settings.storage_options())
+                    partial(data_directories.delete_table_directories, registry, fenced.location, uuid=table_uuid, storage_options=settings.storage_options())
                 )
             except Exception:
                 # This request has not touched the row, so the clone's holds are its own still.
@@ -1096,9 +1096,9 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     # What the catalog promised a clone among the bytes ends before the location's claim does, as at the deregister
     # door: a tag that cannot be deleted leaves the location held, and no clone registered there can hold its name.
     if purge:
-        await run_in_threadpool(partial(base_registry.forget_base_record, registry, fenced.location, table=canonical))
+        await run_in_threadpool(partial(base_registry.forget_base_record, registry, fenced.location, uuid=table_uuid))
     else:
-        await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, holder=canonical))
+        await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, uuid=table_uuid))
     # Released under the uuid the cascade listed the table by, as well as under its fence: a purge's directory delete
     # can take longer than a fence stands, and the same name registered at the location once the fence has lapsed holds
     # the claim under a uuid of its own.
@@ -1152,7 +1152,7 @@ async def _forget_trashed(settings: Settings, entry: dict[str, Any], *, purge: b
     so = settings.storage_options()
     if purge and (location := trash.location_of(entry)):
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
-        await run_in_threadpool(partial(data_directories.delete_table_directories, registry, location, table=trash.name_of(entry), storage_options=so))
+        await run_in_threadpool(partial(data_directories.delete_table_directories, registry, location, uuid=uuid, storage_options=so))
     await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=trash.kind_of(entry), uuid=uuid))
 
 
@@ -1536,7 +1536,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
 
     checks: list[ProbeCheck] = []
     try:
-        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="maintain", session_name=session_name)
+        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="probe", session_name=session_name)
         # The probe signs as the client a door hands the vend to, so it holds what that door would answer ([[LH-072]]).
         options = None if vended is None else vended.as_storage_options()
     except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500

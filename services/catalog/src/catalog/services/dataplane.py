@@ -830,10 +830,19 @@ def _before_commit(hook: Callable[[str], None] | None, location: str, registry: 
     no claim."""
     if hook is None or registry is None:
         return
+    hook(_claimed_uuid(registry, location))
+
+
+def _claimed_uuid(registry: base_registry.BaseRegistry, location: str) -> str:
+    """The uuid the claim at ``location`` records: the table a governed create is about to write there.
+
+    Raises:
+        InternalError: The location holds no claim recording a uuid, which a governed create always takes first.
+    """
     claim = location_claims.read(_claim_store(registry), location)
     if claim is None or claim.claim.uuid is None:
         raise InternalError(f"the table about to be written at {location} holds no claim recording its uuid")
-    hook(claim.claim.uuid)
+    return claim.claim.uuid
 
 
 def _record_written(registry: base_registry.BaseRegistry | None, location: str, so: StorageOptions, written: lance.LanceDataset, *, author: str | None) -> None:
@@ -918,23 +927,25 @@ def _write_blob_into(
     declaring a base its record lacks. A failed write releases exactly what it claimed; a record that
     outlived its write would vouch for a base no manifest names.
 
-    EACH DATA DIRECTORY IS CLAIMED FOR ``holder`` FIRST OF ALL ([[LH-252]]), put-if-not-exists, so no other
-    table — a registration declaring the same directory — can be admitted to it while this one exists.
+    EACH DATA DIRECTORY IS CLAIMED FOR THE TABLE FIRST OF ALL ([[LH-252]]), put-if-not-exists, under the uuid its
+    location's claim records ([[LH-575]]), so no other table — a registration declaring the same directory, under this
+    name or any other — can be admitted to it while this one exists.
 
     The location's own claim is :func:`create_table`'s, taken before this write ([[LH-519]]); a failed write
     releases it with the table it drops.
     """
     claim: base_registry.BaseClaim | None = None
     directories: list[str] = []
+    claimed_uuid: str | None = None
     try:
         # ONE DIRECTORY PER TABLE under each approved base ([[LH-252]]), minted here because the record
         # below and the manifest must name the same path.
         own_bases = table_data_bases(data_bases or [], uuid.uuid4().hex)
         if registry is not None:
             entries = table_bases.create_entries(external_blob_bases, [(base.path, base.name) for base in own_bases])
-            directories = base_registry.claim_data_directories(
-                registry, entries, holder, segments, is_gone=lambda held: table_claims.data_directory_holder_is_gone(ns, _claim_store(registry), held)
-            )
+            claimed_uuid = _claimed_uuid(registry, location)
+            claimant = location_claims.DirectoryClaimant(uuid=claimed_uuid, root=location, table=holder, segments=segments)
+            directories = base_registry.claim_data_directories(registry, entries, claimant)
             claim = base_registry.claim_bases(registry, location, entries)
         # STAMPED ON THE TABLE, not only on the manifest row and the reply. The spec's "properties at create" was true of
         # `declare_table` and of the response echo and false of the Lance file, so a client that created with
@@ -970,8 +981,9 @@ def _write_blob_into(
             try:
                 if claim is not None:
                     base_registry.release_claim(registry, claim)
-                base_registry.release_data_directories(registry, directories, holder)
-                location_claims.release(_claim_store(registry), location, holder)
+                if claimed_uuid is not None:
+                    base_registry.release_data_directories(registry, directories, uuid=claimed_uuid)
+                location_claims.release(_claim_store(registry), location, holder, uuid=claimed_uuid)
             except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
                 log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
         if isinstance(exc, Exception | KeyboardInterrupt | SystemExit | GeneratorExit):
@@ -1973,7 +1985,7 @@ def destroy_table(
     holds_a_dataset = _require_destroyable(location, so, stored, spelled, estate_roots=estate_roots)
     table = CATALOG_DELIMITER.join(segments)
     require_no_clone_reading(location, so, table=table)
-    directories = _data_directories_of(control, location, table)
+    directories = _data_directories_of(control, location, table, uuid=table_uuid)
     residue = (
         trash.make_record(table, uuid=table_uuid, location=location, dropped_by=dropped_by, grace_days=0, namespace_uuid=namespace_uuid, residue=True)
         if holds_a_dataset
@@ -2014,15 +2026,16 @@ def destroy_table(
     return DropTableResponse(id=removed.id, location=removed.location)
 
 
-def _data_directories_of(control: location_claims.ClaimStore, location: str, table: str) -> list[base_registry.RecordedBase]:
-    """The data directories a drop of ``table`` at ``location`` deletes with its root, read before anything changes.
+def _data_directories_of(control: location_claims.ClaimStore, location: str, table: str, *, uuid: str) -> list[base_registry.RecordedBase]:
+    """The data directories a drop of ``table`` (the table ``uuid``) at ``location`` deletes with its root, read before
+    anything changes.
 
     Raises:
         ServiceUnavailableError: The base record or a directory's claim could not be read.
     """
     registry = base_registry.BaseRegistry(control_root=control.control_root, storage_options=control.storage_options)
     try:
-        return data_directories.directories_to_end(registry, location, table=table)
+        return data_directories.directories_to_end(registry, location, uuid=uuid)
     except (base_registry.UnreadableBaseRecordError, ClientError, BotoCoreError, ValueError) as exc:
         log.error("drop_data_directories_unread", extra={"table": table, "location": location, "error": str(exc)[:300]})
         raise ServiceUnavailableError(f"the data directories of {table} could not be read, so nothing was dropped") from exc

@@ -412,7 +412,9 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   `catalog.commit_reconcile.reannounced`, and a version of an announced operation the catalog recorded no author for at
   that version, or whose transaction cannot be read (`commit_reconcile_unidentified`), counts
   `catalog.commit_reconcile.unauthored` (both page, `deploy/alerting/rules.yml`). A mark moves only past versions
-  confirmed on the feed, unannounced by design (a `Clone`, a config-only disarm, a provenance row write) or unauthored,
+  confirmed on the feed, unannounced by design (a `Clone`, a pure disarm of commit-path cleanup, a provenance row write),
+  confirmed by its recorded author (a listing-floor raise, announced on no feed; any other config-only commit needs a
+  recorded author, ADR 0204) or unauthored,
   and only once each confirmed version's author record is deleted: a delete the store refuses holds the mark below it.
   A registered table's first mark is its register's ([[LH-550]]): the register door mints the table's uuid, marks each
   ref at its head (`commit_reconcile.mark_registered_heads`, 503 code 17 when a head cannot be read; a dataset pylance
@@ -692,7 +694,8 @@ governing their data. The project-scoped surface is the console's project page, 
   `version/create` refuses a commit that does, every committing catalog door disarms the ref first
   (`core/namespace.disarm_commit_path_cleanup`; the erasure door every ref, so the job's commits are admitted), the
   restore door refuses an armed version, and the
-  expiry pass deletes every such key before its refusal gates, as the backstop for a table nobody commits on (LH-245).
+  table's pass has the catalog delete every such key before its refusal gates, as the backstop for a table nobody commits
+  on (LH-245): `POST /management/v1/table/{id}/maintenance/disarm`, at `can_maintain` (ADR 0204).
   A table's compaction plan has ONE source too, its maintenance policy: Lance plans from `lance.compaction.*` manifest
   config whenever a plan names no option (`lance_docs/lance/format/table/table_config.md`), so the property guard
   (`core/formats.compaction_config_keys`), `version/create`, the register judge (`table_bases.judge_registered_table`)
@@ -809,16 +812,18 @@ governing their data. The project-scoped surface is the console's project page, 
   the branch's commits with it, and `can_write_data` writes every branch. Measured on MinIO
   `RELEASE.2025-04-22T22-12-26Z`, that grant leaves a write credential fitting a table prefix of 89 characters at a
   63-character bucket, inside a 2,048-byte session policy; RustFS enforces the same 2,048-byte limit, counted after it
-  re-serialises the policy, and its boundary is unmeasured (measured 2026-10-18; `rask-rustfs` §2). The catalog sends the policy as compact JSON and refuses one past 2,048 characters before any exchange, 500 code 18 titled `SessionPolicyTooLong` with its length and the limit as extension members; with `vending.encryption` naming an SSE-KMS key (its key ARN, refused at boot otherwise) every tier's session may `kms:Decrypt` with that key, and write and maintain also `kms:GenerateDataKey`, only through S3 (`kms:ViaService`). The warehouse create door's probe then writes and reads back an object encrypted with it (`encrypted_write`), so a store whose role holds no grant on the key is refused 400 code 13 ([[LH-262]]). The
+  re-serialises the policy, and its boundary is unmeasured (measured 2026-10-18; `rask-rustfs` §2). The catalog sends the policy as compact JSON and refuses one past 2,048 characters before any exchange, 500 code 18 titled `SessionPolicyTooLong` with its length and the limit as extension members; with `vending.encryption` naming an SSE-KMS key (its key ARN, refused at boot otherwise) every tier's session may `kms:Decrypt` with that key, and write, maintain and probe also `kms:GenerateDataKey`, only through S3 (`kms:ViaService`). The warehouse create door's probe then writes and reads back an object encrypted with it (`encrypted_write`), so a store whose role holds no grant on the key is refused 400 code 13 ([[LH-262]]). The
   Deny is load-bearing, measured on MinIO (LH-469, #594) and enforced by RustFS's Deny-first evaluation (R3): the
   staged Allow also matches
   `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's
-  `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
-  cleanup except an explicit Deny of put/delete on `<prefix>/_refs/*` (`lakehouse.table_layout.REFS_GLOB`), plus, on
+  `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_vend_maintain`) gets and deletes on the whole prefix for
+  cleanup and puts nothing of the table (ADR 0204, [[LH-575]]: maintenance's commits are the catalog's, at its maintainer
+  doors), with an explicit Deny of delete on `<prefix>/_refs/*` (`lakehouse.table_layout.REFS_GLOB`), plus, on
   the control root, the table's history fence (get/put) and its committed-file records `_file_identities/<uuid>/*`
   (get/delete) (`vending.TableRecords`, [[LH-219]]), and get/delete on the table's own data directories, those of its declared bases its base record holds as
-  `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. It is also the
-  shape for the warehouse scope probe. The management vend door checks the one rung its
+  `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. The warehouse scope
+  probe signs with `probe` (`vending.SessionTier`): get, put and delete in its probe prefix, which no door vends, since a
+  door's `tier` query takes only `vending.Tier`. The management vend door checks the one rung its
   tier names, never either. A put over an existing key is the residue no session policy can refuse, so it is DETECTED
   ([[LH-419]], ADR 0184): every catalog commit records each file it adds under the table's root (data files, blob sidecars,
   deletion files, index files and its transaction file), with the ETag and size the store answers, before its version is
@@ -862,7 +867,10 @@ governing their data. The project-scoped surface is the console's project page, 
   (`kubernetes~system:serviceaccount:<ns>:<release>-sa-maintenance`, `lance.saSubject`), each written as the user it is
   (`fga.user_object`); a bare name in it is refused when the catalog's settings are read ([[LH-063]]). An owner is a
   maintainer and keeps the maintainer doors, and is
-  not vended the tier. The management door refuses the tier 409 code 19 for a table whose maintenance policy keeps its
+  not vended the tier. The tier gets and deletes on the table's prefix but `_refs/` and puts nothing of the table, only
+  the table's history fence on the control root: maintenance's two commits are the catalog's, at the maintainer doors
+  `maintenance/disarm` and `maintenance/floor` (ADR 0204, [[LH-575]]), and the warehouse scope probe signs with a `probe`
+  tier of its own, which no door vends. The management door refuses the tier 409 code 19 for a table whose maintenance policy keeps its
   whole history (`cleanup_enabled` false, `lakehouse.maintenance_policies.keeps_whole_history`, gate
   `require_reclaimable_history` in `api/v1/endpoints/credentials.py`) or is there and cannot be read as a policy (it may
   be the hold, and no retry reads it otherwise), and 503 code 17 when the store did not answer the policy read; and
@@ -1094,7 +1102,8 @@ governing their data. The project-scoped surface is the console's project page, 
   `services/orphan_check.py`) that takes its table's claim (`table.<uuid>`, so never beside its pass), applies the
   pass's guards (claim uuid, `trash.keeps`, `governs`, a `__manifest` row), scans the main dataset
   (`orphans.scan_dataset`, with an age cut: a file not surely before the scan began reading is no finding), raises the
-  listing floor on its own findings (`floor.raise_listing_floor`, then a follow-up pass of the table), logs one
+  listing floor on its own findings (`floor.raise_listing_floor`, which asks the catalog's `maintenance/floor` door to
+  commit the stamp, ADR 0204; then a follow-up pass of the table), logs one
   `maintenance_orphan_check` line and counts `maintenance.orphans.checks` by outcome and `maintenance.orphans.stranded`.
   Its next check rides the schedule's body (`Task.interval_hours`): stranded or undecided -> a day; after a raise ->
   the retention plus a day; clean or only Lance-reclaimable -> twice its interval up to
@@ -1117,7 +1126,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `_indices/` are listed past it (lance #8944 for `data/`, pylance 13.0.0), so an unreferenced data or
   index file is Lance's own to reclaim once it is 7 days old; `orphans._LISTED_PAST_THE_FLOOR_KINDS`
   classifies by that, and the floor raise (`floor.py`, [[LH-094]]) acts only for the floor-bound kinds. A table carrying
-  the raise's stamp (`floor.FLOOR_KEY`) is raised again only once its floor has moved past the stamp (measured
+  the raise's stamp (`lakehouse.listing_floor.FLOOR_KEY`) is raised again only once its floor has moved past the stamp (measured
   2026-11-10 on pylance 13.0.0: a second raise over a moved floor, then one cleanup, removed the file stranded since).
   The floor and the stamp are read off one handle, and a reading that fails refuses the raise, so a store that fails a
   second read never reads as "never raised".
@@ -1169,24 +1178,16 @@ governing their data. The project-scoped surface is the console's project page, 
   warehouse cascade (`_detach_table` before the deregister, so a failed delete leaves the table for the re-issue;
   `_forget_trashed` before the record) and a create's undo. A cascade keeping its bucket keeps the directories. Pinned by
   `tests/integration/test_a_data_bases_bytes_are_reclaimed.py`.
-- **A JSON index has NO stats, and Lance says so with a PANIC — upstream, already contained.** On
-  pylance 10.0.0 a maintenance pass over such a table prints `thread '<unnamed>' panicked at
-  lance-index/src/scalar/json.rs:95:9: not yet implemented` once per Json index it reads (twice on the measured estate). The
-  reproducing call is `ds.stats.index_stats("lineage_run_id_idx")` against a table carrying a JSON
-  index built as `IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": ...})`
-  — such as a provenance index on `lineage -> run_id`, which lets a governed row be filtered back to
-  the run that wrote it; no lakehouse service builds one, a pipeline may. `not yet implemented` is Lance's own `todo!()` — stats for the JSON scalar
-  index simply do not exist yet — so there is nothing to fix on our side and nothing to file beyond
-  upstream. It is CONTAINED, and deliberately: `index_health._stats` catches **`BaseException`**, not
-  `Exception`, because a Rust panic surfaces as pyo3's `PanicException`, which derives from
-  BaseException and passes straight through the pass's error handling, which catches `Exception`. A panic that does
-  escape a pass is that task's failure: the worker delivers it again and ends it on its last delivery, and serves on
-  (`lakehouse.supervision.is_panic`, ADR 0203).
-  It logs `index_stats_unreadable` and the finding reports *"its statistics could not be read, so its
-  health is UNKNOWN — not the same as healthy"*, which is the honest answer: those two indices are
-  UNMONITORED, not proven fine. Do not "fix" the noise by narrowing that except clause. Note also that a
-  JSON index can only be built on a Binary/LargeBinary column holding real **JSONB** — raw JSON text
-  bytes fail `InvalidJsonb` at `json.rs:456`, and a string column is refused outright at `json.rs:726`.
+- **Maintenance never asks `stats.index_stats`** ([[LH-575]]). `index_health.due_indices` reads each index's segments off
+  `describe_indices()` and each fragment's live rows off its manifest entry (physical rows less its deletion file's
+  count), which equal `index_stats`' `num_unindexed_rows` and `num_indices` (measured on pylance 13.0.0 on a covering
+  BTREE, a BTREE after an append, one whose unindexed fragment lost rows to a delete, and an IVF_FLAT after optimizes and
+  after an append) and read no object.
+  `index_stats` reads the index's own files under `_indices/`, which maintenance's store session is granted no read on,
+  since they hold the table's values; it panics on a JSON index (`lance-index/src/scalar/json.rs:95`, a `todo!()`), and
+  with two segments covering one fragment it commits index migrations, then crashes the process. A JSON index can only
+  be built on a Binary/LargeBinary column holding real **JSONB**: raw JSON text bytes fail `InvalidJsonb` at
+  `json.rs:456`, and a string column is refused outright at `json.rs:726`.
 - **`lance_ray.compact_files` DOES NOT COMPACT — upstream, and only the distributed path.** Relevant to
   the bring-your-own rewrite job of LH-467: measured on lance-ray 0.5.0 + pylance 10.0.0, a distributed
   compaction of 4 fragments reports `compaction did not reduce fragments: 4->4`, while a distributed

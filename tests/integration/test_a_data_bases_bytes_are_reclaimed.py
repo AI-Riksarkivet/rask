@@ -230,7 +230,8 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
     assert len(estate.files(directory)) == 2, "precondition: the create and the overwrite each left a file on the base"
     _expired(estate, table)
     if claim == "released":
-        location_claims.release(claims, directory, table)
+        (dropped,) = trash.named(estate.root, estate.key, table)
+        location_claims.release_directory(claims, directory, uuid=trash.object_uuid(dropped))
     markers = {key for key in estate.keys(estate.bucket, "") if key.endswith("/")}
 
     with catalog_doors(estate.client):
@@ -258,7 +259,10 @@ def test_the_purge_leaves_a_directory_no_claim_names_its_table_on_and_still_purg
     location = estate.create(table, _ids(0, 3))
     root_prefix = f"{location.removeprefix(f'{estate.root}/')}/"
     # The record as a create wrote it before [[LH-252]]: the approved base itself, which no claim gives the table.
-    base_registry.forget_base_record(estate.registry, location, table=table)
+    claims = location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key)
+    held = location_claims.holder(claims, location)
+    assert held is not None, "precondition: the create claimed the table's location"
+    base_registry.forget_base_record(estate.registry, location, uuid=held.uuid)
     base_registry.claim_bases(estate.registry, location, [RecordedBase(path=estate.data_base, role=BaseRole.DATA, origin=BaseOrigin.CREATE)])
     estate.door(table, "drop")
     on_the_base = estate.keys(estate.second, "data/")

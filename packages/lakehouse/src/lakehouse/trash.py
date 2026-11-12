@@ -257,8 +257,9 @@ def end(control_root: str, storage_options: StorageOptions, record: dict[str, An
     if location := location_of(record):
         # The base record first: forgetting it deletes the tag a clone holds on each source, and one the store will not
         # delete must leave the location held, or a clone registered there next would hold a tag of the same name.
-        forget_base_record(BaseRegistry(control_root=control_root, storage_options=storage_options), location, table=name_of(record))
-        location_claims.release(location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location, name_of(record))
+        forget_base_record(BaseRegistry(control_root=control_root, storage_options=storage_options), location, uuid=uuid)
+        claims = location_claims.ClaimStore(control_root=control_root, storage_options=storage_options)
+        location_claims.release(claims, location, name_of(record), uuid=uuid)
     clear(control_root, storage_options, uuid, kind=kind)
 
 

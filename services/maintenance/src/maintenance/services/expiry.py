@@ -3,8 +3,9 @@
 Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4): it compacts nothing and builds or optimizes no
 index. What it still writes is reclamation — ``cleanup_old_versions`` deletes superseded manifests and the files only
 they reference, the pass deletes the manifests stock writers staged for versions another commit took, and what no
-retained version references in the table's own data directories (:mod:`maintenance.services.base_reclaim`) — and the
-config commit that disarms Lance's commit-path auto-cleanup. Every gate here guards one of those writes.
+retained version references in the table's own data directories (:mod:`maintenance.services.base_reclaim`). It commits
+nothing: the disarm of Lance's commit-path auto-cleanup is the catalog's, which the table's pass asks for before this
+runs ([[LH-575]]). Every gate here guards one of those deletes.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Any, Final, Literal
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import auto_cleanup, trash
+from lakehouse import trash
 from lakehouse.base_registry import RecordedBase
 from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from lakehouse.features import (
@@ -31,7 +32,7 @@ from lakehouse.features import (
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
-from lakehouse.stored_objects import delete_objects, list_under
+from lakehouse.stored_objects import delete_objects, list_under_at
 from maintenance.core.config import shared_lance_session
 from maintenance.core.metrics import CatalogRefusal
 from maintenance.services import base_reclaim
@@ -133,9 +134,10 @@ class ExpiryTarget(BaseModel):
     """The dataset an expiry pass runs on, and what the sweep already knows about it."""
 
     uri: str
-    #: What the pass reads with: maintenance's own session, which reads every table's bytes and writes none of them.
+    #: What the pass reads with: maintenance's own session, which reads every table's history, none of its data, and
+    #: writes none of it ([[LH-575]]).
     storage_options: StorageOptions
-    #: What the pass writes with, every commit, cleanup and delete: the table's maintain-tier vend ([[LH-219]]). ``None``
+    #: What the pass deletes with, every cleanup and delete: the table's maintain-tier vend ([[LH-219]]). ``None``
     #: when the probe found nothing to write and so asked for none: the pass then writes nothing, and a write it finds
     #: needed waits for the next pass rather than being signed by anything else.
     write_options: StorageOptions | None = None
@@ -159,20 +161,8 @@ class ExpiryTarget(BaseModel):
 
     @property
     def opened_with(self) -> StorageOptions:
-        """What the pass opens the dataset with: the vend where it writes, so every commit through the handle signs with it."""
+        """What the pass opens the dataset with: the vend where it deletes, so every cleanup through the handle signs with it."""
         return self.write_options or self.storage_options
-
-
-class DisarmOutcome(BaseModel):
-    """The failure :func:`_disarm_commit_path_cleanup` met, if any, carried onto whichever result the pass returns."""
-
-    error: str | None = None
-    error_type: str | None = None
-
-    def onto(self, result: DatasetResult) -> DatasetResult:
-        if self.error is not None and result.error is None:
-            result.error, result.error_type = self.error, self.error_type
-        return result
 
 
 class _Opened(BaseModel):
@@ -188,34 +178,6 @@ class _Opened(BaseModel):
 
     def result(self, uri: str) -> DatasetResult:
         return DatasetResult(uri=uri, data_storage_version=self.data_storage_version, mixed_data_file_versions=self.mixed)
-
-
-def _disarm_commit_path_cleanup(ds: lance.LanceDataset, target: ExpiryTarget) -> DisarmOutcome:
-    """Remove every ``lance.auto_cleanup.*`` key, the backstop for a table no door commits on ([[LH-245]]).
-
-    Every catalog door that commits disarms the ref first (:mod:`lakehouse.auto_cleanup` records the
-    measurements); a table nobody commits on is disarmed here, so it does not stay armed until some later commit
-    reclaims behind maintenance's gates.
-
-    Called right after the open, BEFORE every refusal gate: a refused table is exactly one whose history a commit-path
-    cleanup would delete behind them. The write is a config-only commit, and only when a key is present. A failure is
-    reported on the result, never raised: the dataset stays armed, which an operator must see, and the next pass
-    retries. A pass holding no vend commits nothing: a held table is vended none and keeps its keys until a door's
-    commit disarms it, and a key armed since its probe looked is the next pass's to remove.
-    """
-    if target.write_options is None:
-        if armed := auto_cleanup.armed_keys(ds.config()):
-            log.info("auto_cleanup_left_armed", extra={"uri": target.uri, "keys": armed})
-        return DisarmOutcome()
-    try:
-        disarmed = auto_cleanup.disarm(ds)
-    except Exception as exc:  # noqa: BLE001 — reported on the result; the pass continues
-        log.warning("auto_cleanup_disarm_failed", extra={"uri": target.uri, "error": str(exc)})
-        return DisarmOutcome(error=f"auto_cleanup: {exc}", error_type=type(exc).__name__)
-    if not disarmed:
-        return DisarmOutcome()
-    log.warning("auto_cleanup_disarmed", extra={"uri": target.uri, "keys": disarmed})
-    return DisarmOutcome()
 
 
 #: The prefix pylance puts on every ref-name rejection. Matched as a PREFIX: the bodies are upstream's wording, and a
@@ -348,33 +310,52 @@ _STAGED_MANIFEST: Final = re.compile(r"^(?P<inverted>\d{20})\.manifest-[0-9a-f]{
 _U64_MAX: Final = (1 << 64) - 1
 
 
-def staged_manifests(uri: str, storage_options: StorageOptions) -> list[tuple[str, int, datetime]]:
-    """Each manifest staged under the ref's ``_versions/``: its store path, the version it was staged for, when it was put."""
-    staged: list[tuple[str, int, datetime]] = []
-    for listed in list_under(f"{uri.rstrip('/')}/_versions", storage_options):
-        if (match := _STAGED_MANIFEST.match(listed.path.rsplit("/", 1)[-1])) is not None:
-            staged.append((listed.path, _U64_MAX - int(match["inverted"]), listed.modified))
-    return staged
+class LostManifests(BaseModel):
+    """The manifests stock writers staged under a ref for versions it already holds (:func:`lost_staged_manifests`),
+    each with when the store put it, and the store's clock when it listed them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: Each one's store path, and the time the store stamped on it.
+    put_at: dict[str, datetime]
+    #: The store's clock at the listing (:attr:`lakehouse.stored_objects.StoreListing.at`).
+    at: datetime
+
+    def past(self, grace: timedelta) -> list[str]:
+        """The ones the store put at least ``grace`` before it listed them."""
+        return [path for path, put in self.put_at.items() if put <= self.at - grace]
+
+    def due_in(self, grace: timedelta) -> timedelta | None:
+        """How long after the listing the oldest one passes ``grace``, by the store's clock; ``None`` when there is none."""
+        return min(self.put_at.values()) + grace - self.at if self.put_at else None
 
 
-def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version: int) -> list[tuple[str, datetime]]:
+def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version: int) -> LostManifests:
     """Each manifest staged under the ref at ``uri`` for a version it already holds (``version`` is its latest), with when
-    it was put: one whose commit lost its version to another, which no later commit can land ([[LH-529]]).
+    the store put it: one whose commit lost its version to another, which no later commit can land ([[LH-529]]).
 
     A commit that loses its version to another leaves the manifest it staged: Lance deletes a losing one with the
     committer's own credential, which the write tier does not grant, and keeps one whose outcome it cannot prove
     (`lose_or_retain`, `rust/lance-table/src/io/commit/external_manifest.rs` at v13.0.0). Neither can land once another
     commit holds its version, and each is one more key every open of the table lists. One staged for a later version is
     a commit still in flight, and is not one of these.
+
+    Its age is the store's reading alone ([[LH-575]], ADR 0179): the listing's ``Date`` against the stamp the store put
+    on it, so a pod whose clock runs ahead removes nothing a commit may still be deciding on.
     """
-    return [(path, modified) for path, staged_for, modified in staged_manifests(uri, storage_options) if staged_for <= version]
+    listing = list_under_at(f"{uri.rstrip('/')}/_versions", storage_options)
+    lost: dict[str, datetime] = {}
+    for listed in listing.objects:
+        match = _STAGED_MANIFEST.match(listed.path.rsplit("/", 1)[-1])
+        if match is not None and _U64_MAX - int(match["inverted"]) <= version:
+            lost[listed.path] = listed.modified
+    return LostManifests(put_at=lost, at=listing.at)
 
 
 def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
-    """Remove each lost staged manifest (:func:`lost_staged_manifests`) once past ``policy.staged_grace``, judged on the
-    pass's clock: the grace keeps a commit still deciding its outcome from losing the file."""
-    cutoff = target.now - policy.staged_grace
-    lost = [path for path, modified in lost_staged_manifests(target.uri, target.storage_options, version=ds.version) if modified <= cutoff]
+    """Remove each lost staged manifest (:func:`lost_staged_manifests`) once past ``policy.staged_grace`` by the store's
+    clock: the grace keeps a commit still deciding its outcome from losing the file."""
+    lost = lost_staged_manifests(target.uri, target.storage_options, version=ds.version).past(policy.staged_grace)
     delete_objects(target.uri, vend, lost)
     result.staged_manifests_removed = len(lost)
 
@@ -466,18 +447,16 @@ def _record_failure(result: DatasetResult, exc: BaseException) -> None:
 def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: DatasetOpener | None = None) -> DatasetResult:
     """One dataset's version expiry. Never raises: a per-dataset failure is captured in ``error``.
 
-    Opens the dataset, disarms commit-path auto-cleanup before any gate can return (version reclamation has ONE owner,
-    this pass), runs the refusal ladder that guards reclamation, then reclaims the versions and what they left in the
-    table's data directories. A pass holding no vend writes nothing, so it may hand down the handle its probe read
-    (``opener``); one holding a vend opens under it, so every commit through the handle signs with the vend.
+    Opens the dataset, runs the refusal ladder that guards reclamation, then reclaims the versions and what they left in
+    the table's data directories. A pass holding no vend deletes nothing, so it may hand down the handle its probe read
+    (``opener``); one holding a vend opens under it, so every delete through the handle signs with the vend.
     """
     opened = _open(target, opener if target.write_options is None else None)
     if isinstance(opened, DatasetResult):
         return opened
-    disarm = _disarm_commit_path_cleanup(opened.ds, target)
     if (refused := _refusal(opened, target)) is not None:
-        return disarm.onto(refused)
-    result = disarm.onto(opened.result(target.uri))
+        return refused
+    result = opened.result(target.uri)
     result.table_id = target.table_id
     try:
         _count(opened.ds, result=result, target=target, policy=policy)

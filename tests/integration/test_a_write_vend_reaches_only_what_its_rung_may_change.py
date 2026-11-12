@@ -12,11 +12,13 @@ the version under its own credential. So the writer tier never reaches a final `
 version hint or `_refs/`, and that refusal is an explicit Deny: an Allow on `_versions/*.manifest-*` alone
 also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest. Measured with stock
 pylance 13.0.0 on a throwaway store and on the deployed one (LH-469, #594); RustFS lets an explicit Deny win
-(R3, measured 2026-10-18, git history at 64ef118a9). Whole-prefix write and delete belong to `can_maintain`, all but
-`_refs/`: a tag exempts its version from cleanup and a branch keeps its files
-(`lance_docs/lance/guide/tags_and_branches.md`), so a maintainer that could write a ref could keep a version an erasure
-removes or free one a hold keeps ([[XC-084]]). Its reclaim's own records on the control root, the table's history fence and
-the records of its committed files, are the maintain vend's too, and only its own table's ([[LH-219]]).
+(R3, measured 2026-10-18, git history at 64ef118a9). Whole-prefix delete belongs to the maintain tier, all but `_refs/`:
+a tag exempts its version from cleanup and a branch keeps its files (`lance_docs/lance/guide/tags_and_branches.md`), so a
+maintainer that could delete a ref could free a version a hold keeps ([[XC-084]]). It writes nothing of the table: a
+reclaim deletes, and the commits maintenance makes (a disarm, a floor raise) are the catalog's, made at its maintainer
+doors under the catalog's own credential and recorded as the caller's ([[LH-575]]). Its reclaim's own records on the
+control root, the table's history fence and the records of its committed files, are the maintain vend's too, and only its
+own table's ([[LH-219]]).
 
 DRIVEN THROUGH THE REAL DOOR AND THE REAL VENDOR. The catalog runs on a moto server, the vendor is the one its
 lifespan builds, and its token exchange goes to moto's STS, which records the session policy each session carries.
@@ -183,10 +185,11 @@ _Tier = Literal["read", "write", "maintain"]
         pytest.param("write", "b1", "s3:PutObject", "tree/b1/_transactions/9-x.txn", True, id="branch-write-stages-a-transaction"),
         pytest.param("write", "b1", "s3:PutObject", "_versions/9.manifest-0b1c", False, id="branch-write-cannot-stage-on-main"),
         pytest.param("write", "b1", "s3:PutObject", "data/f.lance", False, id="branch-write-cannot-write-main"),
-        pytest.param("maintain", "", "s3:PutObject", "_versions/9.manifest", True, id="maintain-commits"),
-        pytest.param("maintain", "", "s3:PutObject", "data/f.lance", True, id="maintain-rewrites"),
+        pytest.param("maintain", "", "s3:PutObject", "_versions/9.manifest", False, id="maintain-cannot-commit"),
+        pytest.param("maintain", "", "s3:PutObject", "data/f.lance", False, id="maintain-cannot-write-a-file"),
         pytest.param("maintain", "", "s3:DeleteObject", "_versions/1.manifest", True, id="maintain-cleans-up-versions"),
         pytest.param("maintain", "", "s3:DeleteObject", "tree/b1/data/f.lance", True, id="maintain-cleans-up-branches"),
+        pytest.param("maintain", "b1", "s3:PutObject", "tree/b1/_versions/9.manifest", False, id="branch-maintain-cannot-commit"),
         pytest.param("maintain", "", "s3:PutObject", "_refs/branches/b2.json", False, id="maintain-cannot-pin-a-version"),
         pytest.param("maintain", "", "s3:DeleteObject", "_refs/tags/t.json", False, id="maintain-cannot-unpin-a-version"),
     ],

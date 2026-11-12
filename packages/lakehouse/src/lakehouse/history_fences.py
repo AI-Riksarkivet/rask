@@ -22,10 +22,16 @@ catalog refuses such a pair at create, judging the table's branch listing; :attr
 that excludes its own, so two creates on one table take turns and each judges a listing no other create changes
 before it commits.
 
-A HOLD LAPSES AFTER :data:`HOLD`, so a holder that crashed fences the table for at most that long. A reclaim still
-running past its hold is no longer fenced, and its release logs ``history_fence_outlived`` at ERROR. Every hold is
-stamped and judged on the store's own clock (:attr:`lakehouse.records.StoreRead.at`, the ``Date`` of the
-read before each write), never a pod's, so a holder's lapse does not depend on two pods' clocks agreeing.
+A HOLD IS KEPT FOR AS LONG AS ITS WORK RUNS ([[LH-575]]). A reclaim can run longer than one :data:`HOLD` (maintenance
+ends a pass's replica only at twice its 1,800 s bound), and a hold that ran out under it would admit a tag on a version
+it is deleting, so :meth:`TableHistory.held` renews its hold every third of :data:`HOLD` while its block runs: two
+renewals that fail in a row leave a third inside the hold. A holder that crashed renews nothing, so it fences the table for at most
+:data:`HOLD` after its last renewal. A renewal that finds its hold gone, or a release that finds it ended, logs
+``history_fence_lost`` or ``history_fence_outlived`` at ERROR. A renewal is written under the credential the take was,
+so a holder whose credential expires (a maintenance vend lasts 900 s) can renew no further, and the deletes it signs
+with that credential stop with it. Every hold is stamped and judged on the store's own clock
+(:attr:`lakehouse.records.StoreRead.at`, the ``Date`` of the read before each write), never a pod's, so a holder's lapse
+does not depend on two pods' clocks agreeing.
 
 Every method is BLOCKING IO; callers threadpool it.
 """
@@ -33,6 +39,7 @@ Every method is BLOCKING IO; callers threadpool it.
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -57,9 +64,15 @@ def fence_key(table_uuid: str) -> str:
     return record_key(PREFIX, "table", table_uuid)
 
 
-#: How long one take holds the fence. Longer than any one table's reclaim the estate runs, and short enough that a
-#: holder that crashed does not keep a table's refs, or its reclaim, waiting long.
+#: How long a take, and each renewal of it, holds the fence: three renewal intervals, and short enough that a holder that
+#: crashed does not keep a table's refs, or its reclaim, waiting long.
 HOLD: Final = timedelta(minutes=15)
+
+
+def _renewal_seconds() -> float:
+    """How often a holder renews its hold while its work runs: every third of :data:`HOLD`."""
+    return HOLD.total_seconds() / 3
+
 
 #: How many read-and-write rounds a take or a release runs against holders of its own kind writing at once.
 _ATTEMPTS: Final = 8
@@ -175,16 +188,70 @@ class TableHistory(BaseModel):
         except Exception as exc:  # noqa: BLE001 — a release runs in a `finally`, and must not replace the work's own outcome
             log.warning("history_fence_not_released", extra={"table_uuid": self.table_uuid, "reason": f"{type(exc).__name__}: {exc}"[:300]})
 
+    def renew(self, token: str) -> bool:
+        """Hold the table's history for :data:`HOLD` more from the store's clock now, under the take ``token`` names;
+        ``False`` when that take holds it no longer.
+
+        A hold already past its end is not renewed: another take may have been admitted since, judged against the holders
+        that stood then, and only a fresh take may hold the table again.
+
+        Raises:
+            botocore.exceptions.ClientError: The store refused a read or a write.
+            records.RecordChangedError: Every attempt lost to another writer of the fence.
+        """
+        for _ in range(_ATTEMPTS):
+            read = records.read_json_at(self.control_root, self.storage_options, self.key)
+            now = read.at
+            if read.stored is None:
+                return False
+            fence = HistoryFence.model_validate(read.stored.record)
+            live = [holder for holder in fence.holders if holder.expires_at > now]
+            mine = next((holder for holder in live if holder.token == token), None)
+            if mine is None:
+                return False
+            others = [holder for holder in live if holder.token != token]
+            renewed = fence.model_copy(update={"holders": [*others, mine.model_copy(update={"expires_at": now + HOLD})]})
+            try:
+                records.replace_json(self.control_root, self.storage_options, self.key, renewed.model_dump(mode="json"), etag=read.stored.etag)
+            except records.RecordChangedError:
+                continue
+            return True
+        raise records.RecordChangedError(f"{_ATTEMPTS} attempts to renew a hold of this table's history each lost to another writer")
+
+    def _keep(self, token: str, stopped: threading.Event) -> None:
+        """Renew the take ``token`` names every third of :data:`HOLD` until ``stopped`` is set. Never raises: a renewal that
+        fails is tried again at the next interval, still inside the hold, and one that finds the hold gone ends the
+        renewals, logged."""
+        while not stopped.wait(_renewal_seconds()):
+            try:
+                held = self.renew(token)
+            except Exception as exc:  # noqa: BLE001 — retried at the next interval, which still falls inside the hold
+                log.warning("history_fence_not_renewed", extra={"table_uuid": self.table_uuid, "reason": f"{type(exc).__name__}: {exc}"[:300]})
+                continue
+            if held:
+                continue
+            if not stopped.is_set():
+                log.error("history_fence_lost", extra={"table_uuid": self.table_uuid})
+            return
+
     @contextmanager
     def held(self, work: HistoryWork) -> Generator[None]:
-        """The table's history held for ``work`` while the block runs.
+        """The table's history held for ``work`` while the block runs, the hold renewed for as long as it runs.
+
+        The renewals stop before the release, waiting at most one renewal interval for one in flight: a renewal landing
+        after the release reads the record the release wrote, under which its take holds nothing, and renews nothing.
 
         Raises:
             HistoryFencedError: Work that excludes ``work`` holds it; the block did not run.
             botocore.exceptions.ClientError: The store refused the take.
         """
         token = self.take(work)
+        stopped = threading.Event()
+        keeper = threading.Thread(target=self._keep, args=(token, stopped), name=f"history-fence-{self.table_uuid}", daemon=True)
+        keeper.start()
         try:
             yield
         finally:
+            stopped.set()
+            keeper.join(timeout=_renewal_seconds())
             self.release(token)

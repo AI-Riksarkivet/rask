@@ -69,11 +69,17 @@ _VENDED_NOTHING: Final = "no credential was vended"
 #: * ``write`` — a ``can_write_data`` managed-versioning writer: read the table, put what a commit needs
 #:   (data, transaction, deletion and index files, and a staged manifest), never a final manifest, a ref or
 #:   a delete. The catalog commits the version.
-#: * ``maintain`` — the maintenance identity's reclaim (``can_vend_maintain``): get, put and delete anywhere in the prefix
-#:   but its refs, because a disarm commits a version and cleanup deletes them, and the table's own records a reclaim
-#:   writes on the control root (:class:`TableRecords`). Also the shape for a prefix with no Lance layout to narrow by
-#:   (the warehouse scope probe).
+#: * ``maintain`` — the maintenance identity's reclaim (``can_vend_maintain``): get and delete anywhere in the prefix but
+#:   its refs, because cleanup deletes versions and what only they reference, and the table's own records a reclaim
+#:   writes on the control root (:class:`TableRecords`). It puts nothing of the table: the commits maintenance makes are
+#:   the catalog's, at its maintainer doors ([[LH-575]]).
+#:
+#: The vocabulary a vend door's ``tier`` query accepts, so it names no tier a door must never vend.
 Tier = Literal["read", "write", "maintain"]
+#: Every shape a session policy takes: a door's :data:`Tier`, and ``probe``, the warehouse scope probe's, which no door
+#: vends: get, put and delete anywhere in a prefix with no Lance layout to narrow by, where the probe lands, reads and
+#: removes its own objects.
+SessionTier = Tier | Literal["probe"]
 
 
 def requested_tier(query: Mapping[str, str]) -> Tier | None:
@@ -264,7 +270,7 @@ class CredentialVendor(Protocol):
         self,
         *,
         table_location: str,
-        tier: Tier,
+        tier: SessionTier,
         session_name: str,
         bases: Sequence[str] = (),
         data_directories: Sequence[str] = (),
@@ -305,15 +311,20 @@ def split_s3_location(location: str) -> tuple[str, str]:
 _READ_ACTIONS = ("s3:GetObject",)
 #: A writer lands new objects and may abandon its own multipart upload; it deletes nothing.
 _APPEND_ACTIONS = ("s3:PutObject", "s3:AbortMultipartUpload")
-_MAINTAIN_ACTIONS = (
-    "s3:GetObject",
-    "s3:PutObject",
-    "s3:DeleteObject",
-    "s3:AbortMultipartUpload",
-)
-#: What a maintainer does in its table's own data directory: read it, and delete what no version references ([[LH-286]]).
-#: No put: a compaction writes its rewrite to the table's root, since pylance 13.0.0's ``CompactionOptions`` names no base.
-_DATA_DIRECTORY_MAINTAIN_ACTIONS = ("s3:GetObject", "s3:DeleteObject")
+#: What a maintainer does in its table's prefix and in its own data directories: read them, and delete what no version
+#: references ([[LH-286]]). No put: Lance's cleanup deletes and writes nothing (measured on pylance 13.0.0 behind a counting
+#: proxy: GET, HEAD and bulk-delete POST only), and every commit is the catalog's ([[LH-575]]).
+_MAINTAIN_ACTIONS = ("s3:GetObject", "s3:DeleteObject")
+#: What the warehouse scope probe does under its own probe prefix: land an object, read it, and delete it.
+_PROBE_ACTIONS = ("s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload")
+#: What each tier's session may do with the objects of the table's own prefix, a branch's credential aside, which reads
+#: them and writes only its branch's own directories. A writer's puts are its own statements, on what a commit stages.
+_TABLE_OBJECT_ACTIONS: Final[dict[SessionTier, tuple[str, ...]]] = {
+    "read": _READ_ACTIONS,
+    "write": _READ_ACTIONS,
+    "maintain": _MAINTAIN_ACTIONS,
+    "probe": _PROBE_ACTIONS,
+}
 #: What S3 asks of the KMS key an object is encrypted with: ``kms:Decrypt`` to GET one, ``kms:GenerateDataKey`` to PUT one,
 #: and both for a multipart upload (AWS, "Using server-side encryption with AWS KMS keys") ([[LH-262]]).
 _KMS_READ_ACTIONS = ("kms:Decrypt",)
@@ -792,7 +803,7 @@ def table_has_branch(location: str, storage_options: StorageOptions, branch: str
 def build_session_policy(
     bucket: str,
     prefix: str,
-    tier: Tier,
+    tier: SessionTier,
     bases: Sequence[str] = (),
     *,
     sanctioned_bases: Sequence[str] = (),
@@ -825,12 +836,15 @@ def build_session_policy(
       ``tree/`` grant costs 20 characters of the table prefix a write credential fits within a 2,048-byte
       session policy, the limit RustFS and AWS both enforce (109 to 89 at a 63-character bucket, counted on
       the compact policy :class:`WebIdentityVendor` sends; a KMS key's grant costs 25 more, to 64, [[LH-262]]).
-    * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get, put, delete and abort-upload on ``<prefix>/*``: a
-      disarm commits a version and cleanup deletes versions, and an object store cannot tell a rewrite from a write. An
-      explicit Deny keeps every put and delete off ``_refs/`` (``table_layout.REFS_GLOB``), which no reclaim writes: a
-      maintainer that could put a tag could pin a version an erasure removes, and one that could delete a tag could
-      unpin a version a hold keeps ([[XC-084]]). For main, ``records`` adds the table's own records on the control root
-      that a reclaim writes under this vend and no other credential (:class:`TableRecords`, [[LH-219]]).
+    * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get and delete on ``<prefix>/*``, since cleanup
+      deletes versions and what only they reference. No put: a credential that could put a final manifest could commit
+      around every door, so the commits maintenance makes are the catalog's, at its maintainer doors ([[LH-575]]). An
+      explicit Deny keeps every delete off ``_refs/`` (``table_layout.REFS_GLOB``), which no reclaim writes: a maintainer
+      that could delete a tag could unpin a version a hold keeps ([[XC-084]]). For main, ``records`` adds the table's own
+      records on the control root that a reclaim writes under this vend and no other credential (:class:`TableRecords`,
+      [[LH-219]]).
+    * ``probe``: get, put, delete and abort-upload on ``<prefix>/*``, for the warehouse scope probe's prefix, which holds
+      no table.
 
     WHAT A SESSION POLICY CANNOT REFUSE: a ``PutObject`` over an existing key. A writer's ``data/*`` grant
     can therefore overwrite a committed data file's bytes in place; Lance's own commit is put-if-not-exists
@@ -848,8 +862,9 @@ def build_session_policy(
 
     ``kms_key`` is the key ARN a vend tells its writer to encrypt with (``vending.encryption``). The session may use that
     key alone, and only through S3: ``kms:Decrypt`` at every tier, since a reader GETs what was encrypted with it, and
-    ``kms:GenerateDataKey`` as well at the write and maintain tiers, which PUT. Without the grant every SSE-KMS read and
-    write through the credential is refused, since the session can only narrow the catalog's own policy ([[LH-262]]).
+    ``kms:GenerateDataKey`` as well at the tiers that PUT: write, probe, and maintain, whose records on the control root
+    are its puts. Without the grant every SSE-KMS read and write through the credential is refused, since the session can
+    only narrow the catalog's own policy ([[LH-262]]).
 
     ``sanctioned_bases`` defaults to EMPTY, which sanctions nothing foreign: a caller that has not wired
     the operator's allowlist grants only bases inside the table's own scope. Fail-closed is the right
@@ -909,7 +924,7 @@ def build_session_policy(
     # A READ tier needs no split: it is already read-everywhere-in-scope, and a second statement
     # granting nothing new is one more thing to get wrong.
     root = f"{bucket}/{prefix}" if prefix else bucket
-    obj_actions = list(_MAINTAIN_ACTIONS if tier == "maintain" and not branch else _READ_ACTIONS)
+    obj_actions = list(_READ_ACTIONS if branch else _TABLE_OBJECT_ACTIONS[tier])
     list_prefixes = [f"{prefix}/*"] if prefix else ["*"]
     obj_resource = f"arn:aws:s3:::{root}/*"
     statements: list[dict[str, object]] = [
@@ -957,7 +972,7 @@ def build_session_policy(
             }
         )
     elif tier == "maintain":
-        statements.append({"Sid": "NeverARef", "Effect": "Deny", "Action": ["s3:PutObject", "s3:DeleteObject"], "Resource": f"arn:aws:s3:::{root}/{REFS_GLOB}"})
+        statements.append({"Sid": "NeverARef", "Effect": "Deny", "Action": ["s3:DeleteObject"], "Resource": f"arn:aws:s3:::{root}/{REFS_GLOB}"})
         if records is not None:
             statements.extend(records.maintain_statements())
     if kms_key:
@@ -1015,7 +1030,7 @@ def build_session_policy(
             {
                 "Sid": f"BaseObjects{n}",
                 "Effect": "Allow",
-                "Action": list(_DATA_DIRECTORY_MAINTAIN_ACTIONS if reclaimed_here else _READ_ACTIONS),
+                "Action": list(_MAINTAIN_ACTIONS if reclaimed_here else _READ_ACTIONS),
                 "Resource": f"arn:aws:s3:::{base_bucket}/{base_prefix}/*" if base_prefix else f"arn:aws:s3:::{base_bucket}/*",
             }
         )
@@ -1091,7 +1106,7 @@ class ModeBVendor:
         self,
         *,
         table_location: str,
-        tier: Tier,
+        tier: SessionTier,
         session_name: str,
         bases: Sequence[str] = (),
         data_directories: Sequence[str] = (),
@@ -1140,7 +1155,7 @@ class WebIdentityVendor:
         self,
         *,
         table_location: str,
-        tier: Tier,
+        tier: SessionTier,
         session_name: str,
         bases: Sequence[str] = (),
         data_directories: Sequence[str] = (),

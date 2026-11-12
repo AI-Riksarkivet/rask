@@ -670,8 +670,19 @@ def refusal_log_entry(record: RefusedRecord) -> dict[str, object]:
     return {"id": f"{record.kind}:{record.id}", "reason": record.reason, "attempts": record.attempts}
 
 
+class _Reclaim(BaseModel):
+    """What one record's delete is signed and judged with: the session the catalog vends for it, maintenance's own session
+    that reads the base record and the claims, and the uuid the record keeps, by which its directories are judged."""
+
+    model_config = ConfigDict(frozen=True)
+
+    session: StorageOptions
+    own: StorageOptions
+    uuid: str
+
+
 async def _delete_bytes_or_refuse(
-    out: TrashPurgeReport, record: dict[str, Any], *, session: StorageOptions, own: StorageOptions, settings: MaintenanceSettings, control_root: str
+    out: TrashPurgeReport, record: dict[str, Any], reclaim: _Reclaim, *, settings: MaintenanceSettings, control_root: str
 ) -> tuple[int, int] | None:
     """Delete the bytes this record names, its root and its data directories, under its reclaim session, or record a
     refusal and answer ``None``.
@@ -681,13 +692,13 @@ async def _delete_bytes_or_refuse(
     ``OSError``, or a base record that could not be read, is transient and the next run simply retries.
 
     The base record and the claims that say which data directories are the table's are READ with maintenance's own
-    session (``own``, read once for the run), which reads the estate; only the deletes are the reclaim session's, which
-    reaches the bytes and nothing else. Any other failure is the record's refusal too, made by :func:`_purge_or_refuse`.
+    session (``reclaim.own``, read once for the run), which reads the estate; only the deletes are the reclaim
+    session's (``reclaim.session``), which reaches the bytes and nothing else. Any other failure is the record's refusal too, made by :func:`_purge_or_refuse`.
     """
     location, obj_id = trash.location_of(record), trash.name_of(record)
-    registry = BaseRegistry(control_root=control_root, storage_options=own)
+    registry = BaseRegistry(control_root=control_root, storage_options=reclaim.own)
     try:
-        return await run_in_threadpool(partial(_delete_guarded, location, session, registry=registry, table=obj_id))
+        return await run_in_threadpool(partial(_delete_guarded, location, reclaim.session, registry=registry, uuid=reclaim.uuid))
     except NotADatasetRootError as exc:
         await _refuse(out, record, reason=str(exc), settings=settings)
         log.warning("trash_purge_refused_not_a_dataset", extra={"kind": trash.kind_of(record), "id": obj_id, "location": location})
@@ -834,7 +845,8 @@ async def _purge_one(
     if kind == "table" and location:
         if (session := await _asked_of_the_catalog(record, out, partial(reclaim_options_for, kind, uuid, settings), asked="reclaim session")) is None:
             return
-        reclaimed = await _delete_bytes_or_refuse(out, record, session=session, own=run.own, settings=settings, control_root=run.control_root)
+        reclaim = _Reclaim(session=session, own=run.own, uuid=uuid)
+        reclaimed = await _delete_bytes_or_refuse(out, record, reclaim, settings=settings, control_root=run.control_root)
         if reclaimed is None:
             return
         deleted = reclaimed
@@ -978,27 +990,28 @@ def _record_metrics(out: TrashPurgeReport) -> None:
     )
 
 
-def _judged_data_directories(location: str, *, registry: BaseRegistry, table: str) -> list[RecordedBase]:
-    """The data directories ending the table at ``location`` deletes, each judged before any byte goes ([[LH-286]]).
+def _judged_data_directories(location: str, *, registry: BaseRegistry, uuid: str) -> list[RecordedBase]:
+    """The data directories ending the table ``uuid`` at ``location`` deletes, each judged before any byte goes ([[LH-286]]).
 
-    :func:`lakehouse.data_directories.directories_to_end` decides which are the table's (its claim names
-    the table, held or released by it, and every other one is left).
+    :func:`lakehouse.data_directories.directories_to_end` decides which are the table's (its claim records the uuid the
+    trash record keeps, held or released by it, and every other one is left, a table registered under the trashed
+    table's name since included, [[LH-575]]).
 
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
         botocore.exceptions.ClientError: The store refused a read of the record or a claim.
     """
-    return directories_to_end(registry, location, table=table)
+    return directories_to_end(registry, location, uuid=uuid)
 
 
-def _delete_guarded(location: str, storage_options: StorageOptions, *, registry: BaseRegistry, table: str) -> tuple[int, int]:
+def _delete_guarded(location: str, storage_options: StorageOptions, *, registry: BaseRegistry, uuid: str) -> tuple[int, int]:
     """`delete_location`, and the table's data directories after its root; ``(bytes, files)``.
 
     Every directory is judged before the root is touched, so a refusal deletes nothing. The record names the directories,
     so it is forgotten only after them (:func:`_delete_bytes_or_refuse`): a failure here leaves the record for the next
     tick, which finds the root already empty and finishes the directories.
     """
-    directories = _judged_data_directories(location, registry=registry, table=table)
+    directories = _judged_data_directories(location, registry=registry, uuid=uuid)
     root_bytes, root_files = delete_location(location, storage_options)
     deleted = delete_directories(directories, storage_options)
     return root_bytes + deleted.bytes, root_files + deleted.files
