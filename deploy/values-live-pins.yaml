@@ -2,6 +2,6 @@
 # `make k3s-pins TAGS=` and committed. Never hand-edit. See #135.
 image:
   tags:
-    lance-rest-catalog: "19783dedf"
-    web-console: "f4858d197"
+    lance-rest-catalog: "28ada2d4c"
+    web-console: "28ada2d4c"
   digests: {}
