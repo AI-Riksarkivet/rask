@@ -23,7 +23,8 @@ a person with catalog credentials must all publish the same way, or each reimple
 and they drift. It is also the one home for the race: a tag file carries no format-level CAS, and
 `UpdateTableTag` declares no conflict (`lance_docs/ns_catalog/spec.yaml` lists no 409 for it, though
 the error prose's table names code 14), so `set_tag` converges a first publication's create race on
-Lance's create refusal, and a later move of the tag is last-writer-wins.
+Lance's create refusal, and a later move reads the tag again right before it and refuses one another publish
+overtook; the read and the move remain two operations (:func:`advance`).
 
 The control flow is gate first, fail-closed, then create-or-update the tag.
 
@@ -39,14 +40,17 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from datetime import datetime
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from lance_namespace import (
+    ConcurrentModificationError,
     CreateTableTagRequest,
     DeleteTableTagRequest,
     InvalidInputError,
     InvalidTableStateError,
+    LanceNamespaceError,
     TableTagAlreadyExistsError,
     TableTagNotFoundError,
     TableVersionNotFoundError,
@@ -77,31 +81,34 @@ log = logging.getLogger(__name__)
 #: one.
 PUBLISHED_TAG = "published"
 
-#: Held on the candidate version for the DURATION OF THE GATE, then dropped.
-#:
-#: `cleanup_old_versions` exempts only TAGGED versions, and version N is untagged for exactly as long
-#: as the gate takes to run — so a slow gate against a short `older_than` lets maintenance collect the
-#: very version being gated, and the publish then advances a pointer at something that no longer
-#: exists. The window is small and entirely real, and it widens with every assertion added to the
-#: gate. A tag closes it: while `publishing` names N, maintenance cannot touch it.
-#:
-#: Removed in a `finally`, so a crashed gate leaves at most one stale `publishing` tag rather than
-#: pinning a version forever. A stale one is visible in `ListTableTags` and blocks nothing except the
-#: GC of one version.
-PUBLISHING_TAG = "publishing"
-
-#: The prefix of the tags the platform pins versions with (`promotions.HOLD_TAG`), as `rask.*` is its metadata's.
+#: The prefix of the tags the platform pins versions with (`promotions.HOLD_TAG`, :data:`PUBLISHING_PREFIX`), as `rask.*` is
+#: its metadata's.
 CATALOG_TAG_PREFIX = "rask."
+
+#: Each publish's pin on its candidate version for the DURATION OF ITS GATE, named ``<prefix><token>``, one per publish.
+#:
+#: `cleanup_old_versions` exempts only TAGGED versions, and version N is untagged for exactly as long as the gate takes to
+#: run, so a slow gate against a short `older_than` lets maintenance collect the very version being gated. A tag closes
+#: that window. One per publish, because two publishes of one table gate at once, and a pin they shared would be
+#: unpinned by whichever finishes first, mid-gate for the other. Under the platform's prefix, so the spec tag doors refuse it.
+PUBLISHING_PREFIX = f"{CATALOG_TAG_PREFIX}publishing."
+
+#: How old another publish's pin is before a publish removes it as one no publish still holds: its own publish deleted it
+#: in a `finally`, so one older than this is a pin whose delete failed or whose process died. The request deadline
+#: (`LANCE_REQUEST_DEADLINE_SECONDS`) answers the caller but lets the gate run on to its end, so it bounds no gate; a day
+#: is past any gate's scan, and a pin swept under a gate still running fails that publish closed, since a tag cannot be
+#: moved to a version cleanup removed (measured on pylance 13.0.0: `tags.update` answers "Version not found").
+STALE_PIN_AGE = timedelta(days=1)
 
 
 def is_catalog_tag(tag: str) -> bool:
     """Whether ``tag`` is one the catalog moves itself and no client may create, move or delete.
 
     `published` is what readers of a governed tier read (ADR 0156 C1), so only this door's gate and a
-    `can_promote` holder's approval move it; a tag door that moved it would publish past both. `publishing` and
-    the `rask.` tags pin versions for those doors.
+    `can_promote` holder's approval move it; a tag door that moved it would publish past both. The `rask.` tags pin
+    versions for those doors: a publish's candidate and a held version.
     """
-    return tag in (PUBLISHED_TAG, PUBLISHING_TAG) or tag.startswith(CATALOG_TAG_PREFIX)
+    return tag == PUBLISHED_TAG or tag.startswith(CATALOG_TAG_PREFIX)
 
 
 #: The two authorities that can name a gate's key column, as the result reports them.
@@ -546,6 +553,7 @@ def publish(
     declared_by: str = "",
     review: ReviewPolicy | None = None,
     before_move: Callable[[], None] = lambda: None,
+    now: datetime | None = None,
 ) -> PublicationResult:
     """Gate `version`, then advance `published` to it. Returns the range the notification should carry.
 
@@ -567,6 +575,15 @@ def publish(
     ``before_move`` runs once the gate passed, right before the tag advances to ``version``: the door records the move's
     author there ([[LH-552]]), and an exception from it leaves the tag where it was. A publication of the version already
     published passes the gate and leaves the tag as it is.
+
+    The candidate is pinned under a tag of this publish's own for the gate's duration, and the publish ends every other
+    publish's pin older than :data:`STALE_PIN_AGE` at ``now`` (the current time when ``None``).
+
+    Raises:
+        InvalidInputError: ``version`` is below 1, or the gate cannot run on it.
+        TableVersionNotFoundError: Main holds no such version.
+        InvalidTableStateError: ``version`` is older than the one `published` names.
+        ConcurrentModificationError: Another publish moved `published` to or past ``version`` while its gate ran.
     """
     if version < 1:
         raise InvalidInputError(f"version must be >= 1, got {version}")
@@ -586,9 +603,11 @@ def publish(
             f"refusing to move {tag!r} backwards from {previous} to {version}; roll back explicitly via the tag API if that is intended"
         )
 
+    pin = f"{PUBLISHING_PREFIX}{uuid.uuid4().hex}"
     try:
-        # Pin the candidate for the gate's duration — see PUBLISHING_TAG.
-        set_tag(table, storage_options, PUBLISHING_TAG, version)
+        # Pin the candidate for the gate's duration — see PUBLISHING_PREFIX.
+        dataplane.create_tag(table, storage_options, CreateTableTagRequest(id=table_id, tag=pin, version=version))
+        end_abandoned_pins(table, storage_options, now=now or datetime.now(UTC), own=pin)
 
         # Gate the version being published, not `latest`: they differ the moment another writer commits
         # while this gate runs, and publishing a version nobody checked is the whole failure this
@@ -644,11 +663,40 @@ def publish(
             # Published already: setting the tag again would only restamp its file's move time, a move no door announces
             # and the reconciler would take for one made past every door ([[LH-552]]).
             return published
-        before_move()
-        set_tag(table, storage_options, tag, version)
-        return published.model_copy(update={"moved_at": moved_at(table, storage_options, version, tag=tag)})
+        # The tag is read again right before it moves: another publish may have moved it while this gate ran, and a
+        # move over it would put readers back on a version older than the one they read.
+        advanced = advance(table, storage_options, version, tag=tag, before_move=before_move)
+        if not advanced.moved:
+            raise ConcurrentModificationError(
+                f"{tag!r} moved to version {advanced.previous} while version {version} was gated, and moving it back would take readers to "
+                "older data; publish the latest version instead"
+            )
+        return published.model_copy(update={"from_version": advanced.previous, "moved_at": advanced.moved_at})
     finally:
-        # Suppressed on purpose: a failure to unpin must never mask the publish outcome, and the worst
-        # case is one version exempt from GC until someone deletes a visible tag.
+        # Suppressed on purpose: a failure to unpin must never mask the publish outcome. The pin it leaves keeps one
+        # version from cleanup until a later publish ends it (`end_abandoned_pins`).
         with contextlib.suppress(Exception):
-            dataplane.delete_tag(table, storage_options, DeleteTableTagRequest(id=table_id, tag=PUBLISHING_TAG))
+            dataplane.delete_tag(table, storage_options, DeleteTableTagRequest(id=table_id, tag=pin))
+
+
+def end_abandoned_pins(table: DoorTable, so: StorageOptions, *, now: datetime, own: str) -> None:
+    """Delete every other publish's pin older than :data:`STALE_PIN_AGE` at ``now``, each one a publish whose own delete
+    failed; ``own`` is the caller's pin, which it deletes itself.
+
+    Best-effort: the publish that calls it goes on whatever the store answers, and a pin left is ended by the next.
+    """
+    try:
+        tags = table.open_unchecked(so).tags.list()
+    except (OSError, ValueError):
+        log.warning("publication_pins_unread", extra={"table": table.segments}, exc_info=True)
+        return
+    for name, entry in tags.items():
+        created = entry.get("created_at")
+        if name == own or not name.startswith(PUBLISHING_PREFIX) or not isinstance(created, datetime) or now - created < STALE_PIN_AGE:
+            continue
+        try:
+            drop_tag(table, so, name)
+        except (OSError, ValueError, LanceNamespaceError):
+            log.warning("publication_pin_unended", extra={"table": table.segments, "tag": name}, exc_info=True)
+            continue
+        log.info("publication_pin_ended", extra={"table": table.segments, "tag": name, "version": entry.get("version"), "created_at": created.isoformat()})

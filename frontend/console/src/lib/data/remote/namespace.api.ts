@@ -6,7 +6,7 @@ import { fetchTables, TrashEntrySchema, type TrashEntry } from './catalog.api';
 import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
 import { PolicyDeleteResponseSchema, type NamespacePolicyDelete } from '../namespace';
 
-import { catalogJSON, parsed } from '#lib/doors.ts';
+import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 // Transport: the console's catalog door, `#lib/doors`.
 // The NAMESPACE-scoped lifecycle + maintenance-policy surfaces, declared with `query`/`command` and
 // answering the shared `ApiResult` union. Owner-gated by the CATALOG (can_delete on namespace:<id>)
@@ -27,12 +27,16 @@ const enc = encodeURIComponent;
  *  Deliberately NOT `catalog.api.ts`'s `fetchTables`: that one reads the whole estate's registry in
  *  `<ns>$<table>` canonical form for the tables PAGE, so drawing a per-namespace rung from it would
  *  mean pulling every table in the estate to render one branch — and it would answer for namespaces
- *  this caller cannot read, which the hierarchy must show as "unreadable" rather than as empty. */
+ *  this caller cannot read, which the hierarchy must show as "unreadable" rather than as empty.
+ *  Every page of the listing is read (`catalogListing`). */
 const NamespaceTablesSchema = v.object({ tables: v.array(v.string()) });
 export const fetchNamespaceTables = query(
 	v.string(),
 	async (namespace): Promise<ApiResult<{ tables: string[] }>> =>
-		parsed(await catalogJSON(`/v1/namespace/${enc(namespace)}/table/list`), NamespaceTablesSchema),
+		parsed(
+			await catalogListing(`/v1/namespace/${enc(namespace)}/table/list`, 'tables'),
+			NamespaceTablesSchema,
+		),
 );
 
 /** What a CALLER supplies to set a policy — the PolicyRequest wire body, every bound optional

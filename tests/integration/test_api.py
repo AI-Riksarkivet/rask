@@ -16,6 +16,7 @@ from uuid import uuid4
 
 import lance
 import pyarrow as pa
+import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import (
     CreateNamespaceResponse,
@@ -301,14 +302,15 @@ def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypat
 # --- through the shared best-effort + version-pinned read-back trailer (lineage_deps).            ---
 
 
-def _capture_emit(monkeypatch, module: str) -> dict[str, object]:
-    """Patch the endpoint module's emit_write_event to record its kwargs (versionless-marker ops)."""
+def _capture_emit(monkeypatch) -> dict[str, object]:
+    """Record the kwargs of the versionless lifecycle marker a door sends, through the filing it sends from
+    (`catalog.api.announcing`, [[LH-576]])."""
     captured: dict[str, object] = {}
 
     async def _cap(_emitter: object, _segments: object, **kwargs: object) -> None:
         captured.update(kwargs)
 
-    monkeypatch.setattr(f"catalog.api.v1.endpoints.{module}.emit_write_event", _cap)
+    monkeypatch.setattr("catalog.api.announcing.emit_write_event", _cap)
     return captured
 
 
@@ -408,7 +410,7 @@ def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake
     async def _revoke(*_a: object, **_k: object) -> None:
         order.append("revoke")
 
-    monkeypatch.setattr("catalog.api.v1.endpoints.tables.emit_write_event", _emit)
+    monkeypatch.setattr("catalog.api.announcing.emit_write_event", _emit)
     monkeypatch.setattr("catalog.api.fga_deps.revoke_ownership", _revoke)
     claim_described("db$t")
 
@@ -427,7 +429,7 @@ def test_register_emits_the_resolved_location_not_the_relative_one(client: TestC
     fake_ns.register_table.return_value = RegisterTableResponse(location="t.lance")
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/9f_db$t")
     _judge_as_single_version(monkeypatch)
-    captured = _capture_emit(monkeypatch, "tables")
+    captured = _capture_emit(monkeypatch)
 
     resp = client.post("/v1/table/db$t/register", json={"location": "t.lance"})
     assert resp.status_code == 200
@@ -439,7 +441,7 @@ def test_declare_emits_versionless_marker(client: TestClient, fake_ns: MagicMock
     # under the uuid the declaration's grants are seeded on.
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/t")
     claim_described("db$t")
-    captured = _capture_emit(monkeypatch, "tables")
+    captured = _capture_emit(monkeypatch)
 
     resp = client.post("/v1/table/db$t/declare", json={})
     assert resp.status_code == 200
@@ -543,6 +545,47 @@ def test_maintenance_policy_crud_round_trips(client: TestClient, fake_ns: MagicM
     assert (unset.status_code, unset.json()) == (200, {"kind": "table", "id": "db1$users", "uuid": users, "set": False})
 
 
+@pytest.mark.parametrize(
+    ("meanwhile", "kept"),
+    [
+        pytest.param("set", {"compact_enabled": False, "scan_batch_size": 64}, id="a-concurrent-set-keeps-its-field"),
+        pytest.param("delete", {"compact_enabled": False, "scan_batch_size": None}, id="a-concurrent-delete-is-not-undone"),
+    ],
+)
+def test_a_policy_set_merges_onto_the_record_it_replaces(
+    client: TestClient, fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, meanwhile: str, kept: dict[str, object]
+) -> None:
+    """A partial set merges onto the record as it stands when its write lands, never one it read before: a set landing
+    meanwhile keeps the field it set, and a delete landing meanwhile is not undone by the fields the set read before it."""
+    from catalog.api.v1.endpoints import policies as policy_doors
+    from catalog.core.config import get_settings
+    from lakehouse import maintenance_policies
+
+    assert client.post("/management/v1/namespace/gold/policy/set", json={"retain_versions": 5}).status_code == 200
+    real_record = policy_doors._record  # noqa: SLF001 — the merge, where another request's write is landed in between
+    landed: list[str] = []
+
+    def _another_request_lands(kind: str, canonical: str, body: Any, existing: dict[str, object] | None, *, uuid: str | None) -> dict[str, object]:
+        if not landed:
+            landed.append(meanwhile)
+            settings = get_settings()
+            if meanwhile == "set":
+                record = real_record(kind, canonical, policy_doors.PolicyRequest(scan_batch_size=64), existing, uuid=uuid)
+                maintenance_policies.put_policy(settings.registry_root, settings.storage_options(), record)
+            else:
+                maintenance_policies.delete_policy(settings.registry_root, settings.storage_options(), kind, str(uuid))
+        return real_record(kind, canonical, body, existing, uuid=uuid)
+
+    monkeypatch.setattr(policy_doors, "_record", _another_request_lands)
+
+    answer = client.post("/management/v1/namespace/gold/policy/set", json={"compact_enabled": False})
+
+    described = client.post("/management/v1/namespace/gold/policy/describe").json()
+    assert answer.status_code == 200, answer.text
+    assert {field: described.get(field) for field in kept} == kept, described
+    assert described.get("retain_versions") == (5 if meanwhile == "set" else None), described
+
+
 def test_namespace_policy_describe_answers_the_policy_its_set_door_wrote(client: TestClient, fake_ns: MagicMock) -> None:
     # [[LH-589]]: the namespace door reads the record its set door keyed by the namespace's uuid, and says it is set.
     uuid = fake_ns.describe_namespace.return_value.properties[UUID_PROPERTY]
@@ -553,6 +596,19 @@ def test_namespace_policy_describe_answers_the_policy_its_set_door_wrote(client:
     # The defaults a first set writes are kept on the record, so they are part of what it reads back.
     kept = {"retain_versions": 5, "compact_enabled": True, "cleanup_enabled": True, "optimize_indices_enabled": True}
     assert (described.status_code, described.json()) == (200, {"kind": "namespace", "id": "gold", "uuid": uuid, **kept, "set": True})
+
+
+def test_a_field_a_rask_door_does_not_define_is_refused_and_nothing_is_written(client: TestClient, fake_ns: MagicMock) -> None:
+    # [[LH-576]] E10e: every body of rask's own doors refuses a field it does not define (`schemas.RequestBody`), so a
+    # misspelled bound is refused by name rather than read as absent and answered as if it had been understood.
+    del fake_ns
+    refused = client.post("/management/v1/namespace/gold/policy/set", json={"retain_versions": 5, "retention_day": 7})
+
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["code"] == 13
+    assert [(error["field"], error["type"]) for error in refused.json()["errors"]] == [("body.retention_day", "extra_forbidden")]
+    described = client.post("/management/v1/namespace/gold/policy/describe")
+    assert (described.status_code, described.json()["set"]) == (200, False), "a refused set wrote a policy"
 
 
 def _project_policy_settings(tmp_path: object):

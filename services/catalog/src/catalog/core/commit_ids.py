@@ -78,6 +78,15 @@ def tag_move_run_id(key: bytes, *, table_uuid: str, operation: str, version: int
     return _keyed_uuid(key, ("tag", table_uuid, operation, str(version), moved_at))
 
 
+def lifecycle_run_id(key: bytes, *, table_uuid: str, operation: str, announced_at: str) -> str:
+    """The run id of the announcement that ``operation`` (a drop, a deregister, a declare, a register, a rename) changed
+    ``table_uuid`` at ``announced_at``: the time its door fixed when it filed the announcement before the change, so the
+    door's own announcement and one a finish sends for it are one run ([[LH-576]]). Keyed, as a commit's is, so no other
+    writer can post under it first. The first field is a word no uuid spells, so no marker's id is a commit's or a move's.
+    """
+    return _keyed_uuid(key, ("lifecycle", table_uuid, operation, announced_at))
+
+
 def _keyed_uuid(key: bytes, fields: tuple[str, ...]) -> str:
     """A UUIDv8 carrying 122 bits of HMAC-SHA256 under ``key`` over ``fields``, separated by a unit separator."""
     value = int.from_bytes(hmac.new(key, "\x1f".join(fields).encode(), hashlib.sha256).digest()[:16])

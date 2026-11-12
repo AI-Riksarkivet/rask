@@ -119,6 +119,8 @@ class PassReadings(BaseModel):
     #: Why the policy record that may govern the table cannot be read as a policy, which parks each of its datasets
     #: (gate ``policy_unreadable``); ``None`` when it was read or none governs.
     policy_unreadable: str | None = None
+    #: The maintain-tier vends this pass was answered, one serving the table and every branch ([[LH-576]]).
+    vends: credentials.PassVends = Field(default_factory=credentials.PassVends)
 
 
 class NamedDataset(BaseModel):
@@ -367,7 +369,7 @@ def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, readings: PassR
         # Read on the handle the expiry reads too, which no commit has moved: Lance's count is not asked again.
         return expire_versions(target.model_copy(update={"reclaimable_versions": probe.reclaimable_versions}), policy, opener=opened)
     try:
-        vended = credentials.write_options_for(uri, settings, table_id=table)
+        vended = readings.vends.write_options_for(uri, settings, table_id=table)
     except _VEND_STOPS as exc:
         return _stopped_by_vend(probe, target, exc)
     disarm = _disarm(uri, table, readings=readings, settings=settings) if probe.armed else DisarmOutcome()
@@ -455,7 +457,7 @@ def maintain_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceS
         after = DatasetOpener(uri, settings.storage_options())
         question = plan.due_question(table=named.table, uuid=named.owners.table_uuid, location=uri)
         result.due = refresh_due(question, settings, now=readings.context.now, opened=after)
-        _check_committed_files(result, named, settings=settings, opened=after)
+        _check_committed_files(result, named, settings=settings, opened=after, vends=readings.vends)
         _report_unrecorded_bases(uri, settings=settings, opened=after)
     else:
         result.due = "unnamed"
@@ -463,7 +465,9 @@ def maintain_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceS
     return result
 
 
-def _check_committed_files(result: DatasetResult, named: NamedDataset, *, settings: MaintenanceSettings, opened: DatasetOpener) -> None:
+def _check_committed_files(
+    result: DatasetResult, named: NamedDataset, *, settings: MaintenanceSettings, opened: DatasetOpener, vends: credentials.PassVends
+) -> None:
     """Name each file a commit added that the store no longer holds as the catalog recorded it ([[LH-419]]), and forget
     each record no retained version needs.
 
@@ -489,7 +493,7 @@ def _check_committed_files(result: DatasetResult, named: NamedDataset, *, settin
         return
     result.overwritten_files = found.overwritten
     if found.reclaimed:
-        _forget_reclaimed(result, table=named.table, table_uuid=named.owners.table_uuid, reclaimed=found.reclaimed, settings=settings)
+        _forget_reclaimed(result, table=named.table, table_uuid=named.owners.table_uuid, reclaimed=found.reclaimed, settings=settings, vends=vends)
 
 
 def _report_unrecorded_bases(uri: str, *, settings: MaintenanceSettings, opened: DatasetOpener) -> None:
@@ -515,7 +519,9 @@ def _report_unrecorded_bases(uri: str, *, settings: MaintenanceSettings, opened:
         log.warning("maintenance_unrecorded_base", extra={"referrer": uri, "bases": unrecorded})
 
 
-def _forget_reclaimed(result: DatasetResult, *, table: str, table_uuid: str, reclaimed: list[str], settings: MaintenanceSettings) -> None:
+def _forget_reclaimed(
+    result: DatasetResult, *, table: str, table_uuid: str, reclaimed: list[str], settings: MaintenanceSettings, vends: credentials.PassVends
+) -> None:
     """Forget the ``reclaimed`` commits' records under the table's vend ([[LH-219]]).
 
     A record no retained version needs governs nothing, so an undecided vend or a failed delete leaves it for a later
@@ -523,7 +529,7 @@ def _forget_reclaimed(result: DatasetResult, *, table: str, table_uuid: str, rec
     the expiry records its own.
     """
     try:
-        vended = credentials.write_options_for(result.uri, settings, table_id=table)
+        vended = vends.write_options_for(result.uri, settings, table_id=table)
         committed_files.forget(settings.resolved_control_root, vended, table_uuid=table_uuid, reclaimed=reclaimed)
     except (credentials.VendUndecided, OSError) as exc:
         log.warning("committed_files_not_forgotten", extra={"uri": result.uri, "table_id": table, "error": f"{type(exc).__name__}: {exc}"[:300]})
@@ -573,7 +579,7 @@ def _skipped(uri: str, plan: DatasetPlan, named: NamedDataset, *, readings: Pass
     event holds this pass for them and the read costs one listing."""
     skipped = DatasetResult(uri=uri, skipped=plan.skipped)
     if readings.table_ids.of(uri) is not None:
-        _check_committed_files(skipped, named, settings=settings, opened=DatasetOpener(uri, settings.storage_options()))
+        _check_committed_files(skipped, named, settings=settings, opened=DatasetOpener(uri, settings.storage_options()), vends=readings.vends)
     record_overwritten_files(len(skipped.overwritten_files))
     _record_dataset_outcome(skipped, subject=settings.catalog_service_identity)
     return skipped
@@ -907,12 +913,15 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
     """When the dataset ``result`` names next needs a pass, read afresh after this one: its versions, its staged
     manifests and its policy's cadence. A dataset the pass could not decide on, or that the catalog's answer about its
     name parked, is retried after ``retry_seconds``; a refused one, and one nothing comes due on, waits for its next
-    commit or the recheck."""
+    commit or the recheck. So is one whose due record could not be evaluated: the record stays as it was, and a recheck
+    a day out would leave a compaction or an index optimize it now names unlisted for that long."""
     now = readings.context.now
     if result.error is not None or result.skipped == HISTORY_FENCED or result.refused_by in _ASKED_AGAIN:
         return now + timedelta(seconds=settings.retry_seconds)
     if result.refused is not None or result.trashed is not None:
         return None
+    if result.due == "failed":
+        return now + timedelta(seconds=settings.retry_seconds)
     named = name_dataset(result.uri, readings=readings, settings=settings)
     if isinstance(named, DatasetResult):
         return None

@@ -151,9 +151,9 @@ def trash_doors(control_root: str, storage_options: StorageOptions) -> Generator
 
 @contextmanager
 def catalog_doors(catalog: TestClient) -> Generator[respx.MockRouter]:
-    """Answer each trash, grant and clone-ending door maintenance asks `CATALOG_URL` with the real catalog app ``catalog``, so its
-    judgement and its acts are the catalog's own, but for the reclaim session's credential, which is the vend's pair (the
-    app's own vendor vends nothing direct here: what its policy narrows is
+    """Answer each trash, grant, clone-ending and idempotency-record door maintenance asks `CATALOG_URL` with the real
+    catalog app ``catalog``, so its judgement and its acts are the catalog's own, but for the reclaim session's credential,
+    which is the vend's pair (the app's own vendor vends nothing direct here: what its policy narrows is
     `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py`'s claim)."""
 
     _forward = _forwarded_to(catalog)
@@ -163,5 +163,7 @@ def catalog_doors(catalog: TestClient) -> Generator[respx.MockRouter]:
         router.route(url__regex=_TRASH_DOOR, name="trash").mock(side_effect=_forward)
         router.route(url__regex=rf"^{CATALOG_URL}/management/v1/grants/", name="grants").mock(side_effect=_forward)
         router.route(url__regex=rf"^{CATALOG_URL}/management/v1/clone-endings", name="clone-endings").mock(side_effect=_forward)
+        router.route(url__regex=rf"^{CATALOG_URL}/management/v1/idempotency-keys/", name="idempotency-keys").mock(side_effect=_forward)
+        router.route(url__regex=rf"^{CATALOG_URL}/management/v1/announcement-intents/", name="announcement-intents").mock(side_effect=_forward)
         router.route().pass_through()
         yield router

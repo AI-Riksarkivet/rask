@@ -17,6 +17,7 @@ import pytest
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from lance_namespace.errors import ErrorCode
 from openfga_sdk.client import OpenFgaClient
+from unfiled_announcer import unfiled
 
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
@@ -71,7 +72,7 @@ def _run(
     settings = cast(Settings, SimpleNamespace(fga_enabled=True))
     token = _person("alice")
     body = access.AccessGrantRequest(user=user, relation=relation)
-    resp = asyncio.run(access._access_mutate(client, NoopControlEmitter(), settings, token, NamedResolver(), fga_type, ident, body, grant=grant))
+    resp = asyncio.run(access._access_mutate(client, unfiled(NoopControlEmitter()), settings, token, NamedResolver(), fga_type, ident, body, grant=grant))
     return resp, captured
 
 

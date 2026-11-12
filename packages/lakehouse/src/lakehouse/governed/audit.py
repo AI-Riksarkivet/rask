@@ -87,6 +87,10 @@ class AuditAction(StrEnum):
     DLQ_REPLAY = "dlq_replay"
     DLQ_PARKED_REPLAY = "dlq_parked_replay"
     CLONE_ENDING_FINISH = "clone_ending_finish"
+    TRASH_RELEASE = "trash_release"
+    TRASH_END = "trash_end"
+    IDEMPOTENCY_KEYS_RECLAIM = "idempotency_keys_reclaim"
+    ANNOUNCEMENT_INTENTS_FINISH = "announcement_intents_finish"
 
 
 def configure_audit(*, enabled: bool) -> None:

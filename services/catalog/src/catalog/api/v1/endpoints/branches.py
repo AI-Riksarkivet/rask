@@ -42,8 +42,8 @@ def list_table_branches(
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,
+    limit: ListLimit,
     page_token: str | None = None,
-    limit: ListLimit = None,
 ) -> ListTableBranchesResponse:
     """List a table's Git-like branches (paginated) — wraps the pylance ``list_branches`` data-plane op."""
     req = ListTableBranchesRequest(id=parse_identifier(id), page_token=page_token, limit=limit)

@@ -1,7 +1,7 @@
 import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '#lib/api/client.ts';
-import { catalogJSON, parsed } from '#lib/doors.ts';
+import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 import { ControlEventSchema, type ControlEvent } from '#lib/admin/control.ts';
 import type { ProjectSummary } from '../catalog';
 
@@ -89,8 +89,10 @@ export const projectEvents = query(
 export const createProject = command(
 	({ id }) => `Create project ${id}`,
 	v.object({ id: v.string(), name: v.optional(v.nullable(v.string())) }),
-	async (body): Promise<ApiResult<unknown>> =>
-		catalogJSON('/management/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
+	// The catalog keeps a project's id and no name, and refuses a body field its door does not define, so only
+	// the id is sent; `name` stays accepted for the create dialog that passes it.
+	async ({ id }): Promise<ApiResult<unknown>> =>
+		catalogJSON('/management/v1/projects', { method: 'POST', body: JSON.stringify({ id }) }),
 );
 
 /** Retire a tenant — `DELETE /management/v1/projects/{id}`. Gated at the catalog on the project's OWN
@@ -141,13 +143,13 @@ export const warehouseNamespaces = query(
 );
 
 /** The tables under one namespace — the namespace→table rung (#104). The spec's list_tables via
- *  the catalog's GET route; the view caps what it draws and SAYS so, this returns the page. */
+ *  the catalog's GET route, every page of it; the view caps what it draws and SAYS so. */
 const NamespaceTablesSchema = v.object({ tables: v.array(v.string()) });
 export const namespaceTables = query(
 	v.string(),
 	async (namespaceId): Promise<ApiResult<{ tables: string[] }>> =>
 		parsed(
-			await catalogJSON(`/v1/namespace/${enc(namespaceId)}/table/list`),
+			await catalogListing(`/v1/namespace/${enc(namespaceId)}/table/list`, 'tables'),
 			NamespaceTablesSchema,
 		),
 );

@@ -56,6 +56,11 @@ def endpoint_url(settings: LineageSettings) -> str:
     return f"{settings.forward_url.rstrip('/')}/{settings.forward_endpoint.lstrip('/')}"
 
 
+def follower(settings: LineageSettings) -> str:
+    """The forwarder's name in the cursors table: its endpoint, so a new backend starts from the feed's oldest row."""
+    return f"forward:{endpoint_url(settings)}"
+
+
 async def _authorization(settings: LineageSettings) -> dict[str, str]:
     """The bearer the backend asks for, read from the secret store on every tick, so a rotated key needs no restart."""
     if not settings.forward_api_key_secret:
@@ -104,19 +109,19 @@ async def _send(provenance: ProvenanceStore, settings: LineageSettings, client: 
 async def forward(provenance: ProvenanceStore, settings: LineageSettings, client: httpx.AsyncClient) -> ForwardOutcome:
     """POST the feed's events after the forwarder's cursor to the backend, in seq order, and move the cursor past them."""
     url = endpoint_url(settings)
-    follower = f"forward:{url}"
-    mark = await provenance.cursor(follower)
+    name = follower(settings)
+    mark = await provenance.cursor(name)
     bounds = await provenance.feed_bounds()
     if bounds is not None and bounds[1] < mark:
         # A cursor this feed never issued: it was taken on another feed (the store moved, or was restored).
         log.warning("lineage_forward_cursor_ahead_of_feed", extra={"cursor": mark, "head": bounds[1]})
         mark = bounds[0] - 1
-        await provenance.reset_cursor(follower, mark)
+        await provenance.reset_cursor(name, mark)
     elif bounds is not None and mark and bounds[0] > mark + 1:
         log.error("lineage_forward_pruned_before_forwarded", extra={"cursor": mark, "oldest_seq": bounds[0]})
     reached, outcome = await _send(provenance, settings, client, url, mark)
     if reached > mark:
-        await provenance.advance_cursor(follower, reached)
+        await provenance.advance_cursor(name, reached)
     metrics.record_forwarded(forwarded=outcome.forwarded, refused=outcome.refused, stalled=outcome.stalled is not None)
     if outcome.stalled:
         log.warning("lineage_forward_stalled", extra={"cursor": reached, "reason": outcome.stalled})

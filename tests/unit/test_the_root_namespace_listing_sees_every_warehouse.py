@@ -33,6 +33,7 @@ from unittest.mock import MagicMock
 import pytest
 from lance_namespace import ListNamespacesResponse
 
+from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
 from lakehouse.storage_options import StorageOptions
@@ -91,6 +92,7 @@ async def _list(
         token=(MagicMock(sub="bob") if fga_enabled else None),
         client=(MagicMock() if fga_enabled else None),
         resolver=NamedResolver(),
+        limit=MAX_LIST_LIMIT,
     )
 
 
@@ -162,6 +164,7 @@ async def test_an_unreadable_registry_does_not_blank_the_root_listing(monkeypatc
         token=None,
         client=None,
         resolver=NamedResolver(),
+        limit=MAX_LIST_LIMIT,
     )
 
     assert response.namespaces == ["shared"]

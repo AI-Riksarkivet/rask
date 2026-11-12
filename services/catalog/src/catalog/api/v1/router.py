@@ -9,6 +9,7 @@ from catalog.api.security import authenticate
 from catalog.api.v1.endpoints import (
     access,
     access_admin,
+    announcement_intents,
     branches,
     clone_endings,
     columns,
@@ -19,6 +20,7 @@ from catalog.api.v1.endpoints import (
     events,
     gates,
     grant_reconcile,
+    idempotency_keys,
     indices,
     maintenance,
     me,
@@ -72,6 +74,8 @@ for _module in (
     grant_reconcile,
     trash_reclaim,
     clone_endings,
+    idempotency_keys,
+    announcement_intents,
 ):
     api_router.include_router(_module.router)
     # A module may ALSO carry a `management_router`, mounted at `/management/v1/...`. That is the seam

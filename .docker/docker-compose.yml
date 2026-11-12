@@ -122,6 +122,10 @@ services:
       LANCE_S3_VENDED_ENDPOINT: http://localhost:9000
       LANCE_S3_REGION: us-east-1
       LANCE_S3_VIRTUAL_HOSTED: "false"
+      # This stack projects no ServiceAccount token, so the catalog signs with the key pair above, a static key that
+      # never rotates, and boots only where that is acknowledged; so is the authentication this stack leaves off.
+      RASK_INSECURE_ALLOW_STATIC_STORE_KEY: "true"
+      RASK_INSECURE_ALLOW_UNAUTHENTICATED: "true"
       # --- Auth is OFF by default. Uncomment to enforce OIDC (Dex) + OpenFGA authz.
       #   The openfga/postgres/dex services below provide the infra.
       # RASK_OIDC_ENABLED: "true"

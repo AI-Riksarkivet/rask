@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import secrets
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import UTC, datetime, timedelta
@@ -99,8 +100,8 @@ ORPHAN_CHECK_FLOOR_HOURS: Final = 24
 #: The kinds that repair the estate from a drift report, and the one claim they share.
 _RECONCILING_KINDS: Final = frozenset({"audit", "scan"})
 _RECONCILE_CLAIM: Final = "reconcile"
-#: The redelivery delay after a failed delivery, doubling up to a ceiling: a store that is down for a while is asked
-#: again at a pace it can bear.
+#: The bound on the redelivery delay after a failed delivery, doubling up to a ceiling: a store that is down for a while is
+#: asked again at a pace it can bear. The delay itself is drawn beneath the bound (:func:`redelivery_delay`).
 _RETRY_FIRST: Final = 15.0
 _RETRY_CEILING: Final = 900.0
 #: The token a follow-up's subjects carry after their area, and how long a fired follow-up waits for the task holding its
@@ -235,13 +236,25 @@ def _parsed(msg: Msg) -> Task | None:
         return None
 
 
-def _at(at: datetime) -> str:
-    """An ``@at`` schedule for the instant ``at``, in UTC to the second (ADR-51)."""
-    return f"@at {at.astimezone(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')}"
+def at_schedule(at: datetime) -> str:
+    """An ``@at`` schedule for the instant ``at``, in UTC to the second (ADR-51), held to the second after an instant
+    between two: one held to the second before fires short of ``at``, and a task that holds itself until ``at`` (a trash
+    record's, until its release) would find it still ahead and hold itself again, at once, until the clock passed it."""
+    utc = at.astimezone(UTC)
+    held = utc.replace(microsecond=0) + (timedelta(seconds=1) if utc.microsecond else timedelta(0))
+    return f"@at {held.strftime('%Y-%m-%dT%H:%M:%SZ')}"
 
 
-def _redelivery_delay(delivered: int) -> float:
-    return min(_RETRY_FIRST * 2 ** max(delivered - 1, 0), _RETRY_CEILING)
+#: The doublings past which the bound is the ceiling whatever the delivery count: 15 s doubled six times passes 900 s.
+_RETRY_DOUBLINGS: Final = 6
+
+
+def redelivery_delay(delivered: int) -> float:
+    """How long the ``delivered``-th failed delivery waits before it is asked again: drawn at random up to a bound that
+    doubles with each delivery to :data:`_RETRY_CEILING` (full jitter), so tasks that failed together, on one store
+    outage, come back spread over the bound rather than in the same second, delivery after delivery."""
+    bound = min(_RETRY_FIRST * 2 ** min(max(delivered - 1, 0), _RETRY_DOUBLINGS), _RETRY_CEILING)
+    return random.uniform(0.0, bound)  # noqa: S311 — spreads retries, guards nothing
 
 
 async def _standing(claims: KeyValue, key: str, token: str) -> int | None:
@@ -496,7 +509,7 @@ class TaskQueue:
     async def schedule_at(self, task: Task, at: datetime) -> None:
         """Hold ``task`` until ``at``, then put it on the queue, replacing any time it was held for before (ADR-51). A time
         already past fires at once."""
-        await self._hold(task, _at(at), held=task.subject("schedule"), fires=task.subject("due"))
+        await self._hold(task, at_schedule(at), held=task.subject("schedule"), fires=task.subject("due"))
 
     async def schedule_every(self, task: Task, cadence: str) -> None:
         """Put ``task`` on the queue at every firing of ``cadence`` (``@hourly``, ``@every 30m``, a six-field cron), once
@@ -511,7 +524,7 @@ class TaskQueue:
         """
         held = task.subject("schedule")
         try:
-            await self._hold(task, _at(at), held=held, fires=task.subject("due"), expect_nothing=True)
+            await self._hold(task, at_schedule(at), held=held, fires=task.subject("due"), expect_nothing=True)
         except APIError as exc:
             if exc.err_code in _HELD_ALREADY:
                 return False
@@ -528,7 +541,7 @@ class TaskQueue:
         """
         held = task.follow_up_subject("schedule")
         try:
-            await self._hold(task, _at(at), held=held, fires=task.follow_up_subject("due"), expect_nothing=True)
+            await self._hold(task, at_schedule(at), held=held, fires=task.follow_up_subject("due"), expect_nothing=True)
         except APIError as exc:
             if exc.err_code in _HELD_ALREADY:
                 return False
@@ -861,7 +874,7 @@ class Worker:
         the audit and the scan, the other of the two, whose next firing brings this one back. A table's or a trash
         record's next try is held a follow-up's wait out, so the hourly audit is not what finds it."""
         if delivered < self._max_deliver:
-            await self._tell(msg, _nak(_redelivery_delay(delivered)), lease)
+            await self._tell(msg, _nak(redelivery_delay(delivered)), lease)
             return
         log.warning("maintenance_task_given_up_to_its_claim", extra={"subject": msg.subject, "deliveries": delivered})
         await self._tell(msg, Msg.Ack.Term, lease)
@@ -957,7 +970,7 @@ class Worker:
             return
         log.warning("maintenance_task_retried", exc_info=exc, extra={"subject": msg.subject, "deliveries": delivered, "error": error})
         record_task_retried(kind=task.kind)
-        await self._tell(msg, _nak(_redelivery_delay(delivered)), lease)
+        await self._tell(msg, _nak(redelivery_delay(delivered)), lease)
 
     async def _end(self, msg: Msg, task: Task, lease: _Lease, *, deliveries: int, error: str, cause: BaseException | None = None) -> None:
         """End ``task`` on this delivery, counted, and hold its next try ``retry_ended_seconds`` out: the hourly audit queues
@@ -1050,7 +1063,7 @@ class Worker:
             record_store_event_settled(outcome="ended")
             return
         log.warning("maintenance_store_event_retried", extra={"subject": msg.subject, "deliveries": delivered, "error": error})
-        await msg.nak(delay=_redelivery_delay(delivered))
+        await msg.nak(delay=redelivery_delay(delivered))
         record_store_event_settled(outcome="retried")
 
     async def _fetch(self, subscription: JetStreamContext.PullSubscription, batch: int) -> list[Msg]:

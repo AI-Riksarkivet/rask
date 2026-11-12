@@ -35,8 +35,9 @@ estate OBSERVER, whose bar is "may watch the whole estate", must not be able to 
 administer. The delete itself is bottom-up (`open_hierarchy_lifecycle.md` Decision 3): it refuses 409 while
 the project still holds warehouses, naming them, and carries no ``cascade`` at all (see ``delete_project``).
 Its deletion protection is set and cleared on the same authority, ``POST /management/v1/projects/{id}/protection``
-([[LH-549]]), and both doors read the record and decide through :func:`administered_project`, which answers a caller
-who may not administer the tenant exactly as it answers a missing one.
+([[LH-549]]), decided through :func:`administered_project`, which answers a caller who may not administer the tenant
+exactly as it answers a missing one; the delete decides through :func:`project_to_delete`, which also lets the caller
+who started a delete finish it ([[LH-576]]).
 
 ``admins`` comes from OpenFGA ``list_users`` (the #51 access-review primitive) on
 ``project:<id>#can_administer`` — EFFECTIVE admins (role assignees, nested roles, the cascade), not raw
@@ -64,7 +65,8 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.api import fga_deps
+from catalog.api import announcing, fga_deps
+from catalog.api.announcing import AnnouncerDep
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken, current_subject
 from catalog.core.config import Settings
@@ -78,9 +80,11 @@ from catalog.schemas import (
 )
 from catalog.services import projects as project_registry
 from catalog.services import role_grants, roles, warehouses
+from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
 from catalog.services.control_records import ProtectionChange
 from lakehouse import maintenance_policies, protection
 from lakehouse.control_emit import emit_control
+from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
@@ -213,6 +217,10 @@ async def _converge_project(settings: Settings, so: StorageOptions, record: dict
         # Raced a concurrent tenant delete: retryable, never a blind re-create — code 14 -> 409, so
         # the caller retries into a clean mint rather than resurrecting a project just deleted.
         raise ConcurrentModificationError(f"project {record['id']!r} write raced a concurrent delete; retry") from None
+    except project_registry.ProjectBeingDeletedError:
+        # Its id is free once the delete has revoked and ended what it held ([[LH-576]]): a tenant made over a delete
+        # still running would hold whatever that delete has yet to take away.
+        raise ConcurrentModificationError(f"project {record['id']!r} is being deleted; create it once its delete has finished") from None
 
 
 @router.post("", response_model_exclude_none=True)
@@ -220,7 +228,7 @@ async def create_project(
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     body: CreateProjectRequest,
 ) -> ProjectResponse:
     """Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
@@ -229,7 +237,8 @@ async def create_project(
     surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion
     protection forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
-    like any other ACL change, only when it was actually written."""
+    like any other ACL change, only when it was actually written; what the create announces is filed before the record,
+    so a create that fails after it still announces it ([[LH-576]])."""
     project_id = body.id
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
@@ -238,52 +247,54 @@ async def create_project(
     so = settings.storage_options()
     existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
     actor = f"user:{token.subject}" if token else None
+    obj = f"project:{project_id}"
+    created = Announcement(
+        evidence=RecordHeld(key=project_registry.record_key(project_id)),
+        message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=obj, actor=actor)),
+    )
+    # `seed_project_admin` writes the admin's grant exactly when authorization is on and an admin is named.
+    seeds = settings.fga_enabled and token is not None and client is not None and admin is not None
+    admin_granted = (
+        announcing.grant_announcement(
+            fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=obj), action="grant_added", actor=actor, extra={"reason": "project_created"}
+        )
+        if seeds and admin is not None
+        else None
+    )
+    filed = announcer.announcing(door="create_project", target=obj, announcements=[created, *([admin_granted] if admin_granted is not None else [])])
     record = {
         "id": project_id,
         "created_at": (existing.get("created_at") if existing else None) or datetime.now(UTC).isoformat(),
         "created_by": (existing.get("created_by") if existing else None) or (token.subject if token else ""),
     }
-    if existing is None:
-        # The tenant MINT is conditional (F1): two concurrent creates of one id both read "absent"
-        # above; the store refuses the second, which then converges on the winner's identity fields
-        # exactly like the sequential idempotent re-POST.
-        try:
-            await run_in_threadpool(project_registry.create_project_record, settings.registry_root, so, record)
-        except RecordExistsError:
-            # Lost the mint race — converge on the WINNER, conditionally (diff2 F1 leg c). The merge
-            # happens inside the write, against the record as it actually stands, so a protection
-            # change landing in this window is preserved instead of clobbered.
+    async with filed as filing:
+        if existing is None:
+            # The tenant MINT is conditional (F1): two concurrent creates of one id both read "absent"
+            # above; the store refuses the second, which then converges on the winner's identity fields
+            # exactly like the sequential idempotent re-POST.
+            try:
+                await run_in_threadpool(project_registry.create_project_record, settings.registry_root, so, record)
+            except RecordExistsError:
+                # Lost the mint race — converge on the WINNER, conditionally (diff2 F1 leg c). The merge
+                # happens inside the write, against the record as it actually stands, so a protection
+                # change landing in this window is preserved instead of clobbered.
+                record = await _converge_project(settings, so, record)
+        else:
             record = await _converge_project(settings, so, record)
-    else:
-        record = await _converge_project(settings, so, record)
-    granted = await fga_deps.seed_project_admin(client, settings, token, project=project_id, admin=admin)
-    log.info("project_created", extra={"project": project_id, "existing": existing is not None})
-    await emit_control(
-        control,
-        action="project_created",
-        object_type="project",
-        object_id=f"project:{project_id}",
-        actor=actor,
-    )
-    # `seed_project_admin` writes a grant only for a named admin, so `granted` implies one.
-    if granted and admin is not None:
-        audit(
-            AuditAction.ACCESS_GRANT,
-            AuditOutcome.SUCCESS,
-            subject=actor,
-            resource=f"project:{project_id}",
-            grantee=fga.user_object(admin),
-            relation="admin",
-            reason="project_created",
-        )
-        await emit_control(
-            control,
-            action="grant_added",
-            object_type="grant",
-            object_id=f"project:{project_id}",
-            actor=actor,
-            extra={"relation": "admin", "subject": fga.user_object(admin), "reason": "project_created"},
-        )
+        granted = await fga_deps.seed_project_admin(client, settings, token, project=project_id, admin=admin)
+        log.info("project_created", extra={"project": project_id, "existing": existing is not None})
+        await filing.send(created)
+        if granted and admin is not None and admin_granted is not None:
+            audit(
+                AuditAction.ACCESS_GRANT,
+                AuditOutcome.SUCCESS,
+                subject=actor,
+                resource=obj,
+                grantee=fga.user_object(admin),
+                relation="admin",
+                reason="project_created",
+            )
+            await filing.send(admin_granted)
     return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, project_id))
 
 
@@ -390,7 +401,48 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
     return record
 
 
-AdministeredProjectDep = Annotated[dict[str, str], Depends(administered_project)]
+async def project_to_delete(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
+    """The record of ``project_id``, for its delete: a caller who administers it starts one, and once one has started,
+    the caller who started it, an admin it has not reached, or the estate's owner finishes it ([[LH-576]]).
+
+    A delete writes who started it on the project's record before its first destructive step, and its revoke then takes
+    that caller's own admin grant with the rest, so a retry after a later step failed is authorized by the record. The
+    estate's owner, who may watch every tenant, may finish what an admin decided, so no unfinished delete outlives its
+    starter. Anyone else is answered the missing project's 404, as :func:`administered_project` answers them.
+
+    Args:
+        project_id: The project the route's path names.
+        settings: The catalog's settings.
+        token: The verified caller.
+        client: The OpenFGA client deciding.
+
+    Returns:
+        The project's record, the delete it names included.
+
+    Raises:
+        InvalidInputError: The id is not a project id.
+        TableNotFoundError: The project is absent, or its caller may not delete it.
+    """
+    if not _ID_RE.match(project_id):
+        raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
+    record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, settings.storage_options(), project_id)
+    if record is None:
+        raise TableNotFoundError(f"project not found: {project_id}")
+    starter = record.get(project_registry.DELETING_BY)
+    if starter is not None and starter == current_subject(token):
+        audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=f"project:{project_id}")
+        return record
+    doors = [("can_administer", f"project:{project_id}")]
+    if starter is not None:
+        doors.append(("can_observe_events", settings.fga_root_object))
+    try:
+        await fga_deps.require_any_relation(client, settings, token, doors=doors)
+    except PermissionDeniedError as exc:
+        raise TableNotFoundError(f"project not found: {project_id}") from exc
+    return record
+
+
+ProjectToDeleteDep = Annotated[dict[str, str], Depends(project_to_delete)]
 
 
 @router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(administered_project)])
@@ -438,14 +490,42 @@ async def set_project_protection(
     return ProtectionResponse(id=project_id, protected=body.protected)
 
 
+async def _start_delete(project_id: str, record: dict[str, str], settings: Settings, token: CurrentToken, *, force: bool) -> None:
+    """Judge a delete's start, its protection and the project's emptiness, and record it on the project's record.
+
+    Raises:
+        NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses.
+        TableNotFoundError: Its record went meanwhile.
+    """
+    so = settings.storage_options()
+    # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
+    # `project_to_delete` has proven the caller administers this tenant.
+    fga_deps.require_not_protected(record, kind="project", obj_id=project_id, force=force)
+
+    # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
+    # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
+    # read may be one of this project's own ([[LH-572]]).
+    held = sorted(str(r["id"]) for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.get("project") == project_id)
+    if held:
+        raise NamespaceNotEmptyError(
+            f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "
+            f"Delete each one first — DELETE /management/v1/warehouses/{{id}} (its own bucket purge is a separate "
+            f"opt-in) — then delete the project. There is deliberately no cascade here: retiring a tenant "
+            f"must never be able to destroy its buckets transitively in one request."
+        )
+    # Recorded before the first destructive step, so whichever step fails, the retry finds the delete and who started it.
+    if await run_in_threadpool(project_registry.mark_deleting, settings.registry_root, so, project_id, by=current_subject(token)) is None:
+        raise TableNotFoundError(f"project not found: {project_id}")
+
+
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
-    record: AdministeredProjectDep,
+    record: ProjectToDeleteDep,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     force: bool = False,
 ) -> DeleteProjectResponse:
     """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance
@@ -453,8 +533,15 @@ async def delete_project(
 
     Gated on ``project:<id>#can_administer``, the tenant's OWN admin bar: the rungs that open its reads, the estate
     observer's and membership, retire nothing (module docstring). Order, fail-closed and each step earning the next:
-    id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
-    emptiness (409) → revoke tuples → end its roles → end its maintenance policy → delete record → audit + event.
+    id shape (400) → existence and authz (both 404, :func:`project_to_delete`) → deletion protection (409) →
+    emptiness (409) → the delete recorded on the project's record → revoke tuples → end its roles → end its maintenance
+    policy → delete record → audit + event.
+
+    **A delete that failed part-way is finished by asking again** ([[LH-576]]): the record names the caller who started
+    it, whose own admin grant the revoke takes, and :func:`project_to_delete` lets that caller, an admin the revoke has
+    not reached, or the estate's owner finish it. Every later step is idempotent, and the protection and emptiness
+    were judged when the delete was recorded: from then on the project is absent to every other door
+    (``project_registry.get_project``), so no warehouse, role or grant is made for it meanwhile.
 
     **Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to
     empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
@@ -473,11 +560,11 @@ async def delete_project(
 
     Args:
         project_id: The project to retire.
-        record: Its registry record, its caller authorized on it (:func:`administered_project`).
+        record: Its registry record, its caller authorized on it (:func:`project_to_delete`).
         settings: The catalog's settings.
         token: The verified caller.
         client: The OpenFGA client its tuples are revoked through.
-        control: Where control events go.
+        announcer: Where what it announces is filed and sent.
         force: Delete it though it is protected.
 
     Returns:
@@ -485,97 +572,73 @@ async def delete_project(
 
     Raises:
         NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses.
-        InternalError: A warehouse record is there and cannot be read as one; nothing was deleted.
-        ServiceUnavailableError: The store did not answer a registry read, or OpenFGA could not revoke its tuples; nothing
-            was deleted.
+        InternalError: A warehouse record is there and cannot be read as one, and nothing was deleted; or a role record,
+            and the delete stands recorded for a retry to finish once it is written again.
+        ServiceUnavailableError: The store did not answer a read, or OpenFGA could not revoke its tuples; a delete
+            recorded by then is finished by a retry.
     """
     so = settings.storage_options()
-    # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
-    # `administered_project` has proven the caller administers this tenant.
-    fga_deps.require_not_protected(record, kind="project", obj_id=project_id, force=force)
-
-    # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
-    # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
-    # read may be one of this project's own ([[LH-572]]).
-    held = sorted(str(r["id"]) for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.get("project") == project_id)
-    if held:
-        raise NamespaceNotEmptyError(
-            f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "
-            f"Delete each one first — DELETE /management/v1/warehouses/{{id}} (its own bucket purge is a separate "
-            f"opt-in) — then delete the project. There is deliberately no cascade here: retiring a tenant "
-            f"must never be able to destroy its buckets transitively in one request."
-        )
-
-    removed: list[fga.ClientTuple] = []
-    revoked = False
-    # Tuples FIRST, record second. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully
-    # described and re-deletable; the opposite order would strand grants on a project no API can name any
-    # more — privilege that nothing in the product can see, let alone clear.
-    if settings.fga_enabled and client is not None:
-        removed = await fga.revoke_object_tuples(  # noqa: TID251
-            client,
-            f"project:{project_id}",
-            # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
-            # stack, where there genuinely is no principal — never a stand-in for one we failed to thread.
-            actor=token.subject if token is not None else "system:catalog",
-            origin="lifecycle_delete",
-        )
-        revoked = True
-    # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
-    role_fga = client if settings.fga_enabled else None
-    for role in await run_in_threadpool(roles.list_roles, settings.registry_root, so, project_id):
-        ended = await role_grants.end_role(role_fga, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
-        await role_grants.announce_ended(control, role, ended, actor=f"user:{token.subject}" if token is not None else None, reason="project_deleted")
-    # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
-    # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
-    # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse
-    # record claims this project, and a warehouse's delete revokes its own tuples (that edge among them) before its
-    # record goes.
-    # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant,
-    # and a policy kept for the id would govern that tenant's buckets as soon as it named them.
-    await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
-    await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
-
-    actor = f"user:{token.subject}" if token else None
-    log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})
-    if revoked:
-        # Mirrors create_project's grant audit, and only when the revoke really ran: an FGA-off stack must
-        # not fabricate a compliance record for a revocation that never happened. The revoke is
-        # subject-agnostic by design (it deletes EVERY tuple on the object), so the grantee is the wildcard
-        # and `removed` carries the magnitude.
-        audit(
-            AuditAction.ACCESS_REVOKE,
-            AuditOutcome.SUCCESS,
-            subject=actor,
-            resource=f"project:{project_id}",
-            grantee="*",
-            relation="*",
-            removed=len(removed),
-            reason="project_deleted",
-        )
-    await emit_control(
-        control,
-        action="project_deleted",
-        object_type="project",
-        object_id=f"project:{project_id}",
-        actor=actor,
+    if record.get(project_registry.DELETING_BY) is None:
+        await _start_delete(project_id, record, settings, token, force=force)
+    actor = f"user:{token.subject}" if token is not None else None
+    authz = client if settings.fga_enabled else None
+    obj = f"project:{project_id}"
+    # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
+    grants = announcing.grant_changes(
+        await fga.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=actor, reason="project_deleted"
     )
-    # TELL EVERYONE WHO JUST LOST IT. `project_deleted` names the project and nobody in it, so the
-    # admins and members who can no longer see their own work would find out by hitting a 403 — the
-    # failure `grant_revoked` exists to prevent. The revoke already read these tuples in order to
-    # delete them; the only thing missing was saying so.
-    #
-    # STRUCTURAL EDGES ARE NOT PEOPLE: the same calls remove `project`/`parent`/`child` tuples whose USER
-    # is another OBJECT, and announcing one would address an inbox named after it. A principal is
-    # `user:<principal>` or a userset (`role:x#assignee`, which the lane expands); anything else is plumbing.
-    for tup in removed:
-        if fga.names_someone(tup.user):
-            await emit_control(
-                control,
-                action="grant_revoked",
-                object_type="grant",
-                object_id=tup.object,
-                actor=actor,
-                extra={"relation": tup.relation, "subject": tup.user, "reason": "project_deleted"},
+    deleted_event = CatalogControlEvent(action="project_deleted", object_type="project", object_id=obj, actor=actor)
+    deleted = Announcement(evidence=RecordGone(key=project_registry.record_key(project_id)), message=ControlMessage(event=deleted_event))
+    async with announcer.announcing(door="delete_project", target=obj, announcements=[deleted, *grants.values()]) as filing:
+        removed: list[fga.ClientTuple] = []
+        # Tuples FIRST, record second. A revoke that fails (OpenFGA outage → 503) leaves the tenant fully
+        # described and re-deletable; the opposite order would strand grants on a project no API can name any
+        # more — privilege that nothing in the product can see, let alone clear.
+        if authz is not None:
+            removed = await fga.revoke_object_tuples(  # noqa: TID251
+                authz,
+                obj,
+                # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
+                # stack, where there genuinely is no principal — never a stand-in for one we failed to thread.
+                actor=token.subject if token is not None else "system:catalog",
+                origin="lifecycle_delete",
             )
+        # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
+        for role in await run_in_threadpool(roles.every_role, settings.registry_root, so, project_id):
+            ending = await announcing.role_ending(authz, role, actor=actor, reason="project_deleted")
+            async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
+                ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
+                await ending.send(ending_filed, ended, actor=actor, reason="project_deleted")
+        # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
+        # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
+        # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse
+        # record claims this project, and a warehouse's delete revokes its own tuples (that edge among them) before its
+        # record goes.
+        # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant,
+        # and a policy kept for the id would govern that tenant's buckets as soon as it named them.
+        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
+        await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
+
+        log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})
+        if authz is not None:
+            # Mirrors create_project's grant audit, and only when the revoke really ran: an FGA-off stack must
+            # not fabricate a compliance record for a revocation that never happened. The revoke is
+            # subject-agnostic by design (it deletes EVERY tuple on the object), so the grantee is the wildcard
+            # and `removed` carries the magnitude.
+            audit(
+                AuditAction.ACCESS_REVOKE,
+                AuditOutcome.SUCCESS,
+                subject=actor,
+                resource=obj,
+                grantee="*",
+                relation="*",
+                removed=len(removed),
+                reason="project_deleted",
+            )
+        await filing.send(deleted)
+        # TELL EVERYONE WHO JUST LOST IT. `project_deleted` names the project and nobody in it, so the admins and members who
+        # can no longer see their own work would find out by hitting a 403, the failure `grant_revoked` exists to prevent.
+        # A structural edge names no person: `grant_changes` keeps a principal (`user:<principal>`) or a userset
+        # (`role:x#assignee`, which the lane expands), never a `project`/`parent`/`child` edge whose user is an object.
+        await filing.send_grant_changes(grants, removed, action="grant_revoked", actor=actor, reason="project_deleted")
     return DeleteProjectResponse(project=project_id, tuples_revoked=len(removed))

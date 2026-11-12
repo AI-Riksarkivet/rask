@@ -11,9 +11,10 @@ from typing import Any, Final
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lakehouse.governed.decider import MAX_OBJECTS_PER_QUESTION
 from lakehouse.lineage.signing import SIGNATURE_FACET, RefusalReason
 from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, static_event_id
-from lakehouse.openlineage import BRANCH_IDENTIFIER
+from lakehouse.openlineage import BRANCH_IDENTIFIER, SYMLINKS_FACET
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
@@ -26,6 +27,13 @@ MAX_DATASETS: Final = 64
 #: default `max_payload`, 1 MiB, which the NATS fixture does not raise, so this refuses at the HTTP door only an event
 #: the bus could never have carried.
 MAX_EVENT_BYTES: Final = 1024 * 1024
+#: The most distinct identifiers one event may name: its datasets, the identifiers their ``symlinks`` facets list and the
+#: column upstreams their ``columnLineage`` facets name. Each is asked about by name at the catalog's decision door, so the
+#: bound is what one of its questions holds (`lakehouse.governed.decider.MAX_OBJECTS_PER_QUESTION`), and an event costs
+#: one question of each kind however many names it carries. :data:`MAX_DATASETS` bounds the datasets alone, while the
+#: weight bound let the facets list tens of thousands; the catalog's own events name at most 64 inputs, an output and a
+#: location each.
+MAX_NAMED_IDENTIFIERS: Final = MAX_OBJECTS_PER_QUESTION
 
 
 def _within_weight(event: BaseModel) -> None:
@@ -33,6 +41,17 @@ def _within_weight(event: BaseModel) -> None:
     weight = len(event.model_dump_json(by_alias=True).encode())
     if weight > MAX_EVENT_BYTES:
         raise ValueError(f"the event weighs {weight} bytes as JSON; lineage keeps at most {MAX_EVENT_BYTES}")
+
+
+def _within_names(datasets: list[Dataset]) -> None:
+    """Refuse an event naming more than :data:`MAX_NAMED_IDENTIFIERS` distinct identifiers through ``datasets``."""
+    named = {
+        *((dataset.namespace, dataset.name) for dataset in datasets),
+        *(identifier for dataset in datasets for identifier in dataset.symlink_identifiers),
+        *((upstream.namespace, upstream.name) for dataset in datasets for upstream in dataset.column_upstreams),
+    }
+    if len(named) > MAX_NAMED_IDENTIFIERS:
+        raise ValueError(f"the event names {len(named)} distinct datasets, symlinks and column upstreams; lineage takes at most {MAX_NAMED_IDENTIFIERS}")
 
 
 class ColumnUpstream(BaseModel):
@@ -116,6 +135,19 @@ class Dataset(BaseModel):
             if isinstance(value, dict):
                 return value
         return None
+
+    @property
+    def symlink_identifiers(self) -> list[tuple[str, str]]:
+        """The ``(namespace, name)`` identifiers this dataset's standard ``symlinks`` facet lists, malformed entries left out."""
+        facet = self.facet(SYMLINKS_FACET) or {}
+        identifiers = facet.get("identifiers")
+        if not isinstance(identifiers, list):
+            return []
+        return [
+            (str(entry["namespace"]), str(entry["name"]))
+            for entry in identifiers
+            if isinstance(entry, dict) and isinstance(entry.get("namespace"), str) and isinstance(entry.get("name"), str) and entry["name"]
+        ]
 
     @property
     def column_upstreams(self) -> list[ColumnUpstream]:
@@ -282,6 +314,7 @@ class DatasetEvent(BaseModel):
     @model_validator(mode="after")
     def _bounded(self) -> DatasetEvent:
         _within_weight(self)
+        _within_names([self.dataset])
         return self
 
     @model_validator(mode="before")
@@ -469,6 +502,7 @@ class RunEvent(BaseModel):
     @model_validator(mode="after")
     def _bounded(self) -> RunEvent:
         _within_weight(self)
+        _within_names([*self.inputs, *self.outputs])
         return self
 
     @property

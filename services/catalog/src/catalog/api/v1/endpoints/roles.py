@@ -33,7 +33,8 @@ from fastapi import APIRouter, status
 from lance_namespace import InvalidInputError, NamespaceAlreadyExistsError, PermissionDeniedError, TableNotFoundError
 from starlette.concurrency import run_in_threadpool
 
-from catalog.api import fga_deps
+from catalog.api import announcing, fga_deps
+from catalog.api.announcing import AnnouncerDep
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken, current_subject
 from catalog.api.v1.endpoints.members import ProjectId
@@ -155,12 +156,13 @@ async def get_role(project_id: ProjectId, role_id: uuid.UUID, client: FgaClientD
 
 @router.delete("/{project_id}/roles/{role_id}")
 async def delete_role(
-    project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+    project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> RoleDeleted:
     """End a role, gated on its ``can_delete``: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).
 
     Refused 409 (code 14) while ending it would leave a project with no direct admin, before anything is revoked. An
-    ending that fails part-way leaves the role listed and deletable, so calling the door again finishes it.
+    ending that fails part-way leaves the role listed and deletable, so calling the door again finishes it, and what it
+    took is announced though the ending failed after it ([[LH-576]]).
     \f
 
     Raises:
@@ -168,10 +170,12 @@ async def delete_role(
         ConcurrentModificationError: Ending it would strand a project.
     """
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_delete")
-    actor = current_subject(token)
-    removed = await role_grants.end_role(wired, role, control_root=settings.registry_root, storage_options=settings.storage_options(), actor=actor)
-    audit(AuditAction.ROLE_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=roles.role_object(role.id), project=project_id, removed=len(removed))
-    await role_grants.announce_ended(control, role, removed, actor=_announced_actor(token), reason="role_deleted")
+    actor, announced = current_subject(token), _announced_actor(token)
+    ending = await announcing.role_ending(wired, role, actor=announced, reason="role_deleted")
+    async with announcer.announcing(door="delete_role", target=roles.role_object(role.id), announcements=ending.announcements()) as filing:
+        removed = await role_grants.end_role(wired, role, control_root=settings.registry_root, storage_options=settings.storage_options(), actor=actor)
+        audit(AuditAction.ROLE_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=roles.role_object(role.id), project=project_id, removed=len(removed))
+        await ending.send(filing, removed, actor=announced, reason="role_deleted")
     return RoleDeleted(role=role, tuples_revoked=len(removed))
 
 
@@ -209,7 +213,7 @@ async def assign_role(
     role_id: uuid.UUID,
     body: AssigneeRequest,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     settings: SettingsDep,
     token: CurrentToken,
 ) -> Role:
@@ -230,16 +234,12 @@ async def assign_role(
         await fga_deps.refuse_self_elevation(wired, user=token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
     actor = current_subject(token)
     if user not in await _assignees(wired, role.id):
-        await fga.write_tuples(wired, [fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
-        audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
-        await emit_control(
-            control,
-            action="grant_added",
-            object_type="grant",
-            object_id=obj,
-            actor=_announced_actor(token),
-            extra={"relation": roles.ASSIGNEE, "subject": user},
-        )
+        tup = fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
+        told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(token))
+        async with announcer.announcing(door="role_assign", target=obj, announcements=[told]) as filing:
+            await fga.write_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+            audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
+            await filing.send(told)
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
 
 
@@ -249,7 +249,7 @@ async def unassign_role(
     role_id: uuid.UUID,
     body: AssigneeRequest,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     settings: SettingsDep,
     token: CurrentToken,
 ) -> Role:
@@ -268,14 +268,9 @@ async def unassign_role(
     user = fga.grantee_object(body.user)
     obj = roles.role_object(role.id)
     actor = current_subject(token)
-    if await role_membership.unassign(wired, str(role.id), user, actor=actor, origin="grant_api"):
-        audit(AuditAction.ROLE_UNASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
-        await emit_control(
-            control,
-            action="grant_revoked",
-            object_type="grant",
-            object_id=obj,
-            actor=_announced_actor(token),
-            extra={"relation": roles.ASSIGNEE, "subject": user},
-        )
+    told = announcing.grant_announcement(fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj), action="grant_revoked", actor=_announced_actor(token))
+    async with announcer.announcing(door="role_unassign", target=obj, announcements=[told]) as filing:
+        if await role_membership.unassign(wired, str(role.id), user, actor=actor, origin="grant_api"):
+            audit(AuditAction.ROLE_UNASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
+            await filing.send(told)
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))

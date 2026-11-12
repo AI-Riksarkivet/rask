@@ -234,6 +234,33 @@ def delete_object(uri: str, storage_options: StorageOptions, key: str) -> bool:
     return True
 
 
+def remove_object(uri: str, storage_options: StorageOptions, key: str) -> None:
+    """Delete the object at ``<uri>/<key>`` in one request, whether or not it is there: S3 answers a DELETE of an absent key
+    as one of a present one, so a caller that needs no answer to "was it there" spends no read on it (:func:`delete_object`
+    spends a HEAD).
+
+    Raises:
+        OSError: The store refused the delete, or could not be reached.
+    """
+    if not on_s3(uri):
+        fs, base = fs_and_base(uri, storage_options)
+        try:
+            fs.delete_file(f"{base}/{key}")
+        except FileNotFoundError:
+            return
+        return
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
+    full_key = f"{prefix}/{key}" if prefix else key
+    try:
+        object_client(storage_options).delete_object(Bucket=bucket, Key=full_key)
+    except ClientError as exc:
+        raise OSError(f"the store refused deleting {bucket}/{full_key}: {exc}") from exc
+    except BotoCoreError as exc:
+        raise OSError(f"the store could not be reached deleting {bucket}/{full_key}: {exc}") from exc
+
+
 def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) -> None:
     """Delete the store ``paths``, every one beneath ``uri``'s bucket or root, by key.
 

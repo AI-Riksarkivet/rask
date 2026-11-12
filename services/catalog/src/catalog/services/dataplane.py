@@ -573,7 +573,16 @@ def _json_values(path: str, values: pa.Array) -> Iterator[tuple[str, pa.Extensio
 RESERVED_MARKER: Final = ".lance-reserved"
 
 
-def declare_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], *, root: str, claims: location_claims.ClaimStore | None, holder: str) -> str:
+def declare_table(
+    ns: LanceNamespace,
+    so: StorageOptions,
+    segments: list[str],
+    *,
+    root: str,
+    claims: location_claims.ClaimStore | None,
+    holder: str,
+    table_uuid: str | None = None,
+) -> str:
     """Declare ``segments`` at ``<root>/<table uuid>``, where a table the catalog makes lives, and answer that location ([[LH-520]]).
 
     The `dir` catalog's own DeclareTable steps (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:132-149`)
@@ -581,8 +590,8 @@ def declare_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], *
     backend's DeclareTable puts the name in the path (`<hash>_<object_id>`) and refuses any other location (measured on
     pylance 13.0.0), so ADR 0173 §5 takes the steps here, in this order:
 
-    1. the table's uuid is minted and its location's claim taken under it, before any backend call, so the location is
-       this table's before anything resolves to it;
+    1. the table's uuid is minted (``table_uuid``, when the caller minted it) and its location's claim taken under it,
+       before any backend call, so the location is this table's before anything resolves to it;
     2. the `.lance-reserved` marker is written at the location;
     3. the ``__manifest`` row is recorded through RegisterTable's relative location. Measured on pylance 13.0.0, such a
        row answers ``is_only_declared`` until data lands, as the backend's own declaration does, and keeps no properties.
@@ -598,16 +607,16 @@ def declare_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], *
     """
     if len(segments) < 2:
         raise InvalidInputError(f"table {segments!r} names no namespace; a table the catalog makes lives in one")
-    table_uuid = str(uuid.uuid4())
-    location = f"{root.rstrip('/')}/{table_uuid}"
+    minted = table_uuid or str(uuid.uuid4())
+    location = f"{root.rstrip('/')}/{minted}"
     if claims is not None:
         try:
-            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=table_uuid)
+            table_claims.claim_new_table(ns, claims, location, table=holder, segments=segments, table_uuid=minted)
         except location_claims.LocationHeldError:
             raise ConcurrentModificationError(f"the location minted for table {holder} is held by another table; retry to be given another") from None
     try:
         _reserve(location, so)
-        native.call(ns, "register_table", RegisterTableRequest(id=segments, location=table_uuid))
+        native.call(ns, "register_table", RegisterTableRequest(id=segments, location=minted))
     except Exception as exc:
         _unreserve(location, so, claims=claims, holder=holder)
         # The `dir` backend keeps namespaces and tables in one object-id space and arbitrates the add by
@@ -2833,8 +2842,22 @@ def refuse_a_restore_carrying_refused_config(target: lance.LanceDataset, *, vers
         )
 
 
+class RefMovedError(ConcurrentModificationError):
+    """The ref holds a version after the one a commit was to follow, so the commit was not made (the spec's code 14)."""
+
+    def __init__(self, *, follows: int, head: int) -> None:
+        self.follows = follows
+        self.head = head
+        super().__init__(f"the ref is at version {head}, past version {follows} the commit was to follow")
+
+
 def restore(
-    table: table_claims.DoorTable, so: StorageOptions, req: RestoreTableRequest, *, transaction_properties: dict[str, str]
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    req: RestoreTableRequest,
+    *,
+    transaction_properties: dict[str, str],
+    follows: int | None = None,
 ) -> tuple[RestoreTableResponse, int]:
     """Commit ``req``'s ref at ``req.version`` again as its newest version: the spec's answer, and the version made.
 
@@ -2847,15 +2870,21 @@ def restore(
     the table and would resolve it again ([[LH-530]]). Measured on pylance 13.0.0, a ``Restore`` committed this way leaves
     the rows and schema the handle's own ``restore()`` leaves. Unchecked, because a restore reads no row.
 
+    ``follows`` commits the restore only as the version right after it: a promotion's rejection restores over the held
+    version and nothing a writer committed after it, which a restore would discard (owner, 2026-11-12).
+
     Raises:
         InvalidInputError: The version to restore carries config no writer may set (auto-cleanup or compaction).
         TableChangedError: The table changed since the door's resolution.
+        RefMovedError: The ref holds a version after ``follows``; nothing was committed.
     """
     target = table.open_unchecked(so, version=req.version, branch=req.branch)
     refuse_a_restore_carrying_refused_config(target, version=req.version)
     restored = int(target.version)
 
     def plan(latest: lance.LanceDataset) -> tuple[Transaction, str]:
+        if follows is not None and latest.version != follows:
+            raise RefMovedError(follows=follows, head=latest.version)
         transaction = Transaction(read_version=latest.version, operation=lance.LanceOperation.Restore(restored))
         return transaction, transaction.uuid
 
@@ -3415,9 +3444,8 @@ def coerce_insert_arrow(
     ``float64`` for every JS number — otherwise hits the ``insert_into_table`` append with a ``float64``
     batch against an ``int64`` column, which raises a bare **500** ("Internal Server Error"). That is both
     a broken insert AND the wrong status for a client-side mismatch (browser-driven find 2026-07-21). Here we
-    select the table's columns BY NAME (a column the table lacks is dropped and LOGGED by name
-    -- `insert_dropped_columns`; a missing one is a 400) and cast each to its
-    real column type — so ``4.0 → 4`` just works — turning a genuinely incompatible payload (e.g. ``4.5`` →
+    select the table's columns BY NAME (a column the table lacks and a missing one are each refused 400, code 13,
+    naming them) and cast each to its real column type — so ``4.0 → 4`` just works — turning a genuinely incompatible payload (e.g. ``4.5`` →
     ``int``, or a non-castable type) into a clean ``400``, never a 500. Blocking IO (opens the dataset for the
     live schema); the caller runs it in a threadpool.
 
@@ -3442,11 +3470,10 @@ def coerce_insert_arrow(
     if overwrite:
         provenance_guard.refuse_reserved_keys((incoming.schema.metadata or {}).keys(), door="insert?mode=overwrite payload")
         formats.refuse_flag_locking_keys((incoming.schema.metadata or {}).keys(), door="insert?mode=overwrite payload")
-    # THE REF THE REQUEST NAMES, never main. This alignment DROPS columns the target does not have, so
-    # aligning a branch-targeted insert to main's schema silently deletes any column the branch has and
-    # main does not — and then the insert succeeds, reporting rows it quietly rewrote. A branch whose
-    # schema has evolved is the whole reason a branch exists, so this is the ordinary case rather than a
-    # corner. Same defect family as `update`/`delete` rewriting main
+    # THE REF THE REQUEST NAMES, never main. This alignment judges the payload's columns against the target, so
+    # aligning a branch-targeted insert to main's schema would refuse any column the branch has and main does not, and
+    # cast the rest to main's types. A branch whose schema has evolved is the whole reason a branch exists, so this is
+    # the ordinary case rather than a corner. Same defect family as `update`/`delete` rewriting main
     # (`test_branch_scoped_mutations_hit_the_branch.py`); it survived here because the door-level gate
     # walks doors that build a branched request model, and this is a helper.
     target = table.open(so, branch=branch).schema
@@ -3460,15 +3487,12 @@ def coerce_insert_arrow(
     missing = [f.name for f in target if f.name not in present]
     if missing:
         raise InvalidInputError(f"insert rows are missing column(s): {', '.join(missing)}")
-    discarded = sorted(present - {f.name for f in target})
-    if discarded:
-        # DROPPING IS NOT THE DEFECT, SILENCE IS. The table has no such column, so there is nowhere to
-        # put these values and the only choices are refuse or discard; discarding is what keeps the
-        # browser client this coercion exists for working. But a caller that is never told cannot tell
-        # a stored value from a lost one, and the sibling above already raises for the other half of
-        # the same schema mismatch. Reported, not refused: accept -> refuse on a live door is a
-        # contract change rather than a bug fix.
-        log.warning("insert_dropped_columns", extra={"table": table.segments, "columns": discarded})
+    # A column the table lacks has nowhere to go, and Lance's own append refuses it ("Append with different schema:
+    # fields did not match, unexpected=[...]", measured on pylance 13.0.0), so the door refuses it too, by name, rather
+    # than discard values a caller believes were stored.
+    unexpected = sorted(present - {f.name for f in target})
+    if unexpected:
+        raise InvalidInputError(f"insert rows carry column(s) the table does not have: {', '.join(unexpected)}")
     selected = pa.table({f.name: incoming.column(f.name) for f in target})
     _refuse_over_the_cap(sum(bytes_after_cast(selected.column(f.name), f.type) for f in target), max_bytes)
     try:
@@ -3947,7 +3971,7 @@ def tag_reference(dataset: lance.LanceDataset, tag: str) -> TagReference:
 def main_version_of_tag(dataset: lance.LanceDataset, tag: str, *, remedy: str) -> int | None:
     """The main version ``tag`` names, or ``None`` when no tag has the name, for a tag only main may hold.
 
-    The catalog moves ``published``, ``publishing`` and ``rask.held`` on main alone, and so does a model's promotion, so
+    The catalog moves ``published``, each publish's ``rask.publishing.*`` pin and ``rask.held`` on main alone, and so does a model's promotion, so
     one of them on a branch was written past those doors, and its number names the branch's snapshot.
 
     Raises:

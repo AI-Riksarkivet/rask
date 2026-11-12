@@ -18,11 +18,12 @@ the native namespace is a recording stand-in so a refusal can assert the native 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from lance_namespace import DeregisterTableResponse, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
+from unfiled_announcer import unfiled
 
 from catalog.api.dependencies import Resolver
 from catalog.api.idempotency import KeyedDoor
@@ -209,11 +210,9 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
             table=_resolved(settings),
             settings=settings,
             client=None,
-            emitter=_NoopLineage(),
-            control=NoopControlEmitter(),
+            announcer=unfiled(NoopControlEmitter()),
             token=None,
             so=StorageOptions(),
-            authorization=None,
             force=force,
             uuids=NO_OBJECT_UUIDS,
         )
@@ -256,11 +255,9 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
                 table=_resolved(settings),
                 settings=settings,
                 client=None,
-                emitter=_NoopLineage(),
                 control=NoopControlEmitter(),
+                announcer=unfiled(NoopControlEmitter()),
                 token=None,
-                so=StorageOptions(),
-                authorization=None,
                 uuids=NO_OBJECT_UUIDS,
             )
         )
@@ -281,8 +278,7 @@ def test_a_protected_namespace_refuses_drop(tmp_path: Any) -> None:
                 settings=settings,
                 token=None,
                 client=None,
-                control=NoopControlEmitter(),
-                emitter=cast(Any, None),
+                announcer=unfiled(NoopControlEmitter()),
                 body=None,
                 uuids=NO_OBJECT_UUIDS,
             )
@@ -376,11 +372,9 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
             table=_resolved(settings),
             settings=settings,
             client=None,
-            emitter=_NoopLineage(),
-            control=NoopControlEmitter(),
+            announcer=unfiled(NoopControlEmitter()),
             token=None,
             so=StorageOptions(),
-            authorization=None,
             force=False,
             purge=True,
             uuids=NO_OBJECT_UUIDS,
@@ -405,8 +399,7 @@ def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any, monkeypatch: py
                 root=_ROOT,
                 settings=settings,
                 token=None,
-                control=NoopControlEmitter(),
-                emitter=_NoopLineage(),
+                announcer=unfiled(NoopControlEmitter()),
                 uuids=NO_OBJECT_UUIDS,
                 resolver=_resolver(settings, ns, monkeypatch),
             )
@@ -459,8 +452,7 @@ def test_a_cascade_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
                 settings=settings,
                 token=None,
                 client=None,
-                control=NoopControlEmitter(),
-                emitter=cast(Any, None),
+                announcer=unfiled(NoopControlEmitter()),
                 body=DropNamespaceRequest(behavior="Cascade"),
                 uuids=NO_OBJECT_UUIDS,
             )
@@ -485,8 +477,7 @@ def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
             settings=settings,
             token=None,
             client=None,
-            control=NoopControlEmitter(),
-            emitter=cast(Any, None),
+            announcer=unfiled(NoopControlEmitter()),
             body=DropNamespaceRequest(behavior="Cascade"),
             force=True,
             uuids=NO_OBJECT_UUIDS,
@@ -544,8 +535,7 @@ def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False,
             settings=settings,
             token=None,
             client=None,
-            control=NoopControlEmitter(),
-            emitter=cast(Any, None),
+            announcer=unfiled(NoopControlEmitter()),
             body=DropNamespaceRequest(behavior="Cascade"),
             force=force,
             purge=purge,

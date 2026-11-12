@@ -61,6 +61,7 @@ from lakehouse.lancekit.filters import in_lists, sql_literal
 from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from lakehouse.lancekit.writer import RestCatalogWriteTransport
 from lakehouse.lineage import ParentRunFacet
+from lakehouse.lineage.signing import SIGNATURE_FACET
 from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.openlineage import BRANCH_IDENTIFIER
@@ -206,9 +207,21 @@ def delivery_feed_key(cloud_event: Mapping[str, Any]) -> str | None:
 
 
 def feed_key(event: RunEvent | DatasetEvent) -> str:
-    """The feed row's identity: the run and its terminal state, a non-terminal state and when it arrived, or a static change's derived id."""
+    """The feed row's identity: the run and its terminal state, a non-terminal state and when it arrived, or a static change's
+    derived id and who vouches for it.
+
+    A STATIC CHANGE'S ROW IS ITS VOUCHER'S. It has no run to bind to an author, and its id is derived from what it names
+    (`DatasetEvent.feed_id`), all of which a writer of the table can read: the catalog's producer URI, its dataset
+    namespace, the table, the operation and, for a versioned change, its commit's time, which the table's manifest
+    carries. The row is written once, so a poster that sent that id first would take the row the catalog's announcement
+    needs. A signed change (one carrying a `rask_signature`, which only the bus and outbox doors record, each after
+    verifying it where signing is enforced) keeps the bare key, so its redelivery and a re-announcement land on it; an
+    unsigned one, the only kind the HTTP door records, is keyed under the subject it was recorded for as well, so it
+    lands a row of its own and takes no one else's.
+    """
     if isinstance(event, DatasetEvent):
-        return f"{event.feed_id}@{event.feed_event_type}"
+        key = f"{event.feed_id}@{event.feed_event_type}"
+        return key if SIGNATURE_FACET in event.dataset.facets else f"{key}@posted:{author_sub_from_payload(event.model_dump(by_alias=True)) or ''}"
     if event.event_type in TERMINAL_STATES:
         return f"{event.run.run_id}@{event.event_type}"
     return f"{event.run.run_id}@{event.event_type}@{event.event_time}"
@@ -694,10 +707,17 @@ class ProvenanceStore:
             await self.forget_parked(recovered)
         return len(recovered)
 
-    async def prune_events(self, retention_days: int) -> int:
-        """Delete the feed rows this service received more than ``retention_days`` ago; return how many it found to delete."""
+    async def prune_events(self, retention_days: int, *, delivered_through: int | None = None) -> int:
+        """Delete the feed rows this service received more than ``retention_days`` ago; return how many it found to delete.
+
+        ``delivered_through`` is the seq of the last row the forwarder delivered, when one is configured: no row after it
+        is deleted, however old, since the feed is the only copy the forwarder sends from. A row's seq is its stable row
+        id plus one, and Lance evaluates a ``_rowid`` predicate in a delete as in a scan (measured on pylance 13.0.0).
+        """
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         predicate = f"received_at < arrow_cast({sql_literal(cutoff.isoformat(timespec='microseconds'))}, 'Timestamp(Microsecond, Some(\"UTC\"))')"
+        if delivered_through is not None:
+            predicate = f"{predicate} AND _rowid < {int(delivered_through)}"
         return await self._run(lambda: self._prune(predicate))
 
     def _prune(self, predicate: str) -> int:
@@ -755,17 +775,11 @@ class ProvenanceStore:
 
         return await self._run(bounds)
 
-    async def recorded_event(self, feed_id: str, event_type: str | None) -> dict[str, Any] | None:
-        """The payload the feed holds for ``(feed_id, event_type)``, the first such row; ``None`` when it holds none."""
-        if event_type is None:
-            return None
-        rows = await self._run(
-            lambda: self._reader(FEED).to_table(
-                columns=["event"], filter=f"run_id = {sql_literal(feed_id)} AND event_type = {sql_literal(event_type)}", with_row_id=True
-            )
-        )
-        first = min(rows.to_pylist(), key=lambda row: row["_rowid"], default=None)
-        stored = json.loads(first["event"]) if first and first["event"] else None
+    async def recorded_event(self, key: str) -> dict[str, Any] | None:
+        """The payload the feed holds under the row key ``key`` (:func:`feed_key`); ``None`` when it holds none."""
+        rows = await self._run(lambda: self._reader(FEED).to_table(columns=["event"], filter=f"event_key = {sql_literal(key)}"))
+        first = next(iter(rows.column("event").to_pylist()), None)
+        stored = json.loads(first) if first else None
         return stored if isinstance(stored, dict) else None
 
     async def derived(self, sources: set[str], *, max_depth: int = MAX_DERIVED_DEPTH) -> tuple[list[DerivedTable], bool]:

@@ -41,15 +41,15 @@ from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
 
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
-    from maintenance.services.reconcile import ReconcileReport
+    from maintenance.services.reconcile import OrphanedTrash, ReconcileReport
 
 
 log = logging.getLogger(__name__)
 
-#: Counts the objects at a trash record's location. Injected rather than imported so the DECISION is
-#: testable without a store: what is worth pinning here is which records are swept and which refused,
-#: and a suite that had to stand up S3 to ask that would be run rarely and trusted less.
-Probe = Callable[[str], int]
+#: Counts the objects a trash record's table still holds (:func:`maintenance.services.purge.held_by`). Injected rather
+#: than imported so the DECISION is testable without a store: what is worth pinning here is which records are swept and
+#: which refused, and a suite that had to stand up S3 to ask that would be run rarely and trusted less.
+Probe = Callable[["OrphanedTrash"], int]
 
 
 class Tombstone(BaseModel):
@@ -88,7 +88,7 @@ def plan_sweep(report: ReconcileReport, *, probe: Probe) -> tuple[list[Tombstone
     refused: dict[str, str] = {}
     for finding in report.orphaned_trash or []:
         try:
-            objects = probe(finding.location)
+            objects = probe(finding)
         except Exception as exc:  # noqa: BLE001 — an unreadable location is a refusal, never a sweep
             refused[finding.id] = f"the location {finding.location!r} could not be read ({type(exc).__name__}), so nothing proves its bytes are gone"
             continue

@@ -14,6 +14,7 @@ warehouse to `AWS_REGION`, and a dropped token makes a scoped credential sign as
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -38,7 +39,7 @@ class _RecordingClient:
             def read(self) -> bytes:
                 return json.dumps({"id": "w", "status": "active"}).encode()
 
-        return {"Body": _Body(), "ETag": '"abc123"'}
+        return {"Body": _Body(), "ETag": '"abc123"', "LastModified": datetime(2026, 11, 12, tzinfo=UTC)}
 
 
 @pytest.fixture

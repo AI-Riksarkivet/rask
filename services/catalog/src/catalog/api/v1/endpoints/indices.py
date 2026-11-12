@@ -79,9 +79,9 @@ def create_scalar_index(id: str, body: CreateTableIndexRequest) -> CreateTableSc
 def list_table_indices(
     id: str,
     table: DoorTableDep,
+    limit: ListLimit,
     body: ListTableIndicesRequest | None = None,
     page_token: str | None = None,
-    limit: ListLimit = None,
     branch: Annotated[
         str | None,
         Query(

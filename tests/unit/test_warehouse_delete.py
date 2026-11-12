@@ -34,9 +34,9 @@ from lance_namespace import (
     NamespaceNotFoundError,
     TableNotFoundError,
 )
+from unfiled_announcer import unfiled
 
 from catalog.core.config import Settings
-from catalog.core.lineage_emit import NoopEmitter
 from catalog.services import warehouses
 from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -163,8 +163,7 @@ def _delete(
             settings=settings,
             token=token,
             client=client,
-            control=NoopControlEmitter(),
-            emitter=NoopEmitter(),
+            announcer=unfiled(NoopControlEmitter()),
             uuids=NO_OBJECT_UUIDS,
             cascade=cascade,
             purge_bucket=purge_bucket,

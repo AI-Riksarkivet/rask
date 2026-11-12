@@ -35,10 +35,12 @@ from unittest.mock import MagicMock
 
 import pytest
 from lance_namespace import DescribeNamespaceResponse, DropNamespaceRequest, DropNamespaceResponse, InvalidInputError, NamespaceNotFoundError
+from unfiled_announcer import unfiled
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
 from catalog.core.modes import DropMode
+from lakehouse.control_events import CatalogControlEvent
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
@@ -80,10 +82,9 @@ async def _drop(
     monkeypatch.setattr(ns_ep.fga_deps, "require_not_protected", lambda *a, **k: None)
     monkeypatch.setattr(ns_ep.protection, "clear_protection", lambda *a, **k: None)
 
-    async def _emit(_control: Any, *, action: str, **_k: Any) -> None:
-        announced.append(action)
-
-    monkeypatch.setattr(ns_ep, "emit_control", _emit)
+    class _Announced:
+        async def emit(self, event: CatalogControlEvent) -> None:
+            announced.append(event.action)
 
     def _collect(_ns: Any, _segments: list[str]) -> list[Any]:
         if not exists:
@@ -112,8 +113,7 @@ async def _drop(
         settings=cast(Settings, _Settings()),
         token=None,
         client=None,
-        control=cast(Any, None),
-        emitter=cast(Any, None),
+        announcer=unfiled(_Announced()),
         body=DropNamespaceRequest(id=["ghost"], mode=mode, behavior=behavior),
         uuids=NO_OBJECT_UUIDS,
     )

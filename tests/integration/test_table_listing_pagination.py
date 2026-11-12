@@ -1,17 +1,19 @@
-"""A spec listing pages keyset-style, over the final list, and a `limit` past the cap is answered a page of the cap.
+"""A spec listing pages keyset-style, over the final list, and a `limit` past the cap, or none, is answered a page of the cap.
 
 `paginate` cuts the final sorted and deduped list, never the native call (#141): a native-level limit would truncate
 the root listing before the walk and the bound seeds merged in, dropping tables from every page.
 
 The spec's `PageLimit` is "an inclusive upper bound of the number of results" with no maximum, and a server that cannot
 return every item in one response answers a `page_token` (`lance_docs/ns_catalog/spec.yaml` PageToken, PageLimit), so a
-`limit` above the catalog's cap is a valid request answered the cap and a token that continues it ([[LH-546]]).
+`limit` above the catalog's cap is a valid request answered the cap and a token that continues it ([[LH-546]]). A request
+naming no `limit` is answered the same page, so no listing answers the whole estate in one response ([[LH-576]] E10a).
 """
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ListNamespacesResponse
 
@@ -28,10 +30,10 @@ def test_exact_fit_ends_pagination() -> None:
     assert token is None
 
 
-def test_a_limit_past_the_cap_is_answered_the_cap_and_a_token_that_continues_it(client: TestClient, fake_ns: MagicMock) -> None:
+@pytest.mark.parametrize("asked", [pytest.param({"limit": 5 * MAX_LIST_LIMIT}, id="past-the-cap"), pytest.param({}, id="no-limit")])
+def test_a_limit_past_the_cap_or_none_is_answered_the_cap_and_a_token_that_continues_it(client: TestClient, fake_ns: MagicMock, asked: dict[str, int]) -> None:
     children = sorted(f"child{i:05d}" for i in range(MAX_LIST_LIMIT + 500))
     fake_ns.list_namespaces.side_effect = lambda _request: ListNamespacesResponse(namespaces=list(children))
-    asked = {"limit": 5 * MAX_LIST_LIMIT}
 
     first = client.get("/v1/namespace/a/list", params=asked)
     assert first.status_code == 200, first.text

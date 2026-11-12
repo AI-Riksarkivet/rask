@@ -18,6 +18,10 @@ none while another finish's mark on it is younger than that. Then the location's
 
 - held for another uuid than the ending's: another table's location now (a registration between its claim and its
   refusal, :func:`refuse_registration_while_ending`), so nothing is released and the ending stays (409);
+- held for the clone, which stands there, and filed by a registration (:data:`lakehouse.clone_endings.REGISTRATION`):
+  removed with nothing released where the clone's base record names every source the ending does (it was admitted,
+  and its own end owns its tags), and its tags released, the claim staying with the row, where it names fewer (its
+  registration ended between a tag and the record, and no end of the clone would release them);
 - held for the clone, and the clone stands there (:func:`catalog.services.table_claims.holder_stands`: it resolves to
   the location, or the trash keeps it there): the door either never removed it or is still at work (a destructive drop
   deleting a large table's bytes keeps its residue record meanwhile), so nothing is released and the ending stays (409);
@@ -205,6 +209,8 @@ def _finished(ns: LanceNamespace, settings: Settings, claims: location_claims.Cl
         if not ending.names(claim.uuid, claim.table):
             raise _Refused("another table holds the clone's location now; its registration refuses itself while the ending stands")
         if table_claims.holder_stands(ns, claims, claim):
+            if ending.door == clone_endings.REGISTRATION:
+                return _settle_a_registration(settings, claims, ending)
             if found.at - ending.filed_at < STANDING_BOUND:
                 raise _Refused("the clone still stands at its location: its door never removed it, or is still at work")
             clone_endings.remove(claims, ending)
@@ -223,6 +229,32 @@ def _finished(ns: LanceNamespace, settings: Settings, claims: location_claims.Cl
         if claim is not None:
             location_claims.lift_fence(claims, ending.location, token)
         raise
+    return FinishOutcome(table=ending.table, uuid=ending.uuid, released=released)
+
+
+def _settle_a_registration(settings: Settings, claims: location_claims.ClaimStore, ending: CloneEnding) -> FinishOutcome:
+    """Settle the ending a registration left while the clone it registered stands at its location.
+
+    A clone whose base record names every source the ending does was admitted, and its own end files an ending from
+    that record, so the ending is removed with nothing released. One whose record names fewer was never admitted: its
+    registration ended between a tag and the record, so no end of it would release those tags, and they are released
+    here. The location's claim stays with the row that stands, which only its own end releases; it is not fenced, since
+    a registration at a held location is refused anyway.
+
+    Raises:
+        base_registry.UnreadableBaseRecordError: The clone's base record could not be read; the ending stays.
+        OSError: A tag could not be released; the ending stays.
+    """
+    so = settings.storage_options()
+    registry = BaseRegistry(control_root=settings.registry_root, storage_options=so)
+    recorded = {
+        location_claims.claim_digest(source) for source in base_registry.clone_source_locations(base_registry.read_base_record(registry, ending.location))
+    }
+    if {location_claims.claim_digest(source) for source in ending.sources} <= recorded:
+        clone_endings.remove(claims, ending)
+        return FinishOutcome(table=ending.table, uuid=ending.uuid, kept=True)
+    released = clone_sources.release_all(ending.sources, clone_location=ending.location, storage_options=so)
+    clone_endings.remove(claims, ending)
     return FinishOutcome(table=ending.table, uuid=ending.uuid, released=released)
 
 

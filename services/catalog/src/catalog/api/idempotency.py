@@ -25,19 +25,20 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import time
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
+from uuid import uuid4
 
 from fastapi import Depends, Header
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import ConcurrentModificationError, InvalidInputError, LanceNamespaceError
+from lance_namespace import ConcurrentModificationError, InternalError, InvalidInputError, LanceNamespaceError
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
 from lakehouse import idempotency
 from lakehouse.ns_errors import status_for
+from lakehouse.records import RecordChangedError
 from lakehouse.storage_options import StorageOptions
 
 
@@ -80,7 +81,8 @@ class Converge(BaseModel):
     storage_options: StorageOptions
     scope: str
     key: str | None
-    claimed_at: float = 0.0
+    #: This request's attempt at the key: the claim it gives back is only its own.
+    attempt: str = ""
     replay: idempotency.Replay | None = None
 
     async def release_if_refused(self, exc: BaseException) -> None:
@@ -96,7 +98,7 @@ class Converge(BaseModel):
             self.storage_options,
             scope=self.scope,
             key=self.key,
-            claimed_at=self.claimed_at,
+            attempt=self.attempt,
         )
 
     async def remember(self, status: int, response: Any) -> None:  # noqa: ANN401 — the door's own response model
@@ -121,20 +123,21 @@ class Converge(BaseModel):
         )
 
 
-async def begin(registry_root: str, storage_options: StorageOptions, scope: str, key: str | None, *, endpoint: str) -> Converge:
-    """Claim `key` for `endpoint`, or return the no-op when the caller sent none.
+async def begin(registry_root: str, storage_options: StorageOptions, scope: str, key: str | None, *, binding: idempotency.KeyBinding) -> Converge:
+    """Claim `key` for the operation `binding` names, or return the no-op when the caller sent none.
 
-    The two failures are translated to the spec's own vocabulary rather than a hand-picked status, per
-    `rask-lance-catalog`: a key bound to another operation is the CALLER's mistake and correctable, so
-    `InvalidInput` (400); an attempt still running is a conflict about the world, so
-    `ConcurrentModification` (409), which is what a retrying client should see.
+    The failures are translated to the spec's own vocabulary rather than a hand-picked status, per
+    `rask-lance-catalog`: a key bound to another door or another object is the CALLER's mistake and correctable, so
+    `InvalidInput` (400); an attempt still running is a conflict about the world, so `ConcurrentModification` (409),
+    which is what a retrying client should see; a record that is there and cannot be read as one is `Internal` (500,
+    code 18), which only writing it again clears.
     """
     if key is None:
         return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=None)
 
     # One key, however the caller cases its hex digits.
     key = key.lower()
-    claimed_at = time.time()
+    attempt = uuid4().hex
     try:
         replay = await run_in_threadpool(
             idempotency.claim,
@@ -142,14 +145,16 @@ async def begin(registry_root: str, storage_options: StorageOptions, scope: str,
             storage_options,
             scope=scope,
             key=key,
-            endpoint=endpoint,
-            now=claimed_at,
+            binding=binding,
+            attempt=attempt,
         )
     except idempotency.KeyReusedError as exc:
         raise InvalidInputError(str(exc)) from exc
-    except idempotency.InFlightError as exc:
+    except (idempotency.InFlightError, RecordChangedError) as exc:
         raise ConcurrentModificationError(str(exc)) from exc
-    return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, claimed_at=claimed_at, replay=replay)
+    except idempotency.KeyRecordUnreadableError as exc:
+        raise InternalError(str(exc)) from exc
+    return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, attempt=attempt, replay=replay)
 
 
 class KeyedDoor(BaseModel):
@@ -166,9 +171,14 @@ class KeyedDoor(BaseModel):
     key: str | None
     converge: Converge | None = None
 
-    async def begin(self, *, endpoint: str) -> Converge:
-        """Claim the request's key for ``endpoint`` (:func:`begin`), after the door's shape refusals."""
-        self.converge = await begin(self.registry_root, self.storage_options, self.scope, self.key, endpoint=endpoint)
+    async def begin(self, *, endpoint: str, target: str) -> Converge:
+        """Claim the request's key for ``endpoint`` acting on ``target`` (:func:`begin`), after the door's shape refusals.
+
+        ``target`` is the canonical id of the object the door acts on (``fga.canonical_object_id``), so the same key on
+        another object is refused rather than answered with this one's response ([[LH-576]]).
+        """
+        binding = idempotency.KeyBinding(endpoint=endpoint, target=target)
+        self.converge = await begin(self.registry_root, self.storage_options, self.scope, self.key, binding=binding)
         return self.converge
 
 

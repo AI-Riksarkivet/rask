@@ -40,6 +40,15 @@ log = logging.getLogger(__name__)
 
 _PROJECTS_PREFIX = control_prefixes.PROJECTS
 
+#: The field a project's delete writes on its record before its first destructive step: the principal key of the caller
+#: who started it. From then on the project is absent to every door but its delete, which that caller can finish though
+#: the delete's revoke took their own admin grant ([[LH-576]]).
+DELETING_BY = "deleting_by"
+
+
+class ProjectBeingDeletedError(Exception):
+    """The project's record names a delete that has not finished, so its id is not yet free for another tenant."""
+
 
 def put_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
     """Unconditionally overwrite ``_projects/<id>.json``. **A SEEDING primitive — no production caller.**
@@ -80,10 +89,12 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
 
     `mutate_json` re-reads and re-applies on a lost race, so a concurrent protection change survives.
     Raises ``RecordMissingError`` if the record vanished (a concurrent delete — retryable, never a
-    blind re-create).
+    blind re-create), and :class:`ProjectBeingDeletedError` while a delete of the project stands unfinished.
     """
 
     def merge(live: dict[str, str]) -> dict[str, str]:
+        if live.get(DELETING_BY):
+            raise ProjectBeingDeletedError(f"project {record['id']!r} is being deleted")
         merged = {**live, **{k: v for k, v in record.items() if k in _CALLER_OWNED}}
         # Identity fields belong to the ORIGINAL create; a re-POST never resets a tenant's age or author.
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
@@ -124,15 +135,48 @@ def create_project_record(control_root: str, storage_options: StorageOptions, re
     create_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", record)
 
 
+def record_key(project_id: str) -> str:
+    """Where project ``project_id``'s record lives on the control root."""
+    return f"{_PROJECTS_PREFIX}/{project_id}.json"
+
+
 def get_project(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
-    """The project record, or ``None`` if the tenant does not exist.
+    """The project record, or ``None`` if the tenant does not exist or is being deleted ([[LH-576]]).
 
     A malformed record REFUSES rather than reading as a missing tenant: `require_project_exists` gates
     warehouse creation on this answer, and project delete acts on it, so "does not exist" is a verdict
-    rather than an absence of information."""
+    rather than an absence of information. A project whose delete has started is no tenant for any door
+    but that delete's (:func:`get_project_record`), so no warehouse, role, grant or policy is made for it
+    while its delete revokes and ends what it held."""
+    record = get_project_record(control_root, storage_options, project_id)
+    return None if record is None or record.get(DELETING_BY) else record
+
+
+def get_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> dict[str, str] | None:
+    """The project's record as it stands, a delete it names included, or ``None`` when there is none: what the delete door
+    reads to start or finish a delete. A malformed record refuses, as :func:`get_project` refuses it."""
     key = f"{_PROJECTS_PREFIX}/{project_id}.json"
     record = read_json(control_root, storage_options, key)
     return validated_or_refuse(record, ProjectRecord, event="project_record_malformed", path=key) if record is not None else None
+
+
+def mark_deleting(control_root: str, storage_options: StorageOptions, project_id: str, *, by: str) -> dict[str, str] | None:
+    """Record on the project's record that ``by`` started its delete, conditional on the record's ETag ([[LH-576]]).
+
+    A delete another caller started first keeps its starter, so the record names one delete whoever asks again.
+
+    Returns:
+        The record as written, or ``None`` when it is gone: a delete finished meanwhile.
+    """
+    try:
+        return mutate_json(
+            control_root,
+            storage_options,
+            f"{_PROJECTS_PREFIX}/{project_id}.json",
+            lambda record: record if record.get(DELETING_BY) else {**record, DELETING_BY: by},
+        )
+    except RecordMissingError:
+        return None
 
 
 def delete_project_record(control_root: str, storage_options: StorageOptions, project_id: str) -> None:
@@ -147,7 +191,8 @@ def delete_project_record(control_root: str, storage_options: StorageOptions, pr
 
 
 def list_projects(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every readable project record (unordered). An absent registry prefix yields ``[]``.
+    """Every readable project record (unordered) but those being deleted, which are no tenant (:func:`get_project`). An
+    absent registry prefix yields ``[]``.
 
     One corrupt or unreadable record is SKIPPED with a warning (mirroring ``list_warehouses``):
     the listing feeds the tenant gallery and the existence guard, and a single bad object voiding
@@ -164,6 +209,6 @@ def list_projects(control_root: str, storage_options: StorageOptions) -> list[di
         except Exception as exc:
             log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
             continue
-        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None:
+        if (valid := validated(record, ProjectRecord, event="project_record_malformed", path=info.path)) is not None and not valid.get(DELETING_BY):
             out.append(valid)
     return out

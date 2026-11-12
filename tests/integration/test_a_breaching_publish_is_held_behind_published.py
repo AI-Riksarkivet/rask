@@ -26,12 +26,13 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
+from lance_namespace import ServiceUnavailableError
 
 from catalog.api.dependencies import get_clock, get_namespace
 from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.core.config import Settings, get_settings
 from catalog.core.lineage_emit import make_emitter
-from catalog.services import object_uuids, table_claims, warehouses
+from catalog.services import object_uuids, promotions, table_claims, warehouses
 from lakehouse.gate_specs import GATES_PREFIX
 from lakehouse.governed import fga
 from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, dataset_uuids
@@ -269,6 +270,50 @@ def test_approval_moves_published_and_announces_it_as_the_approvers_and_rejectio
     estate.insert(range(40, 42))
     again = estate.decide("bob", "reject", 3)
     assert (again.status_code, again.json()["restored_version"], estate.rows()) == (200, 4, 14)
+
+
+def test_a_rejection_while_main_holds_a_later_commit_is_refused_and_the_hold_stays(estate: Estate) -> None:
+    """Version 3 lands on main after held version 2. Restoring main to the published version would discard it, so bob's
+    rejection is refused as a conflict naming main's head (owner, 2026-11-12: "Refuse, hold stays"): main keeps its rows
+    and the hold stays open for an approval, an explicit restore or a later rejection."""
+    estate.grants.grant("bob", ("can_promote", estate.obj("table", TABLE)), ("can_get_metadata", estate.obj("table", TABLE)))
+    estate.insert(range(4, 12))
+    assert estate.publish(2)["held"] is True
+    estate.insert(range(12, 14))
+
+    rejected = estate.decide("bob", "reject", 2)
+
+    assert (rejected.status_code, rejected.headers["content-type"], rejected.json().get("code")) == (409, "application/problem+json", 14), rejected.text
+    assert "version 3" in rejected.json()["detail"]
+    assert (estate.rows("published"), estate.rows(), estate.holds()) == (4, 14, [(TABLE, 2, 1, ["row_count_delta"])])
+
+
+def test_a_rejection_retried_after_its_restore_landed_restores_main_once(
+    estate: Estate, monkeypatch: pytest.MonkeyPatch, lineage: list[dict[str, Any]]
+) -> None:
+    """bob's rejection restores main as version 3, and the store fails to record that before it answers. His retry
+    finds the restore it already made and records it: main is restored once, not again as version 4, and the restore is
+    announced once, by the call that made it ([[LH-576]])."""
+    estate.grants.grant("bob", ("can_promote", estate.obj("table", TABLE)), ("can_get_metadata", estate.obj("table", TABLE)))
+    estate.insert(range(4, 12))
+    assert estate.publish(2)["held"] is True
+    record_restore = promotions.record_restore
+
+    def unanswered(*_args: object, **_kwargs: object) -> promotions.Hold:
+        monkeypatch.setattr(promotions, "record_restore", record_restore)
+        raise ServiceUnavailableError("the object store did not answer recording the restore")
+
+    monkeypatch.setattr(promotions, "record_restore", unanswered)
+    assert estate.decide("bob", "reject", 2).status_code == 503
+
+    again = estate.decide("bob", "reject", 2)
+
+    assert again.status_code == 200, again.text
+    assert (again.json()["restored_version"], lance.dataset(estate.location()).version, estate.rows()) == (3, 3, 4)
+    restores = [
+        event["outputs"][0]["facets"]["version"]["datasetVersion"] for event in lineage if event["run"]["facets"][LANCE_FACET]["operation"] == "restore_table"
+    ]
+    assert restores == ["3"]
 
 
 def test_without_can_promote_a_caller_can_neither_decide_a_hold_nor_move_published(estate: Estate) -> None:

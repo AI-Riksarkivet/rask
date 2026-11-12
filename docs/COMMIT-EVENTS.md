@@ -170,12 +170,18 @@ an outside source, and so is a dataset under another catalog's `lance-namespace:
   holds no `publish_table` for that move, announces it for the person the catalog recorded moving the tag. A tag moved past the catalog's doors names no
   such person: it is counted unauthored, which pages, and never announced. Only the version the tag names now is looked
   for, so a publication the tag moved past before the cron ran is not announced; the newer one is.
-- A table's lifecycle markers (a declare, a register, a rename, a drop, a deregister) are best-effort: a crash
-  between the change and its outbox stage loses that marker, and nothing announces it again (ADR 0188). A follower that
-  must not miss a table coming or going reads `ListTables` and `DescribeTable` as the truth, and the marker as its cue.
+- A table's lifecycle markers (a declare, a register, a rename, a drop, a deregister, an undrop) and the control
+  events the doors that change grants, roles, projects and principals send are filed on the control root before their
+  change ([ADR 0205](adr/0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md)). A door
+  that fails after its change has them sent by the catalog's finish within the hour, once the store shows the change
+  landed, as the events the door built: a marker's run id and a control event's `event_id` are the ones the door
+  would have sent, so a copy that did go out lands one row; the namespace and warehouse cascades file theirs the same
+  way. A follower that must not miss a table coming or going still reads `ListTables` and `DescribeTable` as the truth,
+  and the marker as its cue.
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
   commits. Order the writes of one table by `rask_lance.version`, not by `seq`.
-- The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), so a follower
+- The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), and longer for a row the
+  configured graph backend has not taken yet, so a follower
   that stops for longer can find its cursor below `oldest_seq - 1` (see the cursor rule).
 
 ## Telling people: the notifier contract
@@ -286,5 +292,9 @@ so a reader of the bus and a walker of the feed must derive it alike:
   facet's `operation`, every field is taken exactly as the event carries it, and an absent one is the empty string.
   `eventTime` is part of it on purpose: a redelivery carries the same instant and collapses onto one identity, while a
   table dropped and created again carries another and stays a second fact.
+
+Every field a `DatasetEvent`'s identity is derived from can be read by a writer of the table, so an outside producer can
+post a change under the identity the catalog's own announcement will carry. The feed keeps the two as two rows: the
+catalog's signed announcement is never displaced by a posted one, and a walker of the feed may meet one identity twice.
 
 The signature an event carries is verified as `docs/LINEAGE.md` § Signed events (the `rask_signature` facet) describes.

@@ -39,7 +39,6 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
-from catalog.api.pagination import paginate
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings, fresh_lance_session
 from catalog.core.identifiers import parse_identifier
@@ -275,18 +274,20 @@ async def list_erasure_obligations(
     table as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with
     it, is listed to nobody. A derived table the caller may not see is counted, never named, as the verification shows it."""
     obligations = await run_in_threadpool(erasure_obligations.list_obligations, settings.registry_root, settings.storage_options())
-    entries = [table_claims.TableRecord(location=o.location, uuid=o.table_uuid) for o in obligations]
-    names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
-    named = [(name, obligation) for name, obligation in zip(names, obligations, strict=True) if name is not None]
-    if (authz := fga_deps.authorization(settings, client, token)) is not None:
-        # Checked on the uuid each obligation records ([[LH-524]]), which is the object the table's grants are held by.
-        objects = sorted({fga.table_object(obligation.table_uuid) for _, obligation in named})
-        allowed = await authz.batch_check("can_maintain", objects)
-        named = [(name, obligation) for name, obligation in named if allowed.get(fga.table_object(obligation.table_uuid))]
-    by_key = {f"{obligation.deadline.isoformat()}|{obligation.obligation_id}": (name, obligation) for name, obligation in named}
-    page, next_token = paginate(sorted(by_key), page_token, limit)
+    # Named and judged on the uuid each obligation records ([[LH-524]]) only as the page fills, so a page costs about the
+    # obligations it serves or passes over.
+    listed, next_token = await fga_deps.named_record_page(
+        fga_deps.authorization(settings, client, token),
+        table_claims.claim_store(settings),
+        relation="can_maintain",
+        candidates=sorted(
+            ((f"{obligation.deadline.isoformat()}|{obligation.obligation_id}", obligation) for obligation in obligations), key=lambda candidate: candidate[0]
+        ),
+        kept_by=lambda obligation: table_claims.TableRecord(location=obligation.location, uuid=obligation.table_uuid),
+        page_token=page_token,
+        limit=limit,
+    )
     now = clock()
-    listed = [by_key[key] for key in page]
     hidden = await _hidden_derived(
         [surface for _, obligation in listed for surface in obligation.open_surfaces],
         late=[key for _, obligation in listed for key in obligation.late_derived],

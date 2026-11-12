@@ -150,6 +150,26 @@ def test_a_commits_pass_expires_its_table_only_at_the_threshold(
     assert (outcome.ended, len(lance.dataset(task.location, storage_options=store.in_clear()).versions())) == (None, kept)
 
 
+def test_a_pass_expiring_a_table_and_its_branch_asks_the_catalog_for_one_vend(
+    *, bucket: str, store: StorageOptions, settings: Callable[[], MaintenanceSettings]
+) -> None:
+    """The maintain tier is vended for the table, and its session reaches every ref under the table's prefix: maintenance
+    asks no branch-scoped vend. So a pass that expires the table and a branch asks the catalog once, not once a ref."""
+    task = _table_with(THRESHOLD + 1, bucket=bucket, options=store)
+    dataset = lance.dataset(task.location, storage_options=store.in_clear())
+    dataset.create_branch("work")
+    for i in range(THRESHOLD + 1):
+        lance.dataset(task.location, storage_options=store.in_clear()).checkout_version(("work", None)).insert(pa.table({"id": pa.array([10 + i], pa.int64())}))
+
+    with maintain_tier_door(lambda _table: task.location) as doors:
+        outcome = run_table_pass(task, settings())
+        vends = doors.routes["vend"].call_count
+
+    on_work = lance.dataset(task.location, storage_options=store.in_clear()).checkout_version(("work", None))
+    expired = (len(lance.dataset(task.location, storage_options=store.in_clear()).versions()), len(on_work.versions()))
+    assert (outcome.ended, expired, vends) == (None, (1, 1), 1)
+
+
 def _staged(bucket: str, moto_url: str, location: str, version: int) -> str:
     """A manifest staged for ``version`` as a stock writer stages one (`<inverted version>.manifest-<uuid>`); its name."""
     name = f"{(1 << 64) - 1 - version:020d}.manifest-{uuid.uuid4()}"

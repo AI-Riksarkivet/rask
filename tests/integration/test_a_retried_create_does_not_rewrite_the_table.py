@@ -165,6 +165,20 @@ class TestTheDestructiveDoorsConvergeToo:
 
         assert crossed.status_code == 400, crossed.text
 
+    def test_a_key_reused_on_another_table_is_refused_and_the_table_is_left(self, real_ns_client: TestClient) -> None:
+        """[[LH-576]] A key binds the canonical id of the object its door acts on as well as the door: answered with the
+        first table's drop, a second drop under the key would report success and leave the second table standing."""
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        for table in ("db$one", "db$other"):
+            assert real_ns_client.post(f"/v1/table/{table}/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+        keyed = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f66"}
+        assert real_ns_client.post("/v1/table/db$one/drop", headers=keyed).status_code == 200
+
+        reused = real_ns_client.post("/v1/table/db$other/drop", headers=keyed)
+
+        assert (reused.status_code, reused.headers["content-type"], reused.json().get("code")) == (400, "application/problem+json", 13), reused.text
+        assert real_ns_client.post("/v1/table/db$other/describe", json={}).status_code == 200, "the refused drop must leave the table"
+
 
 class TestEveryTableDoorThatMintsOrRetiresConverges:
     """`create`/`drop`/`rename` were the first three; these are the rest of the same amplifier.

@@ -16,15 +16,18 @@ import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+import boto3
 import lance
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, connect
+from moto.server import ThreadedMotoServer
 
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses as wh_svc
 from lakehouse.storage_options import StorageOptions
+from tests.integration import store_requests
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -45,9 +48,10 @@ def routing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[T
     yield from _routing_app(tmp_path, monkeypatch)
 
 
-def _routing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, Path, Path, Path]]:
+def _routing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env: str) -> Iterator[tuple[TestClient, Path, Path, Path]]:
     """The fixture body, shared so a variant can set extra env (see ``routing_recoverable``) without
-    copying the whole app build — a second copy would drift from this one the first time either moved."""
+    copying the whole app build — a second copy would drift from this one the first time either moved. ``env`` is set
+    after the defaults, so a variant may move the control root."""
     default_root = tmp_path / "default"
     warehouse_root = tmp_path / "wh-bucket"
     registry = tmp_path / "registry"
@@ -60,6 +64,8 @@ def _routing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tu
     monkeypatch.setenv("LANCE_CONTROL_ROOT", f"file://{registry}")
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "x")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
 
     from catalog.core.config import get_settings
 
@@ -71,15 +77,17 @@ def _routing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tu
     get_settings.cache_clear()
 
 
-def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-a") -> None:
+def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-a", control: str | None = None, options: StorageOptions | None = None) -> None:
     """Register a warehouse whose root is a LOCAL dir (not s3://) so the resolver can open it in-process,
-    and pre-create its top-level namespace, mirroring what create_warehouse_namespace does on a real stack."""
-    control = f"file://{registry}"
-    wh_svc.put_warehouse(control, StorageOptions(), {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
+    and pre-create its top-level namespace, mirroring what create_warehouse_namespace does on a real stack. The records
+    go to ``registry``, or to the control root ``control`` read with ``options``."""
+    control = control or f"file://{registry}"
+    options = options or StorageOptions()
+    wh_svc.put_warehouse(control, options, {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
     # The tenant namespace lives IN the warehouse bucket — create it there, then bind.
     wh_ns = connect("dir", {"root": str(warehouse_root)})
     wh_ns.create_namespace(CreateNamespaceRequest(id=["tenantns"], properties=with_minted_uuid(None)))
-    wh_svc.bind_namespace(control, StorageOptions(), "tenantns", wid, str(warehouse_root))
+    wh_svc.bind_namespace(control, options, "tenantns", wid, str(warehouse_root))
 
 
 def _created(client: TestClient) -> int:
@@ -345,3 +353,46 @@ def test_a_table_registered_under_a_bound_namespace_is_then_described(routing: t
     described = client.post("/v1/table/tenantns$events/describe", json={})
     listed = client.get("/v1/namespace/tenantns/table/list")
     assert (described.status_code, listed.json().get("tables")) == (200, ["events"]), (described.text, listed.text)
+
+
+@pytest.fixture
+def registry_store() -> Iterator[store_requests.CountedStore]:
+    """An S3 store holding the bucket ``registry``, behind a proxy counting what reaches it."""
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    host, port = server.get_host_and_port()
+    url = f"http://{host}:{port}"
+    boto3.client("s3", endpoint_url=url, aws_access_key_id="x", aws_secret_access_key="x", region_name="us-east-1").create_bucket(Bucket="registry")
+    with store_requests.counted(url) as store:
+        yield store
+    server.stop()
+
+
+@pytest.fixture
+def routing_on_a_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_store: store_requests.CountedStore
+) -> Iterator[tuple[TestClient, Path, Path, Path]]:
+    """`routing` with its control root, and so its warehouse records, on ``registry_store``."""
+    yield from _routing_app(tmp_path, monkeypatch, LANCE_CONTROL_ROOT="s3://registry", LANCE_S3_ENDPOINT=registry_store.url)
+
+
+def test_a_listing_reads_its_warehouse_record_once(
+    routing_on_a_store: tuple[TestClient, Path, Path, Path], registry_store: store_requests.CountedStore
+) -> None:
+    """[[LH-576]] E10h: a request resolves its top namespace's warehouse once, so a listing judging each of its tables
+    through that namespace reads the warehouse's record once, where it read it once per listed table. Counted on the
+    wire in front of the control root's store; the record is still read on every request, so a deactivation is in force
+    from the next one."""
+    from catalog.core.config import get_settings
+
+    client, _default_root, warehouse_root, registry = routing_on_a_store
+    _register_warehouse(registry, warehouse_root, control="s3://registry", options=get_settings().storage_options())
+    for name in ("a", "b", "c", "d"):
+        assert client.post(f"/v1/table/tenantns${name}/create", content=_arrow(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    registry_store.taken()
+
+    listed = client.get("/v1/namespace/tenantns/table/list", params={"include_declared": "false"})
+
+    assert (listed.status_code, listed.json()["tables"]) == (200, ["a", "b", "c", "d"]), listed.text
+    record_reads = [request for request in registry_store.taken() if request.method == "GET" and request.path.endswith("/wh-a.json")]
+    assert len(record_reads) == 1, f"the listing read its warehouse record {len(record_reads)} times"

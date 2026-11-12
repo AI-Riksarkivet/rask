@@ -112,6 +112,11 @@ os.environ.setdefault("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
 # token to check is caught there, not hidden here.
 os.environ.setdefault("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
 
+# THE SAME DECLARATION, for the store identity. `require_env_pair` refuses to sign with a static key pair nobody
+# acknowledged, since a deployment's store identity is its ServiceAccount token. The suites boot services on a pair
+# against moto or a local root ON PURPOSE, projecting no token; the guard's own test `delenv`s this to see the refusal.
+os.environ.setdefault("RASK_INSECURE_ALLOW_STATIC_STORE_KEY", "true")
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _no_harness_telemetry() -> None:

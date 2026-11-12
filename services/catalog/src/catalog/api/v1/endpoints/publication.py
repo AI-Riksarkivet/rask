@@ -33,9 +33,9 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import ConcurrentModificationError, InternalError, InvalidTableStateError, RestoreTableRequest, ServiceUnavailableError
+from lance_namespace import ConcurrentModificationError, InternalError, InvalidTableStateError, ServiceUnavailableError
 
-from catalog.api import lineage_deps
+from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import (
     ClockDep,
     ControlEmitterDep,
@@ -47,13 +47,12 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.fga_deps import authorization, require_relation
-from catalog.api.pagination import paginate
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import PUBLISH_TABLE, RESTORE_TABLE, LineageEmitter, UuidReader, emit_write_event, is_person_subject
 from catalog.schemas import PromotionDecision, PromotionDecisionRequest, PromotionHold, PromotionsListResponse, PublishRequest, PublishResult
-from catalog.services import dataplane, promotions, publication, table_claims, warehouses
+from catalog.services import promotions, publication, table_claims, warehouses
 from catalog.services.table_claims import DoorTable
 from lakehouse import commit_records
 from lakehouse.control_emit import ControlEmitter, emit_control
@@ -288,8 +287,9 @@ async def publish_table(
     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
     and the system did exactly what it should. A held one is a 200 with `held=True` and the hold. Errors
     are reserved for the caller getting it wrong — an unknown version (404), a backwards move (409), a
-    malformed one (400), a version older than the one held (409) — all raised as `lance_namespace` typed
-    errors so the shared problem-body handler renders them.
+    malformed one (400), a version older than the one held (409), a version another publish overtook while
+    its gate ran (409, code 14) — all raised as `lance_namespace` typed errors so the shared problem-body
+    handler renders them.
     """
     segments = parse_identifier(id)
     if body.accept_assertions:
@@ -355,6 +355,7 @@ async def publish_table(
             declared_by=gate.declared_by,
             review=gate.review,
             before_move=_record_mover(settings, table.resolved.require_uuid(), version=body.version, token=token),
+            now=clock(),
         )
     )
     hold: PromotionHold | None = None
@@ -692,8 +693,11 @@ async def reject_promotion(
     Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection
     is recorded before main is restored, and main is restored once: rejecting again completes a restore the first
     call could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past
-    the held version meanwhile, there is nothing to restore and the rejection only closes the hold. 409 when the
-    table holds no such version, it was decided otherwise, or `published` reached it.
+    the held version meanwhile, there is nothing to restore and the rejection only closes the hold. A rejection whose
+    restore landed and whose record of it failed finds that restore when asked again and records it, rather than
+    restoring a second time. 409 when the table holds no such version, it was decided otherwise, or `published` reached
+    it; and 409 (code 14) naming main's head while main holds a commit after the held version, which a restore would
+    discard: the hold stays open for an approval, a RestoreTable, or a later rejection (owner, 2026-11-12).
     """
     segments = parse_identifier(id)
     table_uuid = table.resolved.require_uuid()
@@ -704,25 +708,32 @@ async def reject_promotion(
         restored: int | None = None
         if published is not None and published < decided.version:
             restore = partial(
-                dataplane.restore,
+                promotions.restore_once,
                 table,
                 so,
-                RestoreTableRequest(id=segments, version=published),
+                held=decided.version,
+                published=published,
                 transaction_properties=lineage_deps.door_stamp(token, RESTORE_TABLE),
             )
-            _, restored = await run_in_threadpool(restore)
-            await lineage_deps.emit_measured_write(
-                lineage,
-                segments,
-                location=table.location,
-                so=so,
-                token=token,
-                operation=RESTORE_TABLE,
-                authorization=authorization,
-                uuids=uuids,
-                pin_version=restored,
-                branch=None,
-            )
+            try:
+                restored, made = await run_in_threadpool(restore)
+            except promotions.MainMovedError:
+                # The rejection took no effect, so the hold waits for its next answer as it did before it.
+                await run_in_threadpool(partial(promotions.reopen, settings.registry_root, settings.storage_options(), table_uuid, version=decided.version))
+                raise
+            if made:
+                await lineage_deps.emit_measured_write(
+                    lineage,
+                    segments,
+                    location=table.location,
+                    so=so,
+                    token=token,
+                    operation=RESTORE_TABLE,
+                    authorization=authorization,
+                    uuids=uuids,
+                    pin_version=restored,
+                    branch=None,
+                )
         decided = await run_in_threadpool(
             partial(promotions.record_restore, settings.registry_root, settings.storage_options(), table_uuid, version=decided.version, restored=restored)
         )
@@ -747,23 +758,27 @@ async def list_promotions(
     token: CurrentToken,
     client: FgaClientDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
-    page_token: Annotated[str | None, Query(description="Continue after this table id (the previous page's `page_token`).")] = None,
+    page_token: Annotated[str | None, Query(description="Continue after this hold (the previous page's `page_token`).")] = None,
 ) -> PromotionsListResponse:
-    """The open holds the caller may see, in table order: each table's held version, what `published` names, why
-    it is held and when the sweep expires it. A hold names its table as the table is named now, and is listed to a
-    caller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and expires.
+    """The open holds the caller may see, the soonest the sweep expires first: each table's held version, what
+    `published` names, why it is held and when the sweep expires it. A hold names its table as the table is named now,
+    and is listed to a caller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and
+    expires.
+
+    A hold is named and judged only as the page fills (:func:`fga_deps.named_record_page`), on the uuid it records
+    ([[LH-524]]), the object the table's grants are held by: a page costs about the holds it serves or passes over.
     """
     holds = await run_in_threadpool(promotions.open_holds, settings.registry_root, settings.storage_options())
-    entries = [table_claims.TableRecord(location=hold.location, uuid=hold.uuid) for hold in holds]
-    names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
-    named = [(name, hold) for name, hold in zip(names, holds, strict=True) if name is not None]
-    if (authz := authorization(settings, client, token)) is not None:
-        # Checked on the uuid each hold records ([[LH-524]]), which is the object the table's grants are held by.
-        visible = await authz.batch_check("can_get_metadata", sorted({fga.table_object(hold.uuid) for _, hold in named}))
-        named = [(name, hold) for name, hold in named if visible.get(fga.table_object(hold.uuid))]
-    by_key = {f"{name}|{hold.uuid}": (name, hold) for name, hold in named}
-    page, next_token = paginate(sorted(by_key), page_token, limit)
-    return PromotionsListResponse(holds=[_view(hold, table=name) for name, hold in (by_key[key] for key in page)], page_token=next_token)
+    page, next_token = await fga_deps.named_record_page(
+        authorization(settings, client, token),
+        table_claims.claim_store(settings),
+        relation="can_get_metadata",
+        candidates=sorted(((f"{hold.expires_at.isoformat()}|{hold.uuid}", hold) for hold in holds), key=lambda candidate: candidate[0]),
+        kept_by=lambda hold: table_claims.TableRecord(location=hold.location, uuid=hold.uuid),
+        page_token=page_token,
+        limit=limit,
+    )
+    return PromotionsListResponse(holds=[_view(hold, table=name) for name, hold in page], page_token=next_token)
 
 
 # One exported router, like `gates`: `router.py` mounts `_module.router` for every endpoint module.

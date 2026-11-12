@@ -89,6 +89,36 @@ def test_create_list_get_warehouse(client: TestClient, tmp_path: Any, monkeypatc
     assert (got.json()["bucket"], got.json().get("primary")) == ("wh-a", True)
 
 
+def test_a_project_holding_warehouses_refuses_its_delete_naming_each_one(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deletes are bottom-up (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses refuses 409 and names
+    each one with the door that empties it, never another tenant's, and the refusal removes nothing."""
+    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
+    _mk_projects(client, "acme", "globex")
+    for warehouse, project in (("wh-b", "acme"), ("wh-a", "acme"), ("wh-g", "globex")):
+        made = client.post("/management/v1/warehouses", json={"id": warehouse, "project": project})
+        assert made.status_code == 200, made.text
+
+    refused = client.delete("/management/v1/projects/acme")
+
+    detail = refused.json()["detail"]
+    assert (refused.status_code, refused.json()["code"]) == (409, 3), refused.text
+    assert ("wh-a" in detail, "wh-b" in detail, "wh-g" in detail, "DELETE /management/v1/warehouses/" in detail) == (True, True, False, True), detail
+    assert client.get("/management/v1/projects/acme").status_code == 200, "a refusal removes nothing"
+
+
+def test_an_empty_project_is_retired_with_no_grant_to_revoke(client: TestClient, tmp_path: Any) -> None:
+    """With authorization off the delete revokes nothing and answers so: a count of grants it never revoked would be a
+    record of a revocation that did not happen."""
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
+    _mk_projects(client, "acme")
+
+    retired = client.delete("/management/v1/projects/acme")
+
+    assert (retired.status_code, retired.json()) == (200, {"project": "acme", "tuples_revoked": 0})
+    assert client.get("/management/v1/projects/acme").status_code == 404
+
+
 class _VendingStore:
     """An object store reached with vended credentials, which honours or ignores what Lance relies on.
 
@@ -361,6 +391,50 @@ def test_a_warehouse_declared_protected_refuses_its_delete(client: TestClient, t
         True,
     )
     assert (client.get("/management/v1/warehouses/wh-a").status_code, purged) == (200, [])
+
+
+def test_a_purged_buckets_claim_goes_with_its_last_warehouse(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A warehouse delete that purged its bucket releases the bucket's claim, so another project may register the bucket
+    once its bytes are gone; a delete keeping the bytes keeps the claim, so no other project adopts what the bucket holds."""
+    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+    monkeypatch.setattr(wh_svc, "purge_bucket", lambda bucket, so: 0)
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
+    _mk_projects(client, "acme", "globex")
+    for warehouse, bucket in (("wh-kept", "kept-bkt"), ("wh-purged", "purged-bkt")):
+        assert client.post("/management/v1/warehouses", json={"id": warehouse, "project": "acme", "bucket": bucket}).status_code == 200
+    assert client.delete("/management/v1/warehouses/wh-kept").status_code == 200
+    assert client.delete("/management/v1/warehouses/wh-purged", params={"purge_bucket": "true"}).status_code == 200
+
+    kept = client.post("/management/v1/warehouses", json={"id": "wh-g1", "project": "globex", "bucket": "kept-bkt"})
+    purged = client.post("/management/v1/warehouses", json={"id": "wh-g2", "project": "globex", "bucket": "purged-bkt"})
+
+    assert (kept.status_code, purged.status_code) == (409, 200), purged.text
+
+
+def test_a_purge_that_fails_is_finished_by_the_same_call_again(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The warehouse's record goes after its bucket's purge, so a purge that fails answers PartiallyApplied with the
+    warehouse still standing, and the same call issued again purges the bucket and removes the warehouse."""
+    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+    purged: list[str] = []
+
+    def _a_store_that_fails_once(bucket: str, _so: object) -> int:
+        purged.append(bucket)
+        if len(purged) == 1:
+            raise OSError("the store did not answer the purge")
+        return 3
+
+    monkeypatch.setattr(wh_svc, "purge_bucket", _a_store_that_fails_once)
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
+    _mk_projects(client, "acme")
+    assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}).status_code == 200
+
+    failed = client.delete("/management/v1/warehouses/wh-a", params={"purge_bucket": "true"})
+    standing = client.get("/management/v1/warehouses/wh-a").status_code
+    again = client.delete("/management/v1/warehouses/wh-a", params={"purge_bucket": "true"})
+
+    assert (failed.status_code, failed.json().get("partial"), standing) == (503, True, 200), failed.text
+    assert (again.status_code, again.json().get("objects_purged"), purged) == (200, 3, ["wh-a", "wh-a"]), again.text
+    assert client.get("/management/v1/warehouses/wh-a").status_code == 404
 
 
 def test_namespace_create_refused_on_deactivated_warehouse(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

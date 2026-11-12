@@ -26,11 +26,13 @@ namespace binding → warehouse → project).
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    ConcurrentModificationError,
     InvalidInputError,
     LanceNamespace,
     NamespaceAlreadyExistsError,
@@ -46,6 +48,7 @@ from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, Pol
 from catalog.services import projects as project_registry
 from catalog.services import table_claims, warehouses
 from lakehouse import maintenance_policies as policies
+from lakehouse import records
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimStore
@@ -76,7 +79,7 @@ _PROJECT_ID_RE = CONTROL_ID_RE
 def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[str, object] | None, *, uuid: str | None) -> dict[str, object]:
     """The record to persist. A field the caller did not SET keeps whatever the stored record had.
 
-    `put_policy` overwrites the whole object, so `model_dump()` alone made every set a full replace:
+    The record is written whole, so `model_dump()` alone made every set a full replace:
     a client that read a policy, changed one knob and sent it back wrote the model's DEFAULTS over
     every field it had not mentioned — silently clearing `scan_batch_size` (the compaction memory
     bound) and re-enabling a `cleanup_enabled=False` legal hold. The lakehouse form
@@ -84,7 +87,8 @@ def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[st
     means inherit".
 
     Only EXPLICITLY set fields are applied (`exclude_unset`), which is also what the request model's
-    empty-body guard already keys on — one notion of "the caller meant this", not two.
+    empty-body guard already keys on — one notion of "the caller meant this", not two. ``existing`` is the record as it
+    stands when the write lands (`policies.set_policy`), never one read earlier.
     """
     merged: dict[str, object] = dict(existing or {})
     merged.update(body.model_dump(exclude_unset=True))
@@ -92,6 +96,19 @@ def _record(kind: str, canonical_id: str, body: PolicyRequest, existing: dict[st
     for field, value in body.model_dump().items():
         merged.setdefault(field, value)
     return {**merged, "kind": kind, "id": canonical_id, **({"uuid": uuid} if uuid is not None else {})}
+
+
+async def _set(settings: Settings, kind: PolicyKind, key: str, compose: Callable[[dict[str, Any] | None], dict[str, Any]]) -> dict[str, Any]:
+    """Write the record ``compose`` merges onto the one stored, conditional on that record (`policies.set_policy`), once
+    for all three rungs; the record written.
+
+    Raises:
+        ConcurrentModificationError: The record kept changing under the set (409, code 14).
+    """
+    try:
+        return await run_in_threadpool(policies.set_policy, settings.registry_root, settings.storage_options(), kind, key, compose)
+    except records.RecordChangedError as exc:
+        raise ConcurrentModificationError(f"the {kind} policy kept changing while it was set; set it again") from exc
 
 
 def _response(record: dict[str, object]) -> PolicyResponse:
@@ -141,10 +158,10 @@ async def set_table_policy(
     """Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``)."""
     canonical = fga.canonical_object_id(table.segments)
     table_uuid = table.require_uuid()
-    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "table", table_uuid)
     # The location beside the uuid, so a listing names the table as it is named now (`table_claims.names_now`).
-    record = {**_record("table", canonical, body, prior, uuid=table_uuid), "location": str(table.location)}
-    await run_in_threadpool(policies.put_policy, settings.registry_root, settings.storage_options(), record)
+    record = await _set(
+        settings, "table", table_uuid, lambda stored: {**_record("table", canonical, body, stored, uuid=table_uuid), "location": str(table.location)}
+    )
     log.info("maintenance_policy_set", extra={"kind": "table", "id": canonical})
     await emit_control(
         control,
@@ -179,9 +196,7 @@ async def set_namespace_policy(
     a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``)."""
     namespace = await _namespace(id, ns, settings)
     canonical = fga.canonical_object_id(namespace.segments)
-    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), "namespace", namespace.uuid)
-    record = _record("namespace", canonical, body, prior, uuid=namespace.uuid)
-    await run_in_threadpool(policies.put_policy, settings.registry_root, settings.storage_options(), record)
+    record = await _set(settings, "namespace", namespace.uuid, lambda stored: _record("namespace", canonical, body, stored, uuid=namespace.uuid))
     log.info("maintenance_policy_set", extra={"kind": "namespace", "id": canonical})
     await emit_control(
         control,
@@ -267,9 +282,7 @@ async def set_project_policy(
                 "contested; refusing to set a policy over another tenant's data (fix the warehouse "
                 "records first)"
             )
-    prior = await run_in_threadpool(policies.get_policy, settings.registry_root, so, "project", project)
-    record = {**_record("project", project, body, prior, uuid=None), "buckets": buckets}
-    await run_in_threadpool(policies.put_policy, settings.registry_root, so, record)
+    record = await _set(settings, "project", project, lambda stored: {**_record("project", project, body, stored, uuid=None), "buckets": buckets})
     log.info("maintenance_policy_set", extra={"kind": "project", "id": project})
     await emit_control(
         control,

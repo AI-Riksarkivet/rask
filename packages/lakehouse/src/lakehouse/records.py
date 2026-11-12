@@ -134,6 +134,9 @@ class Stored(BaseModel):
 
     record: dict[str, Any]
     etag: str
+    #: When it was last written, as the store stamped it (an S3 object's ``LastModified``, a local file's mtime): the
+    #: store's clock, read with the ETag from one answer, so an age judged on it is the age of the bytes that ETag names.
+    modified: datetime
 
 
 class StoreRead(BaseModel):
@@ -175,7 +178,7 @@ def read_json_at(root_uri: str, storage_options: StorageOptions, key: str) -> St
                 return StoreRead(stored=None, at=store_clock(exc.response))
             raise
         body = json.loads(got["Body"].read().decode("utf-8"))
-        return StoreRead(stored=Stored(record=body, etag=str(got["ETag"]).strip('"')), at=store_clock(got))
+        return StoreRead(stored=Stored(record=body, etag=str(got["ETag"]).strip('"'), modified=got["LastModified"]), at=store_clock(got))
 
     fs, path = pafs.FileSystem.from_uri(root_uri)
     if not isinstance(fs, pafs.LocalFileSystem):
@@ -187,11 +190,13 @@ def read_json_at(root_uri: str, storage_options: StorageOptions, key: str) -> St
             fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
             try:
                 raw = fh.read()
+                modified = datetime.fromtimestamp(os.fstat(fh.fileno()).st_mtime, UTC)
             finally:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     except FileNotFoundError:
         return StoreRead(stored=None, at=datetime.now(UTC))
-    return StoreRead(stored=Stored(record=json.loads(raw.decode("utf-8")), etag=hashlib.sha256(raw).hexdigest()), at=datetime.now(UTC))
+    stored = Stored(record=json.loads(raw.decode("utf-8")), etag=hashlib.sha256(raw).hexdigest(), modified=modified)
+    return StoreRead(stored=stored, at=datetime.now(UTC))
 
 
 def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> tuple[dict[str, Any], str] | None:
@@ -303,7 +308,9 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, reco
         except ClientError as exc:
             status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             code = str(exc.response.get("Error", {}).get("Code", ""))
-            if status in {409, 412} or code in {"PreconditionFailed", "ConditionalRequestConflict"}:
+            # A record deleted since the read answers 404 NoSuchKey, not 412 (measured on moto 5: a PutObject naming
+            # If-Match on a deleted key): it changed under the writer as surely as one written over.
+            if status in {404, 409, 412} or code in {"PreconditionFailed", "ConditionalRequestConflict", "NoSuchKey"}:
                 raise RecordChangedError(f"record {key!r} changed under {root_uri!r}") from exc
             raise
         return
@@ -312,13 +319,17 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, reco
     if not isinstance(fs, pafs.LocalFileSystem):
         raise NotImplementedError(f"conditional replace is not supported for root {root_uri!r} ({type(fs).__name__})")
     target = os.path.join(path.rstrip("/"), key)
-    os.makedirs(os.path.dirname(target), exist_ok=True)
+    try:
+        handle = open(target, "r+b")  # noqa: SIM115 — closed by the `with` below, which the lock needs open first
+    except FileNotFoundError as exc:
+        # Deleted since the read, as on S3: the replace never puts a record back where none stands.
+        raise RecordChangedError(f"record {key!r} changed under {root_uri!r}") from exc
     # An exclusive lock across the compare AND the swap. A bare re-read-then-write would leave the
     # same window this function exists to close, only narrower — and a narrower race is the kind that
     # survives testing and fails in production. `flock` serializes cooperating writers on one host,
     # which is exactly the scope of a local root (dev + the unit suite); s3:// is the multi-replica
     # path and it has the store's own precondition above.
-    with open(target, "a+b") as fh:
+    with handle as fh:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
         try:
             fh.seek(0)

@@ -21,17 +21,18 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidTableStateError, NamespaceNotFoundError, TableNotFoundError
 
-from catalog.api import fga_deps
-from catalog.api.dependencies import ClockDep, ControlEmitterDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
+from catalog.api import announcing, fga_deps
+from catalog.api.announcing import AnnouncerDep
+from catalog.api.dependencies import ClockDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
 from catalog.api.security import Caller, CurrentSubject, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import reclaim_or_refuse, role_session_name
 from catalog.schemas import CredentialResponse, TrashEndResponse, TrashRefusalRequest, TrashRefusalResponse, TrashReleaseResponse, VendedCredentials
 from catalog.services import trash_reclaim
+from catalog.services.announcement_intents import Announcement
 from lakehouse import trash
 from lakehouse.base_refs import decoded_path
-from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.location_claims import LocationClaim
@@ -55,22 +56,38 @@ async def release_trash(
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     clock: ClockDep,
 ) -> TrashReleaseResponse:
     """Release a drop past its deadline (ADR 0146): revoke every grant on its object, tell each person who lost one, and
-    stamp the record released; its bytes wait for the purge.
+    stamp the record released; its bytes wait for the purge. What it tells is filed before the revoke, so a release that
+    fails after the revoke still tells them ([[LH-576]]).
+
 
     Refused 409 (code 19) until the deadline has settled (``lakehouse.trash.RELEASE_SETTLE``), and while a live object
-    holds the record's place or name again: an undrop registers before it clears its record.
+    holds the record's place or name again: an undrop registers before it clears its record. Audited as it lands or as it
+    fails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.
     """
-    record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
-    claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
-    if (reason := trash_reclaim.release_refusal(record, now=clock()) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
-        raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
-    removed = await fga_deps.revoke_expired_object(client, settings, fga.object_of(kind, uuid), token=token)
-    await _announce_revoked(control, record, removed, kind=kind, uuid=uuid, actor=_actor(token))
-    stamped = await run_in_threadpool(partial(trash_reclaim.stamp_released, settings, kind=kind, uuid=uuid, now=clock()))
+    try:
+        record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
+        claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
+        if (reason := trash_reclaim.release_refusal(record, now=clock()) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
+            raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
+        obj = fga.object_of(kind, uuid)
+        held = await fga.read_object_tuples(client, obj) if client is not None and settings.fga_enabled else []
+        told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(token)) for t in held if fga.names_someone(str(t.user))}
+        async with announcer.announcing(door="trash_release", target=obj, announcements=list(told.values())) as filing:
+            removed = await fga_deps.revoke_expired_object(client, settings, obj, token=token)
+            # Tell each person who lost a grant on the released object: none of them can see it any more, so no feed gated
+            # on seeing it would. Structural edges name objects, not people, and are not announced.
+            for t in removed:
+                if fga.names_someone(str(t.user)):
+                    await filing.send(told.get((t.object, t.relation, t.user)) or _revoked(t, record, uuid=uuid, actor=_actor(token)))
+            stamped = await run_in_threadpool(partial(trash_reclaim.stamp_released, settings, kind=kind, uuid=uuid, now=clock()))
+    except Exception as failed:
+        _audited(AuditAction.TRASH_RELEASE, AuditOutcome.FAILURE, token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
+        raise
+    _audited(AuditAction.TRASH_RELEASE, AuditOutcome.SUCCESS, token, kind=kind, uuid=uuid, tuples_revoked=len(removed), stamped=stamped)
     return TrashReleaseResponse(tuples_revoked=len(removed), stamped=stamped)
 
 
@@ -118,15 +135,21 @@ async def end_trash(
 
     Refused 409 (code 19) while its place, or a data directory its claim names, holds an object (the purge deletes them
     first), while a record naming no bytes is short of its deadline, at a place whose claim records another table or
-    none, and while a live object holds the place or the name again.
+    none, and while a live object holds the place or the name again. Audited as it lands or as it fails (``trash_end``):
+    it revokes grants and ends records on the catalog's own session, for whoever asked.
     """
-    record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
-    claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
-    judged = partial(trash_reclaim.end_refusal, settings, record, claim, kind=kind, uuid=uuid, now=clock())
-    if (reason := await run_in_threadpool(judged) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
-        raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
-    revoked = await fga_deps.revoke_removed_object(client, settings, fga.object_of(kind, uuid), token=token)
-    await run_in_threadpool(partial(trash.end, settings.registry_root, settings.storage_options(), record, kind=kind, uuid=uuid))
+    try:
+        record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
+        claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
+        judged = partial(trash_reclaim.end_refusal, settings, record, claim, kind=kind, uuid=uuid, now=clock())
+        if (reason := await run_in_threadpool(judged) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
+            raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
+        revoked = await fga_deps.revoke_removed_object(client, settings, fga.object_of(kind, uuid), token=token)
+        await run_in_threadpool(partial(trash.end, settings.registry_root, settings.storage_options(), record, kind=kind, uuid=uuid))
+    except Exception as failed:
+        _audited(AuditAction.TRASH_END, AuditOutcome.FAILURE, token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
+        raise
+    _audited(AuditAction.TRASH_END, AuditOutcome.SUCCESS, token, kind=kind, uuid=uuid, tuples_revoked=revoked)
     return TrashEndResponse(tuples_revoked=revoked)
 
 
@@ -137,6 +160,11 @@ async def note_trash_refusal(kind: TrashKind, uuid: str, body: TrashRefusalReque
     await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
     attempts = await run_in_threadpool(partial(trash_reclaim.note_refusal, settings, kind=kind, uuid=uuid, reason=body.reason))
     return TrashRefusalResponse(attempts=attempts)
+
+
+def _audited(action: AuditAction, outcome: AuditOutcome, token: Caller | None, *, kind: TrashKind, uuid: str, **fields: object) -> None:
+    """One audit record of a trash door's act on the object ``kind`` and ``uuid`` name, for the caller that asked."""
+    audit(action, outcome, subject=token.subject if token is not None else None, resource=fga.object_of(kind, uuid), **fields)
 
 
 async def _noted(settings: Settings, *, kind: TrashKind, uuid: str, reason: str) -> InvalidTableStateError:
@@ -180,23 +208,18 @@ async def _place_held(resolver: Resolver, claim: LocationClaim) -> str | None:
     return f"the live table {fga.canonical_object_id(claim.segments)!r} holds the record's place, so its bytes are not the trash's"
 
 
-async def _announce_revoked(control: ControlEmitter, record: dict[str, Any], removed: list[fga.ClientTuple], *, kind: TrashKind, uuid: str, actor: str) -> None:
-    """Tell each person who lost a grant on the released object: none of them can see it any more, so no feed gated on
-    seeing it would. Structural edges name objects, not people, and are not announced."""
+def _revoked(t: fga.ClientTuple, record: dict[str, Any], *, uuid: str, actor: str) -> Announcement:
+    """The ``grant_revoked`` a release announces for ``t``, naming the released object by its name and uuids."""
     namespace_uuid = record.get("namespace_uuid")
-    for tup in removed:
-        if fga.names_someone(str(tup.user)):
-            await emit_control(
-                control,
-                action="grant_revoked",
-                object_type="grant",
-                object_id=fga.object_of(kind, uuid),
-                object_name=trash.name_of(record),
-                object_uuid=uuid,
-                namespace_uuid=namespace_uuid if isinstance(namespace_uuid, str) else None,
-                actor=actor,
-                extra={"relation": tup.relation, "subject": tup.user, "reason": "trash_expired"},
-            )
+    return announcing.grant_announcement(
+        t,
+        action="grant_revoked",
+        actor=actor,
+        object_name=trash.name_of(record),
+        object_uuid=uuid,
+        namespace_uuid=namespace_uuid if isinstance(namespace_uuid, str) else None,
+        extra={"reason": "trash_expired"},
+    )
 
 
 def _actor(token: Caller | None) -> str:

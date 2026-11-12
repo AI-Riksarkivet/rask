@@ -12,6 +12,10 @@ its events' ``symlinks`` facet ([[LH-553]]). So a producer naming a table by its
 own dataset's symlinks, is decided on that table: lineage asks the catalog's ``locate`` door which table a location
 holds, and resolves a symlinked name as the producer.
 
+The catalog is asked about an event's names in one question, never once per name: a producer that may see none of
+them costs it the one question that says so. An event naming more identifiers than one question holds is refused
+before the catalog is asked anything.
+
 Nothing stands in: the catalog's own app on a real `dir` namespace with OpenFGA on a store of this test's own, lineage's
 own app and lifespan asking it through `CatalogDecider` and recording into its provenance namespace, and every caller a
 token a real verifier checks: the loopback Dex for the person who makes the tables, the loopback service-account issuer
@@ -22,19 +26,22 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pyarrow as pa
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga
+from lakehouse.governed.decider import MAX_OBJECTS_PER_QUESTION
 from lakehouse.naming import location_identifier
 from lakehouse.openlineage import SYMLINKS_FACET_SCHEMA_URL
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event
+from tests.integration.store_requests import CountedStore, counted
 
 
 #: Lineage's service account and the pipeline's, as the kubelet names them.
@@ -47,12 +54,16 @@ _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
 
 
 class Estate(BaseModel):
-    """Lineage's address, the uuid and storage location of each table the catalog made, and their namespace's uuid."""
+    """Lineage's address, the uuid and storage location of each table the catalog made, their namespace's uuid, and what
+    lineage asked the catalog."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     lineage_url: str
     uuids: dict[str, str]
     locations: dict[str, str]
     namespace_uuid: str
+    asked: CountedStore
 
 
 @pytest.fixture
@@ -81,6 +92,7 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
     with (
         live_catalog(tmp_path / "catalog", monkeypatch, **catalog_env) as catalog_url,
         httpx.Client(base_url=catalog_url, headers=alice, timeout=60) as catalog,
+        ExitStack() as stack,
     ):
         assert catalog.post("/v1/namespace/acme/create", json={}).status_code == 200
         namespace_uuid = catalog.post("/v1/namespace/acme/describe", json={}).json()["properties"]["rask.uuid"]
@@ -97,19 +109,20 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
             (fga.user_object(_PRODUCER), "writer", fga.table_object(uuids[_MINE])),
             (fga.user_object(_PRODUCER), "reader", fga.table_object(uuids[_READ])),
         )
+        asked = stack.enter_context(counted(catalog_url))
         lineage_token = tmp_path / "lineage-catalog-token"
         lineage_token.write_text(sa_issuer.mint(_LINEAGE_SA, audience="rask-catalog"))
         for key, value in {
             **sa,
             "RASK_SA_AUDIENCE": "rask-lineage",
             "RASK_FGA_ENABLED": "true",
-            "RASK_FGA_DECIDER_URL": catalog_url,
+            "RASK_FGA_DECIDER_URL": asked.url,
             "RASK_FGA_DECIDER_TOKEN_FILE": str(lineage_token),
             "RASK_CATALOG_IDENTITY_TOKEN_FILE": str(lineage_token),
         }.items():
             monkeypatch.setenv(key, value)
-        with live_lineage(catalog_url, monkeypatch) as lineage_url:
-            yield Estate(lineage_url=lineage_url, uuids=uuids, locations=locations, namespace_uuid=namespace_uuid)
+        with live_lineage(asked.url, monkeypatch) as lineage_url:
+            yield Estate(lineage_url=lineage_url, uuids=uuids, locations=locations, namespace_uuid=namespace_uuid, asked=asked)
 
 
 @pytest.mark.parametrize(
@@ -152,6 +165,40 @@ def test_a_dataset_named_by_a_tables_location_or_symlink_is_decided_and_recorded
     # A read by location is a read of the table the location holds, in lineage's own feed as in the forwarded graph.
     named = sorted(estate.uuids[table] for table in (_MINE, read) if table is not None)
     assert (posted.status_code, recorded) == (status, [([_MINE], named)] if status == 201 else []), posted.text
+
+
+def _named_by_more_than_one_question_holds() -> dict[str, Any]:
+    """An event whose one output lists, in its ``symlinks`` facet, one identifier more than a decision question names."""
+    identifiers = [{"namespace": "s3://elsewhere", "name": f"raw/{index}", "type": "LOCATION"} for index in range(MAX_OBJECTS_PER_QUESTION)]
+    event = run_event("run-4", "COMPLETE", "2026-11-12T10:00:00+00:00", outputs=[_THEIRS])
+    event["outputs"][0]["facets"] = {
+        "symlinks": {"_producer": "https://example.invalid/etl", "_schemaURL": SYMLINKS_FACET_SCHEMA_URL, "identifiers": identifiers}
+    }
+    return event
+
+
+@pytest.mark.parametrize(
+    ("event", "status", "questions"),
+    [
+        pytest.param(
+            run_event("run-3", "COMPLETE", "2026-11-12T10:00:00+00:00", outputs=[_THEIRS], inputs=(_READ, _MINE)), 403, 1, id="names-it-may-not-write"
+        ),
+        pytest.param(_named_by_more_than_one_question_holds(), 422, 0, id="more-names-than-one-question-holds"),
+    ],
+)
+def test_a_producer_is_judged_on_one_question_whatever_the_names_its_event_carries(
+    estate: Estate, sa_issuer: Any, event: dict[str, Any], status: int, questions: int
+) -> None:
+    producer = {"Authorization": f"Bearer {sa_issuer.mint(_PRODUCER_SA, namespace='etl', audience='rask-lineage')}"}
+    estate.asked.taken()
+    with httpx.Client(base_url=estate.lineage_url, headers=producer, timeout=60) as lineage:
+        posted = lineage.post("/api/v1/lineage", json=event)
+
+    # What lineage asked about the event's names; its reads of its own provenance tables are not about them.
+    about_names = [
+        path for path in (request.path for request in estate.asked.taken()) if path.startswith("/v1/table/acme$") or path.endswith("/decisions/check")
+    ]
+    assert (posted.status_code, about_names) == (status, ["/management/v1/decisions/check"] * questions), posted.text
 
 
 def location_input(location: str) -> dict[str, Any]:

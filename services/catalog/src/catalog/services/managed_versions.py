@@ -40,6 +40,7 @@ from pydantic import BaseModel, InstanceOf
 
 from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
+from catalog.core.namespace import overlapping_segments
 from catalog.core.vending import labelled_fields
 from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, row_digests, table_claims
 from lakehouse import base_registry, commit_records, commit_turns, features, file_identities
@@ -817,25 +818,18 @@ def _refuse_a_mem_wal(version: _Judged) -> None:
 
 
 def _refuse_overlapping_segments(version: _Judged) -> None:
-    """No two segments of an index the version adds to cover one fragment.
+    """No two segments of an index the version adds to cover one fragment (:func:`catalog.core.namespace.overlapping_segments`).
 
-    Measured on pylance 13.0.0, Lance commits two segments covering one fragment, and a read of the index's statistics
-    then migrates the table from the reader, 472 commits before the process crashed (what
-    the app factory, :func:`lakehouse.lance_app.build_lance_service_app`, keeps from happening here). The rules after this one read
+    The read of an overlapping index's statistics migrates the table from the reader (what the app factory,
+    :func:`lakehouse.lance_app.build_lance_service_app`, keeps from happening here), and the rules after this one read
     every added index's statistics, so this one runs first.
 
     Raises:
         InvalidInputError: Two segments of one index cover one fragment.
     """
     held = _index_uuids(version.current) if version.current is not None else set()
-    for index in version.proposed.describe_indices():
-        if all(segment.uuid in held for segment in index.segments):
-            continue
-        covered: set[int] = set()
-        for segment in index.segments:
-            if shared := sorted(covered.intersection(segment.fragment_ids)):
-                raise InvalidInputError(f"commit refused: fragment(s) {shared[:5]} of index {index.name!r} are covered by more than one of its segments")
-            covered.update(segment.fragment_ids)
+    if (overlap := overlapping_segments(version.proposed.describe_indices(), judged=held)) is not None:
+        raise InvalidInputError(f"commit refused: {overlap.describe()}")
 
 
 def _refuse_an_index_outside_its_directory(version: _Judged) -> None:

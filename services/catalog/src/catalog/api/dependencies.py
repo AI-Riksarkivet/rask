@@ -42,6 +42,30 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
 async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: str) -> tuple[str, str | None] | None:
+    """The bound warehouse's ``(root_uri, endpoint)`` for ``top_ns`` (:func:`_read_warehouse_root`), read once per request.
+
+    A request resolves a top namespace once and every later resolution of it in the same request reads that answer: a
+    listing of N tables resolves each through its top namespace, and N reads of one warehouse record per listing grew
+    with the namespace. Live across requests, so a deactivation is in force from the next request. Only a bound answer
+    is kept: a door that binds a namespace and then routes to it in the same request reads the binding it wrote.
+    """
+    roots: dict[str, tuple[str, str | None]] | None = getattr(request.state, _REQUEST_ROOTS, None)
+    if roots is None:
+        roots = {}
+        setattr(request.state, _REQUEST_ROOTS, roots)
+    if (resolved := roots.get(top_ns)) is not None:
+        return resolved
+    resolved = await _read_warehouse_root(request, settings, top_ns)
+    if resolved is not None:
+        roots[top_ns] = resolved
+    return resolved
+
+
+#: Where :func:`_resolve_warehouse_root` keeps the roots a request resolved, on that request's own state.
+_REQUEST_ROOTS = "warehouse_roots"
+
+
+async def _read_warehouse_root(request: Request, settings: Settings, top_ns: str) -> tuple[str, str | None] | None:
     """The bound warehouse's ``(root_uri, endpoint)`` for ``top_ns`` (#3-A), or ``None`` → default root.
 
     The ENDPOINT rides along because the same live record read already answers it ([[LH-067]]), and

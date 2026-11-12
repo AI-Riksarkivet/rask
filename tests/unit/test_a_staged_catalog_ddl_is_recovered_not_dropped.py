@@ -45,6 +45,7 @@ from lineage.api import fga_deps, relay_cron
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
+from lineage.services.provenance import feed_key
 
 
 _CATALOG = "service-catalog"
@@ -473,8 +474,8 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Pa
     held = DatasetEvent.model_validate(json.loads(staged_json))
 
     class _FeedHoldsIt(_Repo):
-        async def recorded_event(self, run_id: str, event_type: str | None) -> dict[str, Any] | None:
-            return held.model_dump(by_alias=True) if (run_id, event_type) == (held.feed_id, held.feed_event_type) else None
+        async def recorded_event(self, key: str) -> dict[str, Any] | None:
+            return held.model_dump(by_alias=True) if key == feed_key(held) else None
 
     repo = _FeedHoldsIt()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), provenance=repo)))

@@ -44,7 +44,7 @@ from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 from pydantic import BaseModel
 
-from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, tag_move_run_id
+from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id, tag_move_run_id
 from catalog.core.identifiers import top_namespace
 from catalog.core.run_context import RunContext
 from lakehouse import outbox
@@ -146,6 +146,10 @@ PUBLISH_TABLE = "publish_table"
 #: The operations that move a tag and commit no version: the ``version`` their event names is the tag's target, a version
 #: another write committed and announced, so their run is never that commit's ([[LH-497]]).
 TAG_MOVES = frozenset({PUBLISH_TABLE})
+
+#: A table coming into the catalog or leaving it: versionless markers whose door files them before its act, so a finish
+#: can send one a failure left ([[LH-576]]).
+LIFECYCLE_MARKERS = frozenset({DROP_TABLE, DEREGISTER_TABLE, DECLARE_TABLE, REGISTER_TABLE, RENAME_TABLE})
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required,
 #: and what a Marquez-style consumer records as the event source).
@@ -751,15 +755,20 @@ class _BaseLineageEmitter:
     def _run_id(self, version: int | None, operation: str, fields: EmitFields) -> str:
         """The event's run id, for a version of a table the catalog minted a uuid for: derived from the commit, so every
         announcement of one commit is one run ([[LH-497]]), or for a publication from the move, whose ``eventTime`` is the
-        tag file's own ``updatedAt``, so every announcement of one move is one run ([[LH-552]]). A fresh id for a
-        versionless marker (a drop, a declare) and for a publication whose move time was not read.
+        tag file's own ``updatedAt``, so every announcement of one move is one run ([[LH-552]]). A table's lifecycle marker
+        (a drop, a declare) whose door fixed its time when it filed the announcement is derived from that time, so the
+        door's announcement and a finish's are one run ([[LH-576]]). A fresh id for any other versionless event and for a
+        publication whose move time was not read.
 
         Raises:
             SigningKeyUnavailableError: The catalog reads its key from the store and does not hold it.
         """
         uuids = fields.get("uuids")
         table_uuid = uuids.table_uuid if uuids is not None else None
-        moved_at = fields.get("event_time") if operation == PUBLISH_TABLE else None
+        event_time = fields.get("event_time")
+        if version is None and table_uuid and event_time and operation in LIFECYCLE_MARKERS:
+            return lifecycle_run_id((self._commit_ids or UnkeyedCommitIds()).key(), table_uuid=table_uuid, operation=operation, announced_at=event_time)
+        moved_at = event_time if operation == PUBLISH_TABLE else None
         if version is None or not table_uuid or (operation in TAG_MOVES and not moved_at):
             return str(uuid.uuid4())
         key = (self._commit_ids or UnkeyedCommitIds()).key()
@@ -974,6 +983,7 @@ async def emit_write_event(
     commits_rows: bool = False,
     event_time: str | None = None,
     renamed_from: list[str] | None = None,
+    originator: str | None = None,
 ) -> None:
     """Publish a best-effort lineage event for a catalog mutation, awaited INLINE in the handler.
 
@@ -986,7 +996,8 @@ async def emit_write_event(
     (re)attach a location, e.g. ``register``/``declare``.
     ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a pipeline's write
     passes the inputs its run names); ``run`` is that run, the event's ``parent``. ``renamed_from`` is the identifier a rename
-    moved the table from.
+    moved the table from. ``originator`` names the person a service made the change for, where the emitter's request
+    did not (a filed announcement sent by another request, ``catalog.api.announcing``).
     ``commits_rows`` says the commit added rows, which makes a create a write (:func:`build_write_event`).
     ``event_time`` is when the commit was made, the event's ``eventTime``; a versioned event's run id is derived from
     the commit (:mod:`catalog.core.commit_ids`).
@@ -1016,4 +1027,5 @@ async def emit_write_event(
         uuids=table_uuids,
         event_time=event_time,
         renamed_from=fga.canonical_object_id(renamed_from) if renamed_from is not None else None,
+        originator=originator,
     )

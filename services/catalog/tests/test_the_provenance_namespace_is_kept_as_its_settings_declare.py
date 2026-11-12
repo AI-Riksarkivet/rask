@@ -107,6 +107,24 @@ def test_a_boot_takes_back_an_own_accounts_writer_it_no_longer_declares_and_keep
     assert held == {_LINEAGE: {"writer"}, _ANALYST: {"reader"}, _COMPACTOR: {"reader", "maintainer"}, _RECORDER: {"writer"}}
 
 
+def test_a_boot_that_declares_a_retention_keeps_a_hold_set_through_the_policy_door(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
+) -> None:
+    """[[LH-576]] A boot sets the retention it declares onto the policy it finds, as the policy door sets a change: a hold
+    an admin set there stands, and the retention is the newly declared one."""
+    _ns, namespace_uuid = _booted(_settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="20"), openfga_store)
+    declared = _settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="30")
+    root, options = declared.registry_root, declared.storage_options()
+    held = {**(maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) or {}), "cleanup_enabled": False}
+    maintenance_policies.put_policy(root, options, held)
+
+    _booted(declared, openfga_store)
+
+    assert maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) == {**held, "retain_versions": 30}
+
+
 @pytest.mark.parametrize(
     ("changed_through_the_door", "stands"),
     [

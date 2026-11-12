@@ -31,8 +31,9 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
+from catalog.api import announcing, fga_deps
+from catalog.api.announcing import Announcer, AnnouncerDep
+from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import (
@@ -55,7 +56,8 @@ from catalog.schemas import (
     TupleCondition,
 )
 from catalog.services import principals, subject_tuples
-from lakehouse.control_emit import ControlEmitter, emit_control
+from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld
+from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.principal import is_principal
@@ -337,51 +339,51 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
     return tup
 
 
-async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: Caller | None, body: AccessTuple, *, write: bool) -> AccessTuple:
+async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Caller | None, body: AccessTuple, *, write: bool) -> AccessTuple:
     tup = _validated_write_tuple(body, evaluated=write)
     actor = token.subject if token else "anonymous"
     event = AuditAction.ACCESS_TUPLE_WRITE if write else AuditAction.ACCESS_TUPLE_DELETE
-    try:
-        if write:
-            await fga.write_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
-        else:
-            await fga.delete_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
-    except ServiceUnavailableError:
-        # Only the FAILURE row is emitted here. The SUCCESS row now comes from inside
-        # `fga.write_tuples`/`delete_tuples`, so every write site gets one — and emitting it here too
-        # would give this one surface two rows per write while the other six still had none.
-        audit(event, AuditOutcome.FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
-        raise
     # The control-plane feed documents that GRANTS tick the cursor — and the per-object grant surface
     # emits, so a raw-tuple write that stayed silent made this the one grant path live surfaces could
-    # not see. Best-effort AFTER the store mutation (the emitter swallows bus failures), like access.py.
+    # not see. Filed before the store mutation and sent after it, like access.py ([[LH-576]]).
     condition = getattr(tup, "condition", None)
-    await emit_control(
-        control,
+    told = announcing.grant_announcement(
+        tup,
         action="grant_added" if write else "grant_revoked",
-        object_type="grant",
-        object_id=tup.object,
         actor=f"user:{token.subject}" if token else None,
-        extra={"relation": tup.relation, "subject": tup.user} | ({"condition": condition.name} if condition is not None else {}),
+        extra={"condition": condition.name} if condition is not None else None,
     )
+    async with announcer.announcing(door="access_tuple_write" if write else "access_tuple_delete", target=tup.object, announcements=[told]) as filing:
+        try:
+            if write:
+                await fga.write_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
+            else:
+                await fga.delete_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
+        except ServiceUnavailableError:
+            # Only the FAILURE row is emitted here. The SUCCESS row now comes from inside
+            # `fga.write_tuples`/`delete_tuples`, so every write site gets one — and emitting it here too
+            # would give this one surface two rows per write while the other six still had none.
+            audit(event, AuditOutcome.FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
+            raise
+        await filing.send(told)
     return _as_access_tuple(tup)
 
 
 @router.post("/tuples")
-async def write_access_tuple(client: EstateFgaClient, control: ControlEmitterDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
     """Write ONE raw tuple (idempotent — a duplicate write is success), echoing the tuple as stored.
 
     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
     derived ``can_*`` action or an unknown type/relation is a 400) — the raw-tuple analog of the
     per-object grant surface's grantable-rung guard, without its table/namespace restriction.
     """
-    return await _mutate_tuple(client, control, token, body, write=True)
+    return await _mutate_tuple(client, announcer, token, body, write=True)
 
 
 @router.delete("/tuples")
-async def delete_access_tuple(client: EstateFgaClient, control: ControlEmitterDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+async def delete_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
     """Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed."""
-    return await _mutate_tuple(client, control, token, body, write=False)
+    return await _mutate_tuple(client, announcer, token, body, write=False)
 
 
 @router.get("/model")
@@ -456,7 +458,7 @@ async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body
     user = _qualified_subject(body.user)
     subject = token.subject if token else "anonymous"
     try:
-        objects = (await fga.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)).objects
+        listing = await fga.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_LIST_OBJECTS, AuditOutcome.FAILURE, subject=subject, resource=f"{body.type}:", reason="authz_unavailable")
         raise
@@ -468,9 +470,10 @@ async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body
         resource=f"{body.type}:",
         grantee=user,
         relation=relation,
-        delivered=len(objects),
+        delivered=len(listing.objects),
+        truncated=listing.truncated,
     )
-    return AccessListObjectsResponse(objects=objects, user=user, relation=relation, type=body.type)
+    return AccessListObjectsResponse(objects=listing.objects, user=user, relation=relation, type=body.type, truncated=listing.truncated)
 
 
 @router.post("/list-users")
@@ -628,7 +631,7 @@ def _refuse_what_git_declares(key: str, naming: list[fga.ClientTuple], settings:
 
 @router.delete("/principals/{principal:path}")
 async def delete_principal(
-    principal: PrincipalPath, client: EstateFgaClient, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+    principal: PrincipalPath, client: EstateFgaClient, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> PrincipalDeleted:
     """Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).
 
@@ -639,8 +642,9 @@ async def delete_principal(
     store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
     what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
     them, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door
-    revokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is
-    recovered by calling it again. ``revoked`` counts the tuples this call removed.
+    revokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed
+    before the revoke and sent once the deletion is recorded, so a door failing after the record still announces it
+    ([[LH-576]]). ``revoked`` counts the tuples this call removed.
     """
     key = _principal_key(principal)
     actor = token.subject if token else "anonymous"
@@ -650,17 +654,19 @@ async def delete_principal(
     naming = await subject_tuples.tuples_naming(client, user)
     _refuse_what_git_declares(key, naming, settings)
     await subject_tuples.refuse_stranding(client, user, naming, who=key)
-    revoked = len(await subject_tuples.revoke_naming(client, user, naming, actor=actor, origin="principal_delete"))
-    record = await run_in_threadpool(principals.record_deletion, settings.registry_root, settings.storage_options(), key, deleted_by=actor)
-    audit(AuditAction.PRINCIPAL_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=user, revoked=revoked)
-    await emit_control(
-        control,
+    deleted = CatalogControlEvent(
         action="principal_deleted",
         object_type="principal",
         object_id=user,
         actor=f"user:{token.subject}" if token else None,
-        extra={"subject": user, "revoked": revoked},
+        extra={"subject": user, "revoked": len(naming)},
     )
+    told = Announcement(evidence=RecordHeld(key=principals.record_key(key)), message=ControlMessage(event=deleted))
+    async with announcer.announcing(door="delete_principal", target=user, announcements=[told]) as filing:
+        revoked = len(await subject_tuples.revoke_naming(client, user, naming, actor=actor, origin="principal_delete"))
+        record = await run_in_threadpool(principals.record_deletion, settings.registry_root, settings.storage_options(), key, deleted_by=actor)
+        audit(AuditAction.PRINCIPAL_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=user, revoked=revoked)
+        await filing.send(told)
     return PrincipalDeleted(record=record, revoked=revoked)
 
 

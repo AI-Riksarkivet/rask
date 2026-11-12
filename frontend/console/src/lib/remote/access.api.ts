@@ -2,7 +2,7 @@ import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import { fetchMe, type Me } from '#lib/api/index.ts';
 import type { ApiResult } from '#lib/api/client.ts';
-import { catalogJSON, parsed } from '#lib/doors.ts';
+import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import {
 	AccessModelSchema,
@@ -178,7 +178,7 @@ export const fetchAccessModel = query(async (): Promise<ApiResult<AccessModel>> 
 
 /** The catalog registry (`<ns>$<table>` ids) — one-click graph seeds. */
 export const fetchTables = query(async (): Promise<ApiResult<{ tables: string[] }>> =>
-	parsed(await catalogJSON('/v1/table'), v.object({ tables: v.array(v.string()) })),
+	parsed(await catalogListing('/v1/table', 'tables'), v.object({ tables: v.array(v.string()) })),
 );
 
 /** The signed-in identity — what the tuple store actually keys on. Fail-soft to `null` (no session,

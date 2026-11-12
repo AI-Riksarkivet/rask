@@ -120,6 +120,15 @@ def _carrying_a_mem_wal(uri: Path) -> None:
     lance.dataset(str(uri)).initialize_mem_wal(unsharded=True)
 
 
+def _indexed_twice_on_one_fragment(uri: Path) -> None:
+    """Two segments of one index covering fragment 0, which Lance commits (measured on pylance 13.0.0), though each
+    segment covers a disjoint subset of fragments (`lance_docs/lance/format/index/index.md:54`)."""
+    _write(uri, [1, 2], version="2.2")
+    dataset = lance.dataset(str(uri))
+    overlapping = [dataset.create_index_uncommitted("id", index_type="BTREE", name="id_idx", fragment_ids=[0]) for _ in range(2)]
+    lance.LanceDataset.commit(str(uri), lance.LanceOperation.CreateIndex(new_indices=overlapping, removed_indices=[]), read_version=dataset.version)
+
+
 class TestThePublicDoor:
     @pytest.mark.parametrize(
         ("written", "status", "code", "named"),
@@ -129,6 +138,7 @@ class TestThePublicDoor:
             # The spec's Unsupported code: a feature the catalog does not serve.
             pytest.param(_carrying_a_mem_wal, 406, 0, ("MemWAL", "_mem_wal/"), id="a-mem-wal"),
             pytest.param(_opted_into_managed_blobs, 400, 13, ("lance.blob.managed", "no later commit"), id="a-flag-locking-key"),
+            pytest.param(_indexed_twice_on_one_fragment, 400, 13, ("'id_idx'", "more than one of its segments"), id="overlapping-index-segments"),
         ],
     )
     def test_a_refused_table_is_refused_and_the_namespace_is_unchanged(
@@ -181,8 +191,8 @@ class TestThePublicDoor:
         ``compaction-config`` carries a ``lance.compaction.*`` key, which Lance would plan a compaction from in place of the
         table's maintenance policy ([[LH-538]]).
         """
-        from catalog.api import fga_deps
-        from catalog.api.v1.endpoints import tables
+        from catalog.api import announcing, fga_deps
+        from catalog.api.dependencies import get_control_emitter
 
         called: list[str] = []
 
@@ -191,6 +201,10 @@ class TestThePublicDoor:
                 called.append(name)
 
             return _record
+
+        class _Control:
+            async def emit(self, _event: object) -> None:
+                called.append("control")
 
         _create_namespace(catalog, "db")
         if case == "unstable":
@@ -205,8 +219,8 @@ class TestThePublicDoor:
             for manifest in (root / "t" / "_versions").iterdir():
                 manifest.write_bytes(b"not a manifest")
         monkeypatch.setattr(fga_deps, "seed_ownership_or_compensate", _spy("seed"))
-        monkeypatch.setattr(tables, "emit_write_event", _spy("lineage"))
-        monkeypatch.setattr(tables, "emit_control", _spy("control"))
+        monkeypatch.setattr(announcing, "emit_write_event", _spy("lineage"))
+        catalog.app.dependency_overrides[get_control_emitter] = _Control
 
         resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
 
@@ -263,21 +277,23 @@ class TestThePublicDoor:
 
     def test_a_registered_table_is_announced_at_its_resolved_location(self, catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The caller sends a relative location; the lineage edge and the control event must carry the absolute one."""
-        from catalog.api.v1.endpoints import tables
+        from catalog.api import announcing
+        from catalog.api.dependencies import get_control_emitter
+        from lakehouse.control_events import CatalogControlEvent
 
         sent: dict[str, object] = {}
 
         async def _lineage(*_a: object, **kwargs: object) -> None:
             sent["source_uri"] = kwargs.get("source_uri")
 
-        async def _control(*_a: object, **kwargs: object) -> None:
-            extra = kwargs.get("extra")
-            sent["control"] = extra.get("location") if isinstance(extra, dict) else None
+        class _Control:
+            async def emit(self, event: CatalogControlEvent) -> None:
+                sent["control"] = event.extra.get("location")
 
         _create_namespace(catalog, "db")
         _write(root / "t", [1], version="2.2")
-        monkeypatch.setattr(tables, "emit_write_event", _lineage)
-        monkeypatch.setattr(tables, "emit_control", _control)
+        monkeypatch.setattr(announcing, "emit_write_event", _lineage)
+        catalog.app.dependency_overrides[get_control_emitter] = _Control
 
         assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
 

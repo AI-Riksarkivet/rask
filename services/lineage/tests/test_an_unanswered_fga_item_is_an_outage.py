@@ -110,7 +110,7 @@ class _Repo:
     async def run_author(self, _run_id: str) -> str | None:
         return None
 
-    async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
+    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
         return None
 
 

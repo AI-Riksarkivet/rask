@@ -39,8 +39,10 @@ from __future__ import annotations
 
 import json
 import logging
+import struct
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +56,9 @@ from lance.fragment import write_fragments
 from lance.namespace import DirectoryNamespace
 from lance_namespace import DescribeTableRequest, DescribeTableResponse, InternalError, PermissionDeniedError
 
+from lakehouse import manifest_wire
 from lakehouse.listing_floor import FLOOR_KEY
+from lakehouse.version_retention import manifest_version
 from tests.integration.lineage_app import live_catalog, live_lineage, serve
 from tests.loopback import free_port
 
@@ -129,6 +133,30 @@ class _Gate:
         async with httpx.AsyncClient(base_url=self.lineage, timeout=60) as client:
             forwarded = await client.post("/api/v1/lineage", json=event, headers={"Authorization": self.bearer})
         return Response(status_code=forwarded.status_code, content=forwarded.content)
+
+
+def _stamped_behind(location: str, version: int, behind: timedelta) -> None:
+    """Write ``version``'s manifest again stamped ``behind`` its commit time, every other byte kept: what a writer whose
+    clock runs that far behind commits (the time is the writer's own, ``Manifest.timestamp``, field 7). The edit keeps the
+    seconds' varint at its length, so no offset in the file moves."""
+    versions = Path(location.removeprefix("file://")) / "_versions"
+    manifest = next(path for path in versions.iterdir() if manifest_version(path.name) == version)
+    data = bytearray(manifest.read_bytes())
+    (offset,) = struct.unpack_from("<Q", data, len(data) - 16)
+    at, end = offset + 4, offset + 4 + struct.unpack_from("<I", data, offset)[0]
+    while at < end:
+        number, value, after = manifest_wire.next_field(bytes(data[:end]), at)
+        if number == 7 and isinstance(value, bytes):
+            inner = after - len(value)
+            seconds_at = inner + 1
+            seconds, seconds_end = manifest_wire.read_varint(bytes(data), seconds_at)
+            moved = manifest_wire.encode_varint(seconds - int(behind.total_seconds()))
+            assert len(moved) == seconds_end - seconds_at, "the moved stamp changes the manifest's length"
+            data[seconds_at:seconds_end] = moved
+            manifest.write_bytes(bytes(data))
+            return
+        at = after
+    raise AssertionError(f"version {version}'s manifest records no commit time")
 
 
 class _Counter:
@@ -427,9 +455,21 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 assert lineage.post("/api/v1/lineage", json=lost_again[0], headers=alice).status_code == 201
                 assert _publications(_follow(lineage), "db$t") == [(3, author), (3, author)]
 
-    assert [amount for amount, _ in counted.added] == [1, 1, 1, 1, 1, 1]
-    # The create, both inserts the catalog recorded, the refused one, and the registered table's insert.
-    assert [amount for amount, _ in unrecorded.added] == [0, 0, 1, 0, 0]
+                # A write whose writer's clock runs two days behind, past the horizon, its announcement lost: a version's age
+                # is the store's stamp on its manifest, never the time its writer wrote into it, so it is looked for and
+                # announced rather than taken as one the feed has long since dropped.
+                assert catalog.post("/v1/table/db$late/create", content=_rows(0, 1), headers=_ARROW).status_code == 200
+                gate.lineage = None
+                assert catalog.post("/v1/table/db$late/insert", content=_rows(1, 2), headers=_ARROW).status_code == 200
+                gate.lineage = lineage_url
+                _stamped_behind(catalog.post("/v1/table/db$late/describe", json={"vend_credentials": False}).json()["location"], 2, timedelta(days=2))
+                assert catalog.post(f"/{_TICK}").json()["reannounced"] == 1
+                assert _commits(_follow(lineage), "db$late") == [("db$late", "create_table", "1", author), ("db$late", "insert", "2", author)]
+
+    assert [amount for amount, _ in counted.added] == [1, 1, 1, 1, 1, 1, 1]
+    # The create, both inserts the catalog recorded, the refused one, the registered table's insert, and the late table's
+    # create and insert.
+    assert [amount for amount, _ in unrecorded.added] == [0, 0, 1, 0, 0, 0, 0]
     assert [dict(attributes or {}) for _, attributes in counted.added] == [
         {"lance.catalog.operation": "create_table"},
         {"lance.catalog.operation": "insert"},
@@ -437,4 +477,5 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
         {"lance.catalog.operation": "insert"},
         {"lance.catalog.operation": "publish_table"},
         {"lance.catalog.operation": "publish_table"},
+        {"lance.catalog.operation": "insert"},
     ]

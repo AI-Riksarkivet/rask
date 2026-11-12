@@ -61,8 +61,8 @@ class _Req:
     """The one piece of `request` the resolver touches, without standing up an app.
 
     Handed over with an explicit `cast` at each call rather than a `type: ignore`: the resolver reads
-    `request.app.state.warehouse_binding_cache` and nothing else, so the cast states what is actually
-    required of the argument instead of silencing the checker.
+    `request.app.state.warehouse_binding_cache` and keeps what it resolved on the request's own `state`, and nothing
+    else, so the cast states what is actually required of the argument instead of silencing the checker.
     """
 
     class _State:
@@ -71,6 +71,7 @@ class _Req:
 
     def __init__(self) -> None:
         self.app = type("_App", (), {"state": _Req._State()})()
+        self.state = type("_RequestState", (), {})()
 
 
 @pytest.mark.asyncio

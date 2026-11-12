@@ -30,6 +30,7 @@ import pytest
 from lance_namespace import LanceNamespace
 
 from catalog.api.fga_deps import GovernedObject
+from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import namespaces as n_ep
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
@@ -161,6 +162,7 @@ def test_the_estate_listing_lists_every_bound_seed_concurrently(tmp_path: Path, 
             client=None,
             # With no caller and no OpenFGA the listing authorizes no candidate, so no name is resolved.
             resolver=cast("Any", None),
+            limit=MAX_LIST_LIMIT,
         )
     )
 

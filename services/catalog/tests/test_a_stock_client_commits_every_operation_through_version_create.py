@@ -29,7 +29,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -1175,8 +1175,8 @@ def test_a_version_landed_past_every_door_under_an_in_flight_commits_transaction
         branch_identifier=None,
         mark=taken - 1,
         announced=set(),
-        after=datetime.now(UTC) - timedelta(hours=1),
-        before=datetime.now(UTC) + timedelta(hours=1),
+        horizon=timedelta(hours=1),
+        grace=timedelta(0),
         record_of=lambda transaction_uuid, version, ref: commit_records.recorded(
             settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction_uuid, version=version, ref=ref
         ),

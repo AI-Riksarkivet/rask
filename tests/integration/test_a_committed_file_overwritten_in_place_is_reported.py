@@ -52,7 +52,7 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import table_pass
+from maintenance.services import credentials, table_pass
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.store_events import StoreEvents
@@ -429,8 +429,14 @@ def _maintain_door_answering(*answers: httpx.Response) -> Generator[respx.MockRo
     ],
 )
 def test_a_record_is_forgotten_once_no_retained_version_names_its_files(
-    estate: _Estate, forget_answer: Callable[[str], httpx.Response], kept: tuple[str, ...], refusal: tuple[str | None, str | None]
+    estate: _Estate,
+    monkeypatch: pytest.MonkeyPatch,
+    forget_answer: Callable[[str], httpx.Response],
+    kept: tuple[str, ...],
+    refusal: tuple[str | None, str | None],
 ) -> None:
+    # The forget asks the catalog for a vend of its own, as it does once the expiry's is past the pass's reuse window.
+    monkeypatch.setattr(credentials, "VEND_REUSE_SECONDS", 0.0)
     location = estate.create(_rows("bob"))
     estate.write("create?mode=Overwrite", _rows("eve"))
     table = lance.dataset(location, storage_options=estate.key.in_clear())

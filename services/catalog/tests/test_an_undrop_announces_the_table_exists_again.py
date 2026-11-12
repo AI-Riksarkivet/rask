@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import LanceNamespace, connect
 from lance_namespace_urllib3_client.models.create_namespace_request import CreateNamespaceRequest
 
-from catalog.api import dependencies
+from catalog.api import announcing, dependencies
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, NamespaceRootDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespace_doors
@@ -31,6 +31,7 @@ from catalog.api.v1.endpoints import tables as table_doors
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
 from lakehouse.base_registry import BaseRegistry
+from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -86,7 +87,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         (NamespaceRootDep, str(tmp_path / "data")),
         (CurrentToken, _CALLER),
         (FgaClientDep, None),
-        (ControlEmitterDep, None),
+        (ControlEmitterDep, NoopControlEmitter()),
     ):
         application.dependency_overrides[dependency.__metadata__[0].dependency] = _returning(value)
 
@@ -102,9 +103,10 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     async def _record(_emitter: Any, segments: list[str], **kwargs: Any) -> None:
         emitted.append({"segments": list(segments), **kwargs})
 
-    for door in (namespace_doors, table_doors):
-        monkeypatch.setattr(door, "emit_control", _noop)
-        monkeypatch.setattr(door, "emit_write_event", _record)
+    monkeypatch.setattr(namespace_doors, "emit_control", _noop)
+    # The namespace undrop announces each table itself; a table's undrop sends from the filing it files first ([[LH-576]]).
+    monkeypatch.setattr(namespace_doors, "emit_write_event", _record)
+    monkeypatch.setattr(announcing, "emit_write_event", _record)
     with TestClient(application) as test_client:
         yield test_client
 

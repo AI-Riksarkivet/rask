@@ -12,7 +12,8 @@ import logging
 import threading
 import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Iterable
+from typing import TYPE_CHECKING
 
 import lance
 from lance.namespace import DirectoryNamespace
@@ -24,7 +25,7 @@ from lance_namespace import (
     TableVersionNotFoundError,
     connect,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core import formats
 from catalog.core.base_judge import require_sanctioned_bases
@@ -37,6 +38,10 @@ from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lancekit.absence import reads_as_absent
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.storage_options import StorageOptions
+
+
+if TYPE_CHECKING:
+    from lance.lance.indices import IndexDescription
 
 
 log = logging.getLogger(__name__)
@@ -326,6 +331,49 @@ def _open_ref(location: str, storage_options: StorageOptions, table_id: list[str
         raise error from exc
 
 
+class SegmentOverlap(BaseModel):
+    """An index two of whose segments cover one fragment, which the format forbids: each segment covers a disjoint
+    subset of fragments (`lance_docs/lance/format/index/index.md:54`).
+
+    Measured on pylance 13.0.0, Lance commits such an index, and a read of its statistics then migrates the table from
+    the reader, 472 commits before the process crashed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    index: str
+    #: The fragments two of its segments both cover, at most five.
+    fragments: list[int]
+
+    def describe(self) -> str:
+        """The overlap in words, for a refusal to name."""
+        return f"fragment(s) {self.fragments} of index {self.index!r} are covered by more than one of its segments"
+
+
+def overlapping_segments(indices: Iterable[IndexDescription], *, judged: Collection[str] = frozenset()) -> SegmentOverlap | None:
+    """The first index two of whose segments cover one fragment; ``None`` when every index's segments are disjoint.
+
+    Read off the manifest alone (``LanceDataset.describe_indices``), so it opens no index and reads no statistics.
+
+    Args:
+        indices: The indices a dataset describes.
+        judged: The uuids of segments an earlier version committed, judged then; an index all of whose segments are
+            among them is not judged again.
+
+    Returns:
+        The first overlap found, or ``None``.
+    """
+    for index in indices:
+        if all(segment.uuid in judged for segment in index.segments):
+            continue
+        covered: set[int] = set()
+        for segment in index.segments:
+            if shared := sorted(covered.intersection(segment.fragment_ids)):
+                return SegmentOverlap(index=index.name, fragments=shared[:5])
+            covered.update(segment.fragment_ids)
+    return None
+
+
 class RegisteredDataset(BaseModel):
     """What the register door judges on a dataset it attached, read from ONE open."""
 
@@ -349,6 +397,9 @@ class RegisteredDataset(BaseModel):
     #: The config and schema metadata keys it carries that lock a table to a feature flag
     #: (:data:`catalog.core.formats.FLAG_LOCKING_KEYS`). Empty when the open was refused over flag 256.
     flag_locking: list[str] = Field(default_factory=list)
+    #: An index two of whose segments cover one fragment; ``None`` when there is none, or the open was refused over flag
+    #: 256.
+    index_overlap: SegmentOverlap | None = None
 
 
 def registered_dataset_facts(location: str, storage_options: StorageOptions) -> RegisteredDataset | None:
@@ -377,6 +428,7 @@ def registered_dataset_facts(location: str, storage_options: StorageOptions) -> 
         clone=clone_reference(dataset) if any(ref.is_dataset_root for ref in bases) else None,
         mem_wal=dataset.mem_wal_index_details() is not None,
         flag_locking=formats.flag_locking_keys([*dataset.config(), *(dataset.schema.metadata or {})]),
+        index_overlap=overlapping_segments(dataset.describe_indices()),
     )
 
 

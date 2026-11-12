@@ -144,8 +144,8 @@ def list_table_versions(
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,
+    limit: ListLimit,
     page_token: str | None = None,
-    limit: ListLimit = None,
     descending: bool | None = None,
     branch: Annotated[str | None, Query(description="The ref whose version history to list. Omit for main.")] = None,
 ) -> ListTableVersionsResponse:

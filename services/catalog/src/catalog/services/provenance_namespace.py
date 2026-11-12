@@ -102,15 +102,21 @@ def _declared_policy(retain_versions: int, *, canonical: str, namespace_uuid: st
 
 
 def keep_declared_retention(settings: Settings, *, canonical: str, namespace_uuid: str) -> None:
-    """Make the namespace's maintenance policy the one the settings declare: keep the last ``provenance_retain_versions``.
+    """Make the namespace's maintenance policy keep the last ``provenance_retain_versions`` the settings declare.
 
-    With none declared, the policy this step wrote is removed while it stands as written. The policy door merges a change
-    into the record it finds, so a hold set there, or one set over this step's policy, stands. Blocking.
+    The retention is set onto the record stored, conditional on it (``maintenance_policies.set_policy``), as the policy door
+    sets a change: every other knob stands as it is, so a hold set there stands across every boot ([[LH-576]]). With none
+    declared, the policy this step wrote is removed while it stands as written. Blocking.
+
+    Raises:
+        lakehouse.records.RecordChangedError: The record changed under every round of the set.
     """
     root, options = settings.registry_root, settings.storage_options()
-    if settings.provenance_retain_versions is not None:
-        declared = _declared_policy(settings.provenance_retain_versions, canonical=canonical, namespace_uuid=namespace_uuid)
-        maintenance_policies.put_policy(root, options, declared)
+    if (retain := settings.provenance_retain_versions) is not None:
+        declared = _declared_policy(retain, canonical=canonical, namespace_uuid=namespace_uuid)
+        maintenance_policies.set_policy(
+            root, options, "namespace", namespace_uuid, lambda stored: declared if stored is None else {**stored, "retain_versions": retain}
+        )
         return
     held = maintenance_policies.get_policy(root, options, "namespace", namespace_uuid)
     retain = held.get("retain_versions") if held is not None else None

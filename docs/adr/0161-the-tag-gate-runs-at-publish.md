@@ -28,3 +28,16 @@ is not a publication).
 ## Consequences
 
 - A pipeline on a stock Lance client makes one rask call per publication, the publish door.
+
+## Amendment (2026-11-12): a rejection never discards a later commit
+
+Source: owner, 2026-11-12, "Refuse, hold stays", through the multi-question tool while taking LH-576 (#798).
+
+A rejection restores main to the published version as a new commit, and a restore planned on main's head would
+discard every commit a writer made after the held version. So while main holds a commit after the held version,
+`POST /management/v1/table/{id}/promotion/reject` answers 409 (code 14, `ConcurrentModificationError`) naming main's
+head, and the hold stays open: a `can_promote` holder approves it, someone restores the table explicitly
+(`RestoreTable`), or a later rejection is made. The rejection's restore commits only as the version right after the
+held one, so a commit landing between the door's decision and its restore refuses it the same way and the hold is put
+back to open. A rejection asked again after its restore landed finds that restore, or a restore of the published
+version at main's head, and records it rather than restoring a second time.

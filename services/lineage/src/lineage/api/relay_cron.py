@@ -1,4 +1,4 @@
-"""The relay tick — a Dapr cron binding drains the lineage outbox, prunes the feed and forwards it (ADR 0158).
+"""The relay tick — a Dapr cron binding drains the lineage outbox, forwards the feed and prunes it (ADR 0158).
 
 A ``bindings.cron`` component POSTs to ``/<binding-name>`` on a schedule; OPTIONS is Dapr's binding-discovery
 pre-flight. Guarded by ``require_dapr_token`` so only the sidecar's cron may drive it. The schedule + binding
@@ -32,7 +32,7 @@ from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import storage_options
 from lineage.core.metrics import Door, record_outcome, refusal_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload
-from lineage.services.forward import forward
+from lineage.services.forward import follower, forward
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 
 
@@ -88,11 +88,17 @@ async def _prune_old_events(provenance: ProvenanceDep, settings: SettingsDep) ->
 
     ON THE TICK, NOT THE INGEST PATH: the feed's hottest path must not pay for a retention delete per event.
     Isolated: a retention failure degrades to a warning rather than failing a tick whose drain already ran.
+
+    RETENTION WAITS FOR THE FORWARDER. The feed is the only copy the forwarder sends from, so with a graph backend
+    configured no row after the forwarder's cursor is deleted, however old: a backend down for longer than the retention
+    holds the feed, rather than losing every event it missed. Every stalled tick counts on `lineage.forward.stalled`.
+    With no backend configured, the retention stands alone.
     """
     if not settings.events_retention_days:
         return 0
     try:
-        pruned = await provenance.prune_events(settings.events_retention_days)
+        delivered = await provenance.cursor(follower(settings)) if settings.forward_url else None
+        pruned = await provenance.prune_events(settings.events_retention_days, delivered_through=delivered)
     except Exception as exc:
         log.warning("lineage_event_prune_failed", extra={"error": str(exc)})
         return 0
@@ -108,7 +114,7 @@ async def _on_cron(
     publisher: PublisherDep,
     _: Annotated[None, Depends(require_dapr_token)],
 ) -> dict[str, Any]:
-    """One relay tick, triggered by a Dapr cron tick: drain the outbox, prune the feed, then forward it.
+    """One relay tick, triggered by a Dapr cron tick: drain the outbox, forward the feed, then prune what retention and the forwarder release.
 
     Best-effort per the cron contract: each step degrades to a warning, so the tick's report reaches the
     caller either way. Through a read-only window it does nothing and says so: answered 2xx, the sidecar counts no
@@ -125,7 +131,6 @@ async def _on_cron(
             report.outbox_refusals_recorded = outcome.recorded
         except Exception as exc:
             log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
-    report.pruned_events = await _prune_old_events(provenance, settings)
     try:
         report.parks_retired = await provenance.retire_recovered_parks()
     except Exception as exc:
@@ -138,6 +143,8 @@ async def _on_cron(
         except Exception as exc:
             report.forward_stalled = f"{type(exc).__name__}: {exc}"
             log.warning("lineage_forward_failed", extra={"error": str(exc)})
+    # AFTER THE FORWARD, so a row this tick delivered past its retention goes in this tick rather than the next.
+    report.pruned_events = await _prune_old_events(provenance, settings)
     log.info("lineage_relay_tick", extra=report.model_dump())
     return report.model_dump()
 

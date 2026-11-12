@@ -34,7 +34,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse import control_prefixes, stored_objects
 from lakehouse.objectfs import fs_and_base
-from lakehouse.record_store import delete_record, get_record, put_record
+from lakehouse.record_store import delete_record, put_record
+from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
 from lakehouse.storage_options import StorageOptions
 
 
@@ -121,13 +122,21 @@ def recorded_and_copied(control_root: str, storage_options: StorageOptions, tabl
 
     A record's key names its content while it is listed: only the catalog puts one, once per commit, before the version
     lands, and a vend may read and delete one but never put one (``catalog.core.vending``). Its listed size is kept beside
-    it all the same, so a record put again with other content is read again. A copy that no longer parses is rebuilt.
+    it all the same, so a record put again with other content is read again. A copy that no longer parses is deleted and
+    rebuilt.
+
+    THE COPY IS WRITTEN ONLY OVER THE COPY THIS CALL READ: under its ETag, or only where none stands when it read none
+    (:func:`lakehouse.records.replace_json`, :func:`lakehouse.records.create_json`), and a write whose condition lost
+    writes nothing, the next pass reading the copy as it then stands. The table's end (:func:`end`) deletes the records
+    and then the copy, so an end landing after this call's reads deleted the copy it read, and the copy is never put back
+    for a table that is gone. A copy this call creates where none stood is checked once more against the records: once
+    they are found gone, the end landed after the copy it deleted was read as absent, and the copy goes.
 
     Raises:
         ValueError: A record is not one a commit wrote: a file it names could then never be checked.
         OSError: The store refused, or could not be reached for, the listing, a read or the copy's write.
     """
-    copy = _read_copy(control_root, storage_options, table_uuid)
+    copy, etag = _read_copy(control_root, storage_options, table_uuid)
     records: dict[str, _CopiedRecord] = {}
     for transaction_uuid, size in listed_records(control_root, storage_options, table_uuid).items():
         copied = copy.records.get(transaction_uuid)
@@ -138,8 +147,32 @@ def recorded_and_copied(control_root: str, storage_options: StorageOptions, tabl
             copied = _CopiedRecord(size=size, committed=committed)
         records[transaction_uuid] = copied
     if records != copy.records:
-        put_record(control_root, storage_options, _copy_key(table_uuid), _RecordCopy(records=records).model_dump())
+        _write_copy(control_root, storage_options, table_uuid, _RecordCopy(records=records), over=etag)
     return [copied.committed for copied in records.values()]
+
+
+def _write_copy(control_root: str, storage_options: StorageOptions, table_uuid: str, copy: _RecordCopy, *, over: str | None) -> None:
+    """Write ``copy`` over the copy read with the ETag ``over``, or where none stands when ``over`` is ``None``; a lost
+    condition writes nothing. A copy created where none stood is deleted again once the table's records are gone.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the write or the listing after it.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    key = _copy_key(table_uuid)
+    try:
+        if over is not None:
+            replace_json(control_root, storage_options, key, copy.model_dump(mode="json"), etag=over)
+            return
+        create_json(control_root, storage_options, key, copy.model_dump(mode="json"))
+    except (RecordChangedError, RecordExistsError):
+        log.info("file_identities_copy_moved", extra={"table_uuid": table_uuid})
+        return
+    except (BotoCoreError, ClientError) as exc:
+        raise OSError(f"the store refused, or could not be reached for, writing {key}: {exc}") from exc
+    if copy.records and not listed_records(control_root, storage_options, table_uuid):
+        delete_record(control_root, storage_options, key)
 
 
 def listed_records(control_root: str, storage_options: StorageOptions, table_uuid: str) -> dict[str, int]:
@@ -157,15 +190,33 @@ def listed_records(control_root: str, storage_options: StorageOptions, table_uui
     return {name.removesuffix(".json"): stored.size for stored in listed if (name := stored.path.rsplit("/", 1)[-1]).endswith(".json")}
 
 
-def _read_copy(control_root: str, storage_options: StorageOptions, table_uuid: str) -> _RecordCopy:
-    held = get_record(control_root, storage_options, _copy_key(table_uuid), event="file_identities_copy")
-    if held is None:
-        return _RecordCopy()
+def _read_copy(control_root: str, storage_options: StorageOptions, table_uuid: str) -> tuple[_RecordCopy, str | None]:
+    """Maintenance's copy of the table's records and the ETag it was read with; an empty copy and ``None`` where none
+    stands. A copy that does not parse is deleted, so it is rebuilt as one written where none stood.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the read.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    key = _copy_key(table_uuid)
     try:
-        return _RecordCopy.model_validate(held)
+        held = read_json(control_root, storage_options, key)
+    except ValueError:
+        held = None
+        log.warning("file_identities_copy_rebuilt", extra={"table_uuid": table_uuid})
+        delete_record(control_root, storage_options, key)
+    except (BotoCoreError, ClientError) as exc:
+        raise OSError(f"the store refused, or could not be reached for, reading {key}: {exc}") from exc
+    if held is None:
+        return _RecordCopy(), None
+    body, etag = held
+    try:
+        return _RecordCopy.model_validate(body), etag
     except ValidationError:
         log.warning("file_identities_copy_rebuilt", extra={"table_uuid": table_uuid})
-        return _RecordCopy()
+        delete_record(control_root, storage_options, key)
+        return _RecordCopy(), None
 
 
 def _read_record(control_root: str, storage_options: StorageOptions, key: str) -> CommittedFiles | None:

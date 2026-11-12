@@ -32,12 +32,14 @@ from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models.create_namespace_request import CreateNamespaceRequest
 
+from catalog.api import announcing
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as door
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
 from lakehouse.base_registry import BaseRegistry
+from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -97,18 +99,13 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: _CALLER
     application.dependency_overrides[FgaClientDep.__metadata__[0].dependency] = lambda: None
-    application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = lambda: None
-
-    async def _noop(*_a: Any, **_k: Any) -> None:
-        return None
+    application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = NoopControlEmitter
 
     async def _record(_emitter: Any, segments: list[str], **kwargs: Any) -> None:
         emitted.append({"segments": list(segments), **kwargs})
 
-    monkeypatch.setattr(door, "emit_control", _noop)
-    # `raising=False` so the RED run reports the MISSING EMIT rather than an AttributeError about the
-    # patch target — the assertion is the message worth reading.
-    monkeypatch.setattr(door, "emit_write_event", _record, raising=False)
+    # The cascade sends each table's marker from the filing it files before it removes anything ([[LH-576]]).
+    monkeypatch.setattr(announcing, "emit_write_event", _record)
     yield application
 
 

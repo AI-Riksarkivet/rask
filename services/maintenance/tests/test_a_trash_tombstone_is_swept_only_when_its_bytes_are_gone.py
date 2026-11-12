@@ -23,10 +23,16 @@ THE REFUSAL LEGS ARE THE POINT, and both are asserted rather than assumed from t
 
 from __future__ import annotations
 
+from functools import partial
+from pathlib import Path
 from uuid import uuid4
 
+from lakehouse import location_claims
+from lakehouse.base_registry import BaseOrigin, BaseRegistry, BaseRole, RecordedBase, claim_bases
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import tombstones
+from maintenance.services.purge import held_by
 from maintenance.services.reconcile import OrphanedTrash, ReconcileReport
 
 
@@ -47,11 +53,11 @@ def _report() -> ReconcileReport:
     )
 
 
-def _probe(location: str) -> int:
-    """Object count at `location`; raises where the store cannot be read."""
-    if location == _UNREADABLE:
+def _probe(finding: OrphanedTrash) -> int:
+    """Object count at the finding's location; raises where the store cannot be read."""
+    if finding.location == _UNREADABLE:
         raise OSError("registry blip")
-    return 3 if location == _ALIVE else 0
+    return 3 if finding.location == _ALIVE else 0
 
 
 def _settings(**over: object) -> MaintenanceSettings:
@@ -82,6 +88,29 @@ def test_a_record_whose_BYTES_ARE_GONE_is_planned() -> None:
     assert planned[0].location == _GONE
 
 
+def test_a_record_whose_bytes_stand_only_in_its_data_directories_is_refused(tmp_path: Path) -> None:
+    """The sweep's probe asks every place the catalog's end door judges ([[LH-286]]): the table's location, in both
+    spellings, and each data directory its claim names on its table. A table whose fragments sit on a data base holds
+    them there with its root already empty, and a record swept on the root alone strands them, or is refused by the
+    door the sweep then asks."""
+    control, options = f"file://{tmp_path / 'control'}", StorageOptions()
+    location, directory = f"file://{tmp_path / 'gone' / 'ns$t'}", tmp_path / "base" / "t"
+    registry = BaseRegistry(control_root=control, storage_options=options)
+    claim_bases(registry, location, [RecordedBase(path=f"file://{directory}", role=BaseRole.DATA, origin=BaseOrigin.CREATE)])
+    claimant = location_claims.DirectoryClaimant(uuid=_GONE_UUID, root=location, table="ns$t", segments=["ns", "t"])
+    location_claims.take_directory(location_claims.ClaimStore(control_root=control), f"file://{directory}", claimant)
+    directory.mkdir(parents=True)
+    (directory / "0.lance").write_bytes(b"a fragment")
+    finding = OrphanedTrash(id="ns$t", uuid=_GONE_UUID, kind="table", location=location)
+
+    planned, refused = tombstones.plan_sweep(
+        ReconcileReport(checked_at="2026-09-20T00:00:00Z", orphaned_trash=[finding]), probe=partial(held_by, storage_options=options, registry=registry)
+    )
+
+    assert (planned, list(refused)) == ([], ["ns$t"]), (planned, refused)
+    assert "still holds 1 object" in refused["ns$t"], refused
+
+
 def test_a_DRY_RUN_plans_and_deletes_NOTHING() -> None:
     deleter = _Deleter()
     out = tombstones.sweep_tombstones(_settings(), report=_report(), probe=_probe, delete=deleter)
@@ -94,8 +123,8 @@ def test_a_DRY_RUN_plans_and_deletes_NOTHING() -> None:
 def test_DISABLED_does_not_even_probe() -> None:
     probed: list[str] = []
 
-    def _counting(location: str) -> int:
-        probed.append(location)
+    def _counting(finding: OrphanedTrash) -> int:
+        probed.append(finding.location)
         return 0
 
     out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_ENABLED=False), report=_report(), probe=_counting, delete=_Deleter())
@@ -118,6 +147,6 @@ def test_the_CAP_truncates_and_SAYS_it_did() -> None:
         orphaned_trash=[OrphanedTrash(id=f"tr-{i}", uuid=str(uuid4()), kind="table", location=f"s3://dead-{i}/t.lance") for i in range(5)],
     )
 
-    out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK=2), report=many, probe=lambda _l: 0, delete=_Deleter())
+    out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK=2), report=many, probe=lambda _finding: 0, delete=_Deleter())
 
     assert len(out.swept) == 2 and out.capped == 3

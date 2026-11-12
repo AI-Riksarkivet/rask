@@ -1,11 +1,12 @@
-"""A project's deletion protection is set and cleared through its own door, by its admins alone ([[LH-549]]).
+"""A project is protected and retired by its admins alone ([[LH-549]], [[LH-576]]).
 
 `POST /management/v1/projects/{project_id}/protection` takes `{"protected": true}` or `{"protected": false}`, the shape of
 the table, namespace and warehouse doors. Protection is a statement about the project's destruction, so the door asks
 what the delete it guards asks, `can_administer` on the project. A member of the project and the estate's owner, who
 administers no project by that alone, are each answered the not-found a missing project gets, so the door tells nobody
 which ids exist. The project's read answers the flag and who armed it, and its delete refuses a protected project
-unless it is forced, and any project while a warehouse record it must judge cannot be read.
+unless it is forced, and any project while a warehouse record it must judge cannot be read. A delete that failed after
+its revoke took its caller's own admin grant is finished by that caller asking again, or by the estate's owner.
 
 Against the catalog as deployed, a loopback Dex signing callers in and a real OpenFGA deciding on a store of the test's
 own ([[LH-235]]).
@@ -16,16 +17,20 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from announcement_filings import age_filings
 
+from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from lakehouse import maintenance_policies
+from lakehouse import maintenance_policies, records
+from lakehouse.control_events import CatalogControlEvent
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
 
 
 PROJECT = "acme"
-#: acme's admin, who made it as the estate's owner; a second admin of acme; a member of acme; another owner of the estate.
-ADMIN, CO_ADMIN, MEMBER, ESTATE_OWNER = "alice", "dave", "carol", "erin"
+#: acme's admin, who made it as the estate's owner; a second admin of acme; a member of acme; another owner of the estate;
+#: the account the finish door is asked by.
+ADMIN, CO_ADMIN, MEMBER, ESTATE_OWNER, RECLAIMER = "alice", "dave", "carol", "erin", "maintenance"
 #: What a refused request is answered: its status, media type, spec code (`lance_docs/ns_catalog/namespace/operations/errors.md`)
 #: and detail. A caller who may not administer acme is answered exactly what a missing project is.
 NOT_FOUND = (404, "application/problem+json", 4, f"project not found: {PROJECT}")
@@ -49,6 +54,16 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
         (catalog.person(MEMBER), "member", f"project:{PROJECT}"),
     )
     return catalog
+
+
+class _Announced:
+    """The control emitter, as a list of the events the doors published."""
+
+    def __init__(self) -> None:
+        self.events: list[CatalogControlEvent] = []
+
+    async def emit(self, event: CatalogControlEvent) -> None:
+        self.events.append(event)
 
 
 def _protection_of(estate: Any) -> tuple[bool, str | None]:  # noqa: ANN401 — the conftest's GovernedCatalog
@@ -125,6 +140,52 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
         assert (answer.status_code, answer.headers["content-type"], answer.json()["code"], answer.json()["detail"]) == answered
     assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == read_after
     assert (maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "project", PROJECT) is not None) is policy_after
+
+
+@pytest.mark.parametrize(
+    ("finisher", "answered", "finished"),
+    [
+        pytest.param(CO_ADMIN, 200, True, id="the-admin-who-started-it"),
+        pytest.param(ESTATE_OWNER, 200, True, id="the-estates-owner"),
+        pytest.param(MEMBER, 404, False, id="a-member-is-refused"),
+    ],
+)
+def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(estate: Any, finisher: str, answered: int, finished: bool) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """[[LH-576]] A project's delete revokes its grants, those of the admin who asked among them, before it ends its roles.
+    A failure after the revoke is finished by a retry of the admin who started the delete, whom the delete's own record
+    authorizes, or of the estate's owner, and by nobody else: an unfinished delete would leave a project no admin can
+    reach. The finished delete is announced as the finisher's. The failure here is a role record that cannot be read,
+    which the delete refuses to leave standing ([[LH-572]])."""
+    settings = get_settings()
+    fs, base = fs_and_base(settings.registry_root, settings.storage_options())
+    unreadable = f"{base}/_roles/{PROJECT}/unreadable.json"
+    fs.create_dir(f"{base}/_roles/{PROJECT}", recursive=True)
+    with fs.open_output_stream(unreadable) as stream:
+        stream.write(b"{not json")
+    failed = estate.client.delete(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(CO_ADMIN))
+    assert (failed.status_code, failed.json().get("code")) == (500, 18), failed.text
+    fs.delete_file(unreadable)
+    announced = _Announced()
+    estate.client.app.dependency_overrides[get_control_emitter] = lambda: announced
+
+    retried = estate.client.delete(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(finisher))
+
+    assert retried.status_code == answered, retried.text
+    assert (records.read_json(settings.registry_root, settings.storage_options(), f"_projects/{PROJECT}.json") is None) is finished
+    deleted = [(event.object_id, event.actor) for event in announced.events if event.action == "project_deleted"]
+    assert deleted == ([(f"project:{PROJECT}", estate.person(finisher))] if finished else [])
+    # The failed attempt's filing is finished once its door is gone: each change it filed is told under the id the retry
+    # told it with, or under its own where only it reached that change ([[LH-576]]). Its revoke landed whoever finishes
+    # the delete, so the three who lost acme are told it whether or not the project is gone.
+    estate.store.write((estate.person(RECLAIMER), "reclaimer", "estate:rask"))
+    age_filings()
+    told = len(announced.events)
+    assert estate.client.post("/management/v1/announcement-intents/finish", headers=estate.bearer(RECLAIMER)).status_code == 200
+    ids = {event.event_id: (event.action, event.extra.get("subject")) for event in announced.events[:told]}
+    late = [
+        (event.action, event.extra.get("subject")) for event in announced.events[told:] if ids.get(event.event_id) != (event.action, event.extra.get("subject"))
+    ]
+    assert sorted(late) == [("grant_revoked", estate.person(who)) for who in sorted((ADMIN, CO_ADMIN, MEMBER))]
 
 
 def test_a_projects_delete_is_refused_while_a_warehouse_record_cannot_be_read(estate: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog

@@ -8,13 +8,19 @@ which on pylance 13.0.0 answer what ``stats.index_stats`` does without reading t
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import lance
 import numpy as np
 import pyarrow as pa
+import pytest
+from pydantic import SecretStr
 
-from lakehouse.maintenance_due import IndexDue
+from lakehouse.maintenance_due import IndexDue, read_due
+from lakehouse.storage_options import StorageOptions
+from maintenance.core.config import MaintenanceSettings
+from maintenance.services.due import DueQuestion, refresh_due
 from maintenance.services.index_health import due_indices
 
 
@@ -62,6 +68,26 @@ def test_a_vector_index_a_plain_optimize_only_appends_to_is_due_naming_the_merge
         lance.dataset(uri).optimize.optimize_indices()
 
     assert due_indices(lance.dataset(uri)) == [IndexDue(name="v_ivf", unindexed_rows=0, deltas=5, num_indices_to_merge=5)]
+
+
+def test_an_index_whose_describe_fails_decides_nothing_and_its_due_record_stays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A describe the store did not answer says nothing about the index: the table's due record keeps it, and the pass
+    reads it again, where reading the failure as "no index due" deleted the record."""
+    uri = _indexed(tmp_path)
+    lance.write_dataset(pa.table({"id": pa.array(range(200, 260), pa.int64())}), uri, mode="append")
+    control = f"file://{tmp_path / 'control'}"
+    settings = MaintenanceSettings(s3_bucket="lance-catalog", s3_secret_access_key=SecretStr("unit"), control_root=control)
+    question = DueQuestion(table="db$t", uuid="5c1f9e3a-7b2d-4e6f-8a0c-1d3b5e7f9a2c", location=uri, compact_enabled=False)
+    assert refresh_due(question, settings, now=datetime.now(UTC)) == "due"
+
+    def unanswered(_ds: lance.LanceDataset) -> list[object]:
+        raise OSError("the store did not answer")
+
+    monkeypatch.setattr(lance.LanceDataset, "describe_indices", unanswered)
+    verdict = refresh_due(question, settings, now=datetime.now(UTC))
+
+    kept = read_due(control, StorageOptions(), question.uuid)
+    assert (verdict, kept.indices if kept is not None else None) == ("failed", [IndexDue(name="id_btree", unindexed_rows=60, deltas=1)])
 
 
 def test_a_covering_index_is_not_due(tmp_path: Path) -> None:

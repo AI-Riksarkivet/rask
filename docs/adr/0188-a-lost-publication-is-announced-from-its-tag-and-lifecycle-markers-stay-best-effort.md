@@ -1,6 +1,7 @@
 # 0188. A lost publication is announced from its tag; a table's lifecycle markers stay best-effort (2026-11-01)
 
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): best-effort lifecycle markers lose to cloud native; they are to ride the outbox, decided after the store requests per door are counted.
+**Amended 2026-11-12** by [ADR 0205](0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md): see the amendment below.
 
 **Status:** accepted. Source: LH-552 (#743), admitted by the owner on 2026-11-01 from that day's design audit. The owner
 chose its scope the same day through the multi-question tool ("Publication only"), after the research below.
@@ -78,3 +79,18 @@ three cascades, and it went well beyond both references for losses that heal on 
 - Each advancing publication costs one control-root write before the tag moves. Each tick reads one tag file and one
   record listing per live table, and deletes a record once its publication is confirmed or superseded.
 - A drop, deregister, declare, register or rename whose announcement a crash lost stays missing from the feed.
+
+## Amendment (2026-11-12): a table's lifecycle markers are filed before their change
+
+Source: owner, 2026-11-12, "Fold into #798" (LH-584 into LH-576), through the multi-question tool, after the store
+requests per door were counted.
+
+The decision that a table's lifecycle markers stay best-effort is replaced by
+[ADR 0205](0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md). The declare, register,
+rename, drop, deregister and undrop doors file their marker and their control event on the control root before the
+change. The catalog's finish door, which maintenance's hourly audit asks, sends what a failed door left once the name
+shows the change landed. The marker's run id is derived from the time the door fixed at its filing and the table's uuid,
+so the door's emit and the finish's land one row. The filing itself costs each door three control-root requests (a
+LIST, a conditional PUT and a DELETE); the measured totals per door, before and after, are in ADR 0205. The namespace and
+warehouse cascades file their markers the same way. The publication's recovery from its tag stands as decided above.
+What stays best-effort is the deregister of a table no uuid identifies.

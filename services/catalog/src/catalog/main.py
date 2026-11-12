@@ -193,7 +193,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # `storage_options` as a callable. With no token (the offline and Dagger lanes) the environment's pair signs.
     store_session = await start_store_session(settings.web_identity, session_name="catalog", duration_seconds=settings.s3_session_seconds, loops=loops)
     if store_session is None:
-        require_env_pair(settings.env_pair, prefix="LANCE")
+        require_env_pair(settings, prefix="LANCE")
     else:
         stack.push_async_callback(store_session.stop)
     app.state.store_session = store_session

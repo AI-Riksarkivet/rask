@@ -88,7 +88,7 @@ async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Superviso
         # the environment's pair signs, and is refused here when either half is missing.
         store_session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds, loops=loops)
         if store_session is None:
-            require_env_pair(settings.env_pair, prefix="MAINTENANCE")
+            require_env_pair(settings, prefix="MAINTENANCE")
         else:
             stack.push_async_callback(store_session.stop)
         app.state.store_session = store_session

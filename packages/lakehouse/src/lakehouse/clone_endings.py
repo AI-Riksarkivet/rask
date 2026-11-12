@@ -18,7 +18,9 @@ removed by a plain delete once its holds are released: a delete of an object no 
 an ending ended is gone, so the listing reads only what stands.
 
 AN ENDING STANDING AT A LOCATION refuses a registration there (``register_table``): the clone registered next would hold
-tags of the same name, which a finish could then release.
+tags of the same name, which a finish could then release. A registration files one too (:data:`REGISTRATION`), before its
+first tag on a source and removed once it is admitted or undone, so tags a registration took and never recorded, its
+process dying in between, are released by the same finish.
 
 Every function is BLOCKING IO; callers threadpool it.
 """
@@ -38,6 +40,10 @@ from lakehouse.stored_objects import list_under
 
 PREFIX: Final = control_prefixes.CLONE_ENDINGS
 _SUFFIX: Final = ".json"
+
+#: The door of an ending a registration filed before its first tag on a source: it names tags taken for a clone the
+#: registration may never have recorded, where every other door's names the tags a recorded clone holds.
+REGISTRATION: Final = "register"
 
 
 class EndingMark(BaseModel):

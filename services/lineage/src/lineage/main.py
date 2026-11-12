@@ -110,7 +110,7 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # refused here when either half is missing: the drain's boto3 would otherwise sign with whatever its default chain finds.
     store_session = await start_store_session(settings.web_identity, session_name="lineage", duration_seconds=settings.s3_session_seconds, loops=loops)
     if store_session is None and settings.outbox_on_the_store:
-        require_env_pair(settings.env_pair, prefix="LINEAGE")
+        require_env_pair(settings, prefix="LINEAGE")
     if store_session is not None:
         stack.push_async_callback(store_session.stop)
     app.state.store_session = store_session

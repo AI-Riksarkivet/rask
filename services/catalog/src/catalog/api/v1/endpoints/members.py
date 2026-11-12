@@ -26,13 +26,13 @@ from typing import TYPE_CHECKING, Annotated, Any
 from fastapi import APIRouter, Path, status
 from lance_namespace import ServiceUnavailableError
 
-from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
+from catalog.api import announcing, fga_deps
+from catalog.api.announcing import AnnouncerDep
+from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
-from lakehouse.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
@@ -100,7 +100,7 @@ async def list_members(project_id: ProjectId, client: FgaClientDep, settings: Se
 
 @router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def grant_member(
-    project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+    project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> MemberList:
     """Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
 
@@ -120,33 +120,25 @@ async def grant_member(
     await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
 
     existing = await fga.read_object_tuples(wired, obj)
-    granted = not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing)
-    if granted:
-        await fga.write_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
+    tup = fga.ClientTuple(user=user, relation=payload.relation, object=obj)
+    if any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
+        audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+        return MemberList(members=_direct_grants(existing, obj))
+    # TELL THE PERSON, filed before the write so a door failing after it still does ([[LH-576]]). Only a grant that
+    # changes the store is announced: a re-grant is a no-op there, and an announcement of an unchanged state would put a
+    # row in someone's inbox for something that did not happen.
+    told = announcing.grant_announcement(tup, action="grant_added", actor=f"user:{token.subject}" if token else None)
+    async with announcer.announcing(door="member_grant", target=obj, announcements=[told]) as filing:
+        await fga.write_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         existing = await fga.read_object_tuples(wired, obj)
-    audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
-    # TELL THE PERSON. `access.py` has announced every per-object grant it writes since the control lane
-    # existed; this door — one rung UP, and strictly more consequential — wrote the same class of tuple
-    # and announced nothing, so being made a project admin arrived in silence.
-    #
-    # Gated on `granted`, not fired unconditionally: a re-grant is already a no-op on the store, and an
-    # announcement of an unchanged state would put a row in someone's inbox for something that did not
-    # happen. After the audit, like every other emit — a change that did not commit is never announced.
-    if granted:
-        await emit_control(
-            control,
-            action="grant_added",
-            object_type="grant",
-            object_id=obj,
-            actor=f"user:{token.subject}" if token else None,
-            extra={"relation": payload.relation, "subject": user},
-        )
+        audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+        await filing.send(told)
     return MemberList(members=_direct_grants(existing, obj))
 
 
 @router.delete("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def revoke_member(
-    project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+    project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> MemberList:
     """Revoke one tenant rung — gated identically to granting it.
 
@@ -163,29 +155,24 @@ async def revoke_member(
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
 
-    if payload.relation in ADMINISTRATIVE:
-        revoked, existing = await project_admins.revoke_admin(wired, obj, user, actor=actor, origin="grant_api")
-        if not revoked:
-            return MemberList(members=_direct_grants(existing, obj))
-    else:
+    tup = fga.ClientTuple(user=user, relation=payload.relation, object=obj)
+    if payload.relation not in ADMINISTRATIVE:
         existing = await fga.read_object_tuples(wired, obj)
         if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
             return MemberList(members=_direct_grants(existing, obj))
-        await fga.delete_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
-    audit(AuditAction.PROJECT_MEMBER_REVOKE, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
     # THE SHARPER HALF. After this the subject can no longer see the project, so no visibility-gated
     # feed could ever tell them — which is precisely why the control lane runs no visibility check and
     # why being NAMED is the targeting. Unannounced, losing tenant access is discovered as a 403 in the
-    # middle of work, the failure this lane exists to end.
-    #
-    # Unconditional here because the no-op case already returned above: reaching this line means a
-    # tuple really was deleted.
-    await emit_control(
-        control,
-        action="grant_revoked",
-        object_type="grant",
-        object_id=obj,
-        actor=f"user:{token.subject}" if token else None,
-        extra={"relation": payload.relation, "subject": user},
-    )
+    # middle of work, the failure this lane exists to end; so it is filed before the revoke, and a door that
+    # fails after the revoke still tells them ([[LH-576]]). A no-op revoke announces nothing.
+    told = announcing.grant_announcement(tup, action="grant_revoked", actor=f"user:{token.subject}" if token else None)
+    async with announcer.announcing(door="member_revoke", target=obj, announcements=[told]) as filing:
+        if payload.relation in ADMINISTRATIVE:
+            revoked, existing = await project_admins.revoke_admin(wired, obj, user, actor=actor, origin="grant_api")
+            if not revoked:
+                return MemberList(members=_direct_grants(existing, obj))
+        else:
+            await fga.delete_tuples(wired, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        audit(AuditAction.PROJECT_MEMBER_REVOKE, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+        await filing.send(told)
     return MemberList(members=_direct_grants(await fga.read_object_tuples(wired, obj), obj))

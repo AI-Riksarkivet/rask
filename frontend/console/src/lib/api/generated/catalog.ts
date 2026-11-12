@@ -197,8 +197,9 @@ export interface paths {
          *     store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
          *     what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
          *     them, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door
-         *     revokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is
-         *     recovered by calling it again. ``revoked`` counts the tuples this call removed.
+         *     revokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed
+         *     before the revoke and sent once the deletion is recorded, so a door failing after the record still announces it
+         *     ([[LH-576]]). ``revoked`` counts the tuples this call removed.
          */
         delete: operations["delete_principal_management_v1_access_principals__principal__delete"];
         options?: never;
@@ -275,6 +276,29 @@ export interface paths {
          * @description Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
          */
         delete: operations["delete_access_tuple_management_v1_access_tuples_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/announcement-intents/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finish Announcement Intents
+         * @description Send what each filing a failed door left names, wherever the store shows its change landed, and remove the filing.
+         *
+         *     A filing younger than a door can act is left to its door. Each announcement goes out as its door built it, under its
+         *     own id, so one the door had sent before failing is the same event again.
+         */
+        post: operations["finish_announcement_intents_management_v1_announcement_intents_finish_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -598,6 +622,29 @@ export interface paths {
          *     project, or no record at all, is answered unjustified.
          */
         post: operations["rebuild_warehouse_tenancy_management_v1_grants_tenancy_rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/idempotency-keys/reclaim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reclaim Idempotency Keys
+         * @description Delete the `Idempotency-Key` records nothing has written for their lifetime, at most a thousand, oldest first.
+         *
+         *     A record a retry wrote again after the listing is kept for another lifetime. ``left`` counts the expired records
+         *     past this call's limit, for the caller to ask again.
+         */
+        post: operations["reclaim_idempotency_keys_management_v1_idempotency_keys_reclaim_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1133,7 +1180,8 @@ export interface paths {
          *     surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion
          *     protection forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
          *     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
-         *     like any other ACL change, only when it was actually written.
+         *     like any other ACL change, only when it was actually written; what the create announces is filed before the record,
+         *     so a create that fails after it still announces it ([[LH-576]]).
          */
         post: operations["create_project_management_v1_projects_post"];
         delete?: never;
@@ -1308,8 +1356,15 @@ export interface paths {
          *
          *     Gated on ``project:<id>#can_administer``, the tenant's OWN admin bar: the rungs that open its reads, the estate
          *     observer's and membership, retire nothing (module docstring). Order, fail-closed and each step earning the next:
-         *     id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
-         *     emptiness (409) → revoke tuples → end its roles → end its maintenance policy → delete record → audit + event.
+         *     id shape (400) → existence and authz (both 404, :func:`project_to_delete`) → deletion protection (409) →
+         *     emptiness (409) → the delete recorded on the project's record → revoke tuples → end its roles → end its maintenance
+         *     policy → delete record → audit + event.
+         *
+         *     **A delete that failed part-way is finished by asking again** ([[LH-576]]): the record names the caller who started
+         *     it, whose own admin grant the revoke takes, and :func:`project_to_delete` lets that caller, an admin the revoke has
+         *     not reached, or the estate's owner finish it. Every later step is idempotent, and the protection and emptiness
+         *     were judged when the delete was recorded: from then on the project is absent to every other door
+         *     (``project_registry.get_project``), so no warehouse, role or grant is made for it meanwhile.
          *
          *     **Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to
          *     empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
@@ -1451,7 +1506,8 @@ export interface paths {
          * @description End a role, gated on its ``can_delete``: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).
          *
          *     Refused 409 (code 14) while ending it would leave a project with no direct admin, before anything is revoked. An
-         *     ending that fails part-way leaves the role listed and deletable, so calling the door again finishes it.
+         *     ending that fails part-way leaves the role listed and deletable, so calling the door again finishes it, and what it
+         *     took is announced though the ending failed after it ([[LH-576]]).
          */
         delete: operations["delete_role_management_v1_projects__project_id__roles__role_id__delete"];
         options?: never;
@@ -1496,9 +1552,13 @@ export interface paths {
         };
         /**
          * List Promotions
-         * @description The open holds the caller may see, in table order: each table's held version, what `published` names, why
-         *     it is held and when the sweep expires it. A hold names its table as the table is named now, and is listed to a
-         *     caller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and expires.
+         * @description The open holds the caller may see, the soonest the sweep expires first: each table's held version, what
+         *     `published` names, why it is held and when the sweep expires it. A hold names its table as the table is named now,
+         *     and is listed to a caller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and
+         *     expires.
+         *
+         *     A hold is named and judged only as the page fills (:func:`fga_deps.named_record_page`), on the uuid it records
+         *     ([[LH-524]]), the object the table's grants are held by: a page costs about the holds it serves or passes over.
          */
         get: operations["list_promotions_management_v1_promotions_get"];
         put?: never;
@@ -2087,8 +2147,11 @@ export interface paths {
          *     Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection
          *     is recorded before main is restored, and main is restored once: rejecting again completes a restore the first
          *     call could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past
-         *     the held version meanwhile, there is nothing to restore and the rejection only closes the hold. 409 when the
-         *     table holds no such version, it was decided otherwise, or `published` reached it.
+         *     the held version meanwhile, there is nothing to restore and the rejection only closes the hold. A rejection whose
+         *     restore landed and whose record of it failed finds that restore when asked again and records it, rather than
+         *     restoring a second time. 409 when the table holds no such version, it was decided otherwise, or `published` reached
+         *     it; and 409 (code 14) naming main's head while main holds a commit after the held version, which a restore would
+         *     discard: the hold stays open for an approval, a RestoreTable, or a later rejection (owner, 2026-11-12).
          */
         post: operations["reject_promotion_management_v1_table__id__promotion_reject_post"];
         delete?: never;
@@ -2148,8 +2211,9 @@ export interface paths {
          *     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
          *     and the system did exactly what it should. A held one is a 200 with `held=True` and the hold. Errors
          *     are reserved for the caller getting it wrong — an unknown version (404), a backwards move (409), a
-         *     malformed one (400), a version older than the one held (409) — all raised as `lance_namespace` typed
-         *     errors so the shared problem-body handler renders them.
+         *     malformed one (400), a version older than the one held (409), a version another publish overtook while
+         *     its gate ran (409, code 14) — all raised as `lance_namespace` typed errors so the shared problem-body
+         *     handler renders them.
          */
         post: operations["publish_table_management_v1_table__id__publish_post"];
         delete?: never;
@@ -2210,7 +2274,8 @@ export interface paths {
          *     THE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 §9), so the door restores exactly the trashed table
          *     its caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each
          *     one's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another
-         *     table holds the name the undrop answers 409: two tables cannot share it.
+         *     table holds the name the undrop answers 409: two tables cannot share it. What it announces is filed before it takes
+         *     the location back, so a door failing after the re-registration still announces it ([[LH-576]]).
          */
         post: operations["undrop_table_management_v1_table__id__undrop_post"];
         delete?: never;
@@ -2236,7 +2301,8 @@ export interface paths {
          *
          *     Refused 409 (code 19) while its place, or a data directory its claim names, holds an object (the purge deletes them
          *     first), while a record naming no bytes is short of its deadline, at a place whose claim records another table or
-         *     none, and while a live object holds the place or the name again.
+         *     none, and while a live object holds the place or the name again. Audited as it lands or as it fails (``trash_end``):
+         *     it revokes grants and ends records on the catalog's own session, for whoever asked.
          */
         delete: operations["end_trash_management_v1_trash__kind___uuid__delete"];
         options?: never;
@@ -2302,10 +2368,13 @@ export interface paths {
         /**
          * Release Trash
          * @description Release a drop past its deadline (ADR 0146): revoke every grant on its object, tell each person who lost one, and
-         *     stamp the record released; its bytes wait for the purge.
+         *     stamp the record released; its bytes wait for the purge. What it tells is filed before the revoke, so a release that
+         *     fails after the revoke still tells them ([[LH-576]]).
+         *
          *
          *     Refused 409 (code 19) until the deadline has settled (``lakehouse.trash.RELEASE_SETTLE``), and while a live object
-         *     holds the record's place or name again: an undrop registers before it clears its record.
+         *     holds the record's place or name again: an undrop registers before it clears its record. Audited as it lands or as it
+         *     fails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.
          */
         post: operations["release_trash_management_v1_trash__kind___uuid__release_post"];
         delete?: never;
@@ -2578,12 +2647,15 @@ export interface paths {
          *        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
          *        yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,
          *        so re-issuing the call finishes it.
-         *     6. Tuples on ``warehouse:<id>``, then the registry record.
+         *     6. Tuples on ``warehouse:<id>``, then the bucket's purge and claim (step 7), then the registry record last: the
+         *        record is what this door is addressed by, so a failure before it leaves the warehouse for the re-issue.
          *     7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,
          *        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
          *        purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
          *        still claims, or reserved platform storage — refuses BEFORE the cascade
-         *        (:func:`_require_bucket_purgeable`).
+         *        (:func:`_require_bucket_purgeable`). A purge then releases the bucket's claim
+         *        (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping
+         *        the bytes keeps the claim, so no other project adopts what the bucket still holds.
          *
          *     The routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings
          *     POSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the
@@ -3474,7 +3546,9 @@ export interface paths {
          *     A table no uuid identifies is the estate admin's to deregister (the router asks that rung for it, [[LH-534]]): it
          *     holds no grant, no record and no protection, since each is kept under a uuid, so its row is detached and its
          *     location's claim released, and the detach is announced on the control plane alone. Lineage refuses an event naming
-         *     a table by no uuid ([[LH-166]]), so the feed is not told.
+         *     a table by no uuid ([[LH-166]]), so the feed is not told, and no filing precedes that detach: its announcement names
+         *     no uuid the finish could judge a name by. Every other deregister's announcements are filed before the detach, so a
+         *     door failing after it still announces it ([[LH-576]]).
          */
         post: operations["deregister_table_v1_table__id__deregister_post"];
         delete?: never;
@@ -3799,6 +3873,11 @@ export interface paths {
          *     overlaps the control root, a configured base or another table, when the dataset there carries reader
          *     flag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, then
          *     seed the caller's FGA ownership and emit a REGISTER_TABLE marker (who attached it + where).
+         *
+         *     What the registration announces is filed once the dataset is admitted and before its ownership is seeded, the first
+         *     moment its location as the backend resolved it is known, so a door failing after that still announces it, and a
+         *     store refusing the filing detaches the registration ([[LH-576]]). A registration that dies before then is attached
+         *     and unowned: the drift report lists it under ``ungoverned_tables``.
          */
         post: operations["register_table_v1_table__id__register_post"];
         delete?: never;
@@ -3839,8 +3918,8 @@ export interface paths {
          *     the name is there, and both go back if the rename is undone. Its data directories' claims stay as they are: each
          *     records the table's uuid and location, which a rename changes neither of ([[LH-575]]). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
          *     lifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped
-         *     and another created ([[LH-554]]). Source missing → 404
-         *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
+         *     and another created ([[LH-554]]), filed before the rename so a door failing after it still announces it ([[LH-576]]).
+         *     Source missing → 404 ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
          *     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]]).
          */
         post: operations["rename_table_v1_table__id__rename_post"];
@@ -4479,6 +4558,11 @@ export interface components {
             objects: string[];
             /** Relation */
             relation: string;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated?: boolean;
             /** Type */
             type: string;
             /** User */
@@ -5270,6 +5354,37 @@ export interface components {
              * @description If true, return the row id as a column called `_rowid`
              */
             with_row_id?: boolean | null;
+        };
+        /**
+         * AnnouncementIntentsFinishResponse
+         * @description What one finish of the announcements doors left did ([[LH-576]]).
+         */
+        AnnouncementIntentsFinishResponse: {
+            /**
+             * Finished
+             * @default 0
+             */
+            finished?: number;
+            /**
+             * Left
+             * @default 0
+             */
+            left?: number;
+            /**
+             * Sent
+             * @default 0
+             */
+            sent?: number;
+            /**
+             * Unlanded
+             * @default 0
+             */
+            unlanded?: number;
+            /**
+             * Young
+             * @default 0
+             */
+            young?: number;
         };
         /**
          * AssigneeRequest
@@ -7694,6 +7809,20 @@ export interface components {
             detail?: components["schemas"]["ValidationError"][];
         };
         /**
+         * IdempotencyKeysReclaimResponse
+         * @description What one reclaim of expired `Idempotency-Key` records did ([[LH-576]]).
+         */
+        IdempotencyKeysReclaimResponse: {
+            /** Kept */
+            kept: number;
+            /** Left */
+            left: number;
+            /** Reclaimed */
+            reclaimed: number;
+            /** Unreadable */
+            unreadable: number;
+        };
+        /**
          * Identity
          * @description Identity information of a request.
          */
@@ -8735,7 +8864,7 @@ export interface components {
         };
         /**
          * PromotionsListResponse
-         * @description The open holds the caller may see, in table order.
+         * @description The open holds the caller may see, the soonest the sweep expires first.
          */
         PromotionsListResponse: {
             /** Holds */
@@ -10331,6 +10460,38 @@ export interface operations {
             };
         };
     };
+    finish_announcement_intents_management_v1_announcement_intents_finish_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnouncementIntentsFinishResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     grant_classification_access_management_v1_classification__id__access_grant_post: {
         parameters: {
             query?: {
@@ -10812,6 +10973,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TenancyRebuildResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reclaim_idempotency_keys_management_v1_idempotency_keys_reclaim_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdempotencyKeysReclaimResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12334,7 +12527,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description Continue after this table id (the previous page's `page_token`). */
+                /** @description Continue after this hold (the previous page's `page_token`). */
                 page_token?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13335,10 +13528,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                authorization?: string | null;
-                "x-lance-originator"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -13869,10 +14059,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                authorization?: string | null;
-                "x-lance-originator"?: string | null;
-            };
+            header?: never;
             path: {
                 warehouse_id: string;
             };
@@ -14119,10 +14306,10 @@ export interface operations {
                 /** @description List only what was dropped beneath this namespace name. */
                 namespace?: string | null;
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path: {
@@ -14598,10 +14785,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                authorization?: string | null;
-                "x-lance-originator"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -14790,10 +14974,10 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path: {
@@ -14881,11 +15065,11 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 include_declared?: boolean;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path: {
@@ -14973,11 +15157,11 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 include_declared?: boolean;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path?: never;
@@ -15819,10 +16003,10 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path: {
@@ -16335,10 +16519,7 @@ export interface operations {
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
-            header?: {
-                authorization?: string | null;
-                "x-lance-originator"?: string | null;
-            };
+            header?: never;
             path: {
                 id: string;
             };
@@ -16535,9 +16716,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -16731,9 +16910,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -17097,12 +17274,12 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 /** @description REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path: {
@@ -17686,9 +17863,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -17791,9 +17966,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "Idempotency-Key"?: string | null;
-                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -18375,10 +18548,10 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path: {
@@ -18412,10 +18585,10 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path: {
@@ -19166,13 +19339,13 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
-                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
-                limit?: number | null;
                 descending?: boolean | null;
                 /** @description The ref whose version history to list. Omit for main. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
+                /** @description An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
             };
             header?: never;
             path: {

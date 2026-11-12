@@ -21,6 +21,7 @@ import pytest
 from fastapi import Request
 from lance_namespace import LanceNamespace, ListNamespacesRequest, ListNamespacesResponse, ListTablesRequest, ListTablesResponse
 
+from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
 from lakehouse.storage_options import StorageOptions
@@ -90,6 +91,7 @@ def _list(
             token=None,
             client=None,
             resolver=NamedResolver(),
+            limit=MAX_LIST_LIMIT,
         )
     )
     return list(response.tables or [])

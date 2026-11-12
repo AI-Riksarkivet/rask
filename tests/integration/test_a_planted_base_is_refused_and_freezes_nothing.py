@@ -47,13 +47,13 @@ import respx
 from botocore.exceptions import ClientError
 from botocore.paginate import Paginator
 from fastapi.testclient import TestClient
-from lance_namespace import InvalidTableStateError, LanceNamespace, TableNotFoundError
+from lance_namespace import InvalidInputError, InvalidTableStateError, LanceNamespace, TableNotFoundError
 from pydantic import SecretStr
 
 import lakehouse.storage as storage
 from catalog.core.config import get_settings
 from catalog.services import clone_endings as clone_endings_door
-from catalog.services import dataplane, native
+from catalog.services import dataplane, native, table_bases
 from lakehouse import base_registry, clone_endings, clone_sources, location_claims, records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
@@ -1075,6 +1075,75 @@ def test_a_register_undone_with_a_tag_the_store_keeps_leaves_the_clones_location
 
     held = location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), clone)
     assert held is not None and held.table == "db$silver", "the undone registration freed the location with its tag still standing"
+
+
+class _ProcessDied(BaseException):
+    """The catalog's process ending inside a request: no ``except Exception`` of the door runs after it."""
+
+
+def _dies_after_the_tags(*_args: object, **_kwargs: object) -> list[str]:
+    raise _ProcessDied
+
+
+def _refused_after_the_tags(*_args: object, **_kwargs: object) -> list[str]:
+    raise InvalidInputError("the dataset declares a data directory another table holds")
+
+
+def _a_store_that_will_not_delete_the_first_tag() -> Callable[..., bool]:
+    real_delete = clone_sources.delete_tag
+    asked: list[str] = []
+
+    def _delete(source_location: str, tag: str, *, storage_options: StorageOptions) -> bool:
+        asked.append(source_location)
+        if len(asked) == 1:
+            raise OSError(f"the store did not answer the delete of {tag} on {source_location}")
+        return real_delete(source_location, tag, storage_options=storage_options)
+
+    return _delete
+
+
+@pytest.mark.parametrize(
+    ("admission", "store_fails_a_tag"),
+    [
+        pytest.param(_dies_after_the_tags, False, id="the-process-dies-after-the-tags"),
+        pytest.param(_refused_after_the_tags, True, id="a-refusal-whose-undo-cannot-delete-a-tag"),
+    ],
+)
+def test_a_registration_that_does_not_finish_leaves_its_clone_tags_to_the_finish(
+    estate: _Estate, monkeypatch: pytest.MonkeyPatch, admission: Callable[..., list[str]], store_fails_a_tag: bool
+) -> None:
+    """A registration files its clone's ending before its first tag on a source (ADR 0198 §1), so tags a registration
+    took and never recorded are released by the finish maintenance's audit asks for, whether its process died after the
+    tags or its undo could not delete one; an undo answers the refusal that stopped the registration, having tried every
+    tag."""
+    bronze, silver = _registered_clone(estate)
+    gold = f"{estate.root}/gold"
+    between = estate.open(silver)
+    between.shallow_clone(gold, between.version, storage_options=estate.key.in_clear())
+    real_claim, real_delete = table_bases.claim_registered_directories, clone_sources.delete_tag
+    monkeypatch.setattr(table_bases, "claim_registered_directories", admission)
+    if store_fails_a_tag:
+        monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_the_first_tag())
+    answer = estate.client.post("/v1/table/db$gold/register", json={"location": "gold"})
+    monkeypatch.setattr(table_bases, "claim_registered_directories", real_claim)
+    monkeypatch.setattr(clone_sources, "delete_tag", real_delete)
+    monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
+    left = [clone_sources.tag_of(gold) in estate.open(source).tags.list() for source in (silver, bronze)]
+
+    finished = _finished_by_maintenance(estate)
+
+    released = [clone_sources.tag_of(gold) in estate.open(source).tags.list() for source in (silver, bronze)]
+    # A dead process answers nothing; the server in front of it answers 500.
+    expected = (400, _INVALID_INPUT) if store_fails_a_tag else (500, 18)
+    assert ((answer.status_code, answer.json().get("code")), any(left)) == (expected, True), answer.text
+    assert ([ending.split("/")[0] for ending in finished.finished], finished.refused, released) == ([clone_endings.digest_of(gold)], {}, [False, False]), (
+        finished
+    )
+    if not store_fails_a_tag:
+        # The row the dead registration attached stands without the tags the finish released: a register asked again
+        # writes no record naming a source whose version nothing keeps ([[LH-576]]).
+        retried = estate.client.post("/v1/table/db$gold/register", json={"location": "gold"})
+        assert ((retried.status_code, retried.json().get("code")), base_registry.read_base_record(estate.registry, gold)) == ((409, 5), None), retried.text
 
 
 def test_a_location_whose_holder_is_gone_is_registered_under_another_name(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:

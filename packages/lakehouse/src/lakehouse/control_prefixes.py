@@ -45,6 +45,8 @@ PRINCIPALS: Final = "_principals"
 # The queues: events staged before they are published.
 LINEAGE_OUTBOX: Final = "_lineage_outbox"
 CONTROL_OUTBOX: Final = "_control_outbox"
+#: A door's announcements, filed before the change they announce and removed once announced ([[LH-576]]).
+ANNOUNCEMENT_INTENTS: Final = "_announcement_intents"
 
 # The leases and caches: each record holds for a time judged on the store's clock, then lapses.
 COMMIT_TURNS: Final = "_commit_turns"
@@ -85,8 +87,9 @@ RECORD_PREFIXES: Final[frozenset[str]] = frozenset(
 )
 """The records a control-root backup copies and a restore brings back."""
 
-QUEUE_PREFIXES: Final[frozenset[str]] = frozenset({LINEAGE_OUTBOX, CONTROL_OUTBOX})
-"""The outboxes: a restore would publish events the estate already acted on, so a queue's recovery is to be empty."""
+QUEUE_PREFIXES: Final[frozenset[str]] = frozenset({LINEAGE_OUTBOX, CONTROL_OUTBOX, ANNOUNCEMENT_INTENTS})
+"""The outboxes and the announcements filed for them: a restore would publish events the estate already acted on, so a
+queue's recovery is to be empty."""
 
 LEASE_PREFIXES: Final[frozenset[str]] = frozenset({COMMIT_TURNS, HISTORY_FENCES, IDEMPOTENCY})
 """The records that lapse: a restored one would hold a turn, a fence or an answer whose time has passed."""

@@ -43,7 +43,7 @@ from lakehouse.governed.principal import is_principal
 from lakehouse.lineage.signing import VerifiedSignature
 from lakehouse.lineage_events import AUTHOR_FACET, dataset_uuids
 from lakehouse.naming import identifier_location
-from lakehouse.openlineage import SYMLINKS_FACET, author_facet, lifecycle_state
+from lakehouse.openlineage import author_facet, lifecycle_state
 from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep
 from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings
@@ -58,6 +58,7 @@ from lineage.models import (
     UngovernedOutputError,
     author_sub_from_payload,
 )
+from lineage.services.provenance import feed_key
 from lineage.services.signature import verify_arrived_event
 
 
@@ -460,12 +461,12 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
     operation — on the strength of the honest row beside it, which is precisely what the run-author check
     exists to refuse. An event that differs in any field is a new assertion and stays refused.
     """
-    # THE FEED'S OWN KEY, never `run_id`: a static change has no run id and is stored under the id
-    # derived from its content, so looking it up by run id answered "not a replay" for every DatasetEvent.
+    # THE FEED'S OWN ROW KEY, never `run_id`: a static change has no run id and is stored under the id derived from its
+    # content and who vouches for it (`feed_key`), so only its own row can say whether this is that row again.
     provenance = getattr(request.app.state, "provenance", None)
     if provenance is None or not event.feed_id:
         return False
-    stored = await provenance.recorded_event(event.feed_id, event.feed_event_type)
+    stored = await provenance.recorded_event(feed_key(event))
     return stored is not None and stored == payload
 
 
@@ -482,19 +483,6 @@ class Aliases(BaseModel):
     objects: dict[int, frozenset[str]] = {}
     located: frozenset[int] = frozenset()
     hidden: frozenset[str] = frozenset()
-
-
-def _symlinks(dataset: Dataset) -> list[tuple[str, str]]:
-    """The ``(namespace, name)`` identifiers ``dataset``'s standard ``symlinks`` facet lists, malformed entries left out."""
-    facet = dataset.facet(SYMLINKS_FACET) or {}
-    identifiers = facet.get("identifiers")
-    if not isinstance(identifiers, list):
-        return []
-    return [
-        (str(entry["namespace"]), str(entry["name"]))
-        for entry in identifiers
-        if isinstance(entry, dict) and isinstance(entry.get("namespace"), str) and isinstance(entry.get("name"), str) and entry["name"]
-    ]
 
 
 async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, user: str) -> Aliases:
@@ -516,7 +504,7 @@ async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, us
         if is_external_source(dataset.namespace, dataset.name) and (location := identifier_location(dataset.namespace, dataset.name)) is not None:
             own[index] = location
             locations.setdefault(location, []).append(index)
-        for namespace, name in _symlinks(dataset):
+        for namespace, name in dataset.symlink_identifiers:
             if not is_external_source(namespace, name):
                 names.setdefault(name, []).append(index)
             elif (location := identifier_location(namespace, name)) is not None:

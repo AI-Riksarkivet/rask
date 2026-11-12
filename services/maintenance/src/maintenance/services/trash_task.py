@@ -3,7 +3,7 @@
 The commit lane queues the task when the catalog announces a table's drop (``drop_table``, filed after its record), and
 the audit queues it for any record no task or schedule holds, a namespace's among them. The task holds itself until the
 record's deadline and :data:`lakehouse.trash.RELEASE_SETTLE` (a schedule), then asks the catalog to release this record
-alone (:func:`maintenance.services.trash_release.release_expired_trash`): the release deletes no byte, and the purge of
+alone, read by its key (:func:`maintenance.services.trash_release.release_record`): the release deletes no byte, and the purge of
 the bytes stays the daily scan's, gated on the drift report that scan produced. A record gone by the time its task runs was undropped or
 ended; a table undropped stands again under the same uuid, so it gets a table task, as a table the catalog makes does.
 A drop that filed no record, a destructive one, leaves its task nothing to read past that.
@@ -20,7 +20,7 @@ from lakehouse import location_claims, trash
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.naming import claim_store
 from maintenance.services.queue import Task, TaskQueue
-from maintenance.services.trash_release import release_expired_trash
+from maintenance.services.trash_release import release_record
 
 
 log = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ async def run_trash_task(task: Task, *, settings: MaintenanceSettings, queue: Ta
     if due > now:
         await queue.schedule_at(task, due)
         return
-    released = await release_expired_trash(settings, now=now, only=task.uuid)
+    released = await release_record(record, settings, now=now)
     if not released.ran:
         raise TrashUnreadableError(released.reason or "the trash could not be read")
     if released.held:

@@ -42,6 +42,7 @@ THE CREDENTIAL MAINTENANCE PRESENTS IS THE POD'S OWN SERVICE-ACCOUNT TOKEN, proj
 from __future__ import annotations
 
 import logging
+from time import monotonic
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
@@ -264,12 +265,65 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str)
         TableNotGoverned: The door names no such table or namespace.
         VendUndecided: The door could not be asked or decided nothing; the next tick retries the dataset.
     """
-    vended = _vended_from(_answered(settings, _maintain_door(table_id, settings)), asked_for=table_id)
+    return _handed_over(_maintain_vend(table_id, settings), uri=uri, table_id=table_id, settings=settings)
+
+
+def _maintain_vend(table_id: str, settings: MaintenanceSettings) -> Vended:
+    """The catalog's maintain-tier vend for ``table_id``, asked now.
+
+    Raises:
+        VendingNotDirect, MaintenanceDenied, TableNotGoverned, VendUndecided: As :func:`write_options_for`.
+    """
+    return _vended_from(_answered(settings, _maintain_door(table_id, settings)), asked_for=table_id)
+
+
+def _handed_over(vended: Vended, *, uri: str, table_id: str, settings: MaintenanceSettings) -> StorageOptions:
+    """``vended``'s options for the dataset at ``uri``, once the vend is shown to cover it.
+
+    Raises:
+        GovernedElsewhere: The catalog governs ``table_id`` at a location that does not hold ``uri``.
+    """
     # AFTER the vend and BEFORE handing it over: the catalog's answer is what says where this table
     # lives, so the crossing is only detectable once there is an answer to read.
     _refuse_a_credential_that_does_not_cover(uri=uri, table_id=table_id, location=vended.location)
     logger.info("write credential SCOPED for %s — this pass is signed by a table-scoped credential", table_id)
     return _at_own_store(vended.storage_options, settings)
+
+
+#: How long one pass hands a vend it was answered to another dataset of the same table, on this process's monotonic clock
+#: from the answer: half the shortest session the catalog vends (``LANCE_VENDING_TTL_SECONDS`` is at least 60), so a
+#: vend handed on has at least as long left as that half.
+VEND_REUSE_SECONDS: Final = 30.0
+
+
+class _HeldVend(BaseModel):
+    vended: Vended
+    #: When the catalog's answer arrived, on this process's monotonic clock.
+    answered_at: float
+
+
+class PassVends(BaseModel):
+    """The maintain-tier vends one table's pass was answered, by table: one vend serves the table and every branch.
+
+    The maintain tier is vended for the table, never for a branch, and its session gets and deletes on the whole of the
+    table's prefix, ``tree/`` included (``catalog.core.vending.build_session_policy``); a branch-scoped vend grants less
+    and maintenance asks none. So a pass expiring the table and its branches asks the catalog once, rather than once a
+    ref, and hands that vend to each dataset after checking it covers that dataset, within :data:`VEND_REUSE_SECONDS`.
+    """
+
+    held: dict[str, _HeldVend] = Field(default_factory=dict)
+
+    def write_options_for(self, uri: str, settings: MaintenanceSettings, *, table_id: str) -> StorageOptions:
+        """:func:`write_options_for`, answered from a vend this pass holds for ``table_id`` while it is young enough.
+
+        Raises:
+            VendingNotDirect, MaintenanceDenied, TableNotGoverned, VendUndecided: As :func:`write_options_for`.
+        """
+        kept = self.held.get(table_id)
+        if kept is None or monotonic() - kept.answered_at >= VEND_REUSE_SECONDS:
+            kept = _HeldVend(vended=_maintain_vend(table_id, settings), answered_at=monotonic())
+            self.held[table_id] = kept
+        return _handed_over(kept.vended, uri=uri, table_id=table_id, settings=settings)
 
 
 def _at_own_store(options: StorageOptions, settings: MaintenanceSettings) -> StorageOptions:
@@ -548,6 +602,65 @@ def finish_clone_ending(ending: CloneEndingListed, settings: MaintenanceSettings
     """
     door = _clone_endings_door(settings, act=f"/{ending.id}/finish", answer="the finish of a clone's ending")
     return _parsed(_answered(settings, door), CloneEndingFinished, asked_for=door.asked_for)
+
+
+class IdempotencyKeysReclaimed(BaseModel):
+    """What one reclaim of expired `Idempotency-Key` records did, as the catalog answers it."""
+
+    reclaimed: int
+    kept: int
+    #: Expired records past the call's limit, which a further call reclaims.
+    left: int
+    unreadable: int
+
+
+def reclaim_idempotency_keys(settings: MaintenanceSettings) -> IdempotencyKeysReclaimed:
+    """Have the catalog delete the `Idempotency-Key` records nothing has written for their lifetime ([[LH-576]]).
+
+    Maintenance's store policy writes nothing of the control root, so the delete is the catalog's, on its own reads.
+
+    Raises:
+        VendingNotDirect: No catalog door is configured.
+        MaintenanceDenied: The door refused: this identity holds no reclaim rung (403).
+        VendUndecided: The door could not be asked or decided nothing.
+    """
+    door = Door(
+        path="/management/v1/idempotency-keys/reclaim",
+        answer="the reclaim of expired idempotency records",
+        asked_for="the expired idempotency records",
+        denial=reclaim_denial_remedy(identity=settings.catalog_service_identity),
+    )
+    return _parsed(_answered(settings, door), IdempotencyKeysReclaimed, asked_for=door.asked_for)
+
+
+class AnnouncementIntentsFinished(BaseModel):
+    """What one finish of the announcements failed doors left did, as the catalog answers it."""
+
+    finished: int
+    sent: int
+    unlanded: int
+    young: int
+    #: Filings past the call's limit, which a further call finishes.
+    left: int
+
+
+def finish_announcement_intents(settings: MaintenanceSettings) -> AnnouncementIntentsFinished:
+    """Have the catalog send what each failed door left to announce, where its change landed ([[LH-576]]).
+
+    Maintenance holds none of the catalog's emitters and signs for none of its callers; the catalog does.
+
+    Raises:
+        VendingNotDirect: No catalog door is configured.
+        MaintenanceDenied: The door refused: this identity holds no reclaim rung (403).
+        VendUndecided: The door could not be asked or decided nothing.
+    """
+    door = Door(
+        path="/management/v1/announcement-intents/finish",
+        answer="the finish of what failed doors left to announce",
+        asked_for="the announcements failed doors left",
+        denial=reclaim_denial_remedy(identity=settings.catalog_service_identity),
+    )
+    return _parsed(_answered(settings, door), AnnouncementIntentsFinished, asked_for=door.asked_for)
 
 
 def grant_census(settings: MaintenanceSettings) -> fga.GrantCensus | None:

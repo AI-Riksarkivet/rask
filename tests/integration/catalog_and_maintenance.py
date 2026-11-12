@@ -116,3 +116,14 @@ def audited(maintenance: TestClient) -> dict[str, Any]:
     portal = maintenance.portal
     assert portal is not None, "the client was never entered, so the service's lifespan did not run"
     return portal.call(partial(run_audit, maintenance_settings(), queue=None))
+
+
+def scanned(maintenance: TestClient) -> dict[str, Any]:
+    """One daily scan on the maintenance app's own loop, under its settings, as the worker runs the scan's task; the
+    payload it logs."""
+    from lakehouse.control_emit import NoopControlEmitter
+    from maintenance.services.audit import run_scan
+
+    portal = maintenance.portal
+    assert portal is not None, "the client was never entered, so the service's lifespan did not run"
+    return portal.call(partial(run_scan, maintenance_settings(), control=NoopControlEmitter()))

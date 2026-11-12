@@ -43,3 +43,21 @@ async def test_boot_refuses_a_missing_key_the_way_it_refuses_a_missing_secret(mo
     with pytest.raises(ValueError, match="MAINTENANCE_S3_ACCESS_KEY_ID is required"):
         async with service.lifespan(FastAPI()):
             pass
+
+
+@pytest.mark.asyncio
+async def test_boot_refuses_a_whole_static_pair_nobody_acknowledged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deployment's store identity is its ServiceAccount token; a whole key pair in the environment is a static key that
+    never rotates, and a service signs with one only where an operator acknowledged it, as for authentication off."""
+    from fastapi import FastAPI
+
+    from maintenance import service
+
+    monkeypatch.delenv("RASK_INSECURE_ALLOW_STATIC_STORE_KEY", raising=False)
+    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", s3_access_key_id="rask-maintenance", s3_secret_access_key="scoped-secret")
+    monkeypatch.setattr(service, "get_settings", lambda: settings)
+    monkeypatch.setattr(service, "arm_drain_on_sigterm", lambda _app: lambda: None)
+
+    with pytest.raises(ValueError, match="RASK_INSECURE_ALLOW_STATIC_STORE_KEY"):
+        async with service.lifespan(FastAPI()):
+            pass

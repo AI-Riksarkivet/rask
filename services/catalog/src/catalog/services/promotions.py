@@ -29,11 +29,15 @@ import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from lance_namespace import InvalidTableStateError
+import lance
+from lance_namespace import ConcurrentModificationError, InvalidTableStateError, RestoreTableRequest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from catalog.services import publication
+from catalog.core.lineage_emit import RESTORE_TABLE
+from catalog.core.run_context import OPERATION_PROPERTY
+from catalog.services import dataplane, publication
 from lakehouse import control_prefixes
+from lakehouse.outage import store_refusal
 from lakehouse.record_store import get_record, list_records, record_key
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -223,6 +227,102 @@ def record_restore(root: str, so: StorageOptions, table_uuid: str, *, version: i
         return Hold.model_validate(mutate_json(root, so, hold_key(table_uuid), _settle))
     except RecordMissingError:
         raise InvalidTableStateError(f"the table holds no rejection of version {version}") from None
+
+
+def reopen(root: str, so: StorageOptions, table_uuid: str, *, version: int) -> Hold:
+    """Put the rejection of ``version`` back to open while main was never restored for it: the restore was refused
+    (:class:`MainMovedError`), so the rejection took no effect and the hold waits for its next answer. The hold as
+    recorded is returned; one already open is returned as it stands.
+
+    Raises:
+        InvalidTableStateError: The table's hold is not the rejection of ``version`` still owing main its restore.
+    """
+
+    def _reopen(current: dict[str, Any]) -> dict[str, Any]:
+        standing = _parse(current)
+        if standing is None or standing.version != version:
+            raise InvalidTableStateError(f"the table holds no version {version} for review")
+        if standing.state == "open":
+            return current
+        if standing.state != "rejected" or not standing.restore_owed:
+            raise InvalidTableStateError(f"version {version} of the table is {standing.state}, and its decision took effect")
+        return standing.model_copy(update={"state": "open", "decided_by": None, "decided_at": None, "restore_owed": False}).model_dump(mode="json")
+
+    try:
+        return Hold.model_validate(mutate_json(root, so, hold_key(table_uuid), _reopen))
+    except RecordMissingError:
+        raise InvalidTableStateError(f"the table holds no version {version} for review") from None
+
+
+class MainMovedError(ConcurrentModificationError):
+    """Main holds a commit after the held version, which restoring the published version would discard (the spec's code
+    14). The owner's ruling of 2026-11-12, "Refuse, hold stays": the rejection is refused and the hold stays open."""
+
+    def __init__(self, *, held: int, head: int, published: int) -> None:
+        self.head = head
+        super().__init__(
+            f"main is at version {head}, committed after held version {held}, and restoring the published version {published} over it would "
+            "discard that commit; the hold stays open: approve it, restore the table (RestoreTable), or reject it again"
+        )
+
+
+def restore_made(table: DoorTable, so: StorageOptions, *, held: int, published: int) -> int | None:
+    """The version that restored main to ``published`` over the held version ``held``, or ``None`` when main holds none.
+
+    A rejection's restore commits only as the version right after the held one, so a rejection whose restore landed and
+    whose record of it did not is found there, and a restore of the published version made at main's head, a person's
+    RestoreTable after a refused rejection, settles it too: either way main already reads the published version, and
+    restoring again would commit a second time. Each is a Lance ``Restore`` of ``published`` the catalog's restore
+    stamped (``rask.operation``).
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a read of main's history.
+        InternalError: A version main lists could not be read.
+    """
+    dataset = table.open(so)
+    head = int(dataset.version)
+    if head <= held:
+        return None
+    try:
+        kept = {int(entry["version"]) for entry in dataset.versions()}
+        for version in dict.fromkeys((held + 1, head)):
+            if version in kept and _restores(dataset.read_transaction(version), published):
+                return version
+    except OSError as exc:
+        raise store_refusal(exc, reading=f"reading the history of main after held version {held}", so="whether it was restored is unknown") from exc
+    return None
+
+
+def _restores(transaction: lance.Transaction | None, published: int) -> bool:
+    """Whether ``transaction`` is the catalog's restore of main to ``published``."""
+    return (
+        transaction is not None
+        and isinstance(transaction.operation, lance.LanceOperation.Restore)
+        and transaction.operation.version == published
+        and (transaction.transaction_properties or {}).get(OPERATION_PROPERTY) == RESTORE_TABLE
+    )
+
+
+def restore_once(table: DoorTable, so: StorageOptions, *, held: int, published: int, transaction_properties: dict[str, str]) -> tuple[int, bool]:
+    """Restore main to ``published`` over the held version ``held`` for its rejection, once: the version main reads it
+    at, and whether this call committed it (:func:`restore_made` finds an earlier one).
+
+    The restore commits only as the version right after ``held`` (:func:`dataplane.restore`'s ``follows``), so no
+    commit a writer made after the held version is discarded.
+
+    Raises:
+        MainMovedError: Main holds a commit after ``held`` that is no such restore; nothing was committed.
+        ServiceUnavailableError: The store did not answer a read of main's history.
+    """
+    if (made := restore_made(table, so, held=held, published=published)) is not None:
+        return made, False
+    try:
+        _, version = dataplane.restore(
+            table, so, RestoreTableRequest(id=table.segments, version=published), transaction_properties=transaction_properties, follows=held
+        )
+    except dataplane.RefMovedError as exc:
+        raise MainMovedError(held=held, head=exc.head, published=published) from None
+    return version, True
 
 
 def supersede(root: str, so: StorageOptions, table_uuid: str, *, published: int, at: datetime) -> Hold | None:

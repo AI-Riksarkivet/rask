@@ -200,6 +200,9 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, prov 
 		WithEnvVariable("LANCE_S3_ENDPOINT", "http://store:9000").
 		WithEnvVariable("LANCE_S3_ACCESS_KEY_ID", "rustfsadmin").
 		WithEnvVariable("LANCE_S3_SECRET_ACCESS_KEY", "rustfsadmin").
+		// The lane provisions no store identity, so the catalog signs with the store's root pair, which its boot refuses
+		// unless that is acknowledged ([[LH-576]]).
+		WithEnvVariable("RASK_INSECURE_ALLOW_STATIC_STORE_KEY", "true").
 		WithEnvVariable("LANCE_S3_REGION", "us-east-1").
 		WithEnvVariable("LANCE_S3_ALLOW_HTTP", "true").
 		WithEnvVariable("LANCE_S3_VIRTUAL_HOSTED", "false").

@@ -22,7 +22,7 @@ import {
 	type UpdateRowsResult,
 } from '../catalog';
 
-import { catalogJSON, parsed } from '#lib/doors.ts';
+import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
 // Transport: the console's catalog door, `#lib/doors`.
 // The catalog TABLE-LIFECYCLE plane, declared with `query`/`command`: one named function per door, each
@@ -79,9 +79,9 @@ const GcBoundsSchema = v.object({
 
 // ── reads ──────────────────────────────────────────────────────────────────────────────────────
 
-/** The catalog's own table registry (#52) — names in `<ns>$<table>` canonical form. */
+/** The catalog's own table registry (#52) — names in `<ns>$<table>` canonical form, every page. */
 export const fetchTables = query(async (): Promise<ApiResult<TablesList>> =>
-	typedAs<TablesList>(await catalogJSON('/v1/table')),
+	typedAs<TablesList>(await catalogListing('/v1/table', 'tables')),
 );
 
 /** `TrashEntry[]` — what is SCHEDULED against one table (#75/§2.4). Today that is exactly one thing:
@@ -144,6 +144,14 @@ export const fetchTableDetail = query(
 			if (res.ok) return res.json();
 			return res.status === 404 ? null : { error: res.status };
 		};
+		// A listing part reads every page: the catalog answers a page and a token that continues it.
+		const listing = async (path: string, key: string): Promise<unknown> => {
+			const answer = await catalogListing(`/v1/table/${enc(table)}/${path}`, key, {
+				method: 'POST',
+			});
+			if (answer.ok) return answer.data;
+			return answer.status === 404 ? null : { error: answer.status };
+		};
 		const policyPart = async (res: Response): Promise<Policy | PartError | null> => {
 			if (!res.ok) return { error: res.status };
 			const answer = v.safeParse(PolicyDescribeSchema, await res.json());
@@ -184,10 +192,10 @@ export const fetchTableDetail = query(
 			}
 			const [stats, versions, tags, branches, indexes, policy] = await Promise.all([
 				read('stats').then(part),
-				read('version/list').then(part),
-				read('tags/list').then(part),
-				read('branches/list').then(part),
-				read('index/list').then(part),
+				listing('version/list', 'versions'),
+				listing('tags/list', 'tags'),
+				listing('branches/list', 'branches'),
+				listing('index/list', 'indexes'),
 				read('policy/describe', management).then(policyPart),
 			]);
 			return {

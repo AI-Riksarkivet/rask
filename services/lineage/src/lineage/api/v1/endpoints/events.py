@@ -17,6 +17,7 @@ from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.governed import fga
+from lakehouse.lineage.signing import SIGNATURE_FACET
 from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET
 from lakehouse.naming import CATALOG_DELIMITER
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
@@ -92,7 +93,9 @@ def _governed_datasets(record: EventRecord) -> Governed:
 _TARGETING_FIELDS: Final = ("eventType", "eventTime", "producer")
 #: The facets that name WHO: the verified author, and rask's own facet carrying the tenant, the originator
 #: and the producer's run id. Every other facet describes the data or the job.
-_TARGETING_FACETS: Final = (AUTHOR_FACET, LANCE_FACET)
+#: And the signature lineage verified when it recorded the event, which only its bus and outbox doors keep: what tells the
+#: catalog's static change from one a writer posted under the same identity, which is recorded beside it ([[LH-576]]).
+_TARGETING_FACETS: Final = (AUTHOR_FACET, LANCE_FACET, SIGNATURE_FACET)
 #: A run's targeting facets, and the standard `parent` naming the writer's own run, which a notifier links a
 #: notification to ([[LH-554]], ADR 0191).
 _RUN_FACETS: Final = (*_TARGETING_FACETS, "parent")
@@ -120,9 +123,11 @@ def targeting_view(event: dict[str, Any]) -> dict[str, Any]:
     """An event cut to what deciding WHOM TO TELL reads, and nothing describing data.
 
     Its consumer is a notifier walking the feed, and what one reads to target people is the targeting contract
-    (docs/COMMIT-EVENTS.md): the run id and its `rask_author`, `rask_lance` and `parent` facets, the state and
-    time, and the output names with each output's `rask_lance` facet, which names the table by its uuids; for a static
-    change, the dataset's name, namespace and those two facets, plus `producer`. Inputs, the job, every other
+    (docs/COMMIT-EVENTS.md): the run id and its `rask_author`, `rask_lance`, `parent` and `rask_signature` facets, the
+    state and time, and the output names with each output's `rask_lance` facet, which names the table by its uuids; for a
+    static change, the dataset's name, namespace and its `rask_author`, `rask_lance` and `rask_signature` facets, plus
+    `producer`. The signature names who lineage verified signed the event when it recorded it; the cut is no event a
+    signature verifies over. Inputs, the job, every other
     output facet (column lineage among them, which names other tables and their columns) and every other run facet
     stay in the feed and never cross this door.
 

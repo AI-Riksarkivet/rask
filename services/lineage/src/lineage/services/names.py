@@ -4,14 +4,16 @@ A table's identity across a rename is its uuid, so lineage records and walks a g
 the uuids on every event it emits; an event from an outside producer names its tables only, and lineage resolves those
 names when it takes the event in, as it resolves the name a reader filters or walks by.
 
-AS THE CALLER, never as this service: the resolution is the catalog's DescribeTable and DescribeNamespace with the
-caller's own bearer, so it reaches exactly the tables the caller may see, and lineage holds no grant to describe the
-estate. A name the catalog does not hold, or will not describe for this caller, resolves to no uuid. A service
-account's projected token is audience-bound to lineage, so the catalog refuses it at those doors; an event's governed
-dataset left without a uuid is therefore asked about at the catalog's decision door, as the caller's verified subject
-and on the rung DescribeTable asks, and the catalog resolves the name there and answers the uuids of a table the caller
-may see ([[LH-531]]). Any other failure raises: an event recorded under a name it should have been keyed by a uuid
-would split the table's lineage, so the producer's retry is the better answer.
+AS THE CALLER, never as this service, so a name reaches exactly the tables the caller may see and lineage holds no grant
+to describe the estate. Where authorization is decided by the catalog, an event's names are asked about at its decision
+door in one question, as the caller's verified subject and on the rung DescribeTable asks: the catalog resolves each
+name there and answers the uuids of a table the caller may see ([[LH-531]]), and a name it refuses is one DescribeTable
+would refuse the caller too. One question rather than a describe per name, so a producer that may see none of the
+tables it names costs the catalog that question, however many it names. Elsewhere (authorization off, or decided from
+the store, which holds no names) a name is resolved by the catalog's DescribeTable and DescribeNamespace under the
+caller's own bearer. A name the catalog does not hold, or will not resolve for this caller, resolves to no uuid. Any
+other failure raises: an event recorded under a name it should have been keyed by a uuid would split the table's
+lineage, so the producer's retry is the better answer.
 """
 
 from __future__ import annotations
@@ -108,18 +110,19 @@ async def stamp_resolved_uuids(
 
     For the HTTP door, whose caller holds a bearer and no signing key: a uuid in its body is a claim, as a signature
     there is, so each governed dataset's is replaced by what the catalog answers and an external source's is removed.
-    A name the describe doors resolve to no table is asked about through ``decider`` as ``subject``, the caller the
-    bearer was verified as, when both are given. A dataset whose name still resolves to no table keeps none, and is
-    recorded by its name. A dataset named by a storage location a governed table holds is named by that table's uuid, as
+    The names are asked about in one question through ``decider`` as ``subject``, the caller the bearer was verified as,
+    when both are given and the decider resolves names; otherwise each is described under ``bearer``. A dataset whose
+    name resolves to no table keeps none, and is recorded by its name. A dataset named by a storage location a governed table holds is named by that table's uuid, as
     the catalog's ``locate`` door answers it through ``decider`` ([[LH-553]]): it is that table, which the graph the feed
     is forwarded to joins it to by the table's ``symlinks``, and `fga_deps.enforce_output_authz` decides it on its grants.
     """
     datasets = [*event.inputs, *event.outputs]
     governed = sorted({dataset.name for dataset in datasets if not is_external_source(dataset.namespace, dataset.name)})
-    resolved = dict(zip(governed, await asyncio.gather(*(names.table(name, bearer=bearer) for name in governed)), strict=True))
-    if decider is not None and subject is not None and (unseen := [name for name in governed if resolved[name].table_uuid is None]):
-        decided = await decider.check_tables(user=subject, relation=_DESCRIBE_RELATION, tables=unseen)
-        resolved |= {name: DatasetUuids(table_uuid=d.table_uuid, namespace_uuid=d.namespace_uuid) for name, d in decided.items() if d.allowed}
+    if decider is not None and subject is not None and decider.resolves_names:
+        decided = await decider.check_tables(user=subject, relation=_DESCRIBE_RELATION, tables=governed) if governed else {}
+        resolved = {name: DatasetUuids(table_uuid=d.table_uuid, namespace_uuid=d.namespace_uuid) for name, d in decided.items()}
+    else:
+        resolved = dict(zip(governed, await asyncio.gather(*(names.table(name, bearer=bearer) for name in governed)), strict=True))
     located = await _located(datasets, decider) if decider is not None else {}
     for dataset in datasets:
         if is_external_source(dataset.namespace, dataset.name):

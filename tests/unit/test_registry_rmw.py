@@ -26,6 +26,7 @@ host, which is the whole scope of a local root); the S3 branch is driven through
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -135,7 +136,11 @@ def test_s3_replace_sends_if_match_and_maps_412_to_a_lost_race(monkeypatch: pyte
     would leave every call site reading as conditional while writing unconditionally — the F4 bug
     restored, invisibly. So the parameter is asserted by name, not just the behaviour."""
     client = MagicMock()
-    client.get_object.return_value = {"Body": MagicMock(read=lambda: b'{"id":"w","status":"active"}'), "ETag": '"abc123"'}
+    client.get_object.return_value = {
+        "Body": MagicMock(read=lambda: b'{"id":"w","status":"active"}'),
+        "ETag": '"abc123"',
+        "LastModified": datetime(2026, 11, 12, tzinfo=UTC),
+    }
     client.put_object.side_effect = _client_error("PreconditionFailed", 412)
     monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
 

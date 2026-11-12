@@ -34,6 +34,7 @@ from lakehouse.base_registry import BaseRegistry
 from lakehouse.context import DiagnosticFormatter
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.history_fences import TableHistory
+from lakehouse.idempotency import KeyBinding
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.expiry import ExpiryTarget
@@ -128,7 +129,7 @@ def _base_registry(rig: _Rig) -> BaseModel:
 def _keyed_door(rig: _Rig) -> BaseModel:
     """As `idempotency.keyed_door` builds it, holding the claim `idempotency.begin` answers a keyless request with."""
     options = rig.catalog.storage_options(plane="data")
-    converge = asyncio.run(idempotency.begin(rig.catalog.registry_root, options, "caller", None, endpoint="create_table"))
+    converge = asyncio.run(idempotency.begin(rig.catalog.registry_root, options, "caller", None, binding=KeyBinding(endpoint="create_table", target="db$t")))
     return idempotency.KeyedDoor(registry_root=rig.catalog.registry_root, storage_options=options, scope="caller", key=None, converge=converge)
 
 

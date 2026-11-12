@@ -72,7 +72,7 @@ class _RepoWithOutputs(_Repo):
     async def run_author(self, _run_id: str) -> str | None:
         return None
 
-    async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
+    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
         return None
 
 
@@ -174,7 +174,7 @@ class _Feed:
     def __init__(self, stored: dict[str, Any] | None) -> None:
         self._stored = stored
 
-    async def recorded_event(self, _run_id: str, _event_type: str | None) -> dict[str, Any] | None:
+    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
         return self._stored
 
     async def run_author(self, _run_id: str) -> str | None:

@@ -14,17 +14,19 @@ separate spec operations that refuse each other's state) is exactly the kind a d
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import lance
 import pyarrow as pa
 import pytest
 from lance_namespace import (
+    ConcurrentModificationError,
     CreateNamespaceRequest,
     DescribeTableRequest,
     InvalidInputError,
     InvalidTableStateError,
-    ListTableTagsRequest,
     TableVersionNotFoundError,
     connect,
 )
@@ -34,7 +36,6 @@ from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from catalog.services.publication import (
     PUBLISHED_TAG,
-    PUBLISHING_TAG,
     publish,
     published_version,
 )
@@ -138,25 +139,19 @@ def test_a_FAILING_gate_leaves_CONSUMERS_ON_LAST_GOOD(ns, table: DoorTable) -> N
     assert pinned.to_table(columns=["id"]).column("id").to_pylist() == [1, 2, 3]
 
 
-def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.MonkeyPatch, table: DoorTable) -> None:  # noqa: ANN001
-    """The GC hazard, closed.
+def _pins(ns) -> list[int]:  # noqa: ANN001
+    """The versions the table's tags pin besides `published`: what keeps a version from cleanup while a publish gates it."""
+    return sorted(entry["version"] for name, entry in lance.dataset(_uri(ns)).tags.list().items() if name != PUBLISHED_TAG)
 
-    `cleanup_old_versions` exempts only TAGGED versions, and the candidate is untagged for exactly as
-    long as the gate takes — so a slow gate against a short `older_than` lets maintenance collect the
-    version being gated. `publishing` pins it for that window.
 
-    Asserted by observing the tag DURING the gate (the gate is the observation point), and that it is
-    gone afterwards — a pin that outlived its publish would exempt a version from GC forever.
-    """
-    version = _write(ns, [1, 2, 3])
-    seen: list[int | None] = []
-
+def _gating(monkeypatch: pytest.MonkeyPatch, target: int, during: Callable[[], None]) -> None:
+    """Run ``during`` inside the gate of the publish of ``target``, as a concurrent request lands while that gate scans."""
     import catalog.services.publication as publication
 
     real = publication.assert_quality
 
-    # The gate's own signature, spelled out: a `*args` wrapper cannot forward into typed parameters,
-    # and it would keep passing the day the gate grows one.
+    # The gate's own signature, spelled out: a `*args` wrapper cannot forward into typed parameters, and it would keep
+    # passing the day the gate grows one.
     def observing(
         uri: str,
         storage_options: StorageOptions,
@@ -164,24 +159,44 @@ def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.Mon
         key_column: str,
         required_columns: tuple[str, ...] | list[str] = (),
         version: int | None = None,
-        # [[LH-096]]: the gate now takes the process's bounded session. Spelled out rather than absorbed
-        # by a `**kwargs`, for the reason the comment above gives — a wrapper that swallows unknown
-        # parameters keeps passing on the day the gate grows one, which is the whole point of this shape.
         session: object | None = None,
     ) -> list[Assertion]:
-        tags = publication.dataplane.list_tags(table, StorageOptions(), ListTableTagsRequest(id=TABLE_ID)).tags or {}
-        entry = tags.get(PUBLISHING_TAG)
-        seen.append(getattr(entry, "version", None) if entry is not None else None)
+        if version == target:
+            during()
         return real(uri, storage_options, key_column=key_column, required_columns=required_columns, version=version)
 
     monkeypatch.setattr(publication, "assert_quality", observing)
-    _publish(table, version)
 
-    assert seen == [version], f"the candidate was not pinned while the gate ran: {seen}"
 
-    after = publication.dataplane.list_tags(table, StorageOptions(), ListTableTagsRequest(id=TABLE_ID)).tags or {}
-    assert PUBLISHING_TAG not in after, "the pin outlived the publish — that version can never be collected"
-    assert PUBLISHED_TAG in after
+def test_each_publish_pins_its_own_candidate_and_ends_a_pin_no_publish_holds(ns, monkeypatch: pytest.MonkeyPatch, table: DoorTable) -> None:  # noqa: ANN001
+    """`cleanup_old_versions` exempts only tagged versions, so the candidate is pinned while its gate runs.
+
+    A publish whose unpin failed left its pin behind; a publish later than any publish can run removes it. And a second
+    publish landing inside a gate unpins only its own candidate, never the version the first is still gating.
+    """
+    import catalog.services.publication as publication
+
+    older = _write(ns, [1, 2])
+    candidate = _write(ns, [3, 4], mode="append")
+    real_delete = publication.dataplane.delete_tag
+
+    def refusing(*_args: object, **_kwargs: object) -> None:
+        raise OSError("the store did not answer")
+
+    monkeypatch.setattr(publication.dataplane, "delete_tag", refusing)
+    _publish(table, older)
+    monkeypatch.setattr(publication.dataplane, "delete_tag", real_delete)
+    seen: list[list[int]] = []
+
+    def another_publish() -> None:
+        _publish(table, older)
+        seen.append(_pins(ns))
+
+    _gating(monkeypatch, candidate, another_publish)
+
+    publish(table, StorageOptions(), version=candidate, key_column="id", now=datetime.now(UTC) + timedelta(days=2))
+
+    assert (seen, _pins(ns), published_version(table, StorageOptions())) == ([[candidate]], [], candidate)
 
 
 def test_the_pin_is_dropped_even_when_the_gate_REJECTS(ns, table: DoorTable) -> None:  # noqa: ANN001
@@ -190,11 +205,7 @@ def test_the_pin_is_dropped_even_when_the_gate_REJECTS(ns, table: DoorTable) -> 
 
     result = _publish(table, version)
 
-    assert result.published is False
-    import catalog.services.publication as publication
-
-    tags = publication.dataplane.list_tags(table, StorageOptions(), ListTableTagsRequest(id=TABLE_ID)).tags or {}
-    assert PUBLISHING_TAG not in tags
+    assert (result.published, _pins(ns)) == (False, [])
 
 
 def test_a_SECOND_publication_carries_the_PREVIOUS_version_as_from(ns, table: DoorTable) -> None:  # noqa: ANN001
@@ -221,6 +232,20 @@ def test_publishing_BACKWARDS_is_refused(ns, table: DoorTable) -> None:  # noqa:
         _publish(table, first)
 
     assert published_version(table, StorageOptions()) == second
+
+
+def test_a_publish_that_another_overtook_while_it_gated_is_refused(ns, monkeypatch: pytest.MonkeyPatch, table: DoorTable) -> None:  # noqa: ANN001
+    """A slow publish of an older version, whose gate another publish of a newer one overtook, would move `published`
+    back over data readers already read; it is refused as the conflict it is (code 14), and `published` stays."""
+    _write(ns, [1, 2])
+    slow = _write(ns, [3, 4], mode="append")
+    fast = _write(ns, [5, 6], mode="append")
+    _gating(monkeypatch, slow, lambda: _publish(table, fast))
+
+    with pytest.raises(ConcurrentModificationError, match=f"version {fast}"):
+        _publish(table, slow)
+
+    assert published_version(table, StorageOptions()) == fast
 
 
 def test_a_published_tag_on_a_branch_is_refused_rather_than_read_as_main(ns, table: DoorTable) -> None:  # noqa: ANN001

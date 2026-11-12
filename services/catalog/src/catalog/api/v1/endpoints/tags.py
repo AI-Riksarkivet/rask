@@ -34,7 +34,7 @@ def _refuse_a_catalog_tag(tag: str) -> None:
     """Refuse a tag the catalog moves itself (`publication.is_catalog_tag`), on every door that writes a tag.
 
     Raises:
-        InvalidInputError: ``tag`` is `published`, `publishing` or under `rask.`.
+        InvalidInputError: ``tag`` is `published` or under `rask.`.
     """
     if publication.is_catalog_tag(tag):
         raise InvalidInputError(
@@ -58,7 +58,7 @@ def _refuse_a_catalog_tag(tag: str) -> None:
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
 @router.post("/{id}/tags/list", response_model_exclude_none=True, operation_id="list_table_tags")
 @router.get("/{id}/tags/list", response_model_exclude_none=True, operation_id="list_table_tags_compat_get")
-def list_table_tags(id: str, table: DoorTableDep, so: StorageOptionsDep, page_token: str | None = None, limit: ListLimit = None) -> ListTableTagsResponse:
+def list_table_tags(id: str, table: DoorTableDep, so: StorageOptionsDep, limit: ListLimit, page_token: str | None = None) -> ListTableTagsResponse:
     """List the table's tags, a page at a time — wraps lance_namespace ListTableTags."""
     req = ListTableTagsRequest(id=parse_identifier(id), page_token=page_token, limit=limit)
     return dataplane.list_tags(table, so, req)

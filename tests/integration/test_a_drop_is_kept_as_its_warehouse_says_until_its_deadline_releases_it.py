@@ -18,6 +18,7 @@ table whose undrop crashed before clearing its record are the controls: the audi
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,7 @@ from catalog.core.config import get_settings as catalog_settings
 from lakehouse import trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.control_events import CatalogControlEvent
+from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.governed.fga import user_object
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.queue import Task, TaskQueue
@@ -37,6 +39,7 @@ from maintenance.services.trash_task import run_trash_task
 from tests.integration.catalog_and_maintenance import TwoServices, audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import principal_key
+from tests.integration.store_requests import counted
 
 
 PROJECT = "acme"
@@ -136,7 +139,10 @@ def test_a_drop_under_a_warehouse_is_kept_as_its_delete_profile_says(estate: _Es
     assert "delete_profile" not in cleared, f"a re-POST naming the estate's profile kept the warehouse's own: {cleared}"
 
 
-def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_bytes(estate: _Estate) -> None:
+def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_bytes(estate: _Estate, caplog: pytest.LogCaptureFixture) -> None:
+    """Every release and every end of a record is on the audit trail, as it lands or as the catalog refuses it: each
+    revokes grants or ends a record on the catalog's own session, for whoever asked."""
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
     expired, waiting, live = (estate.create_table(f"bronze${name}") for name in ("expired", "waiting", "live"))
     estate.post("/v1/namespace/bronze$gone/create")
@@ -173,6 +179,26 @@ def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_
     refused = estate.catalog.post("/management/v1/table/bronze$expired/undrop", json={})
     assert (refused.status_code, "grace period ended" in refused.text) == (409, True), f"an expired drop undropped: {refused.text}"
 
+    # The end of a released record naming no bytes lands; a release before the deadline and the end of a record whose
+    # bytes stand are refused.
+    asked = [
+        estate.catalog.post(f"/management/v1/trash/table/{waiting}/release", json={}).status_code,
+        estate.catalog.delete(f"/management/v1/trash/namespace/{namespace}").status_code,
+        estate.catalog.delete(f"/management/v1/trash/table/{expired}").status_code,
+    ]
+    trail = {
+        (str(vars(r)["audit.action"]), str(vars(r)["audit.outcome"]), str(vars(r)["audit.resource"]))
+        for r in caplog.records
+        if vars(r).get("audit.action") in (AuditAction.TRASH_RELEASE, AuditAction.TRASH_END)
+    }
+    assert asked == [409, 200, 409], asked
+    assert trail == {
+        *((AuditAction.TRASH_RELEASE.value, AuditOutcome.SUCCESS.value, obj) for obj in released),
+        (AuditAction.TRASH_RELEASE.value, AuditOutcome.FAILURE.value, f"table:{waiting}"),
+        (AuditAction.TRASH_END.value, AuditOutcome.SUCCESS.value, f"namespace:{namespace}"),
+        (AuditAction.TRASH_END.value, AuditOutcome.FAILURE.value, f"table:{expired}"),
+    }, sorted(trail)
+
 
 class _RecordingQueue:
     """The publishes a trash task makes, with `TaskQueue`'s signatures, recorded."""
@@ -189,10 +215,14 @@ class _RecordingQueue:
         return True
 
 
-def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_record_alone(estate: _Estate) -> None:
+def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_record_alone(estate: _Estate, moto_url: str) -> None:
     """The task the commit lane queues for a drop names its uuid alone. Before the deadline it holds itself until the
     record's release, carrying the record's location for the undrop check its later run makes; past the release it asks
-    the catalog to release this record and no other ([[XC-084]])."""
+    the catalog to release this record and no other ([[XC-084]]).
+
+    What it reads is its record's, never the estate's: the record by its key, and whether its table stands again from the
+    ``__manifest`` of the bucket its location is in. It lists no trash, no warehouse registry and no other bucket's
+    manifest, which a task per drop reading them would make cost the estate's size each, counted on the wire."""
     estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
     dropped, other = (estate.create_table(f"bronze${name}") for name in ("dropped", "other"))
     location = estate.location("bronze$dropped")
@@ -208,9 +238,13 @@ def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_rec
     estate.age(dropped)
     estate.age(other)
 
-    with catalog_doors(estate.catalog):
-        asyncio.run(run_trash_task(task, settings=maintenance_settings(), queue=cast(TaskQueue, queue)))
+    table_bucket = location.removeprefix("s3://").split("/", 1)[0]
+    with counted(moto_url) as store, catalog_doors(estate.catalog):
+        asyncio.run(run_trash_task(task, settings=maintenance_settings().model_copy(update={"s3_endpoint": store.url}), queue=cast(TaskQueue, queue)))
+        asked = store.taken()
 
+    listed = {(request.path.strip("/").split("/", 1)[0], request.query["prefix"][0].split("/", 1)[0]) for request in asked if "list-type" in request.query}
+    assert listed == {(table_bucket, "__manifest")}, sorted(listed)
     released, waiting = estate.record(dropped), estate.record(other)
     assert released is not None and trash.is_released(released), f"the task did not release its record: {released}"
     assert waiting is not None and not trash.is_released(waiting), "the task released a record it does not name"

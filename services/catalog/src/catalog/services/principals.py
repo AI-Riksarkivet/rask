@@ -23,13 +23,14 @@ from lakehouse.storage_options import StorageOptions
 _PRINCIPALS_PREFIX: Final = control_prefixes.PRINCIPALS
 
 
-def _key(principal: str) -> str:
+def record_key(principal: str) -> str:
+    """Where ``principal``'s deletion record lives on the control root."""
     return f"{_PRINCIPALS_PREFIX}/{blake2s(principal.encode('utf-8')).hexdigest()}.json"
 
 
 def read_record(control_root: str, storage_options: StorageOptions, principal: str) -> PrincipalRecord | None:
     """The deletion record of ``principal``, or ``None`` when it was never offboarded."""
-    stored = read_json(control_root, storage_options, _key(principal))
+    stored = read_json(control_root, storage_options, record_key(principal))
     return None if stored is None else PrincipalRecord.model_validate(stored[0])
 
 
@@ -42,7 +43,7 @@ def record_deletion(control_root: str, storage_options: StorageOptions, principa
         deleted_by=deleted_by,
     )
     try:
-        create_json(control_root, storage_options, _key(principal), record.model_dump(mode="json"))
+        create_json(control_root, storage_options, record_key(principal), record.model_dump(mode="json"))
     except RecordExistsError:
         existing = read_record(control_root, storage_options, principal)
         if existing is None:

@@ -15,7 +15,8 @@ table registered at ``.`` is vended ``<bucket>/*`` and one at ``_bases`` is vend
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from uuid import UUID
 
 import lance
 import pyarrow as pa
@@ -41,7 +42,7 @@ from catalog.core.namespace import registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import native, table_inputs
-from lakehouse import base_registry, blobs, clone_sources, control_prefixes, location_claims
+from lakehouse import base_registry, blobs, clone_endings, clone_sources, control_prefixes, location_claims, records
 from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.history_fences import HistoryFencedError
@@ -570,6 +571,9 @@ class Admitted(BaseModel):
     directories: list[str] = Field(default_factory=list)
     #: The source locations the table's clone tag was taken on.
     tagged: list[str] = Field(default_factory=list)
+    #: The clone's ending, filed before its first tag and removed once the registration is admitted or undone (ADR 0198
+    #: §1): a registration that never gets there leaves it, and the finish releases the tags it names.
+    ending: clone_endings.CloneEnding | None = None
 
 
 def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], relative: str, context: RegistrationContext) -> RegistrationVerdict:
@@ -642,6 +646,9 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
     if facts.mem_wal:
         log.warning("register_refused_mem_wal", extra={"table": table, "location": location})
         raise UnsupportedOperationError(f"the dataset at {location!r} cannot be registered: {formats.MEM_WAL_NOT_SERVED}")
+    if facts.index_overlap is not None:
+        log.warning("register_refused_overlapping_index_segments", extra={"table": table, "location": location, "index": facts.index_overlap.index})
+        raise InvalidInputError(f"the dataset at {location!r} cannot be registered: {facts.index_overlap.describe()}")
     clone = admit_clone(facts.clone, facts.bases, location=location, context=context)
     entries = entries_for_registration(
         location,
@@ -659,15 +666,21 @@ def admit_registered_table(so: StorageOptions, *, segments: list[str], verdict: 
     """Write what a judged registration is admitted with: each clone source's tag, the data directories, the record.
 
     The tags first, so the record never names a source whose version nothing keeps; the record last, since it is
-    what names the directories. Whatever this wrote is undone when a later step fails, and :func:`release_admitted`
-    undoes it for the door's own undo.
+    what names the directories. A clone's ending is filed before the first tag (ADR 0198 §1), naming the sources, so a
+    registration whose process dies between a tag and the record leaves the tags to the finish maintenance's audit asks
+    for; the door removes it once the registration is admitted (:func:`settle_admitted`) or undone. Whatever this wrote
+    is undone when a later step fails, and :func:`release_admitted` undoes it for the door's own undo; an undo that
+    cannot release everything leaves the ending standing and answers the failure that stopped the registration.
 
     Raises:
         InvalidInputError: A source no longer holds the version the clone reads, or another table holds one of the
             data directories.
         ConcurrentModificationError: A reclaim holds a source's history; nothing was written for it.
+        ServiceUnavailableError: The clone's ending could not be filed; nothing was written.
     """
     admitted = Admitted(uuid=clone_uuid)
+    if verdict.sources:
+        admitted.ending = _file_registration(verdict, clone_uuid=clone_uuid, context=context)
     try:
         for source in verdict.sources:
             _tag(source, clone_location=verdict.location, so=so, context=context)
@@ -680,9 +693,56 @@ def admit_registered_table(so: StorageOptions, *, segments: list[str], verdict: 
             declared = {source.table_uuid: RunInput(table=source.segments, version=source.version, branch=source.branch) for source in verdict.sources}
             table_inputs.record(context.registry.control_root, context.registry.storage_options, clone_uuid, name=context.holder, declared=declared)
     except Exception:
-        release_admitted(admitted, clone_location=verdict.location, so=so, context=context)
+        try:
+            release_admitted(admitted, clone_location=verdict.location, so=so, context=context)
+        except Exception as undo:
+            # The failure that stopped the registration is the answer; what the undo left is the ending's to finish.
+            log.error(
+                "register_admission_undo_incomplete",
+                extra={"table": context.holder, "location": verdict.location, "error": f"{type(undo).__name__}: {undo}"[:300]},
+            )
         raise
     return admitted
+
+
+def _file_registration(verdict: RegistrationVerdict, *, clone_uuid: str, context: RegistrationContext) -> clone_endings.CloneEnding:
+    """File the ending of the clone a registration is about to tag its sources for.
+
+    Raises:
+        ServiceUnavailableError: The ending could not be filed: the registration refuses before any tag is taken.
+    """
+    claims = _claim_store(context)
+    intent = clone_endings.EndingIntent(
+        location=verdict.location,
+        table=context.holder,
+        uuid=clone_uuid,
+        sources=[source.location for source in verdict.sources],
+        forget_record=False,
+        door=clone_endings.REGISTRATION,
+    )
+    try:
+        return clone_endings.file(claims, intent, filing=UUID(clone_uuid).hex)
+    except (OSError, ValueError, records.RecordExistsError) as exc:
+        log.error(
+            "clone_ending_unfiled", extra={"table": context.holder, "location": verdict.location, "door": clone_endings.REGISTRATION, "error": str(exc)[:300]}
+        )
+        raise ServiceUnavailableError(f"cannot register {context.holder}: the record of what it holds as a clone could not be filed") from exc
+
+
+def _claim_store(context: RegistrationContext) -> location_claims.ClaimStore:
+    return location_claims.ClaimStore(control_root=context.registry.control_root, storage_options=context.registry.storage_options)
+
+
+def settle_admitted(admitted: Admitted, *, context: RegistrationContext) -> None:
+    """Remove the ending of a registration admitted for good, or undone in full: the clone's own end files one of its own
+    from its base record. Logged, never raised: an ending left standing is removed by the finish, which finds the clone
+    admitted or its tags gone."""
+    if admitted.ending is None:
+        return
+    try:
+        clone_endings.remove(_claim_store(context), admitted.ending)
+    except OSError as exc:
+        log.warning("clone_ending_left_standing", extra={"location": admitted.ending.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 def _tag(source: clone_sources.CloneSource, *, clone_location: str, so: StorageOptions, context: RegistrationContext) -> None:
@@ -698,11 +758,31 @@ def _tag(source: clone_sources.CloneSource, *, clone_location: str, so: StorageO
 
 
 def release_admitted(admitted: Admitted, *, clone_location: str, so: StorageOptions, context: RegistrationContext) -> None:
-    """Undo :func:`admit_registered_table`: the record's entries, the directories' claims, then each source's tag."""
+    """Undo :func:`admit_registered_table`: the record's entries, the directories' claims, then each source's tag, and the
+    clone's ending once all of them are released.
+
+    Every step is tried whatever an earlier one did, so a tag the store will not delete leaves no other tag standing.
+
+    Raises:
+        Exception: The first step that failed, once every step was tried; the ending then stands for the finish.
+    """
+    failures: list[Exception] = []
+
+    def _attempt(step: Callable[[], object]) -> None:
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 — every step is tried, and the first failure is raised below
+            failures.append(exc)
+
     if admitted.claim is not None:
-        base_registry.release_claim(context.registry, admitted.claim)
-    base_registry.release_data_directories(context.registry, admitted.directories, uuid=admitted.uuid)
-    clone_sources.release_all(admitted.tagged, clone_location=clone_location, storage_options=so)
+        claim = admitted.claim
+        _attempt(lambda: base_registry.release_claim(context.registry, claim))
+    _attempt(lambda: base_registry.release_data_directories(context.registry, admitted.directories, uuid=admitted.uuid))
+    for source in admitted.tagged:
+        _attempt(lambda source=source: clone_sources.release(source, clone_location=clone_location, storage_options=so))
+    if failures:
+        raise failures[0]
+    settle_admitted(admitted, context=context)
 
 
 def claim_registered_directories(

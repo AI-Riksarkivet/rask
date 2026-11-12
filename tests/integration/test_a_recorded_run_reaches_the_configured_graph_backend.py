@@ -6,7 +6,8 @@ the author the token verified. The lineage graph is bring-your-own: the relay ti
 recorded, as standard OpenLineage, to the backend `LINEAGE_FORWARD_URL` names, over the OpenLineage HTTP transport.
 Delivery is at least once and in feed order: a backend that is down holds the forwarder's cursor where it was, and
 the next tick sends the event once the backend answers. The cursor is kept in the catalog, so a tick after a delivery
-sends nothing again.
+sends nothing again. The feed's retention waits for the forwarder: a row older than the retention is kept while the
+backend has not taken it, and goes on the tick that delivered it.
 
 Driven over real sockets: lineage's router behind its real authentication gate records into a live catalog, its
 relay tick runs through the real route behind the sidecar-token guard, and the backend is a live OpenLineage
@@ -16,7 +17,9 @@ endpoint that records what it is sent.
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
+from typing import Self, override
 
 import httpx
 import pytest
@@ -44,13 +47,24 @@ def _declared(catalog_url: str, table: str) -> str:
         return str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"])
 
 
+class _EightDaysAgo(datetime):
+    """The clock lineage stamps a row's arrival with, read past the feed's default retention of seven days."""
+
+    @classmethod
+    @override
+    def now(cls, tz: tzinfo | None = None) -> Self:
+        return cls.fromtimestamp((datetime.now(UTC) - timedelta(days=8)).timestamp(), tz or UTC)
+
+
 @pytest.fixture
 def backend() -> Generator[tuple[GraphBackend, str]]:
     with graph_backend() as served:
         yield served
 
 
-def test_a_run_reaches_the_backend_once_across_an_outage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: tuple[GraphBackend, str]) -> None:
+def test_a_run_reaches_the_backend_once_across_an_outage_longer_than_the_feeds_retention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend: tuple[GraphBackend, str]
+) -> None:
     graph, url = backend
     monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
     monkeypatch.setenv("APP_API_TOKEN", _SIDECAR["dapr-api-token"])
@@ -58,7 +72,9 @@ def test_a_run_reaches_the_backend_once_across_an_outage(tmp_path: Path, monkeyp
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
         granted = {(_ALICE, "can_write_data", f"table:{_declared(catalog_url, _TABLE)}"), (_READER, "can_read_event_feed", "estate:rask")}
         with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
-            posted = lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: _ALICE})
+            with monkeypatch.context() as clock:
+                clock.setattr("lineage.services.provenance.datetime", _EightDaysAgo)
+                posted = lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: _ALICE})
             projected = lineage.get("/events/projection", params={"since": 0}, headers={SUBJECT_HEADER: _READER}).json()
             graph.down = True
             while_down = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
@@ -70,7 +86,11 @@ def test_a_run_reaches_the_backend_once_across_an_outage(tmp_path: Path, monkeyp
     assert [(row["event"]["run"]["runId"], row["event"]["run"]["facets"]["rask_author"]["sub"]) for row in projected["events"]] == [
         (run["run"]["runId"], _ALICE)
     ]
-    assert [(tick["forwarded"], tick["forward_stalled"]) for tick in (while_down, once_up, after)] == [(0, "HTTP 503"), (1, None), (0, None)]
+    assert [(tick["forwarded"], tick["forward_stalled"], tick["pruned_events"]) for tick in (while_down, once_up, after)] == [
+        (0, "HTTP 503", 0),
+        (1, None, 1),
+        (0, None, 0),
+    ]
     assert [(event["run"]["runId"], event["eventType"], event["run"]["facets"]["rask_author"]["sub"]) for event in graph.received] == [
         (run["run"]["runId"], "COMPLETE", _ALICE)
     ]

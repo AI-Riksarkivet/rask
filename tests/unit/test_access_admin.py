@@ -21,6 +21,7 @@ from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
 )
+from unfiled_announcer import unfiled
 
 from catalog.api.v1.endpoints import access_admin as ep
 from catalog.schemas import (
@@ -136,7 +137,7 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
     response = asyncio.run(
         handler(
             client=_fga_client(),
-            control=NoopControlEmitter(),
+            announcer=unfiled(NoopControlEmitter()),
             token=_token("root_admin"),
             body=body,
         )
@@ -197,7 +198,7 @@ def _mutate_recording_emission(
     monkeypatch.setattr(ep.fga, "write_tuples" if write else "delete_tuples", _fake_mutation)
     # The control emitter is INJECTED now (catalog-api-09) rather than dug out of `request.app.state`.
     handler = ep.write_access_tuple if write else ep.delete_access_tuple
-    asyncio.run(handler(client=_fga_client(), control=emitter, token=_token("root_admin"), body=body))
+    asyncio.run(handler(client=_fga_client(), announcer=unfiled(emitter), token=_token("root_admin"), body=body))
     return emitter
 
 
@@ -218,7 +219,7 @@ def test_write_rejects_a_derived_can_relation(gate_seen: dict[str, Any], rec: _A
     # error class the idempotent-duplicate handling swallows, so it must never leave this process.
     body = AccessTuple(user="dex~alice", relation="can_read_data", object="table:db1$t")
     with pytest.raises(InvalidInputError, match="can_read_data"):
-        asyncio.run(ep.write_access_tuple(client=_fga_client(), control=NoopControlEmitter(), token=None, body=body))
+        asyncio.run(ep.write_access_tuple(client=_fga_client(), announcer=unfiled(NoopControlEmitter()), token=None, body=body))
 
 
 def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
@@ -227,7 +228,7 @@ def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], r
             asyncio.run(
                 ep.write_access_tuple(
                     client=_fga_client(),
-                    control=NoopControlEmitter(),
+                    announcer=unfiled(NoopControlEmitter()),
                     token=None,
                     body=AccessTuple(user="dex~alice", relation="reader", object=bad),
                 )
@@ -299,14 +300,14 @@ def test_check_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audit
 # than one that does not exist.
 
 
-def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
+def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_answer(
     gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: dict[str, Any] = {}
 
     async def _fake(_client: Any, **kwargs: Any) -> Any:
         seen.update(kwargs)
-        return ep.fga.ObjectListing(objects=["table:db1$t", "table:db1$u"], truncated=False)
+        return ep.fga.ObjectListing(objects=["table:db1$t", "table:db1$u"], truncated=True)
 
     monkeypatch.setattr(ep.fga, "list_objects", _fake)
     response = asyncio.run(
@@ -324,6 +325,8 @@ def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
     # qualify=False with a pre-resolved subject — the same double-prefix guard `check` carries.
     assert seen == {"user": "user:dex~alice", "relation": "can_read_data", "object_type": "table", "qualify": False}
     assert response.objects == ["table:db1$t", "table:db1$u"]
+    # OpenFGA's ListObjects stops at its ceiling: a reach review that reads a cut answer as whole is wrong ([[LH-576]]).
+    assert response.truncated is True
     assert (response.user, response.type) == ("user:dex~alice", "table")
     assert rec.calls[0][:2] == ("access_list_objects", "success")
     assert rec.calls[0][2]["delivered"] == 2
@@ -599,7 +602,7 @@ def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> li
     asyncio.run(
         ep.write_access_tuple(
             client=_fga_client(),
-            control=NoopControlEmitter(),
+            announcer=unfiled(NoopControlEmitter()),
             token=_token("root_admin"),
             body=body,
         )
@@ -630,7 +633,7 @@ def test_a_condition_the_rung_does_not_accept_is_a_clean_400(gate_seen: dict[str
         asyncio.run(
             ep.write_access_tuple(
                 client=_fga_client(),
-                control=NoopControlEmitter(),
+                announcer=unfiled(NoopControlEmitter()),
                 token=None,
                 body=AccessTuple(
                     user="dex~alice",
@@ -647,7 +650,7 @@ def test_an_unknown_condition_is_a_clean_400(gate_seen: dict[str, Any], rec: _Au
         asyncio.run(
             ep.write_access_tuple(
                 client=_fga_client(),
-                control=NoopControlEmitter(),
+                announcer=unfiled(NoopControlEmitter()),
                 token=None,
                 body=AccessTuple(user="dex~alice", relation="writer", object="namespace:bronze", condition=TupleCondition(name="never_expires")),
             )
@@ -661,7 +664,7 @@ def test_a_condition_missing_a_parameter_is_a_clean_400(gate_seen: dict[str, Any
         asyncio.run(
             ep.write_access_tuple(
                 client=_fga_client(),
-                control=NoopControlEmitter(),
+                announcer=unfiled(NoopControlEmitter()),
                 token=None,
                 body=AccessTuple(
                     user="dex~alice",
@@ -697,7 +700,9 @@ def test_a_caller_supplied_clock_is_refused_on_a_write(gate_seen: dict[str, Any]
 
     monkeypatch.setattr(ep.fga, "write_tuples", _fake_write)
     with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
-        asyncio.run(ep.write_access_tuple(client=_fga_client(), control=NoopControlEmitter(), token=_token("root_admin"), body=_clock_pinned_grant()))
+        asyncio.run(
+            ep.write_access_tuple(client=_fga_client(), announcer=unfiled(NoopControlEmitter()), token=_token("root_admin"), body=_clock_pinned_grant())
+        )
     assert written == []
 
 

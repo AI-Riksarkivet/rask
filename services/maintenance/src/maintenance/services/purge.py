@@ -80,7 +80,7 @@ from lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRe
 from lakehouse.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from lakehouse.control_events import ControlAction, ControlObjectType, ControlUuids
 from lakehouse.control_prefixes import CONTROL_PREFIXES
-from lakehouse.data_directories import delete_directories, directories_to_end
+from lakehouse.data_directories import delete_directories, directories_to_end, directory_uri
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.stored_objects import StoredObject, delete_objects, list_under
@@ -89,7 +89,7 @@ from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, end_trash, note_trash_refusal, reclaim_options_for
 from maintenance.services.naming import manifest_uuid
-from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, WALK_CATEGORIES, ReconcileReport
+from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, WALK_CATEGORIES, OrphanedTrash, ReconcileReport
 
 
 log = logging.getLogger(__name__)
@@ -532,6 +532,25 @@ def objects_held(location: str, storage_options: StorageOptions) -> int:
     name holds a space reads as empty while every byte sits under the decoded key ([[LH-319]]).
     """
     return len(objects_at(location, storage_options))
+
+
+def held_by(finding: OrphanedTrash, *, storage_options: StorageOptions, registry: BaseRegistry) -> int:
+    """How many objects the trashed table ``finding`` names still holds: the tombstone sweep's proof that its record's
+    bytes are gone ([[LH-061]]).
+
+    Counted where the catalog's end door counts them, so a record the sweep plans is one the door ends: the location in
+    both spellings, and each data directory its claim names on the table (:func:`lakehouse.data_directories
+    .directories_to_end`, [[LH-286]]). A table whose fragments sit on a data base keeps them there once its root is
+    empty, and a sweep judging the root alone planned the record the door then refused.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, a listing.
+        UnreadableBaseRecordError: The table's base record exists and cannot be read.
+        botocore.exceptions.ClientError: The store refused a read of the base record or a claim.
+    """
+    directories = directories_to_end(registry, finding.location, uuid=finding.uuid)
+    held = objects_held(finding.location, storage_options)
+    return held + sum(len(list_under(directory_uri(directory), storage_options)) for directory in directories)
 
 
 def _store_path(place: str) -> str:

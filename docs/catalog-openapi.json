@@ -2,6 +2,7 @@
   "components": {
     "schemas": {
       "AccessCheckBody": {
+        "additionalProperties": false,
         "description": "A check, plus the runtime ``context`` any CONDITION on the path needs (``current_time`` for\n``non_expired_grant``).\n\nSeparate from :class:`AccessTuple` because context is a property of the QUESTION, not of the stored\nfact \u2014 the tuple carries the window, the caller carries the clock.",
         "properties": {
           "condition": {
@@ -41,6 +42,7 @@
         "type": "object"
       },
       "AccessCheckRequest": {
+        "additionalProperties": false,
         "description": "A simulated authorization question \u2014 does ``user`` hold ``relation`` on this object? The\n``user`` may be a bare subject (``alice``, taken as ``user:alice``) or a fully-qualified userset\n(``role:<id>#assignee``).",
         "properties": {
           "relation": {
@@ -299,6 +301,7 @@
         "type": "object"
       },
       "AccessExpandRequest": {
+        "additionalProperties": false,
         "description": "\"Why does this resolve?\" \u2014 the userset tree for ``relation`` on ``object``.\n\n``depth`` counts hops: 1 is a plain OpenFGA Expand (one level, the faithful primitive), higher\nfollows ``computed`` rungs and ``X from Y`` edges through the cascade. Clamped server-side.",
         "properties": {
           "depth": {
@@ -384,6 +387,7 @@
         "type": "object"
       },
       "AccessGrantRequest": {
+        "additionalProperties": false,
         "description": "Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` \u2192 ``user:alice``)\nor a fully-qualified userset (``role:<id>#assignee``); ``relation`` must\nbe a grantable base rung the compiled model defines on the type (owner/writer/reader/validator) \u2014 never\na derived ``can_*`` action nor the structural ``parent`` edge.",
         "properties": {
           "relation": {
@@ -482,6 +486,7 @@
         "type": "object"
       },
       "AccessListObjectsRequest": {
+        "additionalProperties": false,
         "description": "\"What can this subject reach?\" \u2014 every object of ``type`` on which ``user`` holds ``relation``.\n``user`` may be a bare id (``alice`` \u2192 ``user:alice``) or a full subject/userset, as everywhere else.",
         "properties": {
           "relation": {
@@ -518,6 +523,11 @@
           "relation": {
             "title": "Relation",
             "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
           },
           "type": {
             "title": "Type",
@@ -575,6 +585,7 @@
         "type": "object"
       },
       "AccessListUsersRequest": {
+        "additionalProperties": false,
         "description": "\"Who can do this?\" \u2014 every subject holding ``relation`` on ``object``. The inverse of\n:class:`AccessListObjectsRequest`, and the blast-radius primitive before a revoke.\n\n``user_type`` (+ ``user_relation``) picks WHICH subject kind to enumerate; OpenFGA takes exactly one\nfilter per call, so ``role``/``assignee`` is a different question from ``user``, not a superset.",
         "properties": {
           "object": {
@@ -687,6 +698,7 @@
         "type": "object"
       },
       "AccessSimulateRequest": {
+        "additionalProperties": false,
         "description": "\"Would this grant do what I think?\" \u2014 a Check evaluated AS IF ``hypothetical`` existed.\n\nNothing is written. The model is concentric, so a grant three levels up cascades to every child;\npredicting that by reading the DSL is exactly the reasoning people get wrong, and today the only\nway to find out is to write the tuple and look.",
         "properties": {
           "hypothetical": {
@@ -751,6 +763,7 @@
         "type": "object"
       },
       "AccessTuple": {
+        "additionalProperties": false,
         "description": "One raw relationship tuple, verbatim (``user`` is a full subject \u2014 ``user:<id>`` or a userset like\n``role:<id>#assignee``). The estate-admin tuple API's unit: the read page lists these, write/delete take\none as the body and echo it back, and a check verdict carries the exact tuple it probed.",
         "properties": {
           "condition": {
@@ -2294,6 +2307,38 @@
         "title": "AnalyzeTableQueryPlanRequest",
         "type": "object"
       },
+      "AnnouncementIntentsFinishResponse": {
+        "description": "What one finish of the announcements doors left did ([[LH-576]]).",
+        "properties": {
+          "finished": {
+            "default": 0,
+            "title": "Finished",
+            "type": "integer"
+          },
+          "left": {
+            "default": 0,
+            "title": "Left",
+            "type": "integer"
+          },
+          "sent": {
+            "default": 0,
+            "title": "Sent",
+            "type": "integer"
+          },
+          "unlanded": {
+            "default": 0,
+            "title": "Unlanded",
+            "type": "integer"
+          },
+          "young": {
+            "default": 0,
+            "title": "Young",
+            "type": "integer"
+          }
+        },
+        "title": "AnnouncementIntentsFinishResponse",
+        "type": "object"
+      },
       "AssigneeRequest": {
         "additionalProperties": false,
         "description": "One assignee of a role: a principal (``dex~gina``), its ``user:`` id, or another role of the same project\n(``role:<id>#assignee``).",
@@ -3451,6 +3496,7 @@
         "type": "object"
       },
       "CreateProjectRequest": {
+        "additionalProperties": false,
         "description": "The create payload: the tenant's id, and who administers it when a machine creates it.",
         "properties": {
           "admin": {
@@ -4414,6 +4460,7 @@
         "type": "object"
       },
       "CreateWarehouseNamespaceRequest": {
+        "additionalProperties": false,
         "properties": {
           "adopt_existing": {
             "default": false,
@@ -4446,6 +4493,7 @@
         "type": "object"
       },
       "CreateWarehouseRequest": {
+        "additionalProperties": false,
         "properties": {
           "bucket": {
             "anyOf": [
@@ -5044,6 +5092,7 @@
         "type": "string"
       },
       "DeleteProfile": {
+        "additionalProperties": false,
         "description": "What a drop under a warehouse does (ADR 0146): ``hard`` destroys the table at once; ``soft`` keeps it\nrecoverable for ``grace_days``, after which its grants are revoked and its bytes wait for the purge; ``estate``\nclears the warehouse's own profile, so it takes the estate's ``LANCE_TRASH_GRACE_DAYS``.",
         "properties": {
           "grace_days": {
@@ -6847,6 +6896,7 @@
         "type": "object"
       },
       "ErasureRequest": {
+        "additionalProperties": false,
         "description": "What to erase, and how much history the caller means to take with it ([[LH-073]], [[LH-493]]).",
         "properties": {
           "follows": {
@@ -6896,6 +6946,7 @@
         "type": "object"
       },
       "ErasureVerifyRequest": {
+        "additionalProperties": false,
         "description": "The predicate an erasure obligation was recorded with, which the catalog holds only as a digest ([[LH-493]]).",
         "properties": {
           "predicate": {
@@ -7342,6 +7393,7 @@
         "type": "object"
       },
       "GcRequest": {
+        "additionalProperties": false,
         "description": "The GC bounds \u2014 a version is reclaimable only if it clears BOTH given bounds (older than\n``retention_days`` AND outside the most-recent ``retain_versions``). At least one is required.",
         "properties": {
           "retain_versions": {
@@ -7603,6 +7655,7 @@
         "type": "object"
       },
       "GhostRevokeRequest": {
+        "additionalProperties": false,
         "description": "The objects a drift report found holding grants that no registry names, each an OpenFGA object (``kind:id``).",
         "properties": {
           "objects": {
@@ -7678,6 +7731,7 @@
         "type": "object"
       },
       "GrantRequest": {
+        "additionalProperties": false,
         "properties": {
           "relation": {
             "enum": [
@@ -7760,6 +7814,35 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IdempotencyKeysReclaimResponse": {
+        "description": "What one reclaim of expired `Idempotency-Key` records did ([[LH-576]]).",
+        "properties": {
+          "kept": {
+            "title": "Kept",
+            "type": "integer"
+          },
+          "left": {
+            "title": "Left",
+            "type": "integer"
+          },
+          "reclaimed": {
+            "title": "Reclaimed",
+            "type": "integer"
+          },
+          "unreadable": {
+            "title": "Unreadable",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reclaimed",
+          "kept",
+          "left",
+          "unreadable"
+        ],
+        "title": "IdempotencyKeysReclaimResponse",
         "type": "object"
       },
       "Identity": {
@@ -8565,6 +8648,7 @@
         "type": "object"
       },
       "ManagedAccessRequest": {
+        "additionalProperties": false,
         "description": "Turn managed access on or off for one container.",
         "properties": {
           "enabled": {
@@ -9317,6 +9401,7 @@
         "type": "string"
       },
       "PolicyRequest": {
+        "additionalProperties": false,
         "description": "The maintenance policy for one table, namespace or project \u2014 every field optional-with-defaults.\n\n``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance\nkeeps tag-pinned versions regardless); ``compact_enabled=False`` opts the target out of maintenance\nentirely; ``compact_interval_hours`` bounds how often the sweep maintains it.\n\n**Resolution is WINNER-TAKES-ALL, not field-by-field.** An exact table match shadows the namespace\nrecord which shadows the project record \u2014 the winning record supplies EVERY field, and a field the\nwinner leaves unset falls to the sweep's global default rather than to the record it shadowed.\nAny surface that displays an effective policy has to say so: an inherited value rendered\nidentically to a set one is how nobody can tell what is actually governing their data.",
         "properties": {
           "cleanup_enabled": {
@@ -10080,7 +10165,7 @@
         "type": "object"
       },
       "PromotionsListResponse": {
-        "description": "The open holds the caller may see, in table order.",
+        "description": "The open holds the caller may see, the soonest the sweep expires first.",
         "properties": {
           "holds": {
             "items": {
@@ -10137,6 +10222,7 @@
         "type": "object"
       },
       "PublishRequest": {
+        "additionalProperties": false,
         "description": "Ask the catalog to gate a committed version and, if it passes, publish it.\n\n`version` is explicit rather than \"whatever is latest\": between a writer's commit and its publish\ncall another writer may have committed, and publishing a version nobody gated is the failure the\ngate exists to prevent. The caller names what it wrote.",
         "properties": {
           "accept_assertions": {
@@ -11402,6 +11488,7 @@
         "type": "object"
       },
       "SetProtectionRequest": {
+        "additionalProperties": false,
         "description": "The one field the protection doors write. Setting is idempotent; clearing removes the flag.\n\nONE definition for the table, namespace and warehouse doors, so the contract names one schema: a copy per\nendpoint module makes FastAPI qualify each name with its module path\n(``catalog__api__v1__endpoints__tables__SetProtectionRequest``), which every generated client then carries.",
         "properties": {
           "protected": {
@@ -11509,6 +11596,7 @@
         "type": "object"
       },
       "TableChangesRequest": {
+        "additionalProperties": false,
         "description": "What a consumer asks for when following a table (\u00a7 J4).\n\nNOT a spec model \u2014 the Lance Namespace spec has no change-feed op \u2014 so it is declared here rather\nthan imported. That makes this a NON-SPEC route on a spec-conformant surface, which \u00a7 B2 is already\ncarving out (25 route groups); this is a deliberate 26th, placed with `query`/`count_rows`/`blobs`\nbecause a change feed is a DATA-PLANE read, not a management operation. When B2 carves, it moves\nwith the data doors, not with the admin ones.",
         "properties": {
           "begin_version": {
@@ -11773,6 +11861,7 @@
         "type": "object"
       },
       "TenancyRebuildRequest": {
+        "additionalProperties": false,
         "description": "The warehouses whose tenancy edge a drift report found missing, by id.",
         "properties": {
           "warehouses": {
@@ -11908,6 +11997,7 @@
         "type": "object"
       },
       "TrashRefusalRequest": {
+        "additionalProperties": false,
         "description": "Why maintenance declined to act on a trash record this tick, as its own report names it.",
         "properties": {
           "reason": {
@@ -11961,6 +12051,7 @@
         "type": "object"
       },
       "TupleCondition": {
+        "additionalProperties": false,
         "description": "A CEL condition attached to a grant, with the parameters that ride the TUPLE.\n\nFor the model's ``non_expired_grant`` that is ``grant_time`` + ``grant_duration`` \u2014 the window.\n``current_time`` is deliberately NOT here: the clock belongs to the caller and is supplied per\ncheck, so a grant cannot pin the present moment at the instant it was written.",
         "properties": {
           "context": {
@@ -13053,7 +13144,7 @@
     },
     "/management/v1/access/principals/{principal}": {
       "delete": {
-        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nholding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything\nis revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the\nstore-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;\nwhat was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is\nrecovered by calling it again. ``revoked`` counts the tuples this call removed.",
+        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nholding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything\nis revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the\nstore-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;\nwhat was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed\nbefore the revoke and sent once the deletion is recorded, so a door failing after the record still announces it\n([[LH-576]]). ``revoked`` counts the tuples this call removed.",
         "operationId": "delete_principal_management_v1_access_principals__principal__delete",
         "parameters": [
           {
@@ -13526,6 +13617,63 @@
         "summary": "Write Access Tuple",
         "tags": [
           "access"
+        ]
+      }
+    },
+    "/management/v1/announcement-intents/finish": {
+      "post": {
+        "description": "Send what each filing a failed door left names, wherever the store shows its change landed, and remove the filing.\n\nA filing younger than a door can act is left to its door. Each announcement goes out as its door built it, under its\nown id, so one the door had sent before failing is the same event again.",
+        "operationId": "finish_announcement_intents_management_v1_announcement_intents_finish_post",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnouncementIntentsFinishResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Finish Announcement Intents",
+        "tags": [
+          "announcement-intents"
         ]
       }
     },
@@ -14494,6 +14642,63 @@
         "summary": "Rebuild Warehouse Tenancy",
         "tags": [
           "grant-reconcile"
+        ]
+      }
+    },
+    "/management/v1/idempotency-keys/reclaim": {
+      "post": {
+        "description": "Delete the `Idempotency-Key` records nothing has written for their lifetime, at most a thousand, oldest first.\n\nA record a retry wrote again after the listing is kept for another lifetime. ``left`` counts the expired records\npast this call's limit, for the caller to ask again.",
+        "operationId": "reclaim_idempotency_keys_management_v1_idempotency_keys_reclaim_post",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdempotencyKeysReclaimResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reclaim Idempotency Keys",
+        "tags": [
+          "idempotency-keys"
         ]
       }
     },
@@ -16266,7 +16471,7 @@
         ]
       },
       "post": {
-        "description": "Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.\n\nThe gate is ``can_observe_events`` on the fixed root object \u2014 the estate-admin bar every whole-estate\nsurface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion\nprotection forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry\n(record written, tuple write failed) converges instead of erroring. The grant is audited and published\nlike any other ACL change, only when it was actually written.",
+        "description": "Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.\n\nThe gate is ``can_observe_events`` on the fixed root object \u2014 the estate-admin bar every whole-estate\nsurface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion\nprotection forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry\n(record written, tuple write failed) converges instead of erroring. The grant is audited and published\nlike any other ACL change, only when it was actually written; what the create announces is filed before the record,\nso a create that fails after it still announces it ([[LH-576]]).",
         "operationId": "create_project_management_v1_projects_post",
         "parameters": [
           {
@@ -16683,7 +16888,7 @@
     },
     "/management/v1/projects/{project_id}": {
       "delete": {
-        "description": "Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance\npolicy, and drop its record.\n\nGated on ``project:<id>#can_administer``, the tenant's OWN admin bar: the rungs that open its reads, the estate\nobserver's and membership, retire nothing (module docstring). Order, fail-closed and each step earning the next:\nid shape (400) \u2192 existence and authz (both 404, :func:`administered_project`) \u2192 deletion protection (409) \u2192\nemptiness (409) \u2192 revoke tuples \u2192 end its roles \u2192 end its maintenance policy \u2192 delete record \u2192 audit + event.\n\n**Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to\nempty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so\nno role of a retired tenant keeps a grant.\n\n**Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses\nrefuses 409 and NAMES them \u2014 a refusal that does not say what blocks it just moves the search to the\nuser. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would\nreach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to\ndestroy a tenant's storage transitively. Emptying goes one rung at a time through\n``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.\n\n``force=true`` overrides deletion PROTECTION only (Decision 5) \u2014 the FGA gate above ran first and runs\nidentically with or without it, so forcing cannot delete a project the caller may not administer.",
+        "description": "Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance\npolicy, and drop its record.\n\nGated on ``project:<id>#can_administer``, the tenant's OWN admin bar: the rungs that open its reads, the estate\nobserver's and membership, retire nothing (module docstring). Order, fail-closed and each step earning the next:\nid shape (400) \u2192 existence and authz (both 404, :func:`project_to_delete`) \u2192 deletion protection (409) \u2192\nemptiness (409) \u2192 the delete recorded on the project's record \u2192 revoke tuples \u2192 end its roles \u2192 end its maintenance\npolicy \u2192 delete record \u2192 audit + event.\n\n**A delete that failed part-way is finished by asking again** ([[LH-576]]): the record names the caller who started\nit, whose own admin grant the revoke takes, and :func:`project_to_delete` lets that caller, an admin the revoke has\nnot reached, or the estate's owner finish it. Every later step is idempotent, and the protection and emptiness\nwere judged when the delete was recorded: from then on the project is absent to every other door\n(``project_registry.get_project``), so no warehouse, role or grant is made for it meanwhile.\n\n**Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to\nempty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so\nno role of a retired tenant keeps a grant.\n\n**Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses\nrefuses 409 and NAMES them \u2014 a refusal that does not say what blocks it just moves the search to the\nuser. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would\nreach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to\ndestroy a tenant's storage transitively. Emptying goes one rung at a time through\n``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.\n\n``force=true`` overrides deletion PROTECTION only (Decision 5) \u2014 the FGA gate above ran first and runs\nidentically with or without it, so forcing cannot delete a project the caller may not administer.",
         "operationId": "delete_project_management_v1_projects__project_id__delete",
         "parameters": [
           {
@@ -17268,7 +17473,7 @@
     },
     "/management/v1/projects/{project_id}/roles/{role_id}": {
       "delete": {
-        "description": "End a role, gated on its ``can_delete``: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).\n\nRefused 409 (code 14) while ending it would leave a project with no direct admin, before anything is revoked. An\nending that fails part-way leaves the role listed and deletable, so calling the door again finishes it.",
+        "description": "End a role, gated on its ``can_delete``: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).\n\nRefused 409 (code 14) while ending it would leave a project with no direct admin, before anything is revoked. An\nending that fails part-way leaves the role listed and deletable, so calling the door again finishes it, and what it\ntook is announced though the ending failed after it ([[LH-576]]).",
         "operationId": "delete_role_management_v1_projects__project_id__roles__role_id__delete",
         "parameters": [
           {
@@ -17600,7 +17805,7 @@
     },
     "/management/v1/promotions": {
       "get": {
-        "description": "The open holds the caller may see, in table order: each table's held version, what `published` names, why\nit is held and when the sweep expires it. A hold names its table as the table is named now, and is listed to a\ncaller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and expires.",
+        "description": "The open holds the caller may see, the soonest the sweep expires first: each table's held version, what\n`published` names, why it is held and when the sweep expires it. A hold names its table as the table is named now,\nand is listed to a caller holding `can_get_metadata` on it; a hold whose table is gone is listed to nobody, and\nexpires.\n\nA hold is named and judged only as the page fills (:func:`fga_deps.named_record_page`), on the uuid it records\n([[LH-524]]), the object the table's grants are held by: a page costs about the holds it serves or passes over.",
         "operationId": "list_promotions_management_v1_promotions_get",
         "parameters": [
           {
@@ -17616,7 +17821,7 @@
             }
           },
           {
-            "description": "Continue after this table id (the previous page's `page_token`).",
+            "description": "Continue after this hold (the previous page's `page_token`).",
             "in": "query",
             "name": "page_token",
             "required": false,
@@ -17629,7 +17834,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Continue after this table id (the previous page's `page_token`).",
+              "description": "Continue after this hold (the previous page's `page_token`).",
               "title": "Page Token"
             }
           },
@@ -19369,7 +19574,7 @@
     },
     "/management/v1/table/{id}/promotion/reject": {
       "post": {
-        "description": "Reject the held `version`: main is restored to the published version (the spec's `RestoreTable`), as a new\ncommit, so the next writer builds on what readers read. `published` does not move.\n\nGated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection\nis recorded before main is restored, and main is restored once: rejecting again completes a restore the first\ncall could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past\nthe held version meanwhile, there is nothing to restore and the rejection only closes the hold. 409 when the\ntable holds no such version, it was decided otherwise, or `published` reached it.",
+        "description": "Reject the held `version`: main is restored to the published version (the spec's `RestoreTable`), as a new\ncommit, so the next writer builds on what readers read. `published` does not move.\n\nGated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection\nis recorded before main is restored, and main is restored once: rejecting again completes a restore the first\ncall could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past\nthe held version meanwhile, there is nothing to restore and the rejection only closes the hold. A rejection whose\nrestore landed and whose record of it failed finds that restore when asked again and records it, rather than\nrestoring a second time. 409 when the table holds no such version, it was decided otherwise, or `published` reached\nit; and 409 (code 14) naming main's head while main holds a commit after the held version, which a restore would\ndiscard: the hold stays open for an approval, a RestoreTable, or a later rejection (owner, 2026-11-12).",
         "operationId": "reject_promotion_management_v1_table__id__promotion_reject_post",
         "parameters": [
           {
@@ -19617,7 +19822,7 @@
     },
     "/management/v1/table/{id}/publish": {
       "post": {
-        "description": "Gate `version` and, if it passes, advance `published` to it; hold it when it breaches under review.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. A held one is a 200 with `held=True` and the hold. Errors\nare reserved for the caller getting it wrong \u2014 an unknown version (404), a backwards move (409), a\nmalformed one (400), a version older than the one held (409) \u2014 all raised as `lance_namespace` typed\nerrors so the shared problem-body handler renders them.",
+        "description": "Gate `version` and, if it passes, advance `published` to it; hold it when it breaches under review.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. A held one is a 200 with `held=True` and the hold. Errors\nare reserved for the caller getting it wrong \u2014 an unknown version (404), a backwards move (409), a\nmalformed one (400), a version older than the one held (409), a version another publish overtook while\nits gate ran (409, code 14) \u2014 all raised as `lance_namespace` typed errors so the shared problem-body\nhandler renders them.",
         "operationId": "publish_table_management_v1_table__id__publish_post",
         "parameters": [
           {
@@ -19813,7 +20018,7 @@
     },
     "/management/v1/table/{id}/undrop": {
       "post": {
-        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing. 409 past the record's\n`expires_at`: the drop is then DropTable's, its data deleted asynchronously, even while its bytes\nstand (ADR 0146).\n\nTHE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 \u00a79), so the door restores exactly the trashed table\nits caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each\none's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another\ntable holds the name the undrop answers 409: two tables cannot share it.",
+        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing. 409 past the record's\n`expires_at`: the drop is then DropTable's, its data deleted asynchronously, even while its bytes\nstand (ADR 0146).\n\nTHE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 \u00a79), so the door restores exactly the trashed table\nits caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each\none's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another\ntable holds the name the undrop answers 409: two tables cannot share it. What it announces is filed before it takes\nthe location back, so a door failing after the re-registration still announces it ([[LH-576]]).",
         "operationId": "undrop_table_management_v1_table__id__undrop_post",
         "parameters": [
           {
@@ -19860,38 +20065,6 @@
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
             }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
           }
         ],
         "responses": {
@@ -19929,7 +20102,7 @@
     },
     "/management/v1/trash/{kind}/{uuid}": {
       "delete": {
-        "description": "End a trash record whose object holds no byte: revoke the grants it still holds, end the records it keeps under\nits uuid, a table's claim and base record, and the record last.\n\nRefused 409 (code 19) while its place, or a data directory its claim names, holds an object (the purge deletes them\nfirst), while a record naming no bytes is short of its deadline, at a place whose claim records another table or\nnone, and while a live object holds the place or the name again.",
+        "description": "End a trash record whose object holds no byte: revoke the grants it still holds, end the records it keeps under\nits uuid, a table's claim and base record, and the record last.\n\nRefused 409 (code 19) while its place, or a data directory its claim names, holds an object (the purge deletes them\nfirst), while a record naming no bytes is short of its deadline, at a place whose claim records another table or\nnone, and while a live object holds the place or the name again. Audited as it lands or as it fails (``trash_end``):\nit revokes grants and ends records on the catalog's own session, for whoever asked.",
         "operationId": "end_trash_management_v1_trash__kind___uuid__delete",
         "parameters": [
           {
@@ -20176,7 +20349,7 @@
     },
     "/management/v1/trash/{kind}/{uuid}/release": {
       "post": {
-        "description": "Release a drop past its deadline (ADR 0146): revoke every grant on its object, tell each person who lost one, and\nstamp the record released; its bytes wait for the purge.\n\nRefused 409 (code 19) until the deadline has settled (``lakehouse.trash.RELEASE_SETTLE``), and while a live object\nholds the record's place or name again: an undrop registers before it clears its record.",
+        "description": "Release a drop past its deadline (ADR 0146): revoke every grant on its object, tell each person who lost one, and\nstamp the record released; its bytes wait for the purge. What it tells is filed before the revoke, so a release that\nfails after the revoke still tells them ([[LH-576]]).\n\n\nRefused 409 (code 19) until the deadline has settled (``lakehouse.trash.RELEASE_SETTLE``), and while a live object\nholds the record's place or name again: an undrop registers before it clears its record. Audited as it lands or as it\nfails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.",
         "operationId": "release_trash_management_v1_trash__kind___uuid__release_post",
         "parameters": [
           {
@@ -20864,7 +21037,7 @@
     },
     "/management/v1/warehouses/{warehouse_id}": {
       "delete": {
-        "description": "Delete a warehouse: its bindings, its tuples and its registry record \u2014 and its BUCKET only if asked.\n\nGated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the\nwarehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own\nadmin bar rather than a rung someone could hold on this one warehouse.\n\nOrder, and every step is load-bearing:\n\n1. The record must exist (404), read by :func:`administered_warehouse`.\n2. **Authorize first**, in that same dependency. The gate runs before the protection and emptiness checks, so an unauthorized\n   caller never learns whether the warehouse is protected or what it holds \u2014 a 409 listing another\n   tenant's namespace names is a disclosure a 403 must beat to.\n3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the\n   PROTECTION ONLY \u2014 step 2 has already run, identically, with or without it.\n4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not\n   say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with\n   everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to\n   its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless\n   ``force=true``, and that refusal changes nothing.\n5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,\n   policy, claim and base record, its trash record last. The bindings select it, so it goes while they still\n   stand, and a re-issue after a failure here selects the same records. Then the cascade removes each bound\n   namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before\n   the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the\n   namespaces dropped deepest first, and only then what each object held ended, its records before its grants\n   (``fga_deps.end_removed_subtree``), the binding last.\n   ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a\n   namespace Restrict whatever ``behavior`` says (measured: ``behavior=\"Cascade\"`` is ignored, not\n   refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not\n   yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,\n   so re-issuing the call finishes it.\n6. Tuples on ``warehouse:<id>``, then the registry record.\n7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,\n   so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a\n   purge that would take bytes this warehouse does not solely own \u2014 a bucket a same-project sibling\n   still claims, or reserved platform storage \u2014 refuses BEFORE the cascade\n   (:func:`_require_bucket_purgeable`).\n\nThe routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings\nPOSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the\ncache would keep routing that namespace into a warehouse that no longer exists.",
+        "description": "Delete a warehouse: its bindings, its tuples and its registry record \u2014 and its BUCKET only if asked.\n\nGated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the\nwarehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own\nadmin bar rather than a rung someone could hold on this one warehouse.\n\nOrder, and every step is load-bearing:\n\n1. The record must exist (404), read by :func:`administered_warehouse`.\n2. **Authorize first**, in that same dependency. The gate runs before the protection and emptiness checks, so an unauthorized\n   caller never learns whether the warehouse is protected or what it holds \u2014 a 409 listing another\n   tenant's namespace names is a disclosure a 403 must beat to.\n3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the\n   PROTECTION ONLY \u2014 step 2 has already run, identically, with or without it.\n4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not\n   say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with\n   everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to\n   its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless\n   ``force=true``, and that refusal changes nothing.\n5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,\n   policy, claim and base record, its trash record last. The bindings select it, so it goes while they still\n   stand, and a re-issue after a failure here selects the same records. Then the cascade removes each bound\n   namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before\n   the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the\n   namespaces dropped deepest first, and only then what each object held ended, its records before its grants\n   (``fga_deps.end_removed_subtree``), the binding last.\n   ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a\n   namespace Restrict whatever ``behavior`` says (measured: ``behavior=\"Cascade\"`` is ignored, not\n   refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not\n   yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,\n   so re-issuing the call finishes it.\n6. Tuples on ``warehouse:<id>``, then the bucket's purge and claim (step 7), then the registry record last: the\n   record is what this door is addressed by, so a failure before it leaves the warehouse for the re-issue.\n7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,\n   so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a\n   purge that would take bytes this warehouse does not solely own \u2014 a bucket a same-project sibling\n   still claims, or reserved platform storage \u2014 refuses BEFORE the cascade\n   (:func:`_require_bucket_purgeable`). A purge then releases the bucket's claim\n   (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping\n   the bytes keeps the claim, so no other project adopts what the bucket still holds.\n\nThe routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings\nPOSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the\ncache would keep routing that namespace into a warehouse that no longer exists.",
         "operationId": "delete_warehouse_management_v1_warehouses__warehouse_id__delete",
         "parameters": [
           {
@@ -20922,38 +21095,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -21526,25 +21667,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -21560,6 +21682,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],
@@ -22299,38 +22440,6 @@
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
             }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
           }
         ],
         "requestBody": {
@@ -22620,25 +22729,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -22654,6 +22744,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],
@@ -22781,25 +22890,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "in": "query",
             "name": "include_declared",
             "required": false,
@@ -22825,6 +22915,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],
@@ -22943,25 +23052,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "in": "query",
             "name": "include_declared",
             "required": false,
@@ -22987,6 +23077,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],
@@ -24266,25 +24375,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -24300,6 +24390,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],
@@ -25166,38 +25275,6 @@
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
             }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
           }
         ],
         "requestBody": {
@@ -25490,7 +25567,7 @@
     },
     "/v1/table/{id}/deregister": {
       "post": {
-        "description": "Deregister the table at ``id`` (detach it without deleting data) via lance_namespace\n``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.\n\nProtection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance \u2014\nthe flag's whole jurisdiction \u2014 so leaving it ungated would make \"deregister, then delete the\nfiles by hand\" the unprotected path around the protected drop.\n\nA table no uuid identifies is the estate admin's to deregister (the router asks that rung for it, [[LH-534]]): it\nholds no grant, no record and no protection, since each is kept under a uuid, so its row is detached and its\nlocation's claim released, and the detach is announced on the control plane alone. Lineage refuses an event naming\na table by no uuid ([[LH-166]]), so the feed is not told.",
+        "description": "Deregister the table at ``id`` (detach it without deleting data) via lance_namespace\n``deregister_table``, then revoke its FGA ownership and emit a best-effort ``deregister_table`` marker.\n\nProtection-gated like drop (#73): deregister keeps bytes but REMOVES the object from governance \u2014\nthe flag's whole jurisdiction \u2014 so leaving it ungated would make \"deregister, then delete the\nfiles by hand\" the unprotected path around the protected drop.\n\nA table no uuid identifies is the estate admin's to deregister (the router asks that rung for it, [[LH-534]]): it\nholds no grant, no record and no protection, since each is kept under a uuid, so its row is detached and its\nlocation's claim released, and the detach is announced on the control plane alone. Lineage refuses an event naming\na table by no uuid ([[LH-166]]), so the feed is not told, and no filing precedes that detach: its announcement names\nno uuid the finish could judge a name by. Every other deregister's announcements are filed before the detach, so a\ndoor failing after it still announces it ([[LH-576]]).",
         "operationId": "deregister_table_v1_table__id__deregister_post",
         "parameters": [
           {
@@ -25522,22 +25599,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "Idempotency-Key",
             "required": false,
             "schema": {
@@ -25551,22 +25612,6 @@
                 }
               ],
               "title": "Idempotency-Key"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -25971,22 +26016,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "Idempotency-Key",
             "required": false,
             "schema": {
@@ -26000,22 +26029,6 @@
                 }
               ],
               "title": "Idempotency-Key"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -26581,25 +26594,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
             "in": "query",
             "name": "branch",
@@ -26633,6 +26627,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],
@@ -27777,7 +27790,7 @@
     },
     "/v1/table/{id}/register": {
       "post": {
-        "description": "Register an existing table location at ``id`` via ``register_table``, refuse it when the location\noverlaps the control root, a configured base or another table, when the dataset there carries reader\nflag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, then\nseed the caller's FGA ownership and emit a REGISTER_TABLE marker (who attached it + where).",
+        "description": "Register an existing table location at ``id`` via ``register_table``, refuse it when the location\noverlaps the control root, a configured base or another table, when the dataset there carries reader\nflag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, then\nseed the caller's FGA ownership and emit a REGISTER_TABLE marker (who attached it + where).\n\nWhat the registration announces is filed once the dataset is admitted and before its ownership is seeded, the first\nmoment its location as the backend resolved it is known, so a door failing after that still announces it, and a\nstore refusing the filing detaches the registration ([[LH-576]]). A registration that dies before then is attached\nand unowned: the drift report lists it under ``ungoverned_tables``.",
         "operationId": "register_table_v1_table__id__register_post",
         "parameters": [
           {
@@ -27809,22 +27822,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "Idempotency-Key",
             "required": false,
             "schema": {
@@ -27838,22 +27835,6 @@
                 }
               ],
               "title": "Idempotency-Key"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -27972,7 +27953,7 @@
     },
     "/v1/table/{id}/rename": {
       "post": {
-        "description": "Rename the table at ``id`` by moving its POINTER, and emit lineage; its grants stay on its uuid.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` answers only Unsupported, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nWithin its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router\n``authorize``) AND ``can_create_table`` on that namespace. The table keeps its uuid, so every record and every grant\nkept for it stays where it is ([[LH-523]], [[LH-524]]), and a rename into ANOTHER namespace therefore takes its grants\nalong: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,\nwhich under managed access need grant authority on the table and on the destination ([[LH-568]]), else a writer\ncould bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,\nout. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge\nin one write before the name, its ``child`` edge taken from the source with it and written on the destination once\nthe name is there, and both go back if the rename is undone. Its data directories' claims stay as they are: each\nrecords the table's uuid and location, which a rename changes neither of ([[LH-575]]). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard\nlifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped\nand another created ([[LH-554]]). Source missing \u2192 404\n``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
+        "description": "Rename the table at ``id`` by moving its POINTER, and emit lineage; its grants stay on its uuid.\n\nLance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and\nthe ``dir`` backend's ``rename_table`` answers only Unsupported, which is also off-spec \u2014 the Namespace REST spec\nmakes rename a first-class Metadata op. It is served here as what the spec describes: the destination id\nis registered at the SOURCE's existing location and the source id is deregistered. **No data byte is\nread, written or deleted**, so the cost is O(1) rather than the dataset's size \u2014 see\n``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one\nshape (a V1 root-namespace table) it refuses.\n\nWithin its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router\n``authorize``) AND ``can_create_table`` on that namespace. The table keeps its uuid, so every record and every grant\nkept for it stays where it is ([[LH-523]], [[LH-524]]), and a rename into ANOTHER namespace therefore takes its grants\nalong: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,\nwhich under managed access need grant authority on the table and on the destination ([[LH-568]]), else a writer\ncould bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,\nout. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge\nin one write before the name, its ``child`` edge taken from the source with it and written on the destination once\nthe name is there, and both go back if the rename is undone. Its data directories' claims stay as they are: each\nrecords the table's uuid and location, which a rename changes neither of ([[LH-575]]). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard\nlifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped\nand another created ([[LH-554]]), filed before the rename so a door failing after it still announces it ([[LH-576]]).\nSource missing \u2192 404 ``TableNotFound``; destination name taken \u2192 409 ``TableAlreadyExists``; the location held by a\nconcurrent rename or registration \u2192 409 ``ConcurrentModification`` (code 14, [[LH-204]]).",
         "operationId": "rename_table_v1_table__id__rename_post",
         "parameters": [
           {
@@ -28004,22 +27985,6 @@
           },
           {
             "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
             "name": "Idempotency-Key",
             "required": false,
             "schema": {
@@ -28033,22 +27998,6 @@
                 }
               ],
               "title": "Idempotency-Key"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -29010,25 +28959,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -29044,6 +28974,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],
@@ -29109,25 +29058,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -29143,6 +29073,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],
@@ -30351,25 +30300,6 @@
             }
           },
           {
-            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
-              "title": "Limit"
-            }
-          },
-          {
             "in": "query",
             "name": "descending",
             "required": false,
@@ -30419,6 +30349,25 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. An absent limit, or one above 1000, is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
             }
           }
         ],

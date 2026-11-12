@@ -26,14 +26,23 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from lakehouse import location_claims, trash
+from lakehouse.base_registry import BaseRegistry
 from lakehouse.control_emit import ControlEmitter
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.bucket_events import report_bucket_events
 from maintenance.services.clone_endings import finish_clone_endings
-from maintenance.services.credentials import end_trash, grant_census
+from maintenance.services.credentials import (
+    MaintenanceDenied,
+    TableNotGoverned,
+    VendUndecided,
+    end_trash,
+    finish_announcement_intents,
+    grant_census,
+    reclaim_idempotency_keys,
+)
 from maintenance.services.naming import claim_store, claimed_location
 from maintenance.services.orphan_check import FLOOR
-from maintenance.services.purge import objects_held, purge_expired_trash, refusal_log_entry
+from maintenance.services.purge import held_by, purge_expired_trash, refusal_log_entry
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
@@ -64,7 +73,7 @@ async def run_audit(settings: MaintenanceSettings, *, queue: TaskQueue | None) -
 
 async def run_scan(settings: MaintenanceSettings, *, control: ControlEmitter) -> dict[str, Any]:
     """The daily scan: the drift report WITH the storage walk, its repairs and the release, then the #79 expired-trash
-    purge.
+    purge, then the catalog's reclaim of the `Idempotency-Key` records past their lifetime.
 
     **The purge lives HERE, in the same run as the report.** Its gate is "the drift report ran clean"
     (:func:`maintenance.services.purge.report_is_clean`), so it must consume the report THIS run produced: a purge
@@ -99,7 +108,30 @@ async def run_scan(settings: MaintenanceSettings, *, control: ControlEmitter) ->
                 "bytes_reclaimed": sum(p.bytes_deleted for p in purged.purged),
             },
         )
+    payload["idempotency_keys"] = await _reclaim_idempotency_keys(settings)
     return payload
+
+
+#: The most calls one scan makes to the catalog's reclaim door, each reclaiming up to the door's own limit, so a scan
+#: stays bounded however far the records ran ahead of it; what is left waits for the next scan.
+_KEY_RECLAIM_CALLS = 50
+
+
+async def _reclaim_idempotency_keys(settings: MaintenanceSettings) -> dict[str, Any]:
+    """Ask the catalog to reclaim the `Idempotency-Key` records past their lifetime, a batch a call while any are left
+    ([[LH-576]]). A refusal or an unanswered door is logged and asked again by the next scan, never fatal to this one:
+    the records it would remove answer nothing past their lifetime."""
+    reclaimed = kept = unreadable = left = 0
+    for _ in range(_KEY_RECLAIM_CALLS):
+        try:
+            done = await run_in_threadpool(reclaim_idempotency_keys, settings)
+        except (MaintenanceDenied, VendUndecided, TableNotGoverned) as exc:
+            log.warning("idempotency_keys_unreclaimed", extra={"reason": str(exc)})
+            return {"reclaimed": reclaimed, "kept": kept, "left": left, "unreadable": unreadable, "reason": str(exc)}
+        reclaimed, kept, unreadable, left = reclaimed + done.reclaimed, kept + done.kept, unreadable + done.unreadable, done.left
+        if not left:
+            break
+    return {"reclaimed": reclaimed, "kept": kept, "left": left, "unreadable": unreadable}
 
 
 async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tuple[dict[str, Any], ReconcileReport, ReconcileSources | None]:
@@ -189,7 +221,8 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
     def _clear(record: Tombstone) -> None:
         end_trash(record.kind, record.uuid, settings)
 
-    probe = partial(objects_held, storage_options=settings.storage_options())
+    options = settings.storage_options()
+    probe = partial(held_by, storage_options=options, registry=BaseRegistry(control_root=settings.resolved_control_root, storage_options=options))
     swept = await run_in_threadpool(sweep_tombstones, settings, report=report, probe=probe, delete=_clear)
     payload["tombstone_sweep"] = swept.model_dump(mode="json")
     if swept.swept or swept.refused or swept.error:
@@ -210,7 +243,33 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
     payload["trash_release"] = await _release_expired_trash(settings)
     # ADR 0198 §1: a clone's tag a door could not release is released by the catalog, asked here; it deletes no byte.
     payload["clone_endings"] = (await finish_clone_endings(settings)).model_dump(mode="json")
+    # ADR 0188 as amended ([[LH-576]]): what a failed door left to announce is sent by the catalog, asked here.
+    payload["announcement_intents"] = await _finish_announcement_intents(settings)
     return payload, report, (read_sources[0] if read_sources else None)
+
+
+#: The most calls one audit makes to the catalog's finish door, each judging up to the door's own limit, so an audit
+#: stays bounded however many filings failed doors left; what is left waits for the next audit.
+_FINISH_CALLS = 20
+
+
+async def _finish_announcement_intents(settings: MaintenanceSettings) -> dict[str, Any]:
+    """Ask the catalog to send what failed doors left to announce, a batch a call while any are left. A refusal or an
+    unanswered door is logged and asked again by the next audit, never fatal to this one; each send the catalog makes is
+    logged NAMED by the catalog, which knows what it sent."""
+    finished = sent = unlanded = left = 0
+    for _ in range(_FINISH_CALLS):
+        try:
+            done = await run_in_threadpool(finish_announcement_intents, settings)
+        except (MaintenanceDenied, VendUndecided, TableNotGoverned) as exc:
+            log.warning("announcement_intents_unfinished", extra={"reason": str(exc)})
+            return {"finished": finished, "sent": sent, "unlanded": unlanded, "left": left, "reason": str(exc)}
+        finished, sent, unlanded, left = finished + done.finished, sent + done.sent, unlanded + done.unlanded, done.left
+        if not left:
+            break
+    if sent or unlanded:
+        log.warning("announcement_intents_finished", extra={"finished": finished, "sent": sent, "unlanded": unlanded, "left": left})
+    return {"finished": finished, "sent": sent, "unlanded": unlanded, "left": left}
 
 
 async def _release_expired_trash(settings: MaintenanceSettings) -> dict[str, Any]:

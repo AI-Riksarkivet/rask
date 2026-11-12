@@ -154,7 +154,14 @@ class DecisionLocateResult(BaseModel):
 
 
 class AccessDecider(Protocol):
-    """The authorization questions a check-only door asks."""
+    """The authorization questions a check-only door asks.
+
+    ``resolves_names`` is whether :meth:`check_tables` answers a table by its name: then a refusal there is the answer a
+    DescribeTable as that user gives, and a caller resolving names needs ask nothing else.
+    """
+
+    @property
+    def resolves_names(self) -> bool: ...
 
     async def check(self, *, user: str, relation: str, obj: str) -> bool: ...
 
@@ -176,6 +183,11 @@ class OpenFgaDecider:
 
     def __init__(self, client: OpenFgaClient) -> None:
         self._client = client
+
+    @property
+    def resolves_names(self) -> bool:
+        """No: the store holds uuids and no names (:meth:`check_tables`)."""
+        return False
 
     async def check(self, *, user: str, relation: str, obj: str) -> bool:
         return await fga.check(self._client, user=user, relation=relation, obj=obj)
@@ -231,6 +243,11 @@ class CatalogDecider:
             raise ValueError("a catalog decider needs the catalog's URL (RASK_FGA_DECIDER_URL)")
         self._token = token
         self._http = httpx.AsyncClient(base_url=f"{catalog_url.rstrip('/')}{DECISIONS_PREFIX}", timeout=timeout_seconds, transport=transport)
+
+    @property
+    def resolves_names(self) -> bool:
+        """Yes: the catalog resolves each name to the table it names now and decides on that table."""
+        return True
 
     async def check(self, *, user: str, relation: str, obj: str) -> bool:
         return (await self.batch_check(user=user, relation=relation, objects=[obj]))[obj]

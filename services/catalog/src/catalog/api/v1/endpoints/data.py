@@ -181,7 +181,7 @@ async def create_table(
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/create")
+    converge = await keyed.begin(endpoint="POST /v1/table/{id}/create", target=fga.canonical_object_id(parse_identifier(id)))
     if converge.replay is not None:
         return CreateTableResponse.model_validate(converge.replay.body)
 

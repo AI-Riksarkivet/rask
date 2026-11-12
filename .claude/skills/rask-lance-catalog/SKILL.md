@@ -430,7 +430,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   and a move the feed holds no run for is announced for that mover; one with no recorded mover is counted unauthored once
   (the `tag:published` mark, keyed by the move). A table's lifecycle markers (declare, register, rename (one `RENAME`
   dataset change naming the old id as `previousIdentifier`, ADR 0191),
-  drop, deregister) stay best-effort, as in Lakekeeper and Polaris. Pinned by
+  drop, deregister) are filed before their change, with the control event each door sends, and a door that fails after its change has them sent by the catalog's finish (`POST /management/v1/announcement-intents/finish`, asked by maintenance's hourly audit), under the run id and event id the door built (ADR 0205, [[LH-576]]); the namespace and warehouse cascades file theirs the same way. Pinned by
   `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
 
 ## Storage — what state lives where (and why there is NO app database)
@@ -574,7 +574,7 @@ governing their data. The project-scoped surface is the console's project page, 
   and cleared through `POST /management/v1/projects/{project_id}/protection` on the project's own `can_administer`, the
   gate its delete shares (`administered_project`), a denial answered the missing project's 404; its reads answer
   `protected` and `protected_by`, and a re-POST of the create carries it forward ([[LH-549]],
-  `services/catalog/tests/test_a_projects_protection_is_set_and_cleared_by_its_admins.py`). Both registries apply one
+  `services/catalog/tests/test_a_project_is_protected_and_retired_by_its_admins.py`). Both registries apply one
   rule, `control_records.with_protection`: arming an armed record keeps its armer, and clearing removes both fields.
   Tables/namespaces carry it as a **control-root `_protection/` record**
   (`lakehouse.protection`) gating drop/deregister/rename and both Overwrite modes,
@@ -1277,7 +1277,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `.../promotion/reject` (main is restored to the published version as a new commit); a hold unanswered after the
   gate's `review_hours` expires on `catalog-promotion-expiry-cron`. Every move of `published` emits a `publish_table`
   lineage run, which a notifier delivers to the project's watchers (`docs/COMMIT-EVENTS.md`), and the spec's tag doors refuse
-  `published`, `publishing` and every `rask.` tag (400), so nothing else moves it. A governed row needs no column (C9, [[LH-477]]): `source_rowid`
+  `published` and every `rask.` tag (400): each publish pins its candidate under a `rask.publishing.<token>` tag of its own, and ends another's older than a day (`publication.STALE_PIN_AGE`); a publish another overtook while it gated, `published` moved to or past its version, is refused 409 code 14 rather than moving it back; and a rejection while main holds a commit after the held version is refused 409 code 14, the hold staying open (ADR 0161, amended 2026-11-12), while a retried rejection finds the restore it already made (`promotions.restore_made`), so nothing else moves it. A governed row needs no column (C9, [[LH-477]]): `source_rowid`
   is an opt-in the publish door holds to uint64 stable row ids, and `stage` and `lineage` are the writer's.
 
   **`register_table` is the door for bytes written outside the catalog's own doors.** It turns written
@@ -1330,7 +1330,7 @@ governing their data. The project-scoped surface is the console's project page, 
   13.0.0: a tag on `("work", 3)` answers 3). Every catalog reader resolves a tag through `dataplane.tag_reference`,
   which reads both. DescribeTable refuses a tag on a branch with the code `branch` gets (406, code 0), since
   DescribeTableResponse has no field to name the branch. The tags the catalog keeps on main (`published`,
-  `publishing`, `rask.held`) are read through `dataplane.main_version_of_tag`, which refuses one found on a branch 409
+  `rask.publishing.*`, `rask.held`) are read through `dataplane.main_version_of_tag`, which refuses one found on a branch 409
   code 19. Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog` and
   `tests/unit/test_publication.py`.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**

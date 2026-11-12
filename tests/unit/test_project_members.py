@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from unfiled_announcer import unfiled
 
 from catalog.api.v1.endpoints import members
 from catalog.core.config import Settings
@@ -65,8 +66,8 @@ def _client() -> Any:
 
 
 def _control() -> Any:
-    """The injected control emitter, announcing into the void."""
-    return NoopControlEmitter()
+    """The injected announcer, announcing into the void."""
+    return unfiled(NoopControlEmitter())
 
 
 def _settings(*, fga_enabled: bool = True) -> Settings:

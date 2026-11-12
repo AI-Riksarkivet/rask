@@ -136,6 +136,8 @@ class ProjectRecord(_Record):
     """A tenant. Existence lives in the record, so the id is the whole of its identity."""
 
     id: str = Field(min_length=1)
+    #: The principal key of the caller who started its delete, while that delete is unfinished ([[LH-576]]).
+    deleting_by: str | None = Field(default=None, min_length=1)
 
 
 #: The record fields deletion protection writes on a warehouse or project record: the flag

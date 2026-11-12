@@ -160,13 +160,17 @@ async def ingest_event(
     # A GOVERNED TABLE IS RECORDED, AND AUTHORIZED, BY ITS UUID ([[LH-522]], [[LH-524]]), which this door resolves from
     # each name as the caller sees it and stamps over whatever the body claimed, as it clears a claimed signature:
     # so a pipeline's runs key on the uuid the catalog's own events carry, a rename since cannot split them, and a
-    # forged uuid in the body can authorize nothing. A name the caller's bearer cannot resolve (a service account's
-    # token is lineage's audience, which the catalog refuses) is resolved by the catalog's decision door, as the
-    # caller ([[LH-531]]).
-    decider = getattr(request.app.state, "decider", None) if settings.fga_enabled else None
-    await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider, subject=token.subject if token else None)
+    # forged uuid in the body can authorize nothing. Where the catalog decides, the names are resolved at its decision
+    # door as the caller, which also resolves a service account's names, whose token the catalog's describe refuses
+    # ([[LH-531]]).
+    #
+    # THE CALLER IS BOUND BEFORE ANY NAME IS ASKED ABOUT, and the names are asked about in one question where the catalog
+    # decides ([[LH-576]]): the bounds `parse_event` applied cap how many there are, so whatever an event names, a caller
+    # who may see none of it costs the catalog one question, never a describe per name.
     try:
         enforce_author(event, token)
+        decider = getattr(request.app.state, "decider", None) if settings.fga_enabled else None
+        await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider, subject=token.subject if token else None)
         await enforce_output_authz(event, request, settings, token)
         started = time.perf_counter()
         # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the

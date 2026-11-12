@@ -32,8 +32,9 @@ from fastapi import APIRouter, Depends, Request
 from lance_namespace import InvalidInputError, NamespaceNotFoundError, ServiceUnavailableError, TableNotFoundError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, Resolver, ResolverDep, SettingsDep
+from catalog.api import announcing, fga_deps
+from catalog.api.announcing import Announcer, AnnouncerDep
+from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
@@ -51,7 +52,6 @@ from catalog.schemas import (
     MyPermissionsResponse,
     RelationGrants,
 )
-from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
@@ -424,7 +424,7 @@ async def my_project_permissions(id: str, client: FgaClientDep, settings: Settin
 
 async def _access_mutate(
     client: OpenFgaClient | None,
-    control: ControlEmitter,
+    announcer: Announcer,
     settings: Settings,
     token: Caller | None,
     resolver: Resolver,
@@ -451,7 +451,8 @@ async def _access_mutate(
     Fail-closed: only a grantable base rung the model defines is accepted (a ``can_*`` action or ``parent``
     is a 4xx, not a silent junk tuple); an OpenFGA outage is a 503, never a silent grant/revoke no-op. Both
     directions are idempotent (``write_tuples`` swallows a duplicate, ``delete_tuples`` an absent tuple) and
-    audited distinctly (``access_grant`` / ``access_revoke``), carrying the grantee + rung."""
+    audited distinctly (``access_grant`` / ``access_revoke``), carrying the grantee + rung. The announcement is filed
+    before the write, so a door that fails after it is still announced, once ([[LH-576]])."""
     client = fga_deps.require_fga(settings, client, feature="access mutation")
     grantable = _grantable_relations(fga_type)
     if body.relation not in grantable:
@@ -473,91 +474,87 @@ async def _access_mutate(
         await fga_deps.refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)
     tup = fga.ClientTuple(user=grantee, relation=body.relation, object=obj)
     event = AuditAction.ACCESS_GRANT if grant else AuditAction.ACCESS_REVOKE
-    try:
-        if grant:
-            await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
-        else:
-            await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
-    except ServiceUnavailableError:
-        audit(event, AuditOutcome.FAILURE, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
-        raise
-    # The per-tuple SUCCESS row is emitted by the library (one row per write site, structurally). This
-    # keeps only the surface-specific vocabulary — `access_grant`/`access_revoke` is the compliance
-    # verb for the per-object grant API, and dropping it would break the existing audit queries.
-    audit(event, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
-    await emit_control(
-        control,
-        action="grant_added" if grant else "grant_revoked",
-        object_type="grant",
-        object_id=obj,
-        object_name=name,
-        actor=f"user:{token.subject}" if token else None,
-        extra={"relation": body.relation, "subject": grantee},
+    told = announcing.grant_announcement(
+        tup, action="grant_added" if grant else "grant_revoked", actor=f"user:{token.subject}" if token else None, object_name=name
     )
+    async with announcer.announcing(door="access_grant" if grant else "access_revoke", target=obj, announcements=[told]) as filing:
+        try:
+            if grant:
+                await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+            else:
+                await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        except ServiceUnavailableError:
+            audit(event, AuditOutcome.FAILURE, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
+            raise
+        # The per-tuple SUCCESS row is emitted by the library (one row per write site, structurally). This
+        # keeps only the surface-specific vocabulary — `access_grant`/`access_revoke` is the compliance
+        # verb for the per-object grant API, and dropping it would break the existing audit queries.
+        audit(event, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
+        await filing.send(told)
     return AccessGrantResponse(object=obj, name=name, user=grantee, relation=body.relation, granted=grant)
 
 
 @table_router.post("/{id}/access/grant")
 async def grant_table_access(
-    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Grant a base rung on the table to a subject — gated PER RUNG by the router
     (``can_grant_<relation>``, read from the body). Granting is its own axis now: a `manage_grants`
     holder may hand out access without holding the data, and a `pass_grants` delegate may hand on only
     what they already hold."""
-    return await _access_mutate(client, control, settings, token, resolver, "table", id, body, grant=True)
+    return await _access_mutate(client, announcer, settings, token, resolver, "table", id, body, grant=True)
 
 
 @table_router.post("/{id}/access/revoke")
 async def revoke_table_access(
-    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Revoke a base rung on the table from a subject — gated per rung, identically to grant: taking a
     rung away is the same authority as handing it out."""
-    return await _access_mutate(client, control, settings, token, resolver, "table", id, body, grant=False)
+    return await _access_mutate(client, announcer, settings, token, resolver, "table", id, body, grant=False)
 
 
 @namespace_router.post("/{id}/access/grant")
 async def grant_namespace_access(
-    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Grant a base rung on the namespace to a subject — gated per rung (``can_grant_<relation>``)."""
-    return await _access_mutate(client, control, settings, token, resolver, "namespace", id, body, grant=True)
+    return await _access_mutate(client, announcer, settings, token, resolver, "namespace", id, body, grant=True)
 
 
 @warehouse_router.post("/{id}/access/grant", dependencies=[Depends(require_warehouse_grant)])
 async def grant_warehouse_access(
     id: str,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     settings: SettingsDep,
     resolver: ResolverDep,
     token: CurrentToken,
     body: AccessGrantRequest,
 ) -> AccessGrantResponse:
     """Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]])."""
-    return await _access_mutate(client, control, settings, token, resolver, "warehouse", id, body, grant=True)
+    return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=True)
 
 
 @warehouse_router.post("/{id}/access/revoke", dependencies=[Depends(require_warehouse_revoke)])
 async def revoke_warehouse_access(
     id: str,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     settings: SettingsDep,
     resolver: ResolverDep,
     token: CurrentToken,
     body: AccessGrantRequest,
 ) -> AccessGrantResponse:
     """Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]])."""
-    return await _access_mutate(client, control, settings, token, resolver, "warehouse", id, body, grant=False)
+    return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=False)
 
 
 @project_router.post("/{id}/access/grant", dependencies=[Depends(require_project_grant)])
 async def grant_project_access(
     id: str,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     settings: SettingsDep,
     resolver: ResolverDep,
     token: CurrentToken,
@@ -572,7 +569,7 @@ async def grant_project_access(
     Args:
         id: The project.
         client: The OpenFGA client.
-        control: Where the grant is announced.
+        announcer: Where the grant is filed and announced.
         settings: The catalog's settings.
         resolver: The request's name resolver.
         token: The verified caller.
@@ -585,14 +582,14 @@ async def grant_project_access(
         InvalidInputError: The rung is no rung this door grants on a project.
         ServiceUnavailableError: OpenFGA did not answer.
     """
-    return await _access_mutate(client, control, settings, token, resolver, "project", id, body, grant=True)
+    return await _access_mutate(client, announcer, settings, token, resolver, "project", id, body, grant=True)
 
 
 @project_router.post("/{id}/access/revoke", dependencies=[Depends(require_project_revoke)])
 async def revoke_project_access(
     id: str,
     client: FgaClientDep,
-    control: ControlEmitterDep,
+    announcer: AnnouncerDep,
     settings: SettingsDep,
     resolver: ResolverDep,
     token: CurrentToken,
@@ -604,7 +601,7 @@ async def revoke_project_access(
     Args:
         id: The project.
         client: The OpenFGA client.
-        control: Where the revoke is announced.
+        announcer: Where the revoke is filed and announced.
         settings: The catalog's settings.
         resolver: The request's name resolver.
         token: The verified caller.
@@ -617,20 +614,20 @@ async def revoke_project_access(
         InvalidInputError: The rung is no rung this door grants on a project.
         ServiceUnavailableError: OpenFGA did not answer.
     """
-    return await _access_mutate(client, control, settings, token, resolver, "project", id, body, grant=False)
+    return await _access_mutate(client, announcer, settings, token, resolver, "project", id, body, grant=False)
 
 
 @namespace_router.post("/{id}/access/revoke")
 async def revoke_namespace_access(
-    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Revoke a base rung on the namespace from a subject — gated per rung, identically to grant."""
-    return await _access_mutate(client, control, settings, token, resolver, "namespace", id, body, grant=False)
+    return await _access_mutate(client, announcer, settings, token, resolver, "namespace", id, body, grant=False)
 
 
 @classification_router.post("/{id}/access/grant")
 async def grant_classification_access(
-    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Delegate a classification label to a subject — gated per rung by ``can_grant_apply``.
 
@@ -639,16 +636,16 @@ async def grant_classification_access(
     only and the separation is decorative. `model.fga` makes the same argument for `classifier` one
     level along — "a person's grant belongs on the grant door rather than in a deploy".
     """
-    return await _access_mutate(client, control, settings, token, resolver, "classification", id, body, grant=True)
+    return await _access_mutate(client, announcer, settings, token, resolver, "classification", id, body, grant=True)
 
 
 @classification_router.post("/{id}/access/revoke")
 async def revoke_classification_access(
-    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Withdraw a classification delegation — ``can_revoke_grant``, stricter than the grant, exactly as
     on table and namespace: taking a rung back is administration, never delegation."""
-    return await _access_mutate(client, control, settings, token, resolver, "classification", id, body, grant=False)
+    return await _access_mutate(client, announcer, settings, token, resolver, "classification", id, body, grant=False)
 
 
 @classification_router.post("/{id}/access/my-permissions")
@@ -762,13 +759,14 @@ async def get_warehouse_managed_access(
 
 
 async def _set_managed_access(
-    client: OpenFgaClient | None, control: ControlEmitter, settings: Settings, token: Caller | None, resolver: Resolver, fga_type: str, id: str, enabled: bool
+    client: OpenFgaClient | None, announcer: Announcer, settings: Settings, token: Caller | None, resolver: Resolver, fga_type: str, id: str, enabled: bool
 ) -> ManagedAccessResponse:
     """Set or clear the flag, idempotently.
 
     Reads before writing for the same reason the membership API does: an OpenFGA Write is
     transactional and REJECTS a tuple that already exists, so "turn it on when it is already on"
-    would 400 rather than being the no-op a caller reasonably expects.
+    would 400 rather than being the no-op a caller reasonably expects. The announcement is filed before the read, as a
+    grant's is ([[LH-576]]).
     """
     client = fga_deps.require_fga(settings, client, feature="managed access")
     segments = parse_identifier(id)
@@ -776,30 +774,26 @@ async def _set_managed_access(
     actor = token.subject if token else "system:catalog"
     tup = fga.ClientTuple(user=_MANAGED_ACCESS_SUBJECT, relation="managed_access", object=obj)
 
-    already = any(t.object == obj and t.relation == "managed_access" for t in await fga.read_object_tuples(client, obj))
-    if enabled and not already:
-        await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
-    elif not enabled and already:
-        await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
-    # Audited distinctly from a grant: this does not move anyone's access, it changes WHO MAY move it —
-    # a governance act whose blast radius is every object beneath, and one an auditor will look for by
-    # name rather than by inferring it from the absence of later grants.
-    audit(AuditAction.MANAGED_ACCESS_SET, AuditOutcome.SUCCESS, subject=actor, resource=obj, enabled=enabled)
-    await emit_control(
-        control,
-        action="grant_added" if enabled else "grant_revoked",
-        object_type="grant",
-        object_id=obj,
-        object_name=name,
-        actor=f"user:{token.subject}" if token else None,
-        extra={"relation": "managed_access", "subject": _MANAGED_ACCESS_SUBJECT},
+    told = announcing.grant_announcement(
+        tup, action="grant_added" if enabled else "grant_revoked", actor=f"user:{token.subject}" if token else None, object_name=name
     )
+    async with announcer.announcing(door="managed_access_set", target=obj, announcements=[told]) as filing:
+        already = any(t.object == obj and t.relation == "managed_access" for t in await fga.read_object_tuples(client, obj))
+        if enabled and not already:
+            await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        elif not enabled and already:
+            await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
+        # Audited distinctly from a grant: this does not move anyone's access, it changes WHO MAY move it —
+        # a governance act whose blast radius is every object beneath, and one an auditor will look for by
+        # name rather than by inferring it from the absence of later grants.
+        audit(AuditAction.MANAGED_ACCESS_SET, AuditOutcome.SUCCESS, subject=actor, resource=obj, enabled=enabled)
+        await filing.send(told)
     return ManagedAccessResponse(object=obj, name=name, managed_access=enabled)
 
 
 @namespace_router.post("/{id}/managed-access/set")
 async def set_namespace_managed_access(
-    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: ManagedAccessRequest
+    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: ManagedAccessRequest
 ) -> ManagedAccessResponse:
     """Centralize granting for this namespace and everything beneath it — gated on
     ``can_set_managed_access`` (which derives from ``manage_grants``).
@@ -809,12 +803,12 @@ async def set_namespace_managed_access(
     already-managed scope the owner's ``manage_grants`` is withdrawn, so they cannot switch it off —
     which is what makes it a policy rather than a suggestion.
     """
-    return await _set_managed_access(client, control, settings, token, resolver, "namespace", id, body.enabled)
+    return await _set_managed_access(client, announcer, settings, token, resolver, "namespace", id, body.enabled)
 
 
 @warehouse_router.post("/{id}/managed-access/set")
 async def set_warehouse_managed_access(
-    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: ManagedAccessRequest
+    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: ManagedAccessRequest
 ) -> ManagedAccessResponse:
     """The same, for a whole warehouse — the scope root, so this governs every stage and table in it,
     **and the warehouse itself**.
@@ -840,7 +834,7 @@ async def set_warehouse_managed_access(
     segments = parse_identifier(id)
     obj = f"warehouse:{fga.canonical_object_id(segments)}"
     await fga_deps.require_relation(client, settings, token, relation="can_set_managed_access", obj=obj)
-    return await _set_managed_access(client, control, settings, token, resolver, "warehouse", id, body.enabled)
+    return await _set_managed_access(client, announcer, settings, token, resolver, "warehouse", id, body.enabled)
 
 
 # The v1 aggregator includes one ``router`` per module — the table + namespace routers are stitched here.

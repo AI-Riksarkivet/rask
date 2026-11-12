@@ -42,6 +42,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps, listings
+from catalog.api.announcing import AnnouncerDep
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
@@ -62,7 +63,7 @@ from catalog.core import tier_policy
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, with_minted_uuid
-from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, LineageEmitter, UuidReader, emit_write_event
+from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_event
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
@@ -72,10 +73,11 @@ from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
+from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves
 from lakehouse import base_registry, clone_sources, location_claims, protection, trash
 from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import emit_control
-from lakehouse.control_events import ControlUuids
+from lakehouse.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.governed import fga
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CATALOG_DELIMITER
@@ -457,8 +459,8 @@ async def list_namespaces(
     token: CurrentToken,
     client: FgaClientDep,
     resolver: ResolverDep,
+    limit: ListLimit,
     page_token: str | None = None,
-    limit: ListLimit = None,
 ) -> ListNamespacesResponse:
     """List the child namespaces under ``id``; when FGA is on, filtered to what the caller can see.
 
@@ -858,37 +860,6 @@ async def _destroy_listed_table(
     return True
 
 
-async def _announce_removed(
-    emitter: LineageEmitter,
-    segments: list[str],
-    *,
-    operation: str,
-    token: Caller | None,
-    authorization: str | None,
-    uuids: UuidReader,
-    known: DatasetUuids,
-) -> None:
-    """Tell lineage a table stopped existing, so its reconcile does not read it as live forever ([[LH-144]]).
-
-    Before its grants are revoked: on the http transport the caller's bearer authorizes the ingest against grants
-    still standing. Best-effort and logged: a missing lineage row must not stop the delete before its revoke, which
-    would trade it for grants on nothing.
-    """
-    try:
-        await emit_write_event(
-            emitter,
-            segments,
-            author=token.subject if token is not None else None,
-            version=None,
-            operation=operation,
-            authorization=authorization,
-            uuids=uuids,
-            known=known,
-        )
-    except Exception as exc:  # noqa: BLE001 — provenance must never fail the delete it records
-        log.warning("cascade_drop_lineage_emit_failed", extra={"table": segments, "error": str(exc)})
-
-
 async def _identify(ns: LanceNamespace, settings: Settings, descendants: list[tuple[str, list[str]]]) -> list[fga_deps.GovernedObject]:
     """Every descendant a cascade is about to remove, with its uuid, read while it still stands.
 
@@ -945,13 +916,11 @@ async def drop_namespace(
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
-    control: ControlEmitterDep,
-    emitter: LineageEmitterDep,
+    announcer: AnnouncerDep,
     uuids: ObjectUuidsDep,
     body: DropNamespaceRequest | None = None,
     force: RaskFlag = False,
     purge: RaskFlag = False,
-    authorization: Annotated[str | None, Header()] = None,
 ) -> DropNamespaceResponse:
     """Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples — and, for a Cascade drop, every
     dropped child's — so a reused id can't inherit stale grants.
@@ -1031,95 +1000,23 @@ async def drop_namespace(
     recoverable = grace > 0
     # The tables this cascade removes itself. A listed table that left before its turn ([[LH-586]]: a drop of its own,
     # or a rename that carried it out alive) is not among them, so no step below announces, tracks or ends it.
-    removed_tables: set[tuple[str, ...]] = set()
-    if recoverable:
-        # The cascade's records are keyed by the uuid the door identified the namespace by, not the best-effort read its
-        # announcements name it by, which answers ``None`` on a failed describe.
-        detached = await _trash_subtree(
-            ns, settings, token, segments, descendants, own=ControlUuids(object_uuid=dropped.uuid, namespace_uuid=own.namespace_uuid), grace_days=grace
-        )
-        removed_tables.update(tuple(item.segments) for item in detached)
-        # Long running, as the spec reads a `transaction_id`: the subtree's bytes are deleted later, by the purge, and
-        # each table's deletion is tracked through DescribeTransaction as `<table id>$<its uuid>`, as at the table door.
-        response = DropNamespaceResponse(transaction_id=[fga.canonical_object_id([*item.segments, item.uuid]) for item in detached] or None)
-    elif cascade:
-        # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves, announcing each table as
-        # it goes ([[LH-495]]): the retry after a failure part-way lists only what still stands.
-        registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-        async for table in _destroy_subtree(
-            ns,
-            segments,
-            descendants,
-            root_uuid=dropped.uuid,
-            registry=registry,
-            claims=table_claims.claim_store(settings),
-            storage_options=settings.storage_options(),
-            estate_roots=(settings.registry_root, settings.root),
-            dropped_by=f"user:{token.subject}" if token is not None else None,
-        ):
-            removed_tables.add(tuple(table))
-            await _announce_removed(
-                emitter,
-                table,
+    # What the drop announces is filed before it removes anything, so a drop that fails after removing something still
+    # announces it ([[LH-576]]): a drop marker per table it means to remove, each landed once the table's name names it no
+    # longer, and its own `namespace_dropped`, landed once the namespace's name names it no longer.
+    dropped_tables = {
+        tuple(item.segments): Announcement(
+            evidence=NameResolves(segments=item.segments, uuid=item.uuid, held=False),
+            message=announcer.marker(
+                item.segments,
+                author=token.subject if token is not None else None,
                 operation=DROP_TABLE,
-                token=token,
-                authorization=authorization,
-                uuids=uuids,
-                known=known.get(tuple(table), DatasetUuids()),
-            )
-        response = DropNamespaceResponse()
-    else:
-        try:
-            response = await run_in_threadpool(native.call, ns, "drop_namespace", req)
-        except NamespaceNotFoundError:
-            if drop_mode is not DropMode.SKIP:
-                raise
-            return await _skip_absent_namespace(settings, client, token, segments)
-    removed = [item for item in descendants if item.kind == "namespace" or tuple(item.segments) in removed_tables]
-    # The record dies with the object — a reused id must not inherit protection nobody set on it. A recoverable cascade
-    # clears its namespace's here, and its DESCENDANTS' only under force=true (an unforced cascade already proved none
-    # exist); every other drop ends them below, with the rest of what each removed object holds.
-    if recoverable:
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", dropped.uuid)
-    if recoverable and force:
-        for item in removed:
-            await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), item.kind, item.uuid)
-    # The warehouse BINDING dies with a destroyed top-level namespace. `unbind_namespace` existed and
-    # only the warehouse-delete door called it, so every direct drop of a top-level namespace leaked
-    # its binding record — and the UI derives its namespace list from bindings, so the dropped
-    # namespace kept LISTING forever, indistinguishable from a live empty one (seen on the deployed
-    # estate: `casc9` survived its own successful cascade). Kept on a RECOVERABLE drop, exactly as the
-    # grants are: undrop rebuilds the subtree and the binding must still be there to route it.
-    if not recoverable and len(segments) == 1:
-        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
-    # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DETACHED, exactly as the single-table door does (a `drop_table`
-    # event per table); a destroyed subtree announced each table as it went. A follower of the feed learns a table
-    # is gone only from these events ([[LH-144]]), so a table nothing records stays indistinguishable from a live
-    # one. Emitted for a recoverable drop too, matching that door — the undrop emits a `register_table` marker per
-    # table, which a follower reads as the table existing again.
-    if recoverable:
-        for item in removed:
-            if item.kind == "table":
-                await _announce_removed(
-                    emitter,
-                    item.segments,
-                    operation=DROP_TABLE,
-                    token=token,
-                    authorization=authorization,
-                    uuids=uuids,
-                    known=known.get(tuple(item.segments), DatasetUuids()),
-                )
-    # End what each removed object holds AFTER the drop commits, so a failed or Restrict-refused drop leaves all of it in
-    # place: the descendants first, found by the catalog's listing and by the `child` edges a failed earlier attempt
-    # left, each one's protection and maintenance policy before its grants, then the namespace's own. NOT on a
-    # recoverable cascade (#96, the #75 rule): undrop rebuilds the subtree, and each object must come back configured
-    # as it was and reachable by the owner, the one person who needs to undrop it. Those die with the bytes — at
-    # purge, or when the sweep's expiry reclaims the trash.
-    if not recoverable:
-        async for _ in fga_deps.end_removed_subtree(client, settings, root_uuid=dropped.uuid, removed=removed, token=token):
-            pass
-    await emit_control(
-        control,
+                uuids=known.get(tuple(item.segments), DatasetUuids()),
+            ),
+        )
+        for item in descendants
+        if item.kind == "table"
+    }
+    planned = CatalogControlEvent(
         action="namespace_dropped",
         object_type="namespace",
         object_id=dropped.fga_object(),
@@ -1127,8 +1024,91 @@ async def drop_namespace(
         object_uuid=own.object_uuid,
         namespace_uuid=own.namespace_uuid,
         actor=f"user:{token.subject}" if token else None,
-        extra={"cascade": cascade, "recoverable": recoverable, "descendants_revoked": 0 if recoverable else len(removed)},
+        extra={"cascade": cascade, "recoverable": recoverable, "descendants_revoked": 0 if recoverable else len(descendants)},
     )
+    dropped_namespace = Announcement(evidence=NamespaceResolves(segments=segments, uuid=dropped.uuid, held=False), message=ControlMessage(event=planned))
+    async with announcer.announcing(door="drop_namespace", target=dropped.fga_object(), announcements=[*dropped_tables.values(), dropped_namespace]) as filing:
+        removed_tables: set[tuple[str, ...]] = set()
+        if recoverable:
+            # The cascade's records are keyed by the uuid the door identified the namespace by, not the best-effort read its
+            # announcements name it by, which answers ``None`` on a failed describe.
+            detached = await _trash_subtree(
+                ns, settings, token, segments, descendants, own=ControlUuids(object_uuid=dropped.uuid, namespace_uuid=own.namespace_uuid), grace_days=grace
+            )
+            removed_tables.update(tuple(item.segments) for item in detached)
+            # Long running, as the spec reads a `transaction_id`: the subtree's bytes are deleted later, by the purge, and
+            # each table's deletion is tracked through DescribeTransaction as `<table id>$<its uuid>`, as at the table door.
+            response = DropNamespaceResponse(transaction_id=[fga.canonical_object_id([*item.segments, item.uuid]) for item in detached] or None)
+        elif cascade:
+            # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves, announcing each table as
+            # it goes ([[LH-495]]): the retry after a failure part-way lists only what still stands.
+            registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+            async for table in _destroy_subtree(
+                ns,
+                segments,
+                descendants,
+                root_uuid=dropped.uuid,
+                registry=registry,
+                claims=table_claims.claim_store(settings),
+                storage_options=settings.storage_options(),
+                estate_roots=(settings.registry_root, settings.root),
+                dropped_by=f"user:{token.subject}" if token is not None else None,
+            ):
+                removed_tables.add(tuple(table))
+                await filing.send(dropped_tables[tuple(table)])
+            response = DropNamespaceResponse()
+        else:
+            try:
+                response = await run_in_threadpool(native.call, ns, "drop_namespace", req)
+            except NamespaceNotFoundError:
+                if drop_mode is not DropMode.SKIP:
+                    raise
+                return await _skip_absent_namespace(settings, client, token, segments)
+        removed = [item for item in descendants if item.kind == "namespace" or tuple(item.segments) in removed_tables]
+        # The record dies with the object — a reused id must not inherit protection nobody set on it. A recoverable cascade
+        # clears its namespace's here, and its DESCENDANTS' only under force=true (an unforced cascade already proved none
+        # exist); every other drop ends them below, with the rest of what each removed object holds.
+        if recoverable:
+            await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", dropped.uuid)
+        if recoverable and force:
+            for item in removed:
+                await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), item.kind, item.uuid)
+        # The warehouse BINDING dies with a destroyed top-level namespace. `unbind_namespace` existed and
+        # only the warehouse-delete door called it, so every direct drop of a top-level namespace leaked
+        # its binding record — and the UI derives its namespace list from bindings, so the dropped
+        # namespace kept LISTING forever, indistinguishable from a live empty one (seen on the deployed
+        # estate: `casc9` survived its own successful cascade). Kept on a RECOVERABLE drop, exactly as the
+        # grants are: undrop rebuilds the subtree and the binding must still be there to route it.
+        if not recoverable and len(segments) == 1:
+            await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
+        # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DETACHED, exactly as the single-table door does (a `drop_table`
+        # event per table); a destroyed subtree announced each table as it went. A follower of the feed learns a table
+        # is gone only from these events ([[LH-144]]), so a table nothing records stays indistinguishable from a live
+        # one. Emitted for a recoverable drop too, matching that door — the undrop emits a `register_table` marker per
+        # table, which a follower reads as the table existing again.
+        if recoverable:
+            for item in removed:
+                if item.kind == "table":
+                    await filing.send(dropped_tables[tuple(item.segments)])
+        # End what each removed object holds AFTER the drop commits, so a failed or Restrict-refused drop leaves all of it in
+        # place: the descendants first, found by the catalog's listing and by the `child` edges a failed earlier attempt
+        # left, each one's protection and maintenance policy before its grants, then the namespace's own. NOT on a
+        # recoverable cascade (#96, the #75 rule): undrop rebuilds the subtree, and each object must come back configured
+        # as it was and reachable by the owner, the one person who needs to undrop it. Those die with the bytes — at
+        # purge, or when the sweep's expiry reclaims the trash.
+        if not recoverable:
+            async for _ in fga_deps.end_removed_subtree(client, settings, root_uuid=dropped.uuid, removed=removed, token=token):
+                pass
+        # Sent with the count of what this drop removed, under the id the planned event was filed with.
+        await filing.send(
+            dropped_namespace.model_copy(
+                update={
+                    "message": ControlMessage(
+                        event=planned.model_copy(update={"extra": {**planned.extra, "descendants_revoked": 0 if recoverable else len(removed)}})
+                    )
+                }
+            )
+        )
     return response
 
 
@@ -1416,8 +1396,8 @@ async def list_tables(
     token: CurrentToken,
     client: FgaClientDep,
     resolver: ResolverDep,
+    limit: ListLimit,
     page_token: str | None = None,
-    limit: ListLimit = None,
     include_declared: bool = True,
 ) -> ListTablesResponse:
     """List the tables under namespace ``id``; when FGA is on, filtered to what the caller can

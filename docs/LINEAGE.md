@@ -56,7 +56,11 @@ row records an announcement, so announcing that row's own commit would record it
 
 **A row is written once.** Each table declares an unenforced primary key and is written with an insert-only merge on
 it, so a redelivered event lands no second row and two racing deliveries of one event land it once. The feed's key is
-one row per terminal state of a run, one per arrival of a non-terminal state, and one per static change.
+one row per terminal state of a run, one per arrival of a non-terminal state, and one per static change and who vouches
+for it. A static change has no run to bind to an author, and its identity is derived from fields a writer of the table
+can read (`docs/COMMIT-EVENTS.md` § An event's identity), so a signed change (the catalog's, recorded off the bus or the
+outbox) keeps the bare key and a change posted to the HTTP door is keyed under its verified author too: no poster can
+take the row the catalog's announcement of a change needs.
 
 **A burst is one commit per table.** Every commit is a Lance version and a fragment that each later open
 and scan pays for (ADR 0174), so the events recorded while a commit is in flight land together in the next one: one
@@ -87,7 +91,7 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 |---|---|
 | `POST /api/v1/lineage` | Authenticated OpenLineage intake (the HTTP transport's default path): a `RunEvent`, or a `DatasetEvent` for a change no job performed |
 | `GET /events` | The durable commit feed, governed per dataset: newest first by `after`, or forward from `since` with `next_cursor`; filterable by `table` or `namespace`; reports `oldest_seq` |
-| `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify; gated on `can_read_event_feed`, for a notifier holding `event_reader` (granted at the estate admin's tuple door) |
+| `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify, with the `rask_signature` lineage verified when it recorded each event, which tells the catalog's change from one a writer posted under the same identity; gated on `can_read_event_feed`, for a notifier holding `event_reader` (granted at the estate admin's tuple door) |
 | `GET /tables/{name}/derived?depth=` | Every table derived from `name`, nearest first |
 | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The dead-letter queue: list parked deliveries, replay one |
 | `POST /lineage-events` | Dapr subscription on `lineage.events.v1` (sidecar only) |
@@ -103,7 +107,11 @@ committed the write, so a grant revoked since takes nothing back (LH-551). The c
 whose own announcement was lost is signed only for the author the catalog recorded authorizing that commit (LH-550),
 so it is recorded on the signature too. One event names at most 64 inputs and 64 outputs and
 weighs at most 1 MiB as JSON, else 422. Every door (HTTP, bus, outbox drain, DLQ replay) parses through the same models, so all of them refuse
-alike. This door records and triggers nothing: it publishes nothing on `lineage.events.v1`, so a write that should be
+alike, and one event names at most 1,000 distinct identifiers across its datasets, their `symlinks` and their
+`columnLineage` upstreams, what one question to the catalog's decision door holds. The caller is bound as the author
+before any name is resolved, and where the catalog decides (`RASK_FGA_DECIDER_URL`), the event's names are resolved in
+one decision question as the caller, so a caller who may see none of them costs the catalog that one question, never a
+describe per name. This door records and triggers nothing: it publishes nothing on `lineage.events.v1`, so a write that should be
 announced goes through the catalog's data-plane doors, whose emitter announces it.
 
 **Derived tables.** `GET /tables/{name}/derived` resolves `name` to the uuid of the table it names now and walks the
@@ -133,8 +141,7 @@ overlapping ticks need no lock (`lineage/api/relay_cron.py`):
    each survivor, re-publishes it and deletes it, oldest first and bounded per tick. An event governance refuses is
    recorded to `provenance$refusals` before its staged object is deleted. Lineage's object-store grant is only this
    prefix (list, get, delete).
-2. **Prune the feed** past `services.lineage.eventsRetentionDays` (default 7, by arrival time; 0 keeps everything).
-3. **Forward.** Every recorded event, as standard OpenLineage over the HTTP transport, is POSTed to
+2. **Forward.** Every recorded event, as standard OpenLineage over the HTTP transport, is POSTed to
    `services.lineage.forward.url` + `endpoint` (default `api/v1/lineage`), at least once and in feed order, from a
    cursor in `provenance$cursors` keyed by the endpoint URL. The cursor moves by a conditional merge
    (`source.seq > target.seq`), so a slower replica's tick never moves it back. A 400, 413 or 422 refuses that one
@@ -142,6 +149,10 @@ overlapping ticks need no lock (`lineage/api/relay_cron.py`):
    the backend took, and the next tick resumes there. `forward.authSecret.{name,key}` names an API key in the Dapr
    secret store, read on every tick so a rotated key needs no restart, and denied to every other app's sidecar. An
    empty URL forwards nothing.
+3. **Prune the feed** past `services.lineage.eventsRetentionDays` (default 7, by arrival time; 0 keeps everything). With a
+   forward URL set, no row after the forwarder's cursor is pruned, however old: a backend that cannot take events for
+   longer than the retention holds the feed until it does, and each tick it stalls counts on
+   `lineage_forward_stalled_total` and logs `lineage_forward_stalled`.
 
 The full lineage graph (upstream and downstream walks, run history, a DAG view, column lineage) is the forwarded
 backend's. Development runs Marquez from `deploy/fixtures/marquez` (Service `rask-marquez:5000`), which

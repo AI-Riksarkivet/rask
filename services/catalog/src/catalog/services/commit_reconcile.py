@@ -42,6 +42,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import lance
+from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
@@ -49,13 +50,16 @@ from catalog.core import lineage_emit, run_context
 from catalog.core.config import Settings
 from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
 from catalog.services.publication import PUBLISHED_TAG
-from lakehouse import auto_cleanup, commit_records
+from lakehouse import auto_cleanup, commit_records, stored_objects
+from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.features import flags_from_open_error
 from lakehouse.governed import fga
 from lakehouse.lancekit.filters import sql_literal
+from lakehouse.lineage.signing import SIGNATURE_FACET
 from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.openlineage import BRANCH_IDENTIFIER
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, on_s3
+from lakehouse.version_retention import manifest_version
 
 
 log = logging.getLogger(__name__)
@@ -118,11 +122,15 @@ class Announced(BaseModel):
     publications: frozenset[str] = frozenset()
 
 
-def announced(feed_location: str, so: StorageOptions, table_uuid: str, *, since: datetime) -> Announced:
+def announced(feed_location: str, so: StorageOptions, table_uuid: str, *, since: datetime, signer: str | None) -> Announced:
     """Every commit of ``table_uuid`` and every publication of it the feed holds a row for, received at ``since`` or after.
 
     A row naming the table among its outputs (a run) or as its dataset (a static change) at a version counts, whatever
-    the name it used.
+    the name it used, once ``signer`` signed it: lineage records a signature only from its bus and outbox doors, after
+    verifying it, and drops it from every event its HTTP door records ([[LH-576]]). A writer of the table may post an
+    event naming any of its versions over HTTP, which would otherwise read as the catalog's announcement and keep a lost
+    one from ever being announced. ``signer`` is ``None`` for a catalog that signs nothing, whose announcements carry no
+    signature to tell from a posted one's.
     """
     feed = lance.dataset(feed_location, storage_options=so.in_clear() or None)
     rows = feed.to_table(
@@ -136,6 +144,8 @@ def announced(feed_location: str, so: StorageOptions, table_uuid: str, *, since:
             event = json.loads(text)
         except (TypeError, ValueError):
             continue
+        if signer is not None and _signed_by(event) != signer:
+            continue
         commits |= set(_commits_named(event, table_uuid))
         if _names_a_publication(event, table_uuid):
             publications.add(str(_mapping(event.get("run")).get("runId")))
@@ -144,6 +154,15 @@ def announced(feed_location: str, so: StorageOptions, table_uuid: str, *, since:
 
 def _mapping(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _signed_by(event: dict[str, Any]) -> str | None:
+    """The identity whose signature an event recorded on the feed carries, on its run or, for a static change, its dataset."""
+    for holder in ("run", "dataset"):
+        signature = _mapping(_mapping(_mapping(event.get(holder)).get("facets")).get(SIGNATURE_FACET))
+        if isinstance(identity := signature.get("identity"), str):
+            return identity
+    return None
 
 
 def _commits_named(event: dict[str, Any], table_uuid: str) -> Iterator[tuple[str, int]]:
@@ -242,17 +261,23 @@ def scan_ref(
     branch_identifier: str | None,
     mark: int | None,
     announced: set[tuple[str, int]],
-    after: datetime,
-    before: datetime,
+    horizon: timedelta,
+    grace: timedelta,
     record_of: Callable[[str, int, str], commit_records.CommitAuthor | None],
     authenticates: bool,
     unannounced: Callable[[str], bool],
 ) -> RefScan:
-    """Every version of ``branch`` after ``mark``, committed between ``after`` and ``before``, that the feed (``announced``)
-    lacks.
+    """Every version of ``branch`` after ``mark``, older than ``grace`` and younger than ``horizon``, that the feed
+    (``announced``) lacks.
 
-    A version on the feed is confirmed, whoever made it. ``after`` is the horizon: a version committed before it is past
-    the feed's own retention, so the feed may hold no row for it and the pass confirms it unread. ``record_of`` answers,
+    A VERSION'S AGE IS THE STORE'S (ADR 0179): the time the store stamped on its ``_versions/`` manifest
+    (``LastModified``) against the store's own clock at one listing of the ref's ``_versions/``, the listing
+    ``ListTableVersions`` itself reads (``lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md`` §
+    ListTableVersions). Never the manifest's own ``timestamp``, which its writer wrote on its own clock: a writer whose
+    clock ran a day behind made each of its versions read as past the horizon, confirmed unread and never announced.
+
+    A version on the feed is confirmed, whoever made it. The horizon is the feed's retention: a version older is past it,
+    so the feed may hold no row for it and the pass confirms it unread. ``record_of`` answers,
     for a transaction's uuid, the version it holds and the ref's key, the record of the author the catalog authorized that
     commit there for, the only author a re-announcement is signed for (ADR 0187), and only when the version holds the
     manifest the record names, if it names one: a version's own ``rask.author`` is whatever its writer stamped, and its
@@ -266,20 +291,23 @@ def scan_ref(
     raise) is confirmed once its author is recorded, and counted otherwise, never announced.
 
     Raises:
-        ReconcileReadError: A retained version, or its commit time, could not be read; the mark stops before it.
+        ReconcileReadError: The ref's ``_versions/`` could not be listed, or a retained version could not be read or is
+            not in that listing; the mark stops before it.
         OSError: A recorded author, or the manifest it names, could not be read.
     """
     key = commit_records.ref_key(branch, branch_identifier)
     ref_location = managed_versions.CommitRef(table_location=location, branch=branch).location
+    stamped, at = _stamped_versions(ref_location, so)
+    after, before = at - horizon, at - grace
     missing: list[Commit] = []
     unauthored: list[int] = []
     forget: list[Commit] = []
     confirmed = mark
     contiguous = True
     for version, handle in _versions_after(location, so, branch, mark):
-        when = _committed_at(handle)
+        when = stamped.get(version)
         if when is None:
-            raise ReconcileReadError(f"version {version} of {location} on {branch or 'main'} records no readable commit time")
+            raise ReconcileReadError(f"version {version} of {location} on {branch or 'main'} has no manifest the store lists")
         if when >= before:
             break
         on_feed = when < after or (key, version) in announced
@@ -358,9 +386,24 @@ def _versions_after(location: str, so: StorageOptions, branch: str | None, mark:
         yield version, handle
 
 
-def _committed_at(handle: lance.LanceDataset) -> datetime | None:
-    stamp = dataplane.commit_time(handle)
-    return datetime.fromisoformat(stamp) if stamp is not None else None
+def _stamped_versions(ref_location: str, so: StorageOptions) -> tuple[dict[int, datetime], datetime]:
+    """When the store stamped each committed manifest of the ref at ``ref_location`` (its ``LastModified``), by version, and
+    the store's clock at that one listing of the ref's ``_versions/``. A version found under both naming schemes is stamped
+    at the later of the two, so it is looked for no earlier than either says.
+
+    Raises:
+        ReconcileReadError: The store refused, or could not be reached for, the listing.
+    """
+    versions = f"{key_uri(store_of(ref_location), decoded_path(ref_location))}/_versions" if on_s3(ref_location) else f"{ref_location.rstrip('/')}/_versions"
+    try:
+        listing = stored_objects.list_under_at(versions, so)
+    except (OSError, BotoCoreError, ClientError) as exc:
+        raise ReconcileReadError(f"the versions of {ref_location} could not be listed: {exc}") from exc
+    stamped: dict[int, datetime] = {}
+    for listed in listing.objects:
+        if (version := manifest_version(listed.path)) is not None:
+            stamped[version] = max(stamped.get(version, listed.modified), listed.modified)
+    return stamped, listing.at
 
 
 class UnidentifiedCommitError(Exception):
@@ -498,7 +541,7 @@ def reconcile_table(
     marks = commit_records.read_marks(control, control_so, table_uuid)
     after = now - timedelta(seconds=settings.commit_reconcile_horizon_seconds)
     before = grace_bound(now, settings.commit_reconcile_grace_seconds)
-    on_feed = announced(feed, so, table_uuid, since=after - _FEED_SLACK)
+    on_feed = announced(feed, so, table_uuid, since=after - _FEED_SLACK, signer=settings.signing_identity or None)
     parent = fga.parent_namespace_id(segments) or ""
     scans: list[RefScan] = []
     unreadable: list[str] = []
@@ -512,8 +555,8 @@ def reconcile_table(
                     branch_identifier=identifier,
                     mark=marks.refs.get(commit_records.ref_key(branch, identifier)),
                     announced=set(on_feed.commits),
-                    after=after,
-                    before=before,
+                    horizon=timedelta(seconds=settings.commit_reconcile_horizon_seconds),
+                    grace=timedelta(seconds=settings.commit_reconcile_grace_seconds),
                     record_of=lambda transaction_uuid, version, ref: commit_records.recorded(
                         control, control_so, table_uuid, transaction_uuid=transaction_uuid, version=version, ref=ref
                     ),

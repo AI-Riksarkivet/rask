@@ -40,6 +40,7 @@ from lakehouse import control_prefixes, trash
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
+from lakehouse.record_store import delete_record
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
 
@@ -382,6 +383,24 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
         raise NamespaceAlreadyExistsError(f"bucket {bucket!r} is already registered to another project's warehouse") from None
 
 
+def release_bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: str, warehouse_id: str) -> bool:
+    """Delete the claim on ``bucket`` once no warehouse record but ``warehouse_id``'s names it; whether a claim was deleted.
+
+    Asked by a warehouse delete that PURGED the bucket, after the purge and before the warehouse's own record goes: the
+    bytes the claim kept from another project are gone, and the record still standing keeps a re-issue of the delete
+    reaching this step. Idempotent: an absent claim is no claim to release. A delete that keeps the bytes keeps the
+    claim, so no other project registers a bucket that still holds this project's data.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a read of the registry.
+        InternalError: A warehouse record cannot be read, so whether another warehouse still names the bucket is unknown.
+        OSError: The store refused the claim's delete.
+    """
+    if any(r.get("bucket") == bucket and r.get("id") != warehouse_id for r in every_warehouse(control_root, storage_options)):
+        return False
+    return delete_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
+
+
 def bind_namespace(control_root: str, storage_options: StorageOptions, top_ns: str, warehouse_id: str, root_uri: str) -> None:
     """Record that top-level namespace ``top_ns`` physically lives in ``warehouse_id`` (root ``root_uri``).
 
@@ -655,6 +674,11 @@ def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, objec
         if top_ns:
             _pop(top_ns)
     return evicted
+
+
+def record_key(warehouse_id: str) -> str:
+    """Where warehouse ``warehouse_id``'s record lives on the control root."""
+    return f"{_REGISTRY_PREFIX}/{warehouse_id}.json"
 
 
 def delete_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> None:

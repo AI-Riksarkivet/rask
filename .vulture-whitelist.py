@@ -131,3 +131,5 @@ overdue  # unused variable (services/catalog/src/catalog/services/erasure_obliga
 oldest_seq  # unused variable (services/lineage/src/lineage/schemas.py:45)
 paused  # unused variable (services/lineage/src/lineage/api/relay_cron.py:71)
 forgotten  # unused variable (services/maintenance/src/maintenance/services/committed_files.py:47)
+deleting_by  # unused variable (services/catalog/src/catalog/services/control_records.py, ProjectRecord: read by the key DELETING_BY)
+put_policy  # unused function (packages/lakehouse/src/lakehouse/maintenance_policies.py: the seeding write tests arrange a stored policy with)

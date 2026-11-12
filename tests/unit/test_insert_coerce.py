@@ -45,13 +45,12 @@ def _coerce(table: _Table, data: bytes) -> pa.Table:
     return pa.ipc.open_stream(out).read_all()
 
 
-def test_reorders_and_drops_extra_columns() -> None:
+def test_reorders_columns_by_name() -> None:
     table = _Table(pa.schema([("id", pa.int64()), ("tag", pa.string())]))
-    # columns out of order + an extra 'junk' the table doesn't have → aligned by name, extra dropped
+    # columns out of order → aligned by name and cast to the table's types
     incoming = pa.table(
         {
             "tag": pa.array(["a"], pa.string()),
-            "junk": pa.array([9], pa.int64()),
             "id": pa.array([1.0], pa.float64()),
         }
     )

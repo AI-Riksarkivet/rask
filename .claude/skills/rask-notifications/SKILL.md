@@ -126,7 +126,10 @@ await emit_control(  # best-effort; never raises into a committed mutation
 )
 ```
 
-Call it **after** the backend mutation and its audit succeed, so a change that did not happen is never announced. A
+Send it **after** the backend mutation and its audit succeed, so a change that did not happen is never announced, and
+in the catalog **file it before the mutation** (`catalog.api.announcing.Announcer.announcing`, ADR 0205): a door that
+fails between its change and its send then has the event sent by the catalog's finish, under the `event_id` it built,
+once the store shows the change landed. A
 table's or namespace's `object_id` is its uuid object (`table:<uuid>`, the object its grants are held by, [[LH-524]])
 with its name in `object_name`, and the typed `object_uuid` and `namespace_uuid` name it (or the one a grant or policy
 is scoped to) by its uuids (ADR 0173 §10). The catalog's control emitter fills `object_uuid` from `object_id` and the

@@ -229,21 +229,35 @@ def require_a_token(identity: WebIdentity | None, *, prefix: str) -> None:
         raise ValueError(f"with {prefix}_SECRETS_FROM_DAPR the object-store identity is the ServiceAccount token: set {prefix}_S3_WEB_IDENTITY_TOKEN_FILE")
 
 
-def require_env_pair(env_pair: S3KeyPair, *, prefix: str) -> None:
-    """Refuse to boot a service that projects no token without both halves of its environment's pair.
+#: The acknowledgement a service needs before it signs with a static key pair from its environment.
+STATIC_KEY_ACKNOWLEDGEMENT: Final = "RASK_INSECURE_ALLOW_STATIC_STORE_KEY"
+
+
+def require_env_pair(settings: StoreIdentitySettings, *, prefix: str) -> None:
+    """Refuse to boot a service that projects no token unless both halves of its environment's pair are set, and an
+    operator acknowledged signing with them.
 
     An empty secret would fail every request with a `SignatureDoesNotMatch` rather than a startup error. The key id is
     refused too: any default for it would be the store's root account, whose credential reaches every tenant's bytes
     and the records that govern the services themselves. A credential is a pair, and refusing one half leaves the other
-    unguarded.
+    unguarded. A whole pair is a static key that never rotates, where a deployment's identity is its ServiceAccount token
+    (ADR 0170), so it signs only where :data:`STATIC_KEY_ACKNOWLEDGEMENT` says an operator meant it: the offline and
+    Dagger lanes and the side stacks, which project no token. The chart renders no pair and no acknowledgement.
 
     Raises:
-        ValueError: A half of the pair is missing.
+        ValueError: A half of the pair is missing, or nobody acknowledged a static pair.
     """
+    env_pair = settings.env_pair
     if not env_pair.access_key_id:
         raise ValueError(f"{prefix}_S3_ACCESS_KEY_ID is required when the service projects no token ({prefix}_S3_WEB_IDENTITY_TOKEN_FILE)")
     if not env_pair.secret_access_key.get_secret_value():
         raise ValueError(f"{prefix}_S3_SECRET_ACCESS_KEY is required when the service projects no token ({prefix}_S3_WEB_IDENTITY_TOKEN_FILE)")
+    if not settings.insecure_allow_static_store_key:
+        raise ValueError(
+            f"this service would sign with the static key pair {prefix}_S3_ACCESS_KEY_ID names, which never rotates: a deployment's "
+            f"store identity is its ServiceAccount token ({prefix}_S3_WEB_IDENTITY_TOKEN_FILE). Set {STATIC_KEY_ACKNOWLEDGEMENT}=true "
+            "to declare that a static key is what you meant."
+        )
 
 
 def env_alias(prefix: str) -> Callable[[str], str]:
@@ -275,6 +289,9 @@ class StoreIdentitySettings(BaseSettings):
     #: The pair the service signs with when it projects no token: the offline and Dagger lanes' fixture.
     s3_access_key_id: str = ""
     s3_secret_access_key: SecretStr = SecretStr("")
+    #: AN ACKNOWLEDGEMENT, NOT A SWITCH: the pair signs only where an operator said a static key is what they meant
+    #: (`require_env_pair`), as `RASK_INSECURE_ALLOW_UNAUTHENTICATED` says it of authentication off.
+    insecure_allow_static_store_key: bool = Field(default=False, alias=STATIC_KEY_ACKNOWLEDGEMENT)
     s3_region: str = DEFAULT_REGION
 
     @property

@@ -20,6 +20,7 @@ from botocore.exceptions import ClientError
 from lance_namespace import InternalError, InvalidInputError, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
+from unfiled_announcer import unfiled
 
 from catalog.api import dependencies, fga_deps
 from catalog.core.config import Settings
@@ -272,7 +273,7 @@ def _create_project_as(settings: Settings, sub: str, project_id: str) -> Any:
             settings=settings,
             token=_caller(sub),
             client=MagicMock(),
-            control=NoopControlEmitter(),
+            announcer=unfiled(NoopControlEmitter()),
             body=proj_ep.CreateProjectRequest(id=project_id),
         )
     )
@@ -335,7 +336,7 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
 
     def create(admin: str | None) -> Any:
         body = proj_ep.CreateProjectRequest(id="acme", admin=admin)
-        return asyncio.run(proj_ep.create_project(settings=settings, token=machine, client=MagicMock(), control=NoopControlEmitter(), body=body))
+        return asyncio.run(proj_ep.create_project(settings=settings, token=machine, client=MagicMock(), announcer=unfiled(NoopControlEmitter()), body=body))
 
     # A service account's subject, the provisioner's own or another release's, is a machine whatever its namespace.
     for unnamed in (None, "kubernetes~system:serviceaccount:rask:rask-sa-web", provisioner):
@@ -379,7 +380,7 @@ def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, m
 
 
 def _bare_request() -> Any:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(warehouse_binding_cache={})))
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(warehouse_binding_cache={})), state=SimpleNamespace())
 
 
 def test_binding_lookup_fails_closed_on_read_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -16,14 +16,10 @@ covering one fragment it commits index migrations, then crashes the process (mea
 
 from __future__ import annotations
 
-import logging
-
 import lance
 
 from lakehouse.maintenance_due import IndexDue
 
-
-log = logging.getLogger(__name__)
 
 #: Delta segments tolerated before an optimize is due. One is the steady state after an optimize that appended rather
 #: than merged; a handful is where query fan-out starts to show.
@@ -39,13 +35,13 @@ def _live_rows(fragment: lance.LanceFragment) -> int:
 def due_indices(ds: lance.LanceDataset, *, max_deltas: int = DEFAULT_MAX_DELTAS) -> list[IndexDue]:
     """Every user index an optimize is due on: one leaving live rows in a fragment no segment covers, or with more than
     ``max_deltas`` segments, which names the merge that clears them (:attr:`IndexDue.num_indices_to_merge`). A system
-    index (``__``-named) is the table's own and never listed."""
-    try:
-        described = list(ds.describe_indices())
-        live = {fragment.fragment_id: _live_rows(fragment) for fragment in ds.get_fragments()}
-    except Exception as exc:
-        log.warning("describe_indices_failed", extra={"error": str(exc)})
-        return []
+    index (``__``-named) is the table's own and never listed.
+
+    A describe that fails raises: it says nothing about the indices, and read as "none due" it deleted the table's due
+    record (:func:`maintenance.services.due.refresh_due` keeps the record and the pass asks again).
+    """
+    described = list(ds.describe_indices())
+    live = {fragment.fragment_id: _live_rows(fragment) for fragment in ds.get_fragments()}
     due: list[IndexDue] = []
     for index in described:
         if not index.name or index.name.startswith("__"):

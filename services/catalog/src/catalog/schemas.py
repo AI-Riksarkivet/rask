@@ -23,6 +23,17 @@ from lakehouse.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGT
 from lakehouse.maintenance_due import CompactionDue, IndexDue
 
 
+class RequestBody(BaseModel):
+    """The body of a request to one of rask's own doors, which refuses a field it does not define.
+
+    A field the door does not define is refused 400 (code 13) naming it, never ignored: a misspelled bound
+    (``retain_version``) read as absent would apply a default the caller never chose, and the request would answer as if
+    it had been understood. The spec's request models are the installed ``lance_namespace``'s, not these.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
 # --------------------------------------------------------------------------- #
 # Access review / simulation / grant / graph (#51 / #68 / #72 / #81)
 # --------------------------------------------------------------------------- #
@@ -53,7 +64,7 @@ class AccessListResponse(BaseModel):
     truncated: bool = False
 
 
-class ManagedAccessRequest(BaseModel):
+class ManagedAccessRequest(RequestBody):
     """Turn managed access on or off for one container."""
 
     enabled: bool
@@ -91,7 +102,7 @@ class MyPermissionsResponse(BaseModel):
     permissions: dict[str, bool]
 
 
-class AccessCheckRequest(BaseModel):
+class AccessCheckRequest(RequestBody):
     """A simulated authorization question — does ``user`` hold ``relation`` on this object? The
     ``user`` may be a bare subject (``alice``, taken as ``user:alice``) or a fully-qualified userset
     (``role:<id>#assignee``)."""
@@ -109,7 +120,7 @@ class AccessCheckResponse(BaseModel):
     allowed: bool
 
 
-class AccessGrantRequest(BaseModel):
+class AccessGrantRequest(RequestBody):
     """Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` → ``user:alice``)
     or a fully-qualified userset (``role:<id>#assignee``); ``relation`` must
     be a grantable base rung the compiled model defines on the type (owner/writer/reader/validator) — never
@@ -128,7 +139,7 @@ class AccessGrantResponse(BaseModel):
     granted: bool  # True after a grant, False after a revoke — the resulting state of the tuple
 
 
-class TupleCondition(BaseModel):
+class TupleCondition(RequestBody):
     """A CEL condition attached to a grant, with the parameters that ride the TUPLE.
 
     For the model's ``non_expired_grant`` that is ``grant_time`` + ``grant_duration`` — the window.
@@ -139,7 +150,7 @@ class TupleCondition(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
-class AccessTuple(BaseModel):
+class AccessTuple(RequestBody):
     """One raw relationship tuple, verbatim (``user`` is a full subject — ``user:<id>`` or a userset like
     ``role:<id>#assignee``). The estate-admin tuple API's unit: the read page lists these, write/delete take
     one as the body and echo it back, and a check verdict carries the exact tuple it probed."""
@@ -213,7 +224,7 @@ class AccessCheckResult(BaseModel):
     checked: AccessTuple
 
 
-class AccessListObjectsRequest(BaseModel):
+class AccessListObjectsRequest(RequestBody):
     """ "What can this subject reach?" — every object of ``type`` on which ``user`` holds ``relation``.
     ``user`` may be a bare id (``alice`` → ``user:alice``) or a full subject/userset, as everywhere else."""
 
@@ -231,9 +242,12 @@ class AccessListObjectsResponse(BaseModel):
     user: str
     relation: str
     type: str
+    #: True when OpenFGA stopped at its ListObjects ceiling, so ``objects`` is a part of what the subject reaches, not
+    #: all of it: a reach review that reads a cut answer as whole concludes the rest is out of reach.
+    truncated: bool = False
 
 
-class AccessListUsersRequest(BaseModel):
+class AccessListUsersRequest(RequestBody):
     """ "Who can do this?" — every subject holding ``relation`` on ``object``. The inverse of
     :class:`AccessListObjectsRequest`, and the blast-radius primitive before a revoke.
 
@@ -310,7 +324,7 @@ class AccessExpandDifference(BaseModel):
     subtract: AccessExpandNode | None = None
 
 
-class AccessSimulateRequest(BaseModel):
+class AccessSimulateRequest(RequestBody):
     """ "Would this grant do what I think?" — a Check evaluated AS IF ``hypothetical`` existed.
 
     Nothing is written. The model is concentric, so a grant three levels up cascades to every child;
@@ -343,7 +357,7 @@ class AccessSimulateResult(BaseModel):
     hypothetical: list[AccessTuple]
 
 
-class AccessExpandRequest(BaseModel):
+class AccessExpandRequest(RequestBody):
     """ "Why does this resolve?" — the userset tree for ``relation`` on ``object``.
 
     ``depth`` counts hops: 1 is a plain OpenFGA Expand (one level, the faithful primitive), higher
@@ -400,7 +414,7 @@ class AccessGraphResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-class GcRequest(BaseModel):
+class GcRequest(RequestBody):
     """The GC bounds — a version is reclaimable only if it clears BOTH given bounds (older than
     ``retention_days`` AND outside the most-recent ``retain_versions``). At least one is required."""
 
@@ -438,11 +452,9 @@ class CleanupDisarmed(BaseModel):
     disarmed: list[str] = Field(default_factory=list)
 
 
-class FloorRaiseRequest(BaseModel):
+class FloorRaiseRequest(RequestBody):
     """A raise of a table's listing floor, or its dry run. A field it does not name is refused, since a misnamed
     ``dry_run`` would otherwise commit the raise its caller only meant to preview."""
-
-    model_config = ConfigDict(extra="forbid")
 
     #: Answer as the raise would be answered, the caller's rung and the table's name judged, and commit nothing.
     dry_run: bool = False
@@ -480,7 +492,7 @@ class MaintenanceDueResponse(BaseModel):
     page_token: str | None = None
 
 
-class ErasureRequest(BaseModel):
+class ErasureRequest(RequestBody):
     """What to erase, and how much history the caller means to take with it ([[LH-073]], [[LH-493]])."""
 
     #: The rows to remove, as a Lance filter expression — the same dialect `delete_from_table` takes.
@@ -496,7 +508,7 @@ class ErasureRequest(BaseModel):
     follows: str | None = None
 
 
-class ErasureVerifyRequest(BaseModel):
+class ErasureVerifyRequest(RequestBody):
     """The predicate an erasure obligation was recorded with, which the catalog holds only as a digest ([[LH-493]])."""
 
     predicate: str
@@ -507,7 +519,7 @@ class ErasureVerifyRequest(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-class PolicyRequest(BaseModel):
+class PolicyRequest(RequestBody):
     """The maintenance policy for one table, namespace or project — every field optional-with-defaults.
 
     ``retention_days`` / ``retain_versions`` override the sweep's global old-version cleanup (Lance
@@ -682,7 +694,7 @@ class ProjectPoliciesResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-class DeleteProfile(BaseModel):
+class DeleteProfile(RequestBody):
     """What a drop under a warehouse does (ADR 0146): ``hard`` destroys the table at once; ``soft`` keeps it
     recoverable for ``grace_days``, after which its grants are revoked and its bytes wait for the purge; ``estate``
     clears the warehouse's own profile, so it takes the estate's ``LANCE_TRASH_GRACE_DAYS``."""
@@ -698,7 +710,7 @@ class DeleteProfile(BaseModel):
         return self
 
 
-class CreateWarehouseRequest(BaseModel):
+class CreateWarehouseRequest(RequestBody):
     id: str
     project: str
     bucket: str | None = None  # defaults to the id (a warehouse = one bucket)
@@ -777,7 +789,7 @@ class WarehouseResponse(BaseModel):
         return data
 
 
-class CreateWarehouseNamespaceRequest(BaseModel):
+class CreateWarehouseNamespaceRequest(RequestBody):
     namespace: str  # a single TOP-LEVEL namespace name to create in + bind to this warehouse
     #: ADOPT a namespace whose bytes were already migrated INTO this warehouse's bucket (the
     #: sanctioned bytes-first migration): a native "already exists" AT THE WAREHOUSE ROOT converges
@@ -838,7 +850,7 @@ class TrashEndResponse(BaseModel):
     tuples_revoked: int
 
 
-class TrashRefusalRequest(BaseModel):
+class TrashRefusalRequest(RequestBody):
     """Why maintenance declined to act on a trash record this tick, as its own report names it."""
 
     reason: str = Field(min_length=1, max_length=2000)
@@ -876,6 +888,34 @@ class CloneEndingFinishResponse(BaseModel):
     kept: bool
 
 
+class IdempotencyKeysReclaimResponse(BaseModel):
+    """What one reclaim of expired `Idempotency-Key` records did ([[LH-576]])."""
+
+    #: Records deleted.
+    reclaimed: int
+    #: Expired records a retry wrote again since they were listed, kept for another lifetime.
+    kept: int
+    #: Expired records past this call's limit, for the caller to ask again.
+    left: int
+    #: Objects under the records' prefix that are no record, left alone.
+    unreadable: int
+
+
+class AnnouncementIntentsFinishResponse(BaseModel):
+    """What one finish of the announcements doors left did ([[LH-576]])."""
+
+    #: Filings judged and removed.
+    finished: int = 0
+    #: Announcements sent, their change shown landed.
+    sent: int = 0
+    #: Announcements not sent, the store showing their change did not land.
+    unlanded: int = 0
+    #: Filings left to their door, younger than a door can act.
+    young: int = 0
+    #: Filings past this call's limit, for the caller to ask again.
+    left: int = 0
+
+
 class GrantCensusResponse(BaseModel):
     """Every object's grant count, by type, as the store holds them now: what a drift report's authorization categories
     read. The objects a deployment keeps for itself are left out, since no registry names them."""
@@ -888,7 +928,7 @@ class GrantCensusResponse(BaseModel):
     truncated: str | None = None
 
 
-class GhostRevokeRequest(BaseModel):
+class GhostRevokeRequest(RequestBody):
     """The objects a drift report found holding grants that no registry names, each an OpenFGA object (``kind:id``)."""
 
     objects: list[str] = Field(min_length=1, max_length=500)
@@ -901,7 +941,7 @@ class GhostRevokeResponse(BaseModel):
     refused: dict[str, str] = Field(default_factory=dict)
 
 
-class TenancyRebuildRequest(BaseModel):
+class TenancyRebuildRequest(RequestBody):
     """The warehouses whose tenancy edge a drift report found missing, by id."""
 
     warehouses: list[str] = Field(min_length=1, max_length=500)
@@ -915,7 +955,7 @@ class TenancyRebuildResponse(BaseModel):
     unjustified: dict[str, str] = Field(default_factory=dict)
 
 
-class PublishRequest(BaseModel):
+class PublishRequest(RequestBody):
     """Ask the catalog to gate a committed version and, if it passes, publish it.
 
     `version` is explicit rather than "whatever is latest": between a writer's commit and its publish
@@ -1021,16 +1061,14 @@ class PromotionHold(BaseModel):
 
 
 class PromotionsListResponse(BaseModel):
-    """The open holds the caller may see, in table order."""
+    """The open holds the caller may see, the soonest the sweep expires first."""
 
     holds: list[PromotionHold]
     page_token: str | None = None
 
 
-class PromotionDecisionRequest(BaseModel):
+class PromotionDecisionRequest(RequestBody):
     """The held version being decided. A decision lands only on the hold its decider reviewed."""
-
-    model_config = ConfigDict(extra="forbid")
 
     version: int = Field(ge=1)
 
@@ -1049,7 +1087,7 @@ class PromotionDecision(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-class SetProtectionRequest(BaseModel):
+class SetProtectionRequest(RequestBody):
     """The one field the protection doors write. Setting is idempotent; clearing removes the flag.
 
     ONE definition for the table, namespace and warehouse doors, so the contract names one schema: a copy per
@@ -1100,7 +1138,7 @@ class TrashListing(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-class GateSpecRequest(BaseModel):
+class GateSpecRequest(RequestBody):
     """Declare one project's gate. The project comes from the gated PATH, never from here.
 
     Omitting ``project`` is the security half: a body-supplied project would let an admin of one
@@ -1109,8 +1147,6 @@ class GateSpecRequest(BaseModel):
     Field semantics live on ``lakehouse.gate_specs.GateSpec``, which is the model this
     validates into.
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     key_column: str = "id"
     required_columns: list[str] = Field(default_factory=list)
@@ -1173,17 +1209,15 @@ class MemberList(BaseModel):
     grantable: list[str] = Field(default_factory=lambda: list(GRANTABLE))
 
 
-class GrantRequest(BaseModel):
+class GrantRequest(RequestBody):
     #: A bare subject (``gina``) or a full FGA user string. Normalised by the endpoint — asking a UI to
     #: know the prefix is asking it to know the authorization model.
     user: str = Field(min_length=1, max_length=256)
     relation: Rung
 
 
-class RoleCreateRequest(BaseModel):
+class RoleCreateRequest(RequestBody):
     """A role to mint in a project ([[LH-557]]): its name, unique in the project, and what it is for."""
-
-    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
@@ -1212,11 +1246,9 @@ class RoleList(BaseModel):
     roles: list[Role]
 
 
-class AssigneeRequest(BaseModel):
+class AssigneeRequest(RequestBody):
     """One assignee of a role: a principal (``dex~gina``), its ``user:`` id, or another role of the same project
     (``role:<id>#assignee``)."""
-
-    model_config = ConfigDict(extra="forbid")
 
     user: str = Field(min_length=1, max_length=256)
 
@@ -1334,7 +1366,7 @@ class ProjectResponse(BaseModel):
     protected_by: str | None = None
 
 
-class CreateProjectRequest(BaseModel):
+class CreateProjectRequest(RequestBody):
     """The create payload: the tenant's id, and who administers it when a machine creates it."""
 
     id: str
@@ -1353,7 +1385,7 @@ class DeleteProjectResponse(BaseModel):
     tuples_revoked: int
 
 
-class TableChangesRequest(BaseModel):
+class TableChangesRequest(RequestBody):
     """What a consumer asks for when following a table (§ J4).
 
     NOT a spec model — the Lance Namespace spec has no change-feed op — so it is declared here rather

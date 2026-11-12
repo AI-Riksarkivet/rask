@@ -66,6 +66,7 @@ from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.subjects import is_person_subject
+from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.outage import store_refusal
 from lakehouse.storage_options import StorageOptions
@@ -1693,6 +1694,42 @@ async def judged_page[T](
                 return page, key if more else None
         start, size = start + len(batch), min(LISTING_BATCH, size * 2)
     return page, None
+
+
+async def named_record_page[R](
+    authz: Authorization | None,
+    store: ClaimStore,
+    *,
+    relation: str,
+    candidates: Sequence[tuple[str, R]],
+    kept_by: Callable[[R], table_claims.TableRecord],
+    page_token: str | None,
+    limit: int | None,
+) -> tuple[list[tuple[str, R]], str | None]:
+    """The page of records kept for tables, each with the name its table holds now, that the caller holds ``relation`` on.
+
+    Each candidate is its listing key (sorted, unique) and its record, and ``kept_by`` reads the location and uuid the
+    record keeps. A record's table is named (:func:`table_claims.names_now`) and judged on its uuid only as the page
+    fills (:func:`judged_page`), so a page costs a claim read and a check for about the records it serves or passes
+    over, never one for every record held. A record whose table is gone names no table and is listed to nobody.
+    """
+    names: dict[str, str] = {}
+
+    async def judged_on(batch: Sequence[tuple[str, R]]) -> list[str | None]:
+        kept = [kept_by(record) for _, record in batch]
+        now = await run_in_threadpool(table_claims.names_now, store, kept)
+        names.update((key, name) for (key, _), name in zip(batch, now, strict=True) if name is not None)
+        return [fga.table_object(record.uuid) if name is not None else None for record, name in zip(kept, now, strict=True)]
+
+    page, token = await judged_page(
+        authz,
+        relation=relation,
+        candidates=[(key, (key, record)) for key, record in candidates],
+        objects_of=judged_on,
+        page_token=page_token,
+        limit=limit,
+    )
+    return [(names[key], record) for key, record in page], token
 
 
 async def _listed_object(resolver: Resolver, kind: Literal["table", "namespace"], name: str, segments: list[str]) -> str | None:

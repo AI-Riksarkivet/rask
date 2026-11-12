@@ -16,10 +16,13 @@ Two refusals stand in front of asking, each because the release would strip a li
 judges both again on its own reads:
 
 * **STILL REGISTERED.** An undrop registers and then clears the record, so a crash between the two leaves a record on a
-  live table (``purge.still_registered``, the purge's own rule). The manifests are read across every root the registry
-  names, deactivated warehouses' included: reading a manifest touches no tenant's bytes, and a root left unread would
-  read its live tables as gone.
-* **OUTSIDE EVERY ROOT READ.** A table whose location sits under no root this step read cannot be told live or gone.
+  live table (``purge.still_registered``, the purge's own rule). A trash task's release reads the ``__manifest`` of the
+  one bucket a table record's location is in (:func:`release_record`); the audit's and the scan's backstop
+  (:func:`release_expired_trash`), and a task's release of a namespace record, read every root the registry names,
+  deactivated warehouses' included: reading a manifest touches no tenant's bytes, and a root left unread would read its
+  live tables as gone.
+* **OUTSIDE EVERY ROOT READ.** On the backstop's estate-wide read, a table whose location sits under no root it read
+  cannot be told live or gone. A task's release reads the root its record's location is under, so it never meets one.
 
 A record is taken :data:`lakehouse.trash.RELEASE_SETTLE` after its deadline, not at it: an undrop the door admitted
 just before the deadline registers before it clears the record, and a revoke landing between the two would leave the
@@ -38,7 +41,7 @@ from pydantic import BaseModel, Field
 
 from lakehouse import trash, warehouse_records
 from lakehouse.base_refs import location_within
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, on_s3
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, release_trash
 from maintenance.services.purge import Liveness, liveness_across, still_registered
@@ -138,11 +141,9 @@ async def _release_one(record: dict[str, Any], *, roots: set[str], live: Livenes
     )
 
 
-async def release_expired_trash(
-    settings: MaintenanceSettings, *, control_root: str | None = None, now: datetime | None = None, only: str | None = None
-) -> TrashReleaseReport:
-    """Release every drop :data:`lakehouse.trash.RELEASE_SETTLE` past its deadline that this step may release, or only
-    the one whose object's uuid is ``only``: a trash task's release at its own deadline. Never raises."""
+async def release_expired_trash(settings: MaintenanceSettings, *, control_root: str | None = None, now: datetime | None = None) -> TrashReleaseReport:
+    """Release every drop :data:`lakehouse.trash.RELEASE_SETTLE` past its deadline that this step may release: the audit's
+    and the scan's backstop for a record no task released. Never raises."""
     at = now or datetime.now(UTC)
     out = TrashReleaseReport()
     resolved_control_root = control_root or settings.resolved_control_root
@@ -151,7 +152,7 @@ async def release_expired_trash(
         storage_options = settings.storage_options()
         records = await run_in_threadpool(trash.list_all, resolved_control_root, storage_options)
         roots = await run_in_threadpool(roots_read, settings, storage_options, resolved_control_root)
-        due = [record for record in records if trash.releasable(record, now=at) and not trash.is_released(record) and only in (None, trash.object_uuid(record))]
+        due = [record for record in records if trash.releasable(record, now=at) and not trash.is_released(record)]
         live = await run_in_threadpool(liveness_across, roots, storage_options) if due else None
     except Exception as exc:  # noqa: BLE001 — an unreadable session, registry or estate stops the step, it does not fail the tick
         out.reason = f"the trash, the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
@@ -159,9 +160,51 @@ async def release_expired_trash(
         return out
     out.ran = True
     for record in due:
-        match await _release_or_hold(record, roots=roots, live=live, settings=settings):
-            case ReleasedRecord() as released:
-                out.released.append(released)
-            case HeldRecord() as held:
-                out.held.append(held)
+        _reported(out, await _release_or_hold(record, roots=roots, live=live, settings=settings))
     return out
+
+
+async def release_record(record: dict[str, Any], settings: MaintenanceSettings, *, now: datetime | None = None) -> TrashReleaseReport:
+    """Release the one drop ``record`` keeps, read by its key, once it is :data:`lakehouse.trash.RELEASE_SETTLE` past its
+    deadline: a trash task's release at its own deadline. Never raises.
+
+    What it reads is the record's, never the estate's (ADR 0198 §2): whether a table stands again is asked of the
+    ``__manifest`` of the bucket its location is in (:func:`root_of`), where every row naming that location is, since a
+    table the catalog makes, registers or restores is recorded relative to the root it is laid out under. A record that
+    names no such place, a namespace's, has no one root, and is judged against every root the registry names, as the
+    audit's backstop judges it. The catalog judges the record again on its own reads before it revokes anything.
+    """
+    out = TrashReleaseReport()
+    if not trash.releasable(record, now=now or datetime.now(UTC)) or trash.is_released(record):
+        out.ran = True
+        return out
+    try:
+        storage_options = settings.storage_options()
+        own = root_of(record)
+        roots = {own} if own is not None else await run_in_threadpool(roots_read, settings, storage_options, settings.resolved_control_root)
+        live = await run_in_threadpool(liveness_across, roots, storage_options)
+    except Exception as exc:  # noqa: BLE001 — an unreadable session, registry or estate stops the step, it does not fail the task
+        out.reason = f"the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
+        log.error("trash_release_blocked", extra={"reason": out.reason, "uuid": trash.object_uuid(record)})
+        return out
+    out.ran = True
+    _reported(out, await _release_or_hold(record, roots=roots, live=live, settings=settings))
+    return out
+
+
+def root_of(record: dict[str, Any]) -> str | None:
+    """The root whose ``__manifest`` records every table at ``record``'s location: the bucket a table record's ``s3://``
+    location is in; ``None`` for a record naming no such place (a namespace's, or a table recorded with no location)."""
+    location = trash.location_of(record)
+    if trash.kind_of(record) != "table" or not on_s3(location):
+        return None
+    bucket = location.removeprefix("s3://").split("/", 1)[0]
+    return f"s3://{bucket}" if bucket else None
+
+
+def _reported(out: TrashReleaseReport, judged: ReleasedRecord | HeldRecord) -> None:
+    match judged:
+        case ReleasedRecord() as released:
+            out.released.append(released)
+        case HeldRecord() as held:
+            out.held.append(held)

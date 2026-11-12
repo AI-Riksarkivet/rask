@@ -25,11 +25,13 @@ from hashlib import blake2s
 from typing import Final
 
 import pyarrow.fs as pafs
+from lance_namespace import InternalError
 from pydantic import ValidationError
 
 from catalog.schemas import RoleRecord
 from lakehouse import control_prefixes
 from lakehouse.objectfs import fs_and_base
+from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
 from lakehouse.storage_options import StorageOptions
 
@@ -82,23 +84,57 @@ def create_role_record(control_root: str, storage_options: StorageOptions, recor
         raise RecordExistsError(key) from exc
 
 
-def list_roles(control_root: str, storage_options: StorageOptions, project: str) -> list[RoleRecord]:
-    """Every standing role of ``project``, ordered by name. An unreadable record is skipped and logged, so one bad object
-    does not void the project's roles."""
+def _read_roles(control_root: str, storage_options: StorageOptions, project: str) -> tuple[list[RoleRecord], list[str]]:
+    """Every standing role of ``project``, ordered by name, and the path of each record that is there and cannot be read
+    as one. A record deleted since the listing named it is no record.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a record's read: one skipped as unreadable would read as a
+            corrupt record, which no retry mends ([[LH-572]]).
+    """
     fs, base = fs_and_base(control_root, storage_options)
     found: list[RoleRecord] = []
+    unreadable: list[str] = []
     for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_ROLES_PREFIX}/{project}", allow_not_found=True)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
             with fs.open_input_stream(info.path) as stream:
                 stored = StoredRole.model_validate(json.loads(stream.readall().decode("utf-8")))
+        except FileNotFoundError:
+            continue
         except (OSError, ValueError, ValidationError) as exc:
+            if reads_as_store_outage(exc):
+                raise store_refusal(exc, reading=f"reading {info.path}", so="the project's roles cannot be read") from exc
             log.warning("role_record_unreadable", extra={"path": info.path, "error": str(exc)})
+            unreadable.append(info.path)
             continue
         if stored.ended_at is None:
             found.append(RoleRecord(**stored.model_dump(exclude={"ended_at"})))
-    return sorted(found, key=lambda role: role.name)
+    return sorted(found, key=lambda role: role.name), unreadable
+
+
+def list_roles(control_root: str, storage_options: StorageOptions, project: str) -> list[RoleRecord]:
+    """Every standing role of ``project``, ordered by name. An unreadable record is skipped and logged, so one bad object
+    does not void the project's roles; a caller ending them all asks :func:`every_role`."""
+    return _read_roles(control_root, storage_options, project)[0]
+
+
+def every_role(control_root: str, storage_options: StorageOptions, project: str) -> list[RoleRecord]:
+    """Every standing role of ``project``, read whole, for a caller ending them all: a record that cannot be read may be
+    one of the roles it must end, so it is refused rather than left standing with its grants ([[LH-572]]).
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a record's read.
+        InternalError: A record is there and cannot be read as one.
+    """
+    roles, unreadable = _read_roles(control_root, storage_options, project)
+    if unreadable:
+        raise InternalError(
+            f"{len(unreadable)} role record(s) of project {project!r} cannot be read as one ({', '.join(sorted(unreadable))}), so its "
+            "roles cannot all be ended. Refusing rather than leaving a role standing with its grants."
+        )
+    return roles
 
 
 def find_role(control_root: str, storage_options: StorageOptions, project: str, role_id: uuid.UUID | str) -> RoleRecord | None:

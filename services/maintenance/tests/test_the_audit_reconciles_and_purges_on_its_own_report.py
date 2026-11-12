@@ -172,7 +172,8 @@ def test_the_purge_consumes_the_report_its_own_audit_produced(monkeypatch: pytes
 def test_the_audit_asks_the_catalog_to_finish_every_clones_ending_it_lists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A clone's tag a door could not release is released by the catalog, asked by the audit for each ending the catalog
     lists (ADR 0198 §1): maintenance's store policy writes no source's tags. A refusal is reported by the ending's id and
-    never stops the audit."""
+    never stops the audit. The same audit asks the catalog to send what a failed door filed to announce (ADR 0205), once
+    while nothing is left."""
     monkeypatch.setattr(audit, "reconcile", _Reconciler())
     catalog = "http://catalog.test"
     settings = _settings(catalog_url=catalog).model_copy(update={"control_root": str(tmp_path)})
@@ -185,10 +186,14 @@ def test_the_audit_asks_the_catalog_to_finish_every_clones_ending_it_lists(tmp_p
         young = doors.post(f"/management/v1/clone-endings/{refused}/finish").mock(
             return_value=httpx.Response(409, json={"code": 19, "detail": "the ending was filed less than 0:15:00 ago"})
         )
+        announced = doors.post("/management/v1/announcement-intents/finish").mock(
+            return_value=httpx.Response(200, json={"finished": 2, "sent": 3, "unlanded": 1, "young": 0, "left": 0})
+        )
         out = asyncio.run(_the_hourly_audit(settings))
 
-    assert (done.call_count, young.call_count) == (1, 1)
+    assert (done.call_count, young.call_count, announced.call_count) == (1, 1, 1)
     assert (out["clone_endings"]["finished"], list(out["clone_endings"]["refused"])) == ([finished], [refused])
+    assert out["announcement_intents"] == {"finished": 2, "sent": 3, "unlanded": 1, "left": 0}
 
 
 def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
