@@ -78,7 +78,9 @@ class _Reclaim(BaseModel):
     location: str
     #: Another object's record, which the reclaim must leave.
     other_record: str
-    #: The parent's pair, which reads the estate as maintenance's own identity would.
+    #: The parent's pair, the catalog's whole data plane, which the reclaim session narrows. The purge's own reads sign with
+    #: it too, so they reach more here than under maintenance's own identity, which reads each root's ``__manifest`` and the
+    #: control records.
     parent: tuple[str, str]
     #: The session STS issued under the reclaim's policy: its key, secret and token.
     issued: tuple[str, str, str]
@@ -88,7 +90,7 @@ class _Reclaim(BaseModel):
         return {str(item["Key"]) for item in listed.get("Contents", [])}
 
     def settings(self) -> MaintenanceSettings:
-        """Maintenance on the store as its own identity, which reads, with the purge on and the stand-in door to ask."""
+        """Maintenance on the store signing its own reads with the parent's pair, with the purge on and the stand-in door to ask."""
         return MaintenanceSettings.model_validate(
             {
                 "s3_endpoint": self.store.endpoint,

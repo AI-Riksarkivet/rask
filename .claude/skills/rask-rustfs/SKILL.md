@@ -111,12 +111,17 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 - **No store identity needs rotating**: none is a key pair, and a session lasts at most its exchange's length. A
   multibase data base holds none either: it is its tables' storage, reached under the catalog's own identity
   ([[LH-286]]). Narrowing an identity is a policy change in git, which the next provisioning run converges on.
-- **Maintenance writes almost nothing under its own session.** Its canned policy reads the estate and writes only
+- **Maintenance reads history, never data, and writes almost nothing under its own session** ([[LH-575]]). Its canned
+  policy lists every bucket and gets each table's manifests, refs and transactions, each root's `__manifest/` index and
+  the control records it judges by, and no data, deletion or index file (measured on the estate's 1.0.3 under helm
+  revision 51, 2026-11-12: a data file of a tenant table and of a control-bucket table refused `AccessDenied`, their
+  manifests and transactions answered). It writes only
   `<control bucket>/_maintenance_due/*`, `_maintenance_files/*` (its copy of the commit records it has read,
   `lakehouse.file_identities`, which no erasure or hold reads), `_policies/state/*` and `_lineage_outbox/*` (owner,
   2026-11-03: a compromised
-  maintenance pod must not be able to defeat an erasure or a hold). A rewrite signs with the table's `maintain`-tier
-  vend, and the trash purge deletes a due record's bytes with a reclaim session the catalog vends for that one record
+  maintenance pod must not be able to defeat an erasure or a hold). A cleanup's deletes sign with the table's
+  `maintain`-tier vend, which gets and deletes and puts nothing of the table (a pass's two commits are the catalog's,
+  ADR 0204), and the trash purge deletes a due record's bytes with a reclaim session the catalog vends for that one record
   (`POST /management/v1/trash/{kind}/{uuid}/credentials`, `catalog.core.vending.ReclaimScope`: list and delete over its
   location and data directories, nothing on the control root); both are session policies under the catalog's own
   identity. The trash records themselves, their release stamp and their end are the catalog's own writes (ADR 0197).

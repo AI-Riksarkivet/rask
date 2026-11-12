@@ -119,19 +119,19 @@ async def vend_credentials(
     tier: Annotated[
         Tier,
         Query(
-            description="`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix but its refs, and the table's history fence and committed-file records on the control root)."
+            description="`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction, deletion and index files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get and delete the whole prefix but its refs, and put nothing of the table; get and put the table's history fence, and get and delete its committed-file records, on the control root)."
         ),
     ] = "read",
     # [[LH-055]] WHICH branch this credential is for. Naming one narrows the grant rather than widening
-    # it — writes land under that branch's own `<table>/tree/<branch>/` (its `data/` at the write tier, its
-    # file directories at the maintain tier) and main drops to read — which is the isolation the LanceDB blog's
+    # it — a writer's puts land under that branch's own `<table>/tree/<branch>/`, a maintainer's deletes stay in that
+    # branch's file directories, and main drops to read — which is the isolation the LanceDB blog's
     # branching post (https://www.lancedb.com/blog/branching-and-shallow-clone) says the `tree/` layout exists to give:
     # "Storage-level access controls can enforce read-only on the main dataset and write-only on the branch directory".
     # Absent = main, exactly as before.
     branch: Annotated[
         str,
         Query(
-            description="The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main."
+            description="The branch this credential is for. Naming one NARROWS the grant to that branch's own `<table>/tree/<branch>/`, and main drops to read-only: the write tier puts what a commit stages there (data, transaction, deletion and index files and a staged manifest), the maintain tier gets and deletes under its `_versions`, `_transactions`, `_deletions`, `_indices` and `data`. Omit for main."
         ),
     ] = "",
 ) -> CredentialResponse:

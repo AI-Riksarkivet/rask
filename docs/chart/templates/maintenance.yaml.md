@@ -195,17 +195,22 @@ exchanges it through STS `AssumeRoleWithWebIdentity` for the sessions its own re
 (`lakehouse.store_session`). It holds no key pair: with `MAINTENANCE_SECRETS_FROM_DAPR` on it refuses to boot without
 the token, and refuses a pair beside it (`lakehouse.store_session.require_one_store_identity`).
 
-THE SESSION READS THE ESTATE AND WRITES ONLY ITS OWN RECORDS. Its canned policy (`lance.objectStorePolicy`, component
-`maintenance`, rendered into `<release>-object-store-identities`) allows `ListAllMyBuckets`; list, `GetBucketLocation`
-and get on every bucket and key; and put and delete only on `<control bucket>/_maintenance_due/*`,
+THE SESSION READS HISTORY, NEVER DATA, AND WRITES ONLY ITS OWN RECORDS ([[LH-575]]). Its canned policy
+(`lance.objectStorePolicy`, component `maintenance`, rendered into `<release>-object-store-identities`; each grant in
+`_helpers.tpl.md`) allows `ListAllMyBuckets`; list, `GetBucketLocation` and `GetBucketNotification` on every bucket;
+get on each table's manifests, refs and transactions, each root's `__manifest/` index and the control records it judges
+by, and on no data, deletion, index or backup file; and put and delete only on `<control bucket>/_maintenance_due/*`,
 `<control bucket>/_maintenance_files/*` (its copy of the commit records it has read, which no erasure or hold reads),
 `<control bucket>/_policies/state/*` and `<control bucket>/_lineage_outbox/*`. Owner, 2026-11-03: a compromised
-maintenance pod must not be able to defeat an erasure or a hold. Every other write is signed by a catalog vend:
+maintenance pod must not be able to defeat an erasure or a hold. Every other write is the catalog's, or signed by a
+catalog vend:
 
-- a rewrite (compaction, cleanup, index work) by the table's `maintain`-tier credential
-  (`POST /management/v1/table/{id}/credentials?tier=maintain`, [[LH-219]]), which reaches the table's prefix except its
-  `_refs/`, its history fence and its committed-file records, and which the catalog refuses for a table whose policy
-  keeps its whole history;
+- a cleanup's deletes by the table's `maintain`-tier credential
+  (`POST /management/v1/table/{id}/credentials?tier=maintain`, [[LH-219]]): get and delete over the table's prefix
+  except its `_refs/`, the put of its history fence and the delete of its committed-file records, and no put of the
+  table's (ADR 0204); the catalog refuses it for a table whose policy keeps its whole history. A pass's two commits, the
+  disarm of Lance's commit-path cleanup and the listing-floor raise, are the catalog's, at
+  `POST /management/v1/table/{id}/maintenance/disarm` and `.../maintenance/floor`;
 - the trash purge's deletes by a reclaim session the catalog vends for one due table record
   (`POST /management/v1/trash/{kind}/{uuid}/credentials`): list and delete over that record's place and its data
   directories, and nothing on the control root. The record's release stamp and its end are the catalog's own writes

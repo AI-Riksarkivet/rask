@@ -238,8 +238,8 @@ def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(
     ],
 )
 def test_a_held_table_is_vended_no_maintain_tier(estate: _Estate, tier: _Tier, answer: tuple[int, str, int | None]) -> None:
-    """[[XC-084]] A table whose maintenance policy keeps its whole history is vended no credential that could delete or
-    rewrite it: the maintain tier reaches every version the hold keeps, and maintenance writes nothing on a held table.
+    """[[XC-084]] A table whose maintenance policy keeps its whole history is vended no credential that could delete from
+    it: the maintain tier reaches every version the hold keeps, and maintenance writes nothing on a held table.
     The other tiers are the table's readers' and writers', which the hold does not change."""
     held = estate.client.post(f"/management/v1/table/{_TABLE}/policy/set", json={"cleanup_enabled": False})
     assert held.status_code == 200, held.text

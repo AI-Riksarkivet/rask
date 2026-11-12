@@ -404,10 +404,10 @@ def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
     base would turn a credential scoped to a single table prefix into a bucket-wide reader.
 
     THE INPUT IS CHOSEN BY A WRITER, which is why depth has to be checked rather than assumed. Bases are
-    read from the table's own manifest, and a maintain-tier vend grants ``PutObject`` on ``<prefix>/*``,
-    which covers ``_versions/`` — enough to commit a manifest client-side; the static keys the cascade's
-    writers hold reach it too. So the value here is one a principal on ONE table can pick, used to widen
-    the next credential vended for it.
+    read from the table's own manifest, whose writer chose them: a stock client's first version staged for
+    ``version/create``, or the manifest a table is registered over (a later commit may not change them,
+    ``managed_versions._refuse_bases``). So the value here is one a principal on ONE table can pick, used to
+    widen the next credential vended for it.
     The base loop already drops a base holding IAM policy syntax (:func:`held_iam_policy_syntax`); this is the
     other half of the same distrust.
 

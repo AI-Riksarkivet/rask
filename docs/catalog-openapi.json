@@ -18356,13 +18356,13 @@
             }
           },
           {
-            "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix but its refs, and the table's history fence and committed-file records on the control root).",
+            "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction, deletion and index files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get and delete the whole prefix but its refs, and put nothing of the table; get and put the table's history fence, and get and delete its committed-file records, on the control root).",
             "in": "query",
             "name": "tier",
             "required": false,
             "schema": {
               "default": "read",
-              "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix but its refs, and the table's history fence and committed-file records on the control root).",
+              "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction, deletion and index files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get and delete the whole prefix but its refs, and put nothing of the table; get and put the table's history fence, and get and delete its committed-file records, on the control root).",
               "enum": [
                 "read",
                 "write",
@@ -18373,13 +18373,13 @@
             }
           },
           {
-            "description": "The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main.",
+            "description": "The branch this credential is for. Naming one NARROWS the grant to that branch's own `<table>/tree/<branch>/`, and main drops to read-only: the write tier puts what a commit stages there (data, transaction, deletion and index files and a staged manifest), the maintain tier gets and deletes under its `_versions`, `_transactions`, `_deletions`, `_indices` and `data`. Omit for main.",
             "in": "query",
             "name": "branch",
             "required": false,
             "schema": {
               "default": "",
-              "description": "The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main.",
+              "description": "The branch this credential is for. Naming one NARROWS the grant to that branch's own `<table>/tree/<branch>/`, and main drops to read-only: the write tier puts what a commit stages there (data, transaction, deletion and index files and a staged manifest), the maintain tier gets and deletes under its `_versions`, `_transactions`, `_deletions`, `_indices` and `data`. Omit for main.",
               "title": "Branch",
               "type": "string"
             }

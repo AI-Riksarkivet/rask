@@ -230,7 +230,8 @@ now holds the version, so a pipeline following `/events` has caught up. For an u
 needs no incident. Then for a `commit_version` success in the catalog's audit log naming that table and version: that is
 a stock client's retry that landed while an earlier attempt of the same commit was still in flight, which the earlier
 attempt's record does not match, and it needs no incident either. Otherwise find who could write that table's
-`_versions/`: no writer is vended a put on a final manifest, so it is a maintain-tier or store-root credential.
+`_versions/`: no credential the catalog vends puts a final manifest (ADR 0204), so it is the store's root credential or
+the catalog's own identity.
 
 A blocked reconciler (`CatalogCommitReconcileBlocked`, `commit_reconcile_ref_unreadable` ERROR logs) could not read a
 retained version or its commit time; it keeps that ref's mark until the read succeeds, so it skips nothing. A

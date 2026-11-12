@@ -692,7 +692,7 @@ async def _delete_bytes_or_refuse(
     ``OSError``, or a base record that could not be read, is transient and the next run simply retries.
 
     The base record and the claims that say which data directories are the table's are READ with maintenance's own
-    session (``reclaim.own``, read once for the run), which reads the estate; only the deletes are the reclaim
+    session (``reclaim.own``, read once for the run), which reads the control records and no table's bytes; only the deletes are the reclaim
     session's (``reclaim.session``), which reaches the bytes and nothing else. Any other failure is the record's refusal too, made by :func:`_purge_or_refuse`.
     """
     location, obj_id = trash.location_of(record), trash.name_of(record)
@@ -791,7 +791,8 @@ class _PurgeRun(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     settings: MaintenanceSettings
-    #: Maintenance's own session, which reads the estate; a record's bytes go under the session the catalog vends for it.
+    #: Maintenance's own session, which lists the estate and reads its history and the control records; a record's bytes
+    #: go under the session the catalog vends for it.
     own: StorageOptions
     control_root: str
     roots: set[str]

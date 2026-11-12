@@ -12685,9 +12685,9 @@ export interface operations {
     vend_credentials_management_v1_table__id__credentials_post: {
         parameters: {
             query?: {
-                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix but its refs, and the table's history fence and committed-file records on the control root). */
+                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction, deletion and index files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get and delete the whole prefix but its refs, and put nothing of the table; get and put the table's history fence, and get and delete its committed-file records, on the control root). */
                 tier?: "read" | "write" | "maintain";
-                /** @description The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main. */
+                /** @description The branch this credential is for. Naming one NARROWS the grant to that branch's own `<table>/tree/<branch>/`, and main drops to read-only: the write tier puts what a commit stages there (data, transaction, deletion and index files and a staged manifest), the maintain tier gets and deletes under its `_versions`, `_transactions`, `_deletions`, `_indices` and `data`. Omit for main. */
                 branch?: string;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;

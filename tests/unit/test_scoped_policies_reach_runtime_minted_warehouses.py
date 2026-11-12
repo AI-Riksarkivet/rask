@@ -13,8 +13,9 @@ estate 2026-09-04/05: a policy that reached warehouses through a `*-wh` name pat
 
 EVERY WRITE IS A VEND'S, owner, 2026-11-03: a compromised maintenance pod must not be able to defeat an erasure or a hold.
 So its own identity writes only the records no table owns, on the control root: its due records, its cadence stamps and
-its lineage outbox. A table's bytes, refs and records are written under the catalog's maintain-tier vend for that table,
-and the trash under the reclaim session the catalog vends for one record (`catalog.core.vending`).
+its lineage outbox. A table's bytes are deleted, and its history fence put, under the catalog's maintain-tier vend for
+that table, which puts nothing of the table; the trash is deleted under the reclaim session the catalog vends for one
+record (`catalog.core.vending`).
 
 The evaluator below is IAM-shaped (explicit Deny wins, otherwise an Allow must match) so each test states the OUTCOME a
 credential gets. A string grep cannot: it can only check the buckets the chart names, and a registry-discovered one is

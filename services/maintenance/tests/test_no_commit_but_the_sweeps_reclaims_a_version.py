@@ -58,7 +58,7 @@ def _auto_cleanup_keys(uri: str) -> dict[str, str]:
 
 
 def _vend_covering(uri: str) -> httpx.Response:
-    """The catalog's maintain-tier vend for the table at ``uri``, which admits a pass that writes ([[LH-219]])."""
+    """The catalog's maintain-tier vend for the table at ``uri``, which admits a pass's deletes ([[LH-219]])."""
     vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
     return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}, "location": uri})
 

@@ -239,9 +239,9 @@ def disarm_commit_path_cleanup(dataset: lance.LanceDataset, table_id: list[str])
     Lance deletes versions inside the commit whose resulting manifest carries those keys, under whoever
     commits and past every hold (:mod:`lakehouse.auto_cleanup`). Measured on pylance 12.0.0: the
     hook reads the manifest the commit PRODUCES, so a config-only commit that drops the keys deletes nothing
-    and the door's own commit, rebased onto it, deletes nothing either. So an armed table — armed out of band
-    by a maintain-tier credential, since no catalog door writes manifest config — is disarmed by its next
-    door commit, whether or not the sweep has reached it.
+    and the door's own commit, rebased onto it, deletes nothing either. So an armed table — armed by a manifest no
+    committing door wrote, a registered table's or one put with the store's root, since every door refuses the keys
+    a commit would bring — is disarmed by its next door commit, whether or not the sweep has reached it.
 
     Returns the same handle, advanced in place to the disarm commit when there was one, so the door commits
     through it and reports the version its own operation made.
