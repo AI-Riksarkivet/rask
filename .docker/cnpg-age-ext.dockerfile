@@ -28,6 +28,9 @@ FROM scratch
 COPY --from=build /usr/share/postgresql/18/extension/age*  /share/extension/
 COPY --from=build /usr/lib/postgresql/18/lib/age.so        /lib/age.so
 COPY --from=build /age/LICENSE                             /licenses/age/LICENSE
+# The image is mounted as a volume and never run, so its user is metadata; it names a non-root one so that nothing runs as
+# root should anyone start it, and the file's last USER is not the build stage's root (trivy DS-0002).
+USER 65532:65532
 LABEL io.cloudnativepg.image.base.pgmajor="18" \
       org.opencontainers.image.title="apache-age-cnpg-extension" \
       org.opencontainers.image.version="1.7.0-18"

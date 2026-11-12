@@ -1,0 +1,62 @@
+{{- $labels := dict "app.kubernetes.io/name" "dev-registry" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "registry" }}
+{{- $metadata := merge (dict "app.kubernetes.io/managed-by" .Release.Service "helm.sh/chart" (printf "%s-%s" .Chart.Name .Chart.Version)) $labels }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rask-registry-data
+  labels: {{- toYaml $metadata | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rask-registry
+  labels: {{- toYaml $metadata | nindent 4 }}
+spec:
+  replicas: 1
+  # One volume, mounted read-write by one pod: the old pod lets go before the new one takes it.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $metadata | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: registry
+          image: {{ .Values.image }}
+          env:
+            # A tag is deleted through the API (`make registry-gc`), which the registry refuses without this, and
+            # `registry garbage-collect` then sweeps only the blobs no manifest references: every rebuild pushes a new
+            # tag and nothing else removes the old ones.
+            - { name: REGISTRY_STORAGE_DELETE_ENABLED, value: "true" }
+          ports:
+            # The node's port, so the host reaches it at localhost (k3s's pulls) and at the docker bridge's address
+            # (the Dagger engine's pushes) with no Service in between.
+            - { containerPort: 5000, hostPort: {{ .Values.port }}, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /v2/, port: 5000 }
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/registry }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: rask-registry-data }

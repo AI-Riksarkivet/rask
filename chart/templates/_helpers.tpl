@@ -167,9 +167,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.egressRules" -}}
 {{- $value := index . 0 -}}{{- $rules := index . 1 -}}{{- $reaches := index . 2 -}}
-{{- if not $rules }}
-{{- fail (printf "%s must state the NetworkPolicy egress rules ({to, ports}) that reach %s" $value $reaches) }}
-{{- end }}
 {{- range $rules }}
 {{- if not (.to | default list) }}
 {{- fail (printf "%s: the rule %s names no `to` peers, so it admits every destination on its ports; name the peers that are %s" $value (toJson .) $reaches) }}
@@ -181,6 +178,56 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- end }}
 {{- toYaml $rules }}
+{{- end -}}
+
+{{- define "lance.tokenVerifiers" -}}
+{{- if .Values.auth.enabled }}{{- list "catalog" "lineage" | toJson }}{{- else }}[]{{- end -}}
+{{- end -}}
+
+{{- define "lance.objectStoreClients" -}}
+{{- $clients := include "lance.objectStoreIdentities" . | fromJsonArray -}}
+{{- if has "maintenance" $clients }}{{- $clients = append $clients "maintenance-worker" }}{{- end -}}
+{{- toJson $clients -}}
+{{- end -}}
+
+{{- define "lance.busClients" -}}
+{{- toJson (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "nats-stream") -}}
+{{- end -}}
+
+{{- define "lance.platformEgress" -}}
+{{- $v := .Values -}}
+{{- $rows := list -}}
+{{- $api := include "lance.tokenVerifiers" . | fromJsonArray -}}
+{{- if and $v.auth.issuerMirror.enabled (or $v.openfga.enabled $v.objectStore.enabled) }}{{- $api = append $api "issuer-mirror" }}{{- end -}}
+{{- if $v.openbao.enabled }}{{- $api = append $api "openbao" }}{{- end -}}
+{{- if $v.observability.enabled }}{{- $api = append $api "otel-collector" }}{{- end -}}
+{{- if $v.backups.volumeSnapshot.enabled }}{{- $api = append $api "object-store-backup" }}{{- end -}}
+{{- if include "lance.daprDashboardEnabled" . }}{{- $api = append $api "dapr-dashboard" }}{{- end -}}
+{{- if $api -}}
+{{- $rows = append $rows (dict "name" "apiserver" "value" "networkPolicy.apiServerEgress" "rules" $v.networkPolicy.apiServerEgress "reaches" "the Kubernetes API server's endpoints, at the port a policy sees after the kubernetes Service's translation" "components" $api) -}}
+{{- end -}}
+{{- if not $v.openfga.enabled -}}
+{{- $rows = append $rows (dict "name" "openfga" "value" "auth.fgaEgress" "rules" $v.auth.fgaEgress "reaches" "the platform's OpenFGA at auth.fgaApiUrl" "components" (concat (include "lance.fgaWriters" . | splitList " ") (list "bootstrap-admin" "openfga-model"))) -}}
+{{- end -}}
+{{- if not $v.openbao.enabled -}}
+{{- $rows = append $rows (dict "name" "secret-store" "value" "openbao.egress" "rules" $v.openbao.egress "reaches" "the platform's secret store at openbao.externalAddr" "components" (splitList "," (include "lance.secretReaderComponents" .) | compact)) -}}
+{{- end -}}
+{{- if $v.observability.enabled -}}
+{{- $rows = append $rows (dict "name" "telemetry-export" "value" "observability.export.egress" "rules" $v.observability.export.egress "reaches" "the telemetry backend at observability.export.endpoint" "components" (list "otel-collector")) -}}
+{{- end -}}
+{{- if not $v.objectStore.enabled -}}
+{{- $rows = append $rows (dict "name" "object-store" "value" "objectStore.egress" "rules" $v.objectStore.egress "reaches" "the platform's S3 and its STS at objectStore.externalEndpoint" "components" (include "lance.objectStoreClients" . | fromJsonArray)) -}}
+{{- end -}}
+{{- if and $v.auth.enabled (not $v.dex.enabled) -}}
+{{- $rows = append $rows (dict "name" "issuer" "value" "auth.oidc.egress" "rules" $v.auth.oidc.egress "reaches" "the platform's IdP at auth.oidc.issuer" "components" (include "lance.tokenVerifiers" . | fromJsonArray)) -}}
+{{- end -}}
+{{- if include "rask.isRealDeployment" . -}}
+{{- $rows = append $rows (dict "name" "bus" "value" "nats.egress" "rules" $v.nats.egress "reaches" "the platform's NATS bus at nats.url" "components" (include "lance.busClients" . | fromJsonArray)) -}}
+{{- if $v.services.lineage.forward.url -}}
+{{- $rows = append $rows (dict "name" "lineage-graph" "value" "services.lineage.forward.egress" "rules" $v.services.lineage.forward.egress "reaches" "the graph backend at services.lineage.forward.url" "components" (list "lineage")) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $rows -}}
 {{- end -}}
 
 {{- define "lance.otelEnabled" -}}
@@ -453,6 +500,13 @@ securityContext:
   readOnlyRootFilesystem: true
   capabilities:
     drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+{{- end -}}
+
+{{- define "lance.podSecurityContext" -}}
+securityContext:
+  runAsNonRoot: true
   seccompProfile:
     type: RuntimeDefault
 {{- end -}}

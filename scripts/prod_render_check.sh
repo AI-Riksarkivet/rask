@@ -34,8 +34,8 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # auth.oidc.connectors the idp id of each of the platform's Dex connectors ([[LH-063]]),
 # auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), openbao.externalAddr its secret
 # store ([[XC-149]]), and route.parentRefs the platform's Gateway (ADR 0165),
-# and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA and its secret store, which
-# no URL can derive ([[XC-143]]). image.tags is the pin a released chart carries for each first-party image: the `dev`
+# and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA, its secret store, its S3, its
+# bus and its IdP, which no URL can derive ([[XC-143]], [[XC-202]]). image.tags is the pin a released chart carries for each first-party image: the `dev`
 # default names no build, which a real deployment refuses (templates/prod-credentials.yaml, [[XC-164]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set auth.oidc.issuer=https://auth.example.com/dex
@@ -56,13 +56,20 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set-json 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]'
         --set-json 'networkPolicy.apiServerEgress=[{"to":[{"ipBlock":{"cidr":"192.0.2.10/32"}}],"ports":[{"protocol":"TCP","port":6443}]}]'
         --set-json 'observability.export.egress=[{"to":[{"ipBlock":{"cidr":"203.0.113.10/32"}}],"ports":[{"protocol":"TCP","port":4318}]}]'
-        --set-json 'auth.fgaEgress=[{"to":[{"ipBlock":{"cidr":"198.51.100.10/32"}}],"ports":[{"protocol":"TCP","port":443}]}]')
+        --set-json 'auth.fgaEgress=[{"to":[{"ipBlock":{"cidr":"198.51.100.10/32"}}],"ports":[{"protocol":"TCP","port":443}]}]'
+        --set-json 'objectStore.egress=[{"to":[{"ipBlock":{"cidr":"203.0.113.20/32"}}],"ports":[{"protocol":"TCP","port":443}]}]'
+        --set-json 'nats.egress=[{"to":[{"ipBlock":{"cidr":"198.51.100.30/32"}}],"ports":[{"protocol":"TCP","port":4222}]}]'
+        --set-json 'auth.oidc.egress=[{"to":[{"ipBlock":{"cidr":"203.0.113.30/32"}}],"ports":[{"protocol":"TCP","port":443}]}]')
 OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
 helm template rask "$CHART" -f "$PROD_VALUES" \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
   --set route.hostnames[0]=lance.example.com "${COMMON[@]}" > "$OUT"
+
+# RENDER_ONLY=PATH keeps the production render at PATH and checks nothing: `dagger call scan-config` scans it, so the
+# scan reads the configuration this check holds to its invariants and no second list of production arguments exists.
+if [ -n "${RENDER_ONLY:-}" ]; then cp "$OUT" "$RENDER_ONLY"; exit 0; fi
 
 fail() { echo "!! prod-render-check: $*" >&2; exit 1; }
 
@@ -71,16 +78,23 @@ np=$(grep -c "kind: NetworkPolicy" "$OUT" || true)
 [ "$np" -ge 9 ] || fail "prod must render the network-isolation layer (>=9 NetworkPolicies), got $np"
 grep -q "default-deny" "$OUT" || fail "prod NetworkPolicy set missing default-deny"
 grep -q "name: rask-allow-secret-store-egress" "$OUT" || fail "prod NetworkPolicy set missing the egress that admits only the secret store's readers"
+# Default-deny egress would leave every store, bus and IdP client unable to reach them ([[XC-202]]): each policy admits
+# the peers its value states.
+for row in object-store:203.0.113.20/32 bus:198.51.100.30/32 issuer:203.0.113.30/32; do
+  grep -A40 "name: rask-allow-${row%%:*}-egress$" "$OUT" | grep -q "cidr: ${row#*:}" \
+    || fail "prod's NetworkPolicy must admit the ${row%%:*}'s clients to the peers its egress value states (${row#*:})"
+done
 # NATS isolation (goal cond 8): the general intra-namespace ingress allow must EXCLUDE the nats pods —
 # without the exclusion the explicit nats rule is decorative (NetworkPolicies are additive). Then the
-# one explicit rule must render: 4222 (clients, port-scoped from any in-namespace pod — the daprd
-# sidecars live in nearly every app pod). The windowed grep pins the port to THAT rule, not a stray match
-# elsewhere.
+# one explicit rule must render: 4222 from the bus's clients, and 6222 between the servers, whose cluster
+# routes a three-node bus runs on. The windowed grep pins the ports to THAT rule, not a stray match elsewhere.
 grep -qF "values: [openbao, age, rustfs, nats, authorization-controller]" "$OUT" \
   || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/rustfs)"
 grep -q "name: rask-nats-clients" "$OUT" || fail "prod NetworkPolicy set missing the nats-clients (4222) rule"
-grep -A20 "name: rask-nats-clients" "$OUT" | grep -q "port: 4222" \
-  || fail "the nats-clients rule must target the 4222 client port"
+for port in 4222 6222; do
+  grep -A40 "name: rask-nats-clients" "$OUT" | grep -q "port: $port" \
+    || fail "the nats-clients rule must admit port $port"
+done
 
 # 2. OpenFGA and its Postgres are the platform's ([[XC-132]]): prod runs neither, and every client dials the endpoints
 # the deployer names.

@@ -6,7 +6,7 @@
 // over the same ground:
 //
 //	dagger call audit                       osv-scanner over EVERY lockfile in the workspace
-//	dagger call scan-config                 trivy misconfig + secrets over .docker/ and chart/
+//	dagger call scan-config                 trivy misconfig over .docker/ and the chart's production render, secrets repo-wide
 //	dagger call scan-secrets                trufflehog over the full GIT HISTORY
 //	dagger call scan-image --name=frontend  trivy over the image dagger call image just built
 //
@@ -73,6 +73,10 @@ const (
 // its first week. images.go carries the same bare `.venv` in its build-context excludes; whether that
 // matters for a build context is a separate question from whether it matters for a scanner, and it has
 // not been changed here.
+//
+// `.claude/worktrees` is another checkout of this repository (an agent's git worktree, gitignored), at another branch
+// whose own CI scans it: a CI checkout has none, so leaving it in made a local run fail on findings CI cannot see
+// (measured 2026-11-12: a CRITICAL in a stale copy of this file on `chore/dagger-1.0-beta`).
 
 // validSeverities is the trivy severity vocabulary, and checking against it is not ceremony.
 // ScanConfig has to run its three scans as ONE `sh -c` line (see there for why), which means the
@@ -113,20 +117,18 @@ func (m *Rask) trivyBase() *dagger.Container {
 //
 // Exit code 1 means "vulnerabilities found" and fails the call — that IS the gate. Note there is NO
 // severity threshold to soften it with: osv-scanner exposes `--config` and `--licenses`, and nothing
-// resembling --fail-on-severity, so ANY finding at ANY severity is fatal. That is why ci.yml runs this
-// leg report-only today (38 findings on the first run, 0 of them Critical) — a gate that goes red the
-// hour it lands teaches everyone to ignore it.
+// resembling --fail-on-severity, so ANY finding at ANY severity is fatal.
 //
-// The way OUT of report-only is not a threshold, it is `osv-scanner.toml` at the repo root: it is
-// auto-discovered for the scanned directory and each ignore entry carries a reason and a review date.
-// Baseline the known 38 there and the gate can block on the 39th — a suppression becomes a recorded
-// decision with an expiry instead of a deleted CI job.
+// What cannot move yet is recorded in `osv-scanner.toml` at the repo root, each entry with its reason and the date it
+// is judged again, and named with `--config` so the one record covers every lockfile wherever it sits ([[XC-202]]): the
+// gate blocks on any advisory it does not name, and a suppression is a recorded decision with an expiry instead of a
+// deleted CI job.
 func (m *Rask) Audit(
 	ctx context.Context,
 	// +ignore=["**/.venv", "**/node_modules", ".git", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", "**/test-results", "**/playwright-report", "**/coverage",
 	//          "**/storybook-static", "**/build",
-	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache", ".claude/worktrees"]
 	// +defaultPath="/"
 	// +optional
 	src *dagger.Directory,
@@ -135,21 +137,25 @@ func (m *Rask) Audit(
 		From(OsvScannerImage).
 		WithMountedDirectory("/src", src).
 		WithWorkdir("/src").
-		WithExec([]string{"/osv-scanner", "scan", "source", "--recursive", "/src"}).
+		WithExec([]string{"/osv-scanner", "scan", "source", "--config", "/src/osv-scanner.toml", "--recursive", "/src"}).
 		Stdout(ctx)
 }
 
-// ScanConfig runs trivy's misconfiguration and secret scanners over the deploy surface.
+// ScanConfig runs trivy's misconfiguration scanner over the dockerfiles and the chart's production render, and its
+// secret scanner over the tree.
 //
-// Scoped to `.docker/` and `chart/` deliberately: `trivy config` on the whole repo also parses every
-// docker-compose file and test fixture, and the resulting noise buries the findings that matter.
-// Needs no build, so it belongs in the fast PR gate next to Audit.
+// The chart is scanned as it RENDERS on a real deployment (scripts/prod_render_check.sh's render, `RENDER_ONLY`), not
+// as a directory: trivy's helm scanner renders `chart/` with no values and no `--api-versions`, which the chart's
+// prerequisite guards refuse, so it skipped the chart with a warning and passed (measured 2026-11-12, trivy 0.73.0:
+// "Skipping chart ... Dapr is a prerequisite"). Scoped to these three deliberately: `trivy config` on the whole repo also
+// parses every docker-compose file and test fixture, and the resulting noise buries the findings that matter. Needs no
+// image build, so it belongs in the fast PR gate next to Audit.
 func (m *Rask) ScanConfig(
 	ctx context.Context,
 	// +ignore=["**/.venv", "**/node_modules", ".git", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", "**/test-results", "**/playwright-report", "**/coverage",
 	//          "**/storybook-static", "**/build",
-	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
+	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache", ".claude/worktrees"]
 	// +defaultPath="/"
 	// +optional
 	src *dagger.Directory,
@@ -161,8 +167,13 @@ func (m *Rask) ScanConfig(
 	if err := checkSeverity(severity); err != nil {
 		return "", err
 	}
+	production := m.chartsBase(src).
+		WithExec([]string{"make", "k3s-deps"}).
+		WithExec([]string{"bash", "-c", "mkdir -p /render && RENDER_ONLY=/render/production.yaml bash scripts/prod_render_check.sh"}).
+		File("/render/production.yaml")
 	return m.trivyBase().
 		WithMountedDirectory("/src", src).
+		WithMountedFile("/render/production.yaml", production).
 		WithWorkdir("/src").
 		// THREE scans, ONE exit code, and the `|| rc=1` is the whole reason this is a shell line
 		// instead of three chained WithExecs. A failing WithExec aborts the chain, so the obvious
@@ -174,7 +185,7 @@ func (m *Rask) ScanConfig(
 		WithExec([]string{"sh", "-c", fmt.Sprintf(
 			"rc=0; "+
 				"trivy config --exit-code 1 --severity %[1]s .docker || rc=1; "+
-				"trivy config --exit-code 1 --severity %[1]s chart || rc=1; "+
+				"trivy config --exit-code 1 --severity %[1]s /render || rc=1; "+
 				"trivy fs --scanners secret --exit-code 1 --severity %[1]s /src || rc=1; "+
 				"exit $rc",
 			severity,
@@ -199,8 +210,8 @@ func (m *Rask) ScanConfig(
 // They overlap on almost nothing — gitleaks matched generic-api-key/curl-auth-user patterns, trufflehog
 // matched 17 Postgres DSNs and 2 Stripe keys. Neither is a superset, so this is not "the better tool",
 // it is the tool with the property that makes a secrets gate survivable: trufflehog CALLS THE PROVIDER
-// to ask whether the credential actually works. `sk_live_abc123secret456def789` in a deleted test
-// harness looks alarming in a grep and is confirmed dead by an API call.
+// to ask whether the credential actually works. A Stripe-shaped live key in a deleted test harness looks
+// alarming in a grep and is confirmed dead by an API call.
 //
 // ── Why the gate is --results=verified ──
 // 36 pattern matches across both tools, ZERO live credentials. A gate that failed on pattern matches
@@ -323,10 +334,10 @@ func (m *Rask) ScanImage(
 // sbomContainer emits a CycloneDX SBOM for an already-built image, reusing the tarball seam
 // `scanContainer` uses so the SBOM describes the EXACT bytes that were scanned and published.
 //
-// AN SBOM IS AN ARTIFACT, NOT A CONTROL, and that distinction is why this ships while image SIGNING
-// does not (§ Q17-26: a signature nothing verifies adds a control that cannot fire). An inventory is
-// useful the moment a CVE lands and somebody has to answer "which images carry this package" — it
-// needs no verifier to have value, and trivy already has the image mounted to answer it.
+// AN SBOM IS AN INVENTORY: useful the moment a CVE lands and somebody has to answer "which images carry
+// this package", and trivy already has the image mounted to answer it. A release attests each platform's
+// SBOM to that platform's manifest, signed as the release's images are (release.go, [[XC-202]]), so the
+// inventory a client reads is the one the release made.
 //
 // CycloneDX rather than SPDX: trivy emits both, and CycloneDX is what the scanners downstream of a
 // registry consume. One format, chosen once, beats a flag nobody sets.

@@ -142,7 +142,7 @@ and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.ena
   `age.user`; lineage keeps no database (ADR 0158). Its password is the secret store's
   `postgres-password`, which ESO delivers. No chart value carries it.
 
-The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS does; the OTLP backend takes its in `observability.export.egress`, the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, and the platform's secret store its addresses in `openbao.egress`, each admitting only the pods that dial it. Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
+The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), every endpoint the platform serves outside the namespace takes its own egress rules, admitting only the pods that dial it: the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, the secret store in `openbao.egress`, the OTLP backend in `observability.export.egress`, the S3 and its STS in `objectStore.egress`, the NATS bus in `nats.egress`, the IdP in `auth.oidc.egress`, and the graph backend lineage forwards to in `services.lineage.forward.egress`. The render refuses every one left empty, in one message naming them all ([[XC-202]]); `networkPolicy.extraEgress` takes a rule for an endpoint none of them names (the Postgres, should OpenFGA run in the chart). Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
 backups belong to the platform, so production runs no `pg_dump` CronJob.
 
 ## Development stand-ins
@@ -384,18 +384,30 @@ token:
 | What | A client pins it as |
 | --- | --- |
 | The catalog image, amd64 and arm64 in one index | `ghcr.io/ai-riksarkivet/lance-rest-catalog@sha256:…` (the chart already names it) |
-| The product chart, pinned to that index's digest | `oci://ghcr.io/ai-riksarkivet/charts/rask`, `--version X.Y.Z` |
+| The console image, amd64 and arm64 in one index | `ghcr.io/ai-riksarkivet/web-console@sha256:…` (the chart already names it) |
+| The product chart, pinned to both indexes' digests | `oci://ghcr.io/ai-riksarkivet/charts/rask`, `--version X.Y.Z` |
 | A lakehouse for its e2e | `dagger install github.com/AI-Riksarkivet/rask@lakehouse-vX.Y.Z`, then `dag.Rask().Lakehouse("X.Y.Z", …)` |
 
 A new GHCR package is private until its visibility is set, and a job token cannot set it. So on the first release, the
-org's package settings make each of the two packages public once: `lance-rest-catalog` and `charts/rask`. Every later
-release publishes into them as they stand.
+org's package settings make each of the three packages public once: `lance-rest-catalog`, `web-console` and `charts/rask`.
+Every later release publishes into them as they stand.
 
-Each architecture's image is built natively on a runner of its own (`dagger call publish-image`): under emulation the
-image's import gate dies of SIGILL in a native wheel. `dagger call publish` then joins them into one index and pushes the
-chart with `scripts/pin_chart_release.py`'s pin. The released chart is a real deployment by default, so it refuses the
+Each architecture's images are built natively on a runner of their own (`dagger call publish-image`): under emulation
+the catalog image's import gate dies of SIGILL in a native wheel. Every image passes a scan gate before it is pushed: a
+HIGH or CRITICAL finding a fixed release exists for refuses the release. `dagger call publish` then joins each image's
+architectures into one index and pushes the chart with `scripts/pin_chart_release.py`'s pin ([[XC-202]]). It signs each
+index, every manifest in it and the chart keylessly, as the release workflow at the release's tag (a short-lived
+Sigstore certificate for the workflow's OIDC token, recorded in the public transparency log, so no signing key exists),
+attests each platform manifest's CycloneDX SBOM the same way, and verifies each signature and attestation as it is
+made. A client checks one with `cosign verify --certificate-identity
+https://github.com/AI-Riksarkivet/rask/.github/workflows/release.yml@refs/tags/lakehouse-vX.Y.Z
+--certificate-oidc-issuer https://token.actions.githubusercontent.com <image or chart>@<digest>`, and an SBOM with
+`cosign verify-attestation --type cyclonedx` and the same two flags against a platform manifest. `dagger call
+release-dry-run --version <semver>` runs the same path end to end into a registry that lives only in its session,
+signing with a key pair generated there, and publishes nothing. The released chart is a real deployment by default, so it refuses the
 development stand-ins until an install names the platform's services. `Lakehouse` is the exception: it stands the
-release up as the local estate it is. It copies the pinned image into a registry inside the session, installs the
+release up as the local estate it is. It verifies the pinned catalog image as signed by the release workflow at that
+version's tag, copies it into a registry inside the session, installs the
 published chart with the development fixtures (`scripts/install_from_empty.sh`, `CHART` and `CHART_VERSION`), and
 returns a `RaskLakehouse` whose `Service` serves the catalog on 2333, lineage on 8000 (its OpenLineage intake,
 `POST /api/v1/lineage`), Dex on 5556 and the object store on 9000. Bind that service as `rask-catalog`, `rask-lineage`,

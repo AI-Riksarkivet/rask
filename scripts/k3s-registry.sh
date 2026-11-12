@@ -12,24 +12,17 @@ set -euo pipefail
 export RASK_EXPECT_CONTEXT
 
 
-REG_NAME="${REG_NAME:-rask-registry}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REG_PORT="${REG_PORT:-5000}"
 REGFILE=/etc/rancher/k3s/registries.yaml
 
-# 1. The registry container (host-local, restart-always).
-if docker ps --format '{{.Names}}' | grep -qx "$REG_NAME"; then
-  echo ">> registry '$REG_NAME' already running"
-else
-  echo ">> starting registry '$REG_NAME' on :$REG_PORT"
-  # REGISTRY_STORAGE_DELETE_ENABLED: registry:2 refuses DELETE without it, and without DELETE there is
-  # no way to reclaim anything — `registry garbage-collect` only sweeps blobs no manifest references.
-  # This matters because every rebuild pushes a UNIQUELY TAGGED image and nothing ever
-  # removes the old ones: measured 113 tags of web-home and 62 of lance-rest-catalog, 83.9 GB of dev
-  # registry. `make registry-gc` is the reclaim; this flag is what makes it possible at all.
-  docker run -d --restart=always -p "${REG_PORT}:5000" --name "$REG_NAME" \
-    -e REGISTRY_STORAGE_DELETE_ENABLED=true \
-    registry:2 >/dev/null
-fi
+# 1. The registry, the fixture deploy/fixtures/registry ([[XC-202]]): a pod on the node's port $REG_PORT, its layers on a
+#    volume, declared in git and installed like every other fixture rather than as a container started by hand.
+#    REGISTRY_STORAGE_DELETE_ENABLED is set there: every rebuild pushes a UNIQUELY TAGGED image and nothing else removes
+#    the old ones (measured 113 tags of web-home and 62 of lance-rest-catalog, 83.9 GB of dev registry), and `make
+#    registry-gc` can reclaim them only through the DELETE the registry otherwise refuses.
+echo ">> installing the registry fixture on :$REG_PORT"
+bash "$ROOT/scripts/fixtures.sh" registry -- --set "port=$REG_PORT"
 
 # 2. Tell k3s containerd to reach localhost:<port> over plaintext HTTP.
 echo ">> writing $REGFILE"
@@ -68,18 +61,12 @@ if systemctl cat k3s.service >/dev/null 2>&1; then
   done
   sudo k3s kubectl get --raw='/readyz' >/dev/null 2>&1 || {
     echo "!! k3s did not become ready within 120s after restart — check 'systemctl status k3s'"; exit 1; }
-elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^k3d-'; then
-  # k3d runs k3s inside containers and does NOT read /etc/rancher/k3s/registries.yaml on
-  # the host; its registry config is per-cluster. Say so rather than implying success.
-  echo "!! k3s here is k3d (containerised). The host $REGFILE this script just wrote does"
-  echo "   NOT apply to it — configure the registry with 'k3d registry create' / recreate"
-  echo "   the cluster with '--registry-use'. See https://k3d.io/stable/usage/registries/"
-  exit 1
 else
   # NEVER exit 0 here. The registry config is written but UNLOADED, so pushes will fail to
   # pull with an error that points nowhere near this script. A silent success is the same
-  # defect class as a green helm install over a failed Job.
-  echo "!! k3s is not a systemd service here and no k3d cluster was found."
+  # defect class as a green helm install over a failed Job. A k3d cluster reads no host
+  # registries.yaml at all: its registry config is per-cluster (`k3d registry create`).
+  echo "!! k3s is not a systemd service here."
   echo "   $REGFILE has been written but is NOT loaded — restart k3s however you run it,"
   echo "   then re-run this script."
   exit 1
@@ -89,7 +76,7 @@ fi
 if curl -fsS "http://localhost:${REG_PORT}/v2/" >/dev/null 2>&1; then
   echo ">> registry responding on localhost:${REG_PORT}"
 else
-  echo "!! registry container is up but http://localhost:${REG_PORT}/v2/ did not answer"; exit 1
+  echo "!! the registry fixture is installed but http://localhost:${REG_PORT}/v2/ did not answer"; exit 1
 fi
 
 echo ">> done. Push to localhost:${REG_PORT}/<image>:<tag>; k3s will pull it."

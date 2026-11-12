@@ -20,14 +20,15 @@ import uuid
 
 import pytest
 from botocore.exceptions import BotoCoreError, ClientError
+from credentials import Credential, credential
 
 from lakehouse import records
 from lakehouse.storage_options import StorageOptions, object_client
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
-SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
+ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
+SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 BUCKET = os.environ.get("LANCE_E2E_S3_BUCKET", "lance-catalog")
 PREFIX = "__cas_stress/registry"
 

@@ -30,10 +30,11 @@ from urllib.parse import quote
 import pyarrow as pa
 import pytest
 import requests
+from credentials import Credential, credential
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
-TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
+TOKEN = credential(Credential.TOKEN)
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
 
 pytestmark = pytest.mark.e2e
@@ -46,7 +47,7 @@ def _auth(token: str = "") -> dict[str, str]:
 @pytest.fixture(scope="module")
 def catalog() -> str:
     if not CATALOG or not TOKEN:
-        pytest.skip("set LANCE_E2E_CATALOG_URL + LANCE_E2E_TOKEN (a deployed stack with warehouses enabled)")
+        pytest.skip("set LANCE_E2E_CATALOG_URL and the run's token credential (a deployed stack with warehouses enabled)")
     try:
         requests.get(f"{CATALOG}/livez", timeout=5).raise_for_status()
     except Exception:

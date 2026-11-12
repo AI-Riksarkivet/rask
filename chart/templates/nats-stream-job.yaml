@@ -16,6 +16,8 @@ spec:
         app.kubernetes.io/component: nats-stream
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
       {{- $creds := hasKey (include "lance.natsFiles" . | fromJson) "nats-admin-creds" }}
       {{- $replicas := (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }}

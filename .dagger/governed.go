@@ -361,7 +361,7 @@ for i in $(seq 1 90); do
 done
 echo "lineage-api never became ready"; exit 1`}).
 		// The suite and the demo sign in as `rask-web`, a confidential client in `.docker/dex.config.yaml` as in the Dex
-		// fixture, with its secret: the suite's `LANCE_E2E_DEX_SECRET` and the demo's `DEX_CLIENT_SECRET` both default to
+		// fixture, with its secret: the suite's `dex-secret` credential and the demo's `DEX_CLIENT_SECRET` both default to
 		// the dev Dex's `lance-catalog-secret`, so neither is set here. Dagger's `WithEnvVariable(name, "")` leaves a
 		// variable UNSET rather than empty (measured: the container reported `'<UNSET>'`), which is why no empty value is
 		// passed that way either.

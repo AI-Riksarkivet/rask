@@ -61,8 +61,7 @@ dev = [
     #     need `-p no:faulthandler` alongside it.
     # `--timeout-method=thread` dumps every thread's stack and fails the run, so the next hang names
     # itself instead of being bisected by hand again. Wired into `.dagger/test.go`'s two lanes rather
-    # than into `addopts`: a global ceiling would also bound the model-loading `slow` suites, whose
-    # honest runtime nobody here can measure.
+    # than into `addopts`, so a developer's run under a debugger is not cut off at the ceiling.
     "pytest-timeout>=2.3",
     "pytest-xdist>=3.6",
 ]
@@ -271,7 +270,7 @@ exclude = [
 [tool.pytest.ini_options]
 # tests/e2e-py holds the LIVE suites (they need a deployed stack): collectable here so they can
 # never silently vanish from the gate (tests/unit/test_e2e_collection_gate.py asserts it), but
-# excluded from offline runs via `-m "not e2e"` (make test / test-slow), the same way `slow` is.
+# excluded from offline runs via `-m "not e2e"` (make test).
 # tests/e2e-py/conftest.py force-applies the e2e marker to every item collected under it.
 # GLOBS, so a workspace member's `tests/` is collected the moment it exists: with an explicit list,
 # adding the directory is a separate act from adding the file, and a suite outside the list is green by
@@ -287,8 +286,10 @@ addopts = "--import-mode=importlib"
 # the rendered chart) that finds nothing asserts nothing, and as a skip it reads as one more line in the summary. Measured
 # 2026-10-31 over all 5,083 collected tests: one module hit it, the maintenance-verb owner gate, whose walk found no route.
 empty_parameter_set_mark = "fail_at_collect"
+# A marker no entry below registers is a collection error, never a warning: a misspelled one would otherwise run inside
+# every `-m "not <marker>"` filter that means to leave it out (measured, pytest 9.1.1).
+strict_markers = true
 markers = [
-    "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",
     "e2e: live end-to-end suites needing a running/deployed stack (deselect with '-m \"not e2e\"'; run via make e2e-ci / the per-suite targets)",
     # per-suite selectors used by the e2e make targets (e.g. `pytest -m cas`); all of them ALSO carry e2e
     "byo_branch: a stock client's commits on a branch on the live estate, each staged on the table's vended credential and judged at version/create (LH-490)",

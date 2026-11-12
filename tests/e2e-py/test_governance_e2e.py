@@ -36,6 +36,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import requests
+from credentials import Credential, credential
 from fga_store import read, tuples_on
 from lance_namespace import ErrorCode
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
@@ -57,7 +58,7 @@ LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 # The sign-in client is confidential in every Dex the suite meets (the Dex fixture and `.docker/dex.config.yaml`), so its
 # password grant carries the client's secret; the default is the dev Dex's.
-DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
+DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 
 pytestmark = pytest.mark.e2e

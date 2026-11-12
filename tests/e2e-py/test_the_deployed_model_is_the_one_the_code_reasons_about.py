@@ -39,6 +39,7 @@ import urllib.request
 from typing import Any
 
 import pytest
+from credentials import Credential, credential_path
 
 from lakehouse.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document, shape
 from lakehouse.governed.fga import ModelHistory, newest_store
@@ -50,7 +51,7 @@ from lakehouse.governed.fga import ModelHistory, newest_store
 FGA = os.environ.get("LANCE_E2E_FGA", "").rstrip("/")
 STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
 #: The `rask-openfga` token file the runner minted (`scripts/e2e_live.sh`); OpenFGA refuses a call without it ([[XC-077]]).
-FGA_TOKEN_FILE = os.environ.get("LANCE_E2E_FGA_TOKEN_FILE") or None
+FGA_TOKEN_FILE = credential_path(Credential.FGA_TOKEN)
 
 pytestmark = pytest.mark.e2e
 

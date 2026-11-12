@@ -39,7 +39,7 @@ LAKEHOUSE_MEMBERS = (
     "packages/lakehouse",
 )
 #: The platform's development fixtures: stand-ins for what a platform team runs, none of them a client.
-PLATFORM_FIXTURES = ("cloudnative-pg", "dapr", "dex", "external-secrets", "marquez", "nats", "observability", "openbao", "rustfs")
+PLATFORM_FIXTURES = ("cloudnative-pg", "dapr", "dex", "external-secrets", "marquez", "nats", "observability", "openbao", "registry", "rustfs")
 #: The lakehouse's console: the single-page app, its packages and its image.
 LAKEHOUSE_CONSOLE = ("frontend", ".docker/frontend.dockerfile")
 #: The rest of what the lakehouse deploys with.

@@ -13,7 +13,7 @@ import (
 const (
 	k3sImage       = "rancher/k3s:v1.31.2-k3s1"
 	registryImage  = "registry:2.8.3"
-	craneImage     = "gcr.io/go-containerregistry/crane:v0.20.3"
+	craneImage     = "gcr.io/go-containerregistry/crane:v0.20.3@sha256:fc86bcad43a000c2a1ca926a1e167db26c053cebc3fa5d14285c72773fb8c11d"
 	kubectlVersion = "v1.31.2"
 )
 

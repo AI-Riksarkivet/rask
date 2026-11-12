@@ -24,10 +24,12 @@ TAG="${CATALOG_IMG##*:}"
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.localbin"
 export PATH="$BIN:$PATH"
 
+. "$(dirname "${BASH_SOURCE[0]}")/e2e_credentials.sh"
 
 PF_PIDS=()
 cleanup() {
   local rc=$?
+  rm -rf "$CREDENTIALS"
   for pid in "${PF_PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
   if [ $rc -ne 0 ]; then
     echo "::group::stack diagnostics (failure)"
@@ -367,13 +369,17 @@ step "6/9 provision the #3-B data buckets (the allowlist GOVERNS, it does not pr
 S3_KEY="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-access-key}' | base64 -d)"
 S3_SECRET="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-secret-key}' | base64 -d)"
 [ -n "$S3_KEY" ] && [ -n "$S3_SECRET" ] || { echo "!! $RELEASE-object-store-root holds no object-store pair"; exit 1; }
-S3_KEY="$S3_KEY" S3_SECRET="$S3_SECRET" uv run python - "${BASE_A#s3://}" "${BASE_B#s3://}" <<'PYEOF'
-import os, sys
+keep s3-access-key "$S3_KEY"
+keep s3-secret-key "$S3_SECRET"
+uv run python - "$CREDENTIALS" "${BASE_A#s3://}" "${BASE_B#s3://}" <<'PYEOF'
+import sys
+from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
-c = boto3.client("s3", endpoint_url="http://localhost:9900", aws_access_key_id=os.environ["S3_KEY"],
-                 aws_secret_access_key=os.environ["S3_SECRET"], region_name="us-east-1")
-for b in sys.argv[1:]:
+pair = Path(sys.argv[1])
+c = boto3.client("s3", endpoint_url="http://localhost:9900", aws_access_key_id=(pair / "s3-access-key").read_text(),
+                 aws_secret_access_key=(pair / "s3-secret-key").read_text(), region_name="us-east-1")
+for b in sys.argv[2:]:
     try:
         c.create_bucket(Bucket=b)
         print("   created", b)
@@ -384,20 +390,17 @@ for b in sys.argv[1:]:
 PYEOF
 
 step "7/9 mint Dex tokens + build the tenant through the catalog's doors"
-mint() {
-  curl -s -m10 http://localhost:5556/dex/token \
-    -d grant_type=password -d client_id=rask-web -d client_secret=lance-catalog-secret \
-    -d scope="openid email federated:id audience:server:client_id:rask-lakehouse" -d username="$1" -d password=password \
-  | uv run python -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"
-}
+mint() { password_grant http://localhost:5556/dex/token rask-web lance-catalog-secret "openid email federated:id audience:server:client_id:rask-lakehouse" "$1" password; }
 ALICE="$(mint alice@example.com)"
 BOB="$(mint bob@example.com)"
 [ -n "$ALICE" ] && [ -n "$BOB" ] || { echo "!! Dex issued no token"; exit 1; }
+keep token "$ALICE"
+keep tenant-b-token "$BOB"
 
 # The FGA subject is the principal the token proves (`<idp-id>~<user id>`, LH-063), NOT the email — granting the
 # email authorizes nobody. The catalog names it: `/management/v1/me` answers the principal its connector map derives.
 principal_of() {
-  curl -s -m 30 http://localhost:2333/management/v1/me -H "authorization: Bearer $1" \
+  authorized "$1" -s -m 30 http://localhost:2333/management/v1/me \
   | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))"
 }
 PRINCIPAL="$(principal_of "$ALICE")"
@@ -412,8 +415,8 @@ ALICE_USER="$(uv run python -c "import sys; from lakehouse.governed.fga import u
 door() {
   local token="$1" method="$2" path="$3" body="$4" out code; shift 4
   out="$(mktemp)"
-  code="$(curl -s -o "$out" -w '%{http_code}' -m 60 -X "$method" "http://localhost:2333$path" \
-    -H "authorization: Bearer $token" -H 'content-type: application/json' -d "$body" || true)"
+  code="$(authorized "$token" -s -o "$out" -w '%{http_code}' -m 60 -X "$method" "http://localhost:2333$path" \
+    -H 'content-type: application/json' -d "$body" || true)"
   case " $* " in *" $code "*) rm -f "$out"; return 0 ;; esac
   echo "!! $method $path answered ${code:-no response}: $(head -c 400 "$out")" >&2
   rm -f "$out"
@@ -431,10 +434,9 @@ door "$ALICE" POST /management/v1/projects "{\"id\":\"$PROJECT\"}" 200 201 409 |
 # and the serving catalog disagree about which store the grants live in (CI flake 2026-07-15: the CLI
 # verified can_create_warehouse=allowed on stores[0] while the catalog checked its own newer store → 403).
 # OpenFGA admits only a projected `rask-openfga` token ([[XC-077]]): the seeder speaks as the bootstrap Job's
-# ServiceAccount, through a TokenRequest the suites re-read from LANCE_E2E_FGA_TOKEN_FILE.
-FGA_TOKEN_FILE="$(mktemp)"
-kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h > "$FGA_TOKEN_FILE" || { echo "!! could not mint a rask-openfga token"; exit 1; }
-FGA_TOKEN="$(cat "$FGA_TOKEN_FILE")"
+# ServiceAccount, through a TokenRequest the suites re-read from the run's `fga-token` credential.
+FGA_TOKEN="$(kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h)" || { echo "!! could not mint a rask-openfga token"; exit 1; }
+keep fga-token "$FGA_TOKEN"
 SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" \
   | uv run python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'])")"
 # The project's creator holds `admin` on it, written by the create. bob gets NOTHING on it — he is the 403 leg.
@@ -468,6 +470,7 @@ echo "   tenant B: $TENANT_B (admin=bob)"
 step "8/9 the outbox suite's Dapr app token"
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
+keep dapr-token "$DAPR_TOKEN"
 
 step "9/9 run the guarded e2e suites against the live stack"
 export LANCE_E2E_S3=http://localhost:9900
@@ -478,8 +481,7 @@ export LANCE_E2E_S3=http://localhost:9900
 # only those, and deletes them — its passes expire every table it registers there, so pointing it at
 # `lance-catalog` would rewrite the estate this job just seeded.
 export LANCE_E2E_S3_ENDPOINT=http://localhost:9900
-export LANCE_E2E_S3_ACCESS_KEY="$S3_KEY"
-export LANCE_E2E_S3_SECRET_KEY="$S3_SECRET"
+export LANCE_E2E_CREDENTIALS="$CREDENTIALS"
 export LANCE_E2E_CATALOG_URL=http://localhost:2333
 # The same catalog under the names the lifecycle and governance suites read.
 export LANCE_REST_E2E_URL=http://localhost:2333
@@ -490,17 +492,12 @@ export LANCE_E2E_LINEAGE_URL=http://localhost:18000
 # client-direct suite's reachability probe 404'd and it SKIPPED — silently, on every run.
 export LANCE_E2E_DEX=http://localhost:5556/dex
 export LANCE_E2E_FGA=http://localhost:8081
-export LANCE_E2E_FGA_TOKEN_FILE="$FGA_TOKEN_FILE"
 # The store the tenant above was seeded in, so every suite that reads OpenFGA reads that one.
 export LANCE_E2E_FGA_STORE_ID="$SID"
-export LANCE_E2E_TOKEN="$ALICE"
-export LANCE_E2E_NONADMIN_TOKEN="$BOB"
-export LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN"
 export LANCE_E2E_PROJECT="$PROJECT"
 # The suites' top-level namespaces arrive through this warehouse (`topology.create_top_level`, `outbox_probe`).
 export LANCE_E2E_WAREHOUSE="$WAREHOUSE"
 export LANCE_E2E_PROJECT_B="$TENANT_B"
-export LANCE_E2E_TENANT_B_TOKEN="$BOB"
 export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
@@ -510,10 +507,9 @@ export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 export LANCE_E2E_NATS_URL=nats://localhost:4222
 export LANCE_E2E_RELEASE="$RELEASE"
 # Criterion 2's service identity: the lineage service's account, for the audience the catalog's own door checks.
-SERVICE_TOKEN_FILE="$(mktemp)"
 SA_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_SA_AUDIENCE")].value}')"
-kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h > "$SERVICE_TOKEN_FILE" || { echo "!! could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"; exit 1; }
-export LANCE_E2E_SERVICE_TOKEN_FILE="$SERVICE_TOKEN_FILE"
+SERVICE_TOKEN="$(kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h)" || { echo "!! could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"; exit 1; }
+keep service-token "$SERVICE_TOKEN"
 
 # NO SILENT SKIPS. Every suite skips when the address or token it needs is missing, which is right on a laptop with
 # nothing running and a lie here: the stack is up, so a skip means a misnamed variable and a suite that never ran.

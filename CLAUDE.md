@@ -143,11 +143,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | ---------------------------- | ------------------------------------------------------------------------ |
 | First-time setup             | `make install` (= `bun --cwd=frontend install` + `uv sync --all-packages` + git hooks + `make k3s-deps` (subcharts) + `make claude-bootstrap`, which installs the ra-skills and mattpocock plugins) |
 | Build everything             | `make build`                                                             |
-| Run tests (excludes slow, e2e) | `make test` (= `uv run pytest -m "not slow and not e2e" -n 16`)        |
-| Run all tests incl. slow     | `make test-slow`                                                         |
+| Run tests (excludes e2e)     | `make test` (= `uv run pytest -m "not e2e" -n 16`)                       |
 | Single Python test           | `uv run pytest services/catalog/tests/<file>.py::test_name`             |
 | Filter by name               | `uv run pytest -k <pattern>`                                             |
-| Skip slow tests              | `uv run pytest -m "not slow"`                                            |
 | Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make lint-imports` + `make typecheck` + `make knip` + `make fga-test` + `make go-fmt` + `make chart-docs-check`) |
 | Scan dependencies for CVEs   | `make audit` (osv-scanner over every lockfile + `.dagger/go.mod`)        |
 | Scan dockerfiles + chart     | `make scan-config` (trivy misconfig + secret detection)                  |
@@ -179,7 +177,7 @@ the catalog's commit announcements reaching lineage's durable feed over the bus,
 
 ```bash
 make k3s-up          # the cluster + release (one-time per session)
-make dev-registry    # ONCE per host: registry on :5000 + point k3s at it (sudo; restarts k3s)
+make dev-registry    # ONCE per host: the registry fixture (deploy/fixtures/registry) on the node's :5000 + point k3s at it (sudo; restarts k3s)
 make dagger-engine   # ONCE per host: a Dagger engine that may push to that (plain-HTTP) registry
 make k9s             # inspect the cluster (installed into .localbin by `make bootstrap`)
 ```
@@ -199,8 +197,8 @@ honest version is one owner, not two.
 Two things bite when pushing to the local registry, and neither announces itself:
 
 - **The registry is addressed twice.** k3s pulls via `localhost:5000`; Dagger pushes to
-  `172.17.0.1:5000`. Same container — but Dagger's engine *is* a container, so `localhost` inside it
-  is the engine. Use the bridge gateway for anything Dagger does.
+  `172.17.0.1:5000`. Same registry pod, on the node's port — but Dagger's engine *is* a container, so
+  `localhost` inside it is the engine. Use the bridge gateway for anything Dagger does.
 - **Dagger always speaks HTTPS and `publish` has no `--insecure` flag**, so against the TLS-less dev
   registry it dies with `http: server gave HTTP response to HTTPS client`. The only lever is the
   engine's own BuildKit config, which the auto-provisioned engine cannot receive — hence

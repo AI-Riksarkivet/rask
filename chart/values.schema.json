@@ -120,6 +120,10 @@
                             "description": "The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required.",
                             "type": "object"
                         },
+                        "egress": {
+                            "description": "NetworkPolicy egress rules ({to, ports}) admitting the governed doors that verify a person's token (the catalog, lineage) to the platform's IdP at `issuer`, at the port a policy sees. Required under networkPolicy.enabled while `auth.enabled` and `dex.enabled` is false.",
+                            "type": "array"
+                        },
                         "issuer": {
                             "description": "The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it). Required when `auth.enabled`; https unless `dex.enabled`.",
                             "type": "string"
@@ -1099,6 +1103,10 @@
                         }
                     }
                 },
+                "egress": {
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the bus's clients (every pod with a Dapr sidecar, the stream Job) to the platform's bus at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment, where the bus is the platform's.",
+                    "type": "array"
+                },
                 "streamMaxAgeSeconds": {
                     "description": "Seconds a message is kept on the LINEAGE, DLQ and CATALOG_CONTROL streams before the stream drops it (max_age).",
                     "type": "integer",
@@ -1126,7 +1134,7 @@
                     "type": "boolean"
                 },
                 "extraEgress": {
-                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.",
+                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination.",
                     "type": "array"
                 },
                 "objectStoreExtraFrom": {
@@ -1152,6 +1160,10 @@
                 },
                 "buckets": {
                     "description": "Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.",
+                    "type": "array"
+                },
+                "egress": {
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the pods that hold a store session (the catalog, lineage, maintenance and its workers, the backup Jobs) to the platform's S3 at `externalEndpoint` and to its STS, at the port a policy sees. Required under networkPolicy.enabled while `enabled` is false.",
                     "type": "array"
                 },
                 "enabled": {
@@ -1785,6 +1797,10 @@
                                             "type": "string"
                                         }
                                     }
+                                },
+                                "egress": {
+                                    "description": "NetworkPolicy egress rules ({to, ports}) admitting lineage to the graph backend at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment that sets `url`.",
+                                    "type": "array"
                                 },
                                 "endpoint": {
                                     "description": "Path the events are POSTed to under `url` (the transport's `endpoint`).",

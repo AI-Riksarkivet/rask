@@ -46,6 +46,7 @@ import byo_scenario as scenario
 import lance
 import requests
 from byo_scenario import Commit, Identity, ScenarioRun
+from credentials import Credential, credential
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse import outbox
@@ -61,8 +62,8 @@ LINEAGE_DURABLE = "lineage-durable"
 #: The catalog's control outbox (`LANCE_CONTROL_OUTBOX_URI`), and the store the outboxes live in with its own pair.
 CONTROL_OUTBOX_URI = os.environ.get("LANCE_E2E_CONTROL_OUTBOX_URI", "s3://lance-catalog/_control_outbox")
 STORE = os.environ.get("LANCE_E2E_S3", "")
-STORE_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "")
-STORE_SECRET = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "")
+STORE_KEY = credential(Credential.S3_ACCESS_KEY)
+STORE_SECRET = credential(Credential.S3_SECRET_KEY)
 
 #: Each version of a set of tables, as ``(table, branch, version)`` with ``None`` for main, and the `rask.*`
 #: properties its commit carries.
@@ -248,7 +249,9 @@ def settled_outbox_depth(reader: Identity, *, within: float = scenario.SETTLE_SE
 
 def store_options() -> StorageOptions:
     """The store's own pair, as a client outside the catalog's doors reaches the store: the outbox reader, a pipeline."""
-    assert STORE and STORE_KEY and STORE_SECRET, "set LANCE_E2E_S3, LANCE_E2E_S3_ACCESS_KEY and LANCE_E2E_S3_SECRET_KEY: this reads or writes the store itself"
+    assert STORE and STORE_KEY and STORE_SECRET, (
+        "set LANCE_E2E_S3 and the run's s3-access-key and s3-secret-key credentials: this reads or writes the store itself"
+    )
     return StorageOptions.from_flat(
         {
             "endpoint": STORE,

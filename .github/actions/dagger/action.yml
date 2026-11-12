@@ -1,12 +1,32 @@
 name: Dagger CLI and engine
-description: Installs the Dagger CLI pinned to the module's engineVersion and warms the engine, retrying the engine pull only.
+description: Installs the Dagger CLI pinned to the module's engineVersion, from an archive checked against a digest committed here, and warms the engine, retrying the engine pull only.
 runs:
   using: composite
   steps:
-    - name: Install Dagger CLI (pinned to the module's engineVersion)
+    # NO SCRIPT FETCHED AT RUN TIME ([[XC-202]]). The release job's token pushes packages, so whatever this step runs could
+    # publish in rask's name: the archive is the module's engineVersion, and its sha256 is the one Dagger publishes in the
+    # release's checksums.txt, read once and committed here, so a changed archive fails the check instead of running.
+    - name: Install Dagger CLI (the module's engineVersion, digest-checked)
       shell: bash
-      run: curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-    # The engine pull is retried on its own, as ci.yml does: the work is never retried into passing.
+      run: |
+        set -euo pipefail
+        version=0.21.8
+        case "$(uname -m)" in
+          x86_64) arch=amd64; sha256=53e226c7da8fb75171e58c35759d736d961ce8b3a12db0baa7b7107954fccc5a ;;
+          aarch64) arch=arm64; sha256=cd0df4885f2050082932b4abc5a6aad9a733f6aa4e7d8474740558517ffec4af ;;
+          *) echo "!! no pinned Dagger CLI digest for $(uname -m)" >&2; exit 1 ;;
+        esac
+        archive="$RUNNER_TEMP/dagger_v${version}_linux_${arch}.tar.gz"
+        curl -fsSL -o "$archive" "https://dl.dagger.io/dagger/releases/${version}/dagger_v${version}_linux_${arch}.tar.gz"
+        echo "${sha256}  ${archive}" | sha256sum --check --strict -
+        sudo tar -xzf "$archive" -C /usr/local/bin dagger
+        dagger version
+    # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make CI's verdict about the weather.
+    # Measured 2026-09-24: four Dagger jobs across two runs died on `start engine: failed to pull image ... read: connection
+    # reset by peer` from registry.dagger.io, while that same manifest answered 200 from elsewhere. Warming the engine in its
+    # own step keeps the retry on the PULL and off the work: a genuine failure still fails on the last attempt, with its own
+    # error, and a test that fails is never retried into passing. Five attempts over ~150s, because three over ~30s was
+    # measured too short the same day (a 504 outlasted it).
     - name: Warm the Dagger engine
       shell: bash
       env:

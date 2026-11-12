@@ -58,11 +58,14 @@ age:
 # `objectStore.identity.audience`, and creates each workload's canned policy from the ConfigMap
 # `<release>-object-store-identities` (docs/chart/templates/object-store-identities.yaml.md); no workload holds a store
 # key. The development store is refused on a real
-# deployment (templates/prod-credentials.yaml), and the render refuses an empty or http endpoint; the NetworkPolicy reaches it
-# through `networkPolicy.extraEgress`.
+# deployment (templates/prod-credentials.yaml), and the render refuses an empty or http endpoint. The pods holding a store
+# session reach it, and its STS, through `egress`, which the render refuses empty under the NetworkPolicy.
 objectStore:
   enabled: false
   externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
+  # egress:
+  #   - to: [{ipBlock: {cidr: 10.0.1.30/32}}]
+  #     ports: [{protocol: TCP, port: 443}]
 
 # Network isolation: default-deny + DNS egress + the EXCLUSIVE secret-store egress (only the pods whose sidecar
 # reads the store reach its addresses, `openbao.egress`). The chart ships the full, correct impl (templates/network-policy.yaml);
@@ -78,13 +81,13 @@ networkPolicy:
   # apiServerEgress:
   #   - to: [{ipBlock: {cidr: 10.0.0.10/32}}]
   #     ports: [{protocol: TCP, port: 6443}]
-  # Every other platform endpoint this overlay names outside the namespace is reached through extraEgress, a rule per
-  # endpoint naming its addresses: the NATS bus (nats.url, 4222), the Postgres (age.externalHost, 5432), the
-  # platform's IdP (auth.oidc.issuer) and an off-cluster S3. No other egress leaves the namespace, so an endpoint
-  # missing here is unreachable.
-  # extraEgress:
-  #   - to: [{ipBlock: {cidr: 10.0.1.20/32}}]
-  #     ports: [{protocol: TCP, port: 5432}]
+  # Every other platform endpoint this overlay names outside the namespace is reached through the egress value beside its
+  # address, scoped to the pods that dial it: `objectStore.egress` (S3 and its STS), `nats.egress` (the bus, 4222),
+  # `auth.oidc.egress` (the IdP), `auth.fgaEgress`, `openbao.egress`, `observability.export.egress`, and
+  # `services.lineage.forward.egress` when lineage forwards to a graph backend. The render refuses every one left empty,
+  # in one message naming them all ([[XC-202]]). No other egress leaves the namespace, so an endpoint no rule names is
+  # unreachable; `extraEgress` takes a rule for an endpoint none of them names (the Postgres, 5432, if OpenFGA ran in the
+  # chart).
 
 # Load-shed cap sized to the catalog memory tier below (P1): the code default (16) admits 16 × 256MiB
 # buffered Arrow-IPC bodies = 4Gi of buffers against the 1Gi limit — a write burst OOM-kills the pod even
@@ -130,7 +133,10 @@ openbao:
 # deployment refuses it (templates/prod-credentials.yaml) and signs in through the platform's IdP, which the deployer
 # names as `auth.oidc.issuer` (https; the render refuses an http one): every
 # governed door trusts that issuer and nothing else, and accepts only a token whose audience is `auth.oidc.audience`,
-# which the platform's IdP issues to the clients it trusts (`auth.oidc.audienceScope` names the scope they ask for).
+# which the platform's IdP issues to the clients it trusts (`auth.oidc.audienceScope` names the scope they ask for). The
+# doors that verify a person's token reach the IdP through `auth.oidc.egress`, which the render refuses empty under the
+# NetworkPolicy:
+#   auth: {oidc: {egress: [{to: [{ipBlock: {cidr: 10.0.1.40/32}}], ports: [{protocol: TCP, port: 443}]}]}}
 dex:
   enabled: false
 
@@ -190,3 +196,6 @@ observability:
 # nats (the platform's JetStream, REQUIRED):        # a prerequisite rask never installs (ADR 0153); bus down =
 #   url: nats://nats.internal:4222                   # no lineage ingest, no cascade. The stream Job provisions
 #   streamReplicas: 3                                # rask's streams on it (needs a 3+ node cluster)
+#   egress:                                          # the bus's clients reach it here; refused empty under the
+#     - to: [{ipBlock: {cidr: 10.0.1.50/32}}]        # NetworkPolicy ([[XC-202]])
+#       ports: [{protocol: TCP, port: 4222}]

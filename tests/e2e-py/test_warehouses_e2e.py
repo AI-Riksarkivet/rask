@@ -1,13 +1,12 @@
 """#3-A — live per-warehouse physical isolation against the DEPLOYED catalog.
 
 Proves the completion condition end to end: an admin provisions warehouse A→bucket-a and B→bucket-b
-(distinct buckets, created at RUNTIME by the API — not the chart's bucket hook); a namespace bound to A + a
-table created under it physically land in bucket-a and are ABSENT from bucket-b; and ``POST /management/v1/warehouses``
-as a non-admin is denied 403.
+(distinct buckets, created at RUNTIME by the API — not the chart's bucket hook), and a namespace bound to A + a
+table created under it physically land in bucket-a and are ABSENT from bucket-b.
 
-Skipped unless ``LANCE_E2E_CATALOG_URL`` + ``LANCE_E2E_TOKEN`` are set (the stack deployed with
-``LANCE_WAREHOUSES_ENABLED=true`` and the token's user granted ``can_create_warehouse`` on the project).
-Run via ``make e2e-warehouses``. The 403 leg additionally needs ``LANCE_E2E_NONADMIN_TOKEN``.
+Skipped unless ``LANCE_E2E_CATALOG_URL`` and the run's ``token`` credential are set (the stack deployed with
+``LANCE_WAREHOUSES_ENABLED=true`` and the token's user granted ``can_create_warehouse`` on the project). Run via
+``bash scripts/e2e_live.sh tests/e2e-py/test_warehouses_e2e.py``.
 """
 
 from __future__ import annotations
@@ -20,16 +19,17 @@ import pyarrow.fs as pafs
 import pyarrow.ipc as ipc
 import pytest
 import requests
+from credentials import Credential, credential
 
 from lakehouse.naming import CATALOG_DELIMITER
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
-TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
+TOKEN = credential(Credential.TOKEN)
 PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
+S3_ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
+S3_SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
 #: The top-level namespace this suite binds into warehouse A — OWNED BY THIS FILE ALONE.
 #:
@@ -68,7 +68,7 @@ def _arrow_ipc() -> bytes:
 @pytest.fixture(scope="module")
 def catalog() -> str:
     if not CATALOG or not TOKEN:
-        pytest.skip("set LANCE_E2E_CATALOG_URL + LANCE_E2E_TOKEN (deployed stack with warehouses enabled)")
+        pytest.skip("set LANCE_E2E_CATALOG_URL and the run's token credential (deployed stack with warehouses enabled)")
     try:
         requests.get(f"{CATALOG}/livez", timeout=5).raise_for_status()
     except Exception:

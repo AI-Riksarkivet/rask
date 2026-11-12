@@ -4,8 +4,8 @@ Proves the completion condition end to end: a table created with 2 approved data
 distributed across BOTH buckets (the manifest + _versions stay in the primary root — relative-path
 portable), a read returns ALL rows (fan-out), and an off-allowlist base is rejected 400.
 
-Needs ``LANCE_E2E_CATALOG_URL`` + ``LANCE_E2E_TOKEN`` (a reachable deployed catalog whose token owns the
-parent namespace). The FAN-OUT leg additionally needs ``LANCE_E2E_BASE_A`` + ``LANCE_E2E_BASE_B`` naming
+Needs ``LANCE_E2E_CATALOG_URL`` and the run's ``token`` credential (a reachable deployed catalog whose token owns
+the parent namespace). The FAN-OUT leg additionally needs ``LANCE_E2E_BASE_A`` + ``LANCE_E2E_BASE_B`` naming
 two buckets that are BOTH on that catalog's ``LANCE_MULTIBASE_DATA_BASES`` allowlist and physically
 provisioned — the allowlist is a governance gate, not a provisioner. Multi-base is an operator opt-in
 (chart ``catalog.multibase.dataBases``), so an estate that has not opted in SKIPS that leg rather than
@@ -22,16 +22,17 @@ import pyarrow.fs as pafs
 import pyarrow.ipc as ipc
 import pytest
 import requests
+from credentials import Credential, credential
 from topology import assert_parent_exists, create_top_level
 
 from lakehouse.naming import CATALOG_DELIMITER
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
-TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
+TOKEN = credential(Credential.TOKEN)
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
+S3_ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
+S3_SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 #: NO DEFAULTS. `s3://mb-a` / `s3://mb-b` are `scripts/e2e_stack.sh`'s install-time constants, and that
 #: script is the only thing that provisions them — so on any OTHER deployed estate the defaults named
 #: two buckets that do not exist, and the fan-out leg failed as though multi-base were broken.
@@ -76,7 +77,7 @@ def _arrow_many_rows(n: int = 4000) -> bytes:
 @pytest.fixture(scope="module")
 def catalog() -> str:
     if not CATALOG or not TOKEN:
-        pytest.skip("set LANCE_E2E_CATALOG_URL + LANCE_E2E_TOKEN (deployed stack with multibase allowlist)")
+        pytest.skip("set LANCE_E2E_CATALOG_URL and the run's token credential (deployed stack with multibase allowlist)")
     try:
         requests.get(f"{CATALOG}/livez", timeout=5).raise_for_status()
     except Exception:

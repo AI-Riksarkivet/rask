@@ -26,6 +26,7 @@ import os
 
 import pyarrow as pa
 import requests
+from credentials import Credential, credential
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 
 from lakehouse.lineage_events import DatasetUuids
@@ -59,7 +60,7 @@ def bearer() -> str:
     form = {
         "grant_type": "password",
         "client_id": DEX_CLIENT,
-        "client_secret": os.environ.get("LANCE_E2E_OIDC_CLIENT_SECRET", "lance-catalog-secret"),
+        "client_secret": credential(Credential.DEX_SECRET, "lance-catalog-secret"),
         "scope": DEX_SCOPE,
         "username": os.environ.get("LANCE_E2E_OIDC_USERNAME", "alice@example.com"),
         "password": os.environ.get("LANCE_E2E_OIDC_PASSWORD", "password"),

@@ -33,9 +33,8 @@ func withRenderableChart(c *dagger.Container) *dagger.Container {
 
 // Test runs the offline pytest suite: every root-workspace testpath (packages, services,
 // tests/unit, tests/integration — and tests/e2e-py stays collectable so the collection
-// gate can see it), excluding the live-stack `e2e` marker and the model-bound `slow`
-// marker. This is the pytest leg of the old `dagger call ci` composition (lint →
-// typecheck → openapi → test).
+// gate can see it), excluding the live-stack `e2e` marker. This is the pytest leg of the
+// old `dagger call ci` composition (lint → typecheck → openapi → test).
 func (m *Rask) Test(
 	ctx context.Context,
 	// +defaultPath="/"
@@ -75,8 +74,7 @@ func (m *Rask) Test(
 		// and fails the run, so the next occurrence names itself. 300s is far above the suite's whole
 		// measured runtime (~2 min on a developer box) — it is a hang detector, not a speed budget.
 		//
-		// Not in `addopts`: that would put the same ceiling on `make test-slow`, whose tests load real
-		// models over the network and whose honest runtime is not established here.
-		WithExec([]string{"uv", "run", "--no-sync", "pytest", "-q", "--timeout=300", "--timeout-method=thread", "-m", "not e2e and not slow"}).
+		// Not in `addopts`, so a developer's run under a debugger is not cut off at the ceiling.
+		WithExec([]string{"uv", "run", "--no-sync", "pytest", "-q", "--timeout=300", "--timeout-method=thread", "-m", "not e2e"}).
 		Stdout(ctx)
 }

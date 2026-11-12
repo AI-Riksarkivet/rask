@@ -20,12 +20,13 @@ import os
 
 import pytest
 import requests
+from credentials import Credential, credential
 from principals import DEX_CLIENT
 
 
 EDGE = os.environ.get("RASK_E2E_EDGE_URL", "").rstrip("/")
 DEX = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
-DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
+DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
 
 pytestmark = [pytest.mark.e2e, pytest.mark.edge]
 

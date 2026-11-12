@@ -28,7 +28,8 @@ set -euo pipefail
 
 REG="${RASK_REGISTRY:-localhost:5000}"
 KEEP="${RASK_REGISTRY_KEEP:-2}"
-NAME="${RASK_REGISTRY_NAME:-rask-registry}"
+# The registry is the fixture deploy/fixtures/registry, so its own commands run in its pod.
+REGISTRY_NAMESPACE="${RASK_REGISTRY_NAMESPACE:-dev-registry}"
 PINS="${RASK_REGISTRY_PINS:-deploy/values-live-pins.yaml}"
 KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
@@ -115,5 +116,5 @@ if [[ "$deleted" -eq 0 ]]; then
 fi
 
 echo ">> deleted $deleted manifests; sweeping blobs"
-docker exec "$NAME" registry garbage-collect --delete-untagged /etc/docker/registry/config.yml 2>&1 | tail -3
-echo ">> registry now $(docker exec "$NAME" du -sh /var/lib/registry 2>/dev/null | cut -f1)"
+KUBECONFIG="$KUBECONFIG_PATH" kubectl -n "$REGISTRY_NAMESPACE" exec deploy/rask-registry -- registry garbage-collect --delete-untagged /etc/docker/registry/config.yml 2>&1 | tail -3
+echo ">> registry now $(KUBECONFIG="$KUBECONFIG_PATH" kubectl -n "$REGISTRY_NAMESPACE" exec deploy/rask-registry -- du -sh /var/lib/registry 2>/dev/null | cut -f1)"

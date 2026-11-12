@@ -1,9 +1,10 @@
 name: Lakehouse release
 
 # A lakehouse release ([[XC-187]], decided by the owner 2026-11-03): pushing the tag `lakehouse-vX.Y.Z` publishes the
-# catalog image (amd64 + arm64, one index) and the product chart pinned to that index's digest to public GHCR, and the
-# tag itself is the pin for the Dagger module another repository calls to stand the lakehouse up
-# (`dagger call lakehouse --version X.Y.Z`). Nothing else publishes.
+# catalog and console images (amd64 + arm64, one index each) and the product chart pinned to both indexes' digests to
+# public GHCR, each image held to the scan gate before it is pushed, every index and the chart signed as this workflow,
+# and each platform's manifest attested its CycloneDX SBOM the same way ([[XC-202]]); the tag itself is the pin for the Dagger module another repository calls to stand the lakehouse
+# up (`dagger call lakehouse --version X.Y.Z`), which verifies that signature. Nothing else publishes.
 on:
   push:
     tags:
@@ -28,9 +29,10 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      # Pinned by commit: this job's token can push packages, so a moved tag must not change what runs here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
-      - name: Build and push this architecture's catalog image
+      - name: Build, scan and push this architecture's images
         env:
           DAGGER_NO_NAG: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -40,15 +42,29 @@ jobs:
   publish:
     needs: image
     runs-on: ubuntu-latest
+    # The OIDC token cosign exchanges for this workflow's signing certificate; only this job signs.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/dagger
-      - name: Join the images into one index and publish the chart pinned to it
+      - name: Join the images into indexes, sign them and attest their SBOMs, publish the chart pinned to them and sign it
         env:
           DAGGER_NO_NAG: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
+        # The request token reaches curl on stdin and the Sigstore token Dagger as a file only this user reads: an argv is
+        # readable through /proc by anything on the runner, and the environment is inherited by every process the step
+        # starts. `shell: bash` runs the step with pipefail, so a failed publish fails the job rather than passing as tee.
+        shell: bash
         run: |
           version="${GITHUB_REF_NAME#lakehouse-v}"
-          dagger call publish --version "$version" --username "$ACTOR" --password env:GITHUB_TOKEN | tee "$RUNNER_TEMP/published.txt"
+          token="$(mktemp "$RUNNER_TEMP/sigstore.XXXXXX")"
+          trap 'rm -f "$token"' EXIT
+          printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" | curl -fsS -H @- "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -er .value > "$token"
+          read -r masked < "$token"
+          echo "::add-mask::$masked"
+          dagger call publish --version "$version" --username "$ACTOR" --password env:GITHUB_TOKEN --identity-token "file:$token" | tee "$RUNNER_TEMP/published.txt"
           { echo "## lakehouse-v$version"; echo '```'; cat "$RUNNER_TEMP/published.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

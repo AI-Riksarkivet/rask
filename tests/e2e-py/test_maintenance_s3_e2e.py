@@ -61,6 +61,7 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
+from credentials import Credential, credential
 from lance import blob_array, blob_field
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
@@ -78,8 +79,8 @@ from maintenance.services.table_pass import PassOutcome, TableTask, run_table_pa
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
-SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
+ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
+SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 
 #: Reuses the REGISTERED `compaction` marker (pyproject `markers`) — `make e2e-compaction` selects it.
 pytestmark = [pytest.mark.e2e, pytest.mark.compaction]
@@ -104,11 +105,6 @@ class Estate(BaseModel):
     deact_uri: str
     #: The table's uuid each passed table's claim records, by its location.
     uuids: dict[str, str] = Field(default_factory=dict)
-
-    @property
-    def branch_child_uri(self) -> str:
-        """The BRANCH itself, which lives at ``<dataset>/tree/<name>`` and is a dataset in its own right."""
-        return f"{self.branch_uri}/tree/feature-a"
 
 
 def _rows(n: int = 3, offset: int = 0) -> pa.Table:

@@ -22,7 +22,7 @@ metadata:
   labels: {{- include "lance.labels" . | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [pods, namespaces, nodes, nodes/proxy, services, endpoints]
+    resources: [pods, namespaces, nodes, services, endpoints]
     verbs: [get, list, watch]
   - apiGroups: ["apps"]
     resources: [replicasets]

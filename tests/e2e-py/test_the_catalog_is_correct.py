@@ -79,6 +79,7 @@ import pytest
 import requests
 import yaml
 from byo_scenario import CATALOG, Identity, Tenant
+from credentials import Credential, credential
 from lance_namespace_urllib3_client import ApiClient, Configuration
 from lance_namespace_urllib3_client.api import TableApi
 from lance_namespace_urllib3_client.exceptions import ApiException
@@ -94,14 +95,16 @@ WRITER_USER = os.environ.get("LANCE_E2E_WRITER_USER", "carol@example.com")
 READER_USER = os.environ.get("LANCE_E2E_READER_USER", "dave@example.com")
 OUTSIDER_USER = os.environ.get("LANCE_E2E_OUTSIDER_USER", "erin@example.com")
 #: A token a fleet service account (`<release>-sa-lineage`) holds for the catalog's audience, minted by the launcher.
-SERVICE_TOKEN_FILE = os.environ.get("LANCE_E2E_SERVICE_TOKEN_FILE", "")
+SERVICE_TOKEN = credential(Credential.SERVICE_TOKEN)
 #: The spec's error codes this module reads (spec.yaml, `ErrorResponse.code`).
 UNSUPPORTED, NAMESPACE_NOT_EMPTY, TABLE_NOT_FOUND, TABLE_TAG_NOT_FOUND, INVALID_INPUT, PERMISSION_DENIED, INVALID_TABLE_STATE = 0, 3, 4, 8, 13, 15, 19
 
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.phase1,
-    pytest.mark.skipif(not (scenario.LIVE and SERVICE_TOKEN_FILE), reason=f"{scenario.REQUIRES}, and LANCE_E2E_SERVICE_TOKEN_FILE (a service account's token)"),
+    pytest.mark.skipif(
+        not (scenario.LIVE and SERVICE_TOKEN), reason=f"{scenario.REQUIRES}, and the run's service-token credential (a service account's token)"
+    ),
 ]
 
 
@@ -1285,7 +1288,7 @@ def tenant_b(byo_tenant: Tenant) -> Iterator[str]:
 def scene(byo_tenant: Tenant, tenant_b: str) -> Iterator[Scene]:
     """The matrix's scene on the shared tenant, its owner the scenario's pipeline and its tenant-B admin bob. The
     tenant's cascade removes what the scene made in its warehouse; the matrix label it removes itself."""
-    service = Identity(Path(SERVICE_TOKEN_FILE).read_text(encoding="utf-8").strip())
+    service = Identity(SERVICE_TOKEN)
     assert service.principal.startswith("kubernetes~system:serviceaccount:"), f"the service token proves {service.principal}, which is no service account"
     callers = {
         Role.OWNER: byo_tenant.pipeline,

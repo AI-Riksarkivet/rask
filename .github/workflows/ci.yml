@@ -47,39 +47,15 @@ jobs:
   # pytest stands alone because it is the only gate the e2e legs actually depend on (`needs: ms-test`
   # below). Inside the matrix, e2e would wait on ruff and formatting to decide whether to run.
   #
-  # Runs the whole offline suite (`-m "not e2e and not slow"`), which INCLUDES the claim-lint
+  # Runs the whole offline suite (`-m "not e2e"`), which INCLUDES the claim-lint
   # invariants (tests/unit/test_invariants.py) and the tests/e2e-py collection gate
   # (tests/unit/test_e2e_collection_gate.py) — those gates are folded in here, not lost.
   ms-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
-      - name: Tests — offline pytest suite, -m "not e2e and not slow" (Dagger)
+      - uses: ./.github/actions/dagger
+      - name: Tests — offline pytest suite, -m "not e2e" (Dagger)
         env:
           DAGGER_NO_NAG: "1"
         run: dagger call test
@@ -130,31 +106,7 @@ jobs:
         gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty, gitops-from-empty]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
+      - uses: ./.github/actions/dagger
       - name: dagger call ${{ matrix.gate }}
         env:
           DAGGER_NO_NAG: "1"
@@ -168,66 +120,32 @@ jobs:
   # NEITHER NEEDS A SECRET. osv-scanner and trivy read public advisory data over HTTPS; there is no API
   # key, no token, and nothing to add to repository secrets to make this work.
   #
-  # ── continue-on-error IS DELIBERATE, AND IT IS TEMPORARY ──
-  # The first run found 38 vulnerabilities (0 Critical, 24 High) and 4 dockerfile misconfigurations.
-  # osv-scanner has NO severity threshold — no --fail-on-severity, only `--config` — so ANY finding at
-  # ANY severity exits 1. Wired blocking, this job would have been red the hour it landed, on a backlog
-  # nobody had triaged, and the only available fix would have been to delete it.
-  #
-  # Report-only is therefore the honest first state, NOT the intended one. The exit condition is
-  # concrete and does not depend on anyone remembering this comment:
-  #   1. baseline whatever genuinely cannot move in `osv-scanner.toml`, each entry with a reason and a
-  #      review date, and the two DS-0031 false positives in `.trivyignore`
-  #      (HF_HUB_DISABLE_IMPLICIT_TOKEN=1 is a DISABLE flag — trivy matches on the name "TOKEN");
-  #   2. delete the `continue-on-error` line on THIS job. The gate then blocks on the 39th finding, which
-  #      is the only version of this job worth having.
+  # BOTH BLOCK ([[XC-202]]). osv-scanner has no severity threshold, so any advisory fails `audit`; what cannot move yet is
+  # recorded in `osv-scanner.toml`, each entry with its reason and the date it is judged again. `scan-config` fails on a
+  # HIGH or CRITICAL misconfiguration in a dockerfile or in the chart's production render, or a secret in the tree. The
+  # schedule runs them nightly too, so an advisory published against an unchanged lockfile turns the next night red.
   supply-chain:
-    name: supply-chain-${{ matrix.leg }} (report-only)
+    name: supply-chain-${{ matrix.leg }}
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         leg: [audit, scan-config]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
+      - uses: ./.github/actions/dagger
       - name: dagger call ${{ matrix.leg }}
         env:
           DAGGER_NO_NAG: "1"
         run: dagger call ${{ matrix.leg }}
 
-  # The one supply-chain leg that BLOCKS, and it blocks because it can afford to.
+  # The history's secrets leg, which blocks on a VERIFIED credential only.
   #
   # trufflehog verifies: it calls the provider to ask whether a credential actually works. Measured on
   # this repo's history — 36 pattern matches across trufflehog and gitleaks, ZERO verified. So gating on
   # `--results=verified` is green today with nothing baselined and nothing suppressed, and the day it
   # goes red someone has pushed a key that genuinely authenticates. That is worth blocking a merge for;
-  # a pattern match is not, which is why the other two legs are report-only.
+  # a pattern match in old history is not.
   #
   # fetch-depth: 0 IS THE WHOLE JOB. This scans GIT HISTORY, and actions/checkout defaults to a depth-1
   # shallow clone — with the default this gate would scan exactly one commit, pass instantly, and report
@@ -239,31 +157,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
+      - uses: ./.github/actions/dagger
       - name: dagger call scan-secrets — trufflehog over the full git history
         env:
           DAGGER_NO_NAG: "1"
@@ -292,31 +186,7 @@ jobs:
         image: [rest-catalog, frontend]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
+      - uses: ./.github/actions/dagger
       - name: Reclaim runner disk
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
@@ -377,31 +247,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
+      - uses: ./.github/actions/dagger
       - name: Frontend bun gate — svelte-check + unit + lint + fmt (Dagger)
         env:
           DAGGER_NO_NAG: "1"
@@ -464,31 +310,7 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
+      - uses: ./.github/actions/dagger
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -549,22 +371,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-
-      # STARTING THE ENGINE IS A NETWORK CALL — see e2e-stack for the measurement. The retry stays
-      # on the PULL and off the work, so a lane that genuinely fails is never retried into passing.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
+      - uses: ./.github/actions/dagger
 
       - name: dagger call ${{ matrix.lane }}
         env:

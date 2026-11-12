@@ -18,6 +18,7 @@ spec:
         app.kubernetes.io/component: bootstrap-admin
     spec:
       restartPolicy: OnFailure
+      {{- include "lance.podSecurityContext" . | nindent 6 }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:

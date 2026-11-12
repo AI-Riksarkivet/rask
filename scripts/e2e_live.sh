@@ -37,6 +37,9 @@ fail() { printf '\033[31m!! %s\033[0m\n' "$*" >&2; exit 1; }
 command -v kubectl >/dev/null || fail "kubectl is not on PATH"
 kubectl get ns >/dev/null 2>&1 || fail "no reachable cluster (KUBECONFIG=$KUBECONFIG)"
 
+. "$(dirname "${BASH_SOURCE[0]}")/e2e_credentials.sh"
+trap 'rm -rf "$CREDENTIALS"' EXIT
+
 # ---- discovery ---------------------------------------------------------------------------------
 # ClusterIP rather than a port-forward: these suites run from the host, the k3s service network is
 # routable here, and a forward per service is eleven background processes to leak.
@@ -89,11 +92,7 @@ DEX_SECRET="$(kubectl get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2
 # it in a token only when a client its audience client trusts asks for it with the cross-client scope.
 OIDC_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="RASK_OIDC_AUDIENCE")].value}' 2>/dev/null)"
 : "${OIDC_AUDIENCE:=rask-lakehouse}"
-mint() {
-  curl -s -m 20 "http://$DEX/dex/token" -d grant_type=password -d client_id="$DEX_CLIENT" \
-    -d client_secret="$DEX_SECRET" -d scope="openid email federated:id audience:server:client_id:$OIDC_AUDIENCE" -d username="$1" -d password=password \
-    | uv run python -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"
-}
+mint() { password_grant "http://$DEX/dex/token" "$DEX_CLIENT" "$DEX_SECRET" "openid email federated:id audience:server:client_id:$OIDC_AUDIENCE" "$1" password; }
 ALICE="$(mint alice@example.com)"; BOB="$(mint bob@example.com)"
 # A THIRD IDENTITY, because bob is not the non-admin this estate needs. The seed assigns bob to acme's
 # admins role, which holds `admin` on `project:acme` — so bob holds `can_administer` and the 403 legs had
@@ -106,10 +105,12 @@ printf '   alice=%s… bob=%s…\n' "${ALICE:0:18}" "${BOB:0:18}"
 step "3/4 reading the estate's own secrets"
 # From the Dapr app-token Secret, never from a values file: the token the sidecar stamps is the one
 # the doors verify, and any other copy is a guess.
-DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
+keep dapr-token "$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
 # The store's root pair, from the Secret the fixture's server mounts (`<release>-object-store-root`, written by ESO).
-S3_KEY="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-access-key}' 2>/dev/null | base64 -d || true)"
-S3_SECRET="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-secret-key}' 2>/dev/null | base64 -d || true)"
+keep s3-access-key "$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-access-key}' 2>/dev/null | base64 -d || true)"
+keep s3-secret-key "$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-secret-key}' 2>/dev/null | base64 -d || true)"
+keep token "$ALICE"
+keep dex-secret "$DEX_SECRET"
 
 # AN ADDRESS THAT DID NOT RESOLVE IS EXPORTED AS NOTHING, never as the scheme alone. Every line below
 # used to be `export X="http://$Y"` unconditionally, so a service this script could not find became the
@@ -133,91 +134,38 @@ url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
 if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
-export LANCE_E2E_TOKEN="$ALICE"
-export LANCE_E2E_ADMIN_TOKEN="$ALICE"
-# NOT exported blind. A leg asserting a 403 with this token needs a genuine non-admin, and on THIS estate
-# bob is an assignee of acme's admins role, which holds `admin` on `project:acme`, so bob is an admin and
-# the create succeeds. The suite
-# then fails on a false premise and reads as a governance hole. It is not one; the identity was wrong.
-# So the token is offered only when the estate agrees it is non-admin, and the suite SKIPS otherwise —
-# an honest skip beats a red test that alleges something untrue.
 if [ -n "$FGA" ]; then
   # OPENFGA ADMITS ONLY A PROJECTED `rask-openfga` TOKEN ([[XC-077]]), so this runner and the suites speak
   # to it as the bootstrap Job's ServiceAccount, the identity that writes the estate's standing tuples. A
-  # TokenRequest, written to a file the suites re-read (`LANCE_E2E_FGA_TOKEN_FILE`); no secret is stored.
-  FGA_TOKEN_FILE="$(mktemp)"
-  trap 'rm -f "$FGA_TOKEN_FILE"' EXIT
-  kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h > "$FGA_TOKEN_FILE" \
+  # TokenRequest, written to the file the suites re-read (`fga-token`); no secret is stored.
+  minted="$(kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h)" \
     || fail "could not mint a rask-openfga token for $RELEASE-sa-jobs"
-  export LANCE_E2E_FGA_TOKEN_FILE="$FGA_TOKEN_FILE"
-  FGA_AUTH="Authorization: Bearer $(cat "$FGA_TOKEN_FILE")"
+  keep fga-token "$minted"
   # THE STORE THE ESTATE USES: the catalog's `RASK_FGA_STORE_ID` pin, else the newest store named
   # `lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).
   # EXPORTED so a suite reads the SAME store this runner picked: a second pick by another rule agrees
   # only while the estate holds one store.
   STORE_ID="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_FGA_STORE_ID")].value}' 2>/dev/null || true)"
-  [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 -H "$FGA_AUTH" "http://$FGA/stores" | uv run python -c "
+  [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 -H @- "http://$FGA/stores" <<<"Authorization: Bearer $(cat "$CREDENTIALS/fga-token")" | uv run python -c "
 import json, sys
 from lakehouse.governed.auth.write_model import STORE_NAME
 from lakehouse.governed.fga import newest_store
 named = newest_store(json.load(sys.stdin).get('stores') or [], STORE_NAME)
 print(named['id'] if named else '')" 2>/dev/null || true)"
   [ -n "$STORE_ID" ] && export LANCE_E2E_FGA_STORE_ID="$STORE_ID"
-  # IN THAT STORE, THE MODEL THIS CHECKOUT CARRIES (`write_model.carried_model`). A check naming no model is
-  # answered by the store's NEWEST, which a legacy image's narrower body can be. Absent, the probe below
-  # does not run and the non-admin legs skip; the deployed-model check names the drift.
-  MODEL_ID=""
-  [ -z "$STORE_ID" ] || MODEL_ID="$(uv run python -c "
-import sys
-from lakehouse.governed.auth.write_model import carried_model
-try:
-    print(carried_model(sys.argv[1], token_file=sys.argv[3], pinned=sys.argv[2])[1])
-except LookupError as exc:
-    sys.exit(f'   note: {exc}')" "http://$FGA" "$STORE_ID" "$FGA_TOKEN_FILE" || true)"
-  # The principal the catalog keys a bearer on (LH-063), and the OpenFGA user it is, through the one seam.
-  principal_of() { curl -s -m 20 "http://$CATALOG/management/v1/me" -H "authorization: Bearer $1" \
-    | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))" 2>/dev/null || true; }
-  fga_user() { uv run python -c "import sys; from lakehouse.governed.fga import user_object; print(user_object(sys.argv[1]))" "$1" 2>/dev/null || true; }
-  can_administer() {
-    curl -s -m 10 -X POST "http://$FGA/stores/$STORE_ID/check" -H "$FGA_AUTH" -H 'content-type: application/json' \
-      -d "{\"authorization_model_id\":\"$MODEL_ID\",\"tuple_key\":{\"user\":\"$(fga_user "$1")\",\"relation\":\"can_administer\",\"object\":\"project:${LANCE_E2E_PROJECT:-acme}\"}}" \
-      | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed'))" 2>/dev/null || true
-  }
-  # ASK THE ESTATE WHICH IDENTITY IS ACTUALLY NON-ADMIN rather than naming one. The suite asserts a
-  # 403, so offering a token that turns out to hold `can_administer` makes it fail on a false premise
-  # and read as a governance hole — which is exactly what happened with bob. Candidates in the
-  # deployed Dex configmap are tried in order and the first genuine non-admin wins.
-  if [ -n "$MODEL_ID" ]; then
-    for CAND_NAME in publisher bob; do
-      eval "CAND_TOK=\${$(echo "$CAND_NAME" | tr '[:lower:]' '[:upper:]'):-}"
-      [ -n "$CAND_TOK" ] || continue
-      CAND_PRINCIPAL="$(principal_of "$CAND_TOK")"
-      [ -n "$CAND_PRINCIPAL" ] || continue
-      if [ "$(can_administer "$CAND_PRINCIPAL")" = "False" ]; then
-        export LANCE_E2E_NONADMIN_TOKEN="$CAND_TOK"
-        printf '   non-admin identity: %s (can_administer on %s is False)\n' "$CAND_NAME" "${LANCE_E2E_PROJECT:-acme}"
-        break
-      fi
-    done
-    [ -n "${LANCE_E2E_NONADMIN_TOKEN:-}" ] || printf '   note: every candidate holds can_administer on %s — the non-admin legs SKIP rather than fail falsely\n' "${LANCE_E2E_PROJECT:-acme}"
-  fi
 fi
 # THE SERVICE IDENTITY criterion 2's matrix calls as (tests/e2e-py/test_the_catalog_is_correct.py): the lineage service's
 # account, for the audience the catalog's own door checks, read off the deployed catalog container. An account
 # authenticates whatever namespace it runs in, and what it may do is the tuples that name it.
 SA_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_SA_AUDIENCE")].value}' 2>/dev/null || true)"
 if [ -n "$SA_AUDIENCE" ]; then
-  SERVICE_TOKEN_FILE="$(mktemp)"
-  trap 'rm -f "${FGA_TOKEN_FILE:-}" "$SERVICE_TOKEN_FILE"' EXIT
-  kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h > "$SERVICE_TOKEN_FILE" \
+  minted="$(kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h)" \
     || fail "could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"
-  export LANCE_E2E_SERVICE_TOKEN_FILE="$SERVICE_TOKEN_FILE"
+  keep service-token "$minted"
 fi
-export LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN"
+export LANCE_E2E_CREDENTIALS="$CREDENTIALS"
 export LANCE_E2E_OIDC_CLIENT_ID="$DEX_CLIENT"
 export LANCE_E2E_OIDC_AUDIENCE="$OIDC_AUDIENCE"
-export LANCE_E2E_OIDC_CLIENT_SECRET="$DEX_SECRET"
-export LANCE_E2E_DEX_SECRET="$DEX_SECRET"
 export LANCE_E2E_PROJECT="${LANCE_E2E_PROJECT:-acme}"
 export LANCE_E2E_RELEASE="$RELEASE"
 # The namespace the release runs in: its ServiceAccounts are the services' signing identities.
@@ -232,14 +180,8 @@ export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 CONTROL_OUTBOX="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="LANCE_CONTROL_OUTBOX_URI")].value}' 2>/dev/null || true)"
 [ -z "$CONTROL_OUTBOX" ] || export LANCE_E2E_CONTROL_OUTBOX_URI="$CONTROL_OUTBOX"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
-export AWS_ACCESS_KEY_ID="$S3_KEY"
-export AWS_SECRET_ACCESS_KEY="$S3_SECRET"
-# THE S3 PAIR IS READ UNDER ITS OWN NAMES TOO, and exporting only the AWS_* spelling is why suites
-# that reach the store directly reported it UNREACHABLE rather than skipping honestly: they read
-# `LANCE_E2E_S3_ACCESS_KEY`/`_SECRET_KEY`, whose defaults are `rustfsadmin`/`rustfsadmin` — a valid
-# key with the wrong secret, so every request signed and every request was refused.
-export LANCE_E2E_S3_ACCESS_KEY="$S3_KEY"
-export LANCE_E2E_S3_SECRET_KEY="$S3_SECRET"
+# The store's pair rides as the files above, never as AWS_*: a pair in the environment is every client's ambient
+# credential, so a vended session missing a key would silently sign as the root.
 export LANCE_E2E_S3_BUCKET="${LANCE_E2E_S3_BUCKET:-lance-catalog}"
 export LANCE_E2E_S3_REGION="${LANCE_E2E_S3_REGION:-us-east-1}"
 
@@ -248,13 +190,7 @@ export LANCE_E2E_S3_REGION="${LANCE_E2E_S3_REGION:-us-east-1}"
 # service for what that bring-up called it. The runner's job is to answer to all of them rather than
 # to make thirty suites agree on a spelling.
 export LANCE_E2E_AUTH_SERVER="http://$CATALOG"
-export MEDIA_CATALOG_URL="http://$CATALOG"
 export LANCE_REST_E2E_URL="http://$CATALOG"
-# THE CREDENTIAL TRAVELS WITH THE ADDRESS. Bridging `MEDIA_CATALOG_URL` alone pointed that suite at a
-# GOVERNED catalog anonymously — an empty token is its documented "auth-off" mode, so it took the
-# ungoverned branch and every leg 401'd on "Missing bearer token". The catalog was right; the runner
-# handed it half an identity.
-export MEDIA_CATALOG_TOKEN="$ALICE"
 
 # THE WAREHOUSE IS DISCOVERED, not assumed, because `warehouses.enabled` decides which door a suite
 # must use. With warehouses on, a top-level `POST /v1/namespace/{ns}/create` is refused 400 by
@@ -265,7 +201,7 @@ export MEDIA_CATALOG_TOKEN="$ALICE"
 # `GET /management/v1/warehouses` answers a BARE LIST (92 records on this estate), not an envelope — measured
 # 2026-09-06. Handle the envelope shapes too rather than pinning the bare one: this is discovery, and
 # a runner that dies on a response shape is the failure it exists to prevent.
-WAREHOUSE="$(curl -s -m 15 "http://$CATALOG/management/v1/warehouses" -H "authorization: Bearer $ALICE" | uv run python -c "
+WAREHOUSE="$(authorized "$ALICE" -s -m 15 "http://$CATALOG/management/v1/warehouses" | uv run python -c "
 import json, os, sys
 try:
     body = json.load(sys.stdin)
@@ -312,19 +248,19 @@ fi
 # skip exactly as they do today. Provisioning a tenant must never be the reason a suite run dies.
 if [ -n "$CATALOG" ] && [ -n "$ALICE" ] && [ -n "$BOB" ]; then
   TENANT_B="${LANCE_E2E_PROJECT_B:-e2etenantb}"
-  B_CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST "http://$CATALOG/management/v1/projects" \
-    -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
+  B_CODE="$(authorized "$ALICE" -s -o /dev/null -w '%{http_code}' -m 20 -X POST "http://$CATALOG/management/v1/projects" \
+    -H 'content-type: application/json' \
     -d "{\"id\":\"$TENANT_B\"}" 2>/dev/null || true)"
-  BOB_PRINCIPAL="$(curl -s -m 20 "http://$CATALOG/management/v1/me" -H "authorization: Bearer $BOB" \
+  BOB_PRINCIPAL="$(authorized "$BOB" -s -m 20 "http://$CATALOG/management/v1/me" \
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))" 2>/dev/null || true)"
   if [ "$B_CODE" = "200" ] || [ "$B_CODE" = "201" ] || [ "$B_CODE" = "409" ]; then
     # Bob administers tenant B while alice administers acme, which is what makes the isolation legs a
     # real cross-tenant test rather than one principal talking to two of its own projects.
-    [ -n "$BOB_PRINCIPAL" ] && curl -s -o /dev/null -m 20 -X POST "http://$CATALOG/management/v1/access/tuples" \
-      -H "authorization: Bearer $ALICE" -H 'content-type: application/json' \
+    [ -n "$BOB_PRINCIPAL" ] && authorized "$ALICE" -s -o /dev/null -m 20 -X POST "http://$CATALOG/management/v1/access/tuples" \
+      -H 'content-type: application/json' \
       -d "{\"user\":\"$BOB_PRINCIPAL\",\"relation\":\"admin\",\"object\":\"project:$TENANT_B\"}" 2>/dev/null || true
     export LANCE_E2E_PROJECT_B="$TENANT_B"
-    export LANCE_E2E_TENANT_B_TOKEN="$BOB"
+    keep tenant-b-token "$BOB"
     printf '   tenant B: %s (admin=bob) — the credential-isolation legs will RUN\n' "$TENANT_B"
   else
     printf '   note: could not provision tenant B (HTTP %s) — the 5 credential-isolation legs will SKIP\n' "${B_CODE:-?}"

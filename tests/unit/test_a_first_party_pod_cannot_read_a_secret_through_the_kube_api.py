@@ -1,5 +1,9 @@
-"""No pod the release runs can read a Secret, or review a token, through the Kubernetes API, and every
-first-party service runs as its own ServiceAccount.
+"""No pod the release runs can read a Secret, review a token, or reach inside a node or a pod through the Kubernetes API,
+and every first-party service runs as its own ServiceAccount.
+
+[[XC-202]]. `nodes/proxy` hands its holder the kubelet's API through the API server, exec into every pod on the node
+included (a websocket upgrade is a GET), and a pod's own exec, attach or port-forward is the same reach into one pod. No
+first-party pod needs either: the Collector reads pod and node metadata through ordinary reads.
 
 [[XC-076]]. A binding of `secrets: get` to the namespace's `default` ServiceAccount (Dapr's `secretReader` is
 the known case: the dev fixture turns it off, deploy/fixtures/dapr/values.yaml) reaches any pod the chart gives no
@@ -44,12 +48,17 @@ _OVERLAYS: dict[str, tuple[str, ...]] = {
 
 _FIRST_PARTY_SOURCE = "rask/templates/"
 
+#: The subresources that reach inside a node or a pod: the kubelet's API through the API server's proxy, which answers
+#: its exec, attach and port-forward endpoints too (a websocket upgrade is a GET), and a pod's own exec, attach and
+#: port-forward.
+_INTERIOR = frozenset({"nodes/proxy", "pods/exec", "pods/attach", "pods/portforward"})
+
 #: Built-in roles a binding may reference without the chart rendering them, and what each grants of
-#: the two capabilities this gate is about. An unlisted external role fails the gate: it cannot judge it.
+#: the capabilities this gate is about. An unlisted external role fails the gate: it cannot judge it.
 _BUILTIN_GRANTS: dict[tuple[str, str], frozenset[str]] = {
-    ("ClusterRole", "cluster-admin"): frozenset({"secrets", "tokenreviews"}),
-    ("ClusterRole", "admin"): frozenset({"secrets"}),
-    ("ClusterRole", "edit"): frozenset({"secrets"}),
+    ("ClusterRole", "cluster-admin"): frozenset({"secrets", "tokenreviews"} | _INTERIOR),
+    ("ClusterRole", "admin"): frozenset({"secrets", "pods/exec", "pods/attach", "pods/portforward"}),
+    ("ClusterRole", "edit"): frozenset({"secrets", "pods/exec", "pods/attach", "pods/portforward"}),
     ("ClusterRole", "view"): frozenset(),
     ("ClusterRole", "system:auth-delegator"): frozenset({"tokenreviews"}),
     ("ClusterRole", "system:service-account-issuer-discovery"): frozenset(),
@@ -181,6 +190,8 @@ def _rule_grants(rule: dict) -> set[str]:
         found.add("secrets")
     if groups & {"authentication.k8s.io", "*"} and resources & {"tokenreviews", "*"} and verbs & {"create", "*"}:
         found.add("tokenreviews")
+    if groups & {"", "*"} and verbs:
+        found |= {sub for sub in _INTERIOR if resources & {sub, f"{sub.split('/')[0]}/*", "*"}}
     return found
 
 
@@ -235,7 +246,7 @@ def _pod(args: tuple[str, ...], workload: str) -> _Pod:
 
 
 def _offending(args: tuple[str, ...]) -> list[str]:
-    """Every grant of `secrets` or `tokenreviews` that reaches an SA a first-party pod runs as."""
+    """Every grant of `secrets`, `tokenreviews` or a node's or pod's interior that reaches an SA a first-party pod runs as."""
     ours = {pod.service_account for pod in _pods(*args) if pod.first_party} | {"default"}
     found: list[str] = []
     for binding in _bindings(*args):
@@ -251,8 +262,9 @@ def _offending(args: tuple[str, ...]) -> list[str]:
 
 
 @pytest.mark.parametrize("overlay", sorted(_OVERLAYS))
-def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(overlay: str) -> None:
-    """No grant of `secrets` or `tokenreviews` reaches `default`, an every-SA group, or an SA a first-party pod runs as.
+def test_no_first_party_service_account_can_read_a_secret_review_a_token_or_reach_into_a_node(overlay: str) -> None:
+    """No grant of `secrets`, `tokenreviews` or a subresource reaching inside a node or a pod (`nodes/proxy`, a pod's
+    exec, attach or port-forward) reaches `default`, an every-SA group, or an SA a first-party pod runs as.
 
     The secret store is the platform's or the dev fixture's ([[XC-149]]), so no first-party pod reviews a token: ESO, a
     prerequisite ([[XC-004]]), logs in through the store's Kubernetes auth backend, and the dev store reviews that login

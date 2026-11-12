@@ -52,17 +52,25 @@ spec:
       template:
         metadata:
           # The explicit component label (the P4 landmine, see backup-pg.yaml): object-store-backup is the
-          # component the object-store ingress rule already allowlists for this workload (network-policy.yaml 3d)
-          # and the label the created VolumeSnapshot CRs carry — one name for the whole backup surface.
+          # component the API server's egress admits (network-policy.yaml's platform rows; the pod calls nothing
+          # else) and the label the created VolumeSnapshot CRs carry — one name for the whole backup surface.
           labels:
             {{- include "lance.labels" . | nindent 12 }}
             app.kubernetes.io/component: object-store-backup
         spec:
           serviceAccountName: {{ include "lance.fullname" . }}-snapshot
           restartPolicy: OnFailure
+          {{- include "lance.podSecurityContext" . | nindent 10 }}
+          volumes:
+            {{- include "lance.tmpVolume" . | nindent 12 }}
           containers:
             - name: snapshot
               image: {{ .Values.backups.volumeSnapshot.kubectlImage }}
+              {{- include "lance.rootlessSecurityContext" 65532 | nindent 14 }}
+              env:
+                - { name: HOME, value: /tmp }
+              volumeMounts:
+                {{- include "lance.tmpMount" . | nindent 16 }}
               resources:
                 requests: { cpu: "10m", memory: "32Mi" }
                 limits: { cpu: "200m", memory: "128Mi" }

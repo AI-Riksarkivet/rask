@@ -24,10 +24,15 @@ before-hook-creation delete policy never matches the previous one — without a 
 
 ## `labels:`
 
-The explicit component label (the P4 landmine, see bootstrap-admin.yaml): nats:4222 is pod-open
-under the prod NetworkPolicy so nothing blocks today, but the label keeps this pod visible to
-release inventory (`kubectl get pods -l app.kubernetes.io/instance=…`) and admissible the day the
-nats ingress gets an exclusive client list like openbao/age/the object store.
+The explicit component label (the P4 landmine, see bootstrap-admin.yaml): `nats-stream` is on the bus's exclusive
+client list (`lance.busClients`), which admits it to the development bus's 4222 (network-policy.yaml (3f)) and to the
+platform bus's egress on a real deployment ([[XC-202]]); a Job without it reaches no bus under the isolation layer.
+
+## `seccompProfile: { type: RuntimeDefault }`
+
+The pod states only its seccomp profile ([[XC-202]]): its one container runs the nats-box image as root
+(`lance.rootSecurityContext`, with every capability dropped and a read-only root), so `runAsNonRoot`, which
+`lance.podSecurityContext` sets, would refuse the pod.
 
 ## `env:`
 

@@ -55,11 +55,13 @@ a mid-run failure strands artefacts under one obviously-scratch name. Teardown d
 deletes the warehouse with its bucket, then the project. A fresh project also means NO declared
 `GateSpec`, so the gate under test is the one the request names rather than a tenant's policy.
 
-Run (the catalog and RustFS both answer on their ClusterIPs from a k3s host), or `make e2e-track-a`:
+Run against the deployed release with `bash scripts/e2e_live.sh tests/e2e-py/test_track_a_acceptance.py`, which
+discovers the addresses and writes the credentials, or `make e2e-track-a` with the catalog's and the store's addresses
+and a credentials directory whose `token` file holds a project-creating user's Dex id_token:
 
     LANCE_E2E_CATALOG_URL=http://10.43.220.241:2333 \
-    LANCE_E2E_TOKEN=$(dex id_token for a project-creating user) \
     LANCE_E2E_S3_ENDPOINT=http://10.43.156.125:9000 \
+    LANCE_E2E_CREDENTIALS=<directory> \
     uv run pytest tests/e2e-py/test_track_a_acceptance.py -v
 """
 
@@ -76,15 +78,16 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 import requests
+from credentials import Credential, credential
 
 from lakehouse.naming import CATALOG_DELIMITER
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
-TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
+TOKEN = credential(Credential.TOKEN)
 S3_ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
+S3_ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
+S3_SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 S3_REGION = os.environ.get("LANCE_E2E_S3_REGION", "us-east-1")
 
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
@@ -94,7 +97,7 @@ pytestmark = [
     pytest.mark.track_a,
     pytest.mark.skipif(
         not (CATALOG and TOKEN and S3_ENDPOINT),
-        reason="set LANCE_E2E_CATALOG_URL + LANCE_E2E_TOKEN + LANCE_E2E_S3_ENDPOINT (a deployed catalog and its object store)",
+        reason="set LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT and the run's token credential (a deployed catalog and its object store)",
     ),
 ]
 

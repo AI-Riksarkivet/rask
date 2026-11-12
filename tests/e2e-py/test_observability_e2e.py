@@ -32,6 +32,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 import requests
+from credentials import Credential, credential
 from principals import DEX_CLIENT, DEX_SCOPE
 
 
@@ -39,7 +40,7 @@ CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 GREPTIME = os.environ.get("LANCE_E2E_GREPTIME_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
-DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
+DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 
 pytestmark = [pytest.mark.e2e, pytest.mark.observability]

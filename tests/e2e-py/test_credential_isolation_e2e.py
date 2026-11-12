@@ -31,14 +31,15 @@ import pytest
 import requests
 from botocore.client import Config
 from botocore.exceptions import ClientError
+from credentials import Credential, credential
 
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.storage_options import ENDPOINT
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
-TOKEN_A = os.environ.get("LANCE_E2E_TOKEN", "")
-TOKEN_B = os.environ.get("LANCE_E2E_TENANT_B_TOKEN", "")
+TOKEN_A = credential(Credential.TOKEN)
+TOKEN_B = credential(Credential.TENANT_B_TOKEN)
 PROJECT_A = os.environ.get("LANCE_E2E_PROJECT", "acme")
 PROJECT_B = os.environ.get("LANCE_E2E_PROJECT_B", "")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
@@ -68,7 +69,7 @@ def _arrow_ipc() -> bytes:
 def catalog() -> str:
     if not (CATALOG and TOKEN_A and TOKEN_B and PROJECT_B):
         pytest.skip(
-            "set LANCE_E2E_CATALOG_URL + LANCE_E2E_TOKEN + LANCE_E2E_TENANT_B_TOKEN + LANCE_E2E_PROJECT_B (two tenants on a deployed, vending-enabled stack)"
+            "set LANCE_E2E_CATALOG_URL, LANCE_E2E_PROJECT_B and the run's token and tenant-b-token credentials (two tenants on a deployed, vending-enabled stack)"
         )
     try:
         requests.get(f"{CATALOG}/livez", timeout=5).raise_for_status()

@@ -18,13 +18,15 @@ audit trail, each a separate exporter because the others must NOT carry them. Th
 Collector with nowhere to send fails the render rather than queueing into nothing.
 
 Deploys whenever observability.enabled. Single Deployment (not a DaemonSet): filelog reads the node it lands
-on, which is correct on a single node. Under NetworkPolicy its egress to an endpoint outside the namespace
-needs a `networkPolicy.extraEgress` entry.
+on, which is correct on a single node. Under NetworkPolicy its egress to the backend is the platform's to state, in
+`observability.export.egress` (network-policy.yaml's platform rows).
 
 ## `apiVersion: rbac.authorization.k8s.io/v1`
 
 k8sattributes needs pod/namespace/replicaset/node reads for enrichment; the prometheus receiver's k8s SD
-needs pod discovery. Cluster-scoped (SD + attributes are cluster-wide), read-only.
+needs pod discovery. Cluster-scoped (SD + attributes are cluster-wide), read-only. No `nodes/proxy`: every scrape is
+`role: pod` and no receiver reads the kubelet, and the subresource hands its holder the kubelet's API through the API
+server, exec into every pod on the node included (a websocket upgrade is a GET) ([[XC-202]]).
 
 ## `filter/drop_app_file_logs:`
 

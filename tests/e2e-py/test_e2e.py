@@ -12,6 +12,7 @@ import uuid
 import pyarrow as pa
 import pytest
 import requests
+from credentials import Credential, credential
 from topology import assert_parent_exists, create_top_level
 
 from lakehouse.naming import CATALOG_DELIMITER
@@ -22,7 +23,7 @@ URL = os.environ.get("LANCE_REST_E2E_URL", "")
 #: router's ``authorize`` dependency, so an anonymous request never reaches a handler: it is 401 at the
 #: door, and with a valid bearer it is 403 on any object the caller holds no rung on. Empty = an
 #: auth-off bring-up, and then the header is simply omitted.
-TOKEN = os.environ.get("LANCE_E2E_TOKEN", "")
+TOKEN = credential(Credential.TOKEN)
 AUTH = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
 

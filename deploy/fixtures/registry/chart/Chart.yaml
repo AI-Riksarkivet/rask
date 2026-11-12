@@ -1,0 +1,8 @@
+apiVersion: v2
+name: dev-registry
+description: >-
+  NOT FOR PRODUCTION. The development estate's image registry: one distribution registry on one local volume, on the
+  node's port 5000, which Dagger pushes to and k3s pulls from. A platform runs its own registry.
+type: application
+version: 0.1.0
+appVersion: "2.8.3"

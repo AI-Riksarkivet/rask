@@ -32,6 +32,7 @@ spec:
       {{- if .Values.podDisruptionBudget.enabled }}
       {{- include "lance.spreadConstraints" "catalog" | nindent 6 }}
       {{- end }}
+      {{- include "lance.podSecurityContext" . | nindent 6 }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-catalog
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
@@ -219,6 +220,7 @@ spec:
       {{- if .Values.podDisruptionBudget.enabled }}
       {{- include "lance.spreadConstraints" "lineage" | nindent 6 }}
       {{- end }}
+      {{- include "lance.podSecurityContext" . | nindent 6 }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-lineage
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:

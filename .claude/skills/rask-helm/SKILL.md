@@ -345,6 +345,14 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   (https only: every sidecar logs in to it with its pod's ServiceAccount token) and, under `networkPolicy.enabled`,
   `openbao.egress`, a rule admitting exactly the pods `lance.secretScopes` names. Setting both is refused. The dev store's
   seed stays rask's (owner, 2026-10-16): only rask's values know what to seed.
+- **Every endpoint the platform serves outside the namespace is one row of `lance.platformEgress`** ([[XC-202]]): its
+  egress value, what it reaches, the components that dial it, and when it is required (the API server, OpenFGA, the
+  secret store, the telemetry backend, the S3 and STS with `objectStore.enabled` off, the IdP with `dex.enabled` off, and
+  on a real deployment the bus and lineage's graph backend). Under `networkPolicy.enabled` the render refuses every empty
+  row in ONE message naming them all, and the same rows render the egress policies, so a new endpoint is a new row, never
+  `networkPolicy.extraEgress` (kept for an endpoint no row names). `lance.egressRules` refuses a rule with no `to` peers
+  or a `/0` peer. The development stores' ingress admits exactly their callers from the same helpers
+  (`lance.objectStoreClients`, `lance.busClients`), plus each fixture's own Job and, on the bus, the development object store's server, which publishes each change on `store.events`.
 - **Who reads which secret is one table, `lance.storeReads`** ([[XC-165]], ADR 0169): per app, its ServiceAccount, the
   secrets its code reads (its Configuration's `allowedSecrets`, deny by default) and the ones its components resolve.
   The one `lance-secrets` component logs each sidecar in with Kubernetes auth as `<release>-{appID}` (Dapr fills

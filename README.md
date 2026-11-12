@@ -78,7 +78,7 @@ from the old machine (memory, `.env`, local branches), and the k3s estate instal
 ```bash
 make install     # bun --cwd=frontend install + uv sync --all-packages + git hooks + make k3s-deps + make claude-bootstrap
 make build
-make test        # offline suites (deselects the live `e2e` + long-running `slow` marks)
+make test        # offline suites (deselects the live `e2e` mark)
 make check       # fmt + lint + lint-imports + typecheck + knip + fga-test + go-fmt + chart-docs-check
 ```
 
@@ -143,7 +143,7 @@ Playwright suite. Everything hermetic runs identically on your machine: `dagger 
 | Target                                  | What it does                                                         |
 | --------------------------------------- | -------------------------------------------------------------------- |
 | `make install` / `make build`           | Install both planes / build everything                               |
-| `make test` / `make test-slow`          | pytest offline (`-m "not slow and not e2e"`) / + slow                |
+| `make test`                             | pytest offline (`-m "not e2e"`)                                      |
 | `make check` / `make ci`                | fmt, lint, lint-imports, typecheck, knip, fga-test, go-fmt, chart-docs-check / + tests |
 | `make dev` / `make dev-k3s`             | The console with Vite HMR / against the in-cluster Gateway           |
 | `make console-image`                    | The console's image through Dagger                                   |

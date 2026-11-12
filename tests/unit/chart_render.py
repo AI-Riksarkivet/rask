@@ -47,11 +47,24 @@ API_SERVER_CIDR = "192.0.2.10/32"
 SECRET_STORE_URL = "https://vault.example.com:8200"
 SECRET_STORE_CIDR = "198.51.100.20/32"
 
+#: The platform's S3 (its STS answers at the same address), its IdP and its bus as a production render names them
+#: ([[XC-202]]), and the address the platform states to the NetworkPolicy for each: documentation ranges no other peer
+#: shares.
+OBJECT_STORE_URL = "https://s3.example.com"
+OBJECT_STORE_CIDR = "203.0.113.20/32"
+ISSUER_URL = "https://auth.example.com/dex"
+ISSUER_CIDR = "203.0.113.30/32"
+BUS_CIDR = "198.51.100.30/32"
+#: The graph backend a production render forwards lineage to (ADR 0158), and its address as the platform states it.
+GRAPH_URL = "https://lineage-graph.example.com"
+GRAPH_CIDR = "203.0.113.40/32"
+
 #: The prerequisites a render names: the APIs the chart checks through `.Capabilities`, the External Secrets Operator
 #: ([[XC-004]]) and Dapr ([[XC-128]]), the NATS bus's address ([[XC-129]]), and the platform's Gateway the routes attach
 #: to (ADR 0165). Under `networkPolicy.enabled` the egress to
-#: the API server, the telemetry backend and an external OpenFGA is the platform's to state too ([[XC-143]]). A cluster-less render names
-#: the cluster it targets. Without them every render refuses.
+#: the API server, the telemetry backend, an external OpenFGA and, on a real deployment, the platform's store, bus and IdP is
+#: the platform's to state too ([[XC-143]], [[XC-202]]). A cluster-less render names the cluster it targets. Without them
+#: every render refuses.
 PREREQ_ARGS: tuple[str, ...] = (
     "--api-versions", "external-secrets.io/v1/ExternalSecret",
     "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
@@ -61,6 +74,9 @@ PREREQ_ARGS: tuple[str, ...] = (
     "--set-json", f'networkPolicy.apiServerEgress=[{{"to":[{{"ipBlock":{{"cidr":"{API_SERVER_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":6443}}]}}]',
     "--set-json", 'observability.export.egress=[{"to":[{"ipBlock":{"cidr":"203.0.113.10/32"}}],"ports":[{"protocol":"TCP","port":4318}]}]',
     "--set-json", 'auth.fgaEgress=[{"to":[{"ipBlock":{"cidr":"198.51.100.10/32"}}],"ports":[{"protocol":"TCP","port":443}]}]',
+    "--set-json", f'objectStore.egress=[{{"to":[{{"ipBlock":{{"cidr":"{OBJECT_STORE_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":443}}]}}]',
+    "--set-json", f'nats.egress=[{{"to":[{{"ipBlock":{{"cidr":"{BUS_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":4222}}]}}]',
+    "--set-json", f'auth.oidc.egress=[{{"to":[{{"ipBlock":{{"cidr":"{ISSUER_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":443}}]}}]',
 )  # fmt: skip
 
 #: Observability ON with the backend an operator names ([[XC-127]]): off by default, it renders the Collector and the
@@ -71,7 +87,7 @@ OBSERVABILITY_ARGS: tuple[str, ...] = tuple(arg for value in OBSERVABILITY_SETS 
 #: Every input the chart refuses to render without: the fail-closed OIDC guard's issuer and the prerequisites. Every
 #: caller needs them and none of them is testing those guards.
 OIDC_ARGS: tuple[str, ...] = (
-    "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
+    "--set-string", f"auth.oidc.issuer={ISSUER_URL}",
     *PREREQ_ARGS,
 )  # fmt: skip
 
@@ -89,9 +105,11 @@ PROD_ARGS: tuple[str, ...] = (
     "--set-string", "auth.fgaApiUrl=https://fga.example.com",
     "--set-json", 'auth.oidc.connectors={"ldap":"corp"}',
     "--set-string", "age.externalHost=pg.example.com",
-    "--set-string", "objectStore.externalEndpoint=https://s3.example.com",
+    "--set-string", f"objectStore.externalEndpoint={OBJECT_STORE_URL}",
     "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}",
     "--set-json", f'openbao.egress=[{{"to":[{{"ipBlock":{{"cidr":"{SECRET_STORE_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":8200}}]}}]',
+    "--set-string", f"services.lineage.forward.url={GRAPH_URL}",
+    "--set-json", f'services.lineage.forward.egress=[{{"to":[{{"ipBlock":{{"cidr":"{GRAPH_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":443}}]}}]',
     "--set", "backups.volumeSnapshot.snapshotClassName=csi-snapclass",
     # `--set-json`, so a gate's later `--set-json route.hostnames=[]` replaces it: helm applies every `--set` after every `--set-json`.
     "--set-json", 'route.hostnames=["lance.example.com"]',
@@ -170,6 +188,17 @@ def render_fixture(name: str, *extra: str) -> tuple[dict, ...]:
     return tuple(doc for doc in yaml.load_all(text, Loader=FAST_LOADER) if isinstance(doc, dict))
 
 
+def pod_template(doc: dict) -> dict | None:
+    """The pod template a rendered workload runs (a Deployment's, StatefulSet's, DaemonSet's or Job's, a CronJob's job's),
+    or None for a document that runs no pod."""
+    kind = doc.get("kind")
+    if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job"}:
+        return doc["spec"]["template"]
+    if kind == "CronJob":
+        return doc["spec"]["jobTemplate"]["spec"]["template"]
+    return None
+
+
 def containers(docs: tuple[dict, ...]) -> list[tuple[str, str, dict]]:
     """`(workload, container_name, container)` for every first-class workload shape.
 
@@ -178,16 +207,13 @@ def containers(docs: tuple[dict, ...]) -> list[tuple[str, str, dict]]:
     """
     found: list[tuple[str, str, dict]] = []
     for doc in docs:
-        kind, name = doc.get("kind"), doc.get("metadata", {}).get("name", "?")
-        if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job"}:
-            spec = doc["spec"]["template"]["spec"]
-        elif kind == "CronJob":
-            spec = doc["spec"]["jobTemplate"]["spec"]["template"]["spec"]
-        else:
+        template = pod_template(doc)
+        if template is None:
             continue
+        workload = f"{doc['kind']}/{doc.get('metadata', {}).get('name', '?')}"
         for key in ("initContainers", "containers"):
-            for container in spec.get(key) or []:
-                found.append((f"{kind}/{name}", container["name"], container))
+            for container in template["spec"].get(key) or []:
+                found.append((workload, container["name"], container))
     return found
 
 

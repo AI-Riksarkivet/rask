@@ -144,11 +144,13 @@ services:
     eventsRetentionDays: 7
     # The forwarder (ADR 0158): the lineage graph is bring-your-own, and the relay tick sends every event lineage
     # records, as standard OpenLineage over the HTTP transport, to the backend `url` names (Marquez, DataHub,
-    # OpenMetadata). At least once and in feed order, from a cursor the catalog keeps. Empty forwards nothing. A
-    # backend outside rask's namespace needs a `networkPolicy.extraEgress` entry when network policies enforce.
+    # OpenMetadata). At least once and in feed order, from a cursor the catalog keeps. Empty forwards nothing. On a real
+    # deployment the backend is the platform's, reached through `egress`.
     forward:
       # -- Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. https on a real deployment: the render refuses an http one.
       url: ""
+      # -- NetworkPolicy egress rules ({to, ports}) admitting lineage to the graph backend at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment that sets `url`.
+      egress: []
       # -- Path the events are POSTed to under `url` (the transport's `endpoint`).
       endpoint: api/v1/lineage
       # The backend's API key is a secret in the estate's secret store, never a value: lineage reads it on every
@@ -378,10 +380,10 @@ security:
 # ⚠ Under default-deny, EVERY Job/CronJob pod template needs explicit component labels or the policy
 # blocks it silently (kindnet hides the failure) — see the templates' job specs.
 networkPolicy:
-  # NOTE (goal cond 8): the NATS pods are EXCLUDED from the general intra-namespace ingress allow; their
-  # only ingress is one explicit, port-scoped rule — 4222 (clients) from any in-namespace pod (the daprd
-  # sidecars live in nearly every app pod, so a label enumeration would be dishonest). 6222/7422 and the 8222
-  # monitor stay closed — see network-policy.yaml (3f).
+  # The development bus's pods are EXCLUDED from the general intra-namespace ingress allow; their only ingress is
+  # port-scoped: 4222 from the pods that dial the bus (`lance.busClients`, the fixture's nats-box and, with the
+  # development object store, its server) and 6222 between the servers. 7422 and the 8222 monitor stay closed — see
+  # network-policy.yaml (3f).
   # -- Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI.
   enabled: false
   # Extra `from` peers for the development store's policy — e.g. the external-secrets operator's namespace:
@@ -391,11 +393,11 @@ networkPolicy:
   # Extra `from` peers for the object-store policy — a client outside the release's component labels:
   # -- List of extra NetworkPolicy `from` peers allowed to reach the object store.
   objectStoreExtraFrom: []
-  # Extra egress rules (verbatim NetworkPolicy egress entries) for externalized backends —
-  # off-cluster S3, a NATS outside this namespace (nats.url), the platform's Postgres (age.externalHost), the
-  # platform's IdP. The API server, the telemetry backend, the Gateway, an external OpenFGA and the platform's
-  # secret store take rules of their own, scoped to the pods that dial them.
-  # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.
+  # Extra egress rules (verbatim NetworkPolicy egress entries) for every pod but the console, to an endpoint no value of
+  # its own names: the platform's Postgres (age.externalHost) when OpenFGA runs in the chart. The API server, OpenFGA, the
+  # secret store, the telemetry backend, the S3, the bus and the IdP take rules of their own, scoped to the pods that dial
+  # them (`lance.platformEgress`).
+  # -- List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination.
   extraEgress: []
   # The pods that call the Kubernetes API (the token verifiers, the dev store's login reviews, the Collector's pod metadata,
   # the snapshot CronJob, the Dapr dashboard) reach it through these rules and no other pod does. The API server is
@@ -456,10 +458,12 @@ auth:
   # the development Dex's (the DEV_ISSUER `make k3s-fixtures` gives the dex fixture), reached in-cluster at
   # `http://<release>-dex`: only then do the doors get that split-horizon discovery URL and
   # RASK_OIDC_ALLOW_INSECURE. Without it the issuer is the platform's IdP,
-  # reached at its own https address (a `networkPolicy.extraEgress` rule), and the render refuses an http one.
+  # reached at its own https address through `auth.oidc.egress`, and the render refuses an http one.
   oidc:
     # -- The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it). Required when `auth.enabled`; https unless `dex.enabled`.
     issuer: ""
+    # -- NetworkPolicy egress rules ({to, ports}) admitting the governed doors that verify a person's token (the catalog, lineage) to the platform's IdP at `issuer`, at the port a policy sees. Required under networkPolicy.enabled while `auth.enabled` and `dex.enabled` is false.
+    egress: []
     # THE LAKEHOUSE'S OWN AUDIENCE ([[LH-515]]). Every governed door accepts a person's token only when its `aud` names
     # this, so a token the IdP issued for another client is refused. The IdP issues it to the clients it trusts: the
     # development Dex declares a confidential audience client of this id, whose secret no client is given and whose
@@ -1218,6 +1222,8 @@ objectStore:
   # development store — pair with objectStore.enabled=false to use the platform's S3.
   # -- S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. https on a real deployment: the render refuses an http one.
   externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that hold a store session (the catalog, lineage, maintenance and its workers, the backup Jobs) to the platform's S3 at `externalEndpoint` and to its STS, at the port a policy sees. Required under networkPolicy.enabled while `enabled` is false.
+  egress: []
   # THE STORE'S CHANGE EVENTS (ADR 0198 §3). The store's event of an object write under a table, on the bus subject
   # `store.events` (the chart's stream Job declares STORE_EVENTS over it), holds that table's pass a few minutes out, and
   # the pass, which checks every file the table's commits recorded against one listing of its root, reports a file
@@ -1311,6 +1317,8 @@ nats:
   # Development gets a three-node bus from deploy/fixtures/nats, at `nats://rask-nats:4222` (deploy/values-local.yaml).
   # -- NATS JetStream address every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.
   url: ""
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the bus's clients (every pod with a Dapr sidecar, the stream Job) to the platform's bus at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment, where the bus is the platform's.
+  egress: []
   # Raft replication for every provisioned stream. A streamReplicas above the bus's node count makes `nats stream add`
   # fail outright rather than degrade.
   # -- Raft replica count for every stream the stream Job provisions; must not exceed the bus's node count.

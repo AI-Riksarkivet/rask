@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 
 import pytest
 import requests
+from credentials import Credential, credential
 from outbox_probe import bearer, owned_output_table, table_uuids
 
 from catalog.core.lineage_emit import INSERT, build_write_event
@@ -50,12 +51,12 @@ from lakehouse.storage_options import StorageOptions
 
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
-DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
+DAPR_TOKEN = credential(Credential.DAPR_TOKEN)
 BINDING = os.environ.get("LANCE_E2E_RELAY_BINDING", "lineage-relay-cron")
 OUTBOX_URI = os.environ.get("LANCE_E2E_OUTBOX_URI", "s3://lance-catalog/_lineage_outbox")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-S3_ACCESS_KEY = os.environ.get("LANCE_E2E_S3_ACCESS_KEY", "rustfsadmin")
-S3_SECRET_KEY = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "rustfsadmin")
+S3_ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
+S3_SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 
 #: The job namespace the catalog stamps on its own events (`LANCE_LINEAGE_JOB_NAMESPACE`, default `lance-catalog`).
 #: The staged event is the one the catalog's insert announces, so it names the job the way the catalog does.
@@ -141,7 +142,7 @@ def _so() -> StorageOptions:
 @pytest.fixture(scope="module")
 def lineage() -> str:
     if not LINEAGE or not DAPR_TOKEN:
-        pytest.skip("set LANCE_E2E_LINEAGE_URL + LANCE_E2E_DAPR_TOKEN (deployed stack, outbox enabled)")
+        pytest.skip("set LANCE_E2E_LINEAGE_URL and the run's dapr-token credential (deployed stack, outbox enabled)")
     try:
         requests.get(f"{LINEAGE}/livez", timeout=5).raise_for_status()
     except Exception:

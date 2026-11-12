@@ -1,0 +1,28 @@
+# The advisories `dagger call audit` (osv-scanner) knows and does not fail on, each with why it cannot move yet and the
+# date it is judged again. Every other finding, at any severity, fails the gate ([[XC-202]]): a new advisory is fixed in
+# the change that meets it, or recorded here with its reason and its date.
+
+# The Dagger module's OpenTelemetry log exporters and SDK. `dagger develop` writes the `replace` directives in .dagger/go.mod
+# that hold them at v0.16.0 for github.com/dagger/otel-go (engine v0.21.8), so they move with an engine upgrade, never by
+# hand. The module runs only inside the Dagger engine; no shipped image carries it.
+[[IgnoredVulns]]
+id = "GO-2026-6508"
+ignoreUntil = 2027-02-12
+reason = "otlploggrpc 0.16.0 is pinned by the Dagger Go SDK's replace directives; it moves with the engine upgrade. CI tooling only."
+
+[[IgnoredVulns]]
+id = "GO-2026-4985"
+ignoreUntil = 2027-02-12
+reason = "otlploghttp 0.16.0 is pinned by the Dagger Go SDK's replace directives; it moves with the engine upgrade. CI tooling only."
+
+[[IgnoredVulns]]
+id = "GO-2026-6615"
+ignoreUntil = 2027-02-12
+reason = "otel sdk/log 0.16.0 is pinned by the Dagger Go SDK's replace directives; it moves with the engine upgrade. CI tooling only."
+
+# deepmerge 4.3.1: no fixed release exists. It reaches the console's build through @sveltejs/vite-plugin-svelte, at build
+# time only; the console's image ships the built pages, not the build toolchain.
+[[IgnoredVulns]]
+id = "GHSA-gcqx-w48m-w2h4"
+ignoreUntil = 2027-02-12
+reason = "No fixed deepmerge release; a build-time dependency of vite-plugin-svelte that the console image does not ship."

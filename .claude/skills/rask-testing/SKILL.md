@@ -1,6 +1,6 @@
 ---
 name: rask-testing
-description: "rask's pytest wiring, its real-collaborator fixtures, and the row rule for how many tests a change may add: the globbed testpaths, importlib mode, the e2e/slow markers, which lane runs what (make test, check-fast, dagger call test, the e2e-stack lane), what the root conftest already does, and what stands in for Lance, S3, NATS, OpenFGA and a service app. Use when writing, changing, deleting or auditing any test in rask, when a new tests/ directory runs in no lane, or when a test needs a real collaborator."
+description: "rask's pytest wiring, its real-collaborator fixtures, and the row rule for how many tests a change may add: the globbed testpaths, importlib mode, the e2e markers, which lane runs what (make test, check-fast, dagger call test, the e2e-stack lane), what the root conftest already does, and what stands in for Lance, S3, NATS, OpenFGA and a service app. Use when writing, changing, deleting or auditing any test in rask, when a new tests/ directory runs in no lane, or when a test needs a real collaborator."
 ---
 
 # rask × pytest — wiring, fixtures, and the row rule
@@ -27,7 +27,7 @@ A change works a row — a GitHub issue on `AI-Riksarkivet/rask`, title `LH-243:
 2. **At most one test per closes-when clause**, and it replaces the test of the same seam rather than
    sitting beside it.
 3. **Red check** (`testing-python` § The red check), with `<src-root>` = `<member>/src` and the scope
-   `<member>/tests tests/integration <the directories step 1 found> -m "not slow and not e2e" -n 16`.
+   `<member>/tests tests/integration <the directories step 1 found> -m "not e2e" -n 16`.
 4. **State the net test delta in the commit message**: `tests: +N −M`.
 
 Done when: each closes-when clause names the one test that pins it, that test was red with the fix
@@ -94,11 +94,9 @@ consequences it does not spell out.
   only because `tests/unit/conftest.py` inserts that directory into `sys.path`; don't copy them. A
   shared helper goes in a plain module, as `tests/unit/chart_render.py` does (`writing-python` →
   `references/testing.md` § Fixtures).
-- **Markers.** `slow` means real models or a long runtime; `make test` and CI deselect it. `e2e`
-  means a live stack: `tests/e2e-py/conftest.py` applies it to everything collected there, and each
-  per-suite selector (`cas`, `nats_auth`, ...) rides on top of it. Neither `strict_markers` nor
-  `--strict-markers` is configured, so pass `--strict-markers` when you add or use a marker (the whole
-  suite, 3,850 tests, collects cleanly under it, measured 2026-11-09; `make test`'s filter selects 3,349 of them).
+- **Markers.** `e2e` means a live stack: `tests/e2e-py/conftest.py` applies it to everything collected there, and each
+  per-suite selector (`cas`, `nats_auth`, ...) rides on top of it; `make test` and CI deselect it. `strict_markers = true`
+  ([[XC-202]]), so a marker the root `pyproject.toml` does not register fails collection: register a new one there.
 - **An empty parametrize is a collection error.** `empty_parameter_set_mark = "fail_at_collect"`, so a test whose
   cases come off a walk (the routes, the rendered chart) fails collection when the walk finds nothing, instead of
   skipping and asserting nothing. Walk a FastAPI app's routes with `services/catalog/tests/router_walk.py`'s
@@ -118,10 +116,9 @@ consequences it does not spell out.
 
 | Lane                                              | What it runs                                                                                                      |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `make test`                                       | (`make test`, `check-fast`, `test-slow` and `coverage` first export `.localbin/openfga` through Dagger, `make openfga`) `-m "not slow and not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process) |
+| `make test`                                       | (`make test`, `check-fast` and `coverage` first export `.localbin/openfga` through Dagger, `make openfga`) `-m "not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process) |
 | `make check-fast`                                 | `tests/unit tests/integration` at `-n 16`, with no marker filter. `--dist loadfile`, because three suites are parallel-unsafe at the file level (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) |
-| `make test-slow`                                  | `-m "not e2e"`                                                                                                   |
-| `make coverage`                                   | `-m "not e2e and not slow" --cov`, on request only                                                                |
+| `make coverage`                                   | `-m "not e2e" --cov`, on request only                                                                             |
 | CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed |
 | CI: `dagger call governance-chain` | a real Dex, OpenFGA, catalog and lineage as Dagger services on RustFS, asserting through `tests/e2e-py/test_governance_e2e.py` under `--require-live` (the e2e-stack lane runs the same module on the chart's render) |
 | CI: `dagger call rustfs-lifecycle`, `dagger call smoke-rustfs` | `tests/e2e-py/test_e2e.py` under `--require-live` against a catalog whose bytes are on RustFS, and `scripts/smoke_rustfs.py` through `lakehouse.storage` |
