@@ -6,9 +6,16 @@
 	// document or a per-app one-off. The app's +error.svelte passes page.status/page.error.
 	let {
 		status = 500,
+		heading = 'Something went wrong',
 		message = 'Something went wrong.',
 		home = '/',
-	}: { status?: number; message?: string; home?: string } = $props();
+	}: {
+		status?: number;
+		/** The page's one h1, in words: what happened, not its code. */
+		heading?: string;
+		message?: string;
+		home?: string;
+	} = $props();
 </script>
 
 <div class="flex flex-1 items-center justify-center p-6">
@@ -18,8 +25,9 @@
 		>
 			<TriangleAlert class="size-6" />
 		</div>
-		<div class="font-mono text-3xl font-semibold tabular-nums">{status}</div>
+		<h1 class="text-2xl font-semibold">{heading}</h1>
 		<p class="text-muted-foreground text-sm">{message}</p>
+		<p class="text-muted-foreground font-mono text-xs tabular-nums">HTTP {status}</p>
 		<a href={home} class="text-primary text-sm hover:underline">← Back to home</a>
 	</div>
 </div>

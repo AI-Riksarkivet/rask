@@ -12,23 +12,36 @@
 	import * as Table from '@rask/ui/table';
 	import { refreshAll } from '$app/navigation';
 	import ProjectCreateDialog from '#lib/ProjectCreateDialog.svelte';
-	import type { GalleryData } from '#lib/gallery.ts';
+	import { Skeleton } from '@rask/ui/skeleton';
+	import { page } from '$app/state';
+	import { isEstateAdmin } from '#lib/estate-admin.ts';
+	import { galleryOf } from '#lib/gallery.ts';
+	import { fetchVisibleProjects } from '#lib/remote/warehouses.api.ts';
 
-	let {
-		heading,
-		authEnabled,
-		signedIn,
-		identityUnavailable,
-		estateAdmin,
-		meSubject,
-		projects,
-	}: GalleryData & {
-		/** The h1 for the surface this is mounted on. */
-		heading: string;
-		/** Whether the stack has OIDC configured at all (from the shared layout load) — an ungoverned
-		 *  stack must not offer a dead sign-in link. */
-		authEnabled: boolean;
-	} = $props();
+	/** The h1 for the surface this is mounted on. */
+	let { heading }: { heading: string } = $props();
+
+	// The identity is the root layout's; the estate listing is a read in the browser, so the page is
+	// on screen at once and only the cards wait for a slow catalog. Read only for an estate admin:
+	// anyone else's gallery is their memberships, and the listing would only add what they hold.
+	const me = $derived(page.data.me ?? null);
+	const listing = $derived(isEstateAdmin(me) ? fetchVisibleProjects() : null);
+	const gallery = $derived(galleryOf(me, page.data.hasSession ?? false, listing?.current));
+	const listingLoads = $derived(listing !== null && listing.current === undefined);
+	// Whether the stack has OIDC configured at all: an ungoverned stack must not offer a dead sign-in link.
+	const authEnabled = $derived(page.data.authEnabled ?? false);
+	const signedIn = $derived(gallery.signedIn);
+	const identityUnavailable = $derived(gallery.identityUnavailable);
+	const estateAdmin = $derived(gallery.estateAdmin);
+	const meSubject = $derived(gallery.meSubject);
+	const projects = $derived(gallery.projects);
+
+	/** A new project is on this gallery's next frame: the identity re-reads with the layout, and the
+	 *  estate listing with its own read. */
+	function created(): void {
+		void refreshAll();
+		void fetchVisibleProjects().refresh();
+	}
 
 	let creating = $state(false);
 
@@ -147,7 +160,14 @@
 			</p>
 		</header>
 
-		{#if projects.length > 0 && view === 'table'}
+		{#if listingLoads}
+			<!-- The estate listing is still out: the page is here, and its cards are on their way. -->
+			<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="gallery-loading">
+				{#each [0, 1, 2] as slot (slot)}
+					<Skeleton class="h-24 rounded-xl" />
+				{/each}
+			</div>
+		{:else if projects.length > 0 && view === 'table'}
 			<!-- THE TABLE VIEW. Same rows, same links, same destinations as the cards — only denser.
 			     It reads the SAME `projects` array rather than a second query: two views of one list,
 			     not two lists. The whole row is not a link (an <a> cannot wrap <tr>), so the project
@@ -251,10 +271,5 @@
 	</div>
 </div>
 
-<!-- Estate-admin only; `oncreated` invalidates the page load so the new project is on the very next
-     frame of THIS gallery (the list is a page load, not a query, so no write's refresh reaches it). -->
-<ProjectCreateDialog
-	bind:open={creating}
-	defaultAdmin={meSubject}
-	oncreated={() => void refreshAll()}
-/>
+<!-- Estate-admin only; `oncreated` re-reads what the gallery is drawn from. -->
+<ProjectCreateDialog bind:open={creating} defaultAdmin={meSubject} oncreated={created} />

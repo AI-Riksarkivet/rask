@@ -108,6 +108,9 @@
 <!-- Leaving or reloading the page writes a save the debounce still holds. -->
 <svelte:window onpagehide={() => autosave?.flush()} />
 
+<!-- The page's own heading: the dock's panels head themselves one level under it. Not drawn, since
+     the breadcrumb already names the page and the dock needs the height. -->
+<h1 class="sr-only">Workbench</h1>
 <div class="wrap">
 	{#if views}
 		<ViewSidebar {views} onselect={applyView} />
@@ -138,6 +141,13 @@
 		flex: 1 1 0;
 		min-height: 0;
 		width: 100%;
+	}
+	/* Below a tablet's width the views rail moves above the dock, so the panels keep the full width
+	   rather than a sliver beside a fixed-width rail. */
+	@media (width < 768px) {
+		.wrap {
+			flex-direction: column;
+		}
 	}
 	/* The dock fills a sized flex item; `min-height: 0` lets it shrink below its content. The stacking
 	   context keeps anything the dock positions from painting over the shared navbar's dropdowns. */

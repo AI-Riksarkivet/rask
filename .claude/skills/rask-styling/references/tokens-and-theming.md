@@ -20,9 +20,9 @@ Declaring a raw value without the matching `@theme inline` line gives you a cust
 | `foreground` | `oklch(0.16 0.006 270)` | `oklch(0.985 0 0)` | `text-foreground` |
 | `card` / `card-foreground` | `0.993 0.002 80` | `0.17 0.008 270` | `bg-card` |
 | `popover` / `popover-foreground` | `0.997 0.001 80` | `0.19 0.01 270` | `bg-popover` |
-| `primary` / `primary-foreground` | `0.37 0.19 250` blue | `0.68 0.16 250` | `bg-primary` |
+| `primary` / `primary-foreground` | `0.37 0.19 250` blue / `0.985 0 0` | `0.68 0.16 250` / `0.13 0.006 270` (dark text on the bright fill: 7.00:1; white on it is 2.75:1) | `bg-primary` |
 | `secondary` / `secondary-foreground` | `0.965 0.005 250` | `0.22 0.008 270` | `bg-secondary` |
-| `muted` / `muted-foreground` | `0.955 0.006 260` / `0.45 0.012 260` | `0.22 0.008 270` / `0.55 0.01 270` | `text-muted-foreground` |
+| `muted` / `muted-foreground` | `0.955 0.006 260` / `0.45 0.012 260` | `0.22 0.008 270` / `0.65 0.01 270` (4.80:1 on `--accent`, the least) | `text-muted-foreground` |
 | `accent` / `accent-foreground` | `0.94 0.008 250` | `0.26 0.01 270` | `bg-accent` |
 | `destructive` | `0.577 0.245 27.325` | `0.704 0.191 22.216` | `text-destructive` |
 | `border` | `0.915 0.006 260` | `oklch(1 0 0 / 8%)` | `border-border` |

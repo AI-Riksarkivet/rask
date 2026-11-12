@@ -117,6 +117,8 @@ test('a person who is not an estate admin never reads the estate-only events fee
 	await page.waitForTimeout(6_000);
 	// The admin area's refusal page reads nothing either.
 	await page.goto('/admin');
-	await expect(page.getByText('Admin is estate-admin only')).toBeVisible();
+	await expect(
+		page.getByRole('heading', { name: 'You don’t have access to Operations', level: 1 }),
+	).toBeVisible();
 	expect(polled).toEqual([]);
 });

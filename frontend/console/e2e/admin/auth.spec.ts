@@ -33,7 +33,7 @@ test('signed-in: the shared nav-user shows the session identity when auth is ena
 	// to stand in for.
 	await page.goto('/admin/dlq');
 	// Back from the issuer, on the page that was asked for.
-	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'DLQ', exact: true })).toBeVisible();
 	await expect(page).toHaveURL(/\/admin\/dlq$/);
 	// The account menu renders the signed-in name — the id token's claims flowed
 	// session→user→AppShell→NavbarUser and selected the signed-in branch.
@@ -59,10 +59,10 @@ test('sign-out ends the issuer session with the id token as its hint', async ({
 	await signIn(context);
 	await mockMe(page);
 	await page.goto('/admin/dlq');
-	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'DLQ', exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Account' }).click();
-	await page.getByRole('link', { name: 'Sign out' }).click();
+	await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
 	await expect(page.getByRole('heading', { name: 'Mock IdP signed out' })).toBeVisible();
 	const endSession = new URL(page.url());
@@ -79,10 +79,10 @@ test('sign-out without an issuer end-session endpoint makes the next sign-in re-
 	await withoutEndSession(context);
 	await mockMe(page);
 	await page.goto('/admin/dlq');
-	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'DLQ', exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Account' }).click();
-	await page.getByRole('link', { name: 'Sign out' }).click();
+	await page.getByRole('menuitem', { name: 'Sign out' }).click();
 
 	// The issuer still holds the session (the identity cookie), and only `prompt=login` keeps it from
 	// signing the person straight back in.
@@ -90,4 +90,20 @@ test('sign-out without an issuer end-session endpoint makes the next sign-in re-
 	const authorize = new URL(page.url());
 	expect(authorize.pathname).toBe('/oidc/auth');
 	expect(authorize.searchParams.get('prompt')).toBe('login');
+});
+
+test('the account menu opens on its first item, and Sign out is the menu item itself', async ({
+	context,
+	page,
+}) => {
+	await signIn(context);
+	await mockMe(page);
+	await page.goto('/admin/dlq');
+	await expect(page.getByRole('heading', { name: 'DLQ', exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Account' }).press('Enter');
+	const signOut = page.getByRole('menuitem', { name: 'Sign out' });
+	await expect(signOut).toBeVisible();
+	await expect(page.getByRole('menuitem').first()).toBeFocused();
+	await expect(signOut).not.toBeFocused();
+	await expect(signOut).toHaveAttribute('href', '/auth/logout');
 });

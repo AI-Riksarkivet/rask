@@ -41,7 +41,7 @@
 	];
 </script>
 
-<svelte:head><title>rask</title></svelte:head>
+<svelte:head><title>Home · rask</title></svelte:head>
 
 <div class="mx-auto flex w-full max-w-5xl flex-col gap-6 p-6">
 	<!-- The hero. `isolate` gives the aurora a stacking context of its own so an absolutely-positioned
@@ -60,9 +60,11 @@
 			class="text-foreground/[0.07] dark:text-foreground/[0.10] mask-[radial-gradient(420px_circle_at_center,white,transparent)]"
 		/>
 		<div class="relative flex flex-col items-center gap-5 px-6 py-14 text-center">
-			<h1 class="text-5xl font-semibold tracking-tight sm:text-7xl">
+			<!-- The page's name is its sidebar row's; the wordmark is the visual, beneath it. -->
+			<h1 class="sr-only">Home</h1>
+			<p class="text-5xl font-semibold tracking-tight sm:text-7xl" data-slot="home-wordmark">
 				<!-- alt is EMPTY on purpose: the image is a flourish inside a wordmark, and any alt text
-				     would land in the middle of this heading's accessible name. -->
+				     would land in the middle of the wordmark's text. -->
 				<MediaBetweenText
 					firstText="LA"
 					secondText="GOM"
@@ -70,7 +72,7 @@
 					alt=""
 					targetWidth={58}
 				/>
-			</h1>
+			</p>
 			<p class="text-muted-foreground max-w-2xl text-sm">
 				The governed lakehouse estate. Open a project to work in it, or configure the estate itself
 				— this page will summarise what is happening across every project you can see.

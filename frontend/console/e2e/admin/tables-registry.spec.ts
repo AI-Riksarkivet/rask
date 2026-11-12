@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { tableFromIPC, Type } from 'apache-arrow';
 import { mockMe, signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from './ports';
+import { cellUnder } from '../table-cell';
 
 // Hermetic /tables registry coverage (#85 declare): declare_table is the browser-shaped create — a
 // JSON body (no Arrow payload) POSTed to /v1/table/{ns}${name}/declare, after which the registry
@@ -179,12 +180,22 @@ test('a namespace named like a route group links to its own page, not the list',
 	);
 });
 
-test('stage chips and muted text clear WCAG AA contrast in light and dark', async ({ page }) => {
+test('stage chips, muted text and primary fills clear WCAG AA contrast in light and dark', async ({
+	page,
+}) => {
 	await seed(page, {
 		'GET /v1/table': { tables: ['acme-bronze$a', 'acme-silver$b', 'acme-gold$c'] },
 	});
 	await page.goto('/catalog/tables');
 	await expect(page.getByRole('link', { name: 'acme-gold$c' })).toBeVisible();
+	// A primary fill as a selected toggle or a default button paints it, beside the account avatar's.
+	await page.evaluate(() => {
+		const probe = document.createElement('span');
+		probe.className = 'bg-primary text-primary-foreground';
+		probe.dataset['probe'] = 'primary';
+		probe.textContent = 'primary';
+		document.body.append(probe);
+	});
 
 	/** The contrast ratio of each matched element's text against what it is painted on, both
 	 *  composited the way the page paints them: every ancestor's background, then the text colour. */
@@ -230,6 +241,31 @@ test('stage chips and muted text clear WCAG AA contrast in light and dark', asyn
 			expect(chip.ratio, `${chip.text} chip, dark=${dark}`).toBeGreaterThanOrEqual(4.5);
 		for (const head of await ratios('th'))
 			expect(head.ratio, `header ${head.text}, dark=${dark}`).toBeGreaterThanOrEqual(4.5);
+		const fills = await ratios('[data-probe="primary"], [data-slot="avatar-fallback"]');
+		expect(fills.map((f) => f.text)).toContain('primary');
+		for (const fill of fills)
+			expect(fill.ratio, `primary fill ${fill.text}, dark=${dark}`).toBeGreaterThanOrEqual(4.5);
+	}
+
+	// A project card's count, at rest and hovered (the card paints --accent then), in both modes.
+	await seed(page, {
+		'GET /management/v1/projects': [{ project: 'acme', warehouses: [{ id: 'acme-wh' }] }],
+	});
+	await page.goto('/projects');
+	const count = page.locator('a[href="/projects/acme"]').getByText('1 warehouse');
+	await expect(count).toHaveText('1 warehouse');
+	// The hovered paint is read at once, not part way through the card's colour transition.
+	await page.addStyleTag({ content: '* { transition: none !important; }' });
+	for (const dark of [false, true]) {
+		await page.evaluate((on) => document.documentElement.classList.toggle('dark', on), dark);
+		for (const hovered of [false, true]) {
+			if (hovered) await count.hover();
+			else await page.mouse.move(0, 0);
+			const [card] = await ratios('a[href="/projects/acme"] [data-slot="card"] > div:last-child');
+			expect(card?.ratio, `card count, dark=${dark}, hovered=${hovered}`).toBeGreaterThanOrEqual(
+				4.5,
+			);
+		}
 	}
 });
 
@@ -239,4 +275,28 @@ test('an empty registry says no table is visible to the reader, not that none ex
 	await seed(page, { 'GET /v1/table': { tables: [] } });
 	await page.goto('/catalog/tables');
 	await expect(page.getByText('No tables visible to you.')).toBeVisible();
+});
+
+test('a table with no project draws the stage column’s dash, in the same face', async ({
+	page,
+}) => {
+	await page.goto('/catalog/tables');
+	await expect(page.getByRole('link', { name: 'db1$existing' })).toBeVisible();
+	const dashFace = async (header: string) =>
+		(await cellUnder(page, 'db1$existing', header))
+			.getByText('—', { exact: true })
+			.evaluate((el) => getComputedStyle(el).fontFamily);
+	expect(await dashFace('project')).toBe(await dashFace('stage'));
+});
+
+test('the declare form takes the focus it was opened for, and Escape closes it back to its toggle', async ({
+	page,
+}) => {
+	await page.goto('/catalog/tables');
+	const toggle = page.getByRole('button', { name: 'Declare table' });
+	await toggle.click();
+	await expect(page.getByLabel('Namespace')).toBeFocused();
+	await page.keyboard.press('Escape');
+	await expect(page.getByLabel('Namespace')).toHaveCount(0);
+	await expect(toggle).toBeFocused();
 });

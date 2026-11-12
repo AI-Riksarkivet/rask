@@ -49,8 +49,8 @@ test('the sidebar: an admin gets a live Settings, a non-admin gets it DISABLED',
 	// Neither a link nor a button: it must not be clickable, reachable as a control, or paste-able.
 	await expect(nav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
 	await expect(nav(page).getByRole('button', { name: 'Settings', exact: true })).toHaveCount(0);
-	// The reason names the RELATION — the half that turns a dead end into a request someone can make.
-	await expect(denied).toHaveAttribute('title', /can_observe_events/);
+	// The reason says who may open it — the half that turns a dead end into a request someone can make.
+	await expect(denied).toHaveAccessibleDescription('Only estate admins can open this.');
 	await rail(page).screenshot({ path: `${SHOTS}/143-sidebar-settings-disabled.png` });
 });
 
@@ -102,7 +102,7 @@ test('the gallery: an ADMIN gets the same button, live', async ({ page }) => {
 test('the route: a non-admin is refused /settings WITH the reason, not a 404', async ({ page }) => {
 	await seed(page, { 'GET /management/v1/me': NON_ADMIN });
 	await page.goto('/settings');
-	await expect(page.getByText('403', { exact: true })).toBeVisible();
+	await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
 	await expect(page.getByText('can_observe_events', { exact: false })).toBeVisible();
 	await page.screenshot({ path: `${SHOTS}/143-settings-403.png` });
 });

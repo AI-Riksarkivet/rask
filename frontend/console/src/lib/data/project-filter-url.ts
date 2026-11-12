@@ -17,9 +17,10 @@ const LIST_ROUTES = {
 
 export type CatalogList = keyof typeof LIST_ROUTES;
 
-/** Show `list` filtered to `project` (`''`: every project), replacing the current history entry. */
+/** Show `list` filtered to `project` (`''`: every project), as a history entry of its own, so Back
+ *  returns to the rows as they were. */
 export function showProject(list: CatalogList, url: WithQuery, project: string): Promise<void> {
 	const route = LIST_ROUTES[list];
 	const query = queryWithProject(url, project);
-	return goto(query ? resolve(`${route}?${query}`) : resolve(route), { replace: true });
+	return goto(query ? resolve(`${route}?${query}`) : resolve(route));
 }

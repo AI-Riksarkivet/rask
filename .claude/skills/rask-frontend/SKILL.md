@@ -51,7 +51,7 @@ modules are fine, and the data layer is `reads.svelte.ts`. `tsconfig.json` exten
 | `/` | the estate landing |
 | `/projects`, `/projects/[project]` | the project gallery and one project's overview (create, delete, policies) |
 | `/settings`, `/settings/access`, `/settings/audit` | estate configuration, estate-admin only (`settings/+layout.ts`) |
-| `/catalog` | a 307 to `/catalog/tables` (`catalog/+page.ts`): the breadcrumb's Catalog crumb and an old bookmark land on a list |
+| `/catalog` | a 307 to `/catalog/tables` (`catalog/+page.ts`): an old bookmark lands on a list; the group is no page, so its breadcrumb crumb is plain text |
 | `/catalog/{warehouses,namespaces,tables,promotions,storage}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`, `promotions/[table]`) | the catalog; the four lists take `?project=<id>` (below); `storage` is the tier view, which states the catalog's refusal (below) |
 | `/admin`, `/admin/{events,streams,dlq}` | operations, estate-admin only (`admin/+layout.ts`) |
 | `/workbench` | the dock (events, tables) |
@@ -69,23 +69,44 @@ with a query is written without the leading `/`, ``resolve(`auth/login?redirect=
 (`replace`, `reset: false`, `refreshAll`) and rejects a URL that names no route. `@rask/ui` cannot import `$app/paths`, so the rule is off under
 `packages/ui/**`; its root paths are what `resolve()` gives in the console.
 
-**Page titles.** Every page's `<title>` is its heading followed by ` · rask` (`Lineage DLQ · rask`), and a
-page about one named object puts the name, as the catalog writes it, before its collection (`db1$t · tables · rask`).
+**One name per page.** A page's sidebar row, breadcrumb crumb, `h1` and `<title>` say the same name (`#lib/nav.ts`'s
+`PAGE_NAMES` feeds the crumbs, `GROUP_NAMES` the plain crumbs of `/catalog` and `/admin`, "Catalog" and
+"Operations"; `/` has the one crumb "Home"), and a longer description is the subtitle under the `h1`. Every `<title>` is that name
+followed by ` · rask` (`DLQ · rask`), and a page about one named object has the name, as the catalog writes it, as its
+`h1` and before its collection in the title (`db1$t · tables · rask`). An error page has its own: `+error.svelte` sets
+`<title>` and one `h1` from the error's `title` (`App.Error`; `requireEstateAdmin` gives "You don’t have access to
+<area>") or the status in words, with the code small beneath. The breadcrumb is the only trail: a detail page draws
+no second one. A 403 on one object's read is the catalog keeping existence to itself, so its page says "No <kind>
+<name> that you can see: it does not exist, or you hold no grant on it", never that the reader lacks access, and
+describes nothing of it (no count, no tabs); a 404 reads the same, so the wording never tells a missing object from a
+hidden one. Home and the workbench name themselves with a visually hidden `h1` (the wordmark and the dock are what
+they draw), and a list drawn in a workbench panel (`TableRegistry`'s `frame="panel"`) heads itself with an `h2`, at the
+panel's width.
 
 **One navigation, the sidebar, on every page** (ADR 0202). `consoleSidebar(me)` in `#lib/nav.ts` builds it: Home and
 Projects, a Catalog group (Warehouses, Namespaces, Tables, Storage, Promotions), an Operations group (Events, Streams,
 DLQ), and Workbench and Settings pinned at the foot; `@rask/ui`'s shell renders it (`app-sidebar`, `page-nav`) inside one
 `<nav aria-label="Pages">`. The top bar holds only the sidebar's toggle, the breadcrumb (the route's own path,
-`pathCrumbs`), the bell and the account menu. A row the caller may not open (Settings and the Operations rows for anyone
-but an estate admin) renders DISABLED with the FGA denial's wording, or the sign-in reason when `me` is unresolved, and
-drops its children, so a disabled row hands out no link. There is no active project: nothing about which project a
+`pathCrumbs`, named and linked by `AppShell`'s `pages`; a group such as Catalog is plain text), the bell and the account
+menu. A row the caller may not open (Settings and the Operations rows for anyone but an estate admin) renders DISABLED
+with a plain-words reason ("Only estate admins can open this.", or the sign-in reason when `me` is unresolved), printed
+once under its group and set as each row's `aria-describedby`, so a keyboard and a touch reach it (the icon rail's
+tooltip carries it too), and drops its children, so a disabled row hands out no link. A group the reader closed holds
+their choice, and marks its heading while it holds the current page. Below the shell breakpoint the sidebar is a sheet
+with a title row and a close button; picking a page closes it, and its rows carry no tooltip, so Escape reaches it. There is no active project: nothing about which project a
 person looks at is kept in a cookie or storage.
 
 **The project filter is a view, never a boundary.** Warehouses, namespaces, tables and promotions each have a project
 column and a `ProjectFilter` select (`#lib/data/ProjectFilter.svelte`, `project-filter.ts`): a plain value and an
 `onchange`, over the projects `GET /management/v1/projects` answers the caller. Each list's page keeps the value in its
-URL (`?project=<id>`, `project-filter-url.ts`'s `showProject`), so a reload and a shared link show the same rows, and
-"all projects" clears it; the workbench's tables panel keeps it in its own state, so choosing a project keeps the reader
+URL (`?project=<id>`, `project-filter-url.ts`'s `showProject`, one history entry per change, so Back is the rows as they
+were), so a reload and a shared link show the same rows, and "all projects" clears it. `filterVerdict`
+(`project-filter.ts`) decides what a filtered list shows: a filter some answered row belongs to is applied whatever
+the projects read says (that read lists only the caller's memberships, or every project to an estate observer, and a
+grant on a table needs no membership); one matching no row and no project the caller can see (`VisibleProjects`)
+shows `ProjectFilterNotice` saying so; while either read is out the list shows its loading state, and when one failed
+the notice says why. The select offers the visible projects and the rows' projects, and keeps an unseen id on screen
+as a disabled "(none you can see)" choice. The subtitle names the filter; the workbench's tables panel keeps it in its own state, so choosing a project keeps the reader
 on `/workbench` (ADR 0202). The rows are the estate-wide read the catalog already answered within the caller's grants;
 the filter narrows them in the browser. A row's project comes from reads the lists already make (`ProjectIndexRead`: the
 warehouses and their estate bindings), and a namespace bound to no warehouse (`provenance`) shows a dash. While that
@@ -196,10 +217,14 @@ directory to resolve an id against, so the id is what a person reads and pastes 
 `YYYY-MM-DD HH:mm:ss UTC+01:00`** (`@rask/ui/utils`' `formatZoned`) on every list of them, the bell and the events feed
 included.
 
-**Liveness rides cursors, not timers.** `#lib/live/tick.svelte.ts` wraps the shared `lineageFeed`/`controlCursor` streams
+**Liveness rides cursors, not timers.** `#lib/live/tick.svelte.ts` wraps the shared `lineageFeed`/`controlFeed` streams
 of `feeds.api.ts` as `lineageTick`/`controlTick`, read through `liveRead` (`#lib/api/live.svelte.ts`), which opens on mount and
 treats a cursor's arrival as no change. Data mutations move the lineage cursor; governance mutations (grants,
-warehouses, tenants) move the control cursor. The control cursor polls only while the root layout's `me` is an estate admin (`isEstateAdmin`,
+warehouses, tenants) move the control cursor. `controlFeed` is the page's ONE poller of `/management/v1/events`: it
+keeps the recent window the events page renders as well as the generation the cursor reads. It parses the page envelope
+strictly and each event alone (`readEvent`), so one malformed event is listed as unreadable and the cursor moves on;
+a failed poll is yielded as `failure` (status and the catalog's `detail`; 0 unreachable, 502 drift) for the events
+page to say, and the feed polls again, ending only on a 403. It polls only while the root layout's `me` is an estate admin (`isEstateAdmin`,
 `#lib/estate-admin.ts`, the one rule): the catalog refuses everyone else (`can_observe_events` on the estate root), so
 another reader's pages read on mount and after their own writes. A timer is right only when nothing publishes the change (a liveness probe)
 or time itself is the change (a countdown).

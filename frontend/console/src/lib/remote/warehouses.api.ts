@@ -41,9 +41,14 @@ export const fetchProject = query(v.string(), async (project): Promise<ApiResult
 );
 
 /** The projects the caller can see, `GET /management/v1/projects`: every project to an estate
- *  observer, and to anyone else the projects they are a member of. Read for their ids. */
-export const fetchVisibleProjects = query(async (): Promise<ApiResult<{ project: string }[]>> =>
-	parsed(await catalogJSON('/management/v1/projects'), v.array(v.object({ project: v.string() }))),
+ *  observer, and to anyone else the projects they are a member of, each with its warehouses. ONE
+ *  read for every surface that asks (the project filter, the gallery's estate listing). */
+const VisibleProjectsSchema = v.array(
+	v.object({ project: v.string(), warehouses: v.array(v.object({ id: v.string() })) }),
+);
+export type VisibleProject = v.InferOutput<typeof VisibleProjectsSchema>[number];
+export const fetchVisibleProjects = query(async (): Promise<ApiResult<VisibleProject[]>> =>
+	parsed(await catalogJSON('/management/v1/projects'), VisibleProjectsSchema),
 );
 
 const EventsPageSchema = v.object({ events: v.array(ControlEventSchema) });
@@ -55,15 +60,14 @@ const EventsPageSchema = v.object({ events: v.array(ControlEventSchema) });
  *  away at /admin/events. The events feed is estate-admin gated at the catalog — the
  *  page renders the 403 as its own quiet state rather than an error. */
 export const projectEvents = query(
-	v.string(),
-	async (project): Promise<ApiResult<ControlEvent[]>> => {
-		const rec = await catalogJSON(`/management/v1/projects/${enc(project)}`);
-		const mine = new Set<string>([`project:${project}`]);
-		if (rec.ok) {
-			const parsedRec = v.safeParse(ProjectSchema, rec.data);
-			if (parsedRec.success)
-				for (const w of parsedRec.output.warehouses) mine.add(`warehouse:${w.id}`);
-		}
+	// The project and its warehouses as the page already read them, so the project itself is read
+	// once per visit, by the page.
+	v.object({ project: v.string(), warehouses: v.array(v.string()) }),
+	async ({ project, warehouses }): Promise<ApiResult<ControlEvent[]>> => {
+		const mine = new Set<string>([
+			`project:${project}`,
+			...warehouses.map((w) => `warehouse:${w}`),
+		]);
 		const res = await catalogJSON('/management/v1/events?since=0');
 		if (!res.ok) return res;
 		const parsedPage = v.safeParse(EventsPageSchema, res.data);

@@ -37,7 +37,7 @@
 	import { declareTable, fetchTables } from './remote/catalog.api';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
-	import { projectOfTable } from './project-filter.ts';
+	import { filterVerdict, projectOfTable } from './project-filter.ts';
 	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOfTable, type StageInfo } from './stage';
@@ -56,15 +56,18 @@
 	let {
 		project: projectFilter,
 		onprojectchange,
-	}: { project: string; onprojectchange: (project: string) => void } = $props();
+		frame = 'page',
+	}: {
+		project: string;
+		onprojectchange: (project: string) => void;
+		/** Where the registry is drawn: its own page (the page's h1, its column and padding), or a
+		 *  workbench panel (a heading under the workbench's h1, the panel's whole width). */
+		frame?: 'page' | 'panel';
+	} = $props();
 
 	// Each row's project, from the warehouses and the bindings; the filter narrows the rows this caller
 	// was given, a view and never a boundary.
 	const projects = new ProjectIndexRead();
-	const filterWaits = $derived(projectFilter !== '' && projects.state.kind === 'loading');
-	const filterFailure = $derived(
-		projectFilter !== '' && projects.state.kind === 'failed' ? projects.state.reason : null,
-	);
 
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
@@ -200,6 +203,27 @@
 		}
 	}
 
+	/** The form's toggle, held to hand the focus back to. */
+	let declareToggle: HTMLButtonElement | null = null;
+	function holdToggle(button: HTMLButtonElement): () => void {
+		declareToggle = button;
+		return () => (declareToggle = null);
+	}
+
+	/** The form opens on a click that asked for it, so its first field takes the focus. */
+	function focusOnOpen(input: HTMLInputElement): void {
+		input.focus();
+	}
+
+	/** Escape in any of the form's controls closes it, as it closes every other panel, and hands focus
+	 *  back to its toggle. */
+	function closeDeclareOnEscape(e: KeyboardEvent): void {
+		if (e.key !== 'Escape') return;
+		e.preventDefault();
+		declaring = false;
+		declareToggle?.focus();
+	}
+
 	function submitDeclareForm(): void {
 		if (hasRows) void runCreateWithRows();
 		else void runDeclare();
@@ -207,19 +231,32 @@
 
 	// ── the DataTable (goal cond 4) ──
 	type Row = { id: string; namespace: string; stage: StageInfo | null; project: string | null };
-	const rows = $derived.by((): Row[] => {
+	const allRows = $derived.by((): Row[] => {
 		const all = (tables ?? []).map((id): Row => ({
 			id,
 			namespace: namespaceOfTable(id),
 			stage: stageOfTable(id),
 			project: projects.index ? projectOfTable(projects.index, id) : null,
 		}));
-		return all.filter(
+		return all;
+	});
+	// What the filter does, from the rows the catalog answered and the projects the caller can see.
+	const rowProjects = $derived(new Set(allRows.flatMap((r) => (r.project ? [r.project] : []))));
+	const verdict = $derived(
+		filterVerdict({
+			filter: projectFilter,
+			index: projects.state,
+			visible: projects.visible.state,
+			rowProjects,
+		}),
+	);
+	const rows = $derived(
+		allRows.filter(
 			(r) =>
 				(!stageFilter || r.stage?.stage === stageFilter) &&
 				(!projectFilter || r.project === projectFilter),
-		);
-	});
+		),
+	);
 
 	let sorting = $state<SortingState>([]);
 	let globalFilter = $state('');
@@ -256,8 +293,8 @@
 					sorted: column.getIsSorted(),
 					onclick: column.getToggleSortingHandler(),
 				}),
-			cell: ({ row }) => row.original.project ?? '—',
-			meta: { headerClass: 'w-32', cellClass: 'font-mono' },
+			cell: ({ row }) => renderSnippet(projectCell, row.original),
+			meta: { headerClass: 'w-32' },
 		},
 		{
 			id: 'stage',
@@ -317,6 +354,10 @@
 		href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(row.id) })}>{row.id}</a
 	>
 {/snippet}
+{#snippet projectCell(row: Row)}
+	<!-- The stage column's dash, in the stage column's face: a monospace em dash reads as an en dash. -->
+	{#if row.project}<span class="mono">{row.project}</span>{:else}<span class="mut">—</span>{/if}
+{/snippet}
 {#snippet stageCell(row: Row)}
 	{#if row.stage}<StageBadge info={row.stage} />{:else}<span class="mut">—</span>{/if}
 {/snippet}
@@ -328,15 +369,17 @@
 	>
 {/snippet}
 
-<div class="page">
+<div class={['page', { panel: frame === 'panel' }]}>
 	<header>
-		<h1>Tables</h1>
+		<svelte:element this={frame === 'page' ? 'h1' : 'h2'} class="title">Tables</svelte:element>
 		<span class="sub mono"
-			>the catalog registry, estate-wide — every table your grants allow ·
+			>{projectFilter
+				? `the catalog registry, in project ${projectFilter} — the tables your grants allow there`
+				: 'the catalog registry, estate-wide — every table your grants allow'} ·
 			&lt;namespace&gt;$&lt;table&gt;</span
 		>
 		{#if !unauthorized}
-			<button class="new" onclick={() => (declaring = !declaring)}>
+			<button class="new" {@attach holdToggle} onclick={() => (declaring = !declaring)}>
 				<Plus size={12} /> Declare table
 			</button>
 		{/if}
@@ -348,24 +391,34 @@
 		     lands the table's first data version, whether or not the id was declared earlier. -->
 		<form
 			class="declare"
+			aria-label="Declare table"
 			onsubmit={(e) => {
 				e.preventDefault();
 				submitDeclareForm();
 			}}
 		>
 			<div class="row">
-				<input class="mono" bind:value={declNs} placeholder="namespace" aria-label="Namespace" />
+				<input
+					class="mono"
+					bind:value={declNs}
+					placeholder="namespace"
+					aria-label="Namespace"
+					onkeydown={closeDeclareOnEscape}
+					{@attach focusOnOpen}
+				/>
 				<input
 					class="mono"
 					bind:value={declName}
 					placeholder="table name"
 					aria-label="Table name"
+					onkeydown={closeDeclareOnEscape}
 				/>
 				<input
 					class="mono loc"
 					bind:value={declLocation}
 					placeholder="location (optional — catalog picks)"
 					aria-label="Location"
+					onkeydown={closeDeclareOnEscape}
 					disabled={hasRows}
 					title={hasRows
 						? 'Ignored when rows are given: the create lands into the location the id already holds.'
@@ -376,7 +429,8 @@
 				class="mono rows"
 				bind:value={declRows}
 				placeholder={'rows (optional) — [{ "id": 1, "name": "a" }]'}
-				aria-label="Initial rows"></textarea>
+				aria-label="Initial rows"
+				onkeydown={closeDeclareOnEscape}></textarea>
 			<p class="hint">
 				{hasRows
 					? 'The rows are encoded to Arrow and become the schema and first version of this table.'
@@ -388,6 +442,7 @@
 					type="submit"
 					disabled={declBusy || declareHint !== null}
 					aria-describedby={declareHint ? 'declare-hint' : undefined}
+					onkeydown={closeDeclareOnEscape}
 				>
 					{declBusy ? '…' : hasRows ? 'Create with rows' : 'Declare'}
 				</button>
@@ -416,29 +471,37 @@
 	{:else}
 		<div class="toolbar">
 			<DataTableTextFilter bind:value={globalFilter} placeholder="Search tables…" />
-			<Select
-				bind:value={stageFilter}
-				ariaLabel="Stage filter"
-				placeholder="any stage"
-				options={[
-					{ value: '', label: 'any stage' },
-					{ value: 'bronze', label: 'bronze' },
-					{ value: 'silver', label: 'silver' },
-					{ value: 'gold', label: 'gold' },
-				]}
+			<label class="text-muted-foreground inline-flex items-center gap-2 text-sm">
+				Stage
+				<Select
+					bind:value={stageFilter}
+					ariaLabel="Stage filter"
+					placeholder="any stage"
+					options={[
+						{ value: '', label: 'any stage' },
+						{ value: 'bronze', label: 'bronze' },
+						{ value: 'silver', label: 'silver' },
+						{ value: 'gold', label: 'gold' },
+					]}
+				/>
+			</label>
+			<ProjectFilter
+				value={projectFilter}
+				visible={projects.visible.ids}
+				ofRows={[...rowProjects]}
+				onchange={onprojectchange}
 			/>
-			<ProjectFilter value={projectFilter} onchange={onprojectchange} />
 		</div>
-		{#if filterFailure !== null}
+		{#if verdict.kind === 'failed' || verdict.kind === 'unseen'}
 			<ProjectFilterNotice
 				project={projectFilter}
-				reason={filterFailure}
+				reason={verdict.kind === 'failed' ? verdict.reason : null}
 				onclear={() => onprojectchange('')}
 			/>
 		{:else}
 			<DataTable
 				{table}
-				loading={tables === null || filterWaits}
+				loading={tables === null || verdict.kind === 'waiting'}
 				emptyMessage={projectFilter
 					? `No tables in project ${projectFilter}.`
 					: 'No tables visible to you. The list holds only the tables your grants reach: ask a project admin for access, or declare one.'}
@@ -503,15 +566,23 @@
 		margin: 0 auto;
 		padding: 56px 20px 40px;
 	}
+	/* A panel is already framed by the dock: its width is the panel's, with a slim inset. */
+	.page.panel {
+		max-width: none;
+		padding: 12px;
+	}
 	header {
 		display: flex;
 		align-items: baseline;
 		gap: 12px;
 		margin-bottom: 18px;
 	}
-	h1 {
+	.title {
 		font-size: 20px;
 		margin: 0;
+	}
+	.panel .title {
+		font-size: 15px;
 	}
 	.sub {
 		color: var(--faint);

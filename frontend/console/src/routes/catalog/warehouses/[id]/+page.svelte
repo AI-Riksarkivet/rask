@@ -82,8 +82,6 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={resolve('/catalog/warehouses')}>Warehouses</a>
-		<span class="sep">/</span>
 		<WarehouseIcon size={15} />
 		<h1 class="mono">{id}</h1>
 		{#if wh}
@@ -100,13 +98,12 @@
 				> to view this warehouse.
 			</p>
 		</div>
-	{:else if denied}
-		<div class="empty">
-			<ShieldAlert size={16} />
-			<p>You don't have metadata access to this warehouse.</p>
+	{:else if denied || missing}
+		<!-- A 403 is the catalog keeping existence to itself, so a 404 reads the same: the wording never
+		     tells a missing warehouse from a hidden one. -->
+		<div class="empty" data-testid="warehouse-not-visible">
+			<p>No warehouse {id} that you can see: it does not exist, or you hold no grant on it.</p>
 		</div>
-	{:else if missing}
-		<div class="empty"><p>No such warehouse in the registry.</p></div>
 	{:else if offline}
 		<div class="empty">
 			<RefreshCw size={16} />
@@ -180,17 +177,6 @@
 		font-size: 20px;
 		margin: 0;
 		color: var(--ink);
-	}
-	.back {
-		color: var(--mut);
-		font-size: 13px;
-		text-decoration: none;
-	}
-	.back:hover {
-		color: var(--ink);
-	}
-	.sep {
-		color: var(--faint);
 	}
 	section {
 		margin-bottom: 26px;

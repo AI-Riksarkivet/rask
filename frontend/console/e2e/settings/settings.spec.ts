@@ -77,10 +77,21 @@ test('a non-admin is REFUSED /settings with the reason — the route itself refu
 		'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
 	});
 	await page.goto('/settings');
-	await expect(page.getByText('403', { exact: true })).toBeVisible();
+	await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
 	// The reason is the FGA denial's own wording, not a generic "forbidden" — that is the half of the
 	// ruling a bare status code would silently drop.
 	await expect(page.getByText('can_observe_events', { exact: false })).toBeVisible();
+	// The refusal is its own page: one h1 in words and its own title, worded as every estate-admin
+	// area's refusal is, with the code small beneath.
+	for (const [path, area] of [
+		['/settings', 'Settings'],
+		['/admin/events', 'Operations'],
+	] as const) {
+		await page.goto(path);
+		const heading = `You don’t have access to ${area}`;
+		await expect(page.getByRole('heading', { level: 1 })).toHaveText(heading);
+		await expect(page).toHaveTitle(`${heading} · rask`);
+	}
 
 	// …and the sidebar SHOWS it, disabled — never omitted. A link would be reachable by keyboard and by
 	// paste however it is painted, so the disabled entry must NOT be a link.
@@ -88,7 +99,7 @@ test('a non-admin is REFUSED /settings with the reason — the route itself refu
 	await expect(nav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
 	const disabled = nav(page).locator('[aria-disabled="true"]', { hasText: 'Settings' });
 	await expect(disabled).toBeVisible();
-	await expect(disabled).toHaveAttribute('title', /can_observe_events/);
+	await expect(disabled).toHaveAccessibleDescription('Only estate admins can open this.');
 });
 
 test('an UNRESOLVED identity is refused for a DIFFERENT reason than a non-admin', async ({
@@ -105,7 +116,7 @@ test('an UNRESOLVED identity is refused for a DIFFERENT reason than a non-admin'
 		'GET /management/v1/me': { status: 503, body: { detail: 'catalog unavailable' } },
 	});
 	await page.goto('/settings');
-	await expect(page.getByText('403', { exact: true })).toBeVisible();
+	await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
 	await expect(page.getByText('could not be confirmed', { exact: false })).toBeVisible();
 	await expect(page.getByText('can_observe_events', { exact: false })).toHaveCount(0);
 });
@@ -119,7 +130,7 @@ for (const child of ['/settings/access', '/settings/audit'] as const) {
 			'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
 		});
 		await page.goto(child);
-		await expect(page.getByText('403', { exact: true })).toBeVisible();
+		await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
 		// Inheriting the STATUS is not enough — a child that inherited the door but grew its own
 		// generic message would satisfy a status-only assertion while losing the ruling.
 		await expect(page.getByText('can_observe_events', { exact: false })).toBeVisible();
@@ -130,7 +141,7 @@ for (const child of ['/settings/access', '/settings/audit'] as const) {
 			'GET /management/v1/me': { status: 503, body: { detail: 'catalog unavailable' } },
 		});
 		await page.goto(child);
-		await expect(page.getByText('403', { exact: true })).toBeVisible();
+		await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
 		await expect(page.getByText('could not be confirmed', { exact: false })).toBeVisible();
 	});
 }

@@ -79,13 +79,16 @@
 	--popover: oklch(0.19 0.01 270);
 	--popover-foreground: oklch(0.985 0 0);
 	--primary: oklch(0.68 0.16 250);
-	--primary-foreground: oklch(0.985 0 0);
+	/* Dark text on the bright primary: 7.00:1 (white on it measures 2.75:1, below AA). The primary
+	   itself stays bright: as text on the dark surfaces it measures 7.00:1 on --background, 6.65:1 on
+	   --card, 6.43:1 on --popover, 6.03:1 on --muted and 5.41:1 on --accent, the least. */
+	--primary-foreground: oklch(0.13 0.006 270);
 	--secondary: oklch(0.22 0.008 270);
 	--secondary-foreground: oklch(0.985 0 0);
 	--muted: oklch(0.22 0.008 270);
-	/* L 0.62 clears 4.5:1 on every dark surface, the least 4.75:1 on --muted (0.55 gave 3.57:1 there
-	   and 4.14:1 on --background). */
-	--muted-foreground: oklch(0.62 0.01 270);
+	/* L 0.65 clears 4.5:1 on every dark surface it is drawn on, a hovered card or row (--accent)
+	   included: the least 4.80:1 on --accent, then 5.35:1 on --muted. */
+	--muted-foreground: oklch(0.65 0.01 270);
 	--accent: oklch(0.26 0.01 270);
 	--accent-foreground: oklch(0.985 0 0);
 	--destructive: oklch(0.704 0.191 22.216);
@@ -104,7 +107,7 @@
 	--sidebar: oklch(0.16 0.008 260);
 	--sidebar-foreground: oklch(0.985 0 0);
 	--sidebar-primary: oklch(0.68 0.16 250);
-	--sidebar-primary-foreground: oklch(0.985 0 0);
+	--sidebar-primary-foreground: oklch(0.13 0.006 270);
 	--sidebar-accent: oklch(0.26 0.01 270);
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--sidebar-border: oklch(1 0 0 / 8%);

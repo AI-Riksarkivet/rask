@@ -62,7 +62,10 @@ test('each warehouse row links to its catalog page', async ({ page }) => {
 		const link = page.getByRole('link', { name: id, exact: true });
 		await expect(link).toHaveAttribute('href', `/catalog/warehouses/${id}`);
 	}
-	const back = page.locator('a.back');
+	// The way back up is the breadcrumb's, as on every page.
+	const back = page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', {
+		name: 'Projects',
+	});
 	await expect(back).toHaveAttribute('href', '/projects');
 	// …and the catalog's lists open filtered to this project, the filter in the URL.
 	const lists = page.getByRole('navigation', { name: 'This project in the catalog' });
@@ -86,7 +89,7 @@ test('a project the reader cannot see reads as missing or not theirs, never as a
 	page.on('request', (req) => sent.push(new URL(req.url()).pathname));
 	await page.goto('/projects/secret');
 	await expect(
-		page.getByText('that you can see: it does not exist, or you are not a member of it.'),
+		page.getByText('that you can see: it does not exist, or you hold no grant on it.'),
 	).toBeVisible();
 	// Nothing is read for a project that is not there: no policies, no events.
 	expect(sent.filter((p) => p.endsWith('/projects/secret/policies'))).toEqual([]);
@@ -94,4 +97,18 @@ test('a project the reader cannot see reads as missing or not theirs, never as a
 	await expect(page.locator('.empty code', { hasText: 'secret' })).toBeVisible();
 	// An honest answer, not a project that looks like it has nothing in it.
 	await expect(page.getByRole('heading', { name: 'Warehouses' })).toHaveCount(0);
+});
+
+test('a visit to a project reads the project once', async ({ page }) => {
+	await seed(page, { 'GET /management/v1/projects/acme': DETAIL });
+	const reads: string[] = [];
+	page.on('request', (req) => {
+		if (new URL(req.url()).pathname.endsWith('/management/v1/projects/acme')) reads.push(req.url());
+	});
+	await page.goto('/projects/acme');
+	// The events panel is the page's last read, made after the project's.
+	await expect(
+		page.getByText(/No governance changes on this project|Events unavailable right now/),
+	).toBeVisible();
+	expect(reads).toHaveLength(1);
 });

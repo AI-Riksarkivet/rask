@@ -15,7 +15,7 @@ import { onMount, untrack } from 'svelte';
  *
  * Nothing here touches any feed. It takes a cursor as an argument, so it is a MECHANISM — which is the
  * only thing a `frontend/packages/*` entry may be. The cursors themselves (`lineageTick`,
- * `controlCursor`, …) live in the console's own `feeds.api.ts`.
+ * `controlFeed`, …) live in the console's own `feeds.api.ts`.
  *
  * Four rules, and the last two are each here because getting them wrong broke a test:
  *

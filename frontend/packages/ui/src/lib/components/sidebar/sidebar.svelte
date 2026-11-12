@@ -40,18 +40,17 @@
 			data-sidebar="sidebar"
 			data-slot="sidebar"
 			data-mobile="true"
-			class={cn(
-				'bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden',
-				className,
-			)}
+			class={cn('bg-sidebar text-sidebar-foreground w-(--sidebar-width) gap-0 p-0', className)}
 			--sidebar-width={SIDEBAR_WIDTH_MOBILE}
 			{side}
 		>
-			<Sheet.Header class="sr-only">
-				<Sheet.Title>Sidebar</Sheet.Title>
-				<Sheet.Description>Displays the mobile sidebar.</Sheet.Description>
+			<!-- A visible title row holds the sheet's own close button (Sheet.Content's), so closing it
+			     needs neither the scrim nor a key. -->
+			<Sheet.Header class="h-12 shrink-0 justify-center border-b px-4 py-0">
+				<Sheet.Title class="text-sm">Pages</Sheet.Title>
+				<Sheet.Description class="sr-only">The console's pages.</Sheet.Description>
 			</Sheet.Header>
-			<div class="flex h-full w-full flex-col">
+			<div class="flex min-h-0 w-full flex-1 flex-col">
 				{@render children?.()}
 			</div>
 		</Sheet.Content>

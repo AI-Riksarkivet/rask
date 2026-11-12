@@ -1,5 +1,5 @@
 import { liveRead, type LiveCursor } from '#lib/api/live.svelte.ts';
-import { controlCursor, lineageFeed } from './feeds.api';
+import { controlFeed, lineageFeed } from './feeds.api.ts';
 
 /**
  * The console's live CURSORS. The reader itself — `liveRead`, and the rules that make it not a
@@ -31,10 +31,10 @@ export function lineageTick(): LiveCursor {
 /** The CONTROL-plane cursor — for the surfaces whose changes are governance mutations (grants,
  *  warehouses, tenants) rather than data movement; those never move the lineage cursor. */
 export function controlTick(): LiveCursor {
-	const feed = controlCursor();
+	const feed = controlFeed();
 	return {
 		get current() {
-			return feed.current;
+			return feed.current?.generation;
 		},
 		get connected() {
 			return feed.connected;

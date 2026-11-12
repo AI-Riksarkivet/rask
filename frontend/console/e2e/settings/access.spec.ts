@@ -56,7 +56,7 @@ const accessState = async (page: import('@playwright/test').Page): Promise<Acces
 const open = async (page: import('@playwright/test').Page) => {
 	await page.goto('/settings/access');
 	// 20s, not the 5s `expect` default: this route loads Svelte Flow, the console's heaviest chunk.
-	await expect(page.getByRole('heading', { name: 'Access', level: 1 })).toBeVisible({
+	await expect(page.getByRole('heading', { name: 'Users & roles', level: 1 })).toBeVisible({
 		timeout: 20_000,
 	});
 };
@@ -456,7 +456,7 @@ test('the model view is URL-addressable and survives a reload', async ({ page })
 	await expect.poll(() => new URL(page.url()).searchParams.get('view')).toBe('model');
 
 	await page.goto(page.url());
-	await expect(page.getByRole('heading', { name: 'Access', level: 1 })).toBeVisible({
+	await expect(page.getByRole('heading', { name: 'Users & roles', level: 1 })).toBeVisible({
 		timeout: 20_000,
 	});
 	// Still the schema after a cold load — the toggle is state, not a transient click.
@@ -480,7 +480,7 @@ test('a run is remembered, re-runnable, and survives a reload', async ({ page })
 
 	// Survives a cold load — the point of persisting rather than holding it in component state.
 	await page.reload();
-	await expect(page.getByRole('heading', { name: 'Access', level: 1 })).toBeVisible({
+	await expect(page.getByRole('heading', { name: 'Users & roles', level: 1 })).toBeVisible({
 		timeout: 20_000,
 	});
 	await page.getByText(/^Recent queries/).click();

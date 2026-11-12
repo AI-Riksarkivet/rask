@@ -22,8 +22,8 @@ import { isEstateAdmin } from '#lib/estate-admin.ts';
  *
  * Who may do what is the catalog's: each route's own guard and each door refuse what the caller may
  * not do. What this decides is only what the rail SHOWS, and it shows a row the caller may not open
- * as disabled with the denial's wording, never hidden: a missing row reads as a product without the
- * feature, while a disabled one names the relation to ask for.
+ * as disabled with who may open it, never hidden: a missing row reads as a product without the
+ * feature, while a disabled one says whom to ask.
  */
 
 /** The catalog, in hierarchy order below a project: warehouse, namespace, table; then the stores
@@ -70,6 +70,19 @@ const SETTINGS: PageNavLeaf = {
 	],
 };
 
+/** Above every section: the estate and its projects. */
+const TOP: PageNavLeaf[] = [
+	{ title: 'Home', href: '/', match: exact('/'), icon: House },
+	{ title: 'Projects', href: '/projects', match: under('/projects'), icon: FolderKanban },
+];
+
+const WORKBENCH: PageNavLeaf = {
+	title: 'Workbench',
+	href: '/workbench',
+	match: seg('/workbench'),
+	icon: LayoutDashboard,
+};
+
 /** A row the caller may not open: shown, disabled with `reason`, and without its sub-routes, so
  *  showing it hands out none of them. */
 function refused(leaf: PageNavLeaf, reason: string): PageNavLeaf {
@@ -93,20 +106,15 @@ export function areaOf(pathname: string): string {
  */
 export function consoleSidebar(me: Me | null): PageNav {
 	const admin = isEstateAdmin(me);
-	// The FGA denial's own wording, so the rail, the route's 403 and the API name the same relation on
-	// the same object. An unresolved identity is told to sign in instead: naming a relation to someone
-	// the console cannot identify is no advice.
+	// Plain words, printed under the rows it disables: who may open them. The route's own 403 page
+	// names the relation for whoever grants it. An unresolved identity is told to sign in instead:
+	// saying who may open a page to someone the console cannot identify is no advice.
 	const denial = me
-		? 'estate-admin only (needs can_observe_events on the FGA root)'
-		: 'sign in to see whether you can open this';
+		? 'Only estate admins can open this.'
+		: 'Sign in to see whether you can open this.';
 	return {
 		groups: [
-			{
-				items: [
-					{ title: 'Home', href: '/', match: exact('/'), icon: House },
-					{ title: 'Projects', href: '/projects', match: under('/projects'), icon: FolderKanban },
-				],
-			},
+			{ items: TOP },
 			{ label: 'Catalog', items: CATALOG },
 			{
 				label: 'Operations',
@@ -114,10 +122,26 @@ export function consoleSidebar(me: Me | null): PageNav {
 			},
 		],
 		footer: {
-			items: [
-				{ title: 'Workbench', href: '/workbench', match: seg('/workbench'), icon: LayoutDashboard },
-				admin ? SETTINGS : refused(SETTINGS, denial),
-			],
+			items: [WORKBENCH, admin ? SETTINGS : refused(SETTINGS, denial)],
 		},
 	};
 }
+
+/**
+ * Every path that is a page of its own, with the name the sidebar gives it, for the breadcrumb: one
+ * name per page across the sidebar, the crumb, the h1 and the title. A group (`/catalog`, `/admin`)
+ * is no page, so its crumb is plain text. The same for every reader: naming a page discloses nothing
+ * the sidebar does not.
+ */
+export const PAGE_NAMES: ReadonlyMap<string, string> = new Map(
+	[...TOP, ...CATALOG, ...OPERATIONS, WORKBENCH, SETTINGS, ...(SETTINGS.children ?? [])].map(
+		(leaf) => [leaf.href, leaf.title],
+	),
+);
+
+/** The paths that name a group of pages, with the sidebar group's name, for the breadcrumb's plain
+ *  crumb: `/admin` is the Operations group, as its 403 page calls it. */
+export const GROUP_NAMES: ReadonlyMap<string, string> = new Map([
+	['/catalog', 'Catalog'],
+	['/admin', 'Operations'],
+]);

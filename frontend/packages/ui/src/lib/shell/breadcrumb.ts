@@ -80,10 +80,10 @@ export function pathCrumbs(pathname: string, routeId: string | null = null): Cru
 /** A trail split around an elision point. `lead` + `tail` are what render; `hidden` is what folded
  *  behind the ellipsis affordance (empty when the whole trail fits). The current page is always the
  *  LAST entry of `tail`, so it is the one crumb elision can never take. */
-export type CrumbTrail = {
-	lead: Crumb[];
-	hidden: Crumb[];
-	tail: Crumb[];
+export type CrumbTrail<T extends Crumb = Crumb> = {
+	lead: T[];
+	hidden: T[];
+	tail: T[];
 };
 
 /**
@@ -98,7 +98,7 @@ export type CrumbTrail = {
  * `maxVisible` is clamped to 2 (a lead and a current page); a trail that already fits is returned
  * whole as `tail`.
  */
-export function collapseCrumbs(crumbs: Crumb[], maxVisible: number): CrumbTrail {
+export function collapseCrumbs<T extends Crumb>(crumbs: T[], maxVisible: number): CrumbTrail<T> {
 	const max = Math.max(2, Math.trunc(maxVisible));
 	if (crumbs.length <= max) return { lead: [], hidden: [], tail: crumbs };
 	const keepTail = max - 1;

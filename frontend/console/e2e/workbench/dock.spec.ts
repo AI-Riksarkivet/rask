@@ -223,3 +223,39 @@ test("the tables panel's project filter narrows the panel and keeps the reader o
 	await expect(page.getByRole('link', { name: 'db2$u' })).toHaveCount(0);
 	await expect(page).toHaveURL(/\/workbench$/);
 });
+
+test('at phone width the views rail sits above the dock, which keeps the full width', async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await answerReads(page);
+	await page.goto('/workbench');
+	await expect(page.getByRole('link', { name: TABLES[0] })).toBeVisible();
+	const rail = await page.locator('aside').filter({ hasText: 'Views' }).boundingBox();
+	const dock = await page.locator('.horizon-layout').first().boundingBox();
+	if (!rail || !dock) throw new Error('the rail and the dock are both on the page');
+	// The panels share the screen's width, not what a fixed-width rail leaves of it.
+	expect(dock.width).toBeGreaterThan(360);
+	expect(dock.y).toBeGreaterThanOrEqual(rail.y + rail.height - 1);
+});
+
+test('a list inside a panel takes the panel’s width, not its page’s column and padding', async ({
+	page,
+}) => {
+	await page.setViewportSize({ width: 1024, height: 800 });
+	await open(page);
+	const panel = page
+		.getByRole('tabpanel')
+		.filter({ has: page.getByRole('heading', { name: 'Tables' }) });
+	const frame = await panel.boundingBox();
+	const heading = await panel.getByRole('heading', { name: 'Tables' }).boundingBox();
+	const card = await panel.locator('[data-slot="data-table-card"]').boundingBox();
+	if (!frame || !heading || !card) throw new Error('the panel, its heading and its table render');
+	// A slim inset, where the page keeps 20 px and a 56 px top.
+	expect(heading.x - frame.x).toBeLessThanOrEqual(16);
+	expect(heading.y - frame.y).toBeLessThanOrEqual(32);
+	// The table's box fits the panel; a table wider than it scrolls inside that box.
+	expect(card.x + card.width).toBeLessThanOrEqual(frame.x + frame.width + 1);
+	// Its heading sits under the workbench's own h1.
+	await expect(panel.getByRole('heading', { name: 'Tables', level: 2 })).toBeVisible();
+});

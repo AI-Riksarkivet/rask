@@ -60,6 +60,7 @@
 						value={o.value}
 						label={o.label}
 						disabled={o.disabled}
+						aria-disabled={o.disabled ? 'true' : undefined}
 						class="data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground flex cursor-default items-center justify-between gap-2 rounded-sm px-2 py-1 text-sm select-none data-[disabled]:opacity-40"
 					>
 						{#snippet children({ selected }: { selected: boolean })}

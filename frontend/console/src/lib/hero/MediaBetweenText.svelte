@@ -10,7 +10,7 @@
 	// `power4.out`: the reference asked for a spring with `bounce: 0`, i.e. settle with NO overshoot.
 	//
 	// The root is a <span> and every part of the lockup is phrasing content, so the whole thing can
-	// sit inside an <h1> without producing invalid markup.
+	// sit inside a heading or a paragraph without producing invalid markup.
 
 	interface Props {
 		firstText: string;

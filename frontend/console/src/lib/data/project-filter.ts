@@ -35,17 +35,68 @@ export function queryWithProject(url: WithQuery, project: string): string {
 }
 
 /** One choice of the filter's select. */
-export type ProjectOption = { value: string; label: string };
+export type ProjectOption = { value: string; label: string; disabled?: boolean };
 
 /**
  * The filter's choices: every project, then the projects the caller can see (the catalog's
  * `GET /management/v1/projects`: every project to an estate observer, the caller's own to anyone
- * else), then the one the filter names when it is not among them, so a shared link still says what
- * it filters by.
+ * else) with the projects of the rows the list was answered (a grant on a table needs no
+ * membership of its project). The id the filter names when it is neither stays on screen, so a
+ * shared link still says what it filters by, as a choice that cannot be picked: it is no project the
+ * caller can see.
  */
-export function projectOptions(visible: readonly string[], current: string): ProjectOption[] {
-	const names = [...new Set([...visible, ...(current ? [current] : [])])].sort();
-	return [{ value: '', label: 'all projects' }, ...names.map((p) => ({ value: p, label: p }))];
+export function projectOptions(
+	visible: readonly string[],
+	ofRows: readonly string[],
+	current: string,
+): ProjectOption[] {
+	const names = [...new Set([...visible, ...ofRows])].sort();
+	const options: ProjectOption[] = [
+		{ value: '', label: 'all projects' },
+		...names.map((p) => ({ value: p, label: p })),
+	];
+	if (current && !names.includes(current))
+		options.push({ value: current, label: `${current} (none you can see)`, disabled: true });
+	return options;
+}
+
+/** Where the projects the caller can see stand. */
+export type VisibleProjectsState =
+	| { kind: 'loading' }
+	| { kind: 'ready'; ids: ReadonlySet<string> }
+	| { kind: 'failed'; reason: string };
+
+/** What a filtered list shows: every row, the rows of the filter's project (none is an empty
+ *  project), its loading state, why the filter cannot be applied, or that the filter names no
+ *  project the caller can see. */
+export type FilterVerdict =
+	| { kind: 'all' }
+	| { kind: 'apply' }
+	| { kind: 'waiting' }
+	| { kind: 'failed'; reason: string }
+	| { kind: 'unseen' };
+
+/**
+ * What a list does with its filter. A project some answered row belongs to is applied whatever the
+ * projects read says: the catalog gave the caller those rows, and a reader granted a table in a
+ * project they are no member of must still see it there. Only a filter that matches no answered row
+ * AND names no project the caller can see is unseen. `index` is the list's project index, or null for
+ * a list whose rows name their project themselves.
+ */
+export function filterVerdict(req: {
+	filter: string;
+	index: ProjectIndexState | null;
+	visible: VisibleProjectsState;
+	rowProjects: ReadonlySet<string>;
+}): FilterVerdict {
+	const { filter, index, visible, rowProjects } = req;
+	if (filter === '') return { kind: 'all' };
+	if (index?.kind === 'loading') return { kind: 'waiting' };
+	if (index?.kind === 'failed') return { kind: 'failed', reason: index.reason };
+	if (rowProjects.has(filter)) return { kind: 'apply' };
+	if (visible.kind === 'loading') return { kind: 'waiting' };
+	if (visible.kind === 'failed') return { kind: 'failed', reason: visible.reason };
+	return visible.ids.has(filter) ? { kind: 'apply' } : { kind: 'unseen' };
 }
 
 /** What a list needs to tell a row's project: each warehouse's project, and each bound namespace's

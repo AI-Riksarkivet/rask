@@ -5,32 +5,37 @@
 	 * keeps it in its URL, `project-filter-url.ts`). A view over rows the caller was already given,
 	 * never a boundary (`project-filter.ts`).
 	 */
-	import { onMount } from 'svelte';
 	import { Select } from '@rask/ui/select';
-	import { fetchVisibleProjects } from '#lib/remote/warehouses.api.ts';
 	import { projectOptions } from './project-filter.ts';
 
-	let { value, onchange }: { value: string; onchange: (project: string) => void } = $props();
-
-	/** The ids the catalog answered; none while the read is out or when it failed, when the select
-	 *  still offers every project and the one the filter names. */
-	let visible = $state.raw<string[]>([]);
-
-	onMount(() => {
-		void fetchVisibleProjects().then((res) => {
-			if (res.ok) visible = res.data.map((p) => p.project);
-		});
-	});
+	let {
+		value,
+		visible,
+		ofRows,
+		onchange,
+	}: {
+		value: string;
+		/** The projects the caller can see; none while that read is out or after it failed. */
+		visible: readonly string[];
+		/** The projects of the rows the list was answered, which the caller may see without being a
+		 *  member of them. */
+		ofRows: readonly string[];
+		onchange: (project: string) => void;
+	} = $props();
 
 	function choose(project: string): void {
 		if (project !== value) onchange(project);
 	}
 </script>
 
-<Select
-	{value}
-	ariaLabel="Project filter"
-	placeholder="all projects"
-	options={projectOptions(visible, value)}
-	onValueChange={choose}
-/>
+<!-- Named on screen as well as to a screen reader; the visible word is part of the accessible name. -->
+<label class="text-muted-foreground inline-flex items-center gap-2 text-sm">
+	Project
+	<Select
+		{value}
+		ariaLabel="Project filter"
+		placeholder="all projects"
+		options={projectOptions(visible, ofRows, value)}
+		onValueChange={choose}
+	/>
+</label>

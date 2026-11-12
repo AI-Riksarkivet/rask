@@ -31,7 +31,7 @@
 	import { fetchEstateBindings } from './remote/warehouses.api';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
-	import { projectOfNamespace } from './project-filter.ts';
+	import { filterVerdict, projectOfNamespace } from './project-filter.ts';
 	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOf, type StageInfo } from './stage';
@@ -66,10 +66,6 @@
 	// Each row's project, from the warehouses and the bindings; the filter narrows the rows this
 	// caller was given, a view and never a boundary.
 	const projects = new ProjectIndexRead();
-	const filterWaits = $derived(projectFilter !== '' && projects.state.kind === 'loading');
-	const filterFailure = $derived(
-		projectFilter !== '' && projects.state.kind === 'failed' ? projects.state.reason : null,
-	);
 
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
@@ -114,7 +110,7 @@
 		project: string | null;
 	};
 
-	const rows = $derived.by((): Row[] => {
+	const allRows = $derived.by((): Row[] => {
 		const m = new Map<string, number>();
 		// Seed with every BOUND namespace at zero, so one holding no tables still gets a row. `null`
 		// (the read failed) seeds nothing and the banner below says so — never silently "none".
@@ -134,10 +130,20 @@
 					warehouse: bindings?.[ns] ?? null,
 					project: projects.index ? projectOfNamespace(projects.index, ns) : null,
 				}))
-				.filter((r) => !projectFilter || r.project === projectFilter)
 				.sort((a, b) => a.ns.localeCompare(b.ns))
 		);
 	});
+	// What the filter does, from the rows the catalog answered and the projects the caller can see.
+	const rowProjects = $derived(new Set(allRows.flatMap((r) => (r.project ? [r.project] : []))));
+	const verdict = $derived(
+		filterVerdict({
+			filter: projectFilter,
+			index: projects.state,
+			visible: projects.visible.state,
+			rowProjects,
+		}),
+	);
+	const rows = $derived(allRows.filter((r) => !projectFilter || r.project === projectFilter));
 
 	// Tables inside the namespace queued for drop — sizes the Cascade choice honestly.
 	const targetCount = $derived(
@@ -225,8 +231,8 @@
 					sorted: column.getIsSorted(),
 					onclick: column.getToggleSortingHandler(),
 				}),
-			cell: ({ row }) => row.original.project ?? '—',
-			meta: { headerClass: 'w-32', cellClass: 'font-mono' },
+			cell: ({ row }) => renderSnippet(projectCell, row.original),
+			meta: { headerClass: 'w-32' },
 		},
 		{
 			id: 'stage',
@@ -307,6 +313,10 @@
 		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.ns) })}>{row.ns}</a
 	>
 {/snippet}
+{#snippet projectCell(row: Row)}
+	<!-- The stage column's dash, in the stage column's face: a monospace em dash reads as an en dash. -->
+	{#if row.project}<span class="mono">{row.project}</span>{:else}<span class="mut">—</span>{/if}
+{/snippet}
 {#snippet stageCell(row: Row)}
 	{#if row.stage}<StageBadge info={row.stage} />{:else}<span class="mut">—</span>{/if}
 {/snippet}
@@ -338,7 +348,9 @@
 	<header>
 		<h1>Namespaces</h1>
 		<span class="sub mono"
-			>grouped from the catalog registry, estate-wide — every namespace your grants allow ·
+			>{projectFilter
+				? `grouped from the catalog registry, in project ${projectFilter} — the namespaces your grants allow there`
+				: 'grouped from the catalog registry, estate-wide — every namespace your grants allow'} ·
 			&lt;namespace&gt;$&lt;table&gt;</span
 		>
 		<!-- A top-level namespace is created by binding it to a warehouse, so the link opens that form,
@@ -386,18 +398,23 @@
 	{:else}
 		<div class="toolbar">
 			<DataTableTextFilter bind:value={globalFilter} placeholder="Search namespaces…" />
-			<ProjectFilter value={projectFilter} onchange={onprojectchange} />
+			<ProjectFilter
+				value={projectFilter}
+				visible={projects.visible.ids}
+				ofRows={[...rowProjects]}
+				onchange={onprojectchange}
+			/>
 		</div>
-		{#if filterFailure !== null}
+		{#if verdict.kind === 'failed' || verdict.kind === 'unseen'}
 			<ProjectFilterNotice
 				project={projectFilter}
-				reason={filterFailure}
+				reason={verdict.kind === 'failed' ? verdict.reason : null}
 				onclear={() => onprojectchange('')}
 			/>
 		{:else}
 			<DataTable
 				{table}
-				loading={tables === null || filterWaits}
+				loading={tables === null || verdict.kind === 'waiting'}
 				emptyMessage={projectFilter
 					? `No namespaces in project ${projectFilter}.`
 					: 'No namespaces visible to you. The list holds only the namespaces your grants reach: ask a project admin for access, or bind one to a warehouse.'}

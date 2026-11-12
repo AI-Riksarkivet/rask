@@ -86,9 +86,7 @@
 			Access &amp; authorization
 		</h2>
 		<p class="text-muted-foreground text-xs">
-			Platform-scoped — each one reads across every project and none of them takes a project. All
-			three are served by this app, so opening one keeps the main menu: they are ordinary in-app
-			navigations, not hops into another app's chrome.
+			Each reads across every project; none is scoped to one.
 		</p>
 		<a href={resolve('/settings/access')} class={PLATFORM_ROW}>
 			{@render platformRow(

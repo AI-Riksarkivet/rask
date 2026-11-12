@@ -31,6 +31,9 @@
 	const drifted = $derived(overview === null && settled && lastStatus === -1);
 	// 0 stays IN the offline set: after the first settle, a fetch-level failure (network down, request timeout)
 	// reports status 0 and must render as offline, not hang on the loading message (audit finding).
+	// A fresh read can change only a failure the next read may not repeat (offline, drift) or a loaded view; a
+	// sign-in, a refusal and the unserved monitor answer the same again, so no Refresh is offered for them.
+	const refreshable = $derived(!(unauthorized || forbidden || unavailable));
 	const offline = $derived(
 		overview === null && settled && ![-1, 200, 401, 403, 501].includes(lastStatus),
 	);
@@ -114,11 +117,13 @@
 	<header>
 		<Layers size={16} />
 		<h1>Streams</h1>
-		<span class="sub mono">JetStream streams · consumer lag · read-only from the NATS monitor</span>
+		<span class="sub mono">JetStream streams and their consumers' lag</span>
 	</header>
 
 	<div class="bar">
-		<button class="btn" onclick={load}><RefreshCw size={13} /> Refresh</button>
+		{#if refreshable}
+			<button class="btn" onclick={load}><RefreshCw size={13} /> Refresh</button>
+		{/if}
 		{#if overview}
 			<span class="totals mono">
 				{overview.totals.streams} streams · {overview.totals.consumers} consumers ·

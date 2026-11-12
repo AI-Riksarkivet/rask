@@ -357,15 +357,28 @@ test('a dropped namespace shows that it was dropped, with its deadline, and read
 	expect(sent.filter((p) => /namespace\/gone\/(policy|access|managed-access)/.test(p))).toEqual([]);
 });
 
-test('a namespace the catalog refuses, with no trash record, is not shown and its governance is not read', async ({
+test('a namespace, table or warehouse the catalog refuses is one the reader cannot see, and its page describes none', async ({
 	page,
 }) => {
 	// A top-level namespace dropped with no grace period leaves no trash record, and its describe is
-	// refused (403) for a caller who can see no ancestor of it.
+	// refused (403) for a caller who can see no ancestor of it. A 403 is the catalog keeping existence
+	// to itself, so no page says "you lack access" as though the object were there.
 	await seed(page, {
 		'POST /v1/namespace/gone/describe': {
 			status: 403,
 			body: { detail: 'can_get_metadata required on namespace:gone' },
+		},
+		'POST /v1/table/gone%24t/describe': {
+			status: 403,
+			body: { detail: 'can_get_metadata required on table:gone$t' },
+		},
+		'GET /management/v1/warehouses/gone-wh': {
+			status: 403,
+			body: { detail: 'can_get_metadata required on warehouse:gone-wh' },
+		},
+		'GET /management/v1/warehouses/never-wh': {
+			status: 404,
+			body: { detail: 'warehouse not found: never-wh' },
 		},
 	});
 	const sent: string[] = [];
@@ -375,5 +388,21 @@ test('a namespace the catalog refuses, with no trash record, is not shown and it
 		'No namespace gone that you can see',
 	);
 	await expect(page.getByText(/Denied/)).toHaveCount(0);
+	// Its header counts no tables: a count would describe the namespace it just said it cannot show.
+	await expect(page.getByText(/^\d+ tables?$/)).toHaveCount(0);
 	expect(sent.filter((p) => /namespace\/gone\/(policy|access|managed-access)/.test(p))).toEqual([]);
+
+	await page.goto(`/catalog/tables/${encodeURIComponent('gone$t')}`);
+	await expect(page.getByTestId('table-not-visible')).toHaveText(
+		'No table gone$t that you can see: it does not exist, or you hold no grant on it.',
+	);
+	await page.goto('/catalog/warehouses/gone-wh');
+	await expect(page.getByTestId('warehouse-not-visible')).toHaveText(
+		'No warehouse gone-wh that you can see: it does not exist, or you hold no grant on it.',
+	);
+	// A 404 reads as the 403 does, so the page never tells a missing warehouse from a hidden one.
+	await page.goto('/catalog/warehouses/never-wh');
+	await expect(page.getByTestId('warehouse-not-visible')).toHaveText(
+		'No warehouse never-wh that you can see: it does not exist, or you hold no grant on it.',
+	);
 });

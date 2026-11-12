@@ -54,8 +54,11 @@
 	let deleting = $state(false);
 
 	const unauthorized = $derived(detail === null && settled && lastStatus === 401);
-	const missing = $derived(detail === null && settled && lastStatus === 404);
-	const offline = $derived(detail === null && settled && ![200, 401, 404].includes(lastStatus));
+	// A 403 and a 404 read the same: the catalog keeps a project's existence to itself.
+	const missing = $derived(detail === null && settled && [403, 404].includes(lastStatus));
+	const offline = $derived(
+		detail === null && settled && ![200, 401, 403, 404].includes(lastStatus),
+	);
 
 	// #65 the tenant's maintenance plane. ONE read answers all three tiers: the project's own record
 	// plus every table/namespace record inside it — a per-object `policy/describe` could not have been
@@ -110,7 +113,10 @@
 			eventsDenied = true;
 			return;
 		}
-		const evRes = await projectEvents(current);
+		const evRes = await projectEvents({
+			project: current,
+			warehouses: res.data.warehouses.map((w) => w.id),
+		});
 		if (project !== current) return;
 		events = evRes.ok ? evRes.data : null;
 		eventsDenied = !evRes.ok && (evRes.status === 401 || evRes.status === 403);
@@ -226,8 +232,6 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={resolve('/projects')}>Projects</a>
-		<span class="sep">/</span>
 		<FolderKanban size={15} />
 		<h1 class="mono">{project}</h1>
 	</header>
@@ -246,10 +250,10 @@
 		     created through POST /management/v1/projects may have no warehouse yet. The catalog answers
 		     a reader who is neither an estate observer nor a member of the project exactly as it answers
 		     a project that does not exist (404), so this says both, and tells the two apart for no one. -->
-		<div class="empty">
+		<div class="empty" data-testid="project-not-visible">
 			<p>
-				No project <code class="mono">{project}</code> that you can see: it does not exist, or you are
-				not a member of it.
+				No project <code class="mono">{project}</code> that you can see: it does not exist, or you hold
+				no grant on it.
 			</p>
 		</div>
 	{:else if offline}
@@ -572,17 +576,6 @@
 		font-size: 20px;
 		margin: 0;
 		color: var(--ink);
-	}
-	.back {
-		color: var(--mut);
-		font-size: 13px;
-		text-decoration: none;
-	}
-	.back:hover {
-		color: var(--ink);
-	}
-	.sep {
-		color: var(--faint);
 	}
 	.catalog-links {
 		display: flex;

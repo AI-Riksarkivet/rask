@@ -29,10 +29,12 @@
 		setWarehouseActive,
 	} from './remote/warehouses.api';
 	import ProjectFilter from './ProjectFilter.svelte';
+	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
+	import { VisibleProjects } from './project-index.svelte.ts';
+	import { filterVerdict } from './project-filter.ts';
 	import RowDrawer from './RowDrawer.svelte';
 	import WarehouseDeleteDialog from './WarehouseDeleteDialog.svelte';
-	import { controlCursor } from '#lib/live/feeds.api.ts';
-	import { liveRead } from '#lib/live/tick.svelte.ts';
+	import { controlTick, liveRead } from '#lib/live/tick.svelte.ts';
 	import { missingFieldsHint } from '#lib/form-hint.ts';
 
 	let warehouses = $state<WarehouseRecord[] | null>(null);
@@ -76,7 +78,7 @@
 	}
 
 	async function load(): Promise<void> {
-		const res = await fetchWarehouses();
+		const [res] = await Promise.all([fetchWarehouses(), visible.load()]);
 		settled = true;
 		if (res.ok) {
 			warehouses = res.data;
@@ -95,7 +97,7 @@
 	// open to any signed-in user, so a non-admin simply never ticks: they get the initial read plus the
 	// re-read every mutation below already performs. That is the honest degradation — a non-admin cannot
 	// change any of this, and the writes are project-admin gated anyway.
-	liveRead(controlCursor, () => load());
+	liveRead(controlTick, () => load());
 
 	function fail(status: number, detail: string): void {
 		if (status === 401)
@@ -163,7 +165,7 @@
 	// The destroy door. It gets its own dialog rather than a banner-confirm because its three opt-ins
 	// (cascade / purge_bucket / force) each need to be argued for separately — see
 	// `WarehouseDeleteDialog`. The list re-reads on `ondeleted` for immediacy; the catalog also emits a
-	// `warehouse_deleted` control event, so the `liveRead(controlCursor, …)` above re-reads every OTHER
+	// `warehouse_deleted` control event, so the `liveRead(controlTick, …)` above re-reads every OTHER
 	// open warehouse list on the estate too.
 	let deleteOpen = $state(false);
 	let deleteRow = $state<WarehouseRecord | null>(null);
@@ -213,6 +215,13 @@
 		project: projectFilter,
 		onprojectchange,
 	}: { project: string; onprojectchange: (project: string) => void } = $props();
+	// The projects the caller can see, so a filter naming none of them, and no warehouse's, says so
+	// rather than reading as a project with no warehouse.
+	const visible = new VisibleProjects();
+	const rowProjects = $derived(new Set((warehouses ?? []).map((w) => w.project)));
+	const verdict = $derived(
+		filterVerdict({ filter: projectFilter, index: null, visible: visible.state, rowProjects }),
+	);
 	const shown = $derived(
 		projectFilter
 			? (warehouses ?? []).filter((w) => w.project === projectFilter)
@@ -296,7 +305,9 @@
 		<WarehouseIcon size={16} />
 		<h1>Warehouses</h1>
 		<span class="sub mono"
-			>every warehouse your grants allow, across projects · bucket-per-warehouse tenancy ·
+			>{projectFilter
+				? `in project ${projectFilter} — the warehouses your grants allow there`
+				: 'every warehouse your grants allow, across projects'} · bucket-per-warehouse tenancy ·
 			project-admin gated</span
 		>
 	</header>
@@ -324,16 +335,29 @@
 	{:else}
 		<div class="toolbar">
 			<DataTableTextFilter bind:value={globalFilter} placeholder="Search warehouses…" />
-			<ProjectFilter value={projectFilter} onchange={onprojectchange} />
+			<ProjectFilter
+				value={projectFilter}
+				visible={visible.ids}
+				ofRows={[...rowProjects]}
+				onchange={onprojectchange}
+			/>
 		</div>
-		<DataTable
-			table={whTable}
-			loading={warehouses === null}
-			emptyMessage={projectFilter
-				? `No warehouses in project ${projectFilter}.`
-				: 'No warehouses visible to you. The list holds only the warehouses your grants reach: ask a project admin for access, or provision one below.'}
-			onrowclick={openDrawer}
-		/>
+		{#if verdict.kind === 'failed' || verdict.kind === 'unseen'}
+			<ProjectFilterNotice
+				project={projectFilter}
+				reason={verdict.kind === 'failed' ? verdict.reason : null}
+				onclear={() => onprojectchange('')}
+			/>
+		{:else}
+			<DataTable
+				table={whTable}
+				loading={warehouses === null || verdict.kind === 'waiting'}
+				emptyMessage={projectFilter
+					? `No warehouses in project ${projectFilter}.`
+					: 'No warehouses visible to you. The list holds only the warehouses your grants reach: ask a project admin for access, or provision one below.'}
+				onrowclick={openDrawer}
+			/>
+		{/if}
 
 		<section>
 			<h2>Provision</h2>
@@ -344,19 +368,19 @@
 					provision();
 				}}
 			>
-				<input
-					class="mono"
-					bind:value={draft.id}
-					placeholder="warehouse id"
-					aria-label="Warehouse id"
-				/>
-				<input class="mono" bind:value={draft.project} placeholder="project" aria-label="Project" />
-				<input
-					class="mono"
-					bind:value={draft.bucket}
-					placeholder="bucket (defaults to id)"
-					aria-label="Bucket"
-				/>
+				<!-- Each field named on screen, not by a placeholder that goes when the reader types. -->
+				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
+					Warehouse id
+					<input class="mono" bind:value={draft.id} placeholder="acme-wh" />
+				</label>
+				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
+					Project
+					<input class="mono" bind:value={draft.project} placeholder="acme" />
+				</label>
+				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
+					Bucket
+					<input class="mono" bind:value={draft.bucket} placeholder="defaults to the id" />
+				</label>
 				<button
 					class="btn"
 					type="submit"
@@ -378,19 +402,24 @@
 					bind();
 				}}
 			>
-				<Select
-					bind:value={bindDraft.warehouse}
-					ariaLabel="Warehouse"
-					placeholder="warehouse…"
-					options={(warehouses ?? []).map((w) => ({ value: w.id, label: w.id }))}
-				/>
-				<input
-					class="mono"
-					bind:value={bindDraft.namespace}
-					placeholder="top-level namespace"
-					aria-label="Namespace"
-					{@attach focusWhenLinked}
-				/>
+				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
+					Warehouse
+					<Select
+						bind:value={bindDraft.warehouse}
+						ariaLabel="Warehouse"
+						placeholder="warehouse…"
+						options={(warehouses ?? []).map((w) => ({ value: w.id, label: w.id }))}
+					/>
+				</label>
+				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
+					Namespace
+					<input
+						class="mono"
+						bind:value={bindDraft.namespace}
+						placeholder="top-level namespace"
+						{@attach focusWhenLinked}
+					/>
+				</label>
 				<button
 					class="btn"
 					type="submit"
@@ -524,6 +553,7 @@
 	.row {
 		display: flex;
 		flex-wrap: wrap;
+		align-items: flex-end;
 		gap: 8px;
 	}
 	input {

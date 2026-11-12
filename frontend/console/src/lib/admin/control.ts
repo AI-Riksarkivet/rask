@@ -26,11 +26,30 @@ export const ControlEventSchema = v.object({
 } satisfies Record<keyof EventWire, unknown>);
 export type ControlEvent = v.InferOutput<typeof ControlEventSchema>;
 
-export const EventsPageSchema = v.object({
-	events: v.array(ControlEventSchema),
+/** The page ENVELOPE, parsed strictly; its events are parsed one by one (`readEvent`), so one event
+ *  that drifted from the contract is shown as unreadable and does not stop the cursor. */
+export const EventsEnvelopeSchema = v.object({
+	events: v.array(v.unknown()),
 	cursor: v.number(),
 	reset: v.boolean(),
 } satisfies Record<keyof PageWire, unknown>);
+
+/** One entry of the feed's window: an event, or one the console could not read and says so. */
+export type FeedEntry =
+	| { kind: 'event'; key: string; event: ControlEvent }
+	| { kind: 'unreadable'; key: string; reason: string };
+
+/** One wire event as a window entry; `fallbackKey` names an entry whose own id is unreadable. */
+export function readEvent(raw: unknown, fallbackKey: string): FeedEntry {
+	const parsed = v.safeParse(ControlEventSchema, raw);
+	if (parsed.success) return { kind: 'event', key: parsed.output.event_id, event: parsed.output };
+	const reason = parsed.issues.map((issue) => v.getDotPath(issue) ?? issue.message).join(', ');
+	return {
+		kind: 'unreadable',
+		key: fallbackKey,
+		reason: `does not match the contract (${reason})`,
+	};
+}
 
 /** What a grant event's `extra` names: the relation and the subject it was granted to or revoked
  *  from, and the condition a time-boxed grant carries. The catalog's grant doors write these keys;

@@ -67,21 +67,25 @@
 		{#if authEnabled}
 			<DropdownMenu.Separator />
 			{#if signedIn}
-				<!-- The shadcn Item wrapper omits bits-ui's `child`, so the anchor is the item's content and
-				     fills the row. -->
+				<!-- The anchor IS the menu item. An anchor nested inside an item would be the menu's first
+				     tabbable element, so the menu would open with focus on it and two Enters would sign out. -->
 				<DropdownMenu.Item>
-					<a href="/auth/logout" class="flex w-full items-center gap-2">
-						<LogOut class="size-4" />
-						Sign out
-					</a>
+					{#snippet child({ props })}
+						<a {...props} href="/auth/logout">
+							<LogOut class="size-4" />
+							Sign out
+						</a>
+					{/snippet}
 				</DropdownMenu.Item>
 			{:else}
 				<!-- Returns here after the round-trip. -->
 				<DropdownMenu.Item>
-					<a href={loginHref} class="flex w-full items-center gap-2">
-						<LogIn class="size-4" />
-						Sign in
-					</a>
+					{#snippet child({ props })}
+						<a {...props} href={loginHref}>
+							<LogIn class="size-4" />
+							Sign in
+						</a>
+					{/snippet}
 				</DropdownMenu.Item>
 			{/if}
 		{/if}

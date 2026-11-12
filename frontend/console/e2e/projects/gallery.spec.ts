@@ -157,3 +157,32 @@ test('/projects mounts the same gallery as / — one implementation, two surface
 	// The estate listing supplies no role for a project the admin is not a member of, so no badge.
 	await expect(page.locator('a[href="/projects/acme"]')).not.toContainText('admin');
 });
+
+test('a slow estate listing does not hold the navigation: the page shows, its cards load', async ({
+	page,
+}) => {
+	await seed(page, {
+		'GET /management/v1/me': ME_ADMIN,
+		'GET /management/v1/projects': [{ project: 'acme', warehouses: [{ id: 'acme-wh' }] }],
+	});
+	await page.goto('/');
+	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+	// The listing answers only when the spec lets it, a catalog as slow as the reader likes.
+	let answer: () => void = () => {};
+	const answered = new Promise<void>((resolve) => (answer = resolve));
+	await page.route('**/api/catalog/management/v1/projects', async (route) => {
+		await answered;
+		await route.continue();
+	});
+	await page
+		.getByRole('navigation', { name: 'Pages' })
+		.getByRole('link', { name: 'Projects', exact: true })
+		.click();
+	// On the page at once, its cards loading, while the listing is still out.
+	await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
+	await expect(page).toHaveURL(/\/projects$/);
+	await expect(page.getByTestId('gallery-loading')).toBeVisible();
+	answer();
+	await expect(page.locator('a[href="/projects/acme"]')).toContainText('1 warehouse');
+	await expect(page.getByTestId('gallery-loading')).toHaveCount(0);
+});

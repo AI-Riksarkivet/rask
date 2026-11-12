@@ -208,8 +208,10 @@
 <div class="page">
 	<header>
 		<Inbox size={16} />
-		<h1>Lineage DLQ</h1>
-		<span class="sub mono">lineage events waiting in the outbox: view and replay</span>
+		<h1>DLQ</h1>
+		<span class="sub mono"
+			>the lineage dead letters: events waiting in the outbox, to view and replay</span
+		>
 	</header>
 
 	<div class="bar">

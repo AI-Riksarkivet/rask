@@ -18,12 +18,12 @@
 	import Explorer from '#lib/access/Explorer.svelte';
 </script>
 
-<svelte:head><title>Access · rask</title></svelte:head>
+<svelte:head><title>Users &amp; roles · rask</title></svelte:head>
 
 <div class="mx-auto flex max-w-[1600px] flex-col gap-3 px-5 pb-6 pt-8">
 	<header class="flex items-baseline gap-2.5">
 		<ShieldCheck size={16} />
-		<h1 class="text-xl font-semibold">Access</h1>
+		<h1 class="text-xl font-semibold">Users &amp; roles</h1>
 		<span class="text-xs text-muted-foreground">
 			the live authorization graph — ask what a subject can reach, who holds a relation, or why one
 			resolves

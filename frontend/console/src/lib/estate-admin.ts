@@ -8,15 +8,25 @@ import type { Me } from '#lib/api/index.ts';
  * answers estate-admin for its anonymous caller, so both areas open there, and a catalog that cannot
  * answer keeps both shut. Every refusal is 403, never 404: the navbar names both areas, so a 404 would
  * claim a page does not exist when it does, and it would hide the next step from someone who may be
- * granted it. The two refusals say different things — "could not be confirmed" sends a person to their
- * session or the catalog, a named relation sends them to whoever grants it.
+ * granted it. Both refusals share one heading, "You don’t have access to <area>", and say different
+ * things below it: "could not be confirmed" sends a person to their session or the catalog, the named
+ * relation sends them to whoever grants it.
  *
  * This guard only decides what the console OFFERS, and a person can bypass it. What authorizes is the
  * catalog's and lineage's own check on every request behind these pages.
  */
-export function requireEstateAdmin(me: Me | null, area: string, refusal: string): Me {
-	if (!me) error(403, `Your identity could not be confirmed, so ${area} cannot be opened.`);
-	if (!isEstateAdmin(me)) error(403, refusal);
+export function requireEstateAdmin(me: Me | null, area: string): Me {
+	const title = `You don’t have access to ${area}`;
+	if (!me)
+		error(403, {
+			title,
+			message: `Your identity could not be confirmed, so ${area} cannot be opened.`,
+		});
+	if (!isEstateAdmin(me))
+		error(403, {
+			title,
+			message: `Only estate admins can open ${area}: it needs can_observe_events on the estate root.`,
+		});
 	return me;
 }
 

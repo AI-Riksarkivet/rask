@@ -78,5 +78,76 @@ test('live-updates when a governance mutation happens elsewhere', async ({ page 
 test('a non-admin (403) sees a terminal error, not a hammering reconnect', async ({ page }) => {
 	await control('mode', { mode: 'forbidden' });
 	await page.goto('/admin/events');
-	await expect(page.getByText(/Feed unavailable/)).toBeVisible({ timeout: 15_000 });
+	// The catalog's own reason, with its status, never a sentence of the console's in its place.
+	await expect(page.getByText(/Feed unavailable/)).toHaveText(
+		'Feed unavailable: HTTP 403: not authorized',
+		{ timeout: 15_000 },
+	);
+});
+
+test('the events page and the pages before it share ONE poll of the control feed', async ({
+	page,
+}) => {
+	// The warehouses list re-reads on the control cursor, so visiting it opens the feed; the events
+	// page then renders the same feed rather than polling it a second time.
+	await page.goto('/catalog/warehouses');
+	await expect(page.getByRole('heading', { name: 'Warehouses', level: 1 })).toBeVisible();
+	await page
+		.getByRole('navigation', { name: 'Pages' })
+		.getByRole('link', { name: 'Events', exact: true })
+		.click();
+	await expect(page.getByText('No changes since this catalog started.')).toBeVisible({
+		timeout: 15_000,
+	});
+	const polls: number[] = [];
+	page.on('request', (req) => {
+		if (req.url().includes('/management/v1/events?since=')) polls.push(Date.now());
+	});
+	// Two poll intervals (5 s each) and a little: one poller asks two or three times in it.
+	await page.waitForTimeout(10_500);
+	expect(
+		polls.length,
+		`polls at ${polls.map((t) => t - (polls[0] ?? 0)).join(', ')} ms`,
+	).toBeLessThanOrEqual(3);
+});
+
+test('an event that drifted from the contract is shown as unreadable, and the feed keeps ticking', async ({
+	page,
+}) => {
+	// The catalog's answers for this test alone: first a page whose one event has no fields, then,
+	// from that cursor on, a well-formed one.
+	await page.route('**/api/catalog/management/v1/events?since=*', (route) => {
+		const since = new URL(route.request().url()).searchParams.get('since');
+		const body =
+			since === '0'
+				? { cursor: 1, reset: false, events: [{}] }
+				: {
+						cursor: 2,
+						reset: false,
+						events: [
+							{
+								event_id: 'e-2',
+								occurred_at: '2026-07-23T10:30:00Z',
+								action: 'grant_added',
+								object_type: 'grant',
+								object_id: 'table:db1$t',
+								actor: 'user:bob',
+								extra: {},
+							},
+						],
+					};
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify(body),
+		});
+	});
+	await page.goto('/admin/events');
+	await expect(page.getByTestId('control-event-unreadable')).toContainText(
+		'An event the console could not read',
+	);
+	await expect(page.getByTestId('control-feed-failure')).toHaveCount(0);
+	// The next poll reads on from the cursor the drifted page gave.
+	await expect(page.getByText('grant added')).toBeVisible({ timeout: 15_000 });
+	await expect(page.getByTestId('control-event-unreadable')).toHaveCount(1);
 });

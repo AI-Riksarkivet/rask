@@ -50,13 +50,14 @@
 
 <svelte:head><title>{table} · promotions · rask</title></svelte:head>
 
-<div class="flex flex-col gap-4 p-4">
+<!-- The catalog pages' column: centred, at the lists' width. -->
+<div class="mx-auto flex w-full max-w-[860px] flex-col gap-4 px-5 pt-14 pb-10">
 	<div>
-		<h1 class="text-lg font-semibold">Held promotion</h1>
+		<h1 class="font-mono text-xl font-semibold">{table}</h1>
 		<p class="text-muted-foreground text-sm">
-			The quality gate found this version unusual rather than broken, so it waits for a validator
-			instead of being published. Approving moves <code>published</code> to it; rejecting restores
-			the table to what <code>published</code> names and closes the hold for good.
+			A held promotion. The quality gate found this version unusual rather than broken, so it waits
+			for a validator instead of being published. Approving moves <code>published</code> to it;
+			rejecting restores the table to what <code>published</code> names and closes the hold for good.
 		</p>
 	</div>
 

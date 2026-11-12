@@ -9,7 +9,7 @@
 	import { formatAbsolute } from '@rask/ui/utils';
 	import ProjectFilter from '#lib/data/ProjectFilter.svelte';
 	import ProjectFilterNotice from '#lib/data/ProjectFilterNotice.svelte';
-	import { projectFilterOf, projectOfTable } from '#lib/data/project-filter.ts';
+	import { filterVerdict, projectFilterOf, projectOfTable } from '#lib/data/project-filter.ts';
 	import { showProject } from '#lib/data/project-filter-url.ts';
 	import { ProjectIndexRead } from '#lib/data/project-index.svelte.ts';
 
@@ -26,14 +26,23 @@
 	const projects = new ProjectIndexRead();
 	const projectFilter = $derived(projectFilterOf(page.url));
 	const chooseProject = (project: string) => void showProject('promotions', page.url, project);
-	const rows = $derived(
-		holds
-			.map((hold) => ({
-				hold,
-				project: projects.index ? projectOfTable(projects.index, hold.table) : null,
-			}))
-			.filter((r) => !projectFilter || r.project === projectFilter),
+	const allRows = $derived(
+		holds.map((hold) => ({
+			hold,
+			project: projects.index ? projectOfTable(projects.index, hold.table) : null,
+		})),
 	);
+	// What the filter does, from the holds the catalog answered and the projects the caller can see.
+	const rowProjects = $derived(new Set(allRows.flatMap((r) => (r.project ? [r.project] : []))));
+	const verdict = $derived(
+		filterVerdict({
+			filter: projectFilter,
+			index: projects.state,
+			visible: projects.visible.state,
+			rowProjects,
+		}),
+	);
+	const rows = $derived(allRows.filter((r) => !projectFilter || r.project === projectFilter));
 
 	async function load(pageToken?: string): Promise<void> {
 		const res = await listPromotions(pageToken ? { pageToken } : {});
@@ -56,9 +65,10 @@
 
 <svelte:head><title>Promotions · rask</title></svelte:head>
 
-<div class="flex flex-col gap-4 p-4">
+<!-- The catalog pages' column: centred, at the lists' width. -->
+<div class="mx-auto flex w-full max-w-[860px] flex-col gap-4 px-5 pt-14 pb-10">
 	<div>
-		<h1 class="text-lg font-semibold">Promotions</h1>
+		<h1 class="text-xl font-semibold">Promotions</h1>
 		<p class="text-muted-foreground text-sm">
 			A version a project's quality gate found unusual rather than broken waits here for a validator
 			instead of being published. Approving moves <code>published</code> to it; rejecting restores
@@ -67,7 +77,12 @@
 	</div>
 
 	<div class="flex items-center gap-2">
-		<ProjectFilter value={projectFilter} onchange={chooseProject} />
+		<ProjectFilter
+			value={projectFilter}
+			visible={projects.visible.ids}
+			ofRows={[...rowProjects]}
+			onchange={chooseProject}
+		/>
 	</div>
 
 	{#if !settled}
@@ -78,20 +93,20 @@
 		<Card class="p-4">
 			<p class="text-sm">Could not read the held promotions ({status || 'offline'}). {detail}</p>
 		</Card>
+	{:else if verdict.kind === 'failed' || verdict.kind === 'unseen'}
+		<ProjectFilterNotice
+			project={projectFilter}
+			reason={verdict.kind === 'failed' ? verdict.reason : null}
+			onclear={() => chooseProject('')}
+		/>
+	{:else if verdict.kind === 'waiting'}
+		<Card class="p-4"><p class="text-muted-foreground text-sm">Loading…</p></Card>
 	{:else if holds.length === 0}
 		<Card class="p-4">
 			<p class="text-muted-foreground text-sm">
 				No promotion visible to you is waiting for a decision.
 			</p>
 		</Card>
-	{:else if projectFilter && projects.state.kind === 'failed'}
-		<ProjectFilterNotice
-			project={projectFilter}
-			reason={projects.state.reason}
-			onclear={() => chooseProject('')}
-		/>
-	{:else if projectFilter && projects.state.kind === 'loading'}
-		<Card class="p-4"><p class="text-muted-foreground text-sm">Loading…</p></Card>
 	{:else}
 		{#if projectFilter}
 			<!-- The holds come a page at a time, and the filter narrows only the pages read so far. -->
@@ -132,7 +147,12 @@
 										})}>{hold.table}</a
 									>
 								</td>
-								<td class="p-2 font-mono">{project ?? '—'}</td>
+								<!-- The dash in the other columns' face: a monospace em dash reads as an en dash. -->
+								<td class="p-2">
+									{#if project}<span class="font-mono">{project}</span>{:else}<span
+											class="text-muted-foreground">—</span
+										>{/if}
+								</td>
 								<td class="p-2"><Badge variant="warning">v{hold.version}</Badge></td>
 								<td class="p-2"
 									>{hold.published_version === null ? '—' : `v${hold.published_version}`}</td

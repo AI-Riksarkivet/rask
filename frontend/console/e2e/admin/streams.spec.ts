@@ -17,4 +17,9 @@ test('the streams page names the missing NATS monitor instead of rendering an em
 		"The stream view needs the NATS monitor (/jsz), which no route serves to the console. Read the bus with NATS's own tools: the nats CLI, its Prometheus exporter, or Surveyor.",
 		{ useInnerText: true },
 	);
+	// A read that can never be served offers no Refresh, and the page claims no source it does not read.
+	await expect(page.getByRole('button', { name: 'Refresh' })).toHaveCount(0);
+	await expect(page.locator('header .sub')).toHaveText(
+		"JetStream streams and their consumers' lag",
+	);
 });

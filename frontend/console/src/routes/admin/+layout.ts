@@ -5,6 +5,6 @@ import type { LayoutLoad } from './$types';
 // `requireEstateAdmin`'s, shared with `/settings/**`.
 export const load: LayoutLoad = async ({ parent }) => {
 	const { me } = await parent();
-	requireEstateAdmin(me, 'the admin area', 'Admin is estate-admin only');
+	requireEstateAdmin(me, 'Operations');
 	return { estateAdmin: true };
 };

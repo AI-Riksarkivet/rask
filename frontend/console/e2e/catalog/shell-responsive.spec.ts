@@ -136,7 +136,7 @@ test('every area carries the same sidebar: the estate pages, the catalog, the ad
 	await expect(header.getByRole('navigation', { name: 'Breadcrumb' })).toBeVisible();
 });
 
-test('/catalog has no page of its own: it, and the Catalog crumb, land on the tables list', async ({
+test('/catalog has no page of its own: it lands on the tables list, and its crumb names it unlinked', async ({
 	page,
 }) => {
 	await page.setViewportSize({ width: 1440, height: 900 });
@@ -144,12 +144,17 @@ test('/catalog has no page of its own: it, and the Catalog crumb, land on the ta
 	await expect(page).toHaveURL(/\/catalog\/tables$/);
 	await expect(page.getByRole('link', { name: TABLES[2] })).toBeVisible();
 
+	// A group's crumb places the reader without sending them to a page they did not ask for; the
+	// page crumbs link, with the sidebar's names.
+	await page.goto('/catalog/warehouses');
+	const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
+	await expect(crumbs.getByText('Catalog', { exact: true })).toBeVisible();
+	await expect(crumbs.getByRole('link', { name: 'Catalog' })).toHaveCount(0);
 	await page.goto(`/catalog/tables/${encodeURIComponent(TABLES[2])}`);
-	await page
-		.getByRole('navigation', { name: 'Breadcrumb' })
-		.getByRole('link', { name: 'Catalog' })
-		.click();
-	await expect(page).toHaveURL(/\/catalog\/tables$/);
+	await expect(crumbs.getByRole('link', { name: 'Tables', exact: true })).toHaveAttribute(
+		'href',
+		'/catalog/tables',
+	);
 });
 
 test('the breadcrumb truncates MIDDLE segments and always shows the current page (#105)', async ({
@@ -169,7 +174,10 @@ test('the breadcrumb truncates MIDDLE segments and always shows the current page
 	// …and folding hides it from the ROW, not from the user: the skipped ancestor is still one click
 	// away, so the trail stays navigable.
 	await ellipsis.click();
-	await expect(page.getByRole('menuitem').getByRole('link', { name: 'tables' })).toBeVisible();
+	await expect(page.getByRole('menuitem', { name: 'Tables' })).toHaveAttribute(
+		'href',
+		'/catalog/tables',
+	);
 	await page.keyboard.press('Escape');
 	// The breadcrumb bar itself never overflows its row.
 	const fits = await crumbs.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
@@ -195,7 +203,7 @@ test('the breadcrumb is the path alone, and writes identifiers as they are', asy
 
 	await page.goto('/settings/access');
 	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
-	await expect(crumbs).toHaveText(['Settings', 'Access'], seen);
+	await expect(crumbs).toHaveText(['Settings', 'Users & roles'], seen);
 	await page.goto('/projects');
 	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
 	await expect(crumbs).toHaveText(['Projects'], seen);
@@ -214,6 +222,52 @@ test(`the sidebar is off-canvas below ${COLLAPSE_AT}px and on-canvas above it (#
 	await expect(page.locator('[data-slot="sidebar"][data-state]')).toHaveCount(0);
 	await page.getByRole('button', { name: 'Toggle Sidebar' }).click();
 	await expect(page.locator('[data-sidebar="sidebar"][data-mobile="true"]')).toBeVisible();
+});
+
+/** Open the phone-width sheet from its trigger with the keyboard, on the tables list. */
+async function openSheet(page: Page) {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await openShell(page);
+	const toggle = page.getByRole('button', { name: 'Toggle Sidebar' });
+	await toggle.focus();
+	await page.keyboard.press('Enter');
+	const sheet = page.locator('[data-sidebar="sidebar"][data-mobile="true"]');
+	await expect(sheet).toBeVisible();
+	return sheet;
+}
+
+test('at phone width Escape on one of the sheet’s rows closes it', async ({ page }) => {
+	// Each row is a tooltip trigger on the desktop rail; in the sheet none takes the key.
+	const sheet = await openSheet(page);
+	await sheet.getByRole('link', { name: 'Namespaces' }).focus();
+	await page.keyboard.press('Escape');
+	await expect(sheet).toHaveCount(0);
+});
+
+test('at phone width the sheet has a close button that closes it', async ({ page }) => {
+	const sheet = await openSheet(page);
+	const close = sheet.getByRole('button', { name: 'Close' });
+	await expect(close).toBeVisible();
+	await close.click();
+	await expect(sheet).toHaveCount(0);
+});
+
+test('at phone width picking a page in the sheet goes there and closes it', async ({ page }) => {
+	const sheet = await openSheet(page);
+	await sheet.getByRole('link', { name: 'Warehouses' }).click();
+	await expect(page).toHaveURL(/\/catalog\/warehouses$/);
+	await expect(sheet).toHaveCount(0);
+});
+
+test('a closed group that holds the current page marks its heading', async ({ page }) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await openShell(page);
+	const nav = page.getByRole('navigation', { name: 'Pages' });
+	const catalog = nav.getByRole('button', { name: /^Catalog/ });
+	await catalog.click();
+	await expect(nav.getByRole('link', { name: 'Tables', exact: true })).toHaveCount(0);
+	await expect(catalog).toHaveAttribute('data-active', 'true');
+	await expect(catalog).toHaveAccessibleName(/holds the current page/);
 });
 
 test('a table wider than the viewport scrolls INSIDE its card (#105)', async ({ page }) => {

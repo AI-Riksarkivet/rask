@@ -37,11 +37,13 @@ export type PageNavLeaf = {
 	 *  them (or the parent) is active. One level only — a third tier is a sign the PAGE should have
 	 *  been split, not the menu. */
 	children?: PageNavLeaf[];
-	/** WHY this area cannot be opened by the current identity — a short phrase, or absent when it can.
+	/** WHY this area cannot be opened by the current identity — one plain sentence, or absent when it
+	 *  can.
 	 *
 	 *  A leaf carrying this renders DISABLED rather than being dropped: a missing row reads as a
-	 *  product without the feature, while a disabled one with the denial's own wording in its tooltip
-	 *  names the relation to ask for. It is not the door: the route's own guard refuses regardless,
+	 *  product without the feature, while a disabled one says who may open it. The reason is printed
+	 *  once under its group (rows sharing it share the note) and is each row's description, so a
+	 *  pointer, a keyboard and a touch all reach it; the icon rail's tooltip carries it too. It is not the door: the route's own guard refuses regardless,
 	 *  and a disabled row cannot navigate. Its `children` must be dropped by whoever disables it, so
 	 *  showing the row hands out none of its sub-routes. */
 	unavailable?: string;
@@ -53,8 +55,9 @@ export type PageNavGroup = {
 	 *  rows and the pinned footer do. */
 	label?: string;
 	items: PageNavLeaf[];
-	/** Start collapsed. Ignored while the group contains the active route — a section that hides
-	 *  where you currently are reads as a broken sidebar. */
+	/** Start collapsed. Ignored while the group contains the active route. Once the reader opens or
+	 *  closes the group, their choice holds; a closed group holding the active route marks its
+	 *  heading. */
 	defaultCollapsed?: boolean;
 };
 

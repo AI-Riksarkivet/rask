@@ -10,7 +10,7 @@
 <div class="page">
 	<header>
 		<ScrollText size={16} />
-		<h1>Audit log</h1>
+		<h1>Audit</h1>
 		<span class="sub">who did what, and how it was decided</span>
 	</header>
 	<p class="empty">

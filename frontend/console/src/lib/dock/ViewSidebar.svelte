@@ -136,6 +136,16 @@
 		background: var(--background);
 		overflow-y: auto;
 	}
+	/* Above the dock on a narrow screen (the workbench page stacks them): full width, and short
+	   enough to leave the panels the height. */
+	@media (width < 768px) {
+		.views {
+			width: auto;
+			max-height: 9rem;
+			border-inline-end: 0;
+			border-bottom: 1px solid var(--border);
+		}
+	}
 	header {
 		display: flex;
 		align-items: center;

@@ -10,7 +10,7 @@
 	import { ChevronRight, MoreHorizontal } from '@lucide/svelte';
 	import { gsap } from 'gsap';
 	import type { ActivityFeed, NavUser, PageNav } from './nav-config.js';
-	import { collapseCrumbs, pathCrumbs } from './breadcrumb.js';
+	import { collapseCrumbs, pathCrumbs, type Crumb } from './breadcrumb.js';
 
 	// Subtle content settle-in. Runs once when the shell MOUNTS — i.e. on a fresh
 	// document load, which is every full-page landing — so the page gently
@@ -47,6 +47,8 @@
 		authEnabled = false,
 		pageNav = null,
 		activity = null,
+		pages = null,
+		groups = null,
 		children,
 	}: {
 		pathname?: string;
@@ -61,12 +63,33 @@
 		/** The reader's activity for the bell (see `ActivityFeed`). The shell never stores it; `null`
 		 *  renders no bell at all. */
 		activity?: ActivityFeed | null;
+		/** Every path that is a page of its own, with the name the sidebar gives it. A crumb on one of
+		 *  them reads that name and links there; a crumb on a path that is no page (`/catalog`, a group)
+		 *  is plain text. Null: every crumb is a link with its route word. */
+		pages?: ReadonlyMap<string, string> | null;
+		/** The paths that name a group of pages (`/catalog`), with the sidebar group's name: their
+		 *  crumb is plain text in that name. */
+		groups?: ReadonlyMap<string, string> | null;
 		children: Snippet;
 	} = $props();
 
 	// The breadcrumb is the route's own trail: every path segment is a crumb, a project's page reads
 	// Projects then the project.
-	const crumbs = $derived(pathCrumbs(pathname, routeId));
+	// The root path has no segment, so its one crumb is its page's name when the app names it.
+	const rootCrumb = $derived(
+		pathname === '/' && pages?.has('/') ? [{ id: '', label: pages.get('/') ?? '', href: '/' }] : [],
+	);
+	const crumbs = $derived(
+		[...rootCrumb, ...pathCrumbs(pathname, routeId)].map((crumb): ShellCrumb =>
+			pages === null
+				? { ...crumb, page: true }
+				: {
+						...crumb,
+						label: pages.get(crumb.href) ?? groups?.get(crumb.href) ?? crumb.label,
+						page: pages.has(crumb.href),
+					},
+		),
+	);
 	// A deep path does not fit a narrow row, so the MIDDLE of the trail folds behind an ellipsis menu
 	// rather than squeezing every crumb into illegibility — and the current page, the one crumb worth
 	// keeping, is never the thing that disappears. Same breakpoint the rest of the shell folds on.
@@ -78,9 +101,26 @@
 	// A separator goes BETWEEN crumbs, so the first one has none.
 	const firstCrumbId = $derived(crumbs[0]?.id);
 
+	/** A crumb, and whether its path is a page a link can open. */
+	type ShellCrumb = Crumb & { page: boolean };
+
 	// Bound, so the trigger and cmd/ctrl+b open and close the rail.
 	let sidebarOpen = $state(true);
 </script>
+
+{#snippet ancestor(crumb: ShellCrumb)}
+	{#if crumb.page === false}
+		<!-- A path that is no page of its own (a group such as Catalog): naming it places the reader,
+		     linking it would send them somewhere else. -->
+		<span class="text-muted-foreground truncate" data-slot="breadcrumb-group">{crumb.label}</span>
+	{:else}
+		<a
+			href={crumb.href}
+			class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm transition-colors outline-none focus-visible:ring-3"
+			>{crumb.label}</a
+		>
+	{/if}
+{/snippet}
 
 <!-- The first stop on every page: past the sidebar's rows straight to the page's own content. -->
 <a
@@ -107,11 +147,7 @@
 				<ol class="flex min-w-0 items-center gap-1.5">
 					{#each trail.lead as crumb (crumb.id)}
 						<li class="flex min-w-0 shrink-0 items-center gap-1.5">
-							<a
-								href={crumb.href}
-								class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm transition-colors outline-none focus-visible:ring-3"
-								>{crumb.label}</a
-							>
+							{@render ancestor(crumb)}
 						</li>
 					{/each}
 					{#if trail.hidden.length > 0}
@@ -135,9 +171,18 @@
 								</DropdownMenu.Trigger>
 								<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
 									{#each trail.hidden as crumb (crumb.id)}
-										<DropdownMenu.Item class="p-0">
-											<a href={crumb.href} class="w-full truncate px-2 py-1.5">{crumb.label}</a>
-										</DropdownMenu.Item>
+										{#if crumb.page === false}
+											<DropdownMenu.Item disabled>{crumb.label}</DropdownMenu.Item>
+										{:else}
+											<!-- The anchor IS the menu item, so one element takes focus and the Enter. -->
+											<DropdownMenu.Item>
+												{#snippet child({ props })}
+													<a {...props} href={crumb.href} class="{props['class']} truncate"
+														>{crumb.label}</a
+													>
+												{/snippet}
+											</DropdownMenu.Item>
+										{/if}
 									{/each}
 								</DropdownMenu.Content>
 							</DropdownMenu.Root>
@@ -155,13 +200,8 @@
 									data-slot="breadcrumb-page">{crumb.label}</span
 								>
 							{:else}
-								<!-- An ancestor: `collapseCrumbs` puts the whole trail in `tail` when it fits,
-								     so every crumb but the current page is a link here too. -->
-								<a
-									href={crumb.href}
-									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm transition-colors outline-none focus-visible:ring-3"
-									>{crumb.label}</a
-								>
+								<!-- An ancestor: `collapseCrumbs` puts the whole trail in `tail` when it fits. -->
+								{@render ancestor(crumb)}
 							{/if}
 						</li>
 					{/each}

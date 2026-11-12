@@ -1,16 +1,19 @@
 <script lang="ts">
-	import { controlEvents } from '#lib/admin/remote/admin.api.ts';
-	import { grantDetail, objectLabel, type ControlEvent } from '#lib/admin/control.ts';
+	import { controlFeed } from '#lib/live/feeds.api.ts';
+	import {
+		grantDetail,
+		objectLabel,
+		type ControlEvent,
+		type FeedEntry,
+	} from '#lib/admin/control.ts';
 	import { Activity, ShieldAlert } from '@lucide/svelte';
 	import ControlEventLine from './ControlEventLine.svelte';
 
-	// A live cursor (query.live): the generator in admin.api.ts polls the catalog from this browser, owns
-	// the cursor, the window and event_id dedup, and yields the window when it changes. No argument: the
-	// estate-wide feed, which the catalog gates on the estate-admin relation, so a non-admin's first poll
-	// ends the feed with a 403 that renders below and is not retried.
-	const feed = controlEvents();
-
-	const failure = (err: unknown) => (err instanceof Error ? err.message : String(err));
+	// The page's one control feed (`feeds.api.ts`): the same poller every surface that re-reads on a
+	// governance change holds, so this page adds no second request. It keeps the cursor, the window
+	// and event_id dedup, and yields each failed poll: this page says what went wrong (the catalog's
+	// status and detail), above the window it already has.
+	const feed = controlFeed();
 
 	// #70 — filter the RENDERED window, client-side. The live cursor's generator owns the
 	// cursor and the window; filtering must never re-query per keystroke or the tail dies with the
@@ -20,7 +23,10 @@
 	let q = $state('');
 	let typeFilter = $state('');
 
-	function matches(e: ControlEvent): boolean {
+	/** An unreadable entry has no fields to match, so it shows only while nothing filters. */
+	function matches(entry: FeedEntry): boolean {
+		if (entry.kind === 'unreadable') return !typeFilter && !q.trim();
+		const e = entry.event;
 		if (typeFilter && e.object_type !== typeFilter) return false;
 		const needle = q.trim().toLowerCase();
 		if (!needle) return true;
@@ -31,25 +37,36 @@
 	}
 
 	// The type dropdown offers what the WINDOW actually contains — no hardcoded list to drift.
-	const typesIn = (events: ControlEvent[]): string[] =>
-		[...new Set(events.map((e) => e.object_type))].sort();
+	const typesIn = (entries: readonly FeedEntry[]): string[] =>
+		[...new Set(entries.flatMap((e) => (e.kind === 'event' ? [e.event.object_type] : [])))].sort();
+
+	/** What a failed poll says: the status, and the catalog's own detail. */
+	const failureText = (f: { status: number; detail: string }): string =>
+		f.status === 0
+			? `the catalog could not be reached (${f.detail})`
+			: `HTTP ${f.status}: ${f.detail}`;
 </script>
 
 <section class="page">
 	<header>
 		<Activity size={16} />
-		<h1>Control-plane activity</h1>
-		<span class="sub">live &middot; governance changes across the estate</span>
+		<h1>Events</h1>
+		<span class="sub"
+			>control-plane activity, live &middot; governance changes across the estate</span
+		>
 	</header>
 
-	{#if feed.error !== undefined}
-		<p class="empty">
-			<ShieldAlert size={15} /> Feed unavailable: {failure(feed.error)}
+	{#if feed.current?.failure}
+		<!-- Above the window, which stays as it was: a failed poll is news about the feed, not about
+		     the changes already shown. -->
+		<p class="empty" role="alert" data-testid="control-feed-failure">
+			<ShieldAlert size={15} /> Feed unavailable: {failureText(feed.current.failure)}
 		</p>
-	{:else if feed.current === undefined}
+	{/if}
+	{#if feed.current === undefined}
 		<p class="empty">Connecting to the live feed&hellip;</p>
-	{:else}
-		{@const events = feed.current}
+	{:else if !(feed.current.failure && feed.current.entries.length === 0)}
+		{@const events = feed.current.entries}
 		{@const shown = events.filter(matches)}
 
 		{#if events.length === 0}
@@ -82,8 +99,14 @@
 				<p class="empty">Nothing in the window matches — the feed is still live underneath.</p>
 			{:else}
 				<ul class="events">
-					{#each shown as e (e.event_id)}
-						<ControlEventLine event={e} />
+					{#each shown as entry (entry.key)}
+						{#if entry.kind === 'event'}
+							<ControlEventLine event={entry.event} />
+						{:else}
+							<li class="unreadable" data-testid="control-event-unreadable">
+								An event the console could not read: it {entry.reason}.
+							</li>
+						{/if}
 					{/each}
 				</ul>
 			{/if}
@@ -151,6 +174,11 @@
 		list-style: none;
 		margin: 0;
 		padding: 0;
+	}
+	.unreadable {
+		color: var(--muted-foreground);
+		font-size: 12px;
+		padding: 6px 0;
 	}
 	.mono {
 		font-family: ui-monospace, monospace;

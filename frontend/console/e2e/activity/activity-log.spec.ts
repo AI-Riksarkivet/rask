@@ -68,7 +68,7 @@ test('the bell logs each write with its outcome, keeps it across a reload, and f
 	await expect(bell(page)).toHaveAccessibleName('Activity');
 
 	await page.getByRole('button', { name: 'Account' }).click();
-	await page.getByRole('link', { name: 'Sign out' }).click();
+	await page.getByRole('menuitem', { name: 'Sign out' }).click();
 	await expect(page.getByRole('heading', { name: 'Mock IdP signed out' })).toBeVisible();
 
 	// Signed in again in the same tab, the log is empty: nothing of the session outlived it.

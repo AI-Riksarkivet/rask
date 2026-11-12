@@ -14,5 +14,5 @@
 </script>
 
 <div class="bg-background h-full min-h-0 overflow-auto">
-	<TableRegistry {project} onprojectchange={(next) => (project = next)} />
+	<TableRegistry {project} onprojectchange={(next) => (project = next)} frame="panel" />
 </div>

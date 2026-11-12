@@ -347,12 +347,12 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={resolve('/catalog/namespaces')}>Namespaces</a>
-		<span class="sep">/</span>
 		<Boxes size={15} />
 		<h1 class="mono">{ns}</h1>
 		{#if stageInfo}<StageBadge info={stageInfo} />{/if}
-		{#if tables !== null}
+		<!-- Counted only for a namespace the caller can see: a count beside "no namespace you can see"
+		     would describe one. -->
+		{#if tables !== null && presence.kind === 'live'}
 			<span class="count">{members.length} table{members.length === 1 ? '' : 's'}</span>
 		{/if}
 	</header>
@@ -624,17 +624,6 @@
 		font-size: 20px;
 		margin: 0;
 		color: var(--ink);
-	}
-	.back {
-		color: var(--mut);
-		font-size: 13px;
-		text-decoration: none;
-	}
-	.back:hover {
-		color: var(--ink);
-	}
-	.sep {
-		color: var(--faint);
 	}
 	.count {
 		font-size: 12px;

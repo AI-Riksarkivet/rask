@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { DropdownMenu as BitsDropdownMenu, type WithoutChild } from 'bits-ui';
+	import { DropdownMenu as BitsDropdownMenu } from 'bits-ui';
 	import { cn } from '../../utils/cn.js';
 
 	let {
@@ -9,12 +9,13 @@
 		variant = 'default',
 		children,
 		...rest
-	}: WithoutChild<BitsDropdownMenu.ItemProps> & {
+	}: BitsDropdownMenu.ItemProps & {
 		inset?: boolean;
 		variant?: 'default' | 'destructive';
 	} = $props();
 </script>
 
+<!-- `child` passes through, so an item can BE a link (one element, one focus) rather than hold one. -->
 <BitsDropdownMenu.Item
 	bind:ref
 	data-inset={inset ? '' : undefined}

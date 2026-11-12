@@ -210,9 +210,9 @@
 			<RecoverCard {table} onrecovered={load} />
 		{/key}
 	{:else if denied}
-		<div class="empty">
-			<ShieldAlert size={16} />
-			<p>You don't have read access to this table's catalog metadata.</p>
+		<!-- A 403 is the catalog keeping existence to itself: it does not say the table exists. -->
+		<div class="empty" data-testid="table-not-visible">
+			<p>No table {table} that you can see: it does not exist, or you hold no grant on it.</p>
 		</div>
 	{:else if offline}
 		<div class="empty">

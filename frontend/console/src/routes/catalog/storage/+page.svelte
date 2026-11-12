@@ -42,15 +42,15 @@
 	});
 </script>
 
-<svelte:head><title>Stores by tier · rask</title></svelte:head>
+<svelte:head><title>Storage · rask</title></svelte:head>
 
 <header class="head">
-	<h1><Layers size={18} /> Stores by tier</h1>
+	<h1><Layers size={18} /> Storage</h1>
 	<p>
-		The object stores behind each tier, which needs a stores-by-tier registry; the catalog serves
-		none, so the page says why below. A store is a warehouse's bucket, listed on the warehouses
-		page. The medallion is exactly bronze → silver → gold; raw is the external world and never a
-		governed tier.
+		Stores by tier: the object stores behind each tier, which needs a stores-by-tier registry; the
+		catalog serves none, so the page says why below. A store is a warehouse's bucket, listed on the
+		warehouses page. The medallion is exactly bronze → silver → gold; raw is the external world and
+		never a governed tier.
 	</p>
 </header>
 

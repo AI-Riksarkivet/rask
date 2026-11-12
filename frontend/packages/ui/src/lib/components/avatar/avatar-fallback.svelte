@@ -12,6 +12,7 @@
 
 <BitsAvatar.Fallback
 	bind:ref
+	data-slot="avatar-fallback"
 	class={cn(
 		'bg-sidebar-primary text-sidebar-primary-foreground flex size-full items-center justify-center rounded-md text-xs font-medium',
 		className,

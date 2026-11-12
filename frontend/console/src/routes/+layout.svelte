@@ -8,7 +8,7 @@
 	import type { Snippet } from 'svelte';
 	import { auth, expired, login } from '#lib/auth.svelte.ts';
 	import { activity } from '#lib/activity.svelte.ts';
-	import { areaOf, consoleSidebar } from '#lib/nav.ts';
+	import { areaOf, consoleSidebar, GROUP_NAMES, PAGE_NAMES } from '#lib/nav.ts';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
@@ -66,6 +66,8 @@
 	user={data.user}
 	authEnabled={data.authEnabled}
 	{pageNav}
+	pages={PAGE_NAMES}
+	groups={GROUP_NAMES}
 	activity={activityFeed}
 >
 	{#if canvasArea}

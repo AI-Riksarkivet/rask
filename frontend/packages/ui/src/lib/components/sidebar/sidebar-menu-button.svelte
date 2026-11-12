@@ -76,7 +76,9 @@
 	{/if}
 {/snippet}
 
-{#if !tooltipContent}
+<!-- No tooltip in the mobile sheet: it never shows there, and a tooltip's own Escape handler would
+     take the key the sheet closes on. -->
+{#if !tooltipContent || sidebar.isMobile}
 	{@render Button({})}
 {:else}
 	<Tooltip.Root>
@@ -88,7 +90,7 @@
 		<Tooltip.Content
 			side="right"
 			align="center"
-			hidden={sidebar.state !== 'collapsed' || sidebar.isMobile}
+			hidden={sidebar.state !== 'collapsed'}
 			{...tooltipContentProps}
 		>
 			{#if typeof tooltipContent === 'string'}
