@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pyarrow as pa
@@ -125,8 +125,9 @@ def _gt_promql_sum(query: str) -> float:
 WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 
 
-def _create_table(table_id: str, namespace: str, auth: dict[str, str]) -> None:
-    """Create a namespace + table via the catalog — the action that emits a lineage event over Dapr."""
+def _create_table(table_id: str, namespace: str, auth: dict[str, str], trace_id: str) -> None:
+    """Create a namespace + table via the catalog — the action that emits a lineage event over Dapr — the table's create
+    carried in the trace `trace_id` names (a W3C `traceparent`, which the services' instrumentation continues)."""
     requests.post(f"{CATALOG}/v1/table/{table_id}/drop", headers=auth, timeout=30)
     requests.post(f"{CATALOG}/v1/namespace/{namespace}/drop", headers=auth, timeout=30)
     # A top-level namespace has exactly ONE door on a warehouses-enabled catalog: it must be bound to a
@@ -152,16 +153,17 @@ def _create_table(table_id: str, namespace: str, auth: dict[str, str]) -> None:
     resp = requests.post(
         f"{CATALOG}/v1/table/{table_id}/create?mode=overwrite",
         data=sink.getvalue().to_pybytes(),
-        headers=ARROW | auth,
+        headers=ARROW | auth | {"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"},
         timeout=60,
     )
     assert resp.status_code == 200, resp.text
 
 
 @pytest.fixture(scope="module")
-def pipeline_run() -> dict[str, Any]:
-    """Drive the real pipeline once: baseline the metric, create a table, return the run context.
-    Skips cleanly unless all three services are reachable (the LANCE_E2E_*_URL env vars)."""
+def pipeline_run() -> Iterator[dict[str, Any]]:
+    """Drive the real pipeline once: baseline the metric, create a table in a trace of the run's own, yield the run
+    context, then drop the namespace with its table. Skips cleanly unless all three services are reachable (the
+    LANCE_E2E_*_URL env vars)."""
     if not (CATALOG and LINEAGE and GREPTIME):
         pytest.skip("set LANCE_E2E_CATALOG_URL / _LINEAGE_URL / _GREPTIME_URL (see module docstring)")
     probes = (
@@ -182,8 +184,11 @@ def pipeline_run() -> dict[str, Any]:
     metric_query = 'sum(lineage_events_processed_total{lance_lineage_outcome="ingested"})'
     before = _gt_promql_sum(metric_query)
 
-    _create_table(table_id, namespace, auth)
-    return {"table_id": table_id, "metric_query": metric_query, "ingested_before": before, "auth": auth}
+    trace_id = uuid.uuid4().hex
+    _create_table(table_id, namespace, auth, trace_id)
+    yield {"table_id": table_id, "metric_query": metric_query, "ingested_before": before, "auth": auth, "trace_id": trace_id}
+    dropped = requests.post(f"{CATALOG}/v1/namespace/{namespace}/drop", json={"behavior": "Cascade"}, headers=auth, timeout=60)
+    assert dropped.status_code == 200, dropped.text[-400:]
 
 
 def test_custom_metric_incremented(pipeline_run: dict[str, Any]) -> None:
@@ -198,23 +203,20 @@ def test_custom_metric_incremented(pipeline_run: dict[str, Any]) -> None:
     assert _eventually(metric_increased) > before
 
 
-@pytest.mark.usefixtures("pipeline_run")
-def test_distributed_trace_spans_catalog_to_lineage() -> None:
-    """3. ONE trace spans catalog → Dapr publish → lineage → its feed write — true distributed tracing."""
+def test_distributed_trace_spans_catalog_to_lineage(pipeline_run: dict[str, Any]) -> None:
+    """3. The create's own trace spans catalog → Dapr publish → lineage → its feed write — true distributed tracing.
 
-    def joined_trace() -> str | None:
-        rows = _gt_sql("SELECT trace_id, service_name FROM opentelemetry_traces ORDER BY timestamp DESC LIMIT 200")
-        by_trace: dict[str, set[str]] = {}
-        for trace_id, service in rows:
-            by_trace.setdefault(trace_id, set()).add(service)
-        joined = [t for t, services in by_trace.items() if {"catalog", "lineage"} <= services]
-        return joined[0] if joined else None
+    Read off the trace the create's `traceparent` names, never the newest trace that spans both services: lineage
+    writes its feed through the catalog's doors, so each relay tick spans catalog and lineage with no publish in it.
+    """
+    query = f"SELECT DISTINCT service_name, span_name FROM opentelemetry_traces WHERE trace_id = '{pipeline_run['trace_id']}' AND {_RECENT}"
 
-    trace_id = _eventually(joined_trace)
-    spans = _gt_sql(f"SELECT DISTINCT service_name, span_name FROM opentelemetry_traces WHERE trace_id = '{trace_id}'")
-    services = {service for service, _ in spans}
+    def joined_trace() -> list[list[Any]] | None:
+        spans = _gt_sql(query)
+        return spans if {"catalog", "lineage"} <= {service for service, _ in spans} else None
+
+    spans = _eventually(joined_trace)
     span_names = {name for _, name in spans}
-    assert {"catalog", "lineage"} <= services
     assert any("PublishEvent" in n for n in span_names), f"no Dapr publish span in {span_names}"
     assert any("/lineage-events" in n for n in span_names), f"no lineage subscriber span in {span_names}"
 
