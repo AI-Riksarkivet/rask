@@ -90,8 +90,8 @@ async def _require_classifier_for_governance_keys(
 
     A DELETE COUNTS, AND IT HAS THREE SPELLINGS. `update_field_metadata` signals key removal with a
     `None` value — but `UpdateFieldMetadataEntry` carries a third field beside `path` and `metadata`,
-    and `dataplane.update_field_metadata` honours it verbatim (`replace = any(bool(u.get("replace")) …)`
-    -> `dataset.update_field_metadata(field_updates, replace=replace)`), whose pylance docstring reads
+    and `dataplane.update_field_metadata` honours it for that entry's field
+    (`dataset.update_field_metadata(..., replace=True)`), whose pylance docstring reads
     "completely replace all metadata for the specified fields".
 
     So `{"path": "payload", "metadata": {}, "replace": true}` names no governance key, drops the

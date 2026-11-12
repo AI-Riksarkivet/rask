@@ -109,8 +109,8 @@ def test_every_spelling_of_un_labelling_takes_the_rung(label: str, updates: list
     """`replace` drops every key the body does NOT name, so it un-labels without ever spelling `rask.`.
 
     `UpdateFieldMetadataEntry` carries a third field beside `path` and `metadata`, and
-    `dataplane.update_field_metadata` honours it verbatim: `replace = any(bool(u.get("replace")) …)` ->
-    `dataset.update_field_metadata(field_updates, replace=replace)`, whose pylance docstring reads
+    `dataplane.update_field_metadata` honours it for that entry's field with `dataset.update_field_metadata(..., replace=True)`,
+    whose pylance docstring reads
     "completely replace all metadata for the specified fields". Measured against a real dataset: after
     `update_field_metadata({"payload": {}}, replace=True)` the classification is GONE and the rows are
     untouched — so a `can_write_data` holder launders the label and keeps the data, which is the whole

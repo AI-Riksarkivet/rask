@@ -9,7 +9,10 @@ row count is the one a client reads to confirm the replace. A query refusal's de
 An add_columns entry is added as it declares or the request is refused ([[LH-537]]): an entry declaring `computed` or
 `virtual_column` beside an `expression` asks for a column the backend cannot make (406), and an entry declaring nothing
 or a column named twice is malformed (400), since filling the first from its expression or dropping the others answers
-success for a request the door did not serve. An empty merge key is the caller's mistake (400).
+success for a request the door did not serve. An empty merge key is the caller's mistake (400). A query field the
+vendored spec declares and the installed lance-namespace request model cannot carry (`minimum_nprobes`,
+`maximum_nprobes`) is refused 406 at the three query doors rather than dropped from a 200, and a query body that is not
+JSON keeps the door's own 400 ([[LH-573]]).
 
 The races and the panic are driven where they happen: a competing ExistOk create lands between the door's probe and its
 declaration, and Lance panics inside the first write.
@@ -115,13 +118,26 @@ _ADD_COLUMNS_VIRTUAL = {
         pytest.param(
             lambda c: c.post(f"{T}/merge_insert?on=&when_matched_update_all=true", content=_rows(), headers=ARROW), 400, 13, id="merge-on-an-empty-key"
         ),
+        pytest.param(lambda c: c.post(f"{T}/query", json={"k": 1, "vector": _VECTOR, "minimum_nprobes": 2}), 406, 0, id="query-a-field-the-model-drops"),
+        pytest.param(
+            lambda c: c.post(f"{T}/explain_plan", json={"query": {"k": 1, "vector": _VECTOR, "minimum_nprobes": 2}}),
+            406,
+            0,
+            id="explain-a-nested-field-the-model-drops",
+        ),
+        pytest.param(
+            lambda c: c.post(f"{T}/analyze_plan", json={"k": 1, "vector": _VECTOR, "maximum_nprobes": 4}), 406, 0, id="analyze-a-field-the-model-drops"
+        ),
+        pytest.param(lambda c: c.post(f"{T}/query", content=b"k=1", headers={"content-type": "text/plain"}), 400, 13, id="query-a-body-that-is-not-json"),
     ],
 )
 def test_an_edge_path_answers_the_spec_code(client: TestClient, send: Callable[[TestClient], Any], status: int, code: int) -> None:
     response = send(client)
 
-    assert (response.status_code, response.json().get("code")) == (status, code), response.text
-    detail = response.json().get("detail", "")
+    # A problem body carries the spec's code; an answer that is not one (a door's 200) carries none to compare.
+    problem = response.json() if response.headers.get("content-type") == "application/problem+json" else {}
+    assert (response.status_code, problem.get("code")) == (status, code), response.text[:500]
+    detail = problem.get("detail", "")
     assert "file://" not in detail, "a refusal's detail names the table's storage location"
     assert re.search(r"\.rs:\d+", detail) is None, "a refusal's detail names a Rust source location of Lance's build"
 

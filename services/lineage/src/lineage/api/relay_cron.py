@@ -30,6 +30,7 @@ from lakehouse.storage_options import StorageOptions
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import storage_options
+from lineage.core.metrics import Door, record_outcome, refusal_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload
 from lineage.services.forward import forward
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
@@ -211,8 +212,12 @@ async def _drain_outbox(
             # NEITHER POISON NOR STRANDED: a governance answer about a well-formed event, so the object is retired
             # only once the verdict AND the event are recorded below — never on the verdict alone.
             refused += 1
+            outcome = refusal_outcome(exc)
             refused_author = author_sub_from_payload(json.loads(event_json))
-            log.warning("lineage_outbox_event_unauthorized", extra={"outbox_key": key, "run_id": event.run_id, "author": refused_author, "reason": str(exc)})
+            log.warning(
+                "lineage_outbox_event_unauthorized",
+                extra={"outbox_key": key, "run_id": event.run_id, "author": refused_author, "outcome": outcome, "reason": str(exc)},
+            )
             # RECORD, THEN RETIRE ([[LH-182]]). A crash after the record leaves the object, the next tick
             # re-refuses it, and the upsert on `outbox_key` makes that a no-op; delete-first would lose the only
             # durable copy. ITS OWN TRY ([[LH-297]]): a record or a drop that raised here would leave the loop.
@@ -221,6 +226,10 @@ async def _drain_outbox(
                 await provenance.record_refusal(outbox_key=key, run_id=event.run_id, author=refused_author, reason=str(exc), event_json=event_json)
                 landed = True
                 recorded += 1
+                # COUNTED ONCE RECORDED, under the outcome every door counts a refusal by, so the alerts reading it see a
+                # drained refusal as they see a delivered one ([[LH-573]]); one whose record failed stays staged and is
+                # counted by the tick that records it.
+                record_outcome(outcome, door=Door.OUTBOX)
                 await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
             except Exception as unretired:
                 log.warning(

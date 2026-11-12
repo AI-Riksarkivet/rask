@@ -8,19 +8,28 @@ graph backend, so a refused tick is seen to forward nothing.
 
 Through a read-only window (`LINEAGE_READ_ONLY`, rendered from the chart's one `readOnlyWindow`) the tick is answered and
 does nothing: it drains, prunes and forwards nothing, and says it paused, so the next tick after the window does the work.
+
+The drain is a door to the feed like the bus and the HTTP ingest, and a refusal there is as final: recorded in the
+refusals table and retired. So a refusal it records moves `lineage.events.processed` under the outcome every door
+counts that refusal by, at the drain's own door, and the alerts reading the outcome see it ([[LH-573]]).
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from lakehouse import outbox
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.storage_options import StorageOptions
 from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineage, graph_backend, live_catalog, run_event
 
 
@@ -91,3 +100,51 @@ def test_a_tick_forwards_only_with_the_sidecars_token_and_outside_a_read_only_wi
         "forward_refused": 0,
         "forward_stalled": None,
     }
+
+
+@pytest.fixture
+def processed(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], dict[tuple[str, str], int]]]:
+    """`lineage.events.processed` by outcome and door, read through a real in-memory reader.
+
+    `record_outcome` adds to the counter the metrics module holds when it is called, so that counter is swapped for one of
+    the same name under this reader's provider, and every door's count lands here.
+    """
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+
+    from lineage.core import metrics
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    monkeypatch.setattr(metrics, "_events_processed", provider.get_meter("lance.lineage").create_counter("lineage.events.processed", unit="{event}"))
+
+    def counts() -> dict[tuple[str, str], int]:
+        found: dict[tuple[str, str], int] = {}
+        data = reader.get_metrics_data()
+        for resource in data.resource_metrics if data is not None else ():
+            for scope in resource.scope_metrics:
+                for metric in scope.metrics:
+                    # A counter only ever yields `NumberDataPoint`, the member of the reader's point union that has a value.
+                    for point in cast(Sequence[NumberDataPoint], metric.data.data_points):
+                        attributes = point.attributes or {}
+                        found[(str(attributes.get("lance.lineage.outcome")), str(attributes.get("lance.lineage.door")))] = int(point.value)
+        return found
+
+    yield counts
+    provider.shutdown()
+
+
+def test_a_tick_counts_a_refusal_it_records_as_every_door_counts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, processed: Callable[[], dict[tuple[str, str], int]]
+) -> None:
+    """A staged event no listed signer signed, refused by the bus door's own gate as the tick drains it."""
+    outbox_uri = f"file://{tmp_path}/outbox"
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+    monkeypatch.setenv("LINEAGE_OUTBOX_URI", outbox_uri)
+    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps(["service-catalog"]))
+    unsigned = run_event("1d3c5a07-0000-4000-8000-000000000573", "COMPLETE", "2026-11-12T10:00:00+00:00", outputs=[_TABLE])
+    outbox.stage_event(outbox_uri, StorageOptions(), unsigned["run"]["runId"], json.dumps(unsigned))
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, set()) as lineage:
+        tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
+
+    assert (tick.json()["outbox_refused"], tick.json()["outbox_refusals_recorded"], processed()) == (1, 1, {("signature_refused", "outbox"): 1})

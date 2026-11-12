@@ -29,8 +29,8 @@ from typing import Any, Final
 from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
-from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, UnverifiedEventError, parse_event
+from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome, refusal_outcome
+from lineage.models import DatasetEvent, ForeignRunError, RunEvent, parse_event
 from lineage.services.provenance import ProvenanceStore
 
 
@@ -114,36 +114,14 @@ async def handle_cloud_event(
             # field the schema defaults. `data` is what Dapr delivered; the parse above is for everything
             # else.
             await authorize(event, data if isinstance(data, dict) else {})
-        except UnverifiedEventError as exc:
-            # AHEAD OF THE GENERIC `PermissionDeniedError` ARM below, which would route it to the dead-letter topic.
-            # The gate has already logged and counted the reason; the ack is the outcome label.
-            log.warning("lineage_event_unverified", extra={"run": event.run_id, "reason": exc.reason})
-            record_outcome(Outcome.SIGNATURE_REFUSED, door=door)
-            return _SUCCESS
-        except UnauthoredRunError as exc:
-            # UNREPAIRABLE, so it is consumed rather than parked — see `UnauthoredRunError`. Measured on
-            # the deployed estate 2026-09-18: 37 of 44 refusals in one hour, all one run id, one burst
-            # per roll, each appending a NEW dead-letter message about an event the DLQ already held.
-            log.warning("lineage_event_unauthored", extra={"run": event.run_id, "reason": str(exc)})
-            record_outcome(Outcome.UNREPAIRABLE, door=door)
-            return _SUCCESS
-        except ForeignRunError as exc:
-            # UNREPAIRABLE, so it is consumed rather than parked: no grant makes a run another subject's.
-            log.warning("lineage_event_foreign_run", extra={"run": event.run_id, "reason": str(exc)})
-            record_outcome(Outcome.UNREPAIRABLE, door=door)
-            return _SUCCESS
-        except UngovernedOutputError as exc:
-            # UNREPAIRABLE, so it is consumed rather than parked — a grant needs an OBJECT, and every
-            # output this names carries zero tuples. Measured on the deployed estate 2026-09-19: all 7
-            # parks in a six-hour window were this, four distinct outputs, none with a tuple and one
-            # answering 404 from the catalog. Parked, they came back on every roll forever.
-            log.warning("lineage_event_ungoverned_output", extra={"run": event.run_id, "reason": str(exc)})
-            record_outcome(Outcome.UNREPAIRABLE, door=door)
-            return _SUCCESS
         except PermissionDeniedError as exc:
-            log.warning("lineage_event_unauthorized", extra={"run": event.run_id, "reason": str(exc)})
-            record_outcome(Outcome.REFUSED, door=door)
-            return _DROP
+            # ONE VERDICT (:func:`refusal_outcome`), the one every door that records an event counts by. Only a named
+            # person lacking a grant keeps the DROP that parks the delivery for repair; every other refusal is final, so
+            # it is acked and its count is the whole trace it leaves (each refusal type says why it is final).
+            outcome = refusal_outcome(exc)
+            log.warning("lineage_event_refused", extra={"run": event.run_id, "outcome": outcome, "reason": str(exc)})
+            record_outcome(outcome, door=door)
+            return _DROP if outcome is Outcome.REFUSED else _SUCCESS
         except Exception as exc:
             log.warning("lineage_authz_unavailable", extra={"run": event.run_id, "error": str(exc)})
             record_outcome(Outcome.RETRIED, door=door)

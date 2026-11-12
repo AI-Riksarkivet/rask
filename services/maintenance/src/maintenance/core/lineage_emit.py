@@ -343,7 +343,7 @@ class DaprMaintenanceEmitter:
         except (SigningKeyUnavailableError, CanonError) as exc:
             log.warning("maintenance_event_withheld_unsigned", extra={"table": table_id, "error": str(exc)})
         except Exception as exc:
-            log.warning("maintenance_publish_failed", extra={"table": table_id, "error": str(exc)})
+            log.warning("maintenance_publish_failed", extra={"table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)})
 
 
 def make_emitter(

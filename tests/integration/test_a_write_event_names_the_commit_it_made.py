@@ -12,6 +12,9 @@ commit that happened, never a re-read. Three ways the event named some other com
 * **a recreated branch.** It restarts its numbering, so ``(table, ref, N)`` names two commits; pylance's
   ``branch_identifier`` tells the incarnations apart, and the event must carry it.
 
+The event also names the tenant whose watchers it reaches, ``rask_lance.project``: the project bound to the table's top
+namespace, however deep the table lies ([[LH-573]]).
+
 Driven through the real catalog app on real pylance, and the event is captured on the WIRE: the real
 ``HttpLineageEmitter`` builds and posts it, and an ``httpx.MockTransport`` stands in for the lineage service.
 """
@@ -35,7 +38,7 @@ from fastapi.testclient import TestClient
 from lance.dataset import Branches
 from lance_namespace import connect
 
-from catalog.core.lineage_emit import HttpLineageEmitter
+from catalog.core.lineage_emit import make_emitter
 from catalog.services import dataplane
 from lakehouse.control_emit import CatalogControlEvent
 from lakehouse.storage_options import StorageOptions
@@ -46,6 +49,9 @@ from lineage.services.provenance import edges_of
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 TABLE = "lh214$t"
 BRANCH = "dev"
+#: The registry's bindings as the emitter's tenant resolver reads them: a binding names a TOP namespace, never a deeper one
+#: (`catalog.services.warehouses.project_for_namespace`).
+TENANTS = {"lh214": "acme"}
 
 
 def _ipc(table: pa.Table) -> bytes:
@@ -70,11 +76,20 @@ def events(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[
             posted.append(json.loads(request.content))
         return httpx.Response(200)
 
-    emitter = HttpLineageEmitter(
-        httpx.AsyncClient(transport=httpx.MockTransport(_receive)),
-        "http://lineage/api/v1/lineage",
+    async def _tenant_of(top_namespace: str) -> str | None:
+        return TENANTS.get(top_namespace)
+
+    emitter = make_emitter(
+        enabled=True,
+        transport="http",
+        url="http://lineage/api/v1/lineage",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_receive)),
+        dapr=None,
+        pubsub="",
+        topic="",
         job_namespace="lance-catalog",
         dataset_namespace="lance-namespace://localhost/api/catalog",
+        project_resolver=_tenant_of,
     )
     monkeypatch.setattr(real_ns_client.app.state, "lineage_emitter", emitter, raising=False)
     return posted
@@ -339,6 +354,18 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
         ("table_dropped", table_uuid, namespace_uuid),
     ], control.named
     assert stamped == table_uuid.encode(), stamped
+
+
+def test_a_tables_create_names_the_tenant_its_top_namespace_is_bound_to_at_any_depth(real_ns_client: TestClient, events: list[dict[str, Any]]) -> None:
+    """A project's watchers are reached through the event's ``rask_lance.project`` alone, and the registry binds a tenant
+    to a top namespace only, so a table two namespaces deep is announced under its first namespace's tenant ([[LH-573]])."""
+    for namespace in ("lh214", "lh214$raw"):
+        assert real_ns_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+
+    created = real_ns_client.post("/v1/table/lh214$raw$t/create", content=_ipc(_rows(1)), headers=ARROW)
+
+    assert created.status_code == 200, created.text
+    assert [(_lance(event)["operation"], _lance(event).get("project")) for event in events] == [("create_table", "acme")]
 
 
 def _incarnations(location: str) -> dict[str, str]:

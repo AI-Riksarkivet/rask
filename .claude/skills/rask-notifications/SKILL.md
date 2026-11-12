@@ -183,8 +183,10 @@ the action names it reads must survive a member it does not know, since the lake
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer, `enforce_author`
    (`lineage/api/fga_deps.py`) **overwrites** the facet with that service's sub — "never trust the request body" is
    doing its job, and your human is gone. Carrying the human's sub through your own call graph is the only fix.
-3. **No `rask_lance.project` disables WATCH silently.** The catalog resolves the tenant centrally in `emit_write_event`
-   through `emitter.project_for(segments[0])` (`catalog/core/lineage_emit.py`) rather than at each call site. Two
+3. **No `rask_lance.project` disables WATCH silently.** The catalog resolves the tenant in the emitter itself, in
+   `_BaseLineageEmitter.emit_write` (`catalog/core/lineage_emit.py`), the one method every catalog event passes, through
+   `project_for` on the FIRST segment of the table's namespace, the only rung the registry binds, at any depth
+   ([[LH-573]]); no caller passes a project. Two
    properties of that are the reusable part: resolve the tenant ONCE at the choke point, and **omit rather than
    sanitize** a project that fails `is_safe_project` — a project-less run reaches its author and no watchers, while a
    coerced one could reach the WRONG tenant's watchers, which is disclosure rather than a miss. The residue:

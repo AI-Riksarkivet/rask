@@ -23,6 +23,7 @@ from typing import Any
 import pyarrow.fs as pafs
 from lance_namespace import InternalError, NamespaceAlreadyExistsError
 
+from catalog.core.identifiers import top_namespace
 from catalog.services.control_records import (
     BindingRecord,
     BucketClaimRecord,
@@ -650,7 +651,7 @@ def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, objec
         if isinstance(namespace, str) and namespace:
             _pop(namespace)
     elif action == "namespace_dropped" and object_name:
-        top_ns = object_name.split(CATALOG_DELIMITER)[0]
+        top_ns = top_namespace(object_name)
         if top_ns:
             _pop(top_ns)
     return evicted
@@ -712,7 +713,7 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse
     in_bucket = f"s3://{bucket}/"
 
     def top(record: dict[str, Any]) -> str:
-        return str(record.get("id") or "").split(CATALOG_DELIMITER, 1)[0]
+        return top_namespace(str(record.get("id") or ""))
 
     owned = [r for r in records if top(r) not in elsewhere and (top(r) in here or str(r.get("location") or "").startswith(in_bucket))]
     return sorted(owned, key=lambda r: (r.get("kind") == "namespace", -len(str(r.get("id") or "").split(CATALOG_DELIMITER))))

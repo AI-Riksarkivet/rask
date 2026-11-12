@@ -180,7 +180,7 @@ class DaprControlEmitter:
                 timeout_seconds=self._timeout_seconds,
             )
         except Exception as exc:
-            self._record_undelivered(event, exc, reason="publish", staged=bool(self._outbox_uri))
+            self._record_undelivered(event, exc, reason="publish", staged=outbox.left_staged(exc))
 
     def _record_undelivered(self, event: CatalogControlEvent, error: Exception, *, reason: _Undelivered, staged: bool) -> None:
         self._emit_failed.add(1, {f"lance.{self._service}.action": event.action, f"lance.{self._service}.reason": reason})

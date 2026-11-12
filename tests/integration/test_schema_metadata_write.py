@@ -102,3 +102,26 @@ def test_delete_does_not_drop_lineage_coordinates(real_ns_client: TestClient) ->
     table_uuid = real_ns_client.post("/v1/table/m1$t3/describe", json={}).json()["properties"]["rask.uuid"]
     assert on_disk.get(b"lineage.dataset_id") == table_uuid.encode(), on_disk
     assert on_disk.get(b"lineage.namespace") == b"m1", on_disk
+
+
+def test_a_field_metadata_update_replaces_only_the_entries_that_ask(real_ns_client: TestClient) -> None:
+    """``replace`` belongs to its entry (``lance_docs/ns_catalog/spec.yaml`` UpdateFieldMetadataEntry): an entry that replaces
+    keeps only what it names, and an entry beside it that merges keeps every key it does not name, sets the ones it does,
+    and deletes the one it names with a null ([[LH-573]])."""
+    real_ns_client.post("/v1/namespace/m1/create", json={})
+    rows = pa.table({"id": pa.array([1], pa.int64()), "v": ["a"]})
+    assert real_ns_client.post("/v1/table/m1$t4/create", content=_ipc(rows), headers=ARROW).status_code == 200
+    seeded = real_ns_client.post(
+        "/v1/table/m1$t4/update_field_metadata",
+        json={"updates": [{"path": "id", "metadata": {"unit": "n", "note": "x"}}, {"path": "v", "metadata": {"desc": "text", "note": "x"}}]},
+    )
+    assert seeded.status_code == 200, seeded.text
+
+    resp = real_ns_client.post(
+        "/v1/table/m1$t4/update_field_metadata",
+        json={"updates": [{"path": "id", "metadata": {"unit": "count"}, "replace": True}, {"path": "v", "metadata": {"lang": "sv", "note": None}}]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    schema = lance.dataset(_location(real_ns_client, "t4")).schema
+    assert (schema.field("id").metadata, schema.field("v").metadata) == ({b"unit": b"count"}, {b"desc": b"text", b"lang": b"sv"})

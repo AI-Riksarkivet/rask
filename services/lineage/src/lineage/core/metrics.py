@@ -21,9 +21,11 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import get_args
 
+from lance_namespace import PermissionDeniedError
 from opentelemetry import metrics
 
 from lakehouse.lineage.signing import RefusalReason
+from lineage.models import ForeignRunError, UnauthoredRunError, UngovernedOutputError, UnverifiedEventError
 
 
 _meter = metrics.get_meter("lance.lineage")
@@ -31,7 +33,7 @@ _meter = metrics.get_meter("lance.lineage")
 _events_processed = _meter.create_counter(
     "lineage.events.processed",
     unit="{event}",
-    description="Lineage events processed by the Dapr subscriber, by outcome.",
+    description="Lineage events each door processed, by outcome and door; the outbox drain counts only its refusals.",
 )
 _ingest_duration = _meter.create_histogram(
     "lineage.ingest.duration",
@@ -153,7 +155,7 @@ class Outcome(StrEnum):
 class Door(StrEnum):
     """WHICH ingress an event arrived through — the counter's second and last attribute.
 
-    All three write one counter from ONE pod, so no resource or instance attribute separates them, and
+    All four write one counter from ONE pod, so no resource or instance attribute separates them, and
     each fails for a different reason and is repaired in a different place. Without this an operator
     woken by a `refused` rate learned that provenance was lost and nothing about where to look.
     """
@@ -166,6 +168,33 @@ class Door(StrEnum):
     #: The dead-letter handler — not an arrival but a giving-up, and an operator reads it as neither of
     #: the above.
     DEAD_LETTER = "dead_letter"
+    #: The relay tick's outbox drain: an event a producer staged, recorded through the bus door's own gate. Only its
+    #: refusals are counted here, each once the drain has recorded it in the refusals table, which is where it is
+    #: repaired from; the drain's other outcomes are the outbox's own counters.
+    OUTBOX = "outbox"
+
+
+def refusal_outcome(refusal: PermissionDeniedError) -> Outcome:
+    """The outcome every door counts an event it refuses under, so an alert reading it means one thing by every route.
+
+    An event no listed signer's key verifies is its own outcome: it sends an operator to whoever publishes without a key
+    the estate provisions. A run carrying no author, one another subject founded and outputs no grant can reach are
+    unrepairable, since no tuple, redelivery or restart changes the answer. Any other refusal is a named person lacking a
+    grant, which writing the tuple repairs.
+
+    Args:
+        refusal: A door's refusal of one event.
+
+    Returns:
+        The outcome the door counts the refusal under.
+    """
+    match refusal:
+        case UnverifiedEventError():
+            return Outcome.SIGNATURE_REFUSED
+        case UnauthoredRunError() | ForeignRunError() | UngovernedOutputError():
+            return Outcome.UNREPAIRABLE
+        case _:
+            return Outcome.REFUSED
 
 
 def record_outcome(outcome: Outcome, *, door: Door) -> None:

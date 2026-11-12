@@ -116,6 +116,12 @@ def parse_identifier(id_str: str) -> list[str]:
     return id_str.split(CATALOG_DELIMITER)
 
 
+def top_namespace(id_str: str) -> str:
+    """The top namespace a string identifier lies under: its first segment, the only rung the warehouse registry binds,
+    so a project or a warehouse is found from it at any depth; ``""`` for the root."""
+    return id_str.partition(CATALOG_DELIMITER)[0]
+
+
 def rename_destination(source: Sequence[str], new_namespace_id: Sequence[str] | None, new_table_name: str) -> list[str]:
     """The identifier a rename of table ``source`` lands at: ``new_namespace_id``, or the source's own namespace when the
     request names none ("if not specified the table stays in the same namespace", ``lance_docs/ns_catalog/spec.yaml:4649-4653``),

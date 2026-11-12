@@ -53,7 +53,7 @@ _RUN_BODY: dict[str, Any] = {
 
 
 #: The subscriber's classification, which is the REFERENCE this door must match
-#: (`services/lineage/src/lineage/services/consumer.py:101-120`).
+#: (`lineage.core.metrics.refusal_outcome`, the one every door counts a refusal by).
 SUBSCRIBER_CLASSIFICATION = [
     (PermissionDeniedError("can_write_data required on outputs: acme-silver$features"), Outcome.REFUSED),
     (UngovernedOutputError("can_write_data required on outputs: acme-silver$features"), Outcome.UNREPAIRABLE),

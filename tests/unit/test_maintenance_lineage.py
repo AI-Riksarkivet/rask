@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -34,6 +36,7 @@ from maintenance.core.lineage_emit import (
 )
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.table_pass import emit_pass_lineage
+from tests.unit.no_store_session import no_store_session
 
 
 # --------------------------------------------------------------------------- #
@@ -245,12 +248,35 @@ def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
     assert payload["run"]["facets"]["rask_lance"]["operation"] == EXPIRE_VERSIONS
 
 
-def test_dapr_emitter_best_effort_swallows_publish_failure() -> None:
-    # A sidecar/broker outage must NEVER fail a maintenance sweep — the publish is best-effort.
+@pytest.mark.parametrize(
+    ("outbox_at", "storage_options", "staged"),
+    [
+        pytest.param("lineage-outbox", None, True, id="the-outbox-holds-it"),
+        pytest.param("occupied/lineage-outbox", None, False, id="the-stage-fails"),
+        pytest.param("lineage-outbox", no_store_session, False, id="the-store-session-is-gone"),
+    ],
+)
+def test_a_dapr_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, outbox_at: str, storage_options: Callable[[], StorageOptions] | None, staged: bool
+) -> None:
+    """A sidecar or broker outage never fails a maintenance sweep, and the line it logs says whether the relay can still
+    deliver the event ([[LH-573]])."""
+
     class _BoomClient:
-        async def publish_event(self, **_kw: Any) -> None:
+        """The sidecar's publish, with `dapr.aio.clients.DaprClient.publish_event`'s signature: it fails."""
+
+        async def publish_event(
+            self,
+            pubsub_name: str,
+            topic_name: str,
+            data: bytes | str,
+            publish_metadata: dict[str, str] | None = None,
+            metadata: tuple[tuple[str, str | bytes], ...] | None = None,
+            data_content_type: str | None = None,
+        ) -> None:
             raise RuntimeError("sidecar down")
 
+    (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
     emitter = DaprMaintenanceEmitter(
         cast(Any, _BoomClient()),
         pubsub="p",
@@ -258,11 +284,13 @@ def test_dapr_emitter_best_effort_swallows_publish_failure() -> None:
         job_namespace="compaction",
         timeout_seconds=5.0,
         dataset_namespace="lance-namespace://localhost/api/catalog",
+        outbox_uri=f"file://{tmp_path}/{outbox_at}",
+        storage_options=storage_options,
     )
-    asyncio.run(emitter.emit_maintenance(table_id="ns$a"))  # no raise == pass
-    asyncio.run(  # the FAIL path is best-effort the same way
-        emitter.emit_maintenance_failed(table_id="ns$a", error="maintain: x")
-    )
+
+    asyncio.run(emitter.emit_maintenance(table_id="ns$a"))
+
+    assert [getattr(record, "staged", None) for record in caplog.records if record.getMessage() == "maintenance_publish_failed"] == [staged]
 
 
 def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() -> None:

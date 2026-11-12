@@ -94,9 +94,8 @@ class TestTheHeaderIsAClaimAndIsBounded:
 # --------------------------------------------------------------------------- #
 # `LineageEmitter` is a four-implementation seam, and its optional keywords are a PEP 692
 # `Unpack[EmitFields]` that every implementation states by name. A bundle can type cleanly and still
-# stop threading a field: an implementation that misses one silently DROPS it, which for `project`
-# means an event nobody watching the tenant is told about and for `originator` a row in the wrong
-# person's inbox.
+# stop threading a field: an implementation that misses one silently DROPS it, which for `originator`
+# is a row in the wrong person's inbox.
 
 
 class _RecordingEmitter(_BaseLineageEmitter):
@@ -121,7 +120,6 @@ def _optional() -> EmitFields:
         schema_fields=[],
         inputs=[InputRef("acme$src", 2)],
         run=RunContext(run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", job_namespace="pipelines", job="nightly"),
-        project="acme",
         originator="dex~bob",
     )
 
@@ -136,7 +134,6 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
     [event] = emitter.events
     facets = event["run"]["facets"]
     assert event["eventTime"] == "2026-10-25T12:00:00+00:00"
-    assert facets["rask_lance"]["project"] == "acme"
     assert facets["rask_lance"]["originator"] == "dex~bob"
     assert (facets["parent"]["run"], facets["parent"]["job"]) == (
         {"runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07"},

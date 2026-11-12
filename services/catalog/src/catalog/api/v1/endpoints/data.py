@@ -6,9 +6,9 @@ import json
 import logging
 import re
 from functools import partial
-from typing import Annotated
+from typing import Annotated, Final
 
-from fastapi import APIRouter, Body, Header, Query
+from fastapi import APIRouter, Body, Depends, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from lance_namespace import (
@@ -25,6 +25,7 @@ from lance_namespace import (
     MergeInsertIntoTableResponse,
     QueryTableRequest,
     QueryTableResponse,
+    UnsupportedOperationError,
     UpdateTableRequest,
     UpdateTableResponse,
 )
@@ -596,7 +597,62 @@ def _reader(token: Caller | None) -> str:
     return token.subject if token is not None else "system:catalog"
 
 
-@router.post("/{id}/query", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
+#: Query fields the vendored spec declares (``lance_docs/ns_catalog/spec.yaml`` QueryTableRequest and
+#: AnalyzeTableQueryPlanRequest) and the installed lance-namespace request models do not carry: pydantic drops a key its
+#: model lacks, so the query would run without the field and answer 200 (``lance_docs/PROVENANCE.md`` § ``spec.yaml``).
+_UNCARRIED_QUERY_FIELDS: Final = ("minimum_nprobes", "maximum_nprobes")
+
+
+async def _refuse_query_fields_the_model_drops(request: Request) -> None:
+    """Refuse a ``query`` or ``analyze_plan`` body naming a query field the installed request model would drop.
+
+    Raises:
+        UnsupportedOperationError: The body names ``minimum_nprobes`` or ``maximum_nprobes``.
+    """
+    _refuse_uncarried_fields(await _json_body(request))
+
+
+async def _refuse_explained_query_fields_the_model_drops(request: Request) -> None:
+    """Refuse an ``explain_plan`` body whose nested ``query`` names a query field the installed request model would drop.
+
+    Raises:
+        UnsupportedOperationError: The nested query names ``minimum_nprobes`` or ``maximum_nprobes``.
+    """
+    body = await _json_body(request)
+    _refuse_uncarried_fields(body.get("query") if isinstance(body, dict) else None)
+
+
+def _refuse_uncarried_fields(query: object) -> None:
+    """Refuse ``query`` when it names a field the installed request model would drop, with the spec's Unsupported.
+
+    406 code 0, as these doors refuse a branch they cannot honour: the request is the spec's, and this backend cannot
+    serve the field yet ([[LH-573]]).
+
+    Raises:
+        UnsupportedOperationError: ``query`` names ``minimum_nprobes`` or ``maximum_nprobes``.
+    """
+    named = [field for field in _UNCARRIED_QUERY_FIELDS if isinstance(query, dict) and field in query]
+    if named:
+        raise UnsupportedOperationError(
+            f"{' and '.join(named)} cannot be served yet: this catalog's lance-namespace request model does not carry it, "
+            "so the query would run without it; ask with nprobes"
+        )
+
+
+async def _json_body(request: Request) -> object:
+    """The request's JSON body, or ``None`` for a body that is not JSON, which the door's own body validation answers."""
+    try:
+        return await request.json()
+    except ValueError:
+        return None
+
+
+@router.post(
+    "/{id}/query",
+    responses=_serves(ARROW_FILE),
+    response_class=ArrowFileResponse,
+    dependencies=[Depends(_refuse_query_fields_the_model_drops)],
+)
 def query_table(
     id: str, body: QueryTableRequest, table: DoorTableDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
 ) -> Response:
@@ -720,7 +776,7 @@ def count_table_rows(
     return JSONResponse(content=counted.count)
 
 
-@router.post("/{id}/explain_plan")
+@router.post("/{id}/explain_plan", dependencies=[Depends(_refuse_explained_query_fields_the_model_drops)])
 def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
@@ -749,7 +805,7 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     return JSONResponse(content=plan)
 
 
-@router.post("/{id}/analyze_plan")
+@router.post("/{id}/analyze_plan", dependencies=[Depends(_refuse_query_fields_the_model_drops)])
 def analyze_table_query_plan(
     id: str,
     body: AnalyzeTableQueryPlanRequest,

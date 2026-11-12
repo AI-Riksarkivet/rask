@@ -412,18 +412,22 @@ Every log line named is in the service's container log (`kubectl logs deploy/ras
   First check: lineage's pod and log, then the bus.
 - `LineageOutboxBacklogAging` (warning): the oldest staged event is older than 300 s while nothing is refused. First
   check: the relay tick's log on lineage, and whether `lineage-relay-cron` still fires (`kubectl logs … -c daprd`).
-- `LineageOutboxEventsRefused` (warning): the relay is refusing staged events every tick, because their producer holds
-  no grant to record them. Not retryable: check the producer's grant, or whether the event should have been staged.
+- `LineageOutboxEventsRefused` (warning): the relay refused staged events (no grant for their author, no signature a
+  listed signer's key verifies, or nothing a grant could repair) and recorded each in the refusals table before retiring
+  it. Not retryable: the outbox door of `lineage_events_processed_total` gives each one's class; check the producer's
+  grant or key, or whether the event should have been staged.
 - `LineageOutboxStagingFailing` (warning): the outbox stage fails, so events reach the bus with no durable copy. First
   check: the producer's log for the stage error, then the object store.
 
 **Lineage ingest** (see also [DLQ parking](#dlq-parking--a-delivery-gave-up)):
 
-- `LineageIngestRefusingProvenance` (warning): a delivered run's author lacks the rung its operation needs on the
-  tables it names, and the refusal is acked. First check: lineage's refusal log lines for the author and the table, then
-  that author's grants.
-- `LineageIngestDiscardingUnrepairable` (warning): delivered events that can never be recorded (no parse, no author, or
-  only ungoverned outputs) are acked and counted. First check: which producer publishes them to `lineage.events.v1`.
+- `LineageIngestRefusingProvenance` (warning): a run's author lacks the rung its operation needs on the tables it
+  names; `lance_lineage_door` says whether it came on the bus (parked on the DLQ), at the HTTP door (answered 403) or
+  from the outbox drain (kept in the refusals table). First check: lineage's refusal log lines for the author and the
+  table, then that author's grants.
+- `LineageIngestDiscardingUnrepairable` (warning): events that can never be recorded (no parse, no author, another
+  subject's run, or only ungoverned outputs) are acked on the bus, kept in the refusals table from the outbox, and
+  counted by door. First check: which producer publishes or stages them.
 
 **Catalog:**
 

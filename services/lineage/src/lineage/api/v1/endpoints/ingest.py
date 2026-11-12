@@ -31,8 +31,8 @@ from pydantic import ValidationError
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import enforce_author, enforce_output_authz
 from lineage.api.security import CurrentToken
-from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import DatasetEvent, ForeignRunError, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event, without_signature_facet
+from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome, refusal_outcome
+from lineage.models import DatasetEvent, RunEvent, parse_event, without_signature_facet
 from lineage.services.names import stamp_resolved_uuids
 
 
@@ -144,8 +144,8 @@ async def ingest_event(
     # `can_get_metadata` denial on a GET is one — so an undifferentiated status-code count cannot
     # separate a reader being told no from a producer's provenance being dropped.
     #
-    # CLASSIFIED EXACTLY AS `services/consumer.py` DOES, and pinned against it by
-    # `tests/unit/test_both_lineage_doors_count_the_same_loss.py`: a denied grant is repairable by
+    # CLASSIFIED BY THE ONE VERDICT EVERY DOOR COUNTS BY (`core/metrics.py`, `refusal_outcome`), which
+    # `tests/unit/test_both_lineage_doors_count_the_same_loss.py` drives at this door: a denied grant is repairable by
     # writing a tuple, while an ungoverned output and an unauthored run are repairable by nothing. Two
     # doors that disagreed about which is which would make the alert mean different things by route.
     #
@@ -173,11 +173,8 @@ async def ingest_event(
         # retry lands what is missing and nothing twice (see `ProvenanceStore.record`). Its own refusal of a run
         # another author bound first is counted as the door's is.
         await provenance.record(event)
-    except (UnauthoredRunError, UngovernedOutputError, ForeignRunError):
-        record_outcome(Outcome.UNREPAIRABLE, door=Door.HTTP)
-        raise
-    except PermissionDeniedError:
-        record_outcome(Outcome.REFUSED, door=Door.HTTP)
+    except PermissionDeniedError as exc:
+        record_outcome(refusal_outcome(exc), door=Door.HTTP)
         raise
     # Domain metrics for the HTTP transport too — every external producer lands here, so counting only the Dapr subscriber undercounted real ingest (audit 2026-07-15).
     # A 401 or a 422 still never reaches this point and needs no domain outcome: neither names a run the

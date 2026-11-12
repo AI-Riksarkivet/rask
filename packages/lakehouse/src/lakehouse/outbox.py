@@ -40,6 +40,41 @@ from lakehouse.storage_options import StorageOptions, object_client, on_s3
 log = logging.getLogger(__name__)
 
 
+class UnpublishedEventError(RuntimeError):
+    """A publish that did not reach the bus, and whether its event stays staged for the relay to deliver.
+
+    ``staged`` is the outbox's own answer, never its configuration's: a stage that failed degrades the call to a plain
+    publish, so a configured outbox can hold nothing for the relay. The message names the failure's type beside its
+    text, since a bare ``TimeoutError()`` has none, and the failure is chained as the cause.
+
+    Args:
+        failure: What the publish raised.
+        staged: Whether the outbox holds the event.
+
+    Attributes:
+        staged: Whether the outbox holds the event, so that its relay delivers it.
+    """
+
+    def __init__(self, failure: Exception, *, staged: bool) -> None:
+        super().__init__(f"{type(failure).__name__}: {failure}")
+        self.staged = staged
+
+
+def left_staged(failure: Exception) -> bool:
+    """Whether a failed publish left its event staged for the relay to deliver.
+
+    Only the outbox can say so (:class:`UnpublishedEventError`); a failure raised before the publish reached it, as when
+    the caller's storage options cannot be built, staged nothing.
+
+    Args:
+        failure: What the publish, or the work before it, raised.
+
+    Returns:
+        Whether the outbox holds the event.
+    """
+    return isinstance(failure, UnpublishedEventError) and failure.staged
+
+
 def _object_key(run_id: str, event_json: str) -> str:
     """The staged object's name: the run id AND the event type it carries.
 
@@ -272,6 +307,9 @@ async def publish_with_outbox(
     **Each lane MUST use its own ``outbox_uri``.** The prefix is drained by a lane-specific relay that
     re-ingests what it finds — the lineage relay writes into the lineage repository — so mixing lanes
     in one prefix would feed each relay the other's events.
+
+    Raises:
+        UnpublishedEventError: The publish did not reach the bus; its ``staged`` says whether the relay holds the event.
     """
     return await _publish_staged(
         publisher,
@@ -300,6 +338,9 @@ async def publish_lineage_with_outbox(
 
     Kept as the lineage lane's name so its six call sites read in the vocabulary of the thing they
     publish, and so a reader of this module can see which lanes exist.
+
+    Raises:
+        UnpublishedEventError: The publish did not reach the bus; its ``staged`` says whether the relay holds the event.
     """
     return await _publish_staged(
         publisher,
@@ -327,8 +368,8 @@ async def _publish_staged(
     """The mechanism both lanes share.
 
     With no ``outbox_uri`` configured this degrades to a plain publish (pre-#4 behavior), so the outbox is
-    opt-in. A publish failure PROPAGATES (the producer's existing RETRY / redelivery handles it) and leaves
-    the staged object in place, so even a hard process crash between the stage and a durable delivery is
+    opt-in. A publish failure PROPAGATES as :class:`UnpublishedEventError` and leaves the staged object in place,
+    so even a hard process crash between the stage and a durable delivery is
     recoverable by the relay. The delete is best-effort: a failed delete just leaves a redundant object the
     relay re-ingests idempotently and drops, logged with its cause and counted as the stage's and the publish's
     failures are, so a store refusing every delete shows as itself rather than as a backlog nobody explains.
@@ -360,13 +401,13 @@ async def _publish_staged(
             data=event_json,
             data_content_type="application/json",
         )
-    except Exception:
-        # The event REMAINS staged — that is the crash window working, not data loss. Count it so a
-        # sustained publish outage is visible (rising failures + rising depth) instead of silent, then
-        # re-raise unchanged: the producer's retry/redelivery contract is unaltered by the metric.
+    except Exception as exc:
+        # A staged event REMAINS staged — that is the crash window working, not data loss. Counted so a sustained publish
+        # outage is visible (rising failures + rising depth) instead of silent. Whether it is staged is this call's to say,
+        # since a stage that failed above left the relay nothing although an outbox is configured ([[LH-573]]).
         if staged:
             outbox_metrics.record_publish_failed()
-        raise
+        raise UnpublishedEventError(exc, staged=staged) from exc
     outbox_metrics.record_published()
     if not staged:
         return

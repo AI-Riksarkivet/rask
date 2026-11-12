@@ -45,6 +45,7 @@ from opentelemetry import metrics
 from pydantic import BaseModel
 
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, tag_move_run_id
+from catalog.core.identifiers import top_namespace
 from catalog.core.run_context import RunContext
 from lakehouse import outbox
 from lakehouse.governed import fga
@@ -479,15 +480,10 @@ type ProjectResolver = Callable[[str], Awaitable[str | None]]
 class EmitFields(TypedDict, total=False):
     """The OPTIONAL metadata every emit accepts, declared ONCE (CAT-CORE-07).
 
-    This block was spelled out in full on all eight emitter methods — the Protocol's two, and
-    ``OriginatorBoundEmitter``'s, ``NoopEmitter``'s and ``_BaseLineageEmitter``'s pairs — and it had
-    already grown twice while copied (``project`` and ``originator`` were added to every one of the
-    eight in a single commit; the block went from eleven keywords to twelve).
-
-    That is not a tidiness problem. A copy that misses a keyword does not fail to type: it silently
-    DROPS the field. ``project`` is WATCH targeting's only key, so dropping it means an event nobody
-    watching the tenant is told about; ``originator`` names the person a service wrote FOR, so dropping
-    it puts the row in the wrong inbox. Both were live defects on this exact seam.
+    All eight emitter methods (the Protocol's two, and ``OriginatorBoundEmitter``'s, ``NoopEmitter``'s and
+    ``_BaseLineageEmitter``'s pairs) name this bundle rather than restating it, because a copy that misses a keyword
+    does not fail to type: it silently DROPS the field. ``originator`` names the person a service wrote FOR, so
+    dropping it puts the row in the wrong inbox.
 
     PEP 692 ``Unpack``, so every caller keeps the identical keyword call syntax — nothing at any call
     site changes — while each implementation names the bundle instead of restating it.
@@ -495,6 +491,9 @@ class EmitFields(TypedDict, total=False):
     The REQUIRED arguments (``table_id``, ``namespace``, ``author``, ``version``, and ``operation`` on
     the write side) stay explicit: they differ between ``emit_create`` and ``emit_write``, and a
     required field in a ``total=False`` bundle would be an optional one.
+
+    The tenant is no field here: the emitter resolves it from the table's top namespace in ``emit_write``, so an event
+    names the project the registry binds and no other.
     """
 
     #: When the commit was made (``dataplane.CommitReadback.committed_at``), the event's ``eventTime``; now when unknown.
@@ -509,8 +508,6 @@ class EmitFields(TypedDict, total=False):
     inputs: list[InputRef] | None
     #: The run the writer named, the event's standard ``parent`` run.
     run: RunContext | None
-    #: The TENANT owning the namespace — WATCH targeting's only key.
-    project: str | None
     #: The person a SERVICE made this write for, when ``author`` is the service.
     originator: str | None
     #: The Lance REF the write committed to (``None`` = main). Absent for main rather than the literal
@@ -698,9 +695,7 @@ class _BaseLineageEmitter:
     ) -> None:
         # The whole optional bundle rides through verbatim: a create can DERIVE FROM a version-pinned
         # source (a client's publish, a job's first write) and carry producer run facets, the
-        # same metadata merge_insert has always accepted. `project`/`originator` were declared and
-        # silently dropped here until 2026-08-18 — the kwarg existing per-copy is what hid it, and the
-        # shared bundle is what stops it recurring.
+        # same metadata merge_insert accepts, and the bundle is named rather than restated so no field is dropped here.
         await self.emit_write(table_id=table_id, namespace=namespace, author=author, version=version, operation=CREATE_TABLE, **fields)
 
     async def emit_write(
@@ -716,10 +711,10 @@ class _BaseLineageEmitter:
         # HERE, the one place every catalog emit passes through, so no door can announce a provenance row.
         if self._unannounced is not None and self._unannounced(namespace, operation):
             return
-        # Resolved here rather than per call site: the mapping is mechanical, and a per-caller kwarg
-        # is a rule every future endpoint eventually forgets (none ever passed one). Best-effort —
-        # this runs on a committed write, so an unresolvable tenant costs a notification, not a request.
-        resolved_project = fields.get("project") or await self.project_for(namespace)
+        # THE EVENT'S TENANT, resolved once, here, for the same reason: the registry binds a tenant to a top namespace
+        # only, so the key is the table's top namespace however deep the table lies ([[LH-573]]). Best-effort: this
+        # runs on a committed write, so an unresolvable tenant costs a notification, not a request.
+        project = await self.project_for(top_namespace(namespace))
         try:
             run_id = self._run_id(version, operation, fields)
         except SigningKeyUnavailableError as exc:
@@ -741,7 +736,7 @@ class _BaseLineageEmitter:
             schema_fields=fields.get("schema_fields"),
             inputs=fields.get("inputs"),
             run=fields.get("run"),
-            project=resolved_project,
+            project=project,
             originator=fields.get("originator"),
             branch=fields.get("branch"),
             branch_identifier=fields.get("branch_identifier"),
@@ -896,7 +891,7 @@ class DaprEmitter(_BaseLineageEmitter):
             log.warning("lineage_emit_withheld_unsigned", extra={"operation": operation, "table": table_id, "error": str(exc)})
         except Exception as exc:
             _emit_failed.add(1, {"lance.catalog.transport": "dapr"})
-            log.warning("lineage_publish_failed", extra={"operation": operation, "table": table_id, "error": str(exc)})
+            log.warning("lineage_publish_failed", extra={"operation": operation, "table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)})
 
 
 def make_emitter(
@@ -1004,12 +999,6 @@ async def emit_write_event(
     """
     refs = await input_refs(inputs, uuids=uuids)
     table_uuids = known if known is not None else await uuids.table(segments, location=source_uri)
-    # THE TENANT, resolved from the table's TOP namespace segment — the rung the warehouse registry
-    # binds. Done HERE rather than at the eight call sites because not one of them has a project in
-    # scope (`endpoints/data.py` does not mention the word), and because a lookup repeated eight times
-    # is eight chances to derive it differently. `project_for` is best-effort and returns `None` on any
-    # failure, which degrades to exactly the previous behaviour: the author is told, the watchers are not.
-    project = await emitter.project_for(segments[0] if segments else "")
     await emitter.emit_write(
         table_id=fga.canonical_object_id(segments),
         namespace=fga.parent_namespace_id(segments) or "",
@@ -1021,7 +1010,6 @@ async def emit_write_event(
         schema_fields=schema_fields,
         inputs=refs,
         run=run,
-        project=project,
         branch=branch,
         branch_identifier=branch_identifier,
         commits_rows=commits_rows,

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -35,7 +37,9 @@ from catalog.core.lineage_emit import (
 from catalog.core.run_context import RunContext
 from lakehouse.lineage_events import LANCE_FACET, DatasetUuids
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE
+from lakehouse.storage_options import StorageOptions
 from lineage.models import RunEvent
+from tests.unit.no_store_session import no_store_session
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -224,40 +228,11 @@ def test_http_emitter_forwards_authorization() -> None:
 class _RecordingEmitter:
     """Records the emit_write call kwargs (stands in for the real emitter)."""
 
-    def __init__(self, project: str | None = None) -> None:
+    def __init__(self) -> None:
         self.writes: list[dict[str, Any]] = []
-        self.resolved: list[str] = []
-        self._project = project
-
-    async def project_for(self, top_ns: str) -> str | None:
-        """Part of the `LineageEmitter` protocol, so the fake carries it too. Recording the argument
-        is the point of the assertion below: the tenant must be resolved from the table's TOP
-        namespace segment, which is the rung the warehouse registry actually binds."""
-        self.resolved.append(top_ns)
-        return self._project
 
     async def emit_write(self, **kwargs: Any) -> None:
         self.writes.append(kwargs)
-
-
-def test_emit_write_event_resolves_the_tenant_from_the_top_namespace_segment() -> None:
-    """The eight call sites have no project in scope, so `emit_write_event` resolves it once and
-    forwards it. Pinned because getting the SEGMENT wrong is silent: resolving `bronze` instead of
-    `alpha` finds no binding, returns None, and the write goes out watcher-less exactly as before."""
-    em = _RecordingEmitter(project="acme")
-    asyncio.run(
-        emit_write_event(
-            cast(LineageEmitter, em),
-            ["alpha", "bronze", "images"],
-            author="alice",
-            version=1,
-            operation=INSERT,
-            authorization=None,
-            uuids=NO_OBJECT_UUIDS,
-        )
-    )
-    assert em.resolved == ["alpha"]
-    assert em.writes[0]["project"] == "acme"
 
 
 def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> None:
@@ -439,8 +414,20 @@ def test_dapr_emitter_publishes_event_to_topic() -> None:
     assert _facets(pub["event"])["rask_author"]["sub"] == "alice"  # the verified catalog author
 
 
-def test_dapr_emitter_swallows_publish_failure() -> None:
-    # A sidecar/broker outage at publish must never break the catalog write (best-effort, like HTTP).
+@pytest.mark.parametrize(
+    ("outbox_at", "storage_options", "staged"),
+    [
+        pytest.param("lineage-outbox", None, True, id="the-outbox-holds-it"),
+        pytest.param("occupied/lineage-outbox", None, False, id="the-stage-fails"),
+        pytest.param("lineage-outbox", no_store_session, False, id="the-store-session-is-gone"),
+    ],
+)
+def test_a_dapr_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, outbox_at: str, storage_options: Callable[[], StorageOptions] | None, staged: bool
+) -> None:
+    """A sidecar or broker outage at publish never breaks the catalog write, and the line it logs says whether the relay
+    can still deliver the event ([[LH-573]])."""
+    (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
     emitter = DaprEmitter(
         cast(Any, _FakeDapr(fail=True)),
         "lineage-pubsub",
@@ -448,8 +435,13 @@ def test_dapr_emitter_swallows_publish_failure() -> None:
         job_namespace="x",
         dataset_namespace=DEFAULT_DATASET_NAMESPACE,
         timeout_seconds=5.0,
+        outbox_uri=f"file://{tmp_path}/{outbox_at}",
+        storage_options=storage_options,
     )
-    asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author=None, version=2, operation=INSERT))  # no raise
+
+    asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author=None, version=2, operation=INSERT))
+
+    assert [getattr(record, "staged", None) for record in caplog.records if record.getMessage() == "lineage_publish_failed"] == [staged]
 
 
 # --- #19: lineage on every write (not just create) ---
@@ -514,45 +506,6 @@ def test_http_emitter_emit_write_posts_operation_and_version_under_the_commits_r
     uuids = DatasetUuids(table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
     asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=4, operation=PUBLISH_TABLE, uuids=uuids))
     assert client.posted["run"]["runId"] != first
-
-
-@pytest.mark.asyncio
-async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -> None:
-    """The emitter resolves the tenant itself, at the one place every catalog write passes.
-
-    `rask_lance.project` is the key a notifier's project watch is looked up by, so an event without it reaches no
-    watcher at all. Resolving it HERE rather than at each of the call sites is deliberate: the mapping is mechanical
-    (top namespace → registry binding → tenant), and a per-caller kwarg is a rule every future endpoint has to
-    remember.
-    """
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
-
-    async def _resolver(top_ns: str) -> str | None:
-        return "acme" if top_ns == "acme-bronze" else None
-
-    emitter._project_resolver = _resolver  # noqa: SLF001 — `make_emitter` wires this in production
-
-    await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1)
-
-    lance = _facets(client.posted)["rask_lance"]
-    assert lance.get("project") == "acme", "an event naming no project reaches none of the project's watchers"
-
-
-@pytest.mark.asyncio
-async def test_an_EXPLICIT_project_is_not_overridden_by_resolution() -> None:
-    """A caller that knows the tenant beats a lookup — resolution fills a gap, it does not decide."""
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
-
-    async def _resolver(_top_ns: str) -> str | None:
-        return "wrong-tenant"
-
-    emitter._project_resolver = _resolver  # noqa: SLF001
-
-    await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1, project="acme")
-
-    assert _facets(client.posted)["rask_lance"]["project"] == "acme"
 
 
 @pytest.mark.asyncio

@@ -55,7 +55,7 @@ tests:
               service: lineage
             exp_annotations:
               summary: "Lineage outbox holds events the graph refuses to record"
-              description: "A producer staged provenance it is not authorized to write, so the relay re-refuses it every tick and the event stays staged. Not a relay fault and not retryable: either the producer's grant is wrong or the event should never have been staged. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+              description: "A producer staged provenance the bus door's gate refuses: its author holds no grant to record it, no listed signer's key verifies it, or no grant could ever repair it. The relay records each in the refusals table and retires its staged object, and the outbox door of `lineage_events_processed_total` says which class. Not a relay fault and not retryable: either the producer's grant or key is wrong or the event should never have been staged. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
   # 1c. A relay that is DRAINING must not page either, however deep the backlog is. Depth alone never
   #     meant "stuck"; it means "there is work", and work being done is not a fault.
@@ -312,8 +312,8 @@ tests:
         alertname: LineageIngestDeadLettering
         exp_alerts: []
 
-  # E2 a. A refused bus event is ACKED, so without this alert the loss is silent and permanent — the
-  # exact failure shape the gate was written to prevent, reappearing as the gate's own side effect.
+  # E2 a. A refused event is missing from the feed until its grant is written, so without this alert the loss is
+  # silent — the exact failure shape the gate was written to prevent, reappearing as the gate's own side effect.
   - interval: 1m
     input_series:
       - series: "lineage_events_processed_total{lance_lineage_outcome=\"refused\"}"
@@ -328,7 +328,7 @@ tests:
               service: "lineage"
             exp_annotations:
               summary: "Lineage ingest is REFUSING events — a producer's provenance is being dropped"
-              description: "A bus-delivered run was refused because its stamped author does not hold the rung its operation demands on the datasets it claims to have written, and a refusal is ACKED — so the loss is silent and permanent without this alert. Either a producer is claiming an identity it has no grant for (the case the gate exists to catch) or a legitimate producer lost a grant it needs (a broken cascade wearing an authorization costume). Distinct from `dropped`, which is a malformed payload and a question about the producer's schema rather than its permissions. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "A run was refused because its stamped author does not hold the rung its operation demands on the datasets it claims to have written, and `lance_lineage_door` says where: a bus delivery is parked on the dead-letter topic, the HTTP door answers its producer 403, and the outbox drain records it in the refusals table. The feed lacks the run until the grant is written. Either a producer is claiming an identity it has no grant for (the case the gate exists to catch) or a legitimate producer lost a grant it needs (a broken cascade wearing an authorization costume). Distinct from `unrepairable`, which no grant can repair. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # THE DISCARD IS THE ONLY TRACE. An unrepairable event is ACKED, so it never reaches `/lineage-dlq`
   # and `LineageIngestDeadLettering` cannot see it — a steady dribble must page or the loss is silent.
@@ -345,7 +345,7 @@ tests:
               service: "lineage"
             exp_annotations:
               summary: "Lineage is DISCARDING events it can never record — a producer is emitting garbage"
-              description: "A delivered event did not parse, carried no author at all, or named only outputs that carry no authorization tuple — so no tuple, redelivery or restart could ever make it recordable. It is ACKED rather than parked, deliberately — a DROP on this subscription writes a dead-letter duplicate of the same event on every roll — which means THIS COUNT IS THE ONLY TRACE IT LEFT. A rising line here is a producer regression: something is publishing to `lineage.events.v1` without a verified author, with a body that is not an OpenLineage RunEvent, or naming an output the estate does not govern. Distinct from `refused`, which is a named person lacking a grant on a table that EXISTS and is repairable by writing the tuple. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "An event did not parse, carried no author at all, extended a run another subject founded, or named only outputs that carry no authorization tuple — so no tuple, redelivery or restart could ever make it recordable. On the bus it is ACKED rather than parked, deliberately — a DROP on this subscription writes a dead-letter duplicate of the same event on every roll — so there THIS COUNT IS THE ONLY TRACE IT LEFT; drained from the outbox it is kept in the refusals table too, and `lance_lineage_door` says which. A rising line here is a producer regression: something is publishing or staging events without a verified author, with a body that is not an OpenLineage RunEvent, or naming an output the estate does not govern. Distinct from `refused`, which is a named person lacking a grant on a table that EXISTS and is repairable by writing the tuple. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # THE RESTART BURST MUST NOT PAGE, shaped on the measured roll: 70 discards inside one burst at pod
   # start and then silence, because `deliverPolicy: all` re-presents the retained stream on every roll.

@@ -4,10 +4,9 @@ The native ``DirectoryNamespace`` stubs several table data, schema, and tag oper
 functions fill the gap: resolve the table's dataset via the namespace, then perform the operation
 with pylance.
 
-Most take ``(ns, storage_options, request)`` and return the typed ``lance_namespace`` response model.
-Exceptions: ``update_field_metadata`` takes ``(ns, storage_options, table_id, updates)``; and
-``create_table`` is the one facade that receives the raw Arrow-IPC ``data`` and writes it directly at
-file format 2.2 with stable row ids — the durable row identity row-id lineage needs.
+Most take the table a door resolved (``table_claims.DoorTable``) and the storage options, and return the typed
+``lance_namespace`` response model. ``create_table`` is the one facade that receives the raw Arrow-IPC ``data`` and
+writes it directly at file format 2.2 with stable row ids — the durable row identity row-id lineage needs.
 
 Scope: pylance dataset semantics only. HTTP read semantics over a blob payload — byte ranges,
 ``If-Range``, ETags, satisfiability, the bounded streaming window — belong to ``blob_serving.py``,
@@ -3436,16 +3435,37 @@ def update_field_metadata(
     *,
     transaction_properties: dict[str, str],
 ) -> UpdateFieldMetadataResponse:
-    """Merge/replace per-field metadata for the given field paths, committed with ``transaction_properties`` ([[LH-497]])."""
-    field_updates = {u["path"]: dict(u.get("metadata") or {}) for u in updates if u.get("path")}
-    replace_existing = any(bool(u.get("replace")) for u in updates)
+    """Merge or replace each entry's field metadata, committed as one version with ``transaction_properties`` ([[LH-497]]).
+
+    ``replace`` belongs to its entry (``lance_docs/ns_catalog/spec.yaml`` UpdateFieldMetadataEntry), so a request mixing
+    the two replaces only the fields whose entries ask (:func:`_apply_field_metadata`). The last entry naming a path
+    decides that path.
+
+    Args:
+        table: The table the door resolved.
+        so: The storage options the door opens it with.
+        updates: The request's entries, each a ``path``, its ``metadata`` (a ``None`` value deletes a key) and ``replace``.
+        branch: The ref to commit on; ``None`` is main.
+        transaction_properties: The stamp the commit carries.
+
+    Returns:
+        The version committed and each path's metadata as the request set it.
+
+    Raises:
+        TableColumnNotFoundError: An entry's path names no field (code 12).
+        ConcurrentModificationError: Another commit took the version this one planned on (code 14).
+        InvalidInputError: Lance refuses the update as the caller's mistake (code 13).
+    """
+    entries = {u["path"]: u for u in updates if u.get("path")}
+    field_updates = {path: dict(entry.get("metadata") or {}) for path, entry in entries.items()}
+    replacing = {path for path, entry in entries.items() if entry.get("replace")}
     dataset = table.open(so, branch=branch)
     with _column_op("update_field_metadata", dataset.schema.names):
         version, _ = commit_stamped(
             table,
             so,
             transaction_properties,
-            captured(table, so, lambda handle: handle.update_field_metadata(field_updates, replace=replace_existing), branch=branch),
+            captured(table, so, lambda handle: _apply_field_metadata(handle, field_updates, replacing=replacing), branch=branch),
             branch=branch,
             opened=dataset,
         )
@@ -3453,6 +3473,39 @@ def update_field_metadata(
     # echoed map since the response model's field values are non-nullable strings.
     fields = {path: {k: v for k, v in meta.items() if v is not None} for path, meta in field_updates.items()}
     return UpdateFieldMetadataResponse(version=version, fields=fields)
+
+
+def _apply_field_metadata(handle: lance.LanceDataset, field_updates: dict[str, dict[str, str | None]], *, replacing: set[str]) -> None:
+    """Apply ``field_updates`` on ``handle`` in ONE Lance call, so the request commits one version.
+
+    Lance's ``update_field_metadata`` takes one ``replace`` for the whole call. With no path in ``replacing`` every entry
+    merges. Otherwise the call replaces, and each merging entry names its field's whole metadata as ``handle``, the
+    version the call is planned on, holds it, with the entry's keys applied (:func:`_merged_field_metadata`).
+    """
+    if not replacing:
+        handle.update_field_metadata(field_updates)
+        return
+    merged = {path: _merged_field_metadata(handle, path, metadata) for path, metadata in field_updates.items() if path not in replacing}
+    handle.update_field_metadata({**field_updates, **merged}, replace=True)
+
+
+def _merged_field_metadata(handle: lance.LanceDataset, path: str, metadata: dict[str, str | None]) -> dict[str, str | None]:
+    """The metadata of the field at ``path`` on ``handle`` with ``metadata`` merged in.
+
+    A ``None`` value stays in, and the replacing call drops its key as a merging one does (measured on pylance 13.0.0). A
+    path no field resolves is answered as given, for Lance's own call to refuse (code 12, :func:`_column_op`).
+
+    Raises:
+        TypeError: pylance answers the field's metadata as something other than a dict.
+    """
+    field = handle.lance_schema.field(path)
+    if field is None:
+        return metadata
+    # pylance 13.0.0 serves `LanceField.metadata` as a dict of strings, an attribute its stub does not declare.
+    held = getattr(field, "metadata", None)
+    if not isinstance(held, dict):
+        raise TypeError(f"pylance answered the metadata of field {path!r} as {type(held).__name__}, not a dict")
+    return {**held, **metadata}
 
 
 #: Per-operation fields worth surfacing in a commit log, keyed by the pylance operation class name. Read
