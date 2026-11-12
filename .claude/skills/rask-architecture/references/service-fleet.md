@@ -42,6 +42,8 @@ gate).
 ## Lifespan injection recap
 
 `build_lance_service_app(lifespan=...)` takes the service's own `Callable[[FastAPI], AbstractAsyncContextManager[None]]`,
-and it is required. The lifespan opens the service's clients on enter and tears them down on exit, sets
-`app.state.startup_complete` once they are open and `app.state.shutting_down` on the way out (the flags `/readyz` reads,
-`lakehouse.lifecycle`), and registers anything it hosts there, never at import.
+and it is required. The lifespan opens the service's clients on enter, each pushed onto one `AsyncExitStack` so they are
+torn down in reverse on exit, starts every background loop on a `lakehouse.supervision.Supervisor` (a loop that ends
+while the process serves ends the process, exit 70, ADR 0203), sets `app.state.startup_complete` once they are open and
+`app.state.shutting_down` on the way out (the flags `/readyz` reads, `lakehouse.lifecycle`), and registers anything it
+hosts there, never at import.

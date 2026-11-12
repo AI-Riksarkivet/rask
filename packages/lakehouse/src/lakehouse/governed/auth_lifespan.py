@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from openfga_sdk import OpenFgaClient
 
     from lakehouse.governed.decider import AccessDecider
+    from lakehouse.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -199,6 +200,7 @@ async def attach_auth(
     settings: _GovernedSettings,
     *,
     service: str,
+    loops: Supervisor,
     provision: bool = False,
     fatal: bool = False,
 ) -> None:
@@ -206,6 +208,9 @@ async def attach_auth(
 
     `app.state.decider` answers every gate's authorization question: the catalog's decision door for a service
     configured with `fga_decider_url`, which then has no `app.state.fga`, or the store through `app.state.fga`.
+
+    Each verifier's keys are fetched here and then again on a loop of ``loops`` (`OIDCVerifier.refresh_forever`), so a
+    request reads keys already held and an identity-provider outage serves the last good ones.
 
     Call from a lifespan, before yielding. `service` names the caller in the log lines, which is the
     only thing that differed between the copies this replaces. See the module docstring for what
@@ -246,10 +251,11 @@ async def attach_auth(
             # unreachable IdP in this pod's log AT BOOT with the URL that failed — instead of in a
             # user's failed request minutes later.
             #
-            # OFF THE EVENT LOOP: `warm` performs bounded but blocking HTTP, and this runs inside the
+            # OFF THE EVENT LOOP: `refresh` performs bounded but blocking HTTP, and this runs inside the
             # lifespan of an async app. Awaiting it inline would stall the worker, which is the exact
             # reason `verify_off_loop` exists one module over.
-            failures = await run_in_threadpool(app.state.oidc.warm)
+            failures = await run_in_threadpool(app.state.oidc.refresh)
+            loops.keep("oidc-keys", app.state.oidc.refresh_forever)
             if failures:
                 # NOT FATAL, and never readiness. Gating startup or `/readyz` on a downstream IdP
                 # turns one blip into every governed pod leaving its Service endpoints at once —
@@ -277,7 +283,8 @@ async def attach_auth(
                 ca_file=settings.sa_ca_file,
             )
             # Proved at boot, off the loop, reported and never fatal: the Dex verifier's reasons above.
-            failures = await run_in_threadpool(app.state.sa_oidc.warm)
+            failures = await run_in_threadpool(app.state.sa_oidc.refresh)
+            loops.keep("service-account-keys", app.state.sa_oidc.refresh_forever)
             for issuer, reason in failures:
                 log.error("%s: service-account issuer unusable (issuer=%s): %s", service, issuer, reason)
             if not failures:

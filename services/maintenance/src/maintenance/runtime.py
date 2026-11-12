@@ -10,20 +10,49 @@ start and stopped at its end, and a start that fails part-way stops what it had 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import TYPE_CHECKING
 
 from dapr.aio.clients import DaprClient
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.bus_watchdog import start_bus_watchdog
 from lakehouse.control_emit import ControlEmitter, ControlSign, make_control_emitter
-from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder
+from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency
+from lakehouse.health import Dependency, HealthWatch, store_dependency
 from lakehouse.lance_metrics import instrument_lance_if_available
+from lakehouse.lifecycle import closed_quietly
 from lakehouse.lineage import SigningKey, attach_control_signature, parse_published_keys
+from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.store_session import require_env_pair, start_store_session
+from lakehouse.supervision import Supervisor
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter, make_emitter
+
+
+if TYPE_CHECKING:
+    from maintenance.services.queue import TaskQueue
+
+
+def reported_health(settings: MaintenanceSettings, queue: TaskQueue | None) -> HealthWatch:
+    """What a maintenance process reports in `/readyz` and gates on none of (ADR 0203): the object store under its own
+    session (the control root's listing), which a task the store fails is retried against; the bus its queue is on, which
+    delivers again what the process could not take; and the secret store it reads keys from, whose keys it already read
+    carry it through."""
+    dependencies = [store_dependency(settings.resolved_control_root, settings.storage_options, required=False)]
+    if queue is not None:
+        dependencies.append(Dependency(name="bus", read=queue.answering, required=False))
+    if settings.secrets_from_dapr and settings.signing_identity:
+        dependencies.append(secret_store_dependency(settings.dapr_secret_store, settings.signing_identity))
+    return HealthWatch(dependencies)
+
+
+async def reported_readiness(request: Request) -> Readiness:
+    """`/readyz`'s answer from what the process's health watch last found; ready while it keeps none, as through a
+    read-only window, when the worker connects to no bus."""
+    health: HealthWatch | None = getattr(request.app.state, "health", None)
+    return health.readiness() if health is not None else Readiness(status=ReadinessStatus.ready)
 
 
 class Collaborators(BaseModel):
@@ -48,8 +77,8 @@ def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
 
 
 @asynccontextmanager
-async def standing(app: FastAPI, settings: MaintenanceSettings) -> AsyncGenerator[None]:
-    """The store session and the bus watchdog, for either process, stopped on the way out."""
+async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[None]:
+    """The store session and the bus watchdog, for either process, their loops on ``loops``, stopped on the way out."""
     async with AsyncExitStack() as stack:
         instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
         # MAINTENANCE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its identity at the store is the ServiceAccount token its
@@ -57,7 +86,7 @@ async def standing(app: FastAPI, settings: MaintenanceSettings) -> AsyncGenerato
         # closed if none is issued, then exchanged again once half the session's life is used. Its own reads and records
         # sign with that session; every rewrite signs with its table's vend. With no token (the offline and Dagger lanes)
         # the environment's pair signs, and is refused here when either half is missing.
-        store_session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds)
+        store_session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds, loops=loops)
         if store_session is None:
             require_env_pair(settings.env_pair, prefix="MAINTENANCE")
         else:
@@ -65,28 +94,23 @@ async def standing(app: FastAPI, settings: MaintenanceSettings) -> AsyncGenerato
         app.state.store_session = store_session
         # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
         # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
-        bus_watchdog = await start_bus_watchdog()
+        bus_watchdog = await start_bus_watchdog(loops)
         if bus_watchdog is not None:
             stack.push_async_callback(bus_watchdog.stop)
         yield
 
 
-async def _closed_quietly(client: DaprClient) -> None:
-    """Close the sidecar client; a close the sidecar no longer answers is the end it was closed for."""
-    with suppress(Exception):
-        await client.close()
-
-
 @asynccontextmanager
-async def collaborators(app: FastAPI, settings: MaintenanceSettings) -> AsyncGenerator[Collaborators]:
+async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[Collaborators]:
     """Build what the worker emits with (its signing key, the sidecar client and the two emitters), publish the key on
-    ``app.state`` for the readiness probe that reads it there, and stop it all on the way out."""
+    ``app.state`` for the readiness probe that reads it there, keep the key's loop on ``loops``, and stop it all on the
+    way out."""
     async with AsyncExitStack() as stack:
         # ONE sidecar client for both emitters, lineage (data) and control (governance). Built when either is on; the
         # sidecar is local, so construction is cheap and needs no broker reachability at start.
         dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled) else None
         if dapr_client is not None:
-            stack.push_async_callback(_closed_quietly, dapr_client)
+            stack.push_async_callback(closed_quietly, dapr_client.close)
         # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), or None for a stack with no store or no identity. It is also the
         # author every event stamps, which the emitter checks at construction: a verifier refuses a signer that is not
         # its event's author.
@@ -131,6 +155,6 @@ async def collaborators(app: FastAPI, settings: MaintenanceSettings) -> AsyncGen
         # worker waiting for its key takes no task, reports itself not ready, and heals in place when the key is
         # published.
         if signing is not None:
-            await signing.start()
+            await signing.start(loops)
             stack.push_async_callback(signing.stop)
         yield Collaborators(signing=signing, lineage=lineage, control=control)

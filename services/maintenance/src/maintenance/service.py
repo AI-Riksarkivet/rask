@@ -18,10 +18,10 @@ from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.dapr_auth import assert_app_token_configured
 from lakehouse.lance_app import build_lance_service_app
 from lakehouse.obs import configure_app_logging
-from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.supervision import Supervisor
 from maintenance.api.arrival import register_arrival_route
 from maintenance.core.config import MaintenanceSettings, get_settings
-from maintenance.runtime import standing
+from maintenance.runtime import reported_health, reported_readiness, standing
 from maintenance.services.queue import TaskQueue
 from maintenance.services.tasks import connected_queue
 
@@ -42,13 +42,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # Fail closed if behind a Dapr sidecar but the app-token is unset: the write-event route would otherwise be an
         # open forged-commit path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
         assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
-        async with standing(app, settings), _lanes_queue(settings) as task_queue:
+        # Every background loop of this process is supervised: one that ends unasked ends the process (ADR 0203).
+        async with Supervisor() as loops, standing(app, settings, loops), _lanes_queue(settings) as task_queue:
             app.state.task_queue = task_queue
+            # Reported and never gating: the lane's deliveries come from the sidecar, which no readiness answer turns away.
+            app.state.health = reported_health(settings, task_queue)
+            app.state.health.watch(loops)
             app.state.startup_complete = True
             try:
                 yield
             finally:
                 app.state.shutting_down = True
+                await loops.stop()
     finally:
         _disarm_drain()
 
@@ -59,21 +64,18 @@ def _lanes_queue(settings: MaintenanceSettings) -> AbstractAsyncContextManager[T
     return connected_queue(settings) if settings.arrival_enabled and settings.lineage_topic else nullcontext()
 
 
-async def _ready(_request: object) -> Readiness:
-    """Nothing of this process's own to report: it signs nothing, and its lane's door reads its keys per delivery."""
-    return Readiness(status=ReadinessStatus.ready)
-
-
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
-# gate, the handler pair in the order that makes it work, one request id, and the probes — see
-# `lakehouse.lance_app` for what each of those five is for and what a copy of it got wrong.
+# gate, the handler pair in the order that makes it work, one request id, every layer a request passes, and the probes
+# — see `lakehouse.lance_app` for what each is for and what a copy of it got wrong.
 app = build_lance_service_app(
     title="Lance table maintenance",
     docs_enabled=get_settings().docs_enabled,
     audit_enabled=get_settings().audit_enabled,
     lifespan=lifespan,
     log=log,
-    ready_check=_ready,
+    ready_check=reported_readiness,
+    max_body_bytes=get_settings().max_body_bytes,
+    request_deadline_seconds=get_settings().request_deadline_seconds,
 )
 
 # The write-event subscription (POST /maintenance-arrival), registered only when the lane is enabled.

@@ -107,7 +107,6 @@ def clone_refusal(settings: Settings, record: dict[str, Any]) -> str | None:
 
     Raises:
         OSError: The store refused, or could not be reached for, the listing of the table's tags.
-        botocore.exceptions.ClientError: The store refused the listing.
     """
     if readers := clone_sources.clones_reading(trash.location_of(record), settings.storage_options()):
         return f"{len(readers)} registered clone(s) read the table's files; its bytes go once those clones are dropped or deregistered"

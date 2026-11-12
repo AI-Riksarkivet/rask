@@ -18,6 +18,7 @@ is the finding and "the helper cannot express the difference" is the reason the 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import pytest
@@ -27,6 +28,7 @@ from pydantic import BaseModel
 from lakehouse.governed import fga as fga_mod
 from lakehouse.governed import oidc as oidc_mod
 from lakehouse.governed.auth_lifespan import attach_auth, build_fga_client
+from lakehouse.supervision import Supervisor
 
 
 class _Settings(BaseModel):
@@ -86,13 +88,16 @@ def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     monkeypatch.setattr(fga_mod, "resolve", resolve)
     monkeypatch.setattr(fga_mod, "make_client", make_client)
 
-    # A stand-in with the ONE method the startup path calls on it. `attach_auth` warms the verifier
-    # so a misconfigured issuer is in the pod's log at boot rather than in a user's failed request,
-    # and a bare `object()` cannot answer that — these postures are about the FGA half, so the OIDC
-    # half has to get far enough out of the way to reach it.
+    # A stand-in with the methods the startup path calls on it. `attach_auth` fetches the verifier's keys
+    # so a misconfigured issuer is in the pod's log at boot rather than in a user's failed request, and
+    # keeps them fetched on a background loop; a bare `object()` cannot answer either — these postures are
+    # about the FGA half, so the OIDC half has to get far enough out of the way to reach it.
     class _WarmVerifier:
-        def warm(self) -> list[tuple[str, str]]:
+        def refresh(self) -> list[tuple[str, str]]:
             return []
+
+        async def refresh_forever(self) -> None:
+            await asyncio.Event().wait()
 
     monkeypatch.setattr(oidc_mod, "OIDCVerifier", lambda *a, **k: _WarmVerifier())
     return rec
@@ -108,7 +113,8 @@ async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) 
     `maintainer` rung. The catalog opts in explicitly; everything else reads.
     """
     app = FastAPI()
-    await attach_auth(app, _Settings(), service="t")
+    async with Supervisor() as loops:
+        await attach_auth(app, _Settings(), service="t", loops=loops)
 
     assert "provision" not in fga_calls.calls, "the DEFAULT posture published a model — boot order now decides the estate's permissions"
     assert fga_calls.calls == ["resolve", "make_client:01RESOLVED"]
@@ -130,7 +136,8 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(
     monkeypatch.setattr(fga_mod, "resolve", resolve)
     app = FastAPI()
     with caplog.at_level(logging.WARNING):
-        await attach_auth(app, _Settings(), service="t", provision=False)
+        async with Supervisor() as loops:
+            await attach_auth(app, _Settings(), service="t", loops=loops, provision=False)
 
     assert getattr(app.state, "fga", None) is None
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
@@ -179,7 +186,8 @@ async def test_fatal_True_reraises_a_failed_fga_build(monkeypatch: pytest.Monkey
     monkeypatch.setattr(fga_mod, "resolve", boom)
     app = FastAPI()
     with pytest.raises(RuntimeError, match="openfga unreachable"):
-        await attach_auth(app, _Settings(), service="t", fatal=True)
+        async with Supervisor() as loops:
+            await attach_auth(app, _Settings(), service="t", loops=loops, fatal=True)
 
 
 @pytest.mark.asyncio
@@ -192,7 +200,8 @@ async def test_fatal_True_reraises_a_failed_verifier_build(monkeypatch: pytest.M
     monkeypatch.setattr(oidc_mod, "OIDCVerifier", boom)
     app = FastAPI()
     with pytest.raises(RuntimeError, match="discovery refused"):
-        await attach_auth(app, _Settings(fga_enabled=False), service="t", fatal=True)
+        async with Supervisor() as loops:
+            await attach_auth(app, _Settings(fga_enabled=False), service="t", loops=loops, fatal=True)
 
 
 @pytest.mark.asyncio
@@ -207,7 +216,8 @@ async def test_the_default_stays_NON_fatal(monkeypatch: pytest.MonkeyPatch, fga_
     # The read half, for the same reason as the fatal case above: it is the one the default takes.
     monkeypatch.setattr(fga_mod, "resolve", boom)
     app = FastAPI()
-    await attach_auth(app, _Settings(), service="t")
+    async with Supervisor() as loops:
+        await attach_auth(app, _Settings(), service="t", loops=loops)
 
     assert getattr(app.state, "fga", None) is None
     assert getattr(app.state, "oidc", None) is not None, "the OIDC half must build independently — one failure must not take the other down"

@@ -343,6 +343,11 @@
                         }
                     }
                 },
+                "requestDeadlineSeconds": {
+                    "description": "Seconds a catalog request may run before its caller is answered 503 (code 17) while it runs on to its end (LANCE_REQUEST_DEADLINE_SECONDS).",
+                    "type": "integer",
+                    "minimum": 1
+                },
                 "trashGraceDays": {
                     "description": "Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.",
                     "type": "number",
@@ -711,6 +716,11 @@
                     "description": "Emit a lineage event per dataset whose versions a pass reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.",
                     "type": "boolean"
                 },
+                "maxBodyBytes": {
+                    "description": "Maximum request-body bytes on any maintenance route (MAINTENANCE_MAX_BODY_BYTES), one write event its lane is delivered; larger bodies get 413 before a byte is read.",
+                    "type": "integer",
+                    "minimum": 1
+                },
                 "minVersionsToExpire": {
                     "description": "Expiry runs on a table only once it has at least this many reclaimable versions.",
                     "type": "integer"
@@ -804,6 +814,11 @@
                 },
                 "replicas": {
                     "description": "Replicas of maintenance's web pods, which serve the write-event lane and run no worker.",
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "requestDeadlineSeconds": {
+                    "description": "Seconds a maintenance request may run before its caller is answered 503 (code 17) while it runs on to its end (MAINTENANCE_REQUEST_DEADLINE_SECONDS, ADR 0203).",
                     "type": "integer",
                     "minimum": 1
                 },
@@ -1781,6 +1796,11 @@
                                 }
                             }
                         },
+                        "maxBodyBytes": {
+                            "description": "Maximum request-body bytes on any lineage route (LINEAGE_MAX_BODY_BYTES), one OpenLineage event; larger bodies get 413 before a byte is read.",
+                            "type": "integer",
+                            "minimum": 1
+                        },
                         "module": {
                             "description": "uvicorn import path the lineage Deployment runs (templates/services.yaml).",
                             "type": "string"
@@ -1826,6 +1846,11 @@
                         "replicas": {
                             "description": "Replica count of lineage; replicas form a competing-consumer group, so it scales freely.",
                             "type": "integer"
+                        },
+                        "requestDeadlineSeconds": {
+                            "description": "Seconds a lineage request may run before its caller is answered 503 (code 17) while it runs on to its end (LINEAGE_REQUEST_DEADLINE_SECONDS, ADR 0203).",
+                            "type": "integer",
+                            "minimum": 1
                         }
                     }
                 }

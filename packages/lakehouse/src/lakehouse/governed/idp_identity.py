@@ -95,9 +95,13 @@ class IdpVerifier:
         self._verifier = verifier
         self._connectors = dict(connectors)
 
-    def warm(self) -> list[tuple[str, str]]:
-        """Resolve the issuer now and report what failed; see `OIDCVerifier.warm`."""
-        return self._verifier.warm()
+    def refresh(self) -> list[tuple[str, str]]:
+        """Fetch the issuer's keys now and report what failed; see `OIDCVerifier.refresh`."""
+        return self._verifier.refresh()
+
+    async def refresh_forever(self) -> None:
+        """Fetch the issuer's keys again in the background until cancelled; see `OIDCVerifier.refresh_forever`."""
+        await self._verifier.refresh_forever()
 
     def verify(self, token: str) -> PersonPrincipal | ServicePrincipal:
         """The caller the token proves; `UnauthenticatedError` for a token at fault, `ProviderUnavailableError` for the IdP."""

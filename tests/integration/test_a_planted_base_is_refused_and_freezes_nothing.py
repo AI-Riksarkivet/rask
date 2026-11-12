@@ -44,6 +44,7 @@ import pyarrow as pa
 import pytest
 import respx
 from botocore.exceptions import ClientError
+from botocore.paginate import Paginator
 from fastapi.testclient import TestClient
 from lance_namespace import InvalidTableStateError, LanceNamespace, TableNotFoundError
 from pydantic import SecretStr
@@ -473,6 +474,45 @@ def test_a_source_a_registered_clone_reads_is_not_destroyed(estate: _Estate) -> 
 
     _refused(refused, _INVALID_TABLE_STATE)
     assert _reads_cold(clone, estate.key.in_clear()) == _CLONED_IDS, "the refused drop changed what the clone reads"
+
+
+class _ThrottledTagListings:
+    """An S3 client whose every listing under a dataset's ``_refs/tags/`` answers SlowDown: the store failing the
+    question a drop asks of who reads a table's bytes, and nothing else."""
+
+    def __init__(self, inner: S3Client) -> None:
+        self._inner = inner
+
+    def get_paginator(self, operation: str) -> _ThrottledTagPages:
+        return _ThrottledTagPages(self._inner.get_paginator(operation))
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+
+class _ThrottledTagPages:
+    """A paginator that answers SlowDown for a listing under ``_refs/tags/`` and pages every other one as the store does."""
+
+    def __init__(self, inner: Paginator) -> None:
+        self._inner = inner
+
+    def paginate(self, **request: str) -> object:
+        if "_refs/tags/" in request.get("Prefix", ""):
+            raise ClientError({"Error": {"Code": "SlowDown", "Message": "Please reduce your request rate."}}, "ListObjectsV2")
+        return self._inner.paginate(**request)
+
+
+def test_a_drop_whose_tags_the_store_cannot_list_destroys_nothing(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A drop destroying a table's bytes first asks the store which registered clones read them; a store that does not
+    answer that listing is an outage, answered 503 code 17 with the table and its bytes standing."""
+    real_client = storage.s3_client
+    monkeypatch.setattr(storage, "s3_client", lambda *args, **kwargs: _ThrottledTagListings(real_client(*args, **kwargs)))
+
+    refused = estate.client.post("/v1/table/db$victim/drop", params={"purge": "true"}, json={})
+
+    monkeypatch.undo()
+    assert (refused.status_code, refused.json()["code"]) == (503, 17), refused.text
+    assert estate.open(estate.victim).count_rows() == 3 * _ROWS.num_rows, "the drop destroyed bytes it could not judge"
 
 
 def test_a_cascade_destroying_a_source_a_clone_outside_it_reads_is_refused(estate: _Estate) -> None:

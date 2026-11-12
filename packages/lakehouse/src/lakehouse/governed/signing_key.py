@@ -35,14 +35,21 @@ import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from typing import Final, Protocol
+from functools import partial
+from typing import TYPE_CHECKING, Final, Protocol
 
+import httpx
 from fastapi import FastAPI, Request
 
 from lakehouse.governed.principal import Principal
-from lakehouse.governed.secrets import fetch_dapr_secret
+from lakehouse.governed.secrets import fetch_dapr_secret, secret_store_answers
+from lakehouse.health import Dependency
 from lakehouse.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+
+
+if TYPE_CHECKING:
+    from lakehouse.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -68,6 +75,8 @@ _KEY_NAME: Final = re.compile(r"[a-z0-9][a-z0-9-]*")
 #: worker that long per event through a store blip. An outage is answered RETRY instead, and the sidecar's redelivery is
 #: the retry.
 KEY_READ_TIMEOUT_SECONDS: Final = 2.0
+#: The bound on the health watch's read of the secret store, inside the watch's own budget for it.
+_SECRET_STORE_READ_SECONDS: Final = 2.0
 
 
 class SigningKeyUnavailableError(RuntimeError):
@@ -121,6 +130,16 @@ def signing_key_secret(identity: str) -> str:
 def signing_public_secret(identity: str) -> str:
     """The secret holding `identity`'s published public keys. Never denied to any sidecar."""
     return f"signing-public-{signing_key_name(identity)}"
+
+
+def secret_store_dependency(store: str, identity: str) -> Dependency:
+    """The secret store as a dependency `/readyz` reports and never gates on (ADR 0203), read for ``identity``'s published
+    key list, which no sidecar is denied: a service rides through the store's outage on the keys it already holds. Each
+    read goes out on one client, held while the store is watched and closed with the watch."""
+    sidecar = httpx.AsyncClient(timeout=_SECRET_STORE_READ_SECONDS)
+    return Dependency(
+        name="secret-store", read=partial(secret_store_answers, sidecar, store, signing_public_secret(identity)), required=False, close=sidecar.aclose
+    )
 
 
 def published_key_fetch(store: str) -> Callable[[str], Mapping[str, str]]:
@@ -242,14 +261,14 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
             log.info("signing_key_resolved", extra={"identity": self._identity, "kid": key.kid})
         return key is not None
 
-    async def start(self) -> None:
-        """Resolve once now, then keep re-resolving in the background until `stop`.
+    async def start(self, loops: Supervisor) -> None:
+        """Resolve once now, then keep re-resolving on a loop of ``loops`` until `stop`.
 
         An unresolved key does not fail the start: a signer that is waiting for its key must still boot, so that its
         probes and its retry answers are served while it heals.
         """
         await asyncio.to_thread(self.resolve)
-        self._task = asyncio.create_task(self._refresh_forever(), name=f"signing-key-{self._identity}")
+        self._task = loops.keep(f"signing-key-{self._identity}", self._refresh_forever)
 
     async def stop(self) -> None:
         """End the background loop. Safe to call when it never started."""
@@ -302,7 +321,7 @@ def signing_of(app: FastAPI) -> SigningStatus | None:
 def signing_ready_check(inner: ReadyCheck | None = None) -> ReadyCheck:
     """A `/readyz` check that adds the signing key to whatever `inner` already reports.
 
-    A signer that cannot sign is `degraded`, which the probe router serves as 503: the pod leaves its Service while
+    A signer that cannot sign is `unhealthy`, which the probe router serves as 503: the pod leaves its Service while
     `/livez` stays 200, so it is waited on rather than restarted.
     """
 
@@ -311,6 +330,6 @@ def signing_ready_check(inner: ReadyCheck | None = None) -> ReadyCheck:
         holder = signing_of(request.app)
         if holder is None or holder.ready:
             return body
-        return body.model_copy(update={"status": ReadinessStatus.degraded, "components": {**body.components, "signing": holder.reason}})
+        return body.model_copy(update={"status": ReadinessStatus.unhealthy, "components": {**body.components, "signing": holder.reason}})
 
     return check

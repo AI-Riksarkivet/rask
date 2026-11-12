@@ -38,12 +38,21 @@ Security posture (see CHANGELOG in the task notes):
   generic ``UnauthenticatedError``; one the provider or this deployment's configuration of it
   causes (discovery, the key set, a non-HTTPS URL, no algorithm in common) is a
   ``ProviderUnavailableError`` naming what failed. Neither leaks library names or crypto detail.
+* **A request reads what is held; the background fetches.** A provider (its discovery document and its
+  key set) is held once fetched and served whatever its age; ``refresh_forever`` fetches both again every
+  ``cache_ttl`` in the background and replaces the provider only with one that arrived whole, so an
+  identity-provider outage serves the last good keys. A request that fetched on a cache's expiry would, through
+  an outage, make one fetch per request, each holding a worker thread for up to `HTTP_FETCH_TIMEOUT_SECONDS`,
+  and empty the pool in seconds while the keys had not changed (ADR 0203). A request fetches only what nothing
+  holds yet, each at the pace a `_RefreshPace` admits: a provider before any fetch landed, and the held key set
+  again for a `kid` it lacks. A set that holds no signing key is read again by the request that meets it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import ssl
 import threading
 import time
@@ -179,10 +188,15 @@ class _CredentialedJWKClient(jwt.PyJWKClient):
     its contract as shipped, including caching only a set that arrived and parses, and following no redirect, so the
     bearer reaches no host but the one the key-set URL names. A token that cannot be read is an
     ``OSError``, which `OIDCVerifier._key_set` already charges to the provider.
+
+    THE CACHED SET NEVER EXPIRES ON ITS OWN (``lifespan`` infinite): a cache that expires makes a request fetch the set
+    on its own path. The set held is replaced only by a fetch that arrived and parses (PyJWT 2.15.1 writes its cache on
+    success alone): the verifier's background refresh, a paced unknown-`kid` refetch, or the request reading a set that
+    holds no signing key again.
     """
 
     def __init__(self, uri: str, credential: _FetchCredential, *, max_cached_keys: int, timeout: float) -> None:
-        super().__init__(uri, cache_jwk_set=True, max_cached_keys=max_cached_keys, timeout=timeout, ssl_context=credential.ssl_context)
+        super().__init__(uri, cache_jwk_set=True, lifespan=math.inf, max_cached_keys=max_cached_keys, timeout=timeout, ssl_context=credential.ssl_context)
         self._credential = credential
 
     def fetch_data(self) -> Any:
@@ -191,7 +205,8 @@ class _CredentialedJWKClient(jwt.PyJWKClient):
 
 
 class _RefreshPace:
-    """Admits one unknown-kid refetch per `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS` for one issuer.
+    """Admits one fetch on the request path per `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS` for one issuer: a provider that
+    nothing holds yet, or the key set again for a `kid` the held one lacks.
 
     The pace is counted from when a refetch BEGAN, and the moment is claimed under the lock before the fetch runs, outside
     it: a burst arriving while a refetch is in flight is declined at once instead of queueing behind a slow IdP, so it
@@ -240,10 +255,11 @@ def _require_https(url: str, *, label: str, allow_insecure: bool) -> None:
 
 
 class OIDCVerifier:
-    """Verify ID tokens against one or more providers, caching discovery + JWKS per issuer.
+    """Verify ID tokens against one or more providers, holding each issuer's discovery document and key set.
 
-    The verifier is constructed once at app startup and shared across requests. Each
-    configured issuer is discovered lazily and cached for ``cache_ttl`` seconds.
+    The verifier is constructed once at app startup and shared across requests. Each configured issuer's provider is
+    fetched by :meth:`refresh` (at startup, then every ``cache_ttl`` seconds by :meth:`refresh_forever`) and held until a
+    later fetch lands whole; a request fetches one only while none is held, at the issuer's pace.
     """
 
     def __init__(
@@ -271,9 +287,12 @@ class OIDCVerifier:
         self._audience = audience
         self._ttl = cache_ttl
         self._clock = clock
-        # Keyed by configured issuer, so a pace outlives the provider `_resolve` rebuilds every `cache_ttl`, and is
-        # bounded by the configuration rather than by anything a token says.
+        # Keyed by configured issuer, so a pace outlives the provider `refresh` replaces every `cache_ttl`, and is
+        # bounded by the configuration rather than by anything a token says. Two per issuer: a request fetching the
+        # provider nothing holds yet, and one fetching the held key set again for a `kid` it lacks, so neither delays
+        # the other.
         self._refresh_paces = {iss: _RefreshPace(clock) for iss in self._issuers}
+        self._discovery_paces = {iss: _RefreshPace(clock) for iss in self._issuers}
         self._leeway = leeway
         self._allow_insecure = allow_insecure
         self._credential = _FetchCredential(fetch_token_file, ca_file)
@@ -282,8 +301,8 @@ class OIDCVerifier:
         self._allowed = list(dict.fromkeys(alg.upper() for alg in allowed_algorithms))
         if not self._allowed:
             raise ValueError("OIDCVerifier requires a non-empty algorithm allowlist")
-        # Per-issuer cache: configured_issuer -> (fetched_at, _Provider).
-        self._cache: dict[str, tuple[float, _Provider]] = {}
+        # The provider each configured issuer's last whole fetch built, replaced only by a later whole fetch.
+        self._held: dict[str, _Provider] = {}
 
     def _safe_algorithms(self, advertised: list[str]) -> list[str]:
         """Intersect the provider's advertised algorithms with our local allowlist.
@@ -301,12 +320,30 @@ class OIDCVerifier:
         return [alg for alg in self._allowed if alg in advertised_upper]
 
     def _resolve(self, configured_issuer: str) -> _Provider:
-        """Return the cached provider for ``configured_issuer``, refreshing past the TTL."""
-        now = self._clock()
-        cached = self._cache.get(configured_issuer)
-        if cached is not None and (now - cached[0]) < self._ttl:
-            return cached[1]
+        """The provider held for ``configured_issuer``, whatever its age; one fetched now when none is held, at the pace
+        the issuer's discovery `_RefreshPace` admits, so an issuer that does not answer costs one fetch per interval, not
+        one per request. A provider fetched here is held before its key set arrives: the request reading it fetches the
+        set, as it reads one that holds no signing key again (`_key_set`).
 
+        Raises:
+            ProviderUnavailableError: None is held and the pace declines a fetch, or the fetch failed.
+        """
+        held = self._held.get(configured_issuer)
+        if held is not None:
+            return held
+        if not self._discovery_paces[configured_issuer].admit():
+            raise ProviderUnavailableError(f"The OIDC issuer {configured_issuer} has not answered yet")
+        provider = self._fetch(configured_issuer)
+        self._held[configured_issuer] = provider
+        return provider
+
+    def _fetch(self, configured_issuer: str) -> _Provider:
+        """Fetch ``configured_issuer``'s discovery document, and the provider it makes, its key set not yet fetched.
+        Blocking: one fetch.
+
+        Raises:
+            ProviderUnavailableError: The fetch failed, or what arrived cannot be used.
+        """
         # Split-horizon: fetch discovery from the override when one is configured for this
         # issuer; the issuer STRING (and every token check against it) is unchanged.
         override = self._discovery_overrides.get(configured_issuer)
@@ -366,39 +403,47 @@ class OIDCVerifier:
             raise ProviderUnavailableError("No mutually-supported OIDC signing algorithm")
 
         jwk_client = _CredentialedJWKClient(jwks_uri, self._credential, max_cached_keys=16, timeout=HTTP_FETCH_TIMEOUT_SECONDS)
-        provider = _Provider(spec=spec, jwk_client=jwk_client, algorithms=algorithms)
-        self._cache[configured_issuer] = (now, provider)
-        return provider
+        return _Provider(spec=spec, jwk_client=jwk_client, algorithms=algorithms)
 
-    def warm(self) -> list[tuple[str, str]]:
-        """Resolve every configured issuer NOW, and report the ones that failed.
+    def refresh(self) -> list[tuple[str, str]]:
+        """Fetch every configured issuer's provider and key set NOW, hold each that arrived whole, and report the ones
+        that failed.
+
+        Whole means a key set holding a signing key, so a request reading the provider never fetches its keys. A failed
+        fetch leaves the provider held before it, so an identity-provider outage, or a set it publishes broken, serves
+        the last good keys.
 
         THE CONSTRUCTOR PERFORMS NO I/O, so a verifier that was merely built proves nothing about the
-        IdP it points at. Discovery happens lazily in :meth:`_resolve` on the first request carrying a
-        bearer, so without this call a wrong issuer, a wrong split-horizon override or an unreachable
-        IdP surfaces as failed user traffic, long after the pod has reported healthy.
+        IdP it points at. Called at startup, this puts a wrong issuer, a wrong split-horizon override or an
+        unreachable IdP in the pod's log at boot, rather than in failed user traffic long after the pod
+        reported healthy, and moves the fetch off the first user request.
 
-        IT REPORTS, IT DOES NOT DECIDE, and that is the load-bearing half. Returning the failures
-        instead of raising keeps the decision with the caller, and today no caller treats an
-        unreachable IdP as fatal — deliberately. Readiness that gates on a downstream dependency turns
-        one IdP blip into every governed pod leaving its Service endpoints at once, which is strictly
-        worse than the 503 the door answers on its own. The pod stays up and says what is wrong.
+        IT REPORTS, IT DOES NOT DECIDE. Returning the failures instead of raising keeps the decision with the
+        caller, and no caller treats an unreachable IdP as fatal, or as a reason to leave rotation: an IdP
+        blip would otherwise take every governed pod out of its Service at once, which is strictly worse
+        than the 503 the door answers on its own. The pod stays up and says what is wrong.
 
         Each entry is ``(configured_issuer, reason)``. The issuer is carried because a split-horizon
         deployment fetches from an override, so the URL that failed is not the one an operator set as
         the issuer — and that override is the setting most likely to be the wrong one.
-
-        Warming also moves the discovery round-trip off the first user request: `_resolve` caches per
-        issuer for ``cache_ttl``, so whoever signs in first after a rollout no longer pays for it.
         """
         failures: list[tuple[str, str]] = []
         for configured in self._issuers:
             try:
-                self._resolve(configured)
+                provider = self._fetch(configured)
+                self._key_set(provider, refresh=True)
+                self._held[configured] = provider
             # Every failure is reported and none is raised — see this method docstring.
             except Exception as exc:
                 failures.append((configured, str(exc)))
         return failures
+
+    async def refresh_forever(self) -> None:
+        """:meth:`refresh` every ``cache_ttl`` seconds, off the event loop, until cancelled; a failed fetch is logged."""
+        while True:
+            await asyncio.sleep(self._ttl)
+            for issuer, reason in await asyncio.to_thread(self.refresh):
+                log.warning("oidc_refresh_failed_serving_held_keys", extra={"issuer": issuer, "reason": reason})
 
     def _provider_for(self, token: str) -> _Provider:
         """Select the configured provider whose issuer matches the token's ``iss`` claim.

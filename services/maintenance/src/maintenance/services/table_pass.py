@@ -868,7 +868,9 @@ def _dataset_due_at(result: DatasetResult, readings: PassReadings, *, settings: 
     try:
         ds = opened()
         due = [at for at in (versions_due_at(ds, policy, now=now), staged_due_at(ds, result.uri, policy=policy, options=options)) if at is not None]
-    except Exception as exc:  # noqa: BLE001 — an unread dataset is retried, as one the pass failed on
+    except (OSError, ValueError) as exc:
+        # A dataset the store or Lance could not read is retried, as one the pass failed on. Any other error is a fault
+        # of this code's, which fails the task: retried every `retry_seconds` it would repeat for ever, unseen.
         log.warning("maintenance_next_due_unread", extra={"uri": result.uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return now + timedelta(seconds=settings.retry_seconds)
     earliest = min(due, default=None)

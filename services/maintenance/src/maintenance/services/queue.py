@@ -31,7 +31,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import secrets
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from datetime import UTC, datetime, timedelta
@@ -42,9 +41,18 @@ import nats
 from nats.aio.client import Client, RawCredentials
 from nats.aio.msg import Msg
 from nats.errors import Error as NatsError
-from nats.js.errors import APIError, KeyDeletedError, KeyNotFoundError, KeyWrongLastSequenceError
+from nats.js.errors import (
+    APIError,
+    BucketNotFoundError,
+    KeyDeletedError,
+    KeyNotFoundError,
+    KeyWrongLastSequenceError,
+    NoStreamResponseError,
+    NotFoundError,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from lakehouse.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
 from maintenance.core.metrics import (
     record_consumer_backlog,
     record_pass_overran,
@@ -111,10 +119,12 @@ _EXPECT_NOTHING: Final = {"Nats-Expected-Last-Subject-Sequence": "0"}
 _API_TIMEOUT: Final = 10.0
 #: A pass running this many times its bound is taken to be hung: the replica ends itself, and Kubernetes restarts it.
 _HUNG_FACTOR: Final = 2
-_HUNG_EXIT: Final = 70
-#: How long before its lease runs out a worker the bus does not answer gives up its task: the reserve between deciding and
-#: the process being gone, which `os._exit` makes immediate.
+#: How long before its lease runs out a worker the bus does not answer gives up its task: the time it has to be gone, its
+#: telemetry flushed within all of it but `_EXIT_RESERVE` (`Worker._end_process`), then `os._exit`, which is immediate.
 _VOUCH_MARGIN: Final = 1.0
+#: What a worker that ends itself keeps of its hold on its task after its flush: the process is gone that long before
+#: JetStream can hand the task on or another pass take its table, whatever the Collector answers.
+_EXIT_RESERVE: Final = 0.5
 #: How soon a heartbeat or a settle the bus did not answer is asked again.
 _VOUCH_RETRY: Final = 1.0
 #: How often the client asks the server it is connected to whether it is still there, and how many unanswered asks
@@ -134,6 +144,15 @@ type Area = Literal["task", "schedule", "due"]
 
 class QueueUnavailableError(RuntimeError):
     """The bus did not take a publish, or did not answer it: nothing was queued, and the caller retries."""
+
+
+class ClaimsBucketMissingError(RuntimeError):
+    """The claims bucket the chart's stream Job declares is not on the bus, so no pass can claim its table.
+
+    Raised rather than retried: waiting mends nothing a deployment left undone, and a worker that kept asking would hold
+    its task until the pass's hung bound ended it. A worker without the bucket does not start, and one whose claim finds it
+    gone ends (:meth:`TaskQueue.claim`).
+    """
 
 
 class Task(BaseModel):
@@ -163,6 +182,12 @@ class Task(BaseModel):
     def follow_up_subject(self, area: Literal["schedule", "due"]) -> str:
         """Where this task's follow-up is held, or fired: beside its schedule, under a subject of its own."""
         return f"maintenance.{area}.{_FOLLOW_UP}.{self.kind}.{self.uuid}"
+
+
+class _ApiRefusal(BaseModel):
+    """The error a JetStream API answer carries when it refuses a request."""
+
+    error: dict[str, object] | None = None
 
 
 class _SubjectsState(BaseModel):
@@ -245,12 +270,14 @@ def _nak(delay: float) -> bytes:
     return Msg.Ack.Nak + b" " + json.dumps({"delay": int(delay * 1_000_000_000)}).encode()
 
 
-def end_replica(event: str, **extra: object) -> NoReturn:
-    """End this replica's process at once, logging ``event``: a pass is a thread nothing can stop, and a hung one would
-    hold the interpreter's exit. Its task is left to the consumer's ack wait. The stdout handler writes each record
-    through as it is emitted (`lakehouse.app.setup_logging`), so the line outlives the process."""
-    log.critical(event, extra=extra)
-    os._exit(_HUNG_EXIT)
+async def _still_working_on(waiting: Collection[Msg]) -> None:
+    """Restart the ack wait of each delivery ``waiting`` to be handled; one the bus does not take is logged, and comes
+    again after its ack wait like any delivery its worker could not vouch for."""
+    for msg in waiting:
+        try:
+            await msg.in_progress()
+        except NatsError as exc:
+            log.warning("maintenance_store_event_unvouched", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 async def _unsubscribe(subscription: JetStreamContext.PullSubscription) -> None:
@@ -289,11 +316,11 @@ class TaskQueue:
         self._claims: KeyValue | None = None
 
     @classmethod
-    async def connect(cls, url: str, credentials: str, *, name: str, end_process: Callable[..., NoReturn] = end_replica) -> TaskQueue:
+    async def connect(cls, url: str, credentials: str, *, name: str, end: EndProcess = end_process) -> TaskQueue:
         """Connect as the user ``credentials`` names (a NATS creds document, held in memory), reconnecting for ever: a bus
         outage must leave the worker waiting on the bus, never closed for good.
 
-        A bus that refuses the credential, or ends the connection for good, ends the process (``end_process``). The
+        A bus that refuses the credential, or ends the connection for good, ends the process (``end``). The
         store's seed issues a user a new credential when its grants change and revokes the old one, and nats-py keeps the
         credential it was given: it closes for good on a session the server ends, and retries a credential the server
         refuses for ever (nats-py 2.16 ``Client._process_err`` and ``_attempt_reconnect``). Started again, the replica
@@ -302,12 +329,12 @@ class TaskQueue:
 
         async def errored(exc: Exception) -> None:
             if _REFUSED in str(exc).lower():
-                end_process("maintenance_bus_refused", error=str(exc)[:300])
+                end("maintenance_bus_refused", error=str(exc)[:300])
             log.warning("maintenance_bus_error", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
 
         async def closed() -> None:
             if not closing.is_set():
-                end_process("maintenance_bus_closed")
+                end("maintenance_bus_closed")
 
         client = await nats.connect(
             servers=[url],
@@ -362,14 +389,34 @@ class TaskQueue:
         stands. A claim lives one ack wait past its last renewal (the bucket's max age), so it outlives its holder's lease.
         Asked again after an answer was lost, it finds its own ``token`` standing and takes that revision.
 
+        A claim no stream answers is asked of a bucket the bus holds no longer, or of one whose leader is being chosen;
+        the bucket's own lookup tells the two apart, the first for good.
+
         Raises:
+            ClaimsBucketMissingError: The bus holds the claims bucket no longer.
             QueueUnavailableError: The bus did not answer within ``within``.
         """
         try:
             claims = await self._bucket()
             return await asyncio.wait_for(self._create(claims, key, token), within)
+        except NoStreamResponseError as exc:
+            await self._require_claims_stream()
+            raise QueueUnavailableError(f"no stream answered the claim on {key}: {exc}") from exc
         except (NatsError, TimeoutError) as exc:
             raise QueueUnavailableError(f"the bus did not answer the claim on {key}: {exc}") from exc
+
+    async def _require_claims_stream(self) -> None:
+        """Return unless the bus answers that it holds no claims bucket; a lookup it does not answer decides nothing.
+
+        Raises:
+            ClaimsBucketMissingError: The bus holds no claims bucket.
+        """
+        try:
+            await asyncio.wait_for(self._js.stream_info(f"KV_{CLAIMS_BUCKET}"), _API_TIMEOUT)
+        except NotFoundError as exc:
+            raise ClaimsBucketMissingError(f"the bus holds no {CLAIMS_BUCKET} bucket; the chart's stream Job declares it") from exc
+        except (NatsError, TimeoutError):
+            return
 
     async def renew(self, key: str, token: str, revision: int, *, within: float) -> int | None:
         """The next revision of this worker's claim on ``key``, or None when it is no longer this worker's: it aged out,
@@ -421,10 +468,29 @@ class TaskQueue:
             if (standing := await _standing(claims, key, token)) is not None:
                 await claims.delete(key, last=standing)
 
+    async def bind_claims(self) -> None:
+        """Bind the claims bucket, which a worker does before it takes a task.
+
+        Raises:
+            ClaimsBucketMissingError: The bus holds no such bucket.
+            QueueUnavailableError: The bus did not answer.
+        """
+        try:
+            await asyncio.wait_for(self._bucket(), _API_TIMEOUT)
+        except (NatsError, TimeoutError) as exc:
+            raise QueueUnavailableError(f"the bus did not answer the claims bucket's lookup: {exc}") from exc
+
     async def _bucket(self) -> KeyValue:
-        """The claims bucket, bound once: the chart's stream Job declares it, and the worker never creates it."""
+        """The claims bucket, bound once: the chart's stream Job declares it, and the worker never creates it.
+
+        Raises:
+            ClaimsBucketMissingError: The bus holds no such bucket.
+        """
         if self._claims is None:
-            self._claims = await self._js.key_value(CLAIMS_BUCKET)
+            try:
+                self._claims = await self._js.key_value(CLAIMS_BUCKET)
+            except BucketNotFoundError as exc:
+                raise ClaimsBucketMissingError(f"the bus holds no {CLAIMS_BUCKET} bucket; the chart's stream Job declares it") from exc
         return self._claims
 
     async def schedule_at(self, task: Task, at: datetime) -> None:
@@ -505,10 +571,14 @@ class TaskQueue:
         prefix = f"maintenance.{area}.{kind}."
         found: set[str] = set()
         while True:
-            page = _SubjectsPage.model_validate(await self._api(f"$JS.API.STREAM.INFO.{stream}", {"subjects_filter": f"{prefix}*", "offset": len(found)}))
+            page = await self._api(f"$JS.API.STREAM.INFO.{stream}", {"subjects_filter": f"{prefix}*", "offset": len(found)}, _SubjectsPage)
+            before = len(found)
             found |= {subject.removeprefix(prefix) for subject in page.state.subjects}
             if not page.state.subjects or len(found) >= page.total:
                 return found
+            if len(found) == before:
+                # A page that names only subjects already read would be asked for again at the same offset for ever.
+                raise QueueUnavailableError(f"the bus answered {stream}'s subjects with a page that adds nothing to the {before} read of {page.total}")
 
     async def stream_state(self, stream: str) -> StreamState:
         """What ``stream`` holds now, read off its info.
@@ -516,7 +586,7 @@ class TaskQueue:
         Raises:
             QueueUnavailableError: JetStream refused the read, or did not answer it.
         """
-        return _StreamInfo.model_validate(await self._api(f"$JS.API.STREAM.INFO.{stream}", {})).state
+        return (await self._api(f"$JS.API.STREAM.INFO.{stream}", {}, _StreamInfo)).state
 
     async def consumer_state(self, stream: str, durable: str) -> ConsumerState:
         """What the durable consumer ``durable`` of ``stream`` awaits now, read off its info.
@@ -524,26 +594,40 @@ class TaskQueue:
         Raises:
             QueueUnavailableError: JetStream refused the read, or did not answer it.
         """
-        return ConsumerState.model_validate(await self._api(f"$JS.API.CONSUMER.INFO.{stream}.{durable}", {}))
+        return await self._api(f"$JS.API.CONSUMER.INFO.{stream}.{durable}", {}, ConsumerState)
 
     async def bind(self, stream: str, consumer: str) -> JetStreamContext.PullSubscription:
         """A pull subscription on the chart's durable ``consumer`` of ``stream``, which it binds to and never creates."""
         return await self._js.pull_subscribe_bind(durable=consumer, stream=stream)
 
-    async def _api(self, subject: str, body: dict[str, object]) -> dict[str, object]:
-        """One JetStream API request's answer.
+    async def _api[M: BaseModel](self, subject: str, body: dict[str, object], answer: type[M]) -> M:
+        """One JetStream API request's answer, read as ``answer``.
 
         Raises:
-            QueueUnavailableError: JetStream answered with an error, or did not answer.
+            QueueUnavailableError: JetStream answered with an error, answered something that is not that answer, or did
+                not answer.
         """
         try:
             reply = await self._client.request(subject, json.dumps(body).encode(), timeout=_API_TIMEOUT)
         except (NatsError, TimeoutError) as exc:
             raise QueueUnavailableError(f"the bus did not answer {subject}: {exc}") from exc
-        answer = json.loads(reply.data)
-        if isinstance(answer, dict) and answer.get("error"):
-            raise QueueUnavailableError(f"the bus refused {subject}: {answer['error']}")
-        return answer if isinstance(answer, dict) else {}
+        try:
+            refusal = _ApiRefusal.model_validate_json(reply.data)
+            read = answer.model_validate_json(reply.data)
+        except ValidationError as exc:
+            raise QueueUnavailableError(f"the bus answered {subject} with something that is not its answer: {exc}"[:500]) from exc
+        if refusal.error:
+            raise QueueUnavailableError(f"the bus refused {subject}: {refusal.error}")
+        return read
+
+    async def answering(self) -> None:
+        """Raise unless the connection to the bus is up: the verdict a readiness report shows for the bus.
+
+        Raises:
+            QueueUnavailableError: The connection is reconnecting, or gone.
+        """
+        if not self._client.is_connected:
+            raise QueueUnavailableError("the connection to the bus is not up")
 
     async def close(self) -> None:
         """Drain, so the acknowledgements and publishes in flight are sent before the connection goes. A connection the
@@ -578,8 +662,9 @@ class Worker:
     its table would take no other (measured on nats-server 2.15.2). A run past ``_HUNG_FACTOR`` times
     its bound (its kind's own in ``max_seconds_by_kind``, else ``max_pass_seconds``) is taken to be hung, and the replica ends itself so its task goes to another, never two passes
     of one table at once. A loop outlives
-    any error of the bus's: a fetch, ack or heartbeat the bus refuses or drops is logged and the loop asks again, so a
-    JetStream leader change or a reconnect never leaves a running replica pulling nothing.
+    any error of the bus's: a bind, fetch, ack or heartbeat the bus refuses or drops is logged and the loop asks again, so
+    a JetStream leader change or a reconnect never leaves a running replica pulling nothing. Any other end of a loop is a
+    fault, which the process's supervisor answers by ending the process (`lakehouse.supervision`).
     """
 
     def __init__(
@@ -594,11 +679,11 @@ class Worker:
         max_pass_seconds: float,
         retry_ended_seconds: float,
         store_events: Callable[[bytes], Awaitable[int]] | None = None,
-        end_process: Callable[..., NoReturn] = end_replica,
+        end: EndProcess = end_process,
         max_seconds_by_kind: Mapping[str, float] | None = None,
     ) -> None:
         self._queue = queue
-        self._exit = end_process
+        self._exit = end
         self._ending = False
         self._retry_ended = retry_ended_seconds
         self._run = run
@@ -608,17 +693,20 @@ class Worker:
         self._ack_wait = ack_wait_seconds
         if ack_wait_seconds - heartbeat_seconds <= _VOUCH_MARGIN:
             raise ValueError(f"a heartbeat every {heartbeat_seconds} s leaves no time to vouch for a task inside an ack wait of {ack_wait_seconds} s")
-        self._passing = False
+        #: The lease of the pass running, none between passes.
+        self._pass_lease: _Lease | None = None
         self._max_deliver = max_deliver
         self._max_pass = max_pass_seconds
         self._max_by_kind = dict(max_seconds_by_kind or {})
         self._stopping = asyncio.Event()
 
-    def _end_process(self, event: str, **extra: object) -> NoReturn:
-        """End the process (``end_process``), noting first that it is ending, so a keep-alive the end unwinds is not taken
-        for one that ended unexpectedly (:meth:`_keep_alive`)."""
+    def _end_process(self, event: str, *, held_until: float, **extra: object) -> NoReturn:
+        """End the process (``end``), its telemetry flushed only until `_EXIT_RESERVE` before ``held_until``, when this
+        worker's hold on its task runs out: JetStream hands the task to another replica then, or another pass takes its
+        table, while the pass, a thread nothing stops, runs on until the process is gone. It notes first that it is ending,
+        so a keep-alive the end unwinds is not taken for one that ended unexpectedly (:meth:`_keep_alive`)."""
         self._ending = True
-        self._exit(event, **extra)
+        self._exit(event, flush_seconds=max(0.0, min(FLUSH_SECONDS, held_until - monotonic() - _EXIT_RESERVE)), **extra)
 
     def stop(self) -> None:
         """Ask every loop to end once what it is doing is done."""
@@ -637,8 +725,8 @@ class Worker:
         """
         self.stop()
         _, unfinished = await asyncio.wait(loops, timeout=seconds)
-        if self._passing:
-            self._end_process("maintenance_drain_outrun", seconds=seconds)
+        if self._pass_lease is not None:
+            self._end_process("maintenance_drain_outrun", held_until=self._pass_lease.until, seconds=seconds)
         for loop in unfinished:
             loop.cancel()
         # Waited for, so nothing of a loop still runs on the connection its caller closes next.
@@ -666,7 +754,9 @@ class Worker:
             if not self._ready():
                 await self.pause(_FETCH_TIMEOUT)
                 continue
-            subscription = await self._queue.bind(TASKS_STREAM, TASK_CONSUMER)
+            subscription = await self._bound(TASKS_STREAM, TASK_CONSUMER)
+            if subscription is None:
+                return
             try:
                 msgs = await self._fetch(subscription, 1)
                 received = monotonic()
@@ -674,6 +764,18 @@ class Worker:
                 await _unsubscribe(subscription)
             for msg in msgs:
                 await self._safely(self._hand_on(msg, received) if self._hands_on(msg) else self._handle(msg, received), msg)
+
+    async def _bound(self, stream: str, consumer: str) -> JetStreamContext.PullSubscription | None:
+        """A pull subscription on the chart's durable ``consumer`` of ``stream``, asked for again after a pause while the
+        bus does not take it; ``None`` once the worker is asked to stop. A reconnect is the bus's ordinary weather, which
+        the loop waits out rather than ending on."""
+        while not self._stopping.is_set():
+            try:
+                return await self._queue.bind(stream, consumer)
+            except NatsError as exc:
+                log.warning("maintenance_bind_failed", extra={"consumer": consumer, "error": f"{type(exc).__name__}: {exc}"[:300]})
+                await self.pause(_FETCH_TIMEOUT)
+        return None
 
     def _hands_on(self, msg: Msg) -> bool:
         """Whether ``msg`` arrived as the worker stopped with a delivery to spare. On the last delivery this worker allows,
@@ -701,17 +803,22 @@ class Worker:
             if not await self._claim(task, lease):
                 await self._give_back(msg, task, lease, delivered=delivered)
                 return
-            self._passing = True
+            self._pass_lease = lease
             claimed = monotonic()
             try:
                 await self._run(task)
-            except Exception as exc:  # noqa: BLE001 — every failure of a run is the task's, retried or ended below
+            except BaseException as exc:
+                # Every failure of a run is the task's, retried or ended below: an Exception, and a native library's panic,
+                # which pyo3 raises as a BaseException (owner, 2026-11-12: "Pass failed, go on"). Any other BaseException is
+                # a request to stop, which ends the loop, and the loop's end ends the process.
+                if not (isinstance(exc, Exception) or is_panic(exc)):
+                    raise
                 await self._retry_or_end(msg, task, exc, lease=lease)
                 return
             await self._tell(msg, Msg.Ack.Ack, lease)
             record_task_duration(kind=task.kind, seconds=monotonic() - claimed)
         finally:
-            self._passing = False
+            self._pass_lease = None
             # Ended before the release, so no renewal still in flight moves the claim's revision after the release read it.
             beating.cancel()
             await asyncio.gather(beating, return_exceptions=True)
@@ -724,8 +831,13 @@ class Worker:
         mid-pass leaves its claim one ack wait past its last renewal, and an ack the network held past a stale worker's
         lease can free a task's place under a live pass, whose claim this pass then waits out (ADR 0198). False when it
         still stands, and the task is given back to come again. A claim the bus does not answer is asked again: a bus that
-        answers nothing is the heartbeat's to judge, and one that answers the heartbeat but not the claim (a bucket the
-        stream Job has not made yet) holds the task until the claim is answered or the pass's hung bound ends the replica."""
+        answers nothing is the heartbeat's to judge, and one that answers the heartbeat but not the claim holds the task
+        until the claim is answered or the pass's hung bound ends the replica. A bus that holds no claims bucket, at the
+        worker's start or since, answers for good: `ClaimsBucketMissingError` ends the loop, and with it the process.
+
+        Raises:
+            ClaimsBucketMissingError: The bus holds no claims bucket.
+        """
         key = _claim_key(task)
         lease.token = secrets.token_hex(16)
         until = monotonic() + self._ack_wait
@@ -772,7 +884,7 @@ class Worker:
         except Exception as exc:  # noqa: BLE001 — any end of the heartbeat but its cancellation leaves the pass unvouched for
             if self._ending:
                 raise
-            self._end_process("maintenance_heartbeat_ended", subject=msg.subject, error=f"{type(exc).__name__}: {exc}"[:300])
+            self._end_process("maintenance_heartbeat_ended", held_until=lease.until, subject=msg.subject, error=f"{type(exc).__name__}: {exc}"[:300])
 
     async def _beat(self, msg: Msg, task: Task, lease: _Lease) -> NoReturn:
         started = monotonic()
@@ -790,7 +902,7 @@ class Worker:
                 record_pass_overran(kind=task.kind)
                 log.error("maintenance_task_overran", extra={"subject": msg.subject, "seconds": round(ran)})
             if ran > _HUNG_FACTOR * bound:
-                self._end_process("maintenance_task_hung", subject=msg.subject, seconds=round(ran))
+                self._end_process("maintenance_task_hung", held_until=lease.until, subject=msg.subject, seconds=round(ran))
 
     async def _tell(self, msg: Msg, said: bytes, lease: _Lease) -> float:
         """Say ``said`` about ``msg``'s delivery (:meth:`TaskQueue.told`), asking again until JetStream answers, and return
@@ -813,7 +925,7 @@ class Worker:
                 extra={"subject": msg.subject, "said": said.split(b" ")[0].decode(), "seconds_left": round(lease.until - monotonic(), 1)},
             )
             await asyncio.sleep(min(_VOUCH_RETRY, max(lease.until - monotonic() - _VOUCH_MARGIN, 0.0)))
-        return self._end_process("maintenance_task_lost", subject=msg.subject)
+        return self._end_process("maintenance_task_lost", held_until=lease.until, subject=msg.subject)
 
     async def _renew(self, task: Task, lease: _Lease) -> float:
         """Renew this pass's claim on its table, asking again until the bus answers, and return when the answered renewal
@@ -829,25 +941,30 @@ class Worker:
                 await asyncio.sleep(min(_VOUCH_RETRY, max(lease.until - monotonic() - _VOUCH_MARGIN, 0.0)))
                 continue
             if revision is None:
-                self._end_process("maintenance_claim_lost", key=key)
+                # The claim is gone, so another pass may hold the table already: nothing of the hold is left to flush in.
+                self._end_process("maintenance_claim_lost", held_until=monotonic(), key=key)
             lease.claim = revision
             return sent
-        return self._end_process("maintenance_task_lost", key=key)
+        return self._end_process("maintenance_task_lost", held_until=lease.until, key=key)
 
-    async def _retry_or_end(self, msg: Msg, task: Task, exc: Exception, *, lease: _Lease) -> None:
+    async def _retry_or_end(self, msg: Msg, task: Task, exc: BaseException, *, lease: _Lease) -> None:
+        """Hand ``task``'s failed run back after its back-off, or end it on its last delivery, logged with ``exc``'s
+        traceback either way: a native panic's traceback is the only account of where it failed."""
         delivered = msg.metadata.num_delivered or 1
+        error = f"{type(exc).__name__}: {exc}"[:300]
         if delivered >= self._max_deliver:
-            await self._end(msg, task, lease, deliveries=delivered, error=f"{type(exc).__name__}: {exc}"[:300])
+            await self._end(msg, task, lease, deliveries=delivered, error=error, cause=exc)
             return
-        log.warning("maintenance_task_retried", extra={"subject": msg.subject, "deliveries": delivered, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        log.warning("maintenance_task_retried", exc_info=exc, extra={"subject": msg.subject, "deliveries": delivered, "error": error})
         record_task_retried(kind=task.kind)
         await self._tell(msg, _nak(_redelivery_delay(delivered)), lease)
 
-    async def _end(self, msg: Msg, task: Task, lease: _Lease, *, deliveries: int, error: str) -> None:
+    async def _end(self, msg: Msg, task: Task, lease: _Lease, *, deliveries: int, error: str, cause: BaseException | None = None) -> None:
         """End ``task`` on this delivery, counted, and hold its next try ``retry_ended_seconds`` out: the hourly audit queues
         a table or a trash record nothing holds, and would otherwise hand a task that kills its worker straight back. A bus
-        that refuses the hold leaves it to that audit."""
-        log.error("maintenance_task_ended", extra={"subject": msg.subject, "deliveries": deliveries, "error": error})
+        that refuses the hold leaves it to that audit. ``cause``, the run's failure when one ended it, is logged with its
+        traceback."""
+        log.error("maintenance_task_ended", exc_info=cause, extra={"subject": msg.subject, "deliveries": deliveries, "error": error})
         record_task_ended(kind=task.kind)
         await self._tell(msg, Msg.Ack.Term, lease)
         if task.kind not in _SCHEDULED_KINDS:
@@ -861,7 +978,9 @@ class Worker:
         """Move each fired schedule onto the queue until :meth:`stop`. A table that already has a task queued or in flight
         is covered by it, since its pass computes the table's next time; a fired follow-up is not, since the commit it
         follows may be one that task's pass read the table before, so it waits until nothing holds the table."""
-        subscription = await self._queue.bind(SCHEDULES_STREAM, DUE_CONSUMER)
+        subscription = await self._bound(SCHEDULES_STREAM, DUE_CONSUMER)
+        if subscription is None:
+            return
         try:
             while not self._stopping.is_set():
                 for msg in await self._fetch(subscription, _DUE_BATCH):
@@ -879,17 +998,27 @@ class Worker:
         or :class:`QueueUnavailableError` for one whose handling the store or the bus refused, which is delivered again
         after a delay that grows with each delivery, and ended on its ``max_deliver``-th: an event is a hint the table's
         recheck backs up. The consumer allows one delivery more, on which an event whose handling outlived its worker
-        every time is ended without handling. Any other error is a fault of the handling's own: it ends the loop, which
-        runs again, and the event is delivered again after the consumer's ack wait.
+        every time is ended without handling. Any other error is a fault of the handling's own: it ends the loop, and the
+        loop's end the process, and the event is delivered again after the consumer's ack wait.
+
+        A batch's events wait while the ones before them are handled, and a handling reads the store, so each one handled
+        tells the bus the rest are still being worked on: ten slow reads would otherwise outlast the consumer's ack wait,
+        and the bus hand the batch's tail to another replica while this one still held it.
         """
         handle = self._store_events
         if handle is None:
+            await self._stopping.wait()
             return
-        subscription = await self._queue.bind(STORE_EVENTS_STREAM, STORE_EVENTS_CONSUMER)
+        subscription = await self._bound(STORE_EVENTS_STREAM, STORE_EVENTS_CONSUMER)
+        if subscription is None:
+            return
         try:
             while not self._stopping.is_set():
-                for msg in await self._fetch(subscription, _DUE_BATCH):
+                waiting = await self._fetch(subscription, _DUE_BATCH)
+                while waiting:
+                    msg, *waiting = waiting
                     await self._safely(self._on_store_event(msg, handle), msg)
+                    await _still_working_on(waiting)
         finally:
             await _unsubscribe(subscription)
 

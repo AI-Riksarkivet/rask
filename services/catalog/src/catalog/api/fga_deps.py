@@ -764,8 +764,12 @@ async def _authorize_grant(
     The userset form is covered too, and has to be: refusing only a literal ``user:<principal>`` would leave
     ``role:x#assignee`` as the same escalation one indirection away, for any userset the caller is
     already inside.
+
+    Raises:
+        InvalidInputError: The body is not JSON.
+        PermissionDeniedError: The body is not an access request, or the caller may not grant or revoke its rung.
     """
-    body = await request.json()
+    body = await _json_body_or_400(request)
     if not isinstance(body, dict):
         raise PermissionDeniedError("malformed access request body")
     relation = body.get("relation")
@@ -919,12 +923,25 @@ def _string_list(value: object) -> list[str] | None:
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) and all(isinstance(item, str) for item in value) else None
 
 
-async def _json_body(request: Request) -> object:
+async def _json_body_or_none(request: Request) -> object:
     """The request's JSON body, or ``None`` when it holds none: the door's own validation answers a body it cannot read."""
     try:
         return await request.json()
     except ValueError:
         return None
+
+
+async def _json_body_or_400(request: Request) -> object:
+    """The request's JSON body, for a gate that must read it to decide: one that is not JSON is the caller's malformed
+    request, answered 400 before anything is decided, never the 500 an unread body would raise.
+
+    Raises:
+        InvalidInputError: The body is not JSON.
+    """
+    try:
+        return await request.json()
+    except ValueError as exc:
+        raise InvalidInputError("the request body is not JSON") from exc
 
 
 def _batch_ids(body: Mapping[str, object]) -> Iterator[tuple[str | None, list[str]]]:
@@ -955,9 +972,13 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Re
 
     Fails CLOSED on malformed input: a non-dict body or a non-list ``entries``/``operations``
     (client-controlled JSON, validated here BEFORE Pydantic since authorize runs first) is a
-    403 deny, never a 500 crash or a silently-skipped check.
+    403 deny, never a 500 crash or a silently-skipped check; a body that is not JSON at all is a 400.
+
+    Raises:
+        InvalidInputError: The body is not JSON.
+        PermissionDeniedError: The body is not a batch, or the caller may not write a table it names.
     """
-    body = await request.json()
+    body = await _json_body_or_400(request)
     if not isinstance(body, dict):
         raise PermissionDeniedError("malformed batch request body")
     entries = body.get("entries")
@@ -1022,7 +1043,7 @@ def _renamed_to(body: object, source: list[str]) -> list[str] | None:
 
 async def _rename_destination(request: Request, segments: list[str]) -> tuple[str, ...]:
     """The table a rename lands in. A body naming no destination leaves the source standing in; the door answers the 400."""
-    destination = _renamed_to(await _json_body(request), segments)
+    destination = _renamed_to(await _json_body_or_none(request), segments)
     return tuple(segments if destination is None else destination)
 
 
@@ -1344,7 +1365,7 @@ async def _identifiers_given(request: Request) -> list[list[str]]:
     """The identifiers ``request`` asks a door to give an object: a making door's path id, a rename's destination, a batch's ids."""
     path: str = request.scope["path"]
     if path.rstrip("/") in _BATCH_PATHS:
-        body = await _json_body(request)
+        body = await _json_body_or_none(request)
         return [segments for _kind, segments in _batch_ids(body)] if isinstance(body, dict) else []
     object_id = request.path_params.get("id")
     resource = _resource_for(path)
@@ -1354,7 +1375,7 @@ async def _identifiers_given(request: Request) -> list[list[str]]:
     if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
         return [parse_identifier(object_id)]
     if resource == "table" and suffix == "rename":
-        destination = _renamed_to(await _json_body(request), parse_identifier(object_id))
+        destination = _renamed_to(await _json_body_or_none(request), parse_identifier(object_id))
         return [] if destination is None else [destination]
     return []
 

@@ -9,9 +9,8 @@ runs on one replica at a time, as the queue hands it out.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -21,6 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.governed.secrets import fetch_required_secrets
+from lakehouse.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import create_orphan_check_series, create_task_series
@@ -104,36 +104,51 @@ async def connected_queue(settings: MaintenanceSettings) -> AsyncGenerator[TaskQ
 
 @asynccontextmanager
 async def running_worker(
-    settings: MaintenanceSettings, *, ready: Callable[[], bool], emitter: MaintenanceEmitter, control: ControlEmitter
+    settings: MaintenanceSettings,
+    *,
+    ready: Callable[[], bool],
+    emitter: MaintenanceEmitter,
+    control: ControlEmitter,
+    end: EndProcess = end_process,
 ) -> AsyncGenerator[TaskQueue | None]:
     """Connect the work queue (:func:`connected_queue`), keep the audit's and the scan's schedules, and run the worker
     until its process stops; the queue it runs on. A stack with no bus runs no worker and yields ``None``.
 
-    Every loop is kept running: one that ends before the worker stops, with an error or without, is logged and started
-    again after a pause, so no failure of one read leaves a replica that stays Ready and does nothing. The two cadences are asserted again every
-    ``_CADENCE_SECONDS``, since a schedules stream purged or recreated loses them with every table's schedule, and the
-    audit they start is what queues those tables again; a cadence is a clock, so asserting it again moves no firing.
+    Every loop runs under a supervisor (`lakehouse.supervision`): one that ends before the worker stops, with an error or
+    without, ends the process by ``end``, so no fault of one leaves a replica that stays Ready and does nothing (ADR 0203).
+    A loop waits out the bus's own errors itself (a bind, a fetch, a settle or a cadence the bus does not take), so only
+    a fault ends one. The two cadences are asserted again every ``_CADENCE_SECONDS``, since a schedules stream purged or
+    recreated loses them with every table's schedule, and the audit they start is what queues those tables again; a
+    cadence is a clock, so asserting it again moves no firing.
 
     On the way out the worker finishes the task it is running, within ``drain_seconds``, before the connection drains:
     a task cut short is delivered to another replica once its heartbeat stops. A worker that cannot start, because the
-    bus refuses its cadences, leaves the connection closed all the same.
+    bus refuses its cadences or holds no claims bucket, leaves the connection closed all the same.
 
     Raises:
         RuntimeError: The store holds no credential for the worker's bus user, or one without its JWT (failing closed).
+        ClaimsBucketMissingError: The bus holds no claims bucket.
     """
     async with connected_queue(settings) as queue:
         if queue is None:
             yield None
             return
-        async with _worker_on(queue, settings, ready=ready, emitter=emitter, control=control):
+        async with _worker_on(queue, settings, ready=ready, emitter=emitter, control=control, end=end):
             yield queue
 
 
 @asynccontextmanager
 async def _worker_on(
-    queue: TaskQueue, settings: MaintenanceSettings, *, ready: Callable[[], bool], emitter: MaintenanceEmitter, control: ControlEmitter
+    queue: TaskQueue,
+    settings: MaintenanceSettings,
+    *,
+    ready: Callable[[], bool],
+    emitter: MaintenanceEmitter,
+    control: ControlEmitter,
+    end: EndProcess,
 ) -> AsyncGenerator[None]:
     """Run the worker's loops on ``queue`` until the block ends, then drain them."""
+    await queue.bind_claims()
     await _assert_cadences(queue, settings)
     emit_zero_baselines()
     create_task_series(get_args(TaskKind.__value__))
@@ -149,22 +164,23 @@ async def _worker_on(
         max_seconds_by_kind={"orphans": settings.orphan_check_max_seconds},
         retry_ended_seconds=settings.recheck_hours * 3600,
         store_events=StoreEvents(settings, queue).hold_passes,
+        end=end,
     )
-    loops = [
-        asyncio.create_task(_supervised(worker, "maintenance-tasks", worker.run_tasks), name="maintenance-tasks"),
-        asyncio.create_task(_supervised(worker, "maintenance-due", worker.run_due), name="maintenance-due"),
-        asyncio.create_task(_supervised(worker, "maintenance-store-events", worker.run_store_events), name="maintenance-store-events"),
-        asyncio.create_task(_supervised(worker, "maintenance-cadences", partial(_keep_cadences, worker, queue, settings)), name="maintenance-cadences"),
-        asyncio.create_task(_supervised(worker, "maintenance-queue-sampler", partial(_sample_queue, worker, queue)), name="maintenance-queue-sampler"),
-    ]
-    try:
-        yield
-    finally:
-        await worker.drain(loops, settings.drain_seconds)
+    async with Supervisor(end=end) as loops:
+        loops.keep("maintenance-tasks", worker.run_tasks)
+        loops.keep("maintenance-due", worker.run_due)
+        loops.keep("maintenance-store-events", worker.run_store_events)
+        loops.keep("maintenance-cadences", partial(_keep_cadences, worker, queue, settings))
+        loops.keep("maintenance-queue-sampler", partial(_sample_queue, worker, queue))
+        try:
+            yield
+        finally:
+            # From here a loop ends because the worker drains it, which is no fault.
+            loops.wind_down()
+            await worker.drain(loops.running, settings.drain_seconds)
 
 
-#: How long a loop that ended with an error waits before it starts again, and how often the cadences are asserted.
-_RESTART_SECONDS: Final = 5.0
+#: How often the cadences are asserted.
 _CADENCE_SECONDS: Final = 900.0
 
 
@@ -174,11 +190,16 @@ async def _assert_cadences(queue: TaskQueue, settings: MaintenanceSettings) -> N
 
 
 async def _keep_cadences(worker: Worker, queue: TaskQueue, settings: MaintenanceSettings) -> None:
-    """Assert the two cadences again every ``_CADENCE_SECONDS`` until the worker stops."""
+    """Assert the two cadences again every ``_CADENCE_SECONDS`` until the worker stops; a bus that does not take them is
+    asked again at the next."""
     while not worker.stopping():
         await worker.pause(_CADENCE_SECONDS)
-        if not worker.stopping():
+        if worker.stopping():
+            return
+        try:
             await _assert_cadences(queue, settings)
+        except QueueUnavailableError as exc:
+            log.warning("maintenance_cadences_unasserted", extra={"error": str(exc)[:300]})
 
 
 async def _sample_queue(worker: Worker, queue: TaskQueue) -> None:
@@ -187,21 +208,3 @@ async def _sample_queue(worker: Worker, queue: TaskQueue) -> None:
     while not worker.stopping():
         await sample_queue(queue)
         await worker.pause(SAMPLE_SECONDS)
-
-
-async def _supervised(worker: Worker, name: str, loop: Callable[[], Awaitable[None]]) -> None:
-    """Run ``loop`` until the worker stops, starting it again after a pause whenever it ends before then.
-
-    A loop ends early with an error, or without one, which only a wrong loop does; started again at once, that one would
-    hold the event loop and starve every other loop of the replica, its heartbeats among them, so it pauses too.
-    """
-    while not worker.stopping():
-        try:
-            await loop()
-        except Exception:  # noqa: BLE001 — whatever ended the loop is logged, and the loop runs again
-            log.exception("maintenance_loop_failed", extra={"loop": name})
-        else:
-            if worker.stopping():
-                return
-            log.error("maintenance_loop_ended", extra={"loop": name})
-        await worker.pause(_RESTART_SECONDS)

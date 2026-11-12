@@ -6,7 +6,9 @@ client's `__exit__` is `pass`, so even `with ApiClient(...)` closes nothing.
 
 The remedy is one client per (catalog host, retry policy), which means the caller's bearer can no
 longer be a DEFAULT header on a shared object — it rides each request instead. That is the part with
-teeth: a token that leaked between transports would authorize one user's read as another's.
+teeth: a token that leaked between transports would authorize one user's read as another's. A read and a
+write hold different policies (`catalog_read_client` sends a read again on a connection the catalog dropped),
+so each kind of call shares one pool per catalog.
 """
 
 from __future__ import annotations
@@ -32,10 +34,10 @@ def _pool(transport: RestCatalogTransport | RestCatalogWriteTransport) -> object
     return api.rest_client.pool_manager
 
 
-def test_the_reader_and_the_writer_share_the_pool_for_one_catalog() -> None:
-    reader = RestCatalogTransport("http://catalog:2333")
-    writer = RestCatalogWriteTransport("http://catalog:2333", ["ns", "t"])
-    assert _pool(reader) is _pool(writer)
+def test_a_write_transport_built_again_for_one_catalog_reuses_its_pool() -> None:
+    """A read transport's sharing is pinned with the token below, on the client the two readers share."""
+    first, second = (RestCatalogWriteTransport("http://catalog:2333", ["ns", "t"]) for _ in range(2))
+    assert _pool(first) is _pool(second)
 
 
 def test_two_catalogs_do_not_share_a_pool() -> None:

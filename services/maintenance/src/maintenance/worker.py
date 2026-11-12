@@ -46,8 +46,9 @@ from lakehouse.governed.signing_key import signing_ready_check
 from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lifecycle import mark_draining, mark_started
 from lakehouse.obs import configure_app_logging
+from lakehouse.supervision import FLUSH_SECONDS, Supervisor, flush_telemetry
 from maintenance.core.config import MaintenanceSettings, get_settings
-from maintenance.runtime import collaborators, standing
+from maintenance.runtime import collaborators, reported_health, reported_readiness, standing
 from maintenance.services.tasks import running_worker
 
 
@@ -78,16 +79,18 @@ def _alive() -> bool:
     return monotonic() - app.state.beat < STALE_SECONDS
 
 
-#: The probes, and nothing else: liveness follows the worker's loop, and readiness the lifecycle flags this process sets
-#: and its signing key.
+#: The probes, and nothing else: liveness follows the worker's loop, and readiness the lifecycle flags this process sets,
+#: its signing key, and the bus and secret store it reports.
 app = build_lance_service_app(
     title="Lance table maintenance worker",
     docs_enabled=False,
     audit_enabled=get_settings().audit_enabled,
     lifespan=_serves_no_lifespan,
     log=log,
-    ready_check=signing_ready_check(),
+    ready_check=signing_ready_check(reported_readiness),
     live_check=_alive,
+    max_body_bytes=get_settings().max_body_bytes,
+    request_deadline_seconds=get_settings().request_deadline_seconds,
 )
 app.state.beat = monotonic()
 
@@ -130,18 +133,26 @@ async def _work(settings: MaintenanceSettings, stop: asyncio.Event, started: asy
         await _held(stop, started)
         return
     async with (
-        standing(app, settings),
-        collaborators(app, settings) as held,
+        # The background loops what the worker stands on runs (its store session, its sidecar's watchdog, its signing key),
+        # each of which ending unasked ends the process (ADR 0203); the worker's own loops have a supervisor of their own.
+        Supervisor() as loops,
+        standing(app, settings, loops),
+        collaborators(app, settings, loops) as held,
         running_worker(settings, ready=lambda: held.ready() and not stop.is_set(), emitter=held.lineage, control=held.control) as queue,
     ):
         if queue is None:
             raise RuntimeError("MAINTENANCE_NATS_URL names no bus: the worker has no queue to take a task from")
+        app.state.health = reported_health(settings, queue)
+        app.state.health.watch(loops)
         mark_started(app)
         started.set()
         log.info("maintenance_worker_started")
         await stop.wait()
         mark_draining(app)
         log.info("maintenance_worker_stopping", extra={"drain_seconds": settings.drain_seconds})
+        # Stopped before the managers above close what the loops read (the queue the health watch asks), and before the
+        # drain, so no loop's end cuts a pass the drain lets finish; the pass keeps the session and the key it holds.
+        await loops.stop()
 
 
 async def _held(stop: asyncio.Event, started: asyncio.Event) -> None:
@@ -208,8 +219,9 @@ async def _until_signalled(settings: MaintenanceSettings) -> bool:
 def _end_unstarted(code: int) -> None:
     """End a process whose start was abandoned, without waiting for it. A start step that runs in a thread (a secret
     read retried for minutes while the sidecar is down) cannot be cancelled, and the interpreter waits for its thread
-    at exit: the pod would stay in Terminating until the read gave up. Nothing was started that needs stopping."""
-    logging.shutdown()
+    at exit: the pod would stay in Terminating until the read gave up. Nothing was started that needs stopping. What it
+    logged is flushed within a bound first, since the Collector keeps no copy of this pod's stdout (`lakehouse.supervision`)."""
+    flush_telemetry(FLUSH_SECONDS)
     os._exit(code)
 
 

@@ -76,12 +76,21 @@ own, in its own repository, whose admissions it supplies to a lakehouse install 
 ## The composition seam: one app factory
 
 `lakehouse.lance_app.build_lance_service_app(*, title, docs_enabled, audit_enabled, lifespan, log, ready_check,
-routers=(), inner_middleware=())` builds `catalog`, `lineage` and `maintenance`: routers mount at the root, config
-is each service's own `core/config.py::get_settings()`, and the factory owns the logging, the docs gate, the audit
-trail, the problem handlers, the request-id layer and `/livez` + `/readyz`. The **lifespan is injectable** and
-required: each service passes its own, which builds its resources and sets the lifecycle flags `/readyz` reads. So is
-`ready_check`: each service's `/readyz` also answers for its own dependency or fact (the catalog's namespace and
-signing key, lineage's feed, maintenance's signing key).
+max_body_bytes, request_deadline_seconds, routers=(), outer_middleware=(), inner_middleware=())` builds `catalog`,
+`lineage` and `maintenance`: routers mount at the root, config is each service's own `core/config.py::get_settings()`,
+and the factory owns the logging, the docs gate, the audit trail, the problem handlers, `/livez` + `/readyz`, and every
+layer a request passes, outermost first: the request id, the panic catcher (a native panic is a 500 problem body), the
+request deadline (503 code 17, the door left to run on), the service's `outer_middleware` (the catalog's write shed and
+path reading), the body cap (413), then its `inner_middleware` (ADR 0203). The **lifespan is injectable** and
+required: each service passes its own, which builds its resources through one `AsyncExitStack`, runs every background
+loop under a `lakehouse.supervision.Supervisor` (a loop that ends ends the process), and sets the lifecycle flags
+`/readyz` reads. So is `ready_check`: each service's `/readyz` answers from memory, the verdicts its
+`lakehouse.health.HealthWatch` keeps by reading each dependency in the background (the catalog's store and OpenFGA and
+lineage's feed gate; the bus, the secret store, lineage's OpenFGA and maintenance's and lineage's object store are
+reported only, every service on one cadence), with its own facts beside them
+(the catalog's namespace and signing key, maintenance's signing key). A service whose doors authenticate builds its
+judge with `lakehouse.admission.caller_judge` and calls `judge_before_the_body` once its routes are mounted, so its
+caller is judged from the headers before FastAPI reads a body.
 A client is an outside tool on the public API and builds its own app (owner, 2026-11-07). The lance services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns
 the boot, not the layout. A `main.py` that opens
 its own `app = FastAPI(...)` is the exception to justify, not the norm: copied boots drift, and one once lost its

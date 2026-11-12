@@ -28,7 +28,7 @@ from lakehouse.exceptions import (
     UnauthorizedError,
     ValidationError,
 )
-from lakehouse.lancekit.catalog_client import catalog_api_client
+from lakehouse.lancekit.catalog_client import catalog_read_client
 from lakehouse.lancekit.catalog_client import request_headers as _request_headers
 from lakehouse.naming import CATALOG_DELIMITER
 
@@ -233,7 +233,7 @@ class RestCatalogTransport:
 
         # ONE client (and so one connection pool) per catalog, shared with every other transport
         # aimed at it — this ctor may run once per request.
-        self._api = DataApi(catalog_api_client(base_url, retries=retries))
+        self._api = DataApi(catalog_read_client(base_url, retries=retries))
         self._token = token
         self._delimiter = delimiter
         self._timeout = timeout

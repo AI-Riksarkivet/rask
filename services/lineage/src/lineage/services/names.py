@@ -21,7 +21,7 @@ from typing import Final
 
 from lakehouse.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from lakehouse.governed.decider import AccessDecider
-from lakehouse.lancekit.catalog_client import catalog_api_client, request_headers
+from lakehouse.lancekit.catalog_client import catalog_read_client, request_headers
 from lakehouse.lancekit.reader import translate_catalog_errors
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.naming import CATALOG_DELIMITER, identifier_location, uuid_of
@@ -64,7 +64,7 @@ class CatalogNames:
 
         try:
             with translate_catalog_errors():
-                described = TableApi(catalog_api_client(self._url)).describe_table(
+                described = TableApi(catalog_read_client(self._url)).describe_table(
                     # The uuid is all this reads, so no credential is minted for the caller's location.
                     name,
                     DescribeTableRequest(vend_credentials=False),
@@ -84,7 +84,7 @@ class CatalogNames:
 
         try:
             with translate_catalog_errors():
-                described = NamespaceApi(catalog_api_client(self._url)).describe_namespace(
+                described = NamespaceApi(catalog_read_client(self._url)).describe_namespace(
                     name, DescribeNamespaceRequest(), delimiter=CATALOG_DELIMITER, _request_timeout=self._timeout, _headers=request_headers(bearer)
                 )
         except _UNSEEN:

@@ -43,6 +43,7 @@ from lakehouse.lineage_events import DatasetUuids, dataset_uuids
 from lakehouse.maintenance_due import DueRecord, read_due, write_due
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
+from lakehouse.supervision import Supervisor
 from maintenance.core.config import get_settings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.table_pass import TableTask, run_table_pass
@@ -143,7 +144,7 @@ def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Test
 
     @asynccontextmanager
     async def _started(app: FastAPI) -> AsyncGenerator[None]:
-        async with runtime.standing(app, get_settings()), runtime.collaborators(app, get_settings()) as held:
+        async with Supervisor() as loops, runtime.standing(app, get_settings(), loops), runtime.collaborators(app, get_settings(), loops) as held:
             app.state.held = held
             yield
 

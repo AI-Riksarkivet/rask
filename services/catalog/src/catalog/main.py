@@ -11,7 +11,7 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from functools import partial
 
 import httpx
@@ -19,6 +19,7 @@ from dapr.aio.clients import DaprClient
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
+from starlette.middleware import Middleware
 
 from catalog.api.commit_reconcile import mount_commit_reconcile
 from catalog.api.control_relay import mount_control_relay
@@ -29,6 +30,7 @@ from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.manifest_reclaim import mount_manifest_reclaim
 from catalog.api.path_reading import PathReadingMiddleware
 from catalog.api.promotion_expiry import mount_promotion_expiry
+from catalog.api.security import authenticate, judge
 from catalog.api.signing_gate import signing_gate_middleware
 from catalog.api.v1.router import api_router
 from catalog.core import base_judge
@@ -41,19 +43,23 @@ from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
-from lakehouse.body_limit import BodySizeLimitMiddleware
-from lakehouse.bus_watchdog import start_bus_watchdog
+from lakehouse.admission import judge_before_the_body
+from lakehouse.bus_watchdog import BusWatchdog, start_bus_watchdog
 from lakehouse.control_emit import make_control_emitter
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.dapr_auth import assert_app_token_configured
+from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.settings import assert_authentication_configured
-from lakehouse.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
+from lakehouse.governed.signing_key import attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
+from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
 from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lance_metrics import instrument_lance_if_available
+from lakehouse.lifecycle import closed_quietly
 from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.obs import configure_app_logging
-from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.schemas.health import Readiness
 from lakehouse.store_session import require_env_pair, start_store_session
+from lakehouse.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -160,6 +166,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     bound_lance_scans(settings)
+    # EVERYTHING ACQUIRED BELOW IS RELEASED BY THIS STACK, in reverse, whether the start completes or fails part-way
+    # (ADR 0203), so a start that fails after the store session or the sidecar client is built leaves neither open.
+    async with AsyncExitStack() as stack:
+        # Every background loop and task this process runs is supervised here: one that ends unasked ends the process.
+        loops = await stack.enter_async_context(Supervisor())
+        await _build(app, settings, stack=stack, loops=loops)
+        # Registered last, so run FIRST: every background loop and task is stopped while the clients it uses are open.
+        stack.push_async_callback(loops.stop)
+        app.state.startup_complete = True
+        try:
+            yield
+        finally:
+            app.state.shutting_down = True
+
+
+async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
+    """Build what the catalog serves with onto ``app.state``, each piece's release pushed onto ``stack`` as it is built,
+    and its background loops and tasks started on ``loops``."""
     # THE CATALOG HOLDS NO STORE KEY ([[XC-083]], ADR 0170). Its identity is the ServiceAccount token its pod projects
     # for the store's audience, exchanged here for a session (`AssumeRoleWithWebIdentity`), waiting out a store or a
     # provisioning hook still starting, and the boot FAILS CLOSED if none is issued; a background loop exchanges again
@@ -167,12 +191,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # needed. Every `storage_options()` read peeks at what that loop holds, and nothing built here keeps a credential of
     # its own: the connections are keyed on it, the judge reads it at each use, and the emitters take
     # `storage_options` as a callable. With no token (the offline and Dagger lanes) the environment's pair signs.
-    store_session = await start_store_session(settings.web_identity, session_name="catalog", duration_seconds=settings.s3_session_seconds)
+    store_session = await start_store_session(settings.web_identity, session_name="catalog", duration_seconds=settings.s3_session_seconds, loops=loops)
     if store_session is None:
         require_env_pair(settings.env_pair, prefix="LANCE")
+    else:
+        stack.push_async_callback(store_session.stop)
     app.state.store_session = store_session
     app.state.connections = NamespaceConnections()
-    app.state.connections.connection(settings)  # fail fast if storage misconfigured
+    namespace = app.state.connections.connection(settings)  # fail fast if storage misconfigured
     # #3-A warehouse routing cache (only used when warehouses_enabled): top-level-namespace → its physical
     # root_uri (bindings are immutable, so cache-forever is safe).
     app.state.warehouse_binding_cache = {}
@@ -180,10 +206,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
     # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be
     # visible as a CrashLoopBackOff, not as a fleet of ready pods answering 503 to everyone.
+    stack.push_async_callback(fga_dispose, app)
     await attach_auth(
         app,
         settings,
         service="catalog",
+        loops=loops,
         fatal=True,
         # THE ESTATE'S ONE PUBLISHER OF THE AUTHORIZATION MODEL. Every other service resolves what
         # this one wrote; `build_fga_client` defaults to the read-only half for that reason.
@@ -218,15 +246,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # as the settings it is built from, so each read signs its record reads with the pair in force, and
     # cleared at shutdown so nothing in this process outlives the app that configured it.
     base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
+    stack.callback(base_judge.install, None)
     # Lineage emission (opt-in, best-effort). Build the chosen transport: a Dapr pub/sub publisher (the
     # sidecar persists to NATS) or a direct-HTTP client. The Dapr client targets the local sidecar, so
-    # it's cheap to construct and needs no broker reachability at boot.
+    # it's cheap to construct and needs no broker reachability at boot. One client per process, closed by this lifespan.
     lineage_http = None
     dapr_client = None
     if settings.lineage_emit_enabled and settings.lineage_transport == "dapr":
         dapr_client = DaprClient()
     elif settings.lineage_emit_enabled and settings.lineage_url:
         lineage_http = httpx.AsyncClient(timeout=settings.lineage_emit_timeout_seconds)
+        stack.push_async_callback(closed_quietly, lineage_http.aclose)
+    if dapr_client is None and settings.control_emit_enabled:
+        dapr_client = DaprClient()
+    if dapr_client is not None:
+        stack.push_async_callback(closed_quietly, dapr_client.close)
 
     # WHICH TENANT a write belongs to, for the emitted `rask_lance.project` facet — WATCH targeting's only
     # key. Without it a notifier skips the watcher loop entirely and every catalog write in the
@@ -287,10 +321,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         commit_ids=commit_ids,
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes through
-    # the same local sidecar (reuse/lazily build the Dapr client). The per-replica ring buffer is ALWAYS
+    # the same local sidecar client, built above when either lane is on. The per-replica ring buffer is ALWAYS
     # built (plain memory, fed by the broadcast subscription in api/dapr.py); the emitter is a no-op when off.
-    if settings.control_emit_enabled and dapr_client is None:
-        dapr_client = DaprClient()
     # The sidecar client itself, published for callers that are not the emitter. The control relay
     # (api/control_relay.py) re-publishes the STAGED event, never a re-serialization of the model, so it
     # cannot go through `control_emitter`, which would rebuild the event from the model and stage it
@@ -317,10 +349,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # its key reports itself not ready and heals in place when the key is published, and a write it has already
     # committed is never failed by an emit that cannot be signed; that emit is withheld, lineage and control alike.
     if signing is not None:
-        await signing.start()
+        await signing.start(loops)
+        stack.push_async_callback(signing.stop)
     if isinstance(commit_ids, CommitIdKeyHolder):
-        await commit_ids.start()
-    app.state.startup_complete = True
+        await commit_ids.start(loops)
+        stack.push_async_callback(commit_ids.stop)
     # Re-assert the warehouse grants over warehouses that already exist. BACKGROUND and non-fatal, and
     # both of those are the design rather than caution:
     #
@@ -337,65 +370,58 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     #     exactly as it was, which is the state this repairs, not a worse one.
     #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
     #     one-by-one past a duplicate), so replicas racing land the same tuples.
-    backfill_task = asyncio.create_task(_backfill_cascade_grants(app))
+    loops.start("cascade-backfill", partial(_backfill_cascade_grants, app))
     # The namespace lineage keeps its tables in, in the background for the backfill's reasons: lineage retries
     # its tables until the namespace exists, so a slow OpenFGA or store must not delay this catalog's readiness.
-    provenance_task = asyncio.create_task(_ensure_provenance_namespace(app))
+    loops.start("provenance-namespace", partial(_ensure_provenance_namespace, app))
     # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
     # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
-    bus_watchdog = await start_bus_watchdog()
-    try:
-        yield
-    finally:
-        app.state.shutting_down = True
-        base_judge.install(None)
-        backfill_task.cancel()
-        provenance_task.cancel()
-        if bus_watchdog is not None:
-            await bus_watchdog.stop()
-        if signing is not None:
-            await signing.stop()
-        if isinstance(commit_ids, CommitIdKeyHolder):
-            await commit_ids.stop()
-        if store_session is not None:
-            await store_session.stop()
-        fga_client = getattr(app.state, "fga", None)
-        # Each close is isolated so one failing teardown can't strand the other resource.
-        if fga_client is not None:
-            with suppress(Exception):
-                await fga_client.close()
-        if lineage_http is not None:
-            with suppress(Exception):
-                await lineage_http.aclose()
-        if dapr_client is not None:
-            with suppress(Exception):
-                await dapr_client.close()
+    bus_watchdog = await start_bus_watchdog(loops)
+    if bus_watchdog is not None:
+        stack.push_async_callback(bus_watchdog.stop)
+    # What `/readyz` answers, read in the background so the probe never waits on a dependency or a request thread
+    # (`lakehouse.health`, ADR 0203). The store and OpenFGA gate: no door serves without them. The bus is reported only,
+    # since every announcement it carries is staged in an outbox first. The namespace this catalog serves is a fact
+    # read once here: a backend that cannot answer `namespace_id()` is no readiness fault, and per-request resolution
+    # surfaces that as a domain error.
+    with suppress(LanceNamespaceError):
+        app.state.readiness_facts = {"namespace": str(namespace.namespace_id())}
+    app.state.health = HealthWatch(_dependencies(app, settings, bus_watchdog))
+    app.state.health.watch(loops)
 
 
-async def _namespace_ready(request: Request) -> Readiness:
-    """Report the resolved namespace id alongside ``ready`` — a boot-config fact worth surfacing on
-    the probe. Best-effort: a backend that cannot answer ``namespace_id()`` is not a readiness fault
-    (per-request resolution surfaces that as a domain error), so the pod stays Ready without the fact."""
-    body = Readiness(status=ReadinessStatus.ready)
-    connections = getattr(request.app.state, "connections", None)
-    if connections is not None:
-        with suppress(LanceNamespaceError):
-            namespace = await run_in_threadpool(connections.connection, request.app.state.settings)
-            body.components["namespace"] = str(namespace.namespace_id())
-    return body
+def _dependencies(app: FastAPI, settings: Settings, bus_watchdog: BusWatchdog | None) -> list[Dependency]:
+    """What the catalog reads to know it can serve: its store under its own session (the control root's listing), OpenFGA
+    under its own credential, the bus where the chart names one, and the secret store its keys are read from."""
+    dependencies = [
+        store_dependency(settings.registry_root, settings.storage_options, required=True),
+        *openfga_dependency(app, required=True),
+        *bus_dependency(bus_watchdog),
+    ]
+    if settings.secrets_from_dapr and settings.signing_identity:
+        dependencies.append(secret_store_dependency(settings.dapr_secret_store, settings.signing_identity))
+    return dependencies
+
+
+async def _catalog_ready(request: Request) -> Readiness:
+    """The verdicts the health watch keeps, with the namespace this catalog serves; never a read of its own."""
+    state = request.app.state
+    return state.health.readiness(getattr(state, "readiness_facts", None))
 
 
 _settings = get_settings()
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
-# gate, the handler pair in the order that makes it work, one request id, and the probes — see
-# `lakehouse.lance_app` for what each of those five is for and what a copy of it got wrong.
+# gate, the handler pair in the order that makes it work, one request id, every layer a request passes, and the
+# probes — see `lakehouse.lance_app` for what each is for and what a copy of it got wrong.
 #
 # `maintenance_middleware` (the read-only gate, a no-op unless LANCE_MAINTENANCE_READ_ONLY=true) and
-# `signing_gate_middleware` (the writes a catalog without its signing key refuses) go
-# in as `inner_middleware` and NOT after this call, because middleware added later is OUTER: outside
-# the request-id layer its 503 never passes back through `RequestIDMiddleware` and goes out with no
-# `X-Request-ID`, so an operator cannot correlate the refusal with anything. That ordering is the
-# entire reason the factory has the hook.
+# `signing_gate_middleware` (the writes a catalog without its signing key refuses) go in as `inner_middleware`, inside
+# the request-id layer, so their 503 carries an `X-Request-ID` an operator can correlate the refusal with.
+#
+# The OUTER layers, in order: the write shed answers 429 once the concurrent-write cap is reached, when a write begins
+# to read its body and before a byte of it is buffered, so shedding relieves memory pressure rather than adding to it;
+# the path reading, outermost of the two, reads the request's path as the client spelled its names, its public prefix
+# stripped and a bare `+` read as a space ([[LH-526]]), so every layer beneath reads one path.
 app = build_lance_service_app(
     title="Lance Namespace REST Catalog",
     version="1.0.0",
@@ -404,8 +430,12 @@ app = build_lance_service_app(
     lifespan=lifespan,
     log=log,
     routers=[api_router],
-    ready_check=signing_ready_check(commit_ids_ready_check(_namespace_ready)),
+    ready_check=signing_ready_check(commit_ids_ready_check(_catalog_ready)),
+    # A body over the cap is refused 413 before it is buffered (Arrow-IPC OOM guard, `lakehouse.body_limit`).
+    max_body_bytes=_settings.max_body_bytes,
+    request_deadline_seconds=_settings.request_deadline_seconds,
     inner_middleware=[maintenance_middleware, signing_gate_middleware],
+    outer_middleware=[Middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes), Middleware(PathReadingMiddleware)],
 )
 # Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always
 # adds GET /dapr/subscribe; the subscription registers only when control_emit_enabled (see api/dapr.py).
@@ -431,13 +461,6 @@ mount_commit_reconcile(app, _settings.commit_reconcile_binding_name)
 # [[LH-251]]: reclaim each root's `__manifest` versions past their retention (POST /<binding name> at the pod root).
 # Mounted only when the chart names the binding, like the relay.
 mount_manifest_reclaim(app, _settings.manifest_reclaim_binding_name)
-# ADDED AFTER, therefore OUTSIDE the request-id layer — where they already were, and where they belong.
-# Reject oversized request bodies with 413 before they are buffered (Arrow-IPC OOM guard). See body_limit.py.
-app.add_middleware(BodySizeLimitMiddleware, max_bytes=_settings.max_body_bytes)
-# Shed a bulk-write burst with 429 once the concurrent-write cap is reached, BEFORE the body is buffered — so
-# shedding relieves memory pressure rather than adding to it. Sits above body_limit so an over-cap write is rejected
-# before even the size check. (P5)
-app.add_middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes)
-# Outermost (added LAST → wraps everything, runs FIRST): read the request's path as the client spelled its names, its
-# public prefix stripped and a bare `+` read as a space ([[LH-526]]), so every layer beneath reads one path.
-app.add_middleware(PathReadingMiddleware)
+# Every door that authenticates its caller does so from the request's headers before its body is read
+# (`lakehouse.admission`): a caller with no token is refused before a byte is buffered, and never takes a write seat.
+judge_before_the_body(app, gate=authenticate, judge=judge)

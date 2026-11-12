@@ -83,7 +83,7 @@ async def create_table_branch(
         # what" is the question a consumer asks next, and it is answered from the DATASET rather than
         # from the request: a branch taken from main sends no `from_version` and records main's current
         # version, so announcing the request answered `null` for the case that happens most.
-        extra={"branch": body.name, **_recorded_parent(table, so, body)},
+        extra={"branch": body.name, **await run_in_threadpool(_recorded_parent, table, so, body)},
     )
     return response
 

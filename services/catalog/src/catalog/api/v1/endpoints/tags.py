@@ -86,7 +86,7 @@ async def create_table_tag(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
-    response = dataplane.create_tag(table, so, body)
+    response = await run_in_threadpool(dataplane.create_tag, table, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
         control,
@@ -125,7 +125,7 @@ async def update_table_tag(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
-    response = dataplane.update_tag(table, so, body)
+    response = await run_in_threadpool(dataplane.update_tag, table, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
         control,
@@ -160,7 +160,7 @@ async def delete_table_tag(
     # The ref the tag pinned, read while the tag still exists: after the delete nothing records it.
     listed = await run_in_threadpool(dataplane.list_tags, table, so, ListTableTagsRequest(id=segments))
     pinned = (listed.tags or {}).get(body.tag)
-    response = dataplane.delete_tag(table, so, body)
+    response = await run_in_threadpool(dataplane.delete_tag, table, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
         control,

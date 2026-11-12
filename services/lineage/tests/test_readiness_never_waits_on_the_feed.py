@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import asyncio
 import time
+from functools import partial
 
 import pytest
 from starlette.testclient import TestClient
 
 from lakehouse.exceptions import ServiceUnavailableError
+from lakehouse.health import HealthWatch
 from lineage import main
 
 
@@ -48,7 +50,7 @@ def _until(client: TestClient, status: int, *, within: float) -> int:
 def test_readiness_answers_at_once_and_refuses_once_the_feed_stops_answering(monkeypatch: pytest.MonkeyPatch) -> None:
     feed = _Feed()
     monkeypatch.setattr(main.ProvenanceStore, "from_settings", lambda _settings: feed)
-    monkeypatch.setattr(main, "FEED_WATCH_INTERVAL_SECONDS", 0.05, raising=False)
+    monkeypatch.setattr(main, "HealthWatch", partial(HealthWatch, interval=0.05))
     with TestClient(main.app) as client:
         asked = time.monotonic()
         client.get("/readyz")

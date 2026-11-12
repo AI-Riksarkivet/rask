@@ -15,19 +15,11 @@ reads the body — and so it composes below the app's exception handlers without
 
 from __future__ import annotations
 
-import json
-
 from lance_namespace import ErrorCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from lakehouse.problem import problem_body
-
-
-_PROBLEM_JSON = b"application/problem+json"
-
-
-class _BodyTooLarge(Exception):
-    """Raised from the wrapped ``receive`` when the streamed body exceeds the cap."""
+from lakehouse.problem import send_problem
+from lakehouse.read_refusal import ReadRefusal
 
 
 class BodySizeLimitMiddleware:
@@ -54,6 +46,9 @@ class BodySizeLimitMiddleware:
                     return
                 break
 
+        # A chunked body, or one longer than its Content-Length, is refused as its bytes arrive, in the read that passes
+        # the cap (`lakehouse.read_refusal`).
+        refusal = ReadRefusal(send, self._reject)
         received = 0
 
         async def limited_receive() -> Message:
@@ -61,45 +56,24 @@ class BodySizeLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self._max_bytes:  # chunked / lying Content-Length caught here
-                    raise _BodyTooLarge
+                if received > self._max_bytes:
+                    await refusal.refuse()
             return message
 
-        try:
-            await self._app(scope, limited_receive, send)
-        except* _BodyTooLarge:
-            # The endpoint reads the full body before sending a response, so no bytes have gone out yet.
-            # ``except*`` (not ``except``) because an inner BaseHTTPMiddleware (e.g. maintenance_middleware)
-            # runs the app in an anyio task group, which wraps the raise in an ExceptionGroup a bare
-            # ``except`` would miss — turning the intended 413 into a 500. except* matches grouped AND naked.
-            await self._reject(send)
+        await refusal.run(self._app, scope, limited_receive)
 
     async def _reject(self, send: Send) -> None:
-        # Through the SHARED builder, so this envelope carries the spec's required `code` and `error`: a generated
-        # Lance-Namespace client validates `ErrorResponse` with `code` as a REQUIRED, no-default field, so a body
-        # without it makes the client raise rather than read the refusal. This middleware cannot raise its way to the
-        # handler (it is pure ASGI and must answer before the body is buffered), so it builds the envelope with
-        # `lakehouse.problem.problem_body`.
-        body = json.dumps(
-            problem_body(
-                ErrorCode.INVALID_INPUT,
-                status=413,
-                title="Payload Too Large",
-                slug="payload-too-large",
-                detail=(
-                    f"request body exceeds the {self._max_bytes}-byte limit; write large payloads "
-                    "directly to object storage with vended credentials instead of through the catalog"
-                ),
-            )
-        ).encode()
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 413,
-                "headers": [
-                    (b"content-type", _PROBLEM_JSON),
-                    (b"content-length", str(len(body)).encode()),
-                ],
-            }
+        # The spec's envelope, its `code` and `error` included: a generated Lance-Namespace client validates
+        # `ErrorResponse` with `code` as a required, no-default field, so a body without it makes the client raise rather
+        # than read the refusal.
+        await send_problem(
+            send,
+            ErrorCode.INVALID_INPUT,
+            status=413,
+            title="Payload Too Large",
+            slug="payload-too-large",
+            detail=(
+                f"request body exceeds the {self._max_bytes}-byte limit; write large payloads "
+                "directly to object storage with vended credentials instead of through the catalog"
+            ),
         )
-        await send({"type": "http.response.body", "body": body})

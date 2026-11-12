@@ -41,6 +41,7 @@ from lakehouse.storage_options import DEFAULT_REGION, REGION, StorageOptions, ob
 
 if TYPE_CHECKING:
     from lakehouse.storage import S3Client
+    from lakehouse.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -350,14 +351,14 @@ class StoreSession:
             self._expired = True
             log.error("store_session_expired", extra={"error": error})
 
-    async def start(self) -> None:
-        """Exchange at boot, then keep the session renewed in the background until `stop`.
+    async def start(self, loops: Supervisor) -> None:
+        """Exchange at boot, then keep the session renewed by a loop of ``loops`` until `stop`.
 
         Raises:
             RuntimeError: The boot exchange failed; see `exchange_at_boot`.
         """
         await asyncio.to_thread(self.exchange_at_boot)
-        self._task = asyncio.create_task(self._wake_forever(), name="store-session")
+        self._task = loops.keep("store-session", self._wake_forever)
 
     async def stop(self) -> None:
         """End the background loop and forget the session. Safe to call when it never started."""
@@ -378,8 +379,9 @@ class StoreSession:
                 log.exception("store_session_pass_failed")
 
 
-async def start_store_session(identity: WebIdentity | None, *, session_name: str, duration_seconds: int) -> StoreSession | None:
-    """Exchange ``identity``'s token at boot and keep its session renewed, or ``None`` for a service that projects no token.
+async def start_store_session(identity: WebIdentity | None, *, session_name: str, duration_seconds: int, loops: Supervisor) -> StoreSession | None:
+    """Exchange ``identity``'s token at boot and keep its session renewed on a loop of ``loops``, or ``None`` for a service
+    that projects no token.
 
     The caller stops what this returns when its lifespan ends.
 
@@ -389,7 +391,7 @@ async def start_store_session(identity: WebIdentity | None, *, session_name: str
     if identity is None:
         return None
     session = StoreSession(identity, session_name=session_name, duration_seconds=duration_seconds)
-    await session.start()
+    await session.start(loops)
     return session
 
 

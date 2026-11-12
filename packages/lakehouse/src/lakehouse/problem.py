@@ -8,7 +8,11 @@ that sets ``Retry-After``) take ``problem_body`` from here.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
+
 from opentelemetry import trace
+from starlette.types import Send
 
 
 #: The RFC 9457 media type every problem body is served with.
@@ -61,3 +65,21 @@ def problem_body(code: int, *, status: int, title: str, detail: str, slug: str |
         "error": detail,
         **occurrence(),
     }
+
+
+async def send_problem(
+    send: Send,
+    code: int,
+    *,
+    status: int,
+    title: str,
+    detail: str,
+    slug: str | None = None,
+    headers: Sequence[tuple[bytes, bytes]] = (),
+) -> None:
+    """Answer an ASGI request with :func:`problem_body` at ``status``, for a pure-ASGI layer that answers before, or
+    outside, the app's handlers. ``headers`` go out beside the content type and length."""
+    payload = json.dumps(problem_body(code, status=status, title=title, detail=detail, slug=slug)).encode()
+    framing = [(b"content-type", PROBLEM_JSON.encode()), (b"content-length", str(len(payload)).encode())]
+    await send({"type": "http.response.start", "status": status, "headers": [*framing, *headers]})
+    await send({"type": "http.response.body", "body": payload})

@@ -38,6 +38,7 @@ from lakehouse import location_claims, store_session
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.store_session import SessionCache, start_store_session
+from lakehouse.supervision import Supervisor
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.reconcile import reconcile
@@ -141,12 +142,13 @@ class _FollowUps:
 @pytest.mark.asyncio
 async def test_the_drift_report_lists_the_stores_buckets_under_the_services_session(store: Store, tmp_path: Path) -> None:
     settings = _settings(store, tmp_path)
-    session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds)
-    assert session is not None, "a service projecting a token holds a session"
-    try:
-        report = await reconcile(settings, warehouses_enabled=False, control_root=f"s3://{store.swept}", namespace_root=f"s3://{store.swept}", walk=False)
-    finally:
-        await session.stop()
+    async with Supervisor() as loops:
+        session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds, loops=loops)
+        assert session is not None, "a service projecting a token holds a session"
+        try:
+            report = await reconcile(settings, warehouses_enabled=False, control_root=f"s3://{store.swept}", namespace_root=f"s3://{store.swept}", walk=False)
+        finally:
+            await session.stop()
 
     unread = [note.reason for note in report.unavailable if note.category == "orphan_buckets"]
     # moto's backends are process-global, so another test's buckets on this worker are listed too.
@@ -166,20 +168,23 @@ async def test_a_store_event_reads_its_tables_claim_under_the_session_in_force(s
     monkeypatch.setattr(store_session, "SESSIONS", SessionCache(clock=clock))
     identity = settings.web_identity
     assert identity is not None, "a service projecting a token has a web identity"
-    session = await start_store_session(identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds)
-    assert session is not None, "a service projecting a token holds a session"
     follow_ups = _FollowUps()
-    try:
-        replica = StoreEvents(settings, cast(TaskQueue, follow_ups))
-        first = store_session.held_session(identity).access_key_id
-        clock.now = settings.s3_session_seconds / 2 + 1
-        assert session.refresh_if_due(), "half the session's life is used, so it is exchanged again"
-        backend = sts_backends[DEFAULT_ACCOUNT_ID]["aws"]
-        backend.assumed_roles = [role for role in backend.assumed_roles if role.access_key_id != first]
-        event = {"Records": [{"eventName": "s3:ObjectCreated:Put", "s3": {"bucket": {"name": store.swept}, "object": {"key": f"{directory}/data/x.lance"}}}]}
+    async with Supervisor() as loops:
+        session = await start_store_session(identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds, loops=loops)
+        assert session is not None, "a service projecting a token holds a session"
+        try:
+            replica = StoreEvents(settings, cast(TaskQueue, follow_ups))
+            first = store_session.held_session(identity).access_key_id
+            clock.now = settings.s3_session_seconds / 2 + 1
+            assert session.refresh_if_due(), "half the session's life is used, so it is exchanged again"
+            backend = sts_backends[DEFAULT_ACCOUNT_ID]["aws"]
+            backend.assumed_roles = [role for role in backend.assumed_roles if role.access_key_id != first]
+            event = {
+                "Records": [{"eventName": "s3:ObjectCreated:Put", "s3": {"bucket": {"name": store.swept}, "object": {"key": f"{directory}/data/x.lance"}}}]
+            }
 
-        held = await replica.hold_passes(json.dumps(event).encode())
-    finally:
-        await session.stop()
+            held = await replica.hold_passes(json.dumps(event).encode())
+        finally:
+            await session.stop()
 
     assert (held, follow_ups.held) == (1, [Task(kind="table", uuid=table_uuid, location=location)])

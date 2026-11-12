@@ -58,6 +58,8 @@ def _lakehouse_app(*, audit_enabled: bool) -> FastAPI:
         lifespan=_lifespan,
         log=logging.getLogger("t"),
         ready_check=_ready,
+        max_body_bytes=1024,
+        request_deadline_seconds=30.0,
     )
 
 

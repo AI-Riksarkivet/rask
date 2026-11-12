@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, signing_ready_check
 from lakehouse.lifecycle import mark_started
 from lakehouse.probes import make_probes_router
+from lakehouse.supervision import Supervisor
 
 
 IDENTITY = "service-test"
@@ -125,20 +126,21 @@ async def test_a_signer_heals_in_place_follows_a_re_minted_store_and_drops_an_un
             assert time.monotonic() < deadline, f"the signer never reached {state}: it holds {_held_kid(holder)!r}, wanted {kid!r}"
             await asyncio.sleep(0.01)
 
-    await holder.start()
-    try:
-        assert _held_kid(holder) is None, "the signer held a key the store would not give it"
+    async with Supervisor() as loops:
+        await holder.start(loops)
+        try:
+            assert _held_kid(holder) is None, "the signer held a key the store would not give it"
 
-        store.serve(_found("seed", "SEED-a"), _found("keys", "PUB-a"))
-        await reaches("a", "the key the store later answered")
+            store.serve(_found("seed", "SEED-a"), _found("keys", "PUB-a"))
+            await reaches("a", "the key the store later answered")
 
-        store.serve(_found("seed", "SEED-b"), _found("keys", "PUB-b"))
-        await reaches("b", "the key a re-minted store published")
+            store.serve(_found("seed", "SEED-b"), _found("keys", "PUB-b"))
+            await reaches("b", "the key a re-minted store published")
 
-        store.serve(_found("seed", "SEED-b"), _found("keys", "PUB-c"))
-        await reaches(None, "no key once its identity stopped listing it")
-    finally:
-        await holder.stop()
+            store.serve(_found("seed", "SEED-b"), _found("keys", "PUB-c"))
+            await reaches(None, "no key once its identity stopped listing it")
+        finally:
+            await holder.stop()
 
 
 @pytest.mark.parametrize(

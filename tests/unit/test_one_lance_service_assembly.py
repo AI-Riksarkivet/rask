@@ -10,6 +10,8 @@ serving no `RequestIDMiddleware` at all, and nothing compared them.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -17,6 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import UnauthenticatedError
+from starlette.types import Message, Scope
 
 
 LANCE_APPS = (
@@ -74,6 +77,43 @@ def test_every_lance_app_stamps_one_request_id(name: str, module_path: str) -> N
 
         response = TestClient(app, raise_server_exceptions=False).get("/_probe_request_id", headers={"X-Request-ID": "quoted-by-a-caller"})
     assert response.headers.get("X-Request-ID") == "quoted-by-a-caller", dict(response.headers)
+
+
+@pytest.mark.parametrize(("name", "module_path"), [row for row in LANCE_APPS if row[0] != "lineage"], ids=["catalog", "maintenance"])
+def test_every_lance_app_refuses_a_body_over_its_cap_before_reading_it(name: str, module_path: str) -> None:
+    """The app factory takes the body cap as a required keyword and installs it (CTL-006), so a body declared over it is
+    refused 413 from its Content-Length, before a byte of it is read. Lineage's is driven over a socket, where its
+    callers reach it: `services/lineage/tests/test_a_post_to_the_intake_is_refused_before_its_body_is_read.py`."""
+    answered: list[Message] = []
+    reads = 0
+
+    async def receive() -> Message:
+        nonlocal reads
+        reads += 1
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        answered.append(message)
+
+    scope: Scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/table/t/insert",
+        "raw_path": b"/v1/table/t/insert",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"test"), (b"content-length", str(2**40).encode())],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+    }
+
+    asyncio.run(_app(module_path)(scope, receive, send))
+
+    start, body = answered[0], json.loads(answered[1]["body"])
+    assert (start["status"], body["code"], reads) == (413, 13, 0), answered
 
 
 @pytest.mark.parametrize(("name", "module_path"), LANCE_APPS, ids=[row[0] for row in LANCE_APPS])

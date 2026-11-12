@@ -27,7 +27,7 @@ import hmac
 import logging
 import uuid
 from contextlib import suppress
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from fastapi import FastAPI, Request
 
@@ -35,6 +35,10 @@ from lakehouse.governed.secrets import fetch_dapr_secret
 from lakehouse.governed.signing_key import SigningKeyUnavailableError
 from lakehouse.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+
+
+if TYPE_CHECKING:
+    from lakehouse.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -137,10 +141,10 @@ class CommitIdKeyHolder:
         log.info("commit_id_key_resolved")
         return True
 
-    async def start(self) -> None:
-        """Resolve once now, then keep re-resolving in the background until :meth:`stop`; an unresolved key fails no start."""
+    async def start(self, loops: Supervisor) -> None:
+        """Resolve once now, then keep re-resolving on a loop of ``loops`` until :meth:`stop`; an unresolved key fails no start."""
         await asyncio.to_thread(self.resolve)
-        self._task = asyncio.create_task(self._refresh_forever(), name="commit-id-key")
+        self._task = loops.keep("commit-id-key", self._refresh_forever)
 
     async def stop(self) -> None:
         task, self._task = self._task, None
@@ -183,7 +187,7 @@ def commit_ids_of(app: FastAPI) -> CommitIds:
 
 
 def commit_ids_ready_check(inner: ReadyCheck) -> ReadyCheck:
-    """A `/readyz` check adding the commit id key to ``inner``: a catalog without it is `degraded` (503), as one
+    """A `/readyz` check adding the commit id key to ``inner``: a catalog without it is `unhealthy` (503), as one
     without its signing key is, so it leaves its Service while `/livez` stays 200."""
 
     async def check(request: Request) -> Readiness:
@@ -191,6 +195,6 @@ def commit_ids_ready_check(inner: ReadyCheck) -> ReadyCheck:
         holder = commit_ids_of(request.app)
         if holder.ready:
             return body
-        return body.model_copy(update={"status": ReadinessStatus.degraded, "components": {**body.components, "commit_ids": holder.reason}})
+        return body.model_copy(update={"status": ReadinessStatus.unhealthy, "components": {**body.components, "commit_ids": holder.reason}})
 
     return check

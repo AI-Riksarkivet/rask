@@ -181,7 +181,9 @@ class OidcSettings:
     #: Split-horizon fetch (reverse-proxied IdP): pull discovery/JWKS in-cluster while tokens keep the
     #: PUBLIC issuer string. Unset = derive the fetch URL from the issuer.
     oidc_discovery_url: str | None = Field(default=None, alias="RASK_OIDC_DISCOVERY_URL")
-    oidc_cache_ttl: int = Field(default=3600, alias="RASK_OIDC_CACHE_TTL")
+    #: How long an issuer's discovery document and key set are served before they are fetched again, in the background
+    #: (`lakehouse.governed.oidc`): a key the issuer drops stops verifying within this. A request never waits on it.
+    oidc_cache_ttl: int = Field(default=300, gt=0, alias="RASK_OIDC_CACHE_TTL")
     oidc_leeway: int = Field(default=60, alias="RASK_OIDC_LEEWAY")
     oidc_allow_insecure: bool = Field(default=False, alias="RASK_OIDC_ALLOW_INSECURE")
     #: The idp id each Dex connector's users are principals of, keyed by the connector id Dex reports in

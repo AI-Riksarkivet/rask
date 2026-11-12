@@ -30,7 +30,9 @@ fixture's) or a user report — not a page.
 | Everything returns 503 / auth failures across the board | [OpenFGA down](#openfga-down--503-everywhere) |
 | App pods stuck `0/1` "waiting for application startup" after a restart/drain | [The secret store sealed](#the-secret-store-sealed--boot-deadlock) |
 | A pod `CrashLoopBackOff` shortly after boot | [Slow boot / startupProbe](#crashloop-on-boot) |
-| lineage `/readyz` = 503 `{"catalog":"unavailable"}`, pod `NotReady` | [Lineage not ready](#lineage-not-ready--catalog-unreachable) |
+| lineage `/readyz` = 503 with `"catalog": "unavailable"` in `components`, pod `NotReady` | [Lineage not ready](#lineage-not-ready--catalog-unreachable) |
+| A lakehouse pod restarts with exit code 70, a `background_work_ended` CRITICAL line before it | [A process ended itself](#a-process-ended-itself-exit-70) |
+| `request_deadline_passed` or `request_panicked` ERROR lines; callers answered 503 code 17 or 500 code 18 | [A request ran past its deadline or panicked](#a-request-ran-past-its-deadline-or-panicked) |
 | `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
 | `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
@@ -49,7 +51,11 @@ fixture's) or a user report — not a page.
 ## OpenFGA down → 503 everywhere
 
 **Symptom.** Broad 503s: catalog writes and lineage reads all fail at once. Logs show
-`authorization service is not available` or FGA check timeouts.
+`authorization service is not available` or FGA check timeouts, and `dependency_unavailable` WARN lines naming
+`dependency=openfga`. Within about 10 s every catalog pod goes `NotReady` (its `/readyz` gates on OpenFGA, ADR 0203), so
+the Gateway answers callers its own 503 rather than a problem body; the pods are Ready again within about 20 s of OpenFGA
+answering. Lineage stays Ready and reports `"openfga": "unavailable"` in its `components`, its doors answering 503 and
+its deliveries retrying until OpenFGA answers.
 
 **Cause.** OpenFGA is the authz chokepoint — every governed call `fga.check`s it and **fails closed**. A
 single-replica OpenFGA (kind) that is drained/OOMed/rescheduling takes the whole estate down until it
@@ -92,13 +98,16 @@ provenance tables through the catalog, retried until the catalog answers) runs *
 
 ## Lineage not ready → catalog unreachable
 
-**Symptom.** Lineage's `/readyz` returns 503 with `{"catalog":"unavailable"}`; the pod goes `NotReady` and is
-pulled from rotation, and `readyz_catalog_unavailable` WARN lines appear.
+**Symptom.** Lineage's `/readyz` returns 503, `status` `unhealthy` with `"catalog": "unavailable"` among its
+`components`; the pod goes `NotReady` and is pulled from rotation, and a `dependency_unavailable` WARN line names
+`dependency=catalog` (`dependency_answering` follows once it answers again).
 
 **Cause.** Lineage keeps no database: its commit feed and edge list are Lance tables in the catalog's
-`provenance` namespace, read and written through the catalog's doors as lineage's own principal. `/readyz`
-gates on the feed table answering through the catalog within 2 s. While it cannot, every delivery answers
-`RETRY`, so the bus keeps the events and nothing is lost.
+`provenance` namespace, read and written through the catalog's doors as lineage's own principal. A background
+read of the feed table through the catalog, every 5 s within 5 s (`lakehouse.health`, ADR 0203), gates `/readyz`,
+which answers from that read's verdict. While it fails, every delivery answers `RETRY`, so the bus keeps the events
+and nothing is lost. The bus, the secret store, OpenFGA and, where the outbox the relay drains is kept on it, the object
+store are reported in `components` the same way and never gate.
 
 **Diagnose.** Catalog pod health and logs; whether the catalog created the provenance namespace at boot (it
 retries until it holds); a 403 from the catalog means lineage's subject is not among `LANCE_PROVENANCE_WRITERS`
@@ -270,7 +279,9 @@ table is found; fix the record or the store and the next tick finds what it miss
 
 ## Object store down → data plane
 
-**Symptom.** Catalog reads/writes fail; Lance datasets unreadable.
+**Symptom.** Catalog reads/writes fail; Lance datasets unreadable. Every catalog pod goes `NotReady` while its read of
+the control root fails (`dependency_unavailable` naming `dependency=store`), and lineage follows, since its feed is read
+through the catalog.
 
 **Cause.** In development the object store is the `rustfs` fixture (`deploy/fixtures/rustfs`, StatefulSet
 `rask-rustfs`), a data-plane single point of failure. The production answer is the platform's managed S3
@@ -330,6 +341,48 @@ export to the store. Every app down at once would do it too, and the other alert
 store must answer at `observability.export.endpoint` (GreptimeDB in development).
 
 **Act.** Restore the Collector or its export. The apps keep serving meanwhile; only their telemetry is lost.
+
+## A process ended itself (exit 70)
+
+**Symptom.** A catalog, lineage or maintenance container restarts with exit code 70 (`kubectl get pod` shows a restart,
+`kubectl describe` the last state's exit code), and its log ends with a `background_work_ended` CRITICAL line naming the
+`loop` and the traceback of what ended it.
+
+**Cause.** Every background loop of a lakehouse process (a key refresh, the store session, a health read, maintenance's
+task, schedule and store-event loops) runs under a supervisor, and one that ends while the process serves ends the
+process, so Kubernetes starts the container again instead of leaving a Ready pod that does nothing (ADR 0203). A loop
+ends only on a fault no loop handles: the store, the bus and the identity provider failing are each waited out inside
+their loop.
+
+**Diagnose.** `kubectl logs <pod> --previous`: the `loop` the line names and its traceback. The process gives its
+records 3 s at most to reach the Collector before it ends, and a maintenance worker holding a task only what its lease
+leaves, so a line missing from the store is still in the container's previous log. A pylance panic inside one
+maintenance pass is not this: it fails that task alone (`maintenance.tasks.retried`, then `ended`). A maintenance
+worker also ends itself when it can no longer hold its task alone, each with a CRITICAL line of its own:
+`maintenance_task_lost` (the bus stopped answering its heartbeat), `maintenance_claim_lost`, `maintenance_task_hung`
+(a pass past twice its bound) and `maintenance_drain_outrun`. A `background_work_ended` naming `maintenance-tasks` with
+`ClaimsBucketMissingError` is a bus that holds no `MAINTENANCE_CLAIMS` bucket, which the chart's stream Job declares.
+
+**Act.** A restart that holds is the repair. One that repeats is a defect in the named loop: file it with the traceback.
+A missing claims bucket is declared again by the stream Job: `make k3s-up` on the dev estate, the release's upgrade in
+production.
+
+## A request ran past its deadline or panicked
+
+**Symptom.** `request_deadline_passed` ERROR lines, callers answered 503 code 17 ("its outcome is unknown"), then a
+`request_past_its_deadline_finished`, `_failed` or `_cancelled` line for the same path; or `request_panicked` ERROR
+lines with a native traceback, callers answered 500 code 18.
+
+**Cause.** A door with no answer begun after `requestDeadlineSeconds` (300 s per service, chart values) is answered
+and left to run to its commit or its undo, never cancelled, since a cancelled door would skip the undo of its
+half-done work (ADR 0203). A panic is a native library (pylance, pyarrow) failing inside one request; the process
+serves on.
+
+**Diagnose.** The path the lines name, and the door's own logs between them; for a deadline, what the door waited on
+(a store or OpenFGA that answers slowly shows in [A service answers 5xx or slowly](#a-service-answers-5xx-or-slowly)).
+
+**Act.** A caller answered 503 code 17 reads what the request changes before retrying it. A panic that repeats on one
+table is a defect to file with the traceback and the table's version.
 
 ## A service answers 5xx or slowly
 

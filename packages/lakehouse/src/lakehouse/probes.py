@@ -27,15 +27,17 @@ from lakehouse.schemas.health import Liveness, Readiness, ReadinessStatus
 
 
 #: A service-specific readiness check, run only AFTER the lifecycle gates pass. Returns the
-#: ``Readiness`` body to serve: ``status=ready`` → 200, anything else (``degraded``) → 503.
+#: ``Readiness`` body to serve: ``ready`` and ``degraded`` → 200, which keep the pod in rotation; ``unhealthy`` → 503.
 type ReadyCheck = Callable[[Request], Awaitable[Readiness]]
+#: The answers that keep a pod in its Service.
+_IN_ROTATION = frozenset({ReadinessStatus.ready, ReadinessStatus.degraded})
 #: A process's own liveness answer, for one whose probes do not run on the loop its work runs on: without it ``/livez``
 #: proves only that the loop serving the probe turns. It must not wait or touch a dependency.
 type LiveCheck = Callable[[], bool]
 
 
 def _serve(body: Readiness) -> JSONResponse:
-    status = HTTPStatus.OK if body.status is ReadinessStatus.ready else HTTPStatus.SERVICE_UNAVAILABLE
+    status = HTTPStatus.OK if body.status in _IN_ROTATION else HTTPStatus.SERVICE_UNAVAILABLE
     return JSONResponse(status_code=status, content=body.model_dump(mode="json"))
 
 

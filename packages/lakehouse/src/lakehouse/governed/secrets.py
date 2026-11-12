@@ -109,6 +109,24 @@ def fetch_dapr_secret(
     return {}  # unreachable; keeps the type-checker's every-path-returns view honest
 
 
+async def secret_store_answers(sidecar: httpx.AsyncClient, store: str, key: str) -> None:
+    """Raise unless the Dapr secret store ``store`` answers one read of ``key`` through the local sidecar, on ``sidecar``,
+    the client the process reads it with: the store's verdict a readiness report shows (`lakehouse.health`). Any answer
+    the store gave is an answer, a refusal included; only no answer, or the sidecar's 5xx saying the store gave none,
+    raises. The value read is dropped unread.
+
+    Raises:
+        ConnectionError: The sidecar, or the store behind it, did not answer.
+    """
+    url = f"http://localhost:{_sidecar_http_port()}/v1.0/secrets/{store}/{key}"
+    try:
+        answer = await sidecar.get(url)
+    except httpx.HTTPError as exc:
+        raise ConnectionError(f"the secret store {store} did not answer: {type(exc).__name__}") from exc
+    if answer.status_code >= 500:
+        raise ConnectionError(f"the secret store {store} did not answer: its sidecar answered {answer.status_code}")
+
+
 def fetch_required_secrets(store: str, key: str, *, require: str, timeout: float = 5.0, retries: int = 10, backoff: float = 3.0) -> dict[str, str]:
     """Fetch the secret bundle, FAILING CLOSED (raise) if ``require`` is absent.
 

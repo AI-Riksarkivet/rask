@@ -14,8 +14,10 @@ exception in an `ExceptionGroup`, which the streaming refusal must still answer 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterator
+from typing import Annotated, Any
 
-from fastapi import FastAPI, Request, Response
+import pytest
+from fastapi import Body, FastAPI, Request, Response
 from fastapi.testclient import TestClient
 from lance_namespace import ErrorCode
 
@@ -35,6 +37,10 @@ def _capped_app() -> FastAPI:
     @app.post("/echo")
     async def _echo(request: Request) -> dict[str, int]:
         return {"len": len(await request.body())}
+
+    @app.post("/parsed")
+    async def _parsed(body: Annotated[dict[str, Any], Body()]) -> dict[str, int]:
+        return {"len": len(body)}
 
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=CAP)
     return app
@@ -56,14 +62,22 @@ def test_a_body_at_the_cap_is_served() -> None:
     assert (resp.status_code, resp.json()) == (200, {"len": CAP})
 
 
-def test_a_chunked_body_over_the_cap_is_refused_while_it_streams() -> None:
-    """With no Content-Length the fast path cannot fire, so the streaming byte counter refuses it."""
+@pytest.mark.parametrize(
+    "path",
+    [
+        pytest.param("/echo", id="read-by-the-handler"),
+        pytest.param("/parsed", id="read-by-fastapi-for-a-declared-body"),
+    ],
+)
+def test_a_chunked_body_over_the_cap_is_refused_while_it_streams(path: str) -> None:
+    """With no Content-Length the fast path cannot fire, so the streaming byte counter refuses it: a 413 whoever reads the
+    body, the handler itself or FastAPI for a body the route declares, which answers a failed read with its own 400."""
 
     def stream() -> Iterator[bytes]:
         for _ in range(4):
             yield b"x" * 500
 
     with TestClient(_capped_app()) as client:
-        resp = client.post("/echo", content=stream())
+        resp = client.post(path, content=stream())
 
     assert (resp.status_code, resp.json()["code"]) == (413, int(ErrorCode.INVALID_INPUT))

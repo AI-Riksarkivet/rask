@@ -39,6 +39,7 @@ from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lifecycle import mark_started
 from lakehouse.lineage import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
 from lakehouse.lineage_events import DatasetUuids, dataset_uuids
+from lakehouse.supervision import Supervisor
 from maintenance.core.lineage_emit import DaprMaintenanceEmitter
 from maintenance.services.purge import ACTOR
 
@@ -115,7 +116,7 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, moto
 
     @asynccontextmanager
     async def _started(app: FastAPI) -> AsyncGenerator[None]:
-        async with runtime.standing(app, get_settings()), runtime.collaborators(app, get_settings()) as held:
+        async with Supervisor() as loops, runtime.standing(app, get_settings(), loops), runtime.collaborators(app, get_settings(), loops) as held:
             app.state.held = held
             mark_started(app)
             yield
@@ -127,6 +128,8 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, moto
         lifespan=_started,
         log=logging.getLogger(__name__),
         ready_check=signing_ready_check(),
+        max_body_bytes=1024,
+        request_deadline_seconds=30.0,
     )
     with ExitStack() as stack:
 

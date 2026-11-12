@@ -94,6 +94,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.multibase.dataBases | list | `[]` | Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates. |
 | catalog.promotion.bindingName | string | `"catalog-promotion-expiry-cron"` | Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves. |
 | catalog.promotion.schedule | string | `"@every 60s"` | Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time. |
+| catalog.requestDeadlineSeconds | int | `300` | Seconds a catalog request may run before its caller is answered 503 (code 17) while it runs on to its end (LANCE_REQUEST_DEADLINE_SECONDS). |
 | catalog.trashGraceDays | float | `7` | Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
 | catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `objectStore.bucket`. |
 | console.enabled | bool | `true` | Render the console: its Deployment, Service, `/config.json` ConfigMap, ServiceAccount and, with `route.enabled`, its `/` HTTPRoute. |
@@ -155,6 +156,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.floorRaise | bool | `false` | Write one metadata-only commit per stranded table, from its own orphan check, to raise its Lance listing floor so residue becomes reclaimable. Off by default. |
 | maintenance.floorRaiseDryRun | bool | `true` | Plan and report floor raises without committing. Defaults true; set false to commit once `floorRaise` is on. |
 | maintenance.lineageEmit | bool | `true` | Emit a lineage event per dataset whose versions a pass reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names. |
+| maintenance.maxBodyBytes | int | `4194304` | Maximum request-body bytes on any maintenance route (MAINTENANCE_MAX_BODY_BYTES), one write event its lane is delivered; larger bodies get 413 before a byte is read. |
 | maintenance.minVersionsToExpire | int | `20` | Expiry runs on a table only once it has at least this many reclaimable versions. |
 | maintenance.olderThanDays | int | `7` | Days of version history kept by old-version GC. |
 | maintenance.orphanCheck.ceilingDays | int | `30` | The longest a clean or an excluded table goes between two orphan checks, in days: a clean table's interval doubles up to it, and an excluded table waits it. A table whose floor was raised waits its retention and a day, whatever this says. |
@@ -173,6 +175,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.queue.scanSchedule | string | `"0 30 0 * * *"` | The scan's NATS message schedule, a six-field cron (seconds first): the audit with the storage walk, which lists every bucket's directories, then the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim. |
 | maintenance.queue.storeEventsMaxBytes | int | `134217728` | The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue. |
 | maintenance.replicas | int | `2` | Replicas of maintenance's web pods, which serve the write-event lane and run no worker. |
+| maintenance.requestDeadlineSeconds | int | `300` | Seconds a maintenance request may run before its caller is answered 503 (code 17) while it runs on to its end (MAINTENANCE_REQUEST_DEADLINE_SECONDS, ADR 0203). |
 | maintenance.tombstoneSweep | bool | `false` | Clear trash records whose bytes a probe proves are gone; deletes bookkeeping rows, never bytes. Off by default. |
 | maintenance.tombstoneSweepDryRun | bool | `true` | Plan and report the tombstone sweep without clearing anything. Defaults true. |
 | maintenance.tombstoneSweepMaxPerTick | int | `50` | Maximum trash records the tombstone sweep probes and clears per tick; the remainder is reported as capped. |
@@ -271,6 +274,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.forward.authSecret.name | string | `""` | Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none. |
 | services.lineage.forward.endpoint | string | `"api/v1/lineage"` | Path the events are POSTed to under `url` (the transport's `endpoint`). |
 | services.lineage.forward.url | string | `""` | Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. https on a real deployment: the render refuses an http one. |
+| services.lineage.maxBodyBytes | int | `8388608` | Maximum request-body bytes on any lineage route (LINEAGE_MAX_BODY_BYTES), one OpenLineage event; larger bodies get 413 before a byte is read. |
 | services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs (templates/services.yaml). |
 | services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<objectStore.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
@@ -280,6 +284,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.relay.enabled | bool | `true` | Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled. |
 | services.lineage.relay.schedule | string | `"@every 30s"` | Schedule of the relay tick (Dapr cron syntax, e.g. `@every 30s` or a cron expression). |
 | services.lineage.replicas | int | `1` | Replica count of lineage; replicas form a competing-consumer group, so it scales freely. |
+| services.lineage.requestDeadlineSeconds | int | `300` | Seconds a lineage request may run before its caller is answered 503 (code 17) while it runs on to its end (LINEAGE_REQUEST_DEADLINE_SECONDS, ADR 0203). |
 | signing.doors | string | `"enforce"` | Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted. |
 | signing.enforce | bool | `true` | Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |

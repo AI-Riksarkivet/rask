@@ -87,6 +87,10 @@ services:
     # merge on the event's key in the feed table lands a redelivery as nothing.
     # -- Replica count of lineage; replicas form a competing-consumer group, so it scales freely.
     replicas: 1
+    # -- Maximum request-body bytes on any lineage route (LINEAGE_MAX_BODY_BYTES), one OpenLineage event; larger bodies get 413 before a byte is read.
+    maxBodyBytes: 8388608 # @schema type: integer; minimum: 1
+    # -- Seconds a lineage request may run before its caller is answered 503 (code 17) while it runs on to its end (LINEAGE_REQUEST_DEADLINE_SECONDS, ADR 0203).
+    requestDeadlineSeconds: 300 # @schema type: integer; minimum: 1
     # Dapr's JetStream component hands its app one message at a time unless its metadata says `concurrencyMode:
     # parallel` (components-contrib v1.19.0, `pubsub/jetstream/metadata.go:63-65`). Lineage's says parallel, so a
     # backlog's events arrive together and land in one commit per provenance table (ProvenanceStore.record's group
@@ -597,6 +601,11 @@ catalog:
   # the catalog memory tier — values-prod.yaml states the sizing formula. 0 disables shedding.
   # -- Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding.
   maxConcurrentWrites: 16
+  # A door past its deadline is answered and NOT cancelled: it undoes half-done work in its own `except` blocks, which a
+  # cancellation skips, so it runs on to its commit or its undo, logged (ADR 0203). 300 s is five times the longest door
+  # the estate's traces hold (a warehouse cascade, 50.9 s, 2026-10-29..11-12).
+  # -- Seconds a catalog request may run before its caller is answered 503 (code 17) while it runs on to its end (LANCE_REQUEST_DEADLINE_SECONDS).
+  requestDeadlineSeconds: 300 # @schema type: integer; minimum: 1
   # #75/#96 RECOVERABLE DROPS — days a dropped table/namespace stays undroppable. Past it the drop is
   # final: undrop refuses it, the maintenance reconcile tick revokes its grants, and its bytes wait for
   # `maintenance.trashPurge` (ADR 0146). A warehouse's own `delete_profile` overrides it for every drop
@@ -796,6 +805,10 @@ maintenance:
   daprAppId: maintenance
   # -- HTTP port of the maintenance container.
   port: 8000
+  # -- Maximum request-body bytes on any maintenance route (MAINTENANCE_MAX_BODY_BYTES), one write event its lane is delivered; larger bodies get 413 before a byte is read.
+  maxBodyBytes: 4194304 # @schema type: integer; minimum: 1
+  # -- Seconds a maintenance request may run before its caller is answered 503 (code 17) while it runs on to its end (MAINTENANCE_REQUEST_DEADLINE_SECONDS, ADR 0203).
+  requestDeadlineSeconds: 300 # @schema type: integer; minimum: 1
   # THE WORK QUEUE (ADR 0198 §2). The chart's stream Job declares MAINTENANCE_TASKS, MAINTENANCE_SCHEDULES, STORE_EVENTS
   # (the store's change events) and their durable consumers; the worker binds to them as its own bus user
   # (`nats.auth.users.maintenance-worker`).

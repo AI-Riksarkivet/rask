@@ -18,8 +18,8 @@ test's: it records which worker ran it, and holds while the test holds it. The r
   `maintenance.queue.maxDeliver` deliveries, so the next delivery ends it without running it, which frees its table and
   holds its next try a recheck out.
 * A worker the bus stops answering mid-pass (its connection cut through a `Link`) ends its process (exit 70) before the
-  ack wait its last answered heartbeat restarted runs out, so its task, handed to the other worker, starts only once the
-  first has ended: never two passes of one table at once.
+  ack wait its last answered heartbeat restarted runs out, though its records go to a Collector that never answers, so
+  its task, handed to the other worker, starts only once the first has ended: never two passes of one table at once.
 * A fired schedule whose task's publish the network lost (the `Link` drops that subject while every other flows) is
   given back, and moved again once publishes flow.
 * A worker asked to stop whose drain ends with a pass still running ends its process (exit 70), so the task, handed to
@@ -38,11 +38,13 @@ test's: it records which worker ran it, and holds while the test holds it. The r
   subject with another code than a put after it (`nats_auth_rig.Broker`), and both mean the table is covered.
 * Three puts of one table's task at once queue one. A follow-up that fires while that task holds its table waits until
   the task is done, then passes the table again: the commit it follows may be one the running pass read the table before.
+* A worker whose claims bucket the bus holds no longer, deleted after the worker bound it, ends its task loop, and with it
+  its process, on the first claim it asks, rather than holding a task it can never claim.
 
 A replica started as the service starts it (`maintenance.services.tasks.running_worker`, its bus credential read from a
 stand-in of the store's secrets API) keeps its loops and its schedules:
 
-* A loop that ends with an error runs again after a pause, so a follow-up the failed loop would have moved still runs.
+* A loop that ends before the replica stops, with an error or without, ends the replica's process.
 * The audit's and the scan's schedules, which a purged or recreated schedules stream loses, are put back on the cadence
   the replica asserts them on.
 
@@ -59,6 +61,7 @@ import asyncio
 import base64
 import inspect
 import json
+import logging
 import os
 import re
 import sys
@@ -68,7 +71,7 @@ from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import httpx
 import pytest
@@ -81,11 +84,24 @@ from pydantic import SecretStr
 from lakehouse import location_claims, store_session
 from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.supervision import EndProcess, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services import queue as worker_queue
 from maintenance.services import tasks
-from maintenance.services.queue import INBOX_PREFIX, SCHEDULES_STREAM, STORE_EVENTS_STREAM, TASK_CONSUMER, TASKS_STREAM, Task, TaskQueue, Worker, sample_queue
+from maintenance.services.queue import (
+    CLAIMS_BUCKET,
+    INBOX_PREFIX,
+    SCHEDULES_STREAM,
+    STORE_EVENTS_STREAM,
+    TASK_CONSUMER,
+    TASKS_STREAM,
+    ClaimsBucketMissingError,
+    Task,
+    TaskQueue,
+    Worker,
+    sample_queue,
+)
 from maintenance.services.store_events import StoreEvents
 from tests.unit.chart_render import DEFAULT_ARGS, nats_users, render
 
@@ -125,11 +141,26 @@ _PULL_EXPIRY = 6.0
 _EXPIRING = "maintenance-worker-expiring"
 _EXPIRY = 60.0
 #: A worker in a process of its own, its pass bound the third argument: it says which task it runs, then holds it until
-#: it is killed, its bound ends the process, `finish` on its stdin ends the pass, or `stop` there drains the worker.
+#: it is killed, its bound ends the process, `finish` on its stdin ends the pass, or `stop` there drains the worker. Its
+#: records go over OTLP to a Collector that takes the connection and never answers, as one behind a cut does, so an end
+#: that waited for its flush would outlive the worker's hold on its task.
 _DOOMED = f"""
-import asyncio, sys
+import asyncio, logging, socket, sys
 from pathlib import Path
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from maintenance.services.queue import TaskQueue, Worker
+
+silent = socket.socket()
+silent.bind(("127.0.0.1", 0))
+silent.listen()
+provider = LoggerProvider()
+collector = f"http://127.0.0.1:{{silent.getsockname()[1]}}/v1/logs"
+provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter(endpoint=collector, timeout=60)))
+set_logger_provider(provider)
+logging.getLogger().addHandler(LoggingHandler(logger_provider=provider))
 
 async def main(url: str, creds: str, max_pass: float) -> None:
     queue = await TaskQueue.connect(url, Path(creds).read_text(), name="doomed")
@@ -195,7 +226,7 @@ class _Runs:
 
 
 class _Ended(Exception):  # noqa: N818 — a replica's end, raised where a worker ends its process
-    """Raised where an in-process replica's worker would end its process (`maintenance.services.queue.end_replica`)."""
+    """Raised where an in-process replica's worker would end its process (`lakehouse.supervision.end_process`)."""
 
 
 class _Replica:
@@ -216,7 +247,7 @@ class _Replica:
             max_deliver=_MAX_DELIVER,
             max_pass_seconds=600,
             retry_ended_seconds=3600,
-            end_process=self._end_process,
+            end=self._end_process,
         )
         self._loops = [asyncio.create_task(self._worker.run_tasks()), asyncio.create_task(self._worker.run_due())]
 
@@ -229,6 +260,12 @@ class _Replica:
         for loop in self._loops:
             loop.cancel()
         raise _Ended(event)
+
+    def task_loop_failure(self) -> BaseException | None:
+        """What ended the replica's task loop by an error, which a replica's supervisor ends the process on; none while
+        the loop runs, or once it was stopped."""
+        tasks_loop = self._loops[0]
+        return tasks_loop.exception() if tasks_loop.done() and not tasks_loop.cancelled() else None
 
     async def stop(self) -> None:
         self._worker.stop()
@@ -352,7 +389,8 @@ async def test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_othe
         for _ in range(_MAX_DELIVER):
             doomed.append(hung := await _doomed(broker.url, worker, 1))
             assert await _said(hung) == ["running", "killer"], f"a worker did not take the task its table held; refused: {refusals()}"
-            assert await asyncio.wait_for(hung.wait(), 30) == _HUNG_EXIT, "a pass past twice its bound did not end its worker's process"
+            ended = await _until(lambda: hung.returncode is not None, 30)
+            assert ended and hung.returncode == _HUNG_EXIT, f"a pass past twice its bound did not end its worker's process (exit {hung.returncode})"
 
         dying = Task(kind="table", uuid="dying", location="s3://bucket/dying")
         doomed.append(dier := await _doomed(broker.url, worker, 600))
@@ -395,8 +433,12 @@ async def test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_othe
         second_ready.set()
         runs.at_start["cut"] = lambda: stranded.returncode
         outage = asyncio.create_task(link.cut(4 * _ACK_WAIT))
-        ended_itself = await _until(lambda: stranded.returncode is not None, 2 * _ACK_WAIT)
-        assert ended_itself and stranded.returncode == _HUNG_EXIT, f"a worker the bus stopped answering kept running its pass (exit {stranded.returncode})"
+        assert await _until(lambda: link.down, 5), "the link was never cut"
+        # Its last heartbeat was answered before the cut, so its lease runs out within one ack wait of it.
+        ended_itself = await _until(lambda: stranded.returncode is not None, _ACK_WAIT)
+        assert ended_itself and stranded.returncode == _HUNG_EXIT, (
+            f"a worker the bus stopped answering ran its pass past its lease (exit {stranded.returncode})"
+        )
         assert await _until(lambda: runs.times("cut") == 1, _ACK_WAIT + 15), f"a stranded worker's task never reached the other; refused: {refusals()}"
         assert runs.seen["cut"] == _HUNG_EXIT, "the task went to another worker while the one the bus stopped answering still ran it"
         await outage
@@ -568,27 +610,9 @@ async def test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_othe
     assert refusals() == [], "the broker refused the worker a call the chart must grant"
 
 
-@pytest.mark.asyncio
-async def test_a_replica_runs_a_failed_loop_again_and_puts_back_schedules_the_bus_lost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
-    ran: list[str] = []
-    failures: list[str] = []
-    run_due = Worker.run_due
-
-    async def record(task: Task, **_: object) -> None:
-        ran.append(task.uuid)
-
-    async def fails_once(self: Worker) -> None:
-        if not failures:
-            failures.append("run_due")
-            raise RuntimeError("a fault no loop handles")
-        await run_due(self)
-
-    monkeypatch.setattr(tasks, "run_task", record)
-    monkeypatch.setattr(tasks, "_CADENCE_SECONDS", 2.0)
-    monkeypatch.setattr(Worker, "run_due", fails_once)
-    # The service reads its secrets from the store as the pod does, presenting its ServiceAccount token.
+def _replica_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broker: Broker) -> MaintenanceSettings:
+    """A replica's settings as the service reads them, reaching its secrets in the store with its ServiceAccount token as
+    the pod does, and the store session its lifespan exchanges that token for already held: no test here reads an object."""
     (token := tmp_path / "token").write_text("a projected token")
     monkeypatch.setenv("MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE", str(token))
     monkeypatch.setenv("MAINTENANCE_S3_STS_ENDPOINT", "http://store.example:9000")
@@ -598,14 +622,69 @@ async def test_a_replica_runs_a_failed_loop_again_and_puts_back_schedules_the_bu
             **{"task_heartbeat_seconds": _HEARTBEAT, "task_ack_wait_seconds": _ACK_WAIT, "task_max_deliver": _MAX_DELIVER},
         }
     )
-    # The session the service's lifespan exchanges its token for (`lakehouse.store_session.start_store_session`), which its
-    # store-events reader signs with; this test reads no object.
+    # The session `lakehouse.store_session.start_store_session` holds, which the store-events reader signs with.
     sessions = store_session.SessionCache()
     monkeypatch.setattr(store_session, "SESSIONS", sessions)
     identity = settings.web_identity
     assert identity is not None, "the service holds no web identity, so it would sign with no session"
     session = S3KeyPair(access_key_id="TESTSESSION", secret_access_key=SecretStr("test-only"), session_token=SecretStr("test-only"))
     sessions.hold(identity, session, asked_at=sessions.now(), lifetime_seconds=3600)
+    return settings
+
+
+async def _start_replica(stack: AsyncExitStack, settings: MaintenanceSettings, worker: Credential, *, end: EndProcess = end_process) -> TaskQueue:
+    """A replica started as the service starts it (`tasks.running_worker`), its bus credential read from a stand-in of the
+    store's secrets API, run until ``stack`` closes; the queue it runs on. Every task it is handed runs nothing."""
+    with respx.mock(assert_all_called=True) as store:
+        secret = f"http://localhost:3500/v1.0/secrets/{settings.dapr_secret_store}/{settings.nats_credentials_secret}"
+        store.get(secret).mock(return_value=httpx.Response(200, json={"jwt": worker.jwt, "seed": worker.seed()}))
+        lane = await stack.enter_async_context(tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), end=end))
+    assert lane is not None, "the replica started with no bus"
+    return lane
+
+
+async def _runs_nothing(_task: Task, **_: object) -> None:
+    return None
+
+
+async def _raises(_worker: Worker) -> None:
+    raise RuntimeError("a fault no loop handles")
+
+
+async def _returns(_worker: Worker) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loop", [pytest.param(_raises, id="with-an-error"), pytest.param(_returns, id="without-one")])
+async def test_a_loop_that_ends_ends_its_replica(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loop: Callable[[Worker], Awaitable[None]]) -> None:
+    """A replica's loop that ends before the replica stops ends its process, whether it raised or returned: a replica whose
+    loop is gone stays Ready with that loop's work undone, and only a new container repairs it (ADR 0203)."""
+    tools, docs, mint_, broker = _the_bus(tmp_path)
+    ended: list[tuple[str, object]] = []
+
+    def record_the_end(event: str, **extra: object) -> None:
+        ended.append((event, extra.get("loop")))
+
+    monkeypatch.setattr(tasks, "run_task", _runs_nothing)
+    monkeypatch.setattr(Worker, "run_due", loop)
+    settings = _replica_settings(tmp_path, monkeypatch, broker)
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        async with AsyncExitStack() as stack:
+            await _start_replica(stack, settings, mint_.credentials[_WORKER], end=cast("EndProcess", record_the_end))
+            assert await _until(lambda: bool(ended), 20), "the loop moving fired schedules ended and its replica went on"
+    finally:
+        broker.stop()
+    assert ended == [("background_work_ended", "maintenance-due")]
+
+
+@pytest.mark.asyncio
+async def test_a_replica_puts_back_the_schedules_the_bus_lost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    monkeypatch.setattr(tasks, "run_task", _runs_nothing)
+    monkeypatch.setattr(tasks, "_CADENCE_SECONDS", 2.0)
+    settings = _replica_settings(tmp_path, monkeypatch, broker)
     cadences = [Task(kind="audit").subject("schedule"), Task(kind="scan").subject("schedule")]
     rig: Client | None = None
     try:
@@ -617,17 +696,8 @@ async def test_a_replica_runs_a_failed_loop_again_and_puts_back_schedules_the_bu
             return ["message" in answer for answer in answers]
 
         async with AsyncExitStack() as stack:
-            with respx.mock(assert_all_called=True) as store:
-                secret = f"http://localhost:3500/v1.0/secrets/{settings.dapr_secret_store}/{settings.nats_credentials_secret}"
-                store.get(secret).mock(return_value=httpx.Response(200, json={"jwt": worker.jwt, "seed": worker.seed()}))
-                lane = await stack.enter_async_context(tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter()))
-            assert lane is not None, "the replica started with no bus"
+            await _start_replica(stack, settings, mint_.credentials[_WORKER])
             assert await held() == [True, True], "a replica started without the audit's and the scan's schedules"
-
-            healed = Task(kind="table", uuid="healed", location="s3://bucket/healed")
-            assert await lane.follow_up(healed, datetime.now(UTC) + timedelta(seconds=1)) is True
-            assert await _until(lambda: "healed" in ran, 20), f"a follow-up never ran once the loop moving it had failed (failures: {failures})"
-
             for subject in cadences:
                 await reader.request(f"$JS.API.STREAM.PURGE.{SCHEDULES_STREAM}", {"filter": subject})
 
@@ -641,7 +711,6 @@ async def test_a_replica_runs_a_failed_loop_again_and_puts_back_schedules_the_bu
                 await rig.close()
         finally:
             broker.stop()
-    assert failures == ["run_due"], "the loop moving fired schedules never failed, so its running again proves nothing"
 
 
 @pytest.mark.asyncio
@@ -808,13 +877,19 @@ async def test_a_worker_settles_each_store_event_by_what_its_handling_found(tmp_
     assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"held": 2, "retried": 3, "unreadable": 1, "ended": 1}
 
 
+class _Panic(BaseException):
+    """Where ``pyo3_runtime.PanicException`` sits: a BaseException that is no Exception and no request to stop."""
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [pytest.param(RuntimeError, id="an-error"), pytest.param(_Panic, id="a-native-panic")])
 async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_delivery_and_an_unreadable_one_ends_at_once(
-    tmp_path: Path, maintenance_metrics: Measured
+    tmp_path: Path, maintenance_metrics: Measured, failure: type[BaseException], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A task whose run raises is delivered again after its retry delay, and on its last delivery is ended, its next try
-    held a recheck out; a message on the queue that is no task is ended without running. Each hand-back and each end is
-    counted by kind."""
+    """A task whose run raises, an error or a native library's panic, is delivered again after its retry delay, and on its
+    last delivery is ended with the failure's traceback logged, its next try held a recheck out, while its worker serves
+    on; a message on the queue that is no task is ended without running. Each hand-back and each end is counted by kind."""
+    caplog.set_level(logging.ERROR, logger=worker_queue.__name__)
     tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
     worker = mint_.credentials[_WORKER]
     runs: list[float] = []
@@ -832,7 +907,7 @@ async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_deli
 
         async def fails(task: Task) -> None:
             runs.append(loop.time())
-            raise RuntimeError(f"the store refused the pass of {task.uuid}")
+            raise failure(f"the pass of {task.uuid} failed")
 
         def ends_its_process(event: str, **extra: object) -> NoReturn:
             raise AssertionError(f"the worker ended its process: {event} {extra}")
@@ -846,7 +921,7 @@ async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_deli
             max_deliver=_MAX_DELIVER,
             max_pass_seconds=600,
             retry_ended_seconds=3600,
-            end_process=ends_its_process,
+            end=ends_its_process,
         )
         loops.append(asyncio.create_task(replica.run_tasks()))
         writer = await Client.connect(broker.url, worker, "garbage", inbox=INBOX_PREFIX)
@@ -883,6 +958,8 @@ async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_deli
     assert held_at is not None and abs((held_at - ended_at).total_seconds() - 3600) < 10, f"the ended task's next try is held for {held_at}, not a recheck out"
     counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("retried", "ended", "completed")}
     assert counted == {"retried": {"table": _MAX_DELIVER - 1}, "ended": {"table": 1, "unreadable": 1}, "completed": {}}
+    ended_by = [record.exc_info[0] for record in caplog.records if record.message == "maintenance_task_ended" and record.exc_info]
+    assert ended_by == [failure], f"the ended task's failure was not logged with its traceback: {ended_by}"
 
 
 @pytest.mark.asyncio
@@ -922,7 +999,7 @@ async def test_a_task_a_pull_answers_as_its_worker_stops(tmp_path: Path, allowed
             max_deliver=max_deliver,
             max_pass_seconds=600,
             retry_ended_seconds=3600,
-            end_process=ends_its_process,
+            end=ends_its_process,
         )
 
     try:
@@ -983,7 +1060,7 @@ async def test_an_idle_worker_stops_and_closes_its_connection_at_once(tmp_path: 
             max_deliver=_MAX_DELIVER,
             max_pass_seconds=600,
             retry_ended_seconds=3600,
-            end_process=ends_its_process,
+            end=ends_its_process,
             store_events=handled,
         )
         loops = [asyncio.create_task(loop()) for loop in (idle.run_tasks, idle.run_due, idle.run_store_events)]
@@ -1150,6 +1227,43 @@ async def test_a_pass_whose_claim_is_gone_ends_its_replica(
 
 
 @pytest.mark.asyncio
+async def test_a_worker_whose_claims_bucket_is_gone_ends_its_task_loop(tmp_path: Path) -> None:
+    """A worker binds the claims bucket before it takes a task; one the bus deleted since answers each claim with no
+    stream, and the bucket's own lookup says it is gone for good. The task loop ends on the first claim, so the process
+    ends and starts again, where a worker that kept asking would hold its task until the pass's hung bound ended it."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    replica: _Replica | None = None
+    lane: TaskQueue | None = None
+    rig: Client | None = None
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        queue = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="unclaiming")
+        await queue.bind_claims()
+        deleted = await rig.request(f"$JS.API.STREAM.DELETE.KV_{CLAIMS_BUCKET}")
+        assert deleted is not None and deleted.get("success") is True, f"the claims bucket was not deleted: {deleted}"
+        replica = _Replica(queue, "unclaiming", runs, ready=lambda: True)
+        assert await lane.enqueue(Task(kind="table", uuid="unclaimed", location="s3://bucket/unclaimed")) is True
+
+        ended = await _until(lambda: replica is not None and replica.task_loop_failure() is not None, 3 * _ACK_WAIT)
+        failure = replica.task_loop_failure()
+    finally:
+        try:
+            if replica is not None:
+                await replica.stop()
+            for client in (lane, rig):
+                if client is not None:
+                    await client.close()
+        finally:
+            broker.stop()
+
+    assert (ended, type(failure), runs.times("unclaimed")) == (True, ClaimsBucketMissingError, 0), f"the worker held on: {failure!r}"
+
+
+@pytest.mark.asyncio
 async def test_a_fired_schedule_that_is_no_task_is_ended_and_not_delivered_again(tmp_path: Path) -> None:
     """What a schedule fires is moved onto the queue as the task it carries; one that carries none can never be moved, so
     it is ended, where giving it back would deliver it for ever (the consumer of fired schedules has no delivery bound)."""
@@ -1184,15 +1298,17 @@ async def test_a_fired_schedule_that_is_no_task_is_ended_and_not_delivered_again
 
 @pytest.mark.asyncio
 async def test_a_task_whose_claim_the_bus_does_not_answer_is_held_until_it_is_and_then_runs(tmp_path: Path) -> None:
-    """A claim the bus cannot answer, as with the claims bucket not yet declared, says nothing of whether another pass
-    holds the table: the worker keeps the task and asks again, and runs it once the claim is answered, without spending
-    a delivery on it."""
+    """A claim the bus does not answer, its publish lost on the way as the network loses one, says nothing of whether
+    another pass holds the table: the worker keeps the task and asks again, and runs it once the claim is answered,
+    without spending a delivery on it. A bucket the bus holds no longer is an answer for good, which ends the worker's
+    task loop instead (`test_a_worker_whose_claims_bucket_is_gone_ends_its_task_loop`)."""
     tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
     worker = mint_.credentials[_WORKER]
     runs = _Runs()
     replica: _Replica | None = None
     lane: TaskQueue | None = None
     rig: Client | None = None
+    link: Link | None = None
     ran_unclaimed: list[tuple[str, str]] = []
     ran = False
     redelivered: object = None
@@ -1200,15 +1316,16 @@ async def test_a_task_whose_claim_the_bus_does_not_answer_is_held_until_it_is_an
         await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
         lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
         rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        dropped = await rig.request("$JS.API.STREAM.DELETE.KV_MAINTENANCE_CLAIMS")
-        assert dropped is not None and dropped.get("success") is True, f"the claims bucket was not removed: {dropped}"
-        replica = await _Replica.start(broker.url, worker, "waiting", runs, ready=lambda: True)
+        link = Link(broker.port)
+        await link.start()
+        link.drop(f"$KV.{CLAIMS_BUCKET}.>")
+        replica = await _Replica.start(link.url, worker, "waiting", runs, ready=lambda: True)
         assert await lane.enqueue(Task(kind="table", uuid="unclaimed", location="s3://bucket/unclaimed")) is True
         # Longer than the worker's wait between asks, and well inside the first redelivery delay (15 s).
         await asyncio.sleep(_ACK_WAIT)
         ran_unclaimed = list(runs.ran)
 
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        link.flow()
 
         ran = await _until(lambda: runs.times("unclaimed") == 1, 30)
         consumer = await rig.request(f"$JS.API.CONSUMER.INFO.{TASKS_STREAM}.{TASK_CONSUMER}") or {}
@@ -1220,6 +1337,8 @@ async def test_a_task_whose_claim_the_bus_does_not_answer_is_held_until_it_is_an
             for client in (lane, rig):
                 if client is not None:
                     await client.close()
+            if link is not None:
+                await link.stop()
         finally:
             broker.stop()
 
@@ -1269,7 +1388,7 @@ async def test_an_orphan_check_is_bounded_by_its_own_bound_and_a_pass_by_the_pas
             max_pass_seconds=600,
             max_seconds_by_kind={"orphans": 1},
             retry_ended_seconds=3600,
-            end_process=ends_its_process,
+            end=ends_its_process,
         )
         loops.append(asyncio.create_task(replica.run_tasks()))
         assert await lane.enqueue(passing) is True

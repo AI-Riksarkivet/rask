@@ -52,6 +52,16 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: one nobody disables. Turn it on per-environment (the chart's dev values do).
     docs_enabled: bool = Field(default=False, alias="MAINTENANCE_DOCS")
 
+    #: The largest request body maintenance reads; one over it is refused 413 before it is buffered (`lakehouse.body_limit`).
+    #: Its one door with a body is the write-event lane, which the sidecar delivers from the bus: a commit's announcement,
+    #: at most NATS's message ceiling of 1 MiB (the bus fixture sets no `max_payload`) plus its envelope.
+    max_body_bytes: int = Field(default=4 * 1024 * 1024, ge=1, alias="MAINTENANCE_MAX_BODY_BYTES")
+
+    #: A request with no answer begun after this long is answered 503 while its handling runs on (`lakehouse.deadline`),
+    #: the catalog's and lineage's bound: maintenance's longest request over two weeks of the estate's traces took 34.2 s
+    #: (2026-10-29..11-12).
+    request_deadline_seconds: float = Field(default=300.0, gt=0, alias="MAINTENANCE_REQUEST_DEADLINE_SECONDS")
+
     #: Whether this service emits the `lance.audit` compliance stream. ON by default — the trail is
     #: evidence, so a deployment that forgets still has it.
     #:

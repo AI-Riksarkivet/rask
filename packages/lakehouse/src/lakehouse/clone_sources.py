@@ -233,11 +233,18 @@ def clones_reading(location: str, storage_options: StorageOptions) -> list[str]:
     ``location`` in either spelling the estate holds it: listed at the key it decodes to.
 
     Raises:
-        OSError: The store refused the listing.
-        botocore.exceptions.ClientError: The store refused the listing.
+        OSError: The store refused, or could not be reached for, the listing.
     """
+    from botocore.exceptions import BotoCoreError, ClientError
+
     tags_dir = f"{_dataset_key(location)}/{_TAGS_DIR}"
-    names = (stored.path.rsplit("/", 1)[-1] for stored in stored_objects.list_under(tags_dir, storage_options))
+    try:
+        listed = stored_objects.list_under(tags_dir, storage_options)
+    except ClientError as exc:
+        raise OSError(f"the store refused listing {tags_dir}: {exc}") from exc
+    except BotoCoreError as exc:
+        raise OSError(f"the store could not be reached listing {tags_dir}: {exc}") from exc
+    names = (stored.path.rsplit("/", 1)[-1] for stored in listed)
     return sorted(name.removesuffix(_TAG_SUFFIX) for name in names if name.startswith(TAG_PREFIX) and name.endswith(_TAG_SUFFIX))
 
 

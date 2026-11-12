@@ -67,6 +67,7 @@ spec:
             - { name: LANCE_ALLOW_EXTERNAL_BLOBS, value: {{ .Values.vending.allowExternalBlobs | quote }} }
             - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
             - { name: LANCE_MAX_BODY_BYTES, value: {{ .Values.catalog.maxBodyBytes | int64 | quote }} }
+            - { name: LANCE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.catalog.requestDeadlineSeconds | quote }} }
             - { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int | quote }} }
             - { name: LANCE_TRASH_GRACE_DAYS, value: {{ hasKey .Values.catalog "trashGraceDays" | ternary .Values.catalog.trashGraceDays 7 | quote }} }
             - { name: LANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
@@ -256,6 +257,8 @@ spec:
             - { name: LINEAGE_CATALOG_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
             - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
             - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }
+            - { name: LINEAGE_MAX_BODY_BYTES, value: {{ .Values.services.lineage.maxBodyBytes | int64 | quote }} }
+            - { name: LINEAGE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.services.lineage.requestDeadlineSeconds | quote }} }
             - { name: LINEAGE_READ_ONLY, value: {{ required "readOnlyWindow is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.readOnlyWindow | quote }} }
             - { name: LINEAGE_EVENTS_RETENTION_DAYS, value: {{ .Values.services.lineage.eventsRetentionDays | quote }} }
             {{- with .Values.services.lineage.forward }}

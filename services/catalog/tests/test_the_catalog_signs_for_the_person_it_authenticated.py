@@ -305,4 +305,4 @@ def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(
     assert _Sidecar.published == [], f"a catalog without its key announced {len(_Sidecar.published)} events"
     staged = [json.loads(body)["action"] for _key, body in outbox.list_events(control_outbox, StorageOptions())]
     assert staged == [], f"a catalog without its key staged {staged} unsigned, and a staged object proves nothing about who wrote it"
-    assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["namespace", "signing"])
+    assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["namespace", "secret-store", "signing", "store"])

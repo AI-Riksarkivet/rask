@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import Request
+from fastapi import FastAPI, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
@@ -79,8 +79,11 @@ def _token(name: str = "alice") -> PersonPrincipal:
 
 
 def _request(**state: object) -> Request:
-    """A fake request exposing only ``request.app.state`` (the gate reads ``oidc``/``decider``)."""
-    return cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(**state))))
+    """A request to an app whose state holds ``state`` (the gate reads ``oidc``/``decider``)."""
+    app = FastAPI()
+    for name, value in state.items():
+        setattr(app.state, name, value)
+    return Request({"type": "http", "app": app, "method": "GET", "path": "/", "headers": []})
 
 
 def _creds(value: str = "tok") -> HTTPAuthorizationCredentials:

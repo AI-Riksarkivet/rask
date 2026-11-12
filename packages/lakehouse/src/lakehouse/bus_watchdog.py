@@ -34,12 +34,16 @@ import logging
 import random
 from collections.abc import Sequence
 from contextlib import suppress
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+if TYPE_CHECKING:
+    from lakehouse.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
@@ -163,9 +167,18 @@ class BusWatchdog:
             return False
         return answer.status_code == 500 and CLOSED in answer.text
 
-    async def start(self) -> None:
-        """Probe in the background until `stop`."""
-        self._task = asyncio.create_task(self._watch_forever(), name="bus-watchdog")
+    async def start(self, loops: Supervisor) -> None:
+        """Probe on a loop of ``loops`` until `stop`."""
+        self._task = loops.keep("bus-watchdog", self._watch_forever)
+
+    async def bus_answer(self) -> None:
+        """Raise unless a server the bus names greets a new connection: the bus's verdict a readiness report shows.
+
+        Raises:
+            ConnectionError: No server the bus names greets a connection.
+        """
+        if not await bus_answers(self._servers):
+            raise ConnectionError(f"no server of the bus greets a connection: {self._servers}")
 
     async def stop(self) -> None:
         """End the background loop and release the sidecar client. Safe to call when it never started."""
@@ -186,12 +199,13 @@ class BusWatchdog:
                 log.exception("bus_watchdog_pass_failed")
 
 
-async def start_bus_watchdog(settings: BusWatchdogSettings | None = None) -> BusWatchdog | None:
-    """The watchdog, started, for a pod whose sidecar connects to the bus; None for one the chart names no bus to."""
+async def start_bus_watchdog(loops: Supervisor, settings: BusWatchdogSettings | None = None) -> BusWatchdog | None:
+    """The watchdog, started on a loop of ``loops``, for a pod whose sidecar connects to the bus; None for one the chart
+    names no bus to."""
     resolved = settings or BusWatchdogSettings()
     servers = bus_servers(resolved.bus_url)
     if not servers:
         return None
     watchdog = BusWatchdog(sidecar=httpx.AsyncClient(base_url=f"http://localhost:{resolved.dapr_http_port}"), servers=servers)
-    await watchdog.start()
+    await watchdog.start(loops)
     return watchdog

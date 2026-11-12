@@ -1,8 +1,7 @@
 """THE lakehouse's app factory — one assembly for catalog, lineage and maintenance.
 
 Routers mount at the root under each service's own paths (``/v1/...``, ``/events``, a cron binding's ``/<name>``),
-config is each service's own ``*Settings``, and the middleware order is per-service because the catalog's Arrow-IPC
-data plane carries load-shedding and a body cap that the others do not.
+config is each service's own ``*Settings``, and every layer a request passes through is installed here, in one order.
 
 docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints
 hand-assembling
@@ -20,17 +19,22 @@ what it owns is the part that is identical in all of them:
    status and headers intact, ``{"detail": ...}`` body — which is how the draining 503 came to declare
    problem+json over a body that was not one. ``install_problem_handlers`` owns request validation and the
    catch-all, so the two sets map disjoint classes.
-4. ``RequestIDMiddleware``. One id per request, minted or echoed, published to the context var
-   ``setup_logging``'s filter reads — so a caller can quote an id from a failed request and an
-   operator can grep for it. PURE ASGI, so it passes streaming bodies through untouched, which is what
-   makes it safe on a plane that serves Arrow IPC. One factory is what keeps every lance service carrying it.
-5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
+4. The layers every request passes, outermost first (ADR 0203):
 
-WHAT IT DOES NOT OWN, and why. ``inner_middleware`` is the escape hatch, and it exists for exactly
-one reason: middleware added LATER is OUTER, and the catalog's read-only maintenance gate must sit
-INSIDE the request-id layer or its 503 goes out without an ``X-Request-ID`` header — a refusal an
-operator cannot then correlate. Middleware that must be OUTER (the catalog's body cap and its
-write-concurrency shed) is added by the caller after this returns, which is where it already was.
+   * ``RequestIDMiddleware``. One id per request, minted or echoed, published to the context var
+     ``setup_logging``'s filter reads, so a caller can quote an id from a failed request and an operator
+     can grep for it. OUTERMOST, so every refusal a layer below answers carries it. PURE ASGI, so it passes
+     streaming bodies through untouched, which is what makes it safe on a plane that serves Arrow IPC.
+   * ``PanicCatcherMiddleware``: a native library's panic answers 500 with the problem body and the process
+     serves on.
+   * ``RequestDeadlineMiddleware``: a request with no answer begun within ``request_deadline_seconds`` is
+     answered 503 while its door runs on to its end. Outside the caller's ``outer_middleware``, so a door
+     running on past its deadline still holds the write seat the catalog's shed counted it in.
+   * ``outer_middleware``, the caller's own, in its order (the catalog's path reading and write shed).
+   * ``BodySizeLimitMiddleware`` at ``max_body_bytes``, a body over it refused 413 before it is buffered.
+   * ``inner_middleware``, the caller's ``http`` functions that must run INSIDE every other layer: the
+     catalog's read-only gate and signing gate answer through the request-id layer this way.
+5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
 """
 
 from __future__ import annotations
@@ -41,12 +45,16 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 from fastapi import APIRouter, FastAPI
+from starlette.middleware import Middleware
 
 from lakehouse.app import setup_logging
+from lakehouse.body_limit import BodySizeLimitMiddleware
+from lakehouse.deadline import RequestDeadlineMiddleware
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import configure_audit
 from lakehouse.middleware import RequestIDMiddleware
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.panic_catcher import PanicCatcherMiddleware
 from lakehouse.probes import LiveCheck, ReadyCheck, make_probes_router
 
 
@@ -59,9 +67,12 @@ def build_lance_service_app(
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
     log: logging.Logger,
     ready_check: ReadyCheck,
+    max_body_bytes: int,
+    request_deadline_seconds: float,
     live_check: LiveCheck | None = None,
     routers: Sequence[APIRouter] = (),
     inner_middleware: Sequence[Callable[[Any, Any], Any]] = (),
+    outer_middleware: Sequence[Middleware] = (),
 ) -> FastAPI:
     """Assemble one lance-plane service's FastAPI app. See the module docstring for what and why.
 
@@ -75,9 +86,12 @@ def build_lance_service_app(
     ``live_check`` is for a process whose probes are not served by the loop its work runs on (a worker serving them
     from a thread): what `/livez` then answers, where otherwise it proves only that the serving loop turns.
 
-    ``inner_middleware`` are ``http`` middleware functions that must run INSIDE the request-id layer
-    (see the module docstring). Everything else the caller adds after this returns, which keeps it
-    outer — the order those middlewares already had.
+    ``max_body_bytes`` and ``request_deadline_seconds`` are REQUIRED for the reason ``docs_enabled`` is: every
+    lakehouse service sets its own body cap and deadline, so a new one answers both rather than inheriting none.
+
+    ``inner_middleware`` are ``http`` middleware functions that must run INSIDE every other layer, and
+    ``outer_middleware`` the caller's pure-ASGI layers, which run inside the deadline and outside the body cap
+    (see the module docstring for the whole order).
 
     ``audit_enabled`` arms the `lance.audit` compliance stream, and is REQUIRED for the same reason
     ``docs_enabled`` beside it is: a keyword with no default is enforced at every call site by the type
@@ -100,8 +114,14 @@ def build_lance_service_app(
     )
     register_handlers(app)
     install_problem_handlers(app, log)
+    # Each layer added is OUTER to those added before it: innermost first.
     for middleware in inner_middleware:
         app.middleware("http")(middleware)
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_body_bytes)
+    for layer in outer_middleware:
+        app.add_middleware(layer.cls, *layer.args, **layer.kwargs)
+    app.add_middleware(RequestDeadlineMiddleware, seconds=request_deadline_seconds, log=log)
+    app.add_middleware(PanicCatcherMiddleware, log=log)
     app.add_middleware(RequestIDMiddleware)
     for router in routers:
         app.include_router(router)

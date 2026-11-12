@@ -96,9 +96,13 @@ class ServiceAccountVerifier:
             return False
         return isinstance(claimed, str) and claimed.rstrip("/") == self.issuer
 
-    def warm(self) -> list[tuple[str, str]]:
-        """Resolve the issuer now and report what failed; see `OIDCVerifier.warm`."""
-        return self._oidc.warm()
+    def refresh(self) -> list[tuple[str, str]]:
+        """Fetch the issuer's keys now and report what failed; see `OIDCVerifier.refresh`."""
+        return self._oidc.refresh()
+
+    async def refresh_forever(self) -> None:
+        """Fetch the issuer's keys again in the background until cancelled; see `OIDCVerifier.refresh_forever`."""
+        await self._oidc.refresh_forever()
 
     def verify(self, token: str) -> ServicePrincipal:
         """The principal the token proves; `UnauthenticatedError` for a token at fault, `ProviderUnavailableError` for the issuer."""

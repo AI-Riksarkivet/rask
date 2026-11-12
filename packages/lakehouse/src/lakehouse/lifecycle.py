@@ -14,6 +14,8 @@ app claim readiness.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from starlette.datastructures import State
@@ -63,4 +65,11 @@ def _state(app_or_state: FastAPI | State) -> State:
     return app_or_state if isinstance(app_or_state, State) else app_or_state.state
 
 
-__all__ = ["DRAINING_FLAG", "STARTED_FLAG", "is_draining", "is_started", "mark_draining", "mark_started"]
+async def closed_quietly(close: Callable[[], Awaitable[object]]) -> None:
+    """Close a client as a lifespan ends; a close its server no longer answers is the end it was closed for, so a failure
+    of it is passed over rather than raised over the other closes the lifespan still has to make."""
+    with suppress(Exception):
+        await close()
+
+
+__all__ = ["DRAINING_FLAG", "STARTED_FLAG", "closed_quietly", "is_draining", "is_started", "mark_draining", "mark_started"]

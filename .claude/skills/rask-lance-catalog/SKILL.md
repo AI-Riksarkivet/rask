@@ -653,10 +653,12 @@ governing their data. The project-scoped surface is the console's project page, 
   (`maintenance-worker`) through nats-py rather than Dapr, whose JetStream subscription sends no in-progress ack and whose
   publish cannot set a schedule header (`maintenance.services.tasks`). It takes one task at a time and heartbeats it
   every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a replica
-  whose heartbeats the bus stops answering ends itself before that ack wait runs out (`Worker._tell`), as does one whose heartbeat ends by an error nothing expected (`Worker._keep_alive`), one whose drain
+  whose heartbeats the bus stops answering ends itself before that ack wait runs out (`Worker._tell`), its telemetry
+  flushed only within what the lease leaves (`Worker._end_process`), as does one whose heartbeat ends by an error nothing expected (`Worker._keep_alive`), one whose drain
   ends with a pass still running ends there (`Worker.drain`), each pull has a subscription of its own, and a pass
   holds a claim on its table in the MAINTENANCE_CLAIMS bucket that another pass waits out (`Worker._claim`), so two
-  passes of one table never overlap; a replica whose credential the bus takes no longer (revoked when its grants changed,
+  passes of one table never overlap; a claim that finds the bucket gone ends the replica's task loop
+  (`TaskQueue.claim`); a replica whose credential the bus takes no longer (revoked when its grants changed,
   or expired) ends itself and starts again on the store's current one (`TaskQueue.connect`); a pass
   past twice `maxPassSeconds` ends its replica, and a task that outlived its worker on all `maxDeliver` deliveries is
   ended unrun on the one more the consumer allows. The worker counts each task retried, ended, completed (and its time
@@ -1173,8 +1175,9 @@ governing their data. The project-scoped surface is the console's project page, 
   index simply do not exist yet — so there is nothing to fix on our side and nothing to file beyond
   upstream. It is CONTAINED, and deliberately: `index_health._stats` catches **`BaseException`**, not
   `Exception`, because a Rust panic surfaces as pyo3's `PanicException`, which derives from
-  BaseException and would otherwise sail straight through the pass's and the worker's error handling, which catch
-  `Exception`.
+  BaseException and passes straight through the pass's error handling, which catches `Exception`. A panic that does
+  escape a pass is that task's failure: the worker delivers it again and ends it on its last delivery, and serves on
+  (`lakehouse.supervision.is_panic`, ADR 0203).
   It logs `index_stats_unreadable` and the finding reports *"its statistics could not be read, so its
   health is UNKNOWN — not the same as healthy"*, which is the honest answer: those two indices are
   UNMONITORED, not proven fine. Do not "fix" the noise by narrowing that except clause. Note also that a

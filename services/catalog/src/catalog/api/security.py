@@ -20,7 +20,7 @@ through to the IdP, no header names the caller, and OpenFGA alone decides what t
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, cast
 
 import jwt
 from fastapi import Depends, Request
@@ -28,6 +28,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
+from catalog.core.config import Settings, get_settings
+from lakehouse.admission import admitted_caller, caller_judge
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
 from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
@@ -82,6 +84,17 @@ def authenticate(
 ) -> Caller | None:
     """Authenticate the request: a projected service-account token (a service) or an OIDC bearer (a person).
 
+    The caller `judge` admitted, when it ran before the body; otherwise judged here.
+    """
+    judged, caller = admitted_caller(request)
+    if judged:
+        return cast("Caller | None", caller)
+    return _authenticated(request, settings, credentials.credentials if credentials is not None else None)
+
+
+def _authenticated(request: Request, settings: Settings, bearer: str | None) -> Caller | None:
+    """The caller ``bearer`` proves, or ``None`` with OIDC off.
+
     The service-account verifier is chosen by the token's unverified ``iss`` and then checks the
     signature, audience and expiry; every account in the cluster whose token carries this door's audience
     authenticates, as its own subject, and is authorized by its tuples alone. ``dapr-api-token`` is not
@@ -90,7 +103,6 @@ def authenticate(
     if not settings.oidc_enabled:
         return None
 
-    bearer = credentials.credentials if credentials is not None else None
     sa_verifier: ServiceAccountVerifier | None = getattr(request.app.state, "sa_oidc", None)
     if bearer and (sa_verifier.issued(bearer) if sa_verifier is not None else _claims_issuer(bearer, settings.sa_issuer)):
         return _service_principal(sa_verifier, bearer)
@@ -120,6 +132,9 @@ def authenticate(
 #: The authenticated caller (``None`` when OIDC is disabled). Endpoints that need claims depend on
 #: this and narrow with ``isinstance``; router-level use enforces authentication.
 CurrentToken = Annotated[Caller | None, Depends(authenticate)]
+#: Every door that depends on `authenticate` judges its caller from the headers before its body is read
+#: (`lakehouse.admission`), so no caller without a token makes this service buffer one.
+judge = caller_judge(gate=authenticate, settings=get_settings, authenticated=_authenticated)
 
 
 def current_subject(token: CurrentToken) -> str:

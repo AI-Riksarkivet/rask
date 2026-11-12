@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.supervision import Supervisor
 from lineage.api import security
 from lineage.core.config import get_settings
 
@@ -54,8 +55,9 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        await attach_auth(app, get_settings(), service="lineage")
-        yield
+        async with Supervisor() as loops:
+            await attach_auth(app, get_settings(), service="lineage", loops=loops)
+            yield
 
     app = FastAPI(lifespan=lifespan)
     register_handlers(app)

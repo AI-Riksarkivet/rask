@@ -23,19 +23,20 @@ request through or handing it to the other verifier.
 
 from __future__ import annotations
 
-from typing import Annotated, Protocol
+from typing import Annotated, Protocol, cast
 
 import jwt
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
+from lakehouse.admission import admitted_caller, caller_judge
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
 from lakehouse.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from lakehouse.governed.oidc import ProviderUnavailableError
 from lineage.api.dependencies import SettingsDep
-from lineage.core.config import LineageSettings
+from lineage.core.config import LineageSettings, get_settings
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.
@@ -96,11 +97,19 @@ def authenticate(
 ) -> Caller | None:
     """Authenticate the caller: a person's IdP bearer, or a service's projected service-account token.
 
-    Returns ``None`` when OIDC is off — the open dev default.
+    The caller `judge` admitted, when it ran before the body; otherwise judged here. ``None`` when OIDC is off, the open
+    dev default.
     """
+    judged, caller = admitted_caller(request)
+    if judged:
+        return cast("Caller | None", caller)
+    return _authenticated(request, settings, credentials.credentials if credentials is not None and credentials.credentials else None)
+
+
+def _authenticated(request: Request, settings: LineageSettings, bearer: str | None) -> Caller | None:
+    """The caller ``bearer`` proves, or ``None`` with OIDC off."""
     if not settings.oidc_enabled:
         return None
-    bearer = credentials.credentials if credentials is not None and credentials.credentials else None
     sa_verifier: ServiceAccountVerifier | None = getattr(request.app.state, "sa_oidc", None)
     if bearer is not None and _service_account_issued(bearer, settings, sa_verifier):
         return _service_account(bearer, sa_verifier)
@@ -119,5 +128,8 @@ def authenticate(
 
 #: The authenticated caller — a ``PersonPrincipal``, a ``ServicePrincipal``, or ``None`` when OIDC is off.
 CurrentToken = Annotated[Caller | None, Depends(authenticate)]
+#: Every door that depends on `authenticate` judges its caller from the headers before its body is read
+#: (`lakehouse.admission`): the intake's JSON body is never read, let alone parsed, for a caller with no token.
+judge = caller_judge(gate=authenticate, settings=get_settings, authenticated=_authenticated)
 
 __all__ = ["Caller", "CurrentToken", "PersonPrincipal", "ServicePrincipal", "authenticate"]

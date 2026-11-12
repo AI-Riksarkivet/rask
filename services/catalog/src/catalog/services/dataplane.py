@@ -2059,7 +2059,7 @@ def clone_readers(location: str, so: StorageOptions, *, table: str) -> set[str]:
     """
     try:
         return set(clone_sources.clones_reading(location, so))
-    except (OSError, ClientError, BotoCoreError) as exc:
+    except OSError as exc:
         raise ServiceUnavailableError(f"the tags of table {table} could not be listed, so whether a clone reads it is unknown; nothing changed") from exc
 
 
