@@ -123,6 +123,11 @@ func (m *Rask) trivyBase() *dagger.Container {
 // is judged again, and named with `--config` so the one record covers every lockfile wherever it sits ([[XC-202]]): the
 // gate blocks on any advisory it does not name, and a suppression is a recorded decision with an expiry instead of a
 // deleted CI job.
+//
+// Go call analysis is off, so every advisory against a module in .dagger/go.mod counts whether or not its code is
+// reached. Call analysis loads the module's packages, and those import the bindings `dagger develop` generates, which
+// are gitignored: on a checkout without them govulncheck cannot load the packages and osv-scanner exits 127 after
+// finding nothing (measured 2026-11-12 in CI's supply-chain-audit and reproduced here with the bindings moved aside).
 func (m *Rask) Audit(
 	ctx context.Context,
 	// +ignore=["**/.venv", "**/node_modules", ".git", "**/.svelte-kit", "**/.turbo",
@@ -137,7 +142,7 @@ func (m *Rask) Audit(
 		From(OsvScannerImage).
 		WithMountedDirectory("/src", src).
 		WithWorkdir("/src").
-		WithExec([]string{"/osv-scanner", "scan", "source", "--config", "/src/osv-scanner.toml", "--recursive", "/src"}).
+		WithExec([]string{"/osv-scanner", "scan", "source", "--config", "/src/osv-scanner.toml", "--no-call-analysis=go", "--recursive", "/src"}).
 		Stdout(ctx)
 }
 
