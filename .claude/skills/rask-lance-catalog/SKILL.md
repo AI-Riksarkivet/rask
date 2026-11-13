@@ -671,7 +671,9 @@ governing their data. The project-scoped surface is the console's project page, 
   each fired schedule the queue refused, and samples every 15 s each stream's depth and oldest message's age and each
   durable's undelivered (`maintenance.queue.waiting`), ack-pending and redelivered counts
   (`maintenance.services.queue.sample_queue`, `maintenance.queue.*`), which the `maintenance` alert group reads:
-  `MaintenanceQueueStalled` pages when tasks wait and no delivery awaits an ack for ten minutes. Measured 2026-11-13, the
+  `MaintenanceQueueStalled` pages when tasks wait and no delivery awaits an ack for ten minutes. Each task's run is a consumer span
+  (`process maintenance.task.<kind>`, `Worker._traced`) of a trace of its own, linked to the span that queued it, whose
+  context rides the message's headers. Measured 2026-11-13, the
   queue costs 3 to 6 ms a task and its rate is the replica count over the pass time (ADR 0198's amendment of that day). With
   store events expected, the hourly audit also reads each governed bucket's event configuration and reports each
   sending no `s3:ObjectCreated:*` event, counting each bucket once per audit on `maintenance.store_event_buckets.checked` by

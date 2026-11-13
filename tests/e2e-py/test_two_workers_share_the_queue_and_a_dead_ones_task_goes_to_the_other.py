@@ -79,6 +79,10 @@ import respx
 from measured_metrics import Measured
 from nats.aio.msg import Msg
 from nats_auth_rig import VALUES_ENV, Broker, Client, Credential, Link, Mint, Permissions, Tools, Violation, issue, mint, run_stream_job, violations
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import SpanKind
 from pydantic import SecretStr
 
 from lakehouse import location_claims, store_session
@@ -1502,6 +1506,61 @@ async def test_a_fired_schedule_whose_move_the_bus_lost_is_moved_again(tmp_path:
 
     assert before == [], f"a task ran though its move's publish was lost: {before}"
     assert moved and replica is not None and replica.ended == [], f"the move was never made again once publishes flowed: {runs.ran}"
+
+
+@pytest.mark.asyncio
+async def test_a_tasks_run_is_a_span_of_its_own_linked_to_the_trace_that_queued_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A task's run is a consumer span that starts a trace of its own and links to the span the task was queued under,
+    whether it was put on the queue directly or held as a schedule the worker moved there when it fired: the context
+    rides the message's headers across both hops. A link and not a parent, since each pass holds its table's next pass
+    from inside its own span, and a parent would chain every pass of a table into one trace."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(worker_queue, "tracer", provider.get_tracer(worker_queue.__name__), raising=False)
+    callers = provider.get_tracer("a-caller")
+    tools, docs, mint_, broker = _the_bus(tmp_path)
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    replica: _Replica | None = None
+    lane: TaskQueue | None = None
+    queued_under: dict[str, int] = {}
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        replica = await _Replica.start(broker.url, worker, "runner", runs, ready=lambda: True)
+        with callers.start_as_current_span("queues-a-task") as caller:
+            queued_under["queued"] = caller.get_span_context().span_id
+            assert await lane.enqueue(Task(kind="table", uuid="queued", location="s3://bucket/queued")) is True
+        with callers.start_as_current_span("holds-a-follow-up") as caller:
+            queued_under["held"] = caller.get_span_context().span_id
+            assert await lane.follow_up(Task(kind="table", uuid="held", location="s3://bucket/held"), datetime.now(UTC) + timedelta(seconds=1)) is True
+        ran = await _until(lambda: {uuid for _, uuid in runs.ran} == {"queued", "held"} and len(_task_spans(exporter)) == 2, 45)
+    finally:
+        try:
+            if replica is not None:
+                await replica.stop()
+            if lane is not None:
+                await lane.close()
+        finally:
+            broker.stop()
+
+    assert ran, f"the two tasks did not both run under a span: ran {runs.ran}, spans {[span.name for span in exporter.get_finished_spans()]}"
+    spans = {str((span.attributes or {})["maintenance.task.uuid"]): span for span in _task_spans(exporter)}
+    callers_traces = {span.context.span_id: span.context.trace_id for span in exporter.get_finished_spans() if span.name != _TASK_SPAN}
+    assert {uuid: (span.kind, span.parent, [link.context.span_id for link in span.links]) for uuid, span in spans.items()} == {
+        "queued": (SpanKind.CONSUMER, None, [queued_under["queued"]]),
+        "held": (SpanKind.CONSUMER, None, [queued_under["held"]]),
+    }
+    assert all(span.context.trace_id not in callers_traces.values() for span in spans.values()), "a task's run joined the trace that queued it"
+
+
+#: The name of the span a table task's run is.
+_TASK_SPAN = "process maintenance.task.table"
+
+
+def _task_spans(exporter: InMemorySpanExporter) -> list[ReadableSpan]:
+    return [span for span in exporter.get_finished_spans() if span.name == _TASK_SPAN]
 
 
 @pytest.mark.asyncio

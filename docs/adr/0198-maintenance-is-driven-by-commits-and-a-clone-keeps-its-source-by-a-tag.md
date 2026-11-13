@@ -515,6 +515,13 @@ The row asked for the readings under other names, and two of its clauses are met
   preceded by `MaintenanceQueueStalled` (ten minutes of nobody pulling) or `MaintenanceTaskAging` (six hours on the
   queue), and the hourly audit queues the table again.
 
+A task's run is a span, and its message carries the trace it was queued under. Each run is a consumer span
+(`process maintenance.task.<kind>`) that starts a trace of its own and links to the span that queued the task, whose
+context rides the message's headers, through a held schedule and the worker's move of it onto the queue as well (a fired
+schedule keeps its held message's headers, measured on nats-server 2.15.2). It is a link and not a parent because a pass
+holds its table's next pass from inside its own span: a parent would chain every pass of a table into one trace for the
+table's life. The span is an error only when the run fails on the delivery that ends the task.
+
 ### What the queue costs, measured 2026-11-13 on the bus lane
 
 Method (`scripts/measure_maintenance_queue.py`, run with the bus lane's tools): three nats-server 2.15.2 in operator mode with every stream at three replicas, declared by the chart's stream

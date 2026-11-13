@@ -51,6 +51,8 @@ from nats.js.errors import (
     NoStreamResponseError,
     NotFoundError,
 )
+from opentelemetry import propagate, trace
+from opentelemetry.trace import Link, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
@@ -75,6 +77,7 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 TASKS_STREAM: Final = "MAINTENANCE_TASKS"
 SCHEDULES_STREAM: Final = "MAINTENANCE_SCHEDULES"
@@ -233,6 +236,25 @@ class ConsumerState(BaseModel):
     num_redelivered: int = 0
 
 
+def _carried(headers: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The trace context a message carries in its headers: the caller's own, or, given a message's ``headers``, the one
+    that message carried, to hand on unchanged when a fired schedule is moved onto the queue (a fired schedule keeps the
+    headers its held message was published with, measured on nats-server 2.15.2, 2026-11-13)."""
+    carrier: dict[str, str] = {}
+    if headers is None:
+        propagate.inject(carrier)
+        return carrier
+    return {field: headers[field] for field in propagate.get_global_textmap().fields if field in headers}
+
+
+def _queued_under(msg: Msg) -> list[Link]:
+    """A link to the span ``msg``'s task was queued under, none when its headers carry no context. A link, never a parent:
+    a pass holds its table's next pass from inside its own span, and a parent would chain every pass of a table, for the
+    table's life, into one trace."""
+    queued = trace.get_current_span(propagate.extract(msg.headers or {})).get_span_context()
+    return [Link(queued)] if queued.is_valid else []
+
+
 def _record_delivery(task: Task, msg: Msg) -> None:
     """Count ``msg`` as a delivery of ``task``: its first records how long the task waited on the queue, whether a worker
     runs it or hands it on as it stops; any later one is a redelivery.
@@ -382,16 +404,18 @@ class TaskQueue:
         )
         return cls(client, closing)
 
-    async def enqueue(self, task: Task) -> bool:
+    async def enqueue(self, task: Task, *, carried: Mapping[str, str] | None = None) -> bool:
         """Put ``task`` on the queue; ``False`` when its table already has one queued or in flight, which covers it. The
         publish expects the task's subject to hold nothing, so JetStream refuses it while a task holds it; the stream's
-        one-message-per-subject limit stands behind that.
+        one-message-per-subject limit stands behind that. The message carries the caller's trace context, or ``carried``,
+        the context of the schedule being moved.
 
         Raises:
             QueueUnavailableError: JetStream refused the publish for another reason, or did not answer it.
         """
         try:
-            await self._js.publish(task.subject("task"), task.model_dump_json().encode(), stream=TASKS_STREAM, headers=_EXPECT_NOTHING)
+            headers = {**_EXPECT_NOTHING, **(_carried() if carried is None else carried)}
+            await self._js.publish(task.subject("task"), task.model_dump_json().encode(), stream=TASKS_STREAM, headers=headers)
         except APIError as exc:
             if exc.err_code in _HELD_ALREADY:
                 return False
@@ -575,7 +599,7 @@ class TaskQueue:
             APIError: With ``expect_nothing``, JetStream refused the schedule; the caller reads its code.
             QueueUnavailableError: JetStream refused the schedule, or did not answer it.
         """
-        headers = {"Nats-Schedule": when, "Nats-Schedule-Target": fires, **(_EXPECT_NOTHING if expect_nothing else {})}
+        headers = {"Nats-Schedule": when, "Nats-Schedule-Target": fires, **(_EXPECT_NOTHING if expect_nothing else {}), **_carried()}
         try:
             await self._js.publish(held, task.model_dump_json().encode(), stream=SCHEDULES_STREAM, headers=headers)
         except APIError as exc:
@@ -841,7 +865,7 @@ class Worker:
             self._pass_lease = lease
             claimed = monotonic()
             try:
-                await self._run(task)
+                await self._traced(msg, task, final=delivered >= self._max_deliver)
             except BaseException as exc:
                 # Every failure of a run is the task's, retried or ended below: an Exception, and a native library's panic,
                 # which pyo3 raises as a BaseException (owner, 2026-11-12: "Pass failed, go on"). Any other BaseException is
@@ -860,6 +884,29 @@ class Worker:
             if lease.claim:
                 await self._queue.release(_claim_key(task), lease.token, lease.claim)
         record_task_completed(kind=task.kind)
+
+    async def _traced(self, msg: Msg, task: Task, *, final: bool) -> None:
+        """Run ``task`` as a span of a trace of its own, linked to the span it was queued under. The span is an error only
+        when the run fails on the delivery that ends the task (``final``): a failure the queue delivers again is not the
+        task's outcome, and the retry's own span follows it."""
+        attributes = {
+            "messaging.system": "nats",
+            "messaging.operation.type": "process",
+            "messaging.destination.name": TASKS_STREAM,
+            "maintenance.task.kind": task.kind,
+            "maintenance.task.uuid": task.uuid,
+            "maintenance.task.delivery": msg.metadata.num_delivered or 1,
+        }
+        name = f"process maintenance.task.{task.kind}"
+        with tracer.start_as_current_span(
+            name, kind=SpanKind.CONSUMER, links=_queued_under(msg), attributes=attributes, record_exception=False, set_status_on_exception=False
+        ) as span:
+            try:
+                await self._run(task)
+            except BaseException as exc:
+                if final and (isinstance(exc, Exception) or is_panic(exc)):
+                    span.set_status(StatusCode.ERROR, type(exc).__name__)
+                raise
 
     async def _claim(self, task: Task, lease: _Lease) -> bool:
         """Claim ``task``'s table for this pass, waiting up to one ack wait while another's claim stands: a worker that died
@@ -1114,7 +1161,7 @@ class Worker:
             await msg.term()
             return
         try:
-            queued = await self._queue.enqueue(task)
+            queued = await self._queue.enqueue(task, carried=_carried(msg.headers or {}))
         except QueueUnavailableError as exc:
             log.warning("maintenance_due_not_queued", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
             record_schedule_not_queued()
