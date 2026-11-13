@@ -44,10 +44,10 @@ import json
 import logging
 import threading
 from collections import deque
-from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, TypeVar
+from typing import Any, Final, Protocol, TypeVar
 
 import pyarrow as pa
 from opentelemetry import trace
@@ -740,37 +740,9 @@ class ProvenanceStore:
         if after is not None and since is not None:
             raise ValueError("a feed read takes `after` or `since`, not both")
         reader = self._reader(FEED)
-        version = await self._run(reader.table_version)
-        ids = await self._feed_ids(reader, version)
-        return FeedWindow(self._run, reader, version=version, row_ids=ids, after=after, since=since, summary=summary)
-
-    async def _feed_ids(self, reader: CatalogTableReader, version: int) -> tuple[int, int] | None:
-        """The lowest and the highest row id the feed holds at ``version``, or ``None`` when it holds none.
-
-        Read without trusting the order a query answers in: the probes NAME the bounds (the first row a query answers, and
-        the row at offset ``total - 1``), and one count proves them, since no row lies outside ``[lo, hi]`` exactly when
-        those are the bounds. Measured on the dev estate 2026-11-13 (3,825 rows), the first probe and the count settle it,
-        because the feed's ids are dense; the offset probe serves a feed with holes (a prune whose cut is not a prefix of
-        commit order); a store answering out of row-id order, which none has, costs the whole read it saves elsewhere.
-        Proven on each read rather than kept per table version: a feed table created again numbers its versions from the
-        start, so a version kept from before would name another table's bounds.
-        """
-        async with asyncio.TaskGroup() as group:
-            counted = group.create_task(self._run(lambda: reader.count_rows(version=version)))
-            probed = group.create_task(self._run(lambda: _row_ids(reader.to_table(columns=_PROBE_COLUMNS, with_row_id=True, limit=1, version=version))))
-        total, first = counted.result(), probed.result()
-        if not total:
-            return None
-        if first:
-            lo = first[0]
-            if not await self._run(lambda: _held_outside(reader, version, lo, lo + total - 1)):
-                return lo, lo + total - 1
-            last = await self._run(lambda: _row_ids(reader.to_table(columns=_PROBE_COLUMNS, with_row_id=True, limit=1, offset=total - 1, version=version)))
-            if last and last[0] >= lo and not await self._run(lambda: _held_outside(reader, version, lo, last[0])):
-                return lo, last[0]
-        log.warning("provenance_feed_bounds_read_whole", extra={"version": version, "rows": total})
-        ids = await self._run(lambda: _row_ids(reader.to_table(columns=_PROBE_COLUMNS, with_row_id=True, version=version)))
-        return (min(ids), max(ids)) if ids else None
+        window = FeedWindow(self._run, reader, version=await self._run(reader.table_version), after=after, since=since, summary=summary)
+        await window.open()
+        return window
 
     async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
         """Feed rows: newest first, older than ``after``, or oldest first after ``since`` (the follower's read)."""
@@ -782,7 +754,7 @@ class ProvenanceStore:
         ``None`` rather than a floor of ``0`` on an empty feed: zero would read as "everything since the
         beginning is still here", the opposite of what an empty feed means after retention.
         """
-        return (await self.window()).bounds
+        return await (await self.window()).bounds()
 
     async def recorded_event(self, key: str) -> dict[str, Any] | None:
         """The payload the feed holds under the row key ``key`` (:func:`feed_key`); ``None`` when it holds none."""
@@ -844,9 +816,10 @@ def _row_ids(table: pa.Table) -> list[int]:
     return [int(value) for value in table.column("_rowid").to_pylist()] if "_rowid" in table.column_names else []
 
 
-def _held_outside(reader: CatalogTableReader, version: int, lo: int, hi: int) -> bool:
-    """Whether the feed holds a row outside ``[lo, hi]`` at ``version``: a count on row ids alone, which reads no data file."""
-    return bool(reader.count_rows(f"_rowid < {lo} OR _rowid > {hi}", version=version))
+class _Runner(Protocol):
+    """Runs a blocking call off the event loop: the store's :meth:`ProvenanceStore._run`."""
+
+    def __call__[T](self, call: Callable[[], T]) -> Coroutine[Any, Any, T]: ...
 
 
 class FeedWindow:
@@ -855,41 +828,121 @@ class FeedWindow:
     Every read names a range of row ids, never an order: a range of ``w`` ids holds at most ``w`` rows, since a row id
     is unique, so a range read is exact whatever order the query answers in, and a page costs the rows it returns, not
     the feed's length. A range that comes back short (a hole a prune or a delete left) is followed by one twice as wide,
-    and rows read past what a take asked for wait for the next take. ``bounds`` is the oldest and the newest seq the feed
-    holds at that version.
+    and rows read past what a take asked for wait for the next take.
+
+    The bounds are read without trusting the order a query answers in either (:meth:`open`): a count and the first row a
+    query answers NAME them, and a second count PROVES them, since no row lies outside ``[lo, lo + total - 1]`` exactly
+    when the feed's ids are those. The proof runs beside the first read, and no row is handed out before it holds; one
+    that fails (a feed with holes: a prune whose cut is not a prefix of commit order) names the newest row by its offset
+    and proves that, and a store answering out of row-id order, which none has, costs a read of every row's id. Measured
+    on the dev estate 2026-11-13 at 3,825 rows, the feed's ids were dense, so the first proof holds: a read of every
+    retained row's key took 0.5 s, a one-row probe 75 ms and a count on row ids 150 ms. Proven on each read rather than
+    kept per table version: a feed table created again numbers its versions from the start, so a version kept from
+    before would name another table's bounds.
+
+    A window serves one consumer at a time: its calls are awaited one after another, never gathered.
     """
 
-    def __init__(
-        self,
-        run: Callable[[Callable[[], list[EventRecord]]], Awaitable[list[EventRecord]]],
-        reader: CatalogTableReader,
-        *,
-        version: int,
-        row_ids: tuple[int, int] | None,
-        after: int | None,
-        since: int | None,
-        summary: bool,
-    ) -> None:
+    def __init__(self, run: _Runner, reader: CatalogTableReader, *, version: int, after: int | None, since: int | None, summary: bool) -> None:
         self._run = run
         self._reader = reader
         self._version = version
+        self._after = after
+        self._since = since
         self._columns = _SUMMARY_COLUMNS if summary else _FEED_COLUMNS
         self._summary = summary
         self._forward = since is not None
         self._buffer: deque[EventRecord] = deque()
-        # `row_ids` is the lowest and highest row id the feed holds; a seq is a row id plus one, so `bounds` is in seqs,
-        # `since` is the first row id after it and the row below `after` is row id `after - 2`.
-        self.bounds = (row_ids[0] + 1, row_ids[1] + 1) if row_ids else None
-        # The row ids left to read, `[_low, _high]`.
-        self._low, self._high = row_ids or (1, 0)
-        if since is not None:
-            self._low = max(self._low, since)
-        elif after is not None:
-            self._high = min(self._high, after - 2)
+        self._bounds: tuple[int, int] | None = None
+        self._low, self._high = 1, 0
+        self._low_bound = 1
+        self._total = 0
+        #: The proof of the bounds :meth:`open` named, while it runs; ``None`` once they are proven.
+        self._proof: asyncio.Task[bool] | None = None
+
+    async def open(self) -> None:
+        """Name the feed's bounds at this version and start proving them."""
+        async with asyncio.TaskGroup() as group:
+            counted = group.create_task(self._run(lambda: self._reader.count_rows(version=self._version)))
+            probed = group.create_task(self._run(lambda: self._ids(limit=1)))
+        self._total, first = counted.result(), probed.result()
+        if not self._total:
+            self._start(None)
+            return
+        if not first:
+            self._start(await self._read_whole())
+            return
+        named = (first[0], first[0] + self._total - 1)
+        self._start(named)
+        self._proof = asyncio.ensure_future(self._run(lambda: not self._held_outside(*named)))
+
+    async def bounds(self) -> tuple[int, int] | None:
+        """The oldest and the newest seq the feed holds at this version, or ``None`` when it holds none."""
+        if not await self._proven():
+            self._start(await self._prove_by_offset())
+        return self._bounds
 
     async def take(self, n: int) -> list[EventRecord]:
         """The next ``n`` rows in cursor order (oldest first after ``since``, else newest first); fewer once none are left."""
+        if self._proof is None:
+            return await self._run(lambda: self._take(n))
+        # The first read goes beside the proof; its rows are handed out only once the bounds it read within hold.
+        read = asyncio.ensure_future(self._run(lambda: self._take(n)))
+        try:
+            held = await self._proven()
+        except BaseException:
+            await asyncio.gather(read, return_exceptions=True)
+            raise
+        if held:
+            return await read
+        await asyncio.gather(read, return_exceptions=True)
+        self._start(await self._prove_by_offset())
         return await self._run(lambda: self._take(n))
+
+    async def _proven(self) -> bool:
+        """Whether the bounds :meth:`open` named hold, waiting for their proof if it runs; ``True`` once settled.
+
+        The proof is dropped only once it has answered, so a proof that raised is raised again rather than read as held.
+        """
+        if self._proof is None:
+            return True
+        held = await self._proof
+        self._proof = None
+        return held
+
+    async def _prove_by_offset(self) -> tuple[int, int] | None:
+        lo = self._low_bound
+        last = await self._run(lambda: self._ids(limit=1, offset=self._total - 1))
+        if last and last[0] >= lo and not await self._run(lambda: self._held_outside(lo, last[0])):
+            return lo, last[0]
+        return await self._read_whole()
+
+    async def _read_whole(self) -> tuple[int, int] | None:
+        log.warning("provenance_feed_bounds_read_whole", extra={"version": self._version, "rows": self._total})
+        ids = await self._run(lambda: self._ids())
+        return (min(ids), max(ids)) if ids else None
+
+    def _start(self, row_ids: tuple[int, int] | None) -> None:
+        """Read from the start of the cursor within ``row_ids``, the lowest and highest row id the feed holds.
+
+        A seq is a row id plus one, so the bounds are in seqs, ``since`` is the first row id after it and the row below
+        ``after`` is row id ``after - 2``.
+        """
+        self._buffer.clear()
+        self._bounds = (row_ids[0] + 1, row_ids[1] + 1) if row_ids else None
+        self._low_bound = row_ids[0] if row_ids else 1
+        self._low, self._high = row_ids or (1, 0)
+        if self._since is not None:
+            self._low = max(self._low, self._since)
+        elif self._after is not None:
+            self._high = min(self._high, self._after - 2)
+
+    def _ids(self, *, limit: int | None = None, offset: int | None = None) -> list[int]:
+        return _row_ids(self._reader.to_table(columns=_PROBE_COLUMNS, with_row_id=True, limit=limit, offset=offset, version=self._version))
+
+    def _held_outside(self, lo: int, hi: int) -> bool:
+        """Whether the feed holds a row outside ``[lo, hi]``: a count on row ids alone, which reads no data file."""
+        return bool(self._reader.count_rows(f"_rowid < {lo} OR _rowid > {hi}", version=self._version))
 
     def _take(self, n: int) -> list[EventRecord]:
         width = n - len(self._buffer)
@@ -900,7 +953,9 @@ class FeedWindow:
             else:
                 lo, hi = max(self._low, self._high - width + 1), self._high
                 self._high = lo - 1
-            rows = self._reader.to_table(columns=self._columns, filter=f"_rowid >= {lo} AND _rowid <= {hi}", with_row_id=True, version=self._version)
+            rows = self._reader.to_table(
+                columns=self._columns, filter=f"_rowid >= {lo} AND _rowid <= {hi}", limit=hi - lo + 1, with_row_id=True, version=self._version
+            )
             records = sorted((_record_of(row, summary=self._summary) for row in rows.to_pylist()), key=lambda record: record.seq, reverse=not self._forward)
             self._buffer.extend(records)
             # A short range met a hole: doubling crosses a hole of `h` ids in about log2(h / n) more reads, and reads at

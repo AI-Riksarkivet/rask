@@ -219,7 +219,10 @@ class _FakeWindow:
 
     def __init__(self, events: list[EventRecord], bounds: tuple[int, int] | None) -> None:
         self._events = events
-        self.bounds = bounds
+        self._bounds = bounds
+
+    async def bounds(self) -> tuple[int, int] | None:
+        return self._bounds
 
     async def take(self, n: int) -> list[EventRecord]:
         read, self._events = self._events[:n], self._events[n:]

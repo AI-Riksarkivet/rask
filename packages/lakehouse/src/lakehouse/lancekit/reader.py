@@ -81,9 +81,10 @@ class CatalogTableReader:
     empty vector (the endpoint has no plain-scan verb) and read in PAGES of a bounded ``k`` plus an
     ``offset``, every page pinned to one table version: the catalog refuses a ``k`` whose answer could
     exceed its ceiling, because it builds each answer whole in memory, so an unbounded logical read is
-    many bounded answers, never one. The first page is :data:`_FIRST_PAGE_ROWS` rows; each later page is
-    :data:`_PAGE_BYTES` worth of rows at the width the previous page measured. A page shorter than the
-    ``k`` it asked for is the last. Decodes each ``application/vnd.apache.arrow.file`` response with
+    many bounded answers, never one. Each page is :data:`_PAGE_BYTES` worth of rows at the width the last page
+    of that projection measured, on this reader, so a reader making many small reads makes one query each; a
+    projection it has not read yet starts at :data:`_FIRST_PAGE_ROWS` rows. A page shorter than the ``k`` it asked
+    for is the last. Decodes each ``application/vnd.apache.arrow.file`` response with
     :func:`~lakehouse.arrow_ipc.decode_arrow_response`, which validates it in full and raises
     :class:`~lakehouse.arrow_ipc.ArrowBodyError` for bytes that are not a valid Arrow IPC body.
     """
@@ -91,6 +92,8 @@ class CatalogTableReader:
     def __init__(self, transport: CatalogTransport, table_id: list[str]) -> None:
         self._transport = transport
         self._id = table_id
+        #: The rows a page of each projection takes, from the width its last page measured.
+        self._page_rows: dict[tuple[str, ...] | None, int] = {}
 
     def _build_request(
         self,
@@ -138,7 +141,8 @@ class CatalogTableReader:
         start = offset or 0
         pages: list[pa.Table] = []
         read = 0
-        page_rows = _FIRST_PAGE_ROWS
+        projection = tuple(columns) if columns else None
+        page_rows = self._page_rows.get(projection, _FIRST_PAGE_ROWS)
         while True:
             k = max(1, page_rows if limit is None else min(page_rows, limit - read))
             request = self._build_request(columns=columns, filter=filter, k=k, offset=start + read, with_row_id=with_row_id, version=pinned)
@@ -148,9 +152,12 @@ class CatalogTableReader:
             page = decode_arrow_response(self._transport.query(request))
             pages.append(page)
             read += page.num_rows
+            if page.num_rows:
+                # At least a byte a row: a projection of a field that stores nothing measures none.
+                page_rows = max(1, _PAGE_BYTES // max(1, -(-page.nbytes // page.num_rows)))
+                self._page_rows[projection] = page_rows
             if page.num_rows < k or (limit is not None and read >= limit):
                 break
-            page_rows = max(1, _PAGE_BYTES // -(-page.nbytes // page.num_rows))
         table = pa.concat_tables(pages)
         return table if limit is None else table.slice(0, limit)
 

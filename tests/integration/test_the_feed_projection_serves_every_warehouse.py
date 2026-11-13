@@ -104,7 +104,10 @@ class _Window:
 
     def __init__(self, rows: list[EventRecord], bounds: tuple[int, int] | None) -> None:
         self._rows = rows
-        self.bounds = bounds
+        self._bounds = bounds
+
+    async def bounds(self) -> tuple[int, int] | None:
+        return self._bounds
 
     async def take(self, n: int) -> list[EventRecord]:
         taken, self._rows = self._rows[:n], self._rows[n:]

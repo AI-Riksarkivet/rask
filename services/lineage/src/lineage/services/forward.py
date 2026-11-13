@@ -113,7 +113,7 @@ async def forward(provenance: ProvenanceStore, settings: LineageSettings, client
     mark = await provenance.cursor(name)
     # One read of the feed serves the whole tick: its bounds judge the cursor and its rows are the pages sent.
     window = await provenance.window(since=mark)
-    bounds = window.bounds
+    bounds = await window.bounds()
     if bounds is not None and bounds[1] < mark:
         # A cursor this feed never issued: it was taken on another feed (the store moved, or was restored).
         log.warning("lineage_forward_cursor_ahead_of_feed", extra={"cursor": mark, "head": bounds[1]})

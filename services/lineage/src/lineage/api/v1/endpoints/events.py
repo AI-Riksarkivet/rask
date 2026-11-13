@@ -35,9 +35,9 @@ router = APIRouter(tags=["query"])
 # so the fetch window collapses to `limit` there.
 _EVENTS_FETCH = 2000
 _EVENTS_RETURN = 500
-#: How much larger each read of a governed page's window is than the last: a page whose first rows are visible reads
-#: about `limit` rows, and one whose window is mostly hidden reaches `_EVENTS_FETCH` in a few reads and FGA checks.
-_CHUNK_GROWTH: Final = 4
+#: How many rows past the estimate a governed page's next read takes, so a page whose rows grow sparser is not read
+#: in many small reads.
+_CHUNK_MARGIN: Final = 2
 
 
 def _column_lineage_datasets(event: dict) -> set[str]:
@@ -258,7 +258,7 @@ async def get_events_projection(
     await require_event_feed_reader(request, settings, token)
     window = await provenance.window(after=after, since=since)
     records = await window.take(limit)
-    bounds = window.bounds
+    bounds = await window.bounds()
     if since is not None:
         next_cursor: int | None = _forward_cursor(records, records, limit=limit, since=since, head=bounds[1] if bounds else 0)
     else:
@@ -319,9 +319,12 @@ async def get_events(
     visible: list[EventRecord] = []
     # The window is read and governed a chunk at a time, stopping once `limit` rows are visible: each row is judged on
     # its own, so the page and its cursor are the ones governing the whole window gives, and a page whose first rows
-    # are visible reads only those ([[LH-590]]).
+    # are visible reads only those ([[LH-590]]). Each later chunk is sized from the share of rows visible so far, so a
+    # mostly hidden window is read in two reads.
     chunk = limit
     while len(visible) < limit and len(records) < fetch:
+        if records:
+            chunk = fetch if not visible else -(-(limit - len(visible)) * len(records) // len(visible)) * _CHUNK_MARGIN
         read = await window.take(min(chunk, fetch - len(records)))
         if not read:
             break
@@ -332,9 +335,8 @@ async def get_events(
         # would receive column schemas of input datasets they cannot read (audit: cross-tenant facet leak). When
         # summary=True the payload is dropped, so the extra set is empty and nothing is over-restricted.
         visible += await governed(datasets, settings.fga_enabled, [record for record in read if scope.names(record)], _governed_datasets)
-        chunk *= _CHUNK_GROWTH
     returned = visible[:limit]
-    bounds = window.bounds
+    bounds = await window.bounds()
     if since is not None:
         next_cursor: int | None = _forward_cursor(returned, records, limit=limit, since=since, head=bounds[1] if bounds else 0)
     elif len(returned) == limit and returned:
