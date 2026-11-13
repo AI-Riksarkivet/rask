@@ -927,7 +927,7 @@ def test_the_catalog_STAGES_its_write_announcement_into_the_prefix_the_relay_DRA
     """The catalog's lineage outbox must be rendered, and must name the prefix the lineage relay reads.
 
     `LANCE_LINEAGE_OUTBOX_URI` exists in `catalog/core/config.py` and is threaded all the way to
-    `outbox.publish_lineage_with_outbox` in `lineage_emit.py` — and rendered NOWHERE, so on every shipped
+    `outbox.publish_with_outbox` in `lineage_emit.py` — and rendered NOWHERE, so on every shipped
     chart the catalog's emit degraded to the pre-#4 plain publish. This is the same failure class as the
     `MEDALLION_LINEAGE_OUTBOX_URI` dead-env above, mirrored: there the chart set what no code read, here
     the code reads what no chart sets. Only a RENDER can tell either of them apart from a working feature.
@@ -948,7 +948,7 @@ def test_the_catalog_STAGES_its_write_announcement_into_the_prefix_the_relay_DRA
 
     staged = catalog_env.get("LANCE_LINEAGE_OUTBOX_URI", "")
     assert staged, (
-        "the catalog Deployment renders no LANCE_LINEAGE_OUTBOX_URI, so `publish_lineage_with_outbox` "
+        "the catalog Deployment renders no LANCE_LINEAGE_OUTBOX_URI, so `publish_with_outbox` "
         "degrades to a plain publish: a crash between the Lance commit and the publish loses the write "
         "announcement, and with it the bronze->silver->gold run that announcement triggers"
     )

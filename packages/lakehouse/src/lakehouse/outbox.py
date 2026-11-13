@@ -6,7 +6,7 @@ lineage event: the data landed but the feed never learns of it. The DLQ only cat
 published *then* failed delivery.
 
 The outbox narrows it: the producer stages the FULL event JSON — a ``RunEvent``, or the ``DatasetEvent``
-every catalog DDL change is — under ``<outbox_uri>/<key>.json`` (:func:`_object_key`) BEFORE the publish,
+every catalog DDL change is — under ``<outbox_uri>/<its envelope's id>.json`` BEFORE the publish,
 and deletes it once the publish returns. Because the stage happens AFTER the commit, every surviving object
 corresponds to a real committed write (no phantoms). If the process crashes before the delete — or the
 publish never lands — the object survives and the lineage service's relay tick re-ingests it
@@ -32,6 +32,7 @@ from contextlib import suppress
 import pyarrow.fs as pafs
 
 from lakehouse import outbox_metrics
+from lakehouse.cloud_events import CloudEvent
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
@@ -75,34 +76,11 @@ def left_staged(failure: Exception) -> bool:
     return isinstance(failure, UnpublishedEventError) and failure.staged
 
 
-def _object_key(run_id: str, event_json: str) -> str:
-    """The staged object's name: the run id AND the event type it carries.
-
-    The run id alone collides, and by design: `build_run_event` deliberately EXCLUDES event_type from
-    it, because one run has a START and then a COMPLETE or a FAIL. Keying the object on the run id
-    therefore made the second event truncate the first, and which one survived was whichever raced
-    last.
-
-    That destroyed the very object this module exists to preserve: a COMPLETE whose PUBLISH failed left
-    `completed = False`, the handler staged a FAIL, and that truncating write destroyed the staged
-    COMPLETE, on a run whose Lance write had already committed. With a per-event key the hazard is gone
-    rather than sequenced around by a flag set before the emit.
-
-    Falls back to the bare run id when the payload carries no readable eventType, which is also what
-    keeps the change BACKWARD-COMPATIBLE: `list_events` derives the drop key from the FILENAME, so an
-    object staged under the old shape still lists and still drops.
-    """
-    try:
-        event_type = str((json.loads(event_json) or {}).get("eventType") or "").strip().upper()
-    except (ValueError, TypeError):
-        event_type = ""
-    return f"{run_id}@{event_type}" if event_type else run_id
-
-
-def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, event_json: str) -> None:
-    """Persist the event JSON at ``<outbox_uri>/<key>.json``, where the key is :func:`_object_key` —
-    the run id AND the event type, so a run's COMPLETE cannot truncate its own FAIL. A redelivery of
-    the SAME event re-stages the same object. Blocking object-store IO; callers run it in a threadpool.
+def stage_event(outbox_uri: str, storage_options: StorageOptions, key: str, event_json: str) -> None:
+    """Persist the event JSON at ``<outbox_uri>/<key>.json``. The key is the event's own, its envelope's id
+    (`lakehouse.cloud_events`): the event's identity and its state together, so a run's COMPLETE cannot
+    truncate its own FAIL, and a redelivery of the SAME event re-stages the same object. Blocking
+    object-store IO; callers run it in a threadpool.
 
     A STAGE MUST NEED ONLY PUT PERMISSION ON ITS OWN KEY, and through pyarrow it did not. This called
     ``fs.create_dir(base, recursive=True)`` under a comment calling an S3 prefix marker "harmless" — but
@@ -122,16 +100,16 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, e
     """
     if on_s3(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
-        key = f"{_object_key(run_id, event_json)}.json"
+        name = f"{key}.json"
         object_client(storage_options).put_object(
             Bucket=bucket,
-            Key=f"{prefix.rstrip('/')}/{key}" if prefix else key,
+            Key=f"{prefix.rstrip('/')}/{name}" if prefix else name,
             Body=event_json.encode("utf-8"),
         )
         return
     fs, base = fs_and_base(outbox_uri, storage_options)
     fs.create_dir(base, recursive=True)
-    with fs.open_output_stream(f"{base}/{_object_key(run_id, event_json)}.json") as stream:
+    with fs.open_output_stream(f"{base}/{key}.json") as stream:
         stream.write(event_json.encode("utf-8"))
 
 
@@ -180,9 +158,8 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
 def resolve_event(outbox_uri: str, storage_options: StorageOptions, run_id: str) -> tuple[str, str] | None:
     """Find the staged object for one RUN ID, as ``(key, event_json)``.
 
-    Exists because the object key is now per EVENT (`_object_key`) while the DLQ replay route addresses
-    a RUN — its path parameter is a run id, not a key. An exact-key read alone would 404 every replay
-    the moment the key widened, which is precisely what it did.
+    The object key is per EVENT (its envelope's id) while the DLQ replay route addresses a RUN: its path
+    parameter is a run id, not a key, and an exact-key read alone would answer 404 to every replay by run.
 
     Exact match first, so a caller that already holds a key (the relay, which reads keys straight off
     the filenames) pays nothing. Otherwise the newest `<run_id>@*.json` wins: a run's later event is the
@@ -253,8 +230,8 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
     FIRST, at most ``limit`` of them.
 
     THE FIRST ELEMENT IS THE DROP KEY, NOT A RUN ID, and the distinction is the whole reason
-    :func:`resolve_event` exists. Since `_object_key` widened, one run stages ``<run_id>@COMPLETE`` and
-    ``<run_id>@FAIL`` as separate objects, so the filename is ``<run_id>@<eventType>`` and a caller that
+    :func:`resolve_event` exists. One run stages ``<run_id>@COMPLETE`` and ``<run_id>@FAIL`` as separate
+    objects, each under its envelope's id, so the filename is ``<run_id>@<eventType>`` and a caller that
     treats it as a run id is comparing a key to an id. A caller wanting the RUN reads it off the
     parsed payload, the way `dlq._summary` does — and a catalog DDL change (a ``DatasetEvent``) names no
     run at all, so the key is the only name it has.
@@ -285,103 +262,55 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
 
 async def publish_with_outbox(
     publisher: object,
+    envelope: CloudEvent,
     *,
     outbox_uri: str,
     storage_options: StorageOptions,
-    key: str,
-    event_json: str,
     pubsub_name: str,
     topic_name: str,
     timeout_seconds: float,
 ) -> None:
     """Durably publish ANY bus event: stage → publish → drop-on-ack (#4).
 
-    Lane-agnostic on purpose. The lineage lane was the first user and `publish_lineage_with_outbox`
-    still names it, but the control lane needs the identical guarantee — a dropped `table_published`
-    cancels the next hop of a pipeline that waits on it — and a SECOND implementation is
-    how two mechanisms doing one job drift apart (owner ruling 2026-08-25).
+    Lane-agnostic on purpose: what a lane brings is its event's envelope (`lakehouse.cloud_events`). The
+    control lane needs the guarantee the lineage lane has — a dropped `table_published` cancels the next
+    hop of a pipeline that waits on it — and a SECOND implementation is how two mechanisms doing one job
+    drift apart (owner ruling 2026-08-25).
 
-    ``key`` is the caller's identity for the event: a lineage `run_id`, a control `event_id`. It is
-    only ever an object-name component, so any stable per-event string works.
+    The staged object is named by the envelope's ``id``, the one identity an event has on the bus, in the
+    outbox and in lineage's feed: two events of one run are two objects, and one event staged again is the
+    same object.
 
-    **Each lane MUST use its own ``outbox_uri``.** The prefix is drained by a lane-specific relay that
-    re-ingests what it finds — the lineage relay writes into the lineage repository — so mixing lanes
-    in one prefix would feed each relay the other's events.
+    A publish failure PROPAGATES and leaves the staged object in place, so even a hard process crash between the stage
+    and a durable delivery is recoverable by the relay. The delete is best-effort: a failed delete leaves a redundant
+    object the relay re-ingests idempotently and drops, logged with its cause and counted as the stage's and the
+    publish's failures are, so a store refusing every delete shows as itself rather than as a backlog nobody explains.
 
-    Raises:
-        UnpublishedEventError: The publish did not reach the bus; its ``staged`` says whether the relay holds the event.
-    """
-    return await _publish_staged(
-        publisher,
-        outbox_uri=outbox_uri,
-        storage_options=storage_options,
-        key=key,
-        event_json=event_json,
-        pubsub_name=pubsub_name,
-        topic_name=topic_name,
-        timeout_seconds=timeout_seconds,
-    )
-
-
-async def publish_lineage_with_outbox(
-    publisher: object,
-    *,
-    outbox_uri: str,
-    storage_options: StorageOptions,
-    run_id: str,
-    event_json: str,
-    pubsub_name: str,
-    topic_name: str,
-    timeout_seconds: float,
-) -> None:
-    """Durably publish a LINEAGE event — `publish_with_outbox` keyed by `run_id`.
-
-    Kept as the lineage lane's name so its six call sites read in the vocabulary of the thing they
-    publish, and so a reader of this module can see which lanes exist.
+    Args:
+        publisher: The sidecar's client.
+        envelope: The event in the envelope its lane derives from it (`lakehouse.cloud_events`). What is staged is the
+            event alone, ``envelope.data``, as its producer signed it: the relay that delivers a staged copy derives
+            the same envelope from it, so the copy goes out under the id the first publish carried.
+        outbox_uri: The lane's OWN outbox prefix. A lane-specific relay drains it and re-ingests what it finds (the
+            lineage relay records into the feed), so two lanes on one prefix would feed each relay the other's events.
+            Empty publishes unstaged: the outbox is opt-in.
+        storage_options: What reaches that prefix.
+        pubsub_name: The pub/sub component to publish through.
+        topic_name: The lane's topic.
+        timeout_seconds: How long the publish may take.
 
     Raises:
         UnpublishedEventError: The publish did not reach the bus; its ``staged`` says whether the relay holds the event.
-    """
-    return await _publish_staged(
-        publisher,
-        outbox_uri=outbox_uri,
-        storage_options=storage_options,
-        key=run_id,
-        event_json=event_json,
-        pubsub_name=pubsub_name,
-        topic_name=topic_name,
-        timeout_seconds=timeout_seconds,
-    )
-
-
-async def _publish_staged(
-    publisher: object,
-    *,
-    outbox_uri: str,
-    storage_options: StorageOptions,
-    key: str,
-    event_json: str,
-    pubsub_name: str,
-    topic_name: str,
-    timeout_seconds: float,
-) -> None:
-    """The mechanism both lanes share.
-
-    With no ``outbox_uri`` configured this degrades to a plain publish (pre-#4 behavior), so the outbox is
-    opt-in. A publish failure PROPAGATES as :class:`UnpublishedEventError` and leaves the staged object in place,
-    so even a hard process crash between the stage and a durable delivery is
-    recoverable by the relay. The delete is best-effort: a failed delete just leaves a redundant object the
-    relay re-ingests idempotently and drops, logged with its cause and counted as the stage's and the publish's
-    failures are, so a store refusing every delete shows as itself rather than as a backlog nobody explains.
     """
     from fastapi.concurrency import run_in_threadpool
 
     from lakehouse import dapr_publish
 
+    event_json = json.dumps(envelope.data)
     staged = bool(outbox_uri)
     if staged:
         try:
-            await run_in_threadpool(stage_event, outbox_uri, storage_options, key, event_json)
+            await run_in_threadpool(stage_event, outbox_uri, storage_options, envelope.id, event_json)
         except Exception as exc:
             # A stage failure degrades this call to the pre-#4 plain publish instead of raising past the
             # publish. Both callers catch and continue, so raising here loses the event outright — whereas
@@ -393,14 +322,7 @@ async def _publish_staged(
         else:
             outbox_metrics.record_staged()
     try:
-        await dapr_publish.publish_event(  # noqa: TID251
-            publisher,
-            timeout_seconds=timeout_seconds,
-            pubsub_name=pubsub_name,
-            topic_name=topic_name,
-            data=event_json,
-            data_content_type="application/json",
-        )
+        await dapr_publish.publish_event(publisher, envelope, pubsub_name=pubsub_name, topic_name=topic_name, timeout_seconds=timeout_seconds)  # noqa: TID251
     except Exception as exc:
         # A staged event REMAINS staged — that is the crash window working, not data loss. Counted so a sustained publish
         # outage is visible (rising failures + rising depth) instead of silent. Whether it is staged is this call's to say,
@@ -412,7 +334,7 @@ async def _publish_staged(
     if not staged:
         return
     try:
-        await run_in_threadpool(drop_event, outbox_uri, storage_options, _object_key(key, event_json))
+        await run_in_threadpool(drop_event, outbox_uri, storage_options, envelope.id)
     except Exception as exc:  # the event is delivered; what is left is a staged copy the relay re-ingests and drops
         outbox_metrics.record_drop_failed()
-        log.warning("outbox_drop_failed", extra={"outbox_uri": outbox_uri, "key": _object_key(key, event_json), "error": str(exc)})
+        log.warning("outbox_drop_failed", extra={"outbox_uri": outbox_uri, "key": envelope.id, "error": str(exc)})

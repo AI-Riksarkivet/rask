@@ -9,9 +9,9 @@ the same).
 
 Defined here, in the library, so the producers (the catalog, maintenance) and the lakehouse's own consumers import ONE
 model; a client reads the same event by its published contract (`docs/COMMIT-EVENTS.md`). The event is a
-plain pointer payload (claim-check invariant — no data), published onto the existing Dapr/NATS bus by
-`lakehouse.control_emit`; Dapr wraps it in a CloudEvent envelope at the sidecar (the same envelope the
-lineage subscriber already speaks). An event is a **refresh hint**, never authoritative data: a consumer
+plain pointer payload (claim-check invariant — no data), published onto the bus by `lakehouse.control_emit` in the
+CloudEvents envelope `lakehouse.cloud_events.control_envelope` derives from it, as its `data`. An event is a
+**refresh hint**, never authoritative data: a consumer
 re-reads state through the normal FGA-governed path, so a dropped/duplicated/late event only costs a
 redundant re-read. `event_id` is the client-side dedupe key.
 """

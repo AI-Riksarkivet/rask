@@ -120,11 +120,14 @@ enforces it. No test pins the topic constants' values or refuses an inline topic
 site: producers and consumers that import the same constant cannot disagree, and a literal typed at a
 publish site is caught by review alone.
 
-### 7.1 Envelope: CloudEvents, supplied by Dapr
+### 7.1 Envelope: CloudEvents, built by the lakehouse
 
-Every publish goes through the one bounded wrapper `packages/lakehouse/src/lakehouse/dapr_publish.py::publish_event`
-with `data_content_type="application/json"`; the Dapr **sidecar** wraps the payload in a CloudEvents
-envelope (id, source, type, traceparent) — application code never builds an envelope. Consumers
+Every publish goes through the one bounded wrapper `packages/lakehouse/src/lakehouse/dapr_publish.py::publish_event`,
+which takes the event in its envelope and sends it in structured mode (`application/cloudevents+json`), so the
+sidecar passes it through as it is. The envelope is derived from the event alone
+(`packages/lakehouse/src/lakehouse/cloud_events.py`; its attributes are `docs/COMMIT-EVENTS.md` § The envelope on
+the bus), so a relay's copy of an event carries the `id` its first publish carried, the message id a stream
+deduplicates on. Consumers
 receive the envelope as a dict and read `body["data"]`: `handle_cloud_event` in
 `services/lineage/services/consumer.py` and `on_control_event` in `services/catalog/api/dapr.py` treat `body` as an
 untrusted `Any` and guard with `isinstance` before touching `data`.

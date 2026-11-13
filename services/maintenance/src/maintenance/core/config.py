@@ -445,7 +445,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
         return self.control_root or f"s3://{self.s3_bucket}"
 
     #: Stage lineage events here before publishing. EMPTY = today's behaviour exactly, because
-    #: `publish_lineage_with_outbox` degrades to a plain publish when unset — so this is inert until a
+    #: `publish_with_outbox` degrades to a plain publish when unset — so this is inert until a
     #: deployment opts in. The twin of the catalog's `LANCE_LINEAGE_OUTBOX_URI`: `_PUBLISH_INTENT`
     #: pinned exactly two bare lineage publishers and this is the second.
     lineage_outbox_uri: str = Field(default="", alias="MAINTENANCE_LINEAGE_OUTBOX_URI")

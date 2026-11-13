@@ -42,6 +42,7 @@ from catalog.core.control_signing import control_sign
 from lakehouse import outbox
 from lakehouse.control_emit import DaprControlEmitter
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent
+from lakehouse.dapr_publish import MAX_PAYLOAD_BYTES
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
 from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.ns_errors import install_problem_handlers
@@ -225,16 +226,16 @@ async def test_the_relay_REPUBLISHES_a_staged_table_published(tmp_path: Path) ->
         pytest.param(_altered_after_the_catalog_signed_it, id="altered-after-the-catalog-signed-it"),
     ],
 )
-async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_byte_for_byte(
+async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_was_staged(
     tmp_path: Path, event_signer: Any, monkeypatch: pytest.MonkeyPatch, forge: Callable[[Any, Any], dict[str, Any]]
 ) -> None:
     """An object staged by anything but this catalog is retired unpublished; what the catalog staged goes out as staged.
 
     A relay that signed what it found staged would sign a forgery as the catalog and declare whatever person it names,
     and every enforcing door would then admit it. The forgery is met first and must not stop the drain: the event the
-    catalog staged behind it still goes out on the same tick, byte for byte, so it keeps its signature and its `event_id`,
-    the cascade's idempotency key (`/publication-arrival` mints its stage token from it and `stage_submission_id` hashes
-    that into the deterministic workflow instance id, so a re-minted id would drive the hop twice).
+    catalog staged behind it still goes out on the same tick as it was staged, so it keeps its signature and its
+    `event_id`, the key every subscriber dedupes on and the id of its envelope, under which the stream stores a copy of
+    an event it already holds once.
     """
     monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     uri = f"file://{tmp_path}/control-outbox"
@@ -247,7 +248,11 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_byte_fo
 
     with _sidecar_serving_the_catalogs_keys(200, pair), TestClient(_relay_app(_settings(uri), recorder, signing=signing)) as client:
         report = client.post(f"/{BINDING}").json()
-        assert [published["data"] for published in recorder.published] == [genuine], "the relay published an object this catalog never signed"
+        delivered = [json.loads(published["data"]) for published in recorder.published]
+        staged = json.loads(genuine)
+        assert [(envelope["id"], envelope["data"]) for envelope in delivered] == [(staged["event_id"], staged)], (
+            "the relay published an object this catalog never signed, or the catalog's event other than as it was staged"
+        )
         assert (report["republished"], report["poison_dropped"], list(outbox.list_events(uri, StorageOptions()))) == (1, 1, []), report
 
 
@@ -278,10 +283,25 @@ async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
 
 
 @pytest.mark.asyncio
-async def test_a_poison_object_is_dropped_rather_than_wedging_the_drain(tmp_path: Path) -> None:
-    """One unparseable object must not stop every real event behind it — the bounded drain is oldest-first."""
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param("{'this': not json}", id="text-that-is-not-json"),
+        pytest.param('{"action": "table_published"}', id="an-object-that-is-no-control-event"),
+        pytest.param(json.dumps(_published_event().model_dump(mode="json") | {"event_id": ""}), id="a-control-event-no-envelope-can-carry"),
+        pytest.param(
+            json.dumps(_published_event().model_dump(mode="json") | {"extra": {"blob": "x" * (MAX_PAYLOAD_BYTES + 1)}}),
+            id="a-control-event-the-bus-can-never-carry",
+        ),
+    ],
+)
+async def test_a_poison_object_is_dropped_rather_than_wedging_the_drain(tmp_path: Path, body: str) -> None:
+    """One object no subscriber could be handed must not stop every real event behind it — the bounded drain is
+    oldest-first, and the object is met first. An event with no id, and one past the size the bus carries, are such
+    objects: a publish refused on every tick would hold the whole lane at them."""
     uri = f"file://{tmp_path}/control-outbox"
-    outbox.stage_event(uri, StorageOptions(), "not-a-control-event", "{'this': not json}")
+    outbox.stage_event(uri, StorageOptions(), "poison", body)
+    _staged_before_everything_else(tmp_path, "poison")
     await _stage(uri, _published_event())
 
     recorder = _Recorder()

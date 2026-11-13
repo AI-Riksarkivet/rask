@@ -109,8 +109,8 @@ async def on_control_event(
 ) -> dict[str, str]:
     """Buffer one Dapr-delivered control-plane CloudEvent into this replica's ring buffer.
 
-    ``body["data"]`` is the ``CatalogControlEvent`` (Dapr parses it since we publish with
-    ``datacontenttype=application/json``); FastAPI has already parsed the JSON envelope into a dict, and a
+    ``body["data"]`` is the ``CatalogControlEvent``, which the envelope its publisher built carries as JSON
+    (`lakehouse.cloud_events`); FastAPI has already parsed the JSON envelope into a dict, and a
     missing/malformed ``data`` field is caught by ``model_validate`` below. Authenticated by the Dapr
     **app-api-token** (``require_dapr_token``): without it
     the route is an unauthenticated, publicly-reachable ingest path — a forged POST could inject fabricated

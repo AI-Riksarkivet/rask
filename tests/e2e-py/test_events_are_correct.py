@@ -8,7 +8,9 @@ lineage's feed serves it, and holds them to six claims:
    `rask_signature` facet against `spec/facets/rask/RaskSignatureRunFacet.json`, and each `rask_lance` and `rask_author`
    facet, in any facet bag, against `RaskLanceFacet.json` and `RaskAuthorFacet.json` and the `_schemaURL` naming it
    ([[LH-500]]); a control event parses strictly as
-   the control envelope (`lakehouse.control_events.CatalogControlEvent`);
+   the control envelope (`lakehouse.control_events.CatalogControlEvent`); and each rides the bus in the CloudEvent its
+   contract derives from it (`docs/COMMIT-EVENTS.md` § The envelope on the bus), stored under that envelope's id, the
+   message id a stream deduplicates on ([[XC-199]]);
 2. lineage recorded each as the person who called the catalog's door: the author is that person's principal, the
    project is the tenant, and the catalog signed it on their behalf;
 3. each names whom it is about the way a notifier targets it (`docs/COMMIT-EVENTS.md`): a `grant_added` control event
@@ -51,6 +53,7 @@ import os
 import time
 import uuid
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +68,7 @@ from pydantic import BaseModel, ValidationError
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.control_events import CatalogControlEvent, control_signer_role
 from lakehouse.governed.fga import user_object
 from lakehouse.lineage_events import dataset_uuids, event_identity
 from tests.unit.rask_facets import rask_facet_errors
@@ -173,6 +176,50 @@ def _openlineage_errors(event: dict[str, Any]) -> list[str]:
 def _signature_facet_errors(event: dict[str, Any]) -> list[str]:
     validator = Draft202012Validator(_SIGNATURE_FACET, registry=_REGISTRY, format_checker=FormatChecker())
     return [f"rask_signature: {error.message}" for error in validator.iter_errors(_facets(event))]
+
+
+def _instant(text: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(text))
+    except ValueError:
+        return None
+
+
+def _envelope_of(event: dict[str, Any]) -> dict[str, Any]:
+    """The attributes `docs/COMMIT-EVENTS.md` § The envelope on the bus writes for ``event``, on either lane. Every
+    lineage event the lakehouse announces ends its run or is a dataset change; its subject is the one table it writes,
+    where the catalog named that table by a uuid."""
+    if "action" in event:
+        return {
+            "id": event["event_id"],
+            "source": f"rask/{control_signer_role(event['action'])}",
+            "type": f"rask.catalog.control.{event['action']}.v1",
+            "subject": event["object_id"] or None,
+            "time": _instant(event["occurred_at"]),
+        }
+    state = event.get("eventType", "COMPLETE")
+    written = _written(event)
+    uuid = dataset_uuids(written[0]).table_uuid if len(written) == 1 else None
+    return {
+        "id": f"{event_identity(event)}@{state}",
+        "source": event["producer"],
+        "type": f"rask.lineage.run.{state.lower()}.v1" if "run" in event else "rask.lineage.dataset.v1",
+        "subject": f"table:{uuid}" if uuid else None,
+        "time": _instant(event["eventTime"]),
+        "dataschema": event["schemaURL"],
+    }
+
+
+def _envelope_errors(message: BusMessage) -> list[str]:
+    """How ``message`` departs from the envelope its event's contract writes, and from being stored under that
+    envelope's id. The trace an envelope carries is telemetry, which `test_observability_e2e.py` reads on an estate
+    that runs the chain (ADR 0167)."""
+    carried = message.envelope | {"time": _instant(message.envelope.get("time"))}
+    expected = _envelope_of(message.event) | {"specversion": "1.0", "datacontenttype": "application/json"}
+    errors = [f"{name} is {carried.get(name)!r}, not {value!r}" for name, value in expected.items() if carried.get(name) != value]
+    if message.headers.get("Nats-Msg-Id") != carried.get("id"):
+        errors.append(f"stored under Nats-Msg-Id {message.headers.get('Nats-Msg-Id')!r}, not its id {carried.get('id')!r}")
+    return errors
 
 
 def _forged(message: BusMessage, event: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -283,6 +330,7 @@ def test_every_event_is_the_shape_its_contract_writes(captured: Captured) -> Non
             CatalogControlEvent.model_validate_json(json.dumps(message.event), strict=True)
         except ValidationError as exc:
             errors.append(f"bus {message.stream} #{message.seq}: {exc}")
+    errors += [f"bus {message.stream} #{message.seq}: {error}" for message in captured.lineage + captured.control for error in _envelope_errors(message)]
 
     assert published and served and captured.control, "the capture holds no event to judge"
     assert errors == []

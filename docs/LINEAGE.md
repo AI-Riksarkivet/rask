@@ -201,9 +201,11 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   is unresolved publishes and stages nothing unsigned: it withholds the event, counts it under
   `<service>_control_emit_failed_total{lance_<service>_reason="unsigned"}` and reports itself not ready, so a control
   event emitted in that window is lost, not delayed. The catalog's control relay signs nothing: it republishes a staged
-  event verbatim only when it verifies as signed by the catalog's own identity against the keys that identity
+  event as it was staged, in the envelope derived from it, only when it verifies as signed by the catalog's own identity against the keys that identity
   publishes, and retires anything else under the control outbox unpublished (`outbox_events_poison_dropped_total`, WARN
-  `control_outbox_unverifiable`), so an object another credential stages there never becomes a catalog-signed event.
+  `control_outbox_unverifiable`), so an object another credential stages there never becomes a catalog-signed event. An
+  event the bus can never carry (past the size the publish seam admits) is retired the same way (WARN
+  `control_outbox_undeliverable`), since left staged it would hold every event behind it.
 - **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
   secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
   that record a bus or staged event apply the rule: the `/lineage-events` subscription, the outbox drain, the operator's

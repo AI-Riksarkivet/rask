@@ -260,7 +260,8 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     (`arrow_ipc`, `storage_options`); the catalog's records, registries and governance guards (protection, trash,
     history fences, quality gates, retention); the table layout and feature checks; the namespace clients, readers and
     writers (`lakehouse.lancekit`); the events (`control_events`, `control_emit`, `signature_doors`, `lineage_events`,
-    `governed.subjects`, the outbox seams with the Dapr publish, the OpenLineage builders in `openlineage`); the
+    `governed.subjects`, `cloud_events`, the CloudEvents envelope each event rides the bus in, the outbox seams with the
+    Dapr publish, the OpenLineage builders in `openlineage`); the
     OpenLineage emission and the Ed25519 signing and verifying seam (`lakehouse.lineage`, `lakehouse.lineage.signing`);
     the store session; and the S3 client, STS and URI seam (`lakehouse.storage`: `s3_client`/`S3Client`,
     `configured_endpoint`, `sts_client`, `iter_keys`, `split_s3_uri`, the `StorageError` family). A client reaches the

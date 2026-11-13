@@ -207,13 +207,14 @@ async def _drain_outbox(
             # THE BUS DOOR'S GATE, never a second copy: the outbox is writable by the producers that stage there,
             # so a stager refused at the bus could stage instead. It authorizes AS the subject the producer
             # stamped, over THE STAGED BYTES (the signature covers what the producer wrote).
-            await enforce_bus_authz(event, request, settings, json.loads(event_json))
+            arrived = json.loads(event_json)
+            await enforce_bus_authz(event, request, settings, arrived)
             await provenance.record(event)
             # RE-PUBLISH, then drop. Recording alone repairs the feed and leaves every SUBSCRIBER unaware:
             # maintenance's arrival door and a notifier on the bus hear of a recovered event only this way.
             # BEFORE the drop: a publish that fails leaves the staged object for the next tick, whose re-record
             # is a no-op. A duplicate delivery is the at-least-once contract subscribers are built for.
-            await republish_staged(publisher, settings, event_json)
+            await republish_staged(publisher, settings, arrived)
             await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
         except PermissionDeniedError as exc:
             # NEITHER POISON NOR STRANDED: a governance answer about a well-formed event, so the object is retired

@@ -51,8 +51,8 @@ async def handle_cloud_event(
     *,
     door: Door,
 ) -> dict[str, str]:
-    """Ingest one Dapr-delivered CloudEvent. ``body["data"]`` is the OpenLineage event (Dapr parses it
-    since we publish with ``datacontenttype=application/json``). ``body`` is an untrusted external
+    """Ingest one Dapr-delivered CloudEvent. ``body["data"]`` is the OpenLineage event, which the envelope its
+    publisher built carries as JSON (`lakehouse.cloud_events`). ``body`` is an untrusted external
     envelope, hence ``Any`` + the ``isinstance`` guard. Returns the Dapr ack status.
 
     ``door`` is the ingress the delivery arrived through, with no default: every outcome below is counted under

@@ -9,6 +9,7 @@ covered by their own tests once wired; these pin the foundation.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, cast
 
 from catalog.core.control_buffer import ControlEventBuffer
@@ -89,8 +90,10 @@ def test_dapr_emitter_publishes_control_topic() -> None:
     call = fake.calls[0]
     assert call["pubsub_name"] == "catalog-control-pubsub"
     assert call["topic_name"] == CONTROL_TOPIC
-    assert call["data_content_type"] == "application/json"
-    assert CatalogControlEvent.model_validate_json(call["data"]) == e  # pointer payload, round-trips
+    envelope = json.loads(call["data"])
+    # The control lane's envelope, under the event's own id: a relay's copy of the event is stored once.
+    assert (envelope["id"], envelope["type"]) == (e.event_id, "rask.catalog.control.grant_added.v1")
+    assert CatalogControlEvent.model_validate(envelope["data"]) == e  # pointer payload, round-trips
 
 
 def test_make_control_emitter_selection() -> None:
@@ -125,5 +128,5 @@ def test_emit_control_builds_and_emits() -> None:
             extra={"from": "t", "to": "t2"},
         )
     )
-    published = CatalogControlEvent.model_validate_json(fake.calls[0]["data"])
+    published = CatalogControlEvent.model_validate(json.loads(fake.calls[0]["data"])["data"])
     assert published.action == "table_renamed" and published.extra == {"from": "t", "to": "t2"}

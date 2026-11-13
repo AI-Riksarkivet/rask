@@ -291,7 +291,7 @@ class CatalogLineageSettings(BaseSettings):
         default=DEFAULT_DATASET_NAMESPACE, alias="LANCE_LINEAGE_DATASET_NAMESPACE"
     )
     #: Stage lineage events here before publishing (docs/RESILIENCE.md gap #1, the estate's #1
-    #: weakness). EMPTY = today's behaviour exactly: `publish_lineage_with_outbox` degrades to a plain
+    #: weakness). EMPTY = today's behaviour exactly: `publish_with_outbox` degrades to a plain
     #: publish when this is unset, so the wiring is inert until a deployment opts in.
     #:
     #: Why it matters HERE specifically: the catalog's emit is inline-awaited and best-effort AFTER the

@@ -99,7 +99,9 @@ def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) 
     client = _RecordingS3()
     monkeypatch.setattr("lakehouse.storage.s3_client", lambda *_a, **_kw: client)
 
-    outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "run-9", '{"eventType": "COMPLETE"}')
+    outbox.stage_event(
+        "s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "run-9@COMPLETE", '{"eventType": "COMPLETE"}'
+    )
 
     assert [name for name, _ in client.calls] == ["put_object"], f"the stage path made {client.calls}"
     _, kw = client.calls[0]

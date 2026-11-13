@@ -1,7 +1,7 @@
 """The NATS JetStream bus the estate's events ride, read and written as an outside client (XC-094).
 
-Dapr publishes each event as a CloudEvent: a message's data is the envelope, and the envelope's `data` is the event
-its producer signed. Every read here is by stream sequence (`$JS.API.STREAM.MSG.GET`), so a reader creates no
+Each event is published as a CloudEvent (`docs/COMMIT-EVENTS.md` § The envelope on the bus): a message's data is the
+envelope, and the envelope's `data` is the event its producer signed. Every read here is by stream sequence (`$JS.API.STREAM.MSG.GET`), so a reader creates no
 consumer on a stream the estate's subscribers share. A write is a plain publish, which each subscriber's sidecar
 delivers to its app exactly as it delivers a producer's.
 
@@ -35,12 +35,14 @@ NATS_CREDS = os.environ.get("LANCE_E2E_NATS_CREDS", "")
 
 
 class BusMessage(BaseModel):
-    """One message a stream holds: where it sits, when the server stored it, and the CloudEvent it carries."""
+    """One message a stream holds: where it sits, when the server stored it, the headers it was published with, and
+    the CloudEvent it carries."""
 
     stream: str
     seq: int
     subject: str
     time: datetime
+    headers: dict[str, str]
     envelope: dict[str, Any]
 
     @property
@@ -73,7 +75,11 @@ async def _messages_since(stream: str, since: datetime) -> list[BusMessage]:
             assert raw.time is not None, f"{stream} message {seq} carries no stored time"
             if raw.time < since:
                 break
-            found.append(BusMessage(stream=stream, seq=seq, subject=str(raw.subject), time=raw.time, envelope=json.loads(raw.data or b"{}")))
+            found.append(
+                BusMessage(
+                    stream=stream, seq=seq, subject=str(raw.subject), time=raw.time, headers=dict(raw.headers or {}), envelope=json.loads(raw.data or b"{}")
+                )
+            )
         return found[::-1]
     finally:
         await client.close()

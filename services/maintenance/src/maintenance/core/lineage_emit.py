@@ -28,7 +28,6 @@ never imports up into ``services``.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from collections.abc import Callable
@@ -38,6 +37,7 @@ from typing import Any, Final, Protocol, runtime_checkable
 from dapr.aio.clients import DaprClient
 
 from lakehouse import outbox
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.lineage import CanonError, SigningKey, attach_signature
 from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
@@ -230,9 +230,10 @@ class DaprMaintenanceEmitter:
     """Publishes maintenance events to a **Dapr** ``pubsub.jetstream`` component (the production path).
 
     Publishes to the local Dapr sidecar (``DaprClient.publish_event``); the sidecar persists to NATS
-    JetStream and owns retry/backoff (no DLQ — docs/RESILIENCE.md gap #2) + W3C trace-context propagation
-    as component config, so the app
-    holds no broker client. Best-effort: a sidecar/broker outage logs + drops rather than failing the sweep.
+    JetStream and owns retry/backoff (no DLQ — docs/RESILIENCE.md gap #2) as component config, so the app
+    holds no broker client. Each event rides the envelope derived from it
+    (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context.
+    Best-effort: a sidecar/broker outage logs + drops rather than failing the sweep.
     """
 
     def __init__(
@@ -330,12 +331,11 @@ class DaprMaintenanceEmitter:
             # under-reporting work that really happened. Degrades to exactly the previous plain publish
             # when `outbox_uri` is unset, which is the default, and stays bounded either way so a hung
             # sidecar cannot stall the sweep.
-            await outbox.publish_lineage_with_outbox(
+            await outbox.publish_with_outbox(
                 self._client,
+                lineage_envelope(event),
                 outbox_uri=self._outbox_uri,
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
-                run_id=str((event.get("run") or {}).get("runId") or ""),
-                event_json=json.dumps(event),
                 pubsub_name=self._pubsub,
                 topic_name=self._topic,
                 timeout_seconds=self._timeout_seconds,

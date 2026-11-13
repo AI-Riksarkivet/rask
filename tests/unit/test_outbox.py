@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 from lakehouse import outbox
+from lakehouse.cloud_events import CloudEvent, lineage_envelope
 from lakehouse.storage_options import StorageOptions
 from lineage.core.config import Signing
 
@@ -25,32 +26,44 @@ def test_drop_absent_is_idempotent(tmp_path: Any) -> None:
 
 class _Dapr:
     def __init__(self, *, fail: bool = False) -> None:
-        self.published: list[str] = []
+        self.published: list[dict[str, Any]] = []
         self.fail = fail
 
     async def publish_event(self, *, pubsub_name: str, topic_name: str, data: str, data_content_type: str) -> None:
         if self.fail:
             raise TimeoutError("sidecar down")
-        self.published.append(data)
+        self.published.append(json.loads(data))
+
+
+A_COMPLETE = {"eventType": "COMPLETE", "run": {"runId": "r1"}}
+
+
+def _publish(sidecar: _Dapr, uri: str) -> None:
+    """Publish :data:`A_COMPLETE` on the lineage lane through the outbox at ``uri``."""
+    asyncio.run(
+        outbox.publish_with_outbox(
+            sidecar, lineage_envelope(A_COMPLETE), outbox_uri=uri, storage_options=StorageOptions(), pubsub_name="p", topic_name="t", timeout_seconds=5
+        )
+    )
 
 
 def test_publish_with_outbox_stages_then_drops_on_ack(tmp_path: Any) -> None:
     uri = _uri(tmp_path)
     dapr = _Dapr()
-    event = '{"run":{"runId":"r1"}}'
-    asyncio.run(
-        outbox.publish_lineage_with_outbox(
-            dapr,
-            outbox_uri=uri,
-            storage_options=StorageOptions(),
-            run_id="r1",
-            event_json=event,
-            pubsub_name="p",
-            topic_name="t",
-            timeout_seconds=5,
-        )
-    )
-    assert dapr.published == [event]
+
+    _publish(dapr, uri)
+
+    # The event rides its lane's envelope, under the id of this event and no other of its run.
+    assert dapr.published == [
+        {
+            "specversion": "1.0",
+            "id": "r1@COMPLETE",
+            "source": "rask/lineage",
+            "type": "rask.lineage.run.complete.v1",
+            "datacontenttype": "application/json",
+            "data": A_COMPLETE,
+        }
+    ]
     assert list(outbox.list_events(uri, StorageOptions())) == []  # dropped after the publish acked
 
 
@@ -64,20 +77,23 @@ def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: A
 
     monkeypatch.setattr(outbox, "stage_event", _boom)
     dapr = _Dapr()
-    event = '{"run":{"runId":"r1"}}'
-    asyncio.run(
-        outbox.publish_lineage_with_outbox(
-            dapr,
-            outbox_uri=_uri(tmp_path),
-            storage_options=StorageOptions(),
-            run_id="r1",
-            event_json=event,
-            pubsub_name="p",
-            topic_name="t",
-            timeout_seconds=5,
-        )
-    )
-    assert dapr.published == [event]
+
+    _publish(dapr, _uri(tmp_path))
+
+    assert [published["data"] for published in dapr.published] == [A_COMPLETE]
+
+
+def test_an_event_the_bus_did_not_take_stays_staged_under_its_envelopes_id_as_the_event_alone(tmp_path: Any) -> None:
+    """What the relay finds after a failed publish: the event its producer made, never its envelope, under its
+    envelope's id. That id carries the event's state, so a run's COMPLETE and its FAIL are two objects: staged under
+    the run alone, the later would truncate the earlier, on a run whose Lance write had committed."""
+    uri = _uri(tmp_path)
+
+    with pytest.raises(outbox.UnpublishedEventError) as unpublished:
+        _publish(_Dapr(fail=True), uri)
+
+    staged = [(key, json.loads(body)) for key, body in outbox.list_events(uri, StorageOptions())]
+    assert (unpublished.value.staged, staged) == (True, [("r1@COMPLETE", A_COMPLETE)])
 
 
 def test_a_delivered_event_whose_drop_fails_stays_staged_and_says_why(tmp_path: Any, monkeypatch: Any, caplog: pytest.LogCaptureFixture) -> None:
@@ -91,15 +107,11 @@ def test_a_delivered_event_whose_drop_fails_stays_staged_and_says_why(tmp_path: 
     monkeypatch.setattr(outbox, "drop_event", _refused)
     uri = _uri(tmp_path)
     dapr = _Dapr()
-    event = '{"run":{"runId":"r1"}}'
-    with caplog.at_level("WARNING", logger=outbox.__name__):
-        asyncio.run(
-            outbox.publish_lineage_with_outbox(
-                dapr, outbox_uri=uri, storage_options=StorageOptions(), run_id="r1", event_json=event, pubsub_name="p", topic_name="t", timeout_seconds=5
-            )
-        )
 
-    assert (dapr.published, len(list(outbox.list_events(uri, StorageOptions())))) == ([event], 1)
+    with caplog.at_level("WARNING", logger=outbox.__name__):
+        _publish(dapr, uri)
+
+    assert ([published["data"] for published in dapr.published], len(list(outbox.list_events(uri, StorageOptions())))) == ([A_COMPLETE], 1)
     assert [(record.getMessage(), getattr(record, "error", None)) for record in caplog.records] == [("outbox_drop_failed", "the store refused the delete")]
 
 
@@ -179,48 +191,6 @@ def test_list_events_is_bounded_and_oldest_first(tmp_path: Any) -> None:
     assert len({rid for rid, _ in outbox.list_events(uri, StorageOptions())}) == 5  # no limit => everything
 
 
-# --- one run, MANY events: the staged object must not collide ------------------------------------
-#
-# `build_run_event` deliberately excludes event_type from the run id — one run has a START, a COMPLETE
-# or a FAIL, and they share it. `stage_event` keyed on the run id ALONE, so the second event for a run
-# truncated the first, and the one that survived was whichever raced last.
-#
-# That destroys the event the outbox exists to preserve: a COMPLETE whose PUBLISH failed is followed by
-# a staged FAIL for the same run, and that truncating write destroys the staged COMPLETE, on a run whose
-# Lance write had already committed.
-#
-# Widening the key is backward-compatible by construction: `list_events` derives the drop key from the
-# FILENAME, so an object staged under the old shape still lists and still drops.
-
-
-def _event(run_id: str, event_type: str) -> str:
-    return json.dumps({"eventType": event_type, "run": {"runId": run_id}})
-
-
-def test_a_complete_and_a_fail_for_one_run_are_both_staged(tmp_path: Any) -> None:
-    uri = _uri(tmp_path)
-
-    outbox.stage_event(uri, StorageOptions(), "run-1", _event("run-1", "COMPLETE"))
-    outbox.stage_event(uri, StorageOptions(), "run-1", _event("run-1", "FAIL"))
-
-    staged = {json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, StorageOptions())}
-    assert staged == {"COMPLETE", "FAIL"}, f"the second event truncated the first — one run's events share an object: {staged}"
-
-
-def test_each_staged_event_drops_independently(tmp_path: Any) -> None:
-    """Dropping the FAIL after its publish must not take the still-unpublished COMPLETE with it."""
-    uri = _uri(tmp_path)
-    outbox.stage_event(uri, StorageOptions(), "run-1", _event("run-1", "COMPLETE"))
-    outbox.stage_event(uri, StorageOptions(), "run-1", _event("run-1", "FAIL"))
-
-    for key, payload in list(outbox.list_events(uri, StorageOptions())):
-        if json.loads(payload)["eventType"] == "FAIL":
-            outbox.drop_event(uri, StorageOptions(), key)
-
-    left = [json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, StorageOptions())]
-    assert left == ["COMPLETE"], f"dropping one event disturbed the other: {left}"
-
-
 def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_path: Any, monkeypatch: Any) -> None:
     """Recording alone repairs the FEED and leaves every subscriber unaware.
 
@@ -231,6 +201,9 @@ def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_
 
     Ordering is asserted, not assumed: the publish must happen BEFORE the staged object is dropped, so a
     publish that fails leaves the event for the next tick. The re-ingest then is a no-op (MERGE on run_id).
+
+    The copy goes out under the id the catalog's own publish carried, so a stream that already holds the event stores
+    the relay's copy of it once.
     """
     from catalog.core.lineage_emit import INSERT, build_write_event
     from lakehouse.openlineage import run_id_for
@@ -254,8 +227,8 @@ def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_
     published: list[dict[str, Any]] = []
     still_staged_at_publish: list[int] = []
 
-    async def _fake_publish(_client: Any, **kwargs: Any) -> None:
-        published.append(kwargs)
+    async def _fake_publish(_client: Any, envelope: CloudEvent, **kwargs: Any) -> None:
+        published.append({"envelope": envelope, **kwargs})
         # The staged object must still exist HERE. If the drop came first, a failed publish would have
         # destroyed the event's only durable copy -- the exact loss the outbox exists to prevent.
         still_staged_at_publish.append(len(list(outbox.list_events(uri, StorageOptions()))))
@@ -268,7 +241,7 @@ def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_
     assert len(published) == 1, "a recovered event was ingested but never re-published -- the cascade stays halted"
     assert published[0]["topic_name"] == "lineage.events.v1"
     assert published[0]["pubsub_name"] == "lineage-pubsub"
-    assert json.loads(published[0]["data"])["run"]["runId"] == run_id
+    assert (published[0]["envelope"].id, published[0]["envelope"].data) == (f"{run_id}@COMPLETE", event)
     assert still_staged_at_publish == [1], "the staged object was dropped before the publish succeeded"
     assert list(outbox.list_events(uri, StorageOptions())) == []  # ...and dropped once it did
 

@@ -183,7 +183,7 @@ export interface paths {
          *     is revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the
          *     store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
          *     what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
-         *     them, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_the_chart_grants`). Re-running the door
+         *     them, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_git_declares`). Re-running the door
          *     revokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed
          *     before the revoke and sent once the deletion is recorded, so a door failing after the record still announces it
          *     ([[LH-576]]). ``revoked`` counts the tuples this call removed.

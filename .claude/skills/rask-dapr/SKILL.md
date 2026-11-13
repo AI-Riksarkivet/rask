@@ -138,6 +138,15 @@ sidecar.
 
 ## Traps already paid for (don't rediscover)
 
+- **The lakehouse publishes its own CloudEvent, and three of the sidecar's behaviours decide its shape** ([[XC-199]],
+  measured on daprd 1.19.0-rc.4 against nats-server 2.15.2, 2026-11-13). A body published as
+  `application/cloudevents+json` is passed through as the envelope it is, and its `id` becomes the message's
+  `Nats-Msg-Id`: the stream's duplicate window then drops a second publish of that id and still acknowledges it, so the
+  id is per event, never per run (`lakehouse.cloud_events`; a run's START and COMPLETE share a run id). An envelope
+  carrying `traceparent` and no `traceid` is stored with both blank and its subscriber's trace is all zeros, so the
+  publish sets `traceid` equal to `traceparent` (`lakehouse.dapr_publish`). And only structured mode works: the
+  component hands a subscriber no NATS header, so an envelope sent as headers reaches the app as bare data. A body
+  published as `application/json` is wrapped under an id the sidecar mints per publish.
 - **A Configuration's secret scope binds the app's API, never a component.** Dapr checks `secrets.scopes` only on
   `GET /v1.0/secrets/...` (`pkg/api/universal/secrets.go:35`); a component's `secretKeyRef` resolves through the store
   with the sidecar's own login (`pkg/runtime/processor/secret/secret.go:162-170`). So a secret only a component reads

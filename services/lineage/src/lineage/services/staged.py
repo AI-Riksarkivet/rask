@@ -9,8 +9,11 @@ subscribers what another withholds, unseen.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from typing import Any
 
 from lakehouse import dapr_publish
+from lakehouse.cloud_events import lineage_envelope
 from lineage.core.config import LineageSettings
 from lineage.models import DatasetEvent, RunEvent, parse_event
 
@@ -35,7 +38,7 @@ def parse_staged(event_json: str) -> RunEvent | DatasetEvent:
         raise UnparseableEventError(str(exc)) from exc
 
 
-async def republish_staged(publisher: object | None, settings: LineageSettings, event_json: str) -> None:
+async def republish_staged(publisher: object | None, settings: LineageSettings, staged: Mapping[str, Any]) -> None:
     """Re-announce a recovered event on the lineage topic, so its SUBSCRIBERS act on it as well as the feed.
 
     Recording alone repairs the feed and leaves its subscribers unaware: a recovered RUN never reaches
@@ -43,18 +46,19 @@ async def republish_staged(publisher: object | None, settings: LineageSettings, 
     notifier's bus lane. ``None`` is a deployment without the outbox, which has
     nothing to re-announce (`api.dependencies.get_publisher`).
 
-    THE STAGED BYTES, never `event.model_dump_json()`. The model is the parsed Python shape (`run_id`,
-    `event_type`); the wire is OpenLineage (`runId`, `eventType`), so a round-trip through the model
-    publishes a document no subscriber can parse. Byte-identical redelivery is also what subscribers would
-    have seen the first time.
+    ``staged`` IS THE STAGED OBJECT AS IT PARSES, never the model's dump. The model is the parsed Python shape
+    (`run_id`, `event_type`); the wire is OpenLineage (`runId`, `eventType`), so a round-trip through the model
+    publishes a document no subscriber can parse. The staged event is what subscribers would have seen the
+    first time, and its envelope is derived from it alone (`lakehouse.cloud_events.lineage_envelope`), so the
+    copy goes out under the id its producer's publish carried: inside its duplicate window the stream stores
+    it only when that publish never arrived.
     """
     if publisher is None:
         return
     await dapr_publish.publish_event(  # noqa: TID251
         publisher,
-        timeout_seconds=settings.dapr_publish_timeout_seconds,
+        lineage_envelope(staged),
         pubsub_name=settings.dapr_pubsub,
         topic_name=settings.dapr_topic,
-        data=event_json,
-        data_content_type="application/json",
+        timeout_seconds=settings.dapr_publish_timeout_seconds,
     )

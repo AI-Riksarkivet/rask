@@ -68,6 +68,8 @@ def catalog(root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iter
 
     with TestClient(app) as client:
         yield client
+    # The app is the process's one catalog app: an override a test here sets would answer the next test's requests.
+    app.dependency_overrides.clear()
     get_settings.cache_clear()
 
 

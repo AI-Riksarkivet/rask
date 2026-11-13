@@ -13,12 +13,13 @@ wrote it: anything that can write under the prefix can stage an object that pars
 what it found would sign that object as the catalog, declaring whatever person it named as the one the catalog
 authenticated, and every enforcing door would admit it. So the catalog's emitter signs each event before it stages it and
 withholds what it cannot sign (`lakehouse.control_emit`), and the relay verifies each staged object as a control event
-signed by THIS catalog's own identity, against the keys that identity publishes, and republishes the staged bytes as they
-are:
+signed by THIS catalog's own identity, against the keys that identity publishes, and republishes the staged event as it
+is, in the envelope derived from it (`lakehouse.cloud_events.control_envelope`):
 
-* verified: republished verbatim, then dropped on ack;
+* verified: republished as staged, then dropped on ack;
 * not a control event, or not signed by this catalog (unsigned, signed by another identity, altered, an unknown key, a
-  bad encoding): POISON, retired unpublished and counted, and the pass goes on;
+  bad encoding), or one the bus can never carry (the publish seam's own refusal, before any I/O): POISON, retired
+  unpublished and counted, and the pass goes on;
 * the published keys cannot be read: no verdict on any signature, so the pass stops and everything stays staged.
 
 A catalog that does not sign has no key to verify against and adds nothing to what it forwards: it delivers what parses,
@@ -54,13 +55,14 @@ from typing import Annotated, Any, Final
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from catalog.api.cron import mount_cron
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
 from lakehouse import dapr_publish, outbox, outbox_metrics
-from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent
+from lakehouse.cloud_events import CloudEvent, control_envelope
+from lakehouse.control_events import CONTROL_TOPIC
 from lakehouse.governed.dapr_auth import require_dapr_token
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
 from lakehouse.lineage import SigningKey
@@ -78,6 +80,10 @@ type StagedVerifier = Callable[[Mapping[str, Any]], VerifiedSignature]
 #: Bounds what an event's own text puts on a log line: a staged object's key and action, or a delivered event's claimed
 #: identity and id, are whatever its writer chose.
 _MAX_LOGGED_CHARS: Final = 300
+
+#: Reads a staged object's text as the JSON object it must be. Its refusal is a `ValidationError`, the poison verdict,
+#: whatever is wrong with the text: not JSON, not an object, or nested past the parser's limit.
+_STAGED_OBJECT: Final = TypeAdapter(dict[str, Any])
 
 #: How many staged events one tick drains. The lineage drain learned this the hard way (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md
 #: P1.2): materialising a whole prefix inside the tick makes the relay fail hardest exactly when a
@@ -108,8 +114,8 @@ class ControlRelayReport(BaseModel):
     oldest_age_seconds: float = 0.0
     #: Events re-published onto the control topic and then dropped.
     republished: int = 0
-    #: Objects retired unpublished so they cannot wedge the drain: one that is not a control event, or, on a catalog that
-    #: signs, one this catalog did not sign. Non-zero is a producer bug or a forgery.
+    #: Objects retired unpublished so they cannot wedge the drain: one that is not a control event, one the bus can never
+    #: carry, or, on a catalog that signs, one this catalog did not sign. Non-zero is a producer bug or a forgery.
     poison_dropped: int = 0
     #: The pass stopped because the keys this catalog publishes could not be read, or a key id could not be decided yet:
     #: everything still staged waits, because the relay publishes only what it verified.
@@ -193,24 +199,20 @@ def _action_of(event_json: str) -> str | None:
     return bounded(action) if isinstance(action, str) and action else None
 
 
-async def _republish(publisher: object, settings: Settings, event_json: str) -> None:
-    """Deliver ONE staged event onto the control topic, as the staged text.
+async def _republish(publisher: object, settings: Settings, envelope: CloudEvent) -> None:
+    """Deliver ONE staged event onto the control topic, in the envelope derived from the staged event.
 
-    Never ``event.model_dump_json()``. Round-tripping through the model re-serializes ``occurred_at``,
-    re-orders ``extra`` and drops the ``rask_signature`` the model ignores, and the point of the
+    Never the envelope of ``event.model_dump()``. Round-tripping through the model re-serializes ``occurred_at``,
+    fills the members the schema defaults and drops the ``rask_signature`` the model ignores, and the point of the
     redelivery is that subscribers see exactly what they would have seen the first time.
 
-    The staged ``event_id`` is also what makes the redelivery IDEMPOTENT: every subscriber on this topic
-    keys on it — the catalog's own ring buffer dedupes on ``event_id``, and a notifier keys what it delivers on it
+    The staged ``event_id`` is what makes the redelivery IDEMPOTENT, twice over. It is the envelope's ``id``, so the
+    stream stores a copy of an event it already holds once, inside its duplicate window. And every subscriber on this
+    topic keys on it: the catalog's own ring buffer dedupes on ``event_id``, and a notifier keys what it delivers on it
     too (a ledger on ``<event_id>@<ACTION>``).
     """
     await dapr_publish.publish_event(  # noqa: TID251
-        publisher,
-        timeout_seconds=settings.control_emit_timeout_seconds,
-        pubsub_name=settings.control_pubsub,
-        topic_name=CONTROL_TOPIC,
-        data=event_json,
-        data_content_type="application/json",
+        publisher, envelope, pubsub_name=settings.control_pubsub, topic_name=CONTROL_TOPIC, timeout_seconds=settings.control_emit_timeout_seconds
     )
 
 
@@ -221,7 +223,7 @@ async def _drain(settings: Settings, publisher: object | None, verify: StagedVer
     next tick, which is the entire point of staging. A redelivery costs a duplicate the lane already
     tolerates; a premature drop costs the cascade.
 
-    VERIFIED BEFORE IT GOES when this catalog signs (``verify``), and never signed here: the staged text
+    VERIFIED BEFORE IT GOES when this catalog signs (``verify``), and never signed here: the staged event
     goes out as it is or not at all. An object that is not a control event, or that this catalog did not
     sign, is retired as poison and never published. Keys that cannot be read stop the pass with every
     object still staged, because they say nothing about any signature.
@@ -247,16 +249,22 @@ async def _drain(settings: Settings, publisher: object | None, verify: StagedVer
         log.warning("control_relay_no_publisher", extra={"depth": depth, "oldest_age_seconds": report.oldest_age_seconds})
         return report
 
+    async def retire(key: str) -> None:
+        """Drop one staged object this lane can never deliver, so the pass goes on to the events behind it."""
+        outbox_metrics.record_poison_dropped()
+        await run_in_threadpool(outbox.drop_event, settings.control_outbox_uri, options, key)
+        report.poison_dropped += 1
+
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.control_outbox_uri, options, limit=DRAIN_LIMIT)))
     for key, event_json in staged:
         try:
-            # VALIDATE, THEN VERIFY; the parsed model is deliberately discarded. Validation asks "could a
-            # subscriber read this?" and verification "did this catalog write it?", and the answers decide
-            # poison vs relay. What goes on the wire is the staged text, never a re-serialization of what was
-            # parsed here, and never a signature made here.
-            CatalogControlEvent.model_validate_json(event_json)
+            # ENVELOPED, THEN VERIFIED. The envelope is derived from the staged event, which must therefore be a
+            # control event one can carry: that asks "could a subscriber read this?". Verification asks "did this
+            # catalog write it?", and the answers decide poison vs relay. The envelope's data is the staged event as
+            # it is, never a re-serialization of a parsed model, and never signed here.
+            envelope = control_envelope(_STAGED_OBJECT.validate_json(event_json))
             if verify is not None:
-                await run_in_threadpool(verify, json.loads(event_json))
+                await run_in_threadpool(verify, envelope.data)
         except KeySourceUnavailableError as exc:
             # No verdict on any signature: nothing may go out and nothing may be retired. Stop the pass like
             # a bus still down, and every object stays staged for the next tick to retry from the oldest.
@@ -269,12 +277,16 @@ async def _drain(settings: Settings, publisher: object | None, verify: StagedVer
             # the one durable copy this module exists to deliver.
             reason = exc.reason if isinstance(exc, SignatureError) else "invalid"
             log.warning("control_outbox_unverifiable", extra={"key": bounded(key), "action": _action_of(event_json), "reason": reason})
-            outbox_metrics.record_poison_dropped()
-            await run_in_threadpool(outbox.drop_event, settings.control_outbox_uri, options, key)
-            report.poison_dropped += 1
+            await retire(key)
             continue
         try:
-            await _republish(publisher, settings, event_json)
+            await _republish(publisher, settings, envelope)
+        except ValueError as exc:
+            # THE BUS CAN NEVER CARRY IT: the publish seam's own refusal, made before any I/O, so no later tick
+            # changes it. Left staged, it would stop every pass at itself and hold every event behind it.
+            log.warning("control_outbox_undeliverable", extra={"key": bounded(key), "action": _action_of(event_json), "error": bounded(str(exc))})
+            await retire(key)
+            continue
         except Exception as exc:
             # The bus is still down. Stop the pass rather than grinding the whole backlog against it:
             # every remaining object stays staged and the next tick retries from the oldest.

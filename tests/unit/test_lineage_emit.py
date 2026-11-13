@@ -385,14 +385,7 @@ class _FakeDapr:
     async def publish_event(self, *, pubsub_name: str, topic_name: str, data: str, data_content_type: str) -> None:
         if self._fail:
             raise RuntimeError("sidecar down")
-        self.published.append(
-            {
-                "pubsub": pubsub_name,
-                "topic": topic_name,
-                "content_type": data_content_type,
-                "event": json.loads(data),
-            }
-        )
+        self.published.append({"pubsub": pubsub_name, "topic": topic_name, "event": json.loads(data)["data"]})
 
 
 def test_dapr_emitter_publishes_event_to_topic() -> None:
@@ -409,8 +402,7 @@ def test_dapr_emitter_publishes_event_to_topic() -> None:
     assert len(dapr.published) == 1
     pub = dapr.published[0]
     assert pub["pubsub"] == "lineage-pubsub" and pub["topic"] == "lineage.events.v1"
-    assert pub["content_type"] == "application/json"
-    assert _written(pub["event"])["name"] == "a$b"  # the spec-correct OpenLineage event is the data
+    assert _written(pub["event"])["name"] == "a$b"  # the spec-correct OpenLineage event is the envelope's data
     assert _facets(pub["event"])["rask_author"]["sub"] == "alice"  # the verified catalog author
 
 

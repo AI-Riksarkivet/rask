@@ -42,7 +42,6 @@ Two ways this fails SILENTLY in-cluster, named because "best-effort" hides them:
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -51,6 +50,7 @@ from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 
 from lakehouse import outbox
+from lakehouse.cloud_events import control_envelope
 from lakehouse.control_events import (
     CONTROL_TOPIC,
     CatalogControlEvent,
@@ -154,27 +154,27 @@ class DaprControlEmitter:
         it, and `event_id` is the client-side dedupe key, so a re-published event is recognised rather than
         double-applied.
 
-        SIGNED BEFORE IT IS STAGED, so the staged copy is the signed bytes and a relay republishes them as
-        they are. An event this service cannot sign, its key unresolved or the event without a canonical
-        form, is WITHHELD: neither staged nor published, counted under `reason="unsigned"` and logged with
+        SIGNED BEFORE IT IS STAGED, so the staged copy is the signed event and a relay republishes it as it is,
+        in the envelope derived from it (`lakehouse.cloud_events.control_envelope`), whose id is the `event_id`: the
+        stream stores a relay's copy of an event it already holds once. An event this service cannot sign, its key
+        unresolved or the event without a canonical form, is WITHHELD: neither staged nor published, counted under `reason="unsigned"` and logged with
         its action and `event_id`. Published, a door would refuse it and acknowledge the refusal; staged,
         it could leave the outbox only if something signed it there, and nothing may sign what it finds
         staged, because staged bytes prove nothing about who wrote them.
         """
-        event_json = event.model_dump_json()
+        wire = event.model_dump(mode="json")
         if self._sign is not None:
             try:
-                event_json = json.dumps(self._sign(json.loads(event_json)))
+                wire = self._sign(wire)
             except Exception as exc:
                 self._record_undelivered(event, exc, reason="unsigned", staged=False)
                 return
         try:
             await outbox.publish_with_outbox(
                 self._client,
+                control_envelope(wire),
                 outbox_uri=self._outbox_uri,
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
-                key=event.event_id,
-                event_json=event_json,
                 pubsub_name=self._pubsub,
                 topic_name=self._topic,
                 timeout_seconds=self._timeout_seconds,

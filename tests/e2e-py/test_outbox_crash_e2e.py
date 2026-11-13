@@ -9,7 +9,7 @@ whole point of the feature.
 
 What this drives, for real:
   1. a child process stages a full RunEvent to the object-store outbox — exactly as
-     `publish_lineage_with_outbox` does, in the window AFTER the Lance commit,
+     `publish_with_outbox` does, in the window AFTER the Lance commit,
   2. the OS kills it with SIGKILL (-9) before it can publish or drop — no cleanup, no finally, no flush,
   3. the staged object must SURVIVE on object storage (the durable copy is all that is left),
   4. the relay tick must drain it into lineage's durable `/events` feed,
@@ -155,9 +155,11 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
         import json, sys, time
         sys.path.insert(0, {os.path.join(os.getcwd(), "services")!r})
         from lakehouse import outbox
+        from lakehouse.cloud_events import lineage_envelope
         from lakehouse.storage_options import StorageOptions
         so = StorageOptions.from_flat(json.loads(sys.stdin.readline()))
-        outbox.stage_event({OUTBOX_URI!r}, so, {run_id!r}, {event_json!r})
+        event_json = {event_json!r}
+        outbox.stage_event({OUTBOX_URI!r}, so, lineage_envelope(json.loads(event_json)).id, event_json)
         print("STAGED", flush=True)          # the commit→publish window is now OPEN
         time.sleep(300)                       # ...and we die inside it
     """)
@@ -193,14 +195,13 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
 def _staged_keys_for(run_id: str) -> list[str]:
     """Every outbox object belonging to ONE run.
 
-    `list_events` yields the object KEY, and since `_object_key` widened that key is
-    ``<run_id>@<eventType>`` — one run stages a COMPLETE and a FAIL as separate objects precisely so
-    the second cannot truncate the first. Asserting `run_id in dict(...)` therefore compares an id to
-    a key and is false however well durability works: it reported a LOSS while the event sat in the
-    outbox, which is the loudest false alarm this suite could raise. The bare form is still matched
-    because `_object_key` falls back to it for a payload with no readable eventType.
+    `list_events` yields the object KEY, which is the event's envelope id, ``<run_id>@<eventType>``: one
+    run stages a COMPLETE and a FAIL as separate objects precisely so the second cannot truncate the
+    first. Asserting `run_id in dict(...)` therefore compares an id to a key and is false however well
+    durability works: it reported a LOSS while the event sat in the outbox, which is the loudest false
+    alarm this suite could raise.
     """
-    return [key for key, _ in outbox.list_events(OUTBOX_URI, _so()) if key == run_id or key.startswith(f"{run_id}@")]
+    return [key for key, _ in outbox.list_events(OUTBOX_URI, _so()) if key.startswith(f"{run_id}@")]
 
 
 def _drive_the_relay(lineage: str, run_id: str, *, budget_seconds: float = 420.0, gap: float = 10.0) -> bool:

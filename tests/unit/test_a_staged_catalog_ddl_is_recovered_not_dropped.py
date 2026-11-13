@@ -73,7 +73,8 @@ class _Publisher:
     """The Dapr client's `publish_event` signature, so a call the real client would refuse fails here too."""
 
     def __init__(self) -> None:
-        self.published: list[str] = []
+        #: The event each published envelope carried as its `data`.
+        self.published: list[dict[str, Any]] = []
         self.topics: list[tuple[str, str]] = []
 
     async def publish_event(
@@ -86,7 +87,7 @@ class _Publisher:
         data_content_type: str | None = None,
     ) -> None:
         self.topics.append((pubsub_name, topic_name))
-        self.published.append(data if isinstance(data, str) else data.decode())
+        self.published.append(json.loads(data)["data"])
 
 
 class _Repo:
@@ -263,7 +264,7 @@ def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path:
     assert outcome.drained == 1, f"the staged create was not recovered: {outcome}"
     assert [e.dataset.name for e in repo.datasets] == [_TABLE] and repo.runs == [], "the create did not reach the dataset door"
     assert repo.datasets[0].operation == "create_table"
-    assert publisher.published == [staged_json], "subscribers never hear of the create; the re-publish must carry the staged bytes"
+    assert publisher.published == [json.loads(staged_json)], "subscribers never hear of the create; the re-publish must carry the staged event"
     assert not list(outbox.list_events(settings.outbox_uri, StorageOptions())), "a recovered event must not stay staged"
 
 
@@ -515,7 +516,7 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "a refused replay must leave the object staged"
 
 
-def test_the_dlq_replay_re_publishes_the_staged_bytes_to_the_lineage_topic(tmp_path: Path, catalog: Any) -> None:
+def test_the_dlq_replay_re_publishes_the_staged_event_to_the_lineage_topic(tmp_path: Path, catalog: Any) -> None:
     """The relay's manual twin tells the SUBSCRIBERS too: a replayed create reaches the bus's subscribers only this way."""
     settings = _settings(tmp_path, fga_enabled=False)
     key, staged_json = _stage_a_create(settings, catalog)
@@ -524,7 +525,7 @@ def test_the_dlq_replay_re_publishes_the_staged_bytes_to_the_lineage_topic(tmp_p
     out = asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), publisher))
 
     assert out.status == "replayed"
-    assert publisher.published == [staged_json], "subscribers never hear of a replayed create; the re-publish must carry the staged bytes"
+    assert publisher.published == [json.loads(staged_json)], "subscribers never hear of a replayed create; the re-publish must carry the staged event"
     assert publisher.topics == [(settings.dapr_pubsub, settings.dapr_topic)], "the replay announced the create somewhere other than the lineage topic"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is None, "a replayed event must be dropped"
 
@@ -584,7 +585,7 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
 
 
 def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -> None:
-    """A replayed write RunEvent reaches the lineage topic byte-for-byte, so a pipeline polling the commit feed hears it again."""
+    """A replayed write RunEvent reaches the lineage topic as it was staged, so a subscriber on the bus hears it again."""
     settings = _settings(tmp_path, fga_enabled=False)
     event = build_write_event(
         table_id="bronze$events",
@@ -606,4 +607,4 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
     out = asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), publisher))
 
     assert out.status == "replayed"
-    assert publisher.published == [staged_json], "a replayed run never reaches the lineage topic"
+    assert publisher.published == [event], "a replayed run never reaches the lineage topic"

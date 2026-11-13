@@ -262,12 +262,44 @@ so a notifier that must not miss a run walks the feed. The topics are internal: 
 `-durable` on a stream it walks that no component in the release renders (`chart/templates/nats-stream-job.yaml`), so a
 durable a client creates there does not outlive the next upgrade.
 
+### The envelope on the bus
+
+On the bus each event rides a [CloudEvents 1.0](https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md)
+envelope in structured mode: the message is the envelope as JSON (`application/cloudevents+json`), and the event its
+producer signed is the envelope's `data`, unchanged. Every attribute is read off the event, so a relay's copy of an
+event rides the envelope its first publish rode.
+
+| attribute | on `lineage.events.v1` | on `catalog.control.v1` |
+| --- | --- | --- |
+| `id` | the event's identity (§ An event's identity) and its state: `<identity>@<eventType>`, followed by `@<eventTime>` for a state that ends no run (`START`, `RUNNING`, `OTHER`, which is also the state of an event declaring none); `<identity>@COMPLETE` for a dataset change | the event's `event_id` |
+| `source` | the event's OpenLineage `producer` (`rask/lineage` for an event naming none) | `rask/catalog` or `rask/maintenance`: the role that signs the action |
+| `type` | `rask.lineage.run.<state>.v1`, the state in lower case (`rask.lineage.run.complete.v1`); `rask.lineage.dataset.v1` for a dataset change | `rask.catalog.control.<action>.v1` |
+| `subject` | `table:<tableUuid>` when the event writes or changes exactly one table the catalog named by a uuid; absent otherwise | the event's `object_id`; absent when it is empty |
+| `time` | the event's `eventTime` when it names an instant, offset included; absent otherwise | the event's `occurred_at` |
+| `dataschema` | the event's `schemaURL` | absent |
+
+- **`id` is the message's `Nats-Msg-Id`**, which a stream deduplicates on inside its duplicate window (two minutes): one
+  event published twice inside it is stored once. A run's `START` and its `COMPLETE` share a run id and are two events,
+  which is why the state is part of it. One event is told under one id by design: every failure of maintenance's pass
+  over a table carries the run id derived from that table, so a failure repeated inside the window is stored once, as
+  the feed keeps its row once. The id is the key lineage's feed keeps the row of a run's event, and of a signed dataset
+  change, under, so a reader of the bus and a walker of the feed key those alike; the feed keys an unsigned dataset
+  change under the subject it was recorded for as well.
+- **A signature covers `data`, never the envelope.** Verify the event; an envelope attribute is a routing hint that
+  anything able to publish can write.
+- **`traceparent` and `tracestate`** (CloudEvents' distributed tracing extension) carry the W3C trace context of the
+  publish. Any other attribute a message holds (`topic`, `pubsubname`, `traceid`) is its transport's and carries no
+  contract.
+- **A `type` ends in its version.** A change that breaks a reader of an event or of its envelope is a new version.
+
 ### The names that carry the contract
 
 A client reads these events with no import from the lakehouse: this section and the facet schemas
 (`spec/facets/rask/`) are the contract. Inside the lakehouse its producers and doors share one definition of each
 name, in the `lakehouse` library:
 
+- `lakehouse.cloud_events`: `CloudEvent`, and `lineage_envelope` and `control_envelope`, the one derivation of each
+  lane's envelope (§ The envelope on the bus above), which a producer's publish and a relay's copy share;
 - `lakehouse.control_events`: `CatalogControlEvent`, `ControlAction`, `CONTROL_TOPIC` and `control_signer_role`;
 - `lakehouse.lineage_events`: the `rask_lance` and `rask_author` facet keys and their schema URLs, `dataset_uuids`
   and `with_dataset_uuids`, and `event_identity` and `static_event_id`, the one derivation of an event's identity

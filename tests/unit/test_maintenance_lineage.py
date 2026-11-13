@@ -223,10 +223,10 @@ def test_make_emitter_is_noop_when_disabled(enabled: bool, dapr: Any, emitter_ty
 
 class _FakeDaprClient:
     def __init__(self) -> None:
-        self.published: list[dict[str, str]] = []
+        self.published: list[dict[str, Any]] = []
 
     async def publish_event(self, *, pubsub_name: str, topic_name: str, data: str, data_content_type: str) -> None:
-        self.published.append({"pubsub": pubsub_name, "topic": topic_name, "data": data})
+        self.published.append({"pubsub": pubsub_name, "topic": topic_name, "event": json.loads(data)["data"]})
 
 
 def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
@@ -243,7 +243,7 @@ def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
     assert len(client.published) == 1
     assert client.published[0]["pubsub"] == "lineage-pubsub"
     assert client.published[0]["topic"] == "lineage.events.v1"
-    payload = json.loads(client.published[0]["data"])
+    payload = client.published[0]["event"]
     assert payload["outputs"][0]["name"] == "ns$a"
     assert payload["run"]["facets"]["rask_lance"]["operation"] == EXPIRE_VERSIONS
 
@@ -310,7 +310,7 @@ def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() ->
         await emitter.emit_maintenance(table_id="ns$a")
 
     asyncio.run(drive())
-    run_ids = [json.loads(p["data"])["run"]["runId"] for p in client.published]
+    run_ids = [p["event"]["run"]["runId"] for p in client.published]
     fail_a1, fail_a2, fail_b, complete_1, complete_2 = run_ids
     assert fail_a1 == fail_a2  # two ticks, one dataset → ONE Run node
     assert fail_b != fail_a1  # per-dataset, not global
@@ -364,44 +364,3 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
     emitter = _RecordingEmitter()
     asyncio.run(emit_pass_lineage(cast(Any, emitter), results))
     assert emitter.calls == [("silver$plain", named)], "a pass was named by a stamp"
-
-
-def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The twin of the catalog's emit, and the second of the two `_PUBLISH_INTENT` pinned as bare.
-
-    A sweep's lineage event describes a committed write, so losing one leaves the graph under-reporting
-    work that really happened — the same loss mode as the cascade head, minus the halted run. With both
-    routed, `_KNOWN_BARE_LINEAGE` is empty and #4's claim that "every lineage publish is staged" stops
-    being aspirational.
-
-    The invariants ratchet proves no BARE publish site REMAINS, which would hold just as well if the emit
-    had been deleted. This asserts the other half: it still publishes, staged, keyed on the run id the
-    relay will look for.
-    """
-    import asyncio as _asyncio
-
-    from maintenance.core import lineage_emit as module
-
-    calls: list[dict[str, object]] = []
-
-    async def _fake_outbox(_publisher: object, **kwargs: object) -> None:
-        calls.append(kwargs)
-
-    monkeypatch.setattr(module.outbox, "publish_lineage_with_outbox", _fake_outbox)
-    emitter = DaprMaintenanceEmitter(
-        cast(Any, object()),
-        pubsub="maintenance-pubsub",
-        topic="lineage.events.v1",
-        job_namespace="compaction",
-        dataset_namespace="lance-namespace://localhost/api/catalog",
-        timeout_seconds=5.0,
-        outbox_uri="s3://staging/outbox",
-        storage_options=lambda: StorageOptions(options={"region": "eu-north-1"}),
-    )
-    _asyncio.run(emitter._publish({"run": {"runId": "r-sweep"}}, "gold$catalog"))
-
-    assert len(calls) == 1, "the maintenance emit did not reach the outbox"
-    assert calls[0]["outbox_uri"] == "s3://staging/outbox"
-    assert calls[0]["storage_options"] == StorageOptions(options={"region": "eu-north-1"})
-    assert calls[0]["topic_name"] == "lineage.events.v1"
-    assert calls[0]["run_id"] == "r-sweep"

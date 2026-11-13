@@ -10,6 +10,7 @@ events by their published contract (`docs/COMMIT-EVENTS.md`, `spec/facets/rask/`
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict
@@ -118,14 +119,15 @@ def static_event_id(*, producer: str, namespace: str, name: str, operation: str,
     return str(uuid.uuid5(_STATIC_EVENT_NAMESPACE, "|".join((producer, namespace, name, operation, event_time))))
 
 
-def event_identity(event: dict[str, Any]) -> str:
+def event_identity(event: Mapping[str, Any]) -> str:
     """The identity of one OpenLineage event on the wire, whichever shape it is.
 
-    A run event IS its run id. A ``DatasetEvent`` has none, and three hops need one anyway — the
-    catalog's outbox stages under it (a wrong key stages under a name the relay cannot find, which is
-    the provenance loss the outbox exists to prevent), lineage's durable feed dedups on it, and a
-    notifier keys what it delivers by it. One derivation, so a single change cannot acquire three
-    identities and be staged, fed and delivered as three different facts.
+    A run event IS its run id. A ``DatasetEvent`` has none, and three hops need one anyway — the bus
+    and the outbox name the event by it and its state (`lakehouse.cloud_events.lineage_envelope`; a
+    wrong name stages the event where the relay cannot find it, which is the provenance loss the
+    outbox exists to prevent), lineage's durable feed dedups on it, and a notifier keys what it
+    delivers by it. One derivation, so a single change cannot acquire three identities and be staged,
+    fed and delivered as three different facts.
     """
     run = event.get("run")
     if isinstance(run, dict) and run.get("runId"):

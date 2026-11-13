@@ -82,7 +82,7 @@ class _Sidecar:
     published: ClassVar[list[tuple[str, dict[str, Any]]]] = []
 
     async def publish_event(self, *, topic_name: str = "", data: str = "", **_kwargs: object) -> None:
-        _Sidecar.published.append((topic_name, json.loads(data)))
+        _Sidecar.published.append((topic_name, json.loads(data)["data"]))
 
     async def close(self) -> None:
         return None

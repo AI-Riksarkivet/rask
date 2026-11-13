@@ -173,14 +173,15 @@ async def replay_dlq(
     # signature and what the stamped author may record — so a replay admits nothing the relay would refuse,
     # and a forged or re-targeted object stays refused however trusted the operator is. Then the ingest
     # door's, over the operator: a caller may only replay what they could have written in the first place.
-    await enforce_bus_authz(event, request, settings, json.loads(event_json))
+    arrived = json.loads(event_json)
+    await enforce_bus_authz(event, request, settings, arrived)
     await enforce_output_authz(event, request, settings, token)
     await provenance.record(event)  # idempotent: every row under its key
     # BEFORE the drop: the staged object is the only copy the relay could still re-publish. The feed is
     # already repaired when this fails, so the answer says so, and the partial outcome is audited: a 503
     # the operator can retry (the record is idempotent) rather than an unexplained 500 with no record.
     try:
-        await republish_staged(publisher, settings, event_json)
+        await republish_staged(publisher, settings, arrived)
     except Exception as exc:
         audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.FAILURE, subject=token.subject if token else "", resource=_audited(event, run_id))
         log.warning("lineage_dlq_replay_unannounced", extra={"run_id": run_id, "error": str(exc)})

@@ -30,7 +30,6 @@ the commit's own time, so the original and a re-announcement of one commit are o
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -48,12 +47,13 @@ from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, 
 from catalog.core.identifiers import warehouse_of
 from catalog.core.run_context import RunContext
 from lakehouse import outbox
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.governed import fga
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.lineage import CanonError, ParentRunFacet, SigningKey, attach_signature, author_of
 from lakehouse.lineage.schemas import JobRef, RunRef
-from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, event_identity, with_dataset_uuids
+from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
 from lakehouse.naming import is_safe_project
 from lakehouse.openlineage import (
     BRANCH_IDENTIFIER,
@@ -806,8 +806,9 @@ class DaprEmitter(_BaseLineageEmitter):
     We publish to the local Dapr **sidecar** (``DaprClient.publish_event``); the sidecar persists to NATS
     JetStream and owns retry/backoff (retry exhaustion dead-letter-parks on the subscriber's ``dlq.*``
     topic — Dapr-native DLQ, default-on via the ``dapr.resiliency.enabled`` chart resiliency, park-and-alert
-    not replay; docs/RESILIENCE.md gap #2, fixed 2026-07-12) + W3C trace-context propagation
-    as *component config*, so the app holds no broker client (the decoupled microservice path). The topic
+    not replay; docs/RESILIENCE.md gap #2, fixed 2026-07-12)
+    as *component config*, so the app holds no broker client (the decoupled microservice path). Each event rides
+    the envelope derived from it (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context. The topic
     is versioned (``lineage.events.v1``). ``authorization`` is unused: the topic authenticates the sidecar that
     delivered an event and not the producer that wrote it, so the ``author`` stamped inside is a claim until the
     event is signed. A catalog holding a signing key signs each authored event as itself (:meth:`_signed`), and
@@ -882,14 +883,11 @@ class DaprEmitter(_BaseLineageEmitter):
             # Degrades to exactly the previous plain publish when `outbox_uri` is empty, which is the
             # default — so this is inert until a deployment sets LANCE_LINEAGE_OUTBOX_URI. Bounded by
             # the same timeout, so a hung sidecar still cannot pin the request path.
-            await outbox.publish_lineage_with_outbox(
+            await outbox.publish_with_outbox(
                 self._client,
+                lineage_envelope(event),
                 outbox_uri=self._outbox_uri,
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
-                # WHICHEVER SHAPE THIS IS. A static metadata change has no run id, and staging one
-                # under "" puts it beyond the relay — the exact loss the outbox exists to prevent.
-                run_id=event_identity(event),
-                event_json=json.dumps(event),
                 pubsub_name=self._pubsub,
                 topic_name=self._topic,
                 timeout_seconds=self._timeout_seconds,
