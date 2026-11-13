@@ -8,7 +8,8 @@ import (
 
 // Lint runs ruff check + format --check over the WHOLE tree — the same estate `make lint` walks — and the gates that the
 // lakehouse's files name no client (scripts/lakehouse_names_no_client.py, [[XC-191]]) and that no code names a reference
-// product (scripts/code_names_no_reference_product.py).
+// product (scripts/code_names_no_reference_product.py), and that only lakehouse.governed.audit writes the compliance trail
+// (scripts/one_audit_writer.py).
 //
 // It named `services tests` until 2026-08-22, which left 39,244 tracked lines outside the merge-path
 // gate: packages/ (24,580 — all seven first-party libraries, including the authorization kernel),
@@ -35,6 +36,9 @@ func (m *Rask) Lint(
 		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/lakehouse_names_no_client.py"}).
 		// The code names no reference product: a comparison with another product is research, kept in docs/ and ADRs.
 		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/code_names_no_reference_product.py"}).
+		// The compliance trail has one writer: no code but lakehouse.governed.audit names the `lance.audit` logger (the
+		// import and attribute half is ruff's TID251 ban).
+		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/one_audit_writer.py"}).
 		Stdout(ctx)
 }
 

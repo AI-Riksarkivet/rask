@@ -54,8 +54,15 @@ exactly one table: a split that copied rather than routed would double the store
 14-day copy authoritative. The filter processor DROPS what its conditions match, which is why
 the audit pipeline's condition is the negation.
 
-Keyed on `body`, the same discriminator `audit-core.ts` used to select these rows out of the
-shared table, so the routing and the reader cannot disagree about what an audit record is.
+Keyed on the record's instrumentation scope, never its text. The SDK's `LoggingHandler` names
+the scope after the Python logger that made the record (`opentelemetry-sdk` 1.45.2,
+`_logs/_internal/__init__.py:711`), so `instrumentation_scope.name == "lance.audit"` selects
+exactly that logger's records: a line on another logger whose message reads `audit` stays out
+of the trail, and a record `audit()` writes is in it whatever its message. What keeps a second
+writer off that logger is `make lint`: ruff's TID251 bans `AUDIT_LOGGER` and `_log` outside
+`lakehouse.governed.audit`, and `scripts/one_audit_writer.py` refuses the logger's name as a
+string. The filelog receiver feeds only the general pipeline,
+so a container's stdout copy of an audit line is never routed here.
 
 ## `filter/drop_keepalive:`
 
@@ -113,9 +120,9 @@ the same change were 31,916 over the same window, and those are excluded at the 
 
 ## `logs/audit:`
 
-OTLP ONLY. An audit record is emitted by a service through the SDK; a `body == "audit"` line
-arriving from `filelog` is a container log that happens to read that way, and writing it to
-the governance table would make the trail forgeable by anything that can print.
+OTLP ONLY. An audit record is emitted by a service through the SDK, under the `lance.audit`
+scope; a line arriving from `filelog` is a container log and carries no scope a service set,
+so admitting the receiver here would make the trail forgeable by anything that can print.
 
 ## `checksum/config: {{ include "lance.otelCollectorConfigMap" . | sha256sum }}`
 

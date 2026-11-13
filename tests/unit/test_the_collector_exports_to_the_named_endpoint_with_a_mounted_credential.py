@@ -17,6 +17,7 @@ import posixpath
 
 import yaml
 
+from lakehouse.governed.audit import AUDIT_LOGGER
 from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_ARGS
 
@@ -72,3 +73,29 @@ def test_every_signal_leaves_for_the_named_endpoint_presenting_a_credential_eso_
     assert {posixpath.basename(f) for f in files} <= delivered, f"ESO writes {sorted(delivered)} into {secret['secretName']}, not the files the Collector reads"
     in_env = [e["name"] for e in collector.get("env") or [] if ((e.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == secret["secretName"]]
     assert not in_env, f"the store credential also reaches the Collector's environment: {in_env}"
+
+
+def test_the_audit_trail_is_routed_by_the_audit_loggers_scope_and_never_by_a_records_text() -> None:
+    """Every record on the logger `audit()` writes reaches the trail's exporter and no other; nothing else reaches it.
+
+    The SDK names a record's instrumentation scope after its Python logger, so the scope is the structured key the
+    code owns. A filter on the record's text admits any logger's line that reads `audit` and loses an audit record
+    whose message differs; a scope that names another logger than `AUDIT_LOGGER` empties the trail into the general
+    pipeline. The filter processor drops what a condition matches, so the trail's condition is the negation.
+    """
+    docs = chart_render.render(*DEFAULT_ARGS, *_NAMED)
+
+    config = yaml.safe_load(_named(docs, "ConfigMap", "rask-otel-collector")["data"]["config.yaml"])
+    pipelines = config["service"]["pipelines"]
+    conditions = {
+        name: [config["processors"][p]["logs"]["log_record"] for p in spec["processors"] if p.startswith("filter/") and "audit" in p]
+        for name, spec in pipelines.items()
+        if name.startswith("logs")
+    }
+
+    assert conditions == {
+        "logs": [[f'instrumentation_scope.name == "{AUDIT_LOGGER}"']],
+        "logs/audit": [[f'instrumentation_scope.name != "{AUDIT_LOGGER}"']],
+    }, f"the audit split does not key on the audit logger's scope: {conditions}"
+    assert pipelines["logs/audit"]["exporters"] == ["otlphttp/audit"]
+    assert "otlphttp/audit" not in pipelines["logs"]["exporters"]

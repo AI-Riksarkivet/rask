@@ -276,12 +276,12 @@ data:
         error_mode: ignore
         logs:
           log_record:
-            - 'body != "audit"'
+            - 'instrumentation_scope.name != "lance.audit"'
       filter/drop_audit:
         error_mode: ignore
         logs:
           log_record:
-            - 'body == "audit"'
+            - 'instrumentation_scope.name == "lance.audit"'
       batch: {}
       filter/drop_keepalive:
         error_mode: ignore

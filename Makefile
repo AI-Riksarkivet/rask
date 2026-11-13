@@ -78,6 +78,7 @@ lint:
 	uv run ruff check .
 	uv run python scripts/lakehouse_names_no_client.py
 	uv run python scripts/code_names_no_reference_product.py
+	uv run python scripts/one_audit_writer.py
 	bun --cwd=frontend run lint
 
 # The import-layer contracts in `.importlinter` (the lakehouse's, which name no client module), then each member's
