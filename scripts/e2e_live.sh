@@ -106,9 +106,10 @@ step "3/4 reading the estate's own secrets"
 # From the Dapr app-token Secret, never from a values file: the token the sidecar stamps is the one
 # the doors verify, and any other copy is a guess.
 keep dapr-token "$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
-# The store's root pair, from the Secret the fixture's server mounts (`<release>-object-store-root`, written by ESO).
-keep s3-access-key "$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-access-key}' 2>/dev/null | base64 -d || true)"
-keep s3-secret-key "$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-secret-key}' 2>/dev/null | base64 -d || true)"
+# THE SUITES' OWN STORE IDENTITY ([[XC-081]]): a token the suites exchange at the store's STS, never the store's root pair.
+. "$(dirname "$0")/suites_store_token.sh"
+minted="$(suites_store_token "$RELEASE")" || fail "could not mint a store token for rask-e2e-suites (is deploy/values-e2e-suites.yaml in the release?)"
+keep store-token "$minted"
 keep token "$ALICE"
 keep dex-secret "$DEX_SECRET"
 

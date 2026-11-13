@@ -8,6 +8,15 @@ metadata:
   labels: {{- include "lance.labels" $ | nindent 4 }}
 automountServiceAccountToken: false
 {{- end }}
+{{- range $name := include "lance.extraStoreIdentities" . | fromJsonArray }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+automountServiceAccountToken: false
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

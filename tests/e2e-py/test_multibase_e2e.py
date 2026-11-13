@@ -24,16 +24,16 @@ import pytest
 import requests
 from credentials import Credential, credential
 from liveness import skip_unless_live
+from store_identity import store_options
 from topology import assert_parent_exists, create_top_level
 
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.storage_options import s3_filesystem
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = credential(Credential.TOKEN)
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-S3_ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
-S3_SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 #: NO DEFAULTS. `s3://mb-a` / `s3://mb-b` are `scripts/e2e_stack.sh`'s install-time constants, and that
 #: script is the only thing that provisions them — so on any OTHER deployed estate the defaults named
 #: two buckets that do not exist, and the fan-out leg failed as though multi-base were broken.
@@ -55,7 +55,8 @@ def _auth() -> dict[str, str]:
 
 
 def _fs() -> pafs.S3FileSystem:
-    return pafs.S3FileSystem(access_key=S3_ACCESS_KEY, secret_key=S3_SECRET_KEY, endpoint_override=S3, scheme="http", region="")
+    """The two data buckets, listed as the suites' own store identity, which reads listings and no table's bytes."""
+    return s3_filesystem(store_options(S3))
 
 
 def _bucket_of(uri: str) -> str:
@@ -134,12 +135,9 @@ def test_multibase_redirects_data_and_reads_fan_out(catalog_ns: str) -> None:
     # Fan-out read: opening the dataset resolves the manifest (primary root) TOGETHER with the fragment in
     # the data base, and the ROWS read back are the rows written. A count would pass on a read that
     # returned the right number of wrong or duplicated rows.
-    so = {
-        "endpoint": S3,
-        "access_key_id": S3_ACCESS_KEY,
-        "secret_access_key": S3_SECRET_KEY,
-        "region": "",
-        "allow_http": "true",
-    }
+    # On the credential the table's describe vends, which covers the bases it was created on ([[XC-081]]).
+    described = requests.post(f"{catalog}/v1/table/{tbl}/describe", json={"vend_credentials": True}, headers=_auth(), timeout=60)
+    assert described.status_code == 200, described.text
+    so = dict(described.json()["storage_options"])
     read = lance.dataset(location, storage_options=so).to_table(columns=["id", "v"]).sort_by("id")
     assert read.to_pydict() == {"id": list(range(4000)), "v": [str(i) for i in range(4000)]}

@@ -80,6 +80,7 @@ import pytest
 import requests
 from credentials import Credential, credential
 from liveness import skip_unless_live
+from store_identity import store_options
 
 from lakehouse.naming import CATALOG_DELIMITER
 
@@ -87,9 +88,6 @@ from lakehouse.naming import CATALOG_DELIMITER
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = credential(Credential.TOKEN)
 S3_ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-S3_ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
-S3_SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
-S3_REGION = os.environ.get("LANCE_E2E_S3_REGION", "us-east-1")
 
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
 
@@ -107,21 +105,16 @@ def _auth() -> dict[str, str]:
     return {"authorization": f"Bearer {TOKEN}"}
 
 
-def _storage_options() -> dict[str, str]:
-    """The object-store connection the CATALOG itself writes through, so this suite reads the same bytes.
+#: Each table this run created, by the location its create answered: a read opens the table on the credential its own
+#: describe vends, as a stock client does, never on a key pair of the store's.
+_TABLE_IDS: dict[str, str] = {}
 
-    Mirrors `catalog.core.config.Settings.storage_options`. `allow_http` and the path-style flag are not
-    optional against RustFS: without them the object-store client upgrades to HTTPS and rewrites the
-    bucket into the hostname, and every open fails in a way that reads as a missing dataset.
-    """
-    return {
-        "aws_access_key_id": S3_ACCESS_KEY,
-        "aws_secret_access_key": S3_SECRET_KEY,
-        "aws_endpoint": S3_ENDPOINT,
-        "aws_region": S3_REGION,
-        "allow_http": "true",
-        "virtual_hosted_style_request": "false",
-    }
+
+def _vended(uri: str) -> dict[str, str]:
+    """The storage options the table's describe vends this run's caller ([[XC-081]])."""
+    r = requests.post(f"{CATALOG}/v1/table/{_TABLE_IDS[uri]}/describe", json={"vend_credentials": True}, headers=_auth(), timeout=60)
+    assert r.status_code == 200, r.text
+    return dict(r.json()["storage_options"])
 
 
 def _arrow_ipc(table: pa.Table) -> bytes:
@@ -151,7 +144,9 @@ class Estate:
             timeout=120,
         )
         assert r.status_code == 200, r.text
-        return str(r.json()["location"])
+        location = str(r.json()["location"])
+        _TABLE_IDS[location] = self.table_id(name)
+        return location
 
     def publish(self, name: str, *, version: int = 1, key_column: str = "id", gate_only: bool = False) -> requests.Response:
         body: dict[str, Any] = {"version": version, "key_column": key_column}
@@ -184,7 +179,7 @@ def _tier(rows: int = 2, *, source_rowid_type: pa.DataType | None = None) -> pa.
 
 
 def _open_main(uri: str) -> lance.LanceDataset:
-    return lance.dataset(uri, storage_options=_storage_options())
+    return lance.dataset(uri, storage_options=_vended(uri))
 
 
 def _open_branch(uri: str, branch: str) -> lance.LanceDataset:
@@ -194,7 +189,7 @@ def _open_branch(uri: str, branch: str) -> lance.LanceDataset:
     `lance.dataset(uri)` reaches main only — which is precisely the confusion the three branch defects
     lived in.
     """
-    return lance.dataset(uri, storage_options=_storage_options()).checkout_version((branch, None))
+    return lance.dataset(uri, storage_options=_vended(uri)).checkout_version((branch, None))
 
 
 def _content(dataset: lance.LanceDataset) -> dict[str, str]:
@@ -304,7 +299,8 @@ def test_a_dataset_without_stable_row_ids_cannot_be_registered(estate: Estate) -
     else wrote — and that door refuses it before it is a table anyone could publish.
     """
     name = f"unstable_{uuid.uuid4().hex[:6]}"
-    lance.write_dataset(_tier(), f"s3://{estate.warehouse}/{name}", storage_options=_storage_options(), enable_stable_row_ids=False)
+    unstable = store_options(S3_ENDPOINT).in_clear()
+    lance.write_dataset(_tier(), f"s3://{estate.warehouse}/{name}", storage_options=unstable, enable_stable_row_ids=False)
     # A RELATIVE location: `register_table` refuses an absolute URI, because a registration that could name
     # any bucket would attach storage the namespace does not own.
     registered = requests.post(f"{CATALOG}/v1/table/{estate.table_id(name)}/register", json={"location": name}, headers=_auth(), timeout=120)

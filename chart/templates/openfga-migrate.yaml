@@ -33,6 +33,7 @@ spec:
         app.kubernetes.io/component: openfga-migrate
     spec:
       restartPolicy: OnFailure
+      securityContext: { fsGroup: 65532 }
       initContainers:
         - name: wait-age
           image: busybox:1.36
@@ -44,6 +45,8 @@ spec:
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
+        - name: openfga-config
+          secret: { secretName: {{ include "lance.fullname" . }}-infra-credentials, items: [{ key: openfga-config.yaml, path: config.yaml }], defaultMode: 0440 }
       containers:
         - name: migrate
           # Same tag as the server (values.openfga.image.tag) so the migrated schema matches.
@@ -51,16 +54,11 @@ spec:
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            - { name: openfga-config, mountPath: /etc/openfga, readOnly: true }
           resources:
             requests: { cpu: "50m", memory: "64Mi" }
             limits: { cpu: "500m", memory: "256Mi" }
-          # The datastore DSN (carrying the AGE password) comes from a k8s Secret env, NOT a plaintext Job
-          # arg — `openfga migrate` honours OPENFGA_DATASTORE_URI. The audit's 'password-bearing DSN
-          # plaintext in the migrate Job args' fix.
           env:
-            - name: OPENFGA_DATASTORE_URI
-              valueFrom:
-                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: openfga-datastore-uri }
             - { name: HOME, value: /tmp }
           args:
             - migrate

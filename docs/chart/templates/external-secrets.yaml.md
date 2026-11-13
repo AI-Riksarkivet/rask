@@ -39,10 +39,12 @@ since removing the owner would garbage-collect the Secret.
 
 ## `name: {{ include "lance.fullname" . }}-infra-credentials`
 
-THE INFRA TIER'S SECRET, for the pods without a sidecar that need the AGE password: the AGE server and openfga
-migrate. It carries `postgres-password`, and `openfga-datastore-uri` assembled from it, and no store credential: the
-object store's root has a Secret of its own (below), so a pod that mounts this one for the database reads nothing
-that signs an STS token.
+THE INFRA TIER'S SECRET, for the pods without a sidecar that need the AGE password: the AGE server, OpenFGA and its
+migrate Job, each of which mounts it as a file and takes nothing from it through env ([[XC-081]]). It carries
+`postgres-password` (the server's `POSTGRES_PASSWORD_FILE`) and `openfga-config.yaml`, OpenFGA's config file with the
+datastore DSN assembled from that password, which `openfga run` and `openfga migrate` read from `/etc/openfga`
+(OpenFGA v1.18.3 `cmd/root.go`). It holds no store credential: the object store's root has a Secret of its own
+(below), so a pod that mounts this one for the database reads nothing that signs an STS token.
 
 ## `{{- if .Values.objectStore.enabled }}`
 

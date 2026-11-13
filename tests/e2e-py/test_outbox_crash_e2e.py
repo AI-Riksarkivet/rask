@@ -43,6 +43,7 @@ import requests
 from credentials import Credential, credential
 from liveness import skip_unless_live
 from outbox_probe import bearer, owned_output_table, table_uuids
+from store_identity import store_options
 
 from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse import outbox
@@ -56,8 +57,6 @@ DAPR_TOKEN = credential(Credential.DAPR_TOKEN)
 BINDING = os.environ.get("LANCE_E2E_RELAY_BINDING", "lineage-relay-cron")
 OUTBOX_URI = os.environ.get("LANCE_E2E_OUTBOX_URI", "s3://lance-catalog/_lineage_outbox")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-S3_ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
-S3_SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 
 #: The job namespace the catalog stamps on its own events (`LANCE_LINEAGE_JOB_NAMESPACE`, default `lance-catalog`).
 #: The staged event is the one the catalog's insert announces, so it names the job the way the catalog does.
@@ -125,15 +124,9 @@ def _signing_key() -> SigningKey | None:
 
 
 def _flat_store_options() -> dict[str, str]:
-    """The probe's store options as the flat map Lance and pyarrow read, the one spelling the harness and its child share."""
-    return {
-        "endpoint": S3,
-        "access_key_id": S3_ACCESS_KEY,
-        "secret_access_key": S3_SECRET_KEY,
-        "region": "us-east-1",
-        "allow_http": "true",
-        "virtual_hosted_style_request": "false",
-    }
+    """The probe's store options as the flat map Lance and pyarrow read, the one spelling the harness and its child share:
+    a session of the suites' own store identity, whose policy writes the lineage outbox and no other control prefix."""
+    return store_options(S3).in_clear()
 
 
 def _so() -> StorageOptions:

@@ -16,6 +16,8 @@ ADMIN_PRINCIPAL="$(uv run --no-project --with pyyaml python "$(dirname "${BASH_S
 # shellcheck disable=SC2034 # read by the sourcing script
 HELM_SET=(
   --set image.localImages=true
+  # The live suites' own store identity ([[XC-081]]), declared once for every release they run against.
+  -f "$(dirname "${BASH_SOURCE[0]}")/../deploy/values-e2e-suites.yaml"
   # The bus the nats fixture runs ([[XC-129]]).
   --set-string nats.url=nats://rask-nats:4222
   --set auth.enabled=true

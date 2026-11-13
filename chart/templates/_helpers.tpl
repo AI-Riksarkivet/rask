@@ -675,6 +675,22 @@ buckets as the estate's reads already are. */ -}}
 - { name: {{ $prefix }}_S3_SESSION_SECONDS, value: {{ required "objectStore.identity.sessionSeconds is how long each store session lasts" $identity.sessionSeconds | quote }} }
 {{- end -}}
 
+{{- define "lance.extraStoreIdentities" -}}
+{{- $root := . -}}
+{{- $own := include "lance.serviceAccounts" . | fromJsonArray -}}
+{{- $names := list -}}
+{{- range $name, $_ := .Values.objectStore.identity.extra | default dict }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" $name) }}{{- fail (printf "objectStore.identity.extra: %q names no ServiceAccount" $name) }}{{- end -}}
+{{- if or (has $name $own) (hasPrefix (printf "%s-sa-" (include "lance.fullname" $root)) $name) (eq $name "default") }}{{- fail (printf "objectStore.identity.extra: %q is the lakehouse's own ServiceAccount, whose policy the chart alone grants" $name) }}{{- end -}}
+{{- $names = append $names $name -}}
+{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{- define "lance.extraStorePolicy" -}}
+{{- toPrettyJson (dict "Version" "2012-10-17" "Statement" (index (index . 0).Values.objectStore.identity.extra (index . 1))) -}}
+{{- end -}}
+
 {{- define "lance.serviceAccounts" -}}
 {{- $root := . -}}{{- $fullname := include "lance.fullname" . -}}
 {{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-dapr-dashboard" $fullname) (printf "%s-otel-collector" $fullname) -}}

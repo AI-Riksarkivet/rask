@@ -531,6 +531,7 @@ DEV_ADMIN_EMAIL ?= alice@example.com
 DEV_ADMIN = $(eval DEV_ADMIN := $(shell uv run --no-project --with pyyaml python scripts/dex_principal.py $(DEV_ADMIN_EMAIL)))$(DEV_ADMIN)
 K3S_VALUES = --reset-values \
   -f deploy/values-local.yaml \
+  -f deploy/values-e2e-suites.yaml \
   $(if $(K3S_REGISTRY),--set-string image.repository=$(K3S_REGISTRY),--set image.localImages=true) \
   $(K3S_PINS_ARG) \
   --set-string auth.oidc.issuer=$(DEV_ISSUER) \
@@ -741,9 +742,10 @@ e2e-byo-pipeline:   ## LH-478 live proof: a stock-client pipeline seeds bronze, 
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m byo_pipeline -v --require-live
-e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs (needs LANCE_E2E_S3_ENDPOINT)
-	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-cas needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m cas -v --require-live
+e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs (needs LANCE_E2E_S3_ENDPOINT and LANCE_E2E_CREDENTIALS, a directory holding the suites' store-token file)
+	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-cas needs LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_CREDENTIALS)" || { echo "  !! e2e-cas needs LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) LANCE_E2E_CREDENTIALS=$(LANCE_E2E_CREDENTIALS) uv run pytest tests/e2e-py -m cas -v --require-live
 e2e-chaos:          ## Criterion 5's dependency-outage drills (XC-095): each takes one dependency of the release down, drives the doors while it is gone, restores it and holds the estate to criteria 1 and 4; they TAKE THE RELEASE'S DEPENDENCIES DOWN, so they run only with --chaos (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on its cluster; `bash scripts/e2e_live.sh -m phase1 --require-live --chaos` discovers them)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
@@ -751,13 +753,12 @@ e2e-chaos:          ## Criterion 5's dependency-outage drills (XC-095): each tak
 	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_S3)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_S3=$(LANCE_E2E_S3) uv run pytest tests/e2e-py -m chaos -v --require-live --chaos
-e2e-compaction:     ## Maintenance proofs: a deployed commit's pass and the in-process pass on real S3 (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_S3_ENDPOINT, and LANCE_E2E_CREDENTIALS, a directory holding the store's s3-access-key and s3-secret-key files)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_CREDENTIALS)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) LANCE_E2E_CREDENTIALS=$(LANCE_E2E_CREDENTIALS) uv run pytest tests/e2e-py -m compaction -v --require-live
+e2e-compaction:     ## Maintenance proof: a deployed commit's pass (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX and LANCE_E2E_CREDENTIALS; the in-process pass on real S3 runs on `make rustfs-provisioning`)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_CREDENTIALS)" || { echo "  !! e2e-compaction needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_CREDENTIALS=$(LANCE_E2E_CREDENTIALS) uv run pytest tests/e2e-py -m compaction -v --require-live
 # THE ITERATION LOOP, and the measurement that made it a target. `tests/unit` + `tests/integration` is
 # what every change runs before it is pushed, and it took 9m57s serially on a 64-core machine. Measured
 # 2026-09-19 at `-n 16 --dist loadfile`: **1m17s, 4,947 passed, zero failures** — 7.7x, because the
@@ -799,7 +800,7 @@ e2e-soak:           ## Phase 1's soak (XC-090): a day after an acceptance run ke
 	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_S3)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_S3=$(LANCE_E2E_S3) uv run pytest tests/e2e-py -m soak -v --require-live --soak $(SOAK)
-e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry + branch isolation (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT, and LANCE_E2E_CREDENTIALS, a directory holding the token file)
+e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry + branch isolation (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT, and LANCE_E2E_CREDENTIALS, a directory holding the token and store-token files)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_CREDENTIALS)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

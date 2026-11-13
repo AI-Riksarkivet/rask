@@ -8,3 +8,7 @@ data:
   {{ include "lance.saName" (list $ $component) }}.json: |
     {{- include "lance.objectStorePolicy" (list $ $component) | nindent 4 }}
   {{- end }}
+  {{- range $name := include "lance.extraStoreIdentities" . | fromJsonArray }}
+  {{ $name }}.json: |
+    {{- include "lance.extraStorePolicy" (list $ $name) | nindent 4 }}
+  {{- end }}

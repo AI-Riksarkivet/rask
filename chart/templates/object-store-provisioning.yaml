@@ -70,6 +70,10 @@ spec:
             - --policy
             - {{ printf "%s=%s" (include "lance.saAccount" (list $ $component)) (include "lance.objectStorePolicy" (list $ $component) | fromJson | toJson) | quote }}
             {{- end }}
+            {{- range $name := include "lance.extraStoreIdentities" $ | fromJsonArray }}
+            - --policy
+            - {{ printf "system:serviceaccount:%s:%s=%s" $.Release.Namespace $name (include "lance.extraStorePolicy" (list $ $name) | fromJson | toJson) | quote }}
+            {{- end }}
             {{- if $prune }}
             - --prune
             {{- end }}

@@ -58,6 +58,8 @@ type governedStack struct {
 	Store   *dagger.Service
 	OpenFGA *dagger.Service
 	Dex     *dagger.Service
+	// StoreToken is the catalog's ServiceAccount token the store's STS exchanges (`laneIdentity`).
+	StoreToken *dagger.File
 }
 
 // runToken makes every volume in a run unique to that run.
@@ -78,27 +80,18 @@ func runToken() string {
 
 func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*governedStack, error) {
 	run := runToken()
-	store := dag.Container().
+	identity := m.laneIdentity(src)
+	store := trustingLaneIssuer(dag.Container().
 		From(rustfsImage).
 		WithEnvVariable("RUSTFS_ACCESS_KEY", "rustfsadmin").
 		WithEnvVariable("RUSTFS_SECRET_KEY", "rustfsadmin").
 		WithEnvVariable("RUSTFS_ADDRESS", ":9000").
 		WithMountedCache("/data", dag.CacheVolume("rask-governed-store-"+run), dagger.ContainerWithMountedCacheOpts{Owner: rustfsUser}).
-		WithExposedPort(9000).
+		WithExposedPort(9000), identity.Issuer).
 		AsService()
 
-	// THE ESTATE'S OWN S3 SEAM, not a third-party CLI image: a registry can close one to anonymous pulls
-	// ([[XC-075]]: Docker Hub hands out a token with `access: []`, quay.io one with `actions: []` and a 401 on
-	// the manifest), and the lane then fails on the image RESOLVE rather than on anything it tests. `m.base`
-	// carries uv, python and this repo; `lakehouse.storage` is the same client the fleet uses, in an image no
-	// registry can withdraw. The script retries: a service binding resolves before the store is listening.
-	if _, err := m.base(src).
-		WithServiceBinding("store", store).
-		WithEnvVariable("RASK_S3_ENDPOINT_URL", "http://store:9000").
-		WithEnvVariable("AWS_ACCESS_KEY_ID", "rustfsadmin").
-		WithEnvVariable("AWS_SECRET_ACCESS_KEY", "rustfsadmin").
-		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/ensure_bucket.py", "lance-catalog"}).
-		Sync(ctx); err != nil {
+	// The catalog's bucket and the catalog's canned policy, as the chart's provisioning hook makes them.
+	if err := m.provisionLaneStore(ctx, src, store, "store"); err != nil {
 		return nil, err
 	}
 
@@ -167,7 +160,7 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 		WithDefaultArgs([]string{"dex", "serve", "/etc/dex/config.yaml"}).
 		AsService()
 
-	return &governedStack{Store: store, OpenFGA: openfga, Dex: dex}, nil
+	return &governedStack{Store: store, OpenFGA: openfga, Dex: dex, StoreToken: identity.CatalogToken}, nil
 }
 
 // provenanceWiring is what a catalog needs to announce its writes to lineage and keep lineage's tables: the
@@ -193,16 +186,11 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, prov 
 	if err != nil {
 		return nil, err
 	}
-	return m.Image(src, "rest-catalog", "", "", "", nil, "").
-		WithServiceBinding("store", stack.Store).
+	return withLaneStoreSession(m.Image(src, "rest-catalog", "", "", "", nil, "").
+		WithServiceBinding("store", stack.Store), stack.StoreToken, "store").
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
 		WithEnvVariable("LANCE_S3_ENDPOINT", "http://store:9000").
-		WithEnvVariable("LANCE_S3_ACCESS_KEY_ID", "rustfsadmin").
-		WithEnvVariable("LANCE_S3_SECRET_ACCESS_KEY", "rustfsadmin").
-		// The lane provisions no store identity, so the catalog signs with the store's root pair, which its boot refuses
-		// unless that is acknowledged ([[LH-576]]).
-		WithEnvVariable("RASK_INSECURE_ALLOW_STATIC_STORE_KEY", "true").
 		WithEnvVariable("LANCE_S3_REGION", "us-east-1").
 		WithEnvVariable("LANCE_S3_ALLOW_HTTP", "true").
 		WithEnvVariable("LANCE_S3_VIRTUAL_HOSTED", "false").

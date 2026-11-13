@@ -24,7 +24,7 @@ through the namespace: the estate's owner owns the provenance namespace through 
 
 EVENTS. Nothing a drive caused parks on the DLQ stream (`bus.messages_since("DLQ", ...)`), and the catalog's two
 outboxes drain: `settled_outbox_depth` is the lineage outbox's depth as lineage's admin door reports it, and
-`settled_control_outbox_depth` the control outbox's, listed with the store's own pair, each read once the settle window
+`settled_control_outbox_depth` the control outbox's, listed as the suites' own store identity, each read once the settle window
 allows its relay to drain what is staged.
 
 Every wait is bounded by ``within``, the scenario's settle window unless a caller needs longer: a delivery its sidecar
@@ -45,8 +45,8 @@ import bus
 import byo_scenario as scenario
 import lance
 import requests
+import store_identity
 from byo_scenario import Commit, Identity, ScenarioRun
-from credentials import Credential, credential
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse import outbox
@@ -59,11 +59,9 @@ from lakehouse.storage_options import StorageOptions
 PROVENANCE_NAMESPACE = os.environ.get("LANCE_E2E_PROVENANCE_NAMESPACE", "provenance")
 #: The durable consumer through which lineage records what the catalog announces.
 LINEAGE_DURABLE = "lineage-durable"
-#: The catalog's control outbox (`LANCE_CONTROL_OUTBOX_URI`), and the store the outboxes live in with its own pair.
+#: The catalog's control outbox (`LANCE_CONTROL_OUTBOX_URI`), and the store the outboxes live in.
 CONTROL_OUTBOX_URI = os.environ.get("LANCE_E2E_CONTROL_OUTBOX_URI", "s3://lance-catalog/_control_outbox")
 STORE = os.environ.get("LANCE_E2E_S3", "")
-STORE_KEY = credential(Credential.S3_ACCESS_KEY)
-STORE_SECRET = credential(Credential.S3_SECRET_KEY)
 
 #: Each version of a set of tables, as ``(table, branch, version)`` with ``None`` for main, and the `rask.*`
 #: properties its commit carries.
@@ -248,24 +246,13 @@ def settled_outbox_depth(reader: Identity, *, within: float = scenario.SETTLE_SE
 
 
 def store_options() -> StorageOptions:
-    """The store's own pair, as a client outside the catalog's doors reaches the store: the outbox reader, a pipeline."""
-    assert STORE and STORE_KEY and STORE_SECRET, (
-        "set LANCE_E2E_S3 and the run's s3-access-key and s3-secret-key credentials: this reads or writes the store itself"
-    )
-    return StorageOptions.from_flat(
-        {
-            "endpoint": STORE,
-            "access_key_id": STORE_KEY,
-            "secret_access_key": STORE_SECRET,
-            "region": "us-east-1",
-            "allow_http": str(STORE.startswith("http://")).lower(),
-            "virtual_hosted_style_request": "false",
-        }
-    )
+    """A session of the suites' own store identity at the estate's store (`store_identity`): the outbox reader, a pipeline
+    that writes a dataset before registering it."""
+    return store_identity.store_options(STORE)
 
 
 def settled_control_outbox_depth(*, within: float = scenario.SETTLE_SECONDS) -> int:
     """The depth of the catalog's control outbox, once its relay has had ``within`` to drain it: the control events
-    staged and not yet confirmed published. No door reports it, so it is listed with the store's own pair."""
+    staged and not yet confirmed published. No door reports it, so it is listed as the suites' own store identity."""
     options = store_options()
     return _settled(lambda: outbox.backlog(CONTROL_OUTBOX_URI, options)[0], within)

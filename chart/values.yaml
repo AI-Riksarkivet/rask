@@ -1209,6 +1209,8 @@ objectStore:
       backup-pg: "arn:aws:iam::000000000000:role/rask-backup-pg"
       # -- The role the control-root backup's token is exchanged for (`backups.controlRoot`).
       backup-control-root: "arn:aws:iam::000000000000:role/rask-backup-control-root"
+    # -- Store identities of the release's namespace outside the lakehouse's own workloads, as `{<ServiceAccount name>: [<policy statement>, ...]}`: each ServiceAccount is rendered with no token mounted, and on the development store the provisioning hook writes its statements as the canned policy its token's subject names, beside the workloads' own, so the hook's prune keeps it. Empty: no other identity holds a store session.
+    extra: {}
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   # -- The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox).
@@ -1751,18 +1753,27 @@ openfga:
   http:
     corsAllowedOrigins: ["https://openfga.invalid"]
     corsAllowedHeaders: ["Authorization"]
-  # -- Subchart passthrough: Postgres datastore on the AGE server, DSN from `rask-infra-credentials`, bundled migrations off (rask's Job migrates), pool 30 open/10 idle.
+  # THE DSN IS A MOUNTED FILE, never env ([[XC-081]]). `openfga run` reads `datastore.uri` from
+  # `/etc/openfga/config.yaml` (OpenFGA v1.18.3 `cmd/root.go`: config paths `/etc/openfga`, `$HOME/.openfga`, `.`; flags,
+  # then OPENFGA_* env, then the file), so the datastore block names only the engine and the subchart renders no
+  # OPENFGA_DATASTORE_URI. The file is the infra-credentials Secret's `openfga-config.yaml`, which the external-secrets
+  # operator assembles from the store's `postgres` password; the migrate Job mounts the same key. Subchart values
+  # cannot template, so the Secret's release-prefixed name is written out: `<release>-infra-credentials`, release `rask`.
+  # The image runs as uid 65532 (OpenFGA v1.18.3's distroless base) and a secret volume's files are root's, so the pod's
+  # fsGroup is what lets the server read its 0440 config file, and no other uid can.
+  # -- Subchart passthrough: the OpenFGA pod's securityContext; fsGroup 65532, the image's own user, which may read the mounted config file.
+  podSecurityContext:
+    fsGroup: 65532
+  # -- Subchart passthrough: the infra-credentials Secret's `openfga-config.yaml`, which carries the datastore DSN, as `/etc/openfga/config.yaml`.
+  extraVolumes:
+    - name: openfga-config
+      secret: { secretName: rask-infra-credentials, items: [{ key: openfga-config.yaml, path: config.yaml }], defaultMode: 0440 }
+  # -- Subchart passthrough: mounts the `openfga-config` volume at `/etc/openfga`, where OpenFGA reads its config file.
+  extraVolumeMounts:
+    - { name: openfga-config, mountPath: /etc/openfga, readOnly: true }
+  # -- Subchart passthrough: Postgres datastore on the AGE server, its DSN from the mounted config file, bundled migrations off (rask's Job migrates), pool 30 open/10 idle.
   datastore:
     engine: postgres
-    # DSN comes from the infra-credentials Secret (key openfga-datastore-uri) — the SAME secret the AGE
-    # servers + our migrate Job consume, written by the external-secrets operator from the
-    # store's `postgres` (field `password`). No plaintext password in values/env: the subchart's
-    # existingSecret+secretKeys branch turns this into a secretKeyRef. (Subchart values can't template,
-    # so the release-prefixed secret name is hardcoded — it is `<release>-infra-credentials`, and the
-    # release is `rask`.)
-    existingSecret: rask-infra-credentials
-    secretKeys:
-      uriKey: openfga-datastore-uri
     # The chart's bundled migrate (both job + initContainer types) failed to pass the datastore flags in
     # 0.3.9, so we disable it and run our own proven migrate Job (templates/openfga-migrate.yaml) that
     # waits for the AGE Postgres first. The server then connects to the already-migrated db. KEPT on the

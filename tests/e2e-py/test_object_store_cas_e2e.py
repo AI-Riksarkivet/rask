@@ -32,13 +32,11 @@ import pyarrow as pa
 import pytest
 from botocore.config import Config
 from cas_append_worker import append_rows
-from credentials import Credential, credential
 from liveness import skip_unless_live
+from store_identity import store_options
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
-SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 BUCKET = os.environ.get("LANCE_E2E_S3_BUCKET", "lance-catalog")
 PREFIX = "__cas_stress"
 
@@ -46,11 +44,13 @@ pytestmark = [pytest.mark.e2e, pytest.mark.cas]
 
 
 def _s3():
+    access_key, secret_key, session_token = store_options(ENDPOINT).credential_in_clear()
     return boto3.client(
         "s3",
         endpoint_url=ENDPOINT,
-        aws_access_key_id=ACCESS_KEY,
-        aws_secret_access_key=SECRET_KEY,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        aws_session_token=session_token,
         region_name="us-east-1",
         config=Config(s3={"addressing_style": "path"}, retries={"max_attempts": 1}),
     )
@@ -60,15 +60,7 @@ def _storage_options() -> dict[str, str]:
     # Same keys the app passes to lance (the catalog and maintenance config.storage_options), plus a very high AIMD
     # ceiling so Lance's client-side rate limiter can't throttle (and thereby serialize) the concurrent
     # writers — that would mask a store silently dropping the conditional-put header (lance_docs/lance/guide/performance.md § Cloud Store Throttling).
-    return {
-        "endpoint": ENDPOINT,
-        "access_key_id": ACCESS_KEY,
-        "secret_access_key": SECRET_KEY,
-        "region": "us-east-1",
-        "allow_http": "true",
-        "virtual_hosted_style_request": "false",
-        "lance_aimd_max_rate": "100000",
-    }
+    return {**store_options(ENDPOINT).in_clear(), "lance_aimd_max_rate": "100000"}
 
 
 @pytest.fixture(scope="module")

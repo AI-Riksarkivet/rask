@@ -118,6 +118,7 @@ func (m *Rask) RustfsProvisioning(
 			"tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py",
 			"tests/e2e-py/test_a_reclaim_session_deletes_one_tables_bytes_and_nothing_else.py",
 			"tests/e2e-py/test_the_store_answers_maintenance_which_buckets_send_store_events.py",
+			"tests/e2e-py/test_maintenance_s3_e2e.py",
 			"-m", "rustfs_provisioning", "-v", "-rs", "-p", "no:cacheprovider", "--timeout=300", "--timeout-method=thread", "--require-live",
 		}).
 		Stdout(ctx)
@@ -148,7 +149,8 @@ func (m *Rask) RustfsLifecycle(
 	// +optional
 	src *dagger.Directory,
 ) (string, error) {
-	rustfs := dag.Container().
+	identity := m.laneIdentity(src)
+	rustfs := trustingLaneIssuer(dag.Container().
 		From(rustfsImage).
 		WithEnvVariable("RUSTFS_ACCESS_KEY", "rustfsadmin").
 		WithEnvVariable("RUSTFS_SECRET_KEY", "rustfsadmin").
@@ -169,30 +171,22 @@ func (m *Rask) RustfsLifecycle(
 		// inputs and the command never changes. A fresh volume gives durability inside the run and
 		// isolation between runs, which is what an e2e actually wants from both.
 		WithMountedCache("/data", dag.CacheVolume("rask-rustfs-e2e-"+runToken()), dagger.ContainerWithMountedCacheOpts{Owner: rustfsUser}).
-		WithExposedPort(9000).
 		// NO `/data` argument, despite the compose overlay carrying `command: ["/data"]`. The image
 		// has no ENTRYPOINT to prepend it to, so passing it makes Dagger try to EXECUTE `/data`
 		// (`exec /data: permission denied`). Compose needed it because its `command:` replaces the
 		// image CMD wholesale; here the image's own default is already right — the same shape
 		// `SmokeRustfs` above uses and proves.
+		WithExposedPort(9000), identity.Issuer).
 		AsService()
 
-	// The bucket, before anything reads it. `Sync` is what orders this against the catalog below.
-	// THE ESTATE'S OWN S3 SEAM, not a third-party CLI image, which a registry can close to anonymous pulls
-	// ([[XC-075]]) so that a lane that pulls fresh cannot bootstrap its store at all. `m.base`
-	// carries uv, python and this repo — `lakehouse.storage` is the same client the fleet uses.
-	if _, err := m.base(src).
-		WithServiceBinding("rustfs", rustfs).
-		WithEnvVariable("RASK_S3_ENDPOINT_URL", "http://rustfs:9000").
-		WithEnvVariable("AWS_ACCESS_KEY_ID", "rustfsadmin").
-		WithEnvVariable("AWS_SECRET_ACCESS_KEY", "rustfsadmin").
-		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/ensure_bucket.py", "lance-catalog"}).
-		Sync(ctx); err != nil {
+	// The bucket and the catalog's canned policy, before anything reads them, as the chart's provisioning hook makes them.
+	// `Sync` is what orders this against the catalog below.
+	if err := m.provisionLaneStore(ctx, src, rustfs, "rustfs"); err != nil {
 		return "", err
 	}
 
-	catalog := m.Image(src, "rest-catalog", "", "", "", nil, "").
-		WithServiceBinding("rustfs", rustfs).
+	catalog := withLaneStoreSession(m.Image(src, "rest-catalog", "", "", "", nil, "").
+		WithServiceBinding("rustfs", rustfs), identity.CatalogToken, "rustfs").
 		// THE POSTURE, DECLARED. `assert_authentication_configured` refuses to boot on the AMBIGUITY
 		// between "open because I meant it" and "open because nothing set it", so a lane that names
 		// neither never comes up: measured 2026-09-24, this one died with
@@ -203,11 +197,6 @@ func (m *Rask) RustfsLifecycle(
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
 		WithEnvVariable("LANCE_S3_ENDPOINT", "http://rustfs:9000").
-		WithEnvVariable("LANCE_S3_ACCESS_KEY_ID", "rustfsadmin").
-		WithEnvVariable("LANCE_S3_SECRET_ACCESS_KEY", "rustfsadmin").
-		// The lane provisions no store identity, so the catalog signs with the store's root pair, which its boot refuses
-		// unless that is acknowledged ([[LH-576]]).
-		WithEnvVariable("RASK_INSECURE_ALLOW_STATIC_STORE_KEY", "true").
 		WithEnvVariable("LANCE_S3_REGION", "us-east-1").
 		WithEnvVariable("LANCE_S3_ALLOW_HTTP", "true").
 		WithEnvVariable("LANCE_S3_VIRTUAL_HOSTED", "false").

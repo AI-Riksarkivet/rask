@@ -84,11 +84,7 @@ spec:
           image: {{ .Values.age.image }}
           env:
             - { name: POSTGRES_USER, value: {{ .Values.age.user | quote }} }
-            # From a k8s Secret (not a plaintext pod-spec value) — the audit's 'POSTGRES_PASSWORD plaintext
-            # on the DB server pod' fix. Prod populates the Secret from OpenBao via the operator.
-            - name: POSTGRES_PASSWORD
-              valueFrom:
-                secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: postgres-password }
+            - { name: POSTGRES_PASSWORD_FILE, value: /run/secrets/postgres/password }
             - { name: POSTGRES_DB, value: {{ .Values.age.bootstrapDb | quote }} }
             - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
           ports:
@@ -96,6 +92,7 @@ spec:
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
             - { name: init, mountPath: /docker-entrypoint-initdb.d }
+            - { name: password, mountPath: /run/secrets/postgres, readOnly: true }
           readinessProbe:
             exec: { command: ["pg_isready", "-U", {{ .Values.age.user | quote }}, "-d", {{ .Values.age.bootstrapDb | quote }}] }
             initialDelaySeconds: 5
@@ -104,6 +101,8 @@ spec:
       volumes:
         - name: init
           configMap: { name: {{ include "lance.ageHost" . }}-init }
+        - name: password
+          secret: { secretName: {{ include "lance.fullname" . }}-infra-credentials, items: [{ key: postgres-password, path: password }], defaultMode: 0440 }
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:

@@ -362,32 +362,13 @@ done
 echo "   catalog=$c lineage=$l maintenance=$m dex=$d"
 [ "$c" = "200" ] && [ "$l" = "200" ] && [ "$m" = "200" ] && [ "$d" = "200" ] || { echo "!! services never became ready"; exit 1; }
 
-step "6/9 provision the #3-B data buckets (the allowlist GOVERNS, it does not provision)"
-# THE STORE'S OWN ROOT PAIR, from the Secret its StatefulSet reads. The store is seeded with a generated secret, so a
-# literal `rustfsadmin` signs every request with the wrong key: the store answers SignatureDoesNotMatch, the data
-# buckets are never made, and the suites that reach the store directly report it unreachable.
-S3_KEY="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-access-key}' | base64 -d)"
-S3_SECRET="$(kubectl get secret "$RELEASE-object-store-root" -o jsonpath='{.data.object-store-secret-key}' | base64 -d)"
-[ -n "$S3_KEY" ] && [ -n "$S3_SECRET" ] || { echo "!! $RELEASE-object-store-root holds no object-store pair"; exit 1; }
-keep s3-access-key "$S3_KEY"
-keep s3-secret-key "$S3_SECRET"
-uv run python - "$CREDENTIALS" "${BASE_A#s3://}" "${BASE_B#s3://}" <<'PYEOF'
-import sys
-from pathlib import Path
-import boto3
-from botocore.exceptions import ClientError
-pair = Path(sys.argv[1])
-c = boto3.client("s3", endpoint_url="http://localhost:9900", aws_access_key_id=(pair / "s3-access-key").read_text(),
-                 aws_secret_access_key=(pair / "s3-secret-key").read_text(), region_name="us-east-1")
-for b in sys.argv[2:]:
-    try:
-        c.create_bucket(Bucket=b)
-        print("   created", b)
-    except ClientError as e:
-        if e.response["Error"]["Code"] not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
-            raise
-        print("   exists", b)
-PYEOF
+step "6/9 mint the suites' own store identity"
+# NO ROOT PAIR LEAVES THE STORE ([[XC-081]]). The #3-B data buckets are the provisioning hook's (`catalog.multibase.dataBases`,
+# which scripts/stack_values.sh declares), and a suite reaches the store as `rask-e2e-suites` through a token it exchanges
+# at the store's STS.
+. "$(dirname "$0")/suites_store_token.sh"
+STORE_TOKEN="$(suites_store_token "$RELEASE")" || { echo "!! could not mint a store token for rask-e2e-suites"; exit 1; }
+keep store-token "$STORE_TOKEN"
 
 step "7/9 mint Dex tokens + build the tenant through the catalog's doors"
 mint() { password_grant http://localhost:5556/dex/token rask-web lance-catalog-secret "openid email federated:id audience:server:client_id:rask-lakehouse" "$1" password; }

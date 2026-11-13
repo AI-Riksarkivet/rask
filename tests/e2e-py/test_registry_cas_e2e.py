@@ -19,48 +19,43 @@ import threading
 import uuid
 
 import pytest
-from credentials import Credential, credential
 from liveness import skip_unless_live
+from store_identity import store_options
 
 from lakehouse import records
 from lakehouse.storage_options import StorageOptions, object_client
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
-SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 BUCKET = os.environ.get("LANCE_E2E_S3_BUCKET", "lance-catalog")
 PREFIX = "__cas_stress/registry"
 
 pytestmark = [pytest.mark.e2e, pytest.mark.cas]
 
-_SO = StorageOptions.from_flat(
-    {
-        "endpoint": ENDPOINT,
-        "access_key_id": ACCESS_KEY,
-        "secret_access_key": SECRET_KEY,
-        "region": "us-east-1",
-    }
-)
+
+@pytest.fixture(scope="module")
+def so() -> StorageOptions:
+    """A session of the suites' own store identity, whose policy writes `__cas_stress/` and no other prefix."""
+    if not ENDPOINT:
+        pytest.skip("set LANCE_E2E_S3_ENDPOINT (see module docstring)")
+    return store_options(ENDPOINT)
 
 
 @pytest.fixture(scope="module")
-def live_root() -> str:
-    if not ENDPOINT:
-        pytest.skip("set LANCE_E2E_S3_ENDPOINT (see module docstring)")
-    client = object_client(_SO)
+def live_root(so: StorageOptions) -> str:
+    client = object_client(so)
     skip_unless_live(ENDPOINT, what=f"the bucket {BUCKET!r}", probe=lambda _url, _timeout: client.head_bucket(Bucket=BUCKET))
     return f"s3://{BUCKET}"
 
 
-def test_registry_create_is_write_once_live(live_root: str) -> None:
+def test_registry_create_is_write_once_live(live_root: str, so: StorageOptions) -> None:
     key = f"{PREFIX}/{uuid.uuid4().hex}.json"
-    records.create_json(live_root, _SO, key, {"id": "first"})
+    records.create_json(live_root, so, key, {"id": "first"})
     with pytest.raises(records.RecordExistsError):
-        records.create_json(live_root, _SO, key, {"id": "second"})
+        records.create_json(live_root, so, key, {"id": "second"})
 
 
-def test_registry_create_contended_exactly_one_winner(live_root: str) -> None:
+def test_registry_create_contended_exactly_one_winner(live_root: str, so: StorageOptions) -> None:
     # 8 barrier-gated threads per round, 5 rounds: a store that silently drops the conditional
     # header passes the sequential test above and fails HERE — the same detector shape as the
     # sibling suite's tier 2. Data invariant asserted (winner count), not exception names.
@@ -79,7 +74,7 @@ def test_registry_create_contended_exactly_one_winner(live_root: str) -> None:
         ) -> None:
             barrier.wait()
             try:
-                records.create_json(live_root, _SO, key, {"winner": worker})
+                records.create_json(live_root, so, key, {"winner": worker})
                 result = "won"
             except records.RecordExistsError:
                 result = "lost"

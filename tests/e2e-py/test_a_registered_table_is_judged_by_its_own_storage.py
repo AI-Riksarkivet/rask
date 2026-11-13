@@ -14,7 +14,7 @@ drop deletes it:
 - ``DropTable`` with ``purge=true`` leaves no object under its location on the estate's store.
 
 Driven as the estate's admin in a scratch tenant of its own, removed at the end with its bucket. The dataset is written
-outside the catalog's doors with the store's own pair, as a pipeline writes one. Run with
+outside the catalog's doors as the suites' own store identity, as a pipeline writes one. Run with
 `bash scripts/e2e_live.sh tests/e2e-py/test_a_registered_table_is_judged_by_its_own_storage.py`.
 """
 
@@ -79,7 +79,7 @@ def test_a_table_registered_at_a_nested_location_is_judged_and_destroyed_by_its_
     assert client.describe_table(ln.DescribeTableRequest(id=moved)).location == described.location
     assert sorted(lance.dataset(namespace_client=client, table_id=moved).to_table(columns=["id"]).column("id").to_pylist()) == [1, 2]
 
-    # A destructive drop deletes every object under its location, listed with the store's own pair.
+    # A destructive drop deletes every object under its location, listed as the suites' own store identity.
     assert objects_held(str(described.location), correctness.store_options()) > 0, "the table holds no object, so the drop would prove nothing"
     ok(admin.http.post(f"{CATALOG}/v1/table/{CATALOG_DELIMITER.join(moved)}/drop", params={"purge": "true"}, json={}))
     tenant.tables.remove(CATALOG_DELIMITER.join(moved))

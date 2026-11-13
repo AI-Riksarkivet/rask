@@ -6,7 +6,7 @@ the first bucket and is ABSENT from the second.
 
 Both warehouses are this module's own, made per run in a scratch project (`scratch_tenant`) and removed with their
 buckets at the end, so no run leaves a warehouse on the estate and no shared project gains one while it runs. The
-buckets are listed with the store's own pair, which the runner hands it. Run via
+buckets are listed as the suites' own store identity, whose token the runner hands it. Run via
 ``bash scripts/e2e_live.sh tests/e2e-py/test_warehouses_e2e.py``.
 """
 
@@ -18,15 +18,14 @@ from collections.abc import Iterator
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
-from credentials import Credential, credential
 from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
+from store_identity import store_options
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.storage_options import s3_filesystem
 
 
 S3 = os.environ.get("LANCE_E2E_S3", "")
-S3_ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
-S3_SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
 
 pytestmark = [
     pytest.mark.e2e,
@@ -35,7 +34,7 @@ pytestmark = [
 
 
 def _list_bucket(bucket: str) -> list[str]:
-    fs = pafs.S3FileSystem(access_key=S3_ACCESS_KEY, secret_key=S3_SECRET_KEY, endpoint_override=S3, scheme="http", region="")
+    fs = s3_filesystem(store_options(S3))
     return [info.path for info in fs.get_file_info(pafs.FileSelector(bucket, allow_not_found=True, recursive=True))]
 
 

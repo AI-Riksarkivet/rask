@@ -1200,6 +1200,10 @@
                             "description": "The audience every lakehouse workload's store token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required.",
                             "type": "string"
                         },
+                        "extra": {
+                            "description": "Store identities of the release's namespace outside the lakehouse's own workloads, as `{\u003cServiceAccount name\u003e: [\u003cpolicy statement\u003e, ...]}`: each ServiceAccount is rendered with no token mounted, and on the development store the provisioning hook writes its statements as the canned policy its token's subject names, beside the workloads' own, so the hook's prune keeps it. Empty: no other identity holds a store session.",
+                            "type": "object"
+                        },
                         "roleArns": {
                             "type": "object",
                             "properties": {
@@ -1356,7 +1360,7 @@
                     }
                 },
                 "datastore": {
-                    "description": "Subchart passthrough: Postgres datastore on the AGE server, DSN from `rask-infra-credentials`, bundled migrations off (rask's Job migrates), pool 30 open/10 idle.",
+                    "description": "Subchart passthrough: Postgres datastore on the AGE server, its DSN from the mounted config file, bundled migrations off (rask's Job migrates), pool 30 open/10 idle.",
                     "type": "object",
                     "properties": {
                         "applyMigrations": {
@@ -1365,22 +1369,11 @@
                         "engine": {
                             "type": "string"
                         },
-                        "existingSecret": {
-                            "type": "string"
-                        },
                         "maxIdleConns": {
                             "type": "integer"
                         },
                         "maxOpenConns": {
                             "type": "integer"
-                        },
-                        "secretKeys": {
-                            "type": "object",
-                            "properties": {
-                                "uriKey": {
-                                    "type": "string"
-                                }
-                            }
                         },
                         "waitForMigrations": {
                             "type": "boolean"
@@ -1416,6 +1409,61 @@
                                                 "type": "string"
                                             }
                                         }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "extraVolumeMounts": {
+                    "description": "Subchart passthrough: mounts the `openfga-config` volume at `/etc/openfga`, where OpenFGA reads its config file.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "mountPath": {
+                                "type": "string"
+                            },
+                            "name": {
+                                "type": "string"
+                            },
+                            "readOnly": {
+                                "type": "boolean"
+                            }
+                        }
+                    }
+                },
+                "extraVolumes": {
+                    "description": "Subchart passthrough: the infra-credentials Secret's `openfga-config.yaml`, which carries the datastore DSN, as `/etc/openfga/config.yaml`.",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string"
+                            },
+                            "secret": {
+                                "type": "object",
+                                "properties": {
+                                    "defaultMode": {
+                                        "type": "integer"
+                                    },
+                                    "items": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "key": {
+                                                    "type": "string"
+                                                },
+                                                "path": {
+                                                    "type": "string"
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "secretName": {
+                                        "type": "string"
                                     }
                                 }
                             }
@@ -1464,6 +1512,15 @@
                     "properties": {
                         "rask.dev/openfga-clients": {
                             "type": "string"
+                        }
+                    }
+                },
+                "podSecurityContext": {
+                    "description": "Subchart passthrough: the OpenFGA pod's securityContext; fsGroup 65532, the image's own user, which may read the mounted config file.",
+                    "type": "object",
+                    "properties": {
+                        "fsGroup": {
+                            "type": "integer"
                         }
                     }
                 },

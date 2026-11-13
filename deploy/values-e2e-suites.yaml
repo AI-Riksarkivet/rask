@@ -1,0 +1,30 @@
+# The live suites' own store identity ([[XC-081]]): a release the live suites run against (`make k3s-up`, the e2e-stack
+# lane through scripts/stack_values.sh) declares it here, so it is provisioned from git and pruned like every other one.
+# The runners mint its token (`kubectl create token rask-e2e-suites --audience <objectStore.identity.audience>`) and a
+# suite exchanges it at the store's STS for a session under this policy; no suite holds the store's root pair.
+#
+# What it reads: every bucket's listing (a warehouse's bytes are shown to be in one bucket and absent from another, a
+# purge to leave nothing under a location, the control outbox's depth), and no object outside its scratch. What it writes,
+# and nothing else: the scratch prefixes the suites write as a pipeline outside the catalog's doors would. Those land in
+# buckets each run makes for its own scratch tenant, which no file can name, so the two pipeline prefixes are granted in
+# every bucket. That reaches no further than its minter already does: issuing this account's token needs the namespace's
+# `serviceaccounts/token`, which also issues the catalog's, whose policy writes every object.
+objectStore:
+  identity:
+    extra:
+      rask-e2e-suites:
+        - Sid: ListEveryBucket
+          Effect: Allow
+          Action: ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListAllMyBuckets"]
+          Resource: ["arn:aws:s3:::*"]
+        # The outbox crash drill stages a lineage event and reads it back; the CAS stress suites race writes on their own
+        # prefix; three suites write a dataset outside the catalog's layout (`<namespace>-outside/`, `unstable_*`) before
+        # registering it.
+        - Sid: WriteOnlyTheScratchPrefixes
+          Effect: Allow
+          Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
+          Resource:
+            - "arn:aws:s3:::lance-catalog/_lineage_outbox/*"
+            - "arn:aws:s3:::lance-catalog/__cas_stress/*"
+            - "arn:aws:s3:::*/*-outside/*"
+            - "arn:aws:s3:::*/unstable_*"

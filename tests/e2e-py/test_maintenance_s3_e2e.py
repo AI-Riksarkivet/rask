@@ -41,16 +41,13 @@ doors" rule and is a deliberate bound: what is under test is the READER
 provisioning — which ``test_warehouses_e2e.py`` already drives, and which would re-gate this suite
 behind a deployed catalog and two tokens. This suite proves nothing about warehouse creation.
 
-Env-gated on ``LANCE_E2E_S3_ENDPOINT`` (the convention ``test_object_store_cas_e2e.py`` established
-and ``scripts/e2e_stack.sh`` exports). Run: ``make e2e-stack``, or point it at any S3 store:
-
-    LANCE_E2E_S3_ENDPOINT=http://localhost:9900 uv run pytest tests/e2e-py/test_maintenance_s3_e2e.py -v
+It makes and removes buckets of its own, which no identity on the shared estate may ([[XC-081]]), so it runs on the
+throwaway RustFS `dagger call rustfs-provisioning` binds (`rustfs_store`), signed with that store's own root pair.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import time
 import uuid
 from collections.abc import Iterator
@@ -61,12 +58,12 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
-from credentials import Credential, credential
 from lance import blob_array, blob_field
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
 from liveness import skip_unless_live
 from pydantic import BaseModel, Field
+from throwaway_rustfs import ThrowawayStore
 
 from lakehouse import location_claims
 from lakehouse.base_refs import normalise
@@ -79,12 +76,7 @@ from maintenance.services.orphans import OrphanFile
 from maintenance.services.table_pass import PassOutcome, TableTask, run_table_pass
 
 
-ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
-ACCESS_KEY = credential(Credential.S3_ACCESS_KEY, "rustfsadmin")
-SECRET_KEY = credential(Credential.S3_SECRET_KEY, "rustfsadmin")
-
-#: Reuses the REGISTERED `compaction` marker (pyproject `markers`) — `make e2e-compaction` selects it.
-pytestmark = [pytest.mark.e2e, pytest.mark.compaction]
+pytestmark = [pytest.mark.e2e, pytest.mark.rustfs_provisioning]
 
 #: Stray `data/*.lance` files planted by hand — the POSITIVE controls. Without them every "is not
 #: reported" assertion below would also pass on a scan that reports nothing at all.
@@ -126,19 +118,17 @@ def _wipe(client: Any, bucket: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def s3() -> Any:
-    """A client on the real store, via lakehouse.storage — never raw boto3 (repo rule)."""
-    if not ENDPOINT:
-        pytest.skip("set LANCE_E2E_S3_ENDPOINT (see the module docstring / scripts/e2e_stack.sh)")
+def s3(rustfs_store: ThrowawayStore) -> Any:
+    """A client on the throwaway store, via lakehouse.storage — never raw boto3 (repo rule)."""
     from lakehouse.storage import s3_client
 
-    client = s3_client(ENDPOINT, access_key=ACCESS_KEY, secret_key=SECRET_KEY)
-    skip_unless_live(ENDPOINT, what="the S3 store", probe=lambda _url, _timeout: client.list_buckets())
+    client = s3_client(rustfs_store.endpoint, access_key=rustfs_store.root_access_key, secret_key=rustfs_store.root_secret())
+    skip_unless_live(rustfs_store.endpoint, what="the S3 store", probe=lambda _url, _timeout: client.list_buckets())
     return client
 
 
 @pytest.fixture(scope="module")
-def estate(s3: Any) -> Iterator[Estate]:
+def estate(s3: Any, rustfs_store: ThrowawayStore) -> Iterator[Estate]:
     """Four fresh buckets carrying six real Lance datasets, plus two warehouse registry records.
 
     Bucket names are lowercase/hyphen/uuid — the S3 legal set, which excludes the ``$`` and ``_`` a
@@ -152,7 +142,7 @@ def estate(s3: Any) -> Iterator[Estate]:
     except Exception as exc:  # noqa: BLE001 — a scoped/vended credential cannot create buckets
         for bucket in names.values():
             _wipe(s3, bucket)
-        pytest.skip(f"the credential at {ENDPOINT} may not create buckets, which this suite requires: {exc}")
+        pytest.skip(f"the credential at {rustfs_store.endpoint} may not create buckets, which this suite requires: {exc}")
 
     built = Estate(
         ctl=names["ctl"],
@@ -166,7 +156,7 @@ def estate(s3: Any) -> Iterator[Estate]:
         reg_uri=f"s3://{names['reg']}/regtbl",
         deact_uri=f"s3://{names['deact']}/deacttbl",
     )
-    options = _settings_for(built).storage_options()
+    options = _settings_for(built, rustfs_store).storage_options()
 
     # THREE separate appends, so Lance's compaction planner has real work to list on object storage; a single-fragment
     # dataset would make the due evaluation a no-op and every assertion below vacuous. The namespace and the table carry
@@ -231,13 +221,13 @@ def estate(s3: Any) -> Iterator[Estate]:
         _wipe(s3, bucket)
 
 
-def _settings_for(estate: Estate) -> MaintenanceSettings:
+def _settings_for(estate: Estate, store: ThrowawayStore) -> MaintenanceSettings:
     """Settings pinned to THIS estate. Never `get_settings()` — that is lru_cached off the ambient env,
     and the one thing this suite must never do is maintain a bucket it did not create."""
     return MaintenanceSettings(
-        s3_endpoint=ENDPOINT,
-        s3_access_key_id=ACCESS_KEY,
-        s3_secret_access_key=SECRET_KEY,
+        s3_endpoint=store.endpoint,
+        s3_access_key_id=store.root_access_key,
+        s3_secret_access_key=store.root_secret(),
         s3_bucket=estate.ctl,
         s3_extra_buckets=estate.extra,
         s3_region="us-east-1",
@@ -247,8 +237,8 @@ def _settings_for(estate: Estate) -> MaintenanceSettings:
 
 
 @pytest.fixture(scope="module")
-def settings(estate: Estate) -> MaintenanceSettings:
-    return _settings_for(estate)
+def settings(estate: Estate, rustfs_store: ThrowawayStore) -> MaintenanceSettings:
+    return _settings_for(estate, rustfs_store)
 
 
 @pytest.fixture(scope="module")

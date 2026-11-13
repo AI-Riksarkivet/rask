@@ -21,8 +21,9 @@ _DIRECTORY_VARIABLE = "LANCE_E2E_CREDENTIALS"
 class Credential(StrEnum):
     """A credential a runner may write, by the name of its file."""
 
-    S3_ACCESS_KEY = "s3-access-key"
-    S3_SECRET_KEY = "s3-secret-key"
+    #: A TokenRequest for the suites' own store identity, `rask-e2e-suites`, at the audience the store trusts; a suite
+    #: exchanges it at the store's STS for a session under that identity's policy (`correctness.store_options`).
+    STORE_TOKEN = "store-token"
     DAPR_TOKEN = "dapr-token"
     #: A bearer of the estate's admin, who administers the scenario's project.
     TOKEN = "token"

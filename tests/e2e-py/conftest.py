@@ -101,7 +101,7 @@ def pytest_configure(config: pytest.Config) -> None:
 __all__ = ["pytest_addoption", "pytest_sessionfinish"]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def rustfs_store() -> ThrowawayStore:
     """The throwaway RustFS `dagger call rustfs-provisioning` binds; a skip anywhere else, which the lane's
     `--require-live` fails."""

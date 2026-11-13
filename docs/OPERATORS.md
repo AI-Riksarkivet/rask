@@ -280,7 +280,7 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
      restart `rask-rustfs` for `object-store-secret-key`. RustFS signs every STS session token with the root secret, so
      rotating root invalidates every outstanding session at once: every workload's own and every vended one. Clients
      re-vend, and a long write in flight fails.
-  4. Restart the consumers at once: a `secretKeyRef` env and the injector's app token are read at pod creation,
+  4. Restart the consumers at once: OpenFGA reads its mounted config file and the injector's app token at start,
      so nothing rolls on its own. AGE: OpenFGA (its migrate Job and the backup CronJob read it at their next run).
      The root: the catalog, lineage and maintenance, whose store sessions the old root signed and which exchange a new
      one at boot rather than at half a session's life. The app token: the sidecar Deployments (an app token rotated as
