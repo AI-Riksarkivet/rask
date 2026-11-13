@@ -1196,6 +1196,8 @@ class MeResponse(BaseModel):
     name: str | None
     email: str | None
     estate_admin: bool
+    #: Whether ``POST /management/v1/projects`` would admit the caller: the estate admin or an operator (ADR 0143).
+    can_create_project: bool
     projects: list[MeProject]
 
 

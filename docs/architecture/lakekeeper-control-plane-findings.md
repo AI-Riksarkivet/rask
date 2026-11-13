@@ -108,9 +108,8 @@ change the deployment config to add or remove admins" (`crates/lakekeeper/src/co
 names that case). The same doors let any `owner` of a warehouse deactivate it, protect or unprotect it, change its grace
 or delete it (`warehouses.py:578`, `:601`, `:665`, `:1153`), and nothing marks a warehouse as one git declares. The model
 already has the machine identity: `estate#operator` and `can_create_project: admin or operator` (`model.fga:138`, `:148`),
-and ADR 0143 decides the create door checks `can_create_project`. The door still checks `can_observe_events`
-(`projects.py:235`), and the model's own comment says so (`model.fga:31-33`); the row is LH-076 (#128, open). So an
-operator identity cannot create a project today, and the planned rask operator has no seam.
+and ADR 0143 decides the create door checks `can_create_project`, which it does since LH-076 (#128). So an
+operator identity creates a project through the door; what the planned rask operator still lacks is the `managed_by` marker.
 
 **The gap.** A warehouse that git declares can be changed through the API by its owner, and the change survives until
 someone notices: the deactivate-versus-re-POST race that `warehouses.py:193-268` handles is exactly a live-only state

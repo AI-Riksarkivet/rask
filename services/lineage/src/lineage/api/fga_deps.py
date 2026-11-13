@@ -240,8 +240,9 @@ async def _require_relation(relation: str, obj: str | None, label: str, request:
 #: The estate rung that opens the unfiltered run feed (`model.fga`, `type estate`).
 _EVENT_FEED_RELATION: Final = "can_read_event_feed"
 
-#: The estate-admin rung (`model.fga`, `type estate`).
-_ESTATE_ADMIN_RELATION: Final = "can_observe_events"
+#: The estate admin's verbs for the kept parks (`model.fga`, `type estate`): reading them, and replaying one.
+_READ_PARKS_RELATION: Final = "can_read_parked_events"
+_REPLAY_PARKS_RELATION: Final = "can_replay_parked_events"
 
 
 async def require_event_feed_reader(request: Request, settings: LineageSettings, token: Caller | None) -> None:
@@ -251,9 +252,8 @@ async def require_event_feed_reader(request: Request, settings: LineageSettings,
     table, and an estate privilege is not a relation of any one table. It is checked on `settings.fga_root_object` verbatim, the object
     every estate privilege is checked on.
 
-    ITS OWN RUNG rather than ``can_observe_events``, which also mints tenants, edits the authorization
-    graph and registers stores: the reconciler that reads this feed holds `event_reader` and nothing that
-    reaches those doors (`model.fga.yaml` pins both halves).
+    ITS OWN RUNG rather than an estate-admin verb: the reconciler that reads this feed holds `event_reader` and
+    nothing that mints a tenant or edits the authorization graph (`model.fga.yaml` pins both halves).
 
     The same fail-closed ladder as every other gate here: FGA off → no-op; unwired client → 503;
     unauthenticated → 401; deny → 403; an OpenFGA outage inside `check` → 503, never allow.
@@ -261,14 +261,23 @@ async def require_event_feed_reader(request: Request, settings: LineageSettings,
     await _require_estate_rung(_EVENT_FEED_RELATION, request, settings, token)
 
 
-async def require_estate_admin(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
-    """Gate an estate operator's door on ``can_observe_events`` at the root object, the estate-admin rung ([[LH-148]]).
+async def require_parks_reader(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
+    """Gate the list of kept parks on ``can_read_parked_events`` at the root object ([[LH-148]]).
 
-    The re-presentation of a kept park records provenance for whoever the event's author is, so it is no rung of the
-    caller's own data; the rung that already holds the estate's other operator doors holds this one. The ladder is
+    The parks are every tenant's refused deliveries, so reading them is the estate admin's. The ladder is
     :func:`require_event_feed_reader`'s.
     """
-    await _require_estate_rung(_ESTATE_ADMIN_RELATION, request, settings, token)
+    await _require_estate_rung(_READ_PARKS_RELATION, request, settings, token)
+
+
+async def require_parks_replayer(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
+    """Gate the replay of a kept park on ``can_replay_parked_events`` at the root object ([[LH-148]]).
+
+    The re-presentation of a kept park records provenance for whoever the event's author is, so it is no rung of the
+    caller's own data, and a verb of its own beside the read: a replay writes to the feed. The ladder is
+    :func:`require_event_feed_reader`'s.
+    """
+    await _require_estate_rung(_REPLAY_PARKS_RELATION, request, settings, token)
 
 
 async def _require_estate_rung(relation: str, request: Request, settings: LineageSettings, token: Caller | None) -> None:

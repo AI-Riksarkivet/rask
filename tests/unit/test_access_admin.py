@@ -2,7 +2,7 @@
 
 Drives the handlers directly (no TestClient) with fake settings + monkeypatched ``fga`` wrappers,
 mirroring ``test_events_endpoint.py``. Pins the frozen contract: the ``/management/v1/events``-style estate gate
-(``can_observe_events`` on the fixed root object), pagination pass-through, the
+(``can_administer_authz`` on the fixed root object), pagination pass-through, the
 model-true write validation (only directly-assignable relations; a derived ``can_*`` write must never
 reach OpenFGA where its 400 would be swallowed as idempotent success), and the write/delete audit on top
 of the gate's allow. Relation/type validation runs against the REAL compiled model.json (never a fake),
@@ -344,8 +344,6 @@ def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_ans
     )
     # The GATE assertion moved out of this test: it is a router dependency now, so a direct handler
     # call does not run it and `gate_seen` would stay empty no matter what the route declares.
-    # `test_gate_is_can_observe_events_on_the_root_object` asserts the relation and object, and
-    # `test_every_access_route_is_covered_by_that_gate` asserts every route carries it — including this one.
     # What remains here is what this test is actually named for.
     # qualify=False with a pre-resolved subject — the same double-prefix guard `check` carries.
     assert seen == {"user": "user:dex~alice", "relation": "can_read_data", "object_type": "table", "qualify": False}

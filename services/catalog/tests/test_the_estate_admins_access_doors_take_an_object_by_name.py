@@ -78,3 +78,6 @@ def test_a_door_answers_an_object_by_name_as_it_answers_it_by_uuid(estate: Any, 
     assert by_name.get("allowed", by_name.get("tree") or by_name.get("users")), f"{door} answered nothing on an object bob sees"
     refused = estate.client.post(f"{ACCESS}/{door}", json=_asking(door, f"{kind}:{absent}", estate), headers=estate.bearer("root"))
     assert (refused.status_code, refused.json()["code"]) == (404, code)
+    # alice owns the objects asked about and holds nothing on the estate: the door is the estate admin's alone.
+    kept_out = estate.client.post(f"{ACCESS}/{door}", json=_asking(door, uuid_object, estate), headers=estate.bearer("alice"))
+    assert (kept_out.status_code, kept_out.json()["detail"]) == (403, "can_administer_authz required on estate:rask")

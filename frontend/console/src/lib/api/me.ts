@@ -1,7 +1,7 @@
 // #lib/api/me — the frozen `GET /management/v1/me` identity contract + its fetch helper.
 //
 // The catalog serves `/management/v1/me` for any VERIFIED bearer: `{ sub, name, email, estate_admin, projects }`
-// (estate_admin = can_observe_events on the FGA root object; projects via the #51 list wrappers, each
+// (estate_admin = can_administer_estate on the FGA root object; projects via the #51 list wrappers, each
 // relation degrading to [] on an FGA outage). Anon is a 401, and with FGA off the backend answers
 // `estate_admin: true, projects: []` (dev parity). Both sides code against THIS shape — no drift.
 //
@@ -20,6 +20,7 @@ export const MeSchema = v.object({
 	name: v.nullable(v.string()),
 	email: v.nullable(v.string()),
 	estate_admin: v.boolean(),
+	can_create_project: v.boolean(),
 	projects: v.array(MeProjectSchema),
 });
 

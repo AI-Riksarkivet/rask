@@ -2,7 +2,7 @@
 
 Drives the handlers directly (no TestClient) with fake registry records + settings, mirroring the repo's
 direct-call style (``test_events_endpoint.py``). Pins the design decisions: the list is the caller's
-projects (every tenant for an estate observer, ``can_observe_events`` on the fixed root object; otherwise
+projects (every tenant for an estate observer, ``can_list_all_projects`` on the fixed root object; otherwise
 the registry's projects the caller is a ``member`` of); with FGA off one tenant's read answers the list's shape,
 and a malformed id is refused before any lookup; grouping tolerates a corrupt record (skip-with-warning,
 never a 500); ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable.
@@ -143,7 +143,7 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     monkeypatch.setattr(ep.fga, "list_users", _no_admins)
     result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [p.project for p in result] == expected
-    assert checks == [("dex~bob", "can_observe_events", "warehouse:lance_catalog")]
+    assert checks == [("dex~bob", "can_list_all_projects", "warehouse:lance_catalog")]
     # A member's listing judges the registry's own candidates, never the projects FGA says the caller reaches.
     assert asked == ([] if estate_observer else [["project:acme", "project:fresh", "project:globex"]])
 
@@ -152,11 +152,11 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
 
 
 def _an_estate_observer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """bob holds ``can_observe_events`` on the estate root, so he lists every tenant: the check answers as a store
+    """bob holds ``can_list_all_projects`` on the estate root, so he lists every tenant: the check answers as a store
     holding that one tuple would, and no for anything else."""
 
     async def _observes(_client: OpenFgaClient, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        return (user, relation, obj) == ("dex~bob", "can_observe_events", "warehouse:lance_catalog")
+        return (user, relation, obj) == ("dex~bob", "can_list_all_projects", "warehouse:lance_catalog")
 
     monkeypatch.setattr(ep.fga, "check", _observes)
 

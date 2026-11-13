@@ -52,7 +52,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> t
     monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "7")
     catalog = request.getfixturevalue("governed_catalog")
-    catalog.store.write((catalog.person(ADMIN), "owner", "estate:rask"))
+    catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"))
     _ok(catalog, "POST", "/management/v1/projects", json={"id": PROJECT})
     settings = get_settings()
     for warehouse in (HERE, ELSEWHERE):

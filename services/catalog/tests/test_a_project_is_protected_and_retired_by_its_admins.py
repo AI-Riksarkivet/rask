@@ -14,6 +14,7 @@ own ([[LH-235]]).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -23,6 +24,7 @@ from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
 from lakehouse import maintenance_policies, records
 from lakehouse.control_events import CatalogControlEvent
+from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
 
@@ -31,6 +33,13 @@ PROJECT = "acme"
 #: acme's admin, who made it as the estate's owner; a second admin of acme; a member of acme; another owner of the estate;
 #: the account the finish door is asked by.
 ADMIN, CO_ADMIN, MEMBER, ESTATE_OWNER, RECLAIMER = "alice", "dave", "carol", "erin", "maintenance"
+#: What a retry of an unfinished delete asks on the estate root, by who retries: the admin who started it is authorized by
+#: the delete's own record and asks nothing there.
+ESTATE_ASKED = {
+    CO_ADMIN: set(),
+    ESTATE_OWNER: {(AuditOutcome.ALLOW, "can_finish_project_delete")},
+    MEMBER: {(AuditOutcome.DENY, "can_finish_project_delete")},
+}
 #: What a refused request is answered: its status, media type, spec code (`lance_docs/ns_catalog/namespace/operations/errors.md`)
 #: and detail. A caller who may not administer acme is answered exactly what a missing project is.
 NOT_FOUND = (404, "application/problem+json", 4, f"project not found: {PROJECT}")
@@ -46,7 +55,7 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
     """acme, made through its door by alice, who owns the estate as the chart's bootstrap hook grants it, with dave a
     second admin of acme, carol a member of it, and erin another owner of the estate."""
     catalog = governed_catalog
-    catalog.store.write((catalog.person(ADMIN), "owner", "estate:rask"), (catalog.person(ESTATE_OWNER), "owner", "estate:rask"))
+    catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"), (catalog.person(ESTATE_OWNER), "owner", "estate:rask"))
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
     catalog.store.write(
@@ -150,7 +159,13 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
         pytest.param(MEMBER, 404, False, id="a-member-is-refused"),
     ],
 )
-def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(estate: Any, finisher: str, answered: int, finished: bool) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(
+    estate: Any,  # noqa: ANN401 — the conftest's GovernedCatalog
+    caplog: pytest.LogCaptureFixture,
+    finisher: str,
+    answered: int,
+    finished: bool,
+) -> None:
     """[[LH-576]] A project's delete revokes its grants, those of the admin who asked among them, before it ends its roles.
     A failure after the revoke is finished by a retry of the admin who started the delete, whom the delete's own record
     authorizes, or of the estate's owner, and by nobody else: an unfinished delete would leave a project no admin can
@@ -168,9 +183,19 @@ def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(estate: 
     announced = _Announced()
     estate.client.app.dependency_overrides[get_control_emitter] = lambda: announced
 
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    caplog.clear()
+
     retried = estate.client.delete(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(finisher))
 
     assert retried.status_code == answered, retried.text
+    # The estate's owner finishes it on the estate verb for exactly that, and nobody is asked any other estate verb.
+    asked_on_the_estate = {
+        (record.__dict__["audit.outcome"], record.__dict__["audit.relation"])
+        for record in caplog.records
+        if record.name == AUDIT_LOGGER and record.__dict__.get("audit.resource") == "estate:rask"
+    }
+    assert asked_on_the_estate == ESTATE_ASKED[finisher]
     assert (records.read_json(settings.registry_root, settings.storage_options(), f"_projects/{PROJECT}.json") is None) is finished
     deleted = [(event.object_id, event.actor) for event in announced.events if event.action == "project_deleted"]
     assert deleted == ([(f"project:{PROJECT}", estate.person(finisher))] if finished else [])

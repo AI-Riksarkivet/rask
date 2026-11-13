@@ -295,7 +295,7 @@ def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> Non
 def test_a_failed_create_blocks_only_its_own_descendants() -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if _layer(request) == "project" and _body(request).get("id") == "beta":
-            return 403, _problem("PermissionDeniedError", "can_observe_events required on warehouse:lance_catalog", 15)
+            return 403, _problem("PermissionDeniedError", "can_create_project required on warehouse:lance_catalog", 15)
         return None
 
     recorded: list[httpx.Request] = []
@@ -309,12 +309,12 @@ def test_a_failed_create_blocks_only_its_own_descendants() -> None:
 def test_an_estate_that_cannot_be_read_back_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if request.method == "GET" and request.url.path == "/management/v1/projects":
-            return 403, _problem("PermissionDeniedError", "can_observe_events required on warehouse:lance_catalog", 15)
+            return 403, _problem("PermissionDeniedError", "can_list_all_projects required on warehouse:lance_catalog", 15)
         return None
 
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
-    assert "can_observe_events" in capsys.readouterr().err
+    assert "can_list_all_projects" in capsys.readouterr().err
 
 
 def test_a_transport_failure_is_reported_against_the_step_that_hit_it(capsys: pytest.CaptureFixture[str]) -> None:

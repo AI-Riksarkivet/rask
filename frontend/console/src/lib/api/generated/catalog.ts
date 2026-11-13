@@ -701,7 +701,7 @@ export interface paths {
          * Get Me
          * @description Describe the signed-in caller: verified claims, estate standing, and tenant memberships.
          *
-         *     Any verified token → 200; anonymous → 401. FGA off → ``estate_admin=true`` + ``projects=[]`` (dev
+         *     Any verified token → 200; anonymous → 401. FGA off → ``estate_admin=true``, ``can_create_project=true`` + ``projects=[]`` (dev
          *     parity). With FGA on, the lookups are display-only and DEGRADE per relation on an OpenFGA
          *     outage/brownout — this endpoint never 5xxes over authz-lookup health.
          */
@@ -1177,7 +1177,7 @@ export interface paths {
         };
         /**
          * List Projects
-         * @description The caller's tenants: every tenant for an estate observer, else the ones the caller is a member of.
+         * @description The caller's tenants: every tenant for the estate admin, else the ones the caller is a member of.
          *
          *     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
          *     facts still serve; the visibility decision itself fails closed (``_visible_projects``).
@@ -1188,8 +1188,8 @@ export interface paths {
          * Create Project
          * @description Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
          *
-         *     The gate is ``can_observe_events`` on the fixed root object — the estate-admin bar every whole-estate
-         *     surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion
+         *     The gate is ``can_create_project`` on the fixed root object: the estate admin, or a provisioning identity
+         *     holding ``operator`` there (ADR 0143). Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion
          *     protection forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
          *     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
          *     like any other ACL change, only when it was actually written; what the create announces is filed before the record,
@@ -1353,7 +1353,7 @@ export interface paths {
         };
         /**
          * Get Project
-         * @description One tenant, in the list's shape, for the callers the list shows it to: an estate observer, or a member of it.
+         * @description One tenant, in the list's shape, for the callers the list shows it to: the estate admin, or a member of it.
          *
          *     Anyone else is answered the missing project's 404, so the door tells no caller which project ids exist (the rule
          *     :func:`administered_project` states), and the trail records the refusal on each door it asked.
@@ -8376,6 +8376,8 @@ export interface components {
          * @description The caller's self-describe: verified claims + effective (possibly degraded) FGA standing.
          */
         MeResponse: {
+            /** Can Create Project */
+            can_create_project: boolean;
             /** Email */
             email: string | null;
             /** Estate Admin */

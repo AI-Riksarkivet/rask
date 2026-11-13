@@ -17,14 +17,14 @@ tenants (a fresh project legitimately has zero warehouses), while a warehouse cl
 record still surfaces — that is pre-registry legacy the reconciler reports, and hiding it would make the
 drift invisible instead of fixable.
 
-**The list is the caller's projects.** An estate observer (``can_observe_events`` on the fixed root object,
+**The list is the caller's projects.** The estate admin (``can_list_all_projects`` on the fixed root object,
 ``settings.fga_root_object``) lists every tenant; anyone else lists the projects they are a ``member`` of
 (the model folds ``admin`` into ``member``), batch-checked over the tenant map
 above, so a membership FGA holds for a project no registry knows lists nothing. Authorization scope ==
 data scope (the ``/management/v1/events`` #12 rationale): a member sees their own tenants' names,
 buckets and admins and no one else's. One tenant's detail is read by the callers the list shows it to, the
-estate observer or a member of that tenant, and anyone else is answered the missing tenant's 404
-(:func:`get_project`); create is estate-observer gated through ``fga_deps.require_relation``.
+estate admin or a member of that tenant, and anyone else is answered the missing tenant's 404
+(:func:`get_project`); create asks ``can_create_project`` on the root through ``fga_deps.require_relation``.
 ``/management/v1/projects`` matches no resource prefix in
 ``fga_deps.authorize``, so the router-wide gate only sets the 401/503 floor; every decision here is
 audited (allow/deny/outage, #41), and an OpenFGA outage fails the list closed with 503.
@@ -233,8 +233,8 @@ async def create_project(
 ) -> ProjectResponse:
     """Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
 
-    The gate is ``can_observe_events`` on the fixed root object — the estate-admin bar every whole-estate
-    surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion
+    The gate is ``can_create_project`` on the fixed root object: the estate admin, or a provisioning identity
+    holding ``operator`` there (ADR 0143). Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion
     protection forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
     like any other ACL change, only when it was actually written; what the create announces is filed before the record,
@@ -243,7 +243,7 @@ async def create_project(
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
     admin = fga_deps.project_admin_for(token, body.admin)
-    await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
+    await fga_deps.require_relation(client, settings, token, relation="can_create_project", obj=settings.fga_root_object)
     so = settings.storage_options()
     existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
     actor = f"user:{token.subject}" if token else None
@@ -301,7 +301,7 @@ async def create_project(
 async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
     """Which of ``candidates`` (the registry's project ids) this caller may list, or ``None`` for every tenant.
 
-    ``None`` for an estate observer, and with FGA off, as for every gate. Otherwise the candidates are batch-checked on
+    ``None`` for the estate admin, and with FGA off, as for every gate. Otherwise the candidates are batch-checked on
     ``member`` ([[LH-223]]): the listing never asks OpenFGA which projects the caller reaches, an answer the server stops
     counting at its ceiling. Fail-closed: no client, no caller (``fga_deps.authorization``) and an OpenFGA outage raise,
     so a caller is never shown more, or less, than their memberships by accident.
@@ -310,7 +310,7 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
         return None
     root = settings.fga_root_object
     try:
-        observer = await fga.check(authz.client, user=authz.subject, relation="can_observe_events", obj=root)
+        observer = await fga.check(authz.client, user=authz.subject, relation="can_list_all_projects", obj=root)
         allowed = None if observer else await authz.batch_check("member", [f"project:{p}" for p in candidates])
     except ServiceUnavailableError:
         audit(AuditAction.LIST_PROJECTS, AuditOutcome.FAILURE, subject=authz.subject, resource=root, reason="authz_unavailable")
@@ -320,7 +320,7 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
     audit(
         AuditAction.AUTHZ,
         AuditOutcome.ALLOW if observer else AuditOutcome.DENY,
-        relation="can_observe_events",
+        relation="can_list_all_projects",
         subject=authz.subject,
         resource=root,
         reason="list_projects",
@@ -330,7 +330,7 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
 
 @router.get("")
 async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[ProjectResponse]:
-    """The caller's tenants: every tenant for an estate observer, else the ones the caller is a member of.
+    """The caller's tenants: every tenant for the estate admin, else the ones the caller is a member of.
 
     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
     facts still serve; the visibility decision itself fails closed (``_visible_projects``)."""
@@ -347,14 +347,14 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
 
 @router.get("/{project_id}")
 async def get_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectResponse:
-    """One tenant, in the list's shape, for the callers the list shows it to: an estate observer, or a member of it.
+    """One tenant, in the list's shape, for the callers the list shows it to: the estate admin, or a member of it.
 
     Anyone else is answered the missing project's 404, so the door tells no caller which project ids exist (the rule
     :func:`administered_project` states), and the trail records the refusal on each door it asked.
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    doors = [("can_observe_events", settings.fga_root_object), ("member", f"project:{project_id}")]
+    doors = [("can_list_all_projects", settings.fga_root_object), ("member", f"project:{project_id}")]
     try:
         await fga_deps.require_any_relation(client, settings, token, doors=doors)
     except PermissionDeniedError as exc:
@@ -434,7 +434,7 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
         return record
     doors = [("can_administer", f"project:{project_id}")]
     if starter is not None:
-        doors.append(("can_observe_events", settings.fga_root_object))
+        doors.append(("can_finish_project_delete", settings.fga_root_object))
     try:
         await fga_deps.require_any_relation(client, settings, token, doors=doors)
     except PermissionDeniedError as exc:

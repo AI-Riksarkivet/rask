@@ -45,20 +45,26 @@ ENTRYPOINTS: list[tuple[str, str]] = [
     ("maintenance.service", "app"),
 ]
 
+#: The setting that opts each entrypoint's docs in, as its chart value `docs.enabled` renders it.
+DOCS_FLAGS = {"catalog.main": "LANCE_REST_DOCS", "lineage.main": "LINEAGE_DOCS", "maintenance.service": "MAINTENANCE_DOCS"}
+
 _PROBE = """
-import importlib, json, sys
+import importlib, json, re
+from fastapi.testclient import TestClient
 mod = importlib.import_module({module!r})
-app = eval({expr!r}, {{"m": mod, **vars(mod)}})
+client = TestClient(eval({expr!r}, {{"m": mod, **vars(mod)}}))
+answers = {{path: client.get(path) for path in ("/docs", "/redoc", "/openapi.json")}}
+names = {{"/docs": r"url: '([^']*)'", "/redoc": r'spec-url="([^"]*)"'}}
 print(json.dumps({{
-    "openapi_url": app.openapi_url,
-    "docs_url": app.docs_url,
-    "redoc_url": app.redoc_url,
+    "status": {{path: answer.status_code for path, answer in answers.items()}},
+    "schema": {{path: (re.search(pattern, answers[path].text) or [None, None])[1] for path, pattern in names.items()}},
 }}))
 """
 
 
-def _urls(module: str, expr: str) -> dict[str, str | None]:
-    """Import one app in a CLEAN process and report its three doc URLs.
+def _docs(module: str, expr: str, flags: dict[str, str]) -> dict[str, dict[str, object]]:
+    """Import one app in a CLEAN process under ``flags``, and report what its three doc paths answer and which schema
+    URL each page names.
 
     A subprocess per app, deliberately. These modules build settings at import time from
     `os.environ`, several via `lru_cache`, so importing fourteen of them into one interpreter would
@@ -76,7 +82,7 @@ def _urls(module: str, expr: str) -> dict[str, str | None]:
     # wise never reach their FastAPI constructor. Without these the probe reports an unimportable app
     # rather than an ungated one — which is how the catalog's real state stayed unmeasured on the
     # first run of this gate. Nothing here connects to anything.
-    env |= {
+    env |= flags | {
         "LANCE_S3_ACCESS_KEY_ID": "gate",
         "LANCE_S3_SECRET_ACCESS_KEY": "gate",
         "RASK_S3_ACCESS_KEY_ID": "gate",
@@ -97,10 +103,21 @@ def _urls(module: str, expr: str) -> dict[str, str | None]:
 
 @pytest.mark.parametrize(("module", "expr"), ENTRYPOINTS, ids=[m for m, _ in ENTRYPOINTS])
 def test_the_app_serves_no_docs_by_default(module: str, expr: str) -> None:
-    urls = _urls(module, expr)
-    served = {name: url for name, url in urls.items() if url is not None}
+    served = {path: status for path, status in _docs(module, expr, {})["status"].items() if status != 404}
     assert not served, (
-        f"{module} publishes {served} with no docs flag set — which is how the chart deploys it. "
-        f"Interactive docs and the OpenAPI schema must be opt-IN; pass "
-        f"docs_url/redoc_url/openapi_url=None unless the service's docs_enabled setting is true"
+        f"{module} answers {served} with no docs flag set — which is how the chart deploys it. "
+        f"Interactive docs and the OpenAPI schema must be opt-IN: served only while the service's docs_enabled setting is true"
     )
+
+
+@pytest.mark.parametrize(("module", "expr"), ENTRYPOINTS, ids=[m for m, _ in ENTRYPOINTS])
+def test_an_opted_in_docs_page_names_its_schema_beside_itself(module: str, expr: str) -> None:
+    """A page served at `<prefix>/docs` behind a route that rewrites or strips the prefix must fetch `<prefix>/openapi.json`,
+    and the app does not know the prefix: a schema URL relative to the page is right behind any route and with none, where
+    one rooted at `/` asks the edge's origin for a path no rule publishes and the page renders empty."""
+    answered = _docs(module, expr, {DOCS_FLAGS[module]: "true"})
+
+    assert answered == {
+        "status": {"/docs": 200, "/redoc": 200, "/openapi.json": 200},
+        "schema": {"/docs": "openapi.json", "/redoc": "openapi.json"},
+    }

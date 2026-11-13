@@ -1668,12 +1668,14 @@ openfga:
   # THE FEATURE this upgrade is for. `weighted_graph_check` puts Check on the weighted-graph
   # algorithm now instead of waiting for it to become the default — OpenFGA is moving every query
   # endpoint onto it and will remove the legacy fallback (openfga.dev, 2026-07-21). Turning it on is
-  # safe for us specifically: the model was audited against all five incompatibility classes and is
-  # clean (OPEN-WORK.md §J) — no `and`/`but not` anywhere, every multi-type TTU resolves on every
-  # allowed parent type, and no check call passes a userset/wildcard subject outside the catalog's
-  # access simulator. Incompatible models silently FALL BACK to the legacy algorithm rather than
-  # breaking, and 1.18.x logs a diagnostic when v2 would differ from v1 — so the flag is also the
-  # cheapest way to find out we are wrong.
+  # safe to turn on whatever the model holds: an incompatible model silently FALLS BACK to the legacy
+  # algorithm rather than breaking, and 1.18.x logs a diagnostic when v2 would differ from v1, so the
+  # flag is also the cheapest way to find out where the two differ. WHAT THE MODEL HOLDS (`model.fga`,
+  # read 2026-11-13): intersections (`and`) in the grant-option and move verbs and exclusions
+  # (`but not`) in the managed-access rules, on `warehouse`, `namespace` and `table`. So the grant and
+  # move verbs are the ones to read that diagnostic for; the data verbs (`can_read_data`,
+  # `can_get_metadata`, `visible_below`) are unions and tuple-to-usersets alone, and every multi-type
+  # tuple-to-userset resolves on every allowed parent type.
   #
   # NOT set here, deliberately: `pipeline_list_objects` is already the DEFAULT since v1.11.6, and
   # `datastore_throttling` changes behaviour under load on a Postgres THREE consumers share — decide

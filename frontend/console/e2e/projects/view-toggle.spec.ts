@@ -82,7 +82,12 @@ test('the toggle is absent when there is nothing to arrange', async ({ page }) =
 	// A member with no projects gets the empty state and no view control — offering two ways to look
 	// at nothing is noise, and the empty state is the answer to the question they actually have.
 	await seed(page, {
-		'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
+		'GET /management/v1/me': {
+			...ME_ADMIN,
+			estate_admin: false,
+			can_create_project: false,
+			projects: [],
+		},
 	});
 	await page.goto('/projects');
 	await expect(page.getByText('You are not a member of any project yet')).toBeVisible();

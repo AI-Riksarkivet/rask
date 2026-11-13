@@ -2,8 +2,8 @@
 
 The RAW-tuple counterpart of the per-object ``…/access/*`` surfaces (#51/#68/#72/#81): where those answer
 questions about ONE table/namespace at the owner bar, this browses and edits the authorization store
-itself — every tuple, any type — so it is gated exactly like ``/management/v1/events``: the surface is estate-wide,
-therefore observing (or mutating) it is a PLATFORM privilege, ``can_observe_events`` on the fixed root
+itself — every tuple, any type — so it is gated on the estate root: the surface is estate-wide,
+therefore observing (or mutating) it is a PLATFORM privilege, ``can_administer_authz`` on the fixed root
 object (``settings.fga_root_object``), decided explicitly per handler because ``/management/v1/access`` matches no
 resource prefix in ``fga_deps.authorize`` (the router gate only sets the 401/503 floor).
 
@@ -265,12 +265,12 @@ async def estate_gate(client: FgaClientDep, settings: SettingsDep, token: Curren
     instead, so the gate does one job and the injection does the other.
 
     FGA off → 406 Unsupported (there is no store to administer, unlike the events feed which still serves its buffer);
-    enabled-but-unwired → 503 fail-closed; then ``can_observe_events`` on the fixed root object — a
+    enabled-but-unwired → 503 fail-closed; then ``can_administer_authz`` on the fixed root object — a
     platform privilege, NOT per-project, because the tuple store is the whole estate's authorization state
     (authz scope == data scope, the #12 events fix). The gate itself audits the allow/deny.
     """
     wired = fga_deps.require_fga(settings, client, feature="FGA administration")
-    await fga_deps.require_relation(wired, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
+    await fga_deps.require_relation(wired, settings, token, relation="can_administer_authz", obj=settings.fga_root_object)
 
 
 #: ONE DOOR for the whole router. See `estate_gate` — this replaces nine hand-written calls, and is

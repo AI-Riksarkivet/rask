@@ -35,7 +35,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     admin of acme, bob the warehouse's owner and carol a member of acme."""
     monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     catalog = request.getfixturevalue("governed_catalog")
-    catalog.store.write((catalog.person(ADMIN), "owner", "estate:rask"))
+    catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"))
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
     settings = get_settings()

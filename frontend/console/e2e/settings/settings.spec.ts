@@ -74,13 +74,18 @@ test('a non-admin is REFUSED /settings with the reason — the route itself refu
 	// the estate ships a documented settings surface and the sidebar names it — while a 404 would cost
 	// every legitimate user their next step.
 	await seed(page, {
-		'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
+		'GET /management/v1/me': {
+			...ME_ADMIN,
+			estate_admin: false,
+			can_create_project: false,
+			projects: [],
+		},
 	});
 	await page.goto('/settings');
 	await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
 	// The reason is the FGA denial's own wording, not a generic "forbidden" — that is the half of the
 	// ruling a bare status code would silently drop.
-	await expect(page.getByText('can_observe_events', { exact: false })).toBeVisible();
+	await expect(page.getByText('owner on the estate root', { exact: false })).toBeVisible();
 	// The refusal is its own page: one h1 in words and its own title, worded as every estate-admin
 	// area's refusal is, with the code small beneath.
 	for (const [path, area] of [
@@ -118,7 +123,7 @@ test('an UNRESOLVED identity is refused for a DIFFERENT reason than a non-admin'
 	await page.goto('/settings');
 	await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
 	await expect(page.getByText('could not be confirmed', { exact: false })).toBeVisible();
-	await expect(page.getByText('can_observe_events', { exact: false })).toHaveCount(0);
+	await expect(page.getByText('owner on the estate root', { exact: false })).toHaveCount(0);
 });
 
 // The CHILDREN: `/settings/access` reads the platform's whole tuple store and `/settings/audit` its
@@ -127,13 +132,18 @@ test('an UNRESOLVED identity is refused for a DIFFERENT reason than a non-admin'
 for (const child of ['/settings/access', '/settings/audit'] as const) {
 	test(`${child} is behind the SAME door as /settings`, async ({ page }) => {
 		await seed(page, {
-			'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
+			'GET /management/v1/me': {
+				...ME_ADMIN,
+				estate_admin: false,
+				can_create_project: false,
+				projects: [],
+			},
 		});
 		await page.goto(child);
 		await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
 		// Inheriting the STATUS is not enough — a child that inherited the door but grew its own
 		// generic message would satisfy a status-only assertion while losing the ruling.
-		await expect(page.getByText('can_observe_events', { exact: false })).toBeVisible();
+		await expect(page.getByText('owner on the estate root', { exact: false })).toBeVisible();
 	});
 
 	test(`${child} answers 403 for an unresolved identity, like its parent`, async ({ page }) => {

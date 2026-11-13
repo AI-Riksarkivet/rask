@@ -198,13 +198,13 @@ _ROOT_OBJECT = str(Settings.model_fields["fga_root_object"].default)
 class _FakeStore:
     """A minimal stand-in for the OpenFGA store: it records the tuples the seed writes and resolves the two
     relations this flow checks against them — ``project#can_create_warehouse`` from a direct ``project#admin``
-    tuple and ``warehouse#can_observe_events`` from a direct ``owner`` on the root — both exactly as the
+    tuple and ``estate#can_create_project`` from a direct ``admin`` on the root — both exactly as the
     compiled model derives them. That makes the SEQUENCE provable offline: an estate admin mints a tenant,
     and the tenant is then self-governing (the second warehouse passes on its OWN project rung, not the
     estate door). A relation outside the pair is an error, so a silent gate change can't slip past."""
 
     def __init__(self, *, estate_admins: tuple[str, ...] = ()) -> None:
-        self.tuples: set[tuple[str, str, str]] = {(fga_module.user_object(sub), "owner", _ROOT_OBJECT) for sub in estate_admins}
+        self.tuples: set[tuple[str, str, str]] = {(fga_module.user_object(sub), "admin", _ROOT_OBJECT) for sub in estate_admins}
         self.checks: list[tuple[str, str, str]] = []
 
     async def check(self, _client: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
@@ -212,9 +212,7 @@ class _FakeStore:
         # The real `fga.check` sends a principal key as the user it is (`user_object`, qualify=True) and a full
         # subject verbatim (qualify=False); mirror that so a checked subject and a seeded tuple are the same string.
         subject = user if _kw.get("qualify") is False else fga_module.user_object(user)
-        if relation == "can_observe_events":
-            return (subject, "owner", obj) in self.tuples
-        if relation == "can_create_warehouse":
+        if relation in ("can_create_project", "can_create_warehouse"):
             return (subject, "admin", obj) in self.tuples
         raise AssertionError(f"the warehouse-create gate checked an unexpected relation: {relation}")
 
@@ -294,7 +292,7 @@ def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> Non
 
 def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # Decision 1 end to end: the estate admin mints the TENANT at POST /management/v1/projects (the estate door,
-    # can_observe_events on the root) — record + her project#admin tuple in one operation — and every
+    # can_create_project on the root) — record + her project#admin tuple in one operation — and every
     # warehouse after that passes on the project's OWN rung. The warehouse door never probes the estate.
     from catalog.schemas import CreateWarehouseRequest
 
@@ -304,7 +302,7 @@ def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_
     settings = _governed_settings(tmp_path)
 
     minted = _create_project_as(settings, "dex~alice", "acme")
-    assert store.checks == [("dex~alice", "can_observe_events", _ROOT_OBJECT)]
+    assert store.checks == [("dex~alice", "can_create_project", _ROOT_OBJECT)]
     assert ("user:dex~alice", "admin", "project:acme") in store.tuples
     assert minted.admins == ["user:dex~alice"]  # existence and permission born together, and the response shows it
 

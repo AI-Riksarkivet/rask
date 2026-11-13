@@ -41,7 +41,7 @@ def _status(response: httpx.Response, status: int, code: int | None = None) -> h
 def test_a_project_admin_manages_a_role_and_its_grant_reaches_its_assignees(governed_catalog: Any, tmp_path: Path) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
     catalog = governed_catalog
     alice, dave = catalog.bearer("alice"), catalog.bearer("dave")
-    catalog.store.write((catalog.person("root"), "owner", "estate:rask"))
+    catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")), 200)
     _status(catalog.client.put("/management/v1/projects/acme/members", json={"user": "dex~alice", "relation": "admin"}, headers=catalog.bearer("root")), 200)
     warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path)})
@@ -81,7 +81,7 @@ def test_a_role_that_is_its_projects_only_admin_keeps_an_assignee_and_ends_with_
     project's delete ends it with every tuple it held."""
     catalog = governed_catalog
     root, alice, grace = catalog.bearer("root"), catalog.bearer("alice"), catalog.bearer("grace")
-    catalog.store.write((catalog.person("root"), "owner", "estate:rask"))
+    catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=root), 200)
     role = _status(catalog.client.post(ROLES, json={"name": "admins"}, headers=root), 201).json()
     assignees, member = f"{ROLES}/{role['id']}/assignees", f"role:{role['id']}#assignee"
@@ -103,7 +103,7 @@ def test_a_role_whose_ending_failed_part_way_is_ended_by_calling_its_door_again(
     it, and its name is free for a new role, which is another uuid."""
     catalog = governed_catalog
     root = catalog.bearer("root")
-    catalog.store.write((catalog.person("root"), "owner", "estate:rask"))
+    catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=root), 200)
     role = _status(catalog.client.post(ROLES, json={"name": "analysts"}, headers=root), 201).json()
     _status(catalog.client.put(f"{ROLES}/{role['id']}/assignees", json={"user": "dex~dave"}, headers=root), 200)

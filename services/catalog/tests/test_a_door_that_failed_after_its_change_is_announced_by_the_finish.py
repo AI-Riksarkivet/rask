@@ -81,7 +81,7 @@ def estate(governed_catalog: Any) -> Iterator[tuple[Any, _Lanes]]:  # noqa: ANN4
     """alice's project acme with carol its member, alice's namespace ``db``, and maintenance holding the estate's
     ``reclaimer`` role, which the finish door asks; both lanes recorded from here on."""
     catalog = governed_catalog
-    catalog.store.write((catalog.person(ADMIN), "owner", "estate:rask"), (catalog.person(RECLAIMER), "reclaimer", "estate:rask"))
+    catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"), (catalog.person(RECLAIMER), "reclaimer", "estate:rask"))
     for path, body in (("/management/v1/projects", {"id": "acme"}), ("/v1/namespace/db/create", {})):
         made = catalog.client.post(path, json=body, headers=catalog.bearer(ADMIN))
         assert made.status_code == 200, made.text

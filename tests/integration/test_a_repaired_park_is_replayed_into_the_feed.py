@@ -73,7 +73,9 @@ def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[
         from lineage.core.config import get_settings
 
         with governed_lineage(catalog_url, monkeypatch, set()) as lineage:
-            lineage.app.state.grants.allowed.add((user_object(_ADMIN), "can_observe_events", get_settings().fga_root_object))
+            lineage.app.state.grants.allowed.update(
+                (user_object(_ADMIN), verb, get_settings().fga_root_object) for verb in ("can_read_parked_events", "can_replay_parked_events")
+            )
             register_dapr(lineage.app)
             publisher = _Publisher()
             lineage.app.state.dapr = publisher
@@ -102,7 +104,7 @@ def test_a_refused_complete_is_kept_and_replayed_into_the_feed_once_its_tuple_is
 
     assert (started.json(), parked.json()) == ({"status": "SUCCESS"}, {"status": "SUCCESS"})
     assert listed.json() == {"runs": {_RUN: 1}}, "a COMPLETE refused after its START landed was not kept"
-    assert (not_admin.status_code, "can_observe_events" in not_admin.json()["detail"]) == (403, True), not_admin.text
+    assert (not_admin.status_code, "can_replay_parked_events" in not_admin.json()["detail"]) == (403, True), not_admin.text
     assert (refused.status_code, refused.json()["code"]) == (400, 13), refused.text
     assert (replayed.status_code, replayed.json()) == (200, {"status": "recovered", "run_id": _RUN}), replayed.text
     assert (again.status_code, left.json()) == (404, {"runs": {}}), "a recovered park is still kept"

@@ -2,8 +2,8 @@
 
 Drives the handler directly (no TestClient) with fake settings + FGA wrappers, mirroring the repo's
 direct-call style (``test_projects_endpoint.py``). Pins the frozen contract: any VERIFIED token → 200
-with ``{sub, name, email, estate_admin, projects}``; anonymous → 401; FGA off → ``estate_admin=true``,
-``projects=[]`` (dev parity); ``estate_admin`` = ``can_observe_events`` on the fixed root object;
+with ``{sub, name, email, estate_admin, can_create_project, projects}``; anonymous → 401; FGA off → ``estate_admin=true``,
+``projects=[]`` (dev parity); ``estate_admin`` = ``can_administer_estate`` on the fixed root object;
 ``projects`` via the #51 list wrappers (admin first, then member, deduped) under a shared 2s budget,
 degrading PER RELATION on an FGA outage — the endpoint never 5xxes over authz-lookup health.
 """
@@ -53,7 +53,7 @@ def test_fga_off_dev_parity() -> None:
     result = _me(_settings(), token=_token(name="Alice A", email="alice@example.com"))
     assert result.sub == "dex~alice"
     assert result.name == "Alice A" and result.email == "alice@example.com"
-    assert result.estate_admin is True  # every require_* gate is a no-op there — say so honestly
+    assert (result.estate_admin, result.can_create_project) == (True, True)  # every require_* gate is a no-op there — say so honestly
     assert result.projects == []
 
 
@@ -67,7 +67,8 @@ def _wire(
     lists: dict[str, Any] | None = None,
     calls: list[tuple[str, str]] | None = None,
 ) -> None:
-    """Fake the two FGA wrappers: `estate`/`lists` values may be exceptions (raised) or results."""
+    """Fake the two FGA wrappers: `estate`/`lists` values may be exceptions (raised) or results; an `estate` dict
+    answers each estate relation its own value."""
     lists = lists or {}
 
     async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **kw: Any) -> bool:
@@ -76,7 +77,7 @@ def _wire(
         assert kw == {"retry_attempts": 1}  # single attempt under the tight budget (the /management/v1/projects rule)
         if isinstance(estate, Exception):
             raise estate
-        return bool(estate)
+        return bool(estate[relation] if isinstance(estate, dict) else estate)
 
     async def _fake_list(_client: Any, *, user: str, relation: str, object_type: str, **kw: Any) -> Any:
         if calls is not None:
@@ -97,9 +98,10 @@ def test_governed_shape_and_admin_first_dedupe(monkeypatch: pytest.MonkeyPatch) 
     calls: list[tuple[str, str]] = []
     # The model folds admins into members (`member: ... or admin`), so acme appears in BOTH lists — the
     # admin row must win and the duplicate member row must be dropped.
+    # An estate owner who is no `admin`: the estate's standing and the create door's verb are asked apart.
     _wire(
         monkeypatch,
-        estate=True,
+        estate={"can_administer_estate": True, "can_create_project": False},
         lists={
             "can_administer": ["project:acme"],
             "member": ["project:globex", "project:acme"],
@@ -107,12 +109,13 @@ def test_governed_shape_and_admin_first_dedupe(monkeypatch: pytest.MonkeyPatch) 
         calls=calls,
     )
     result = _me(_settings(fga_enabled=True), token=_token(), client=object())
-    assert result.estate_admin is True
+    assert (result.estate_admin, result.can_create_project) == (True, False)
     assert [(p.project, p.role) for p in result.projects] == [("acme", "admin"), ("globex", "member")]
-    # The estate check targets the estate-OBSERVER action on the FIXED root object; the lists run
+    # The estate check asks the estate owner's standing on the FIXED root object; the lists run
     # admin-first over the project type (the order the dedupe + budget-expiry semantics rely on).
     assert calls == [
-        ("can_observe_events", "warehouse:lance_catalog"),
+        ("can_administer_estate", "warehouse:lance_catalog"),
+        ("can_create_project", "warehouse:lance_catalog"),
         ("can_administer", "project"),
         ("member", "project"),
     ]

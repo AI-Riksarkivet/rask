@@ -55,8 +55,9 @@ rule order.
 No row publishes a service's root. A pod answers routes for its own platform (the kubelet's `/livez` and `/readyz`,
 the sidecar's `/dapr/subscribe`, the Dapr deliveries and cron ticks), and a prefix over the root would publish those and
 every route the service mounts later. The route keeps them off the edge; the pod's port still admits any peer
-(`<release>-edge-<component>`), and each route authenticates or answers only what a sidecar needs. Anonymous, `/dapr/subscribe` and each tick's `OPTIONS` answer 2xx, so publishing
-them hands the edge the estate's topics and binding names.
+(`<release>-edge-<component>`, ADR 0165), so each service guards them itself: `/dapr/subscribe`, every delivery and
+every tick with its `OPTIONS` pre-flight answer the sidecar's app token alone
+(`lakehouse.governed.dapr_auth`), and only the probes answer a caller with none.
 
 A client has no row here, and none is rendered: a client publishes its own prefixes from its own release. The console,
 the lakehouse's own UI, is routed at `/` by `console.yaml` on the same parentRefs and hostnames, and every `/api/*` row

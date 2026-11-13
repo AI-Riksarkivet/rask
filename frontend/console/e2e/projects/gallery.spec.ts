@@ -38,7 +38,7 @@ test('a 403 on the estate listing degrades to the caller’s own memberships —
 }) => {
 	await seed(page, {
 		'GET /management/v1/me': ME_ADMIN_WITH_MEMBERSHIPS,
-		// estate_admin is `can_observe_events`; the estate LISTING is gated separately, so an identity
+		// estate_admin is `can_administer_estate`; the estate LISTING asks `can_list_all_projects`, so an identity
 		// can hold the first and be refused the second. That is the fallback's real trigger.
 		'GET /management/v1/projects': { status: 403, body: { detail: 'forbidden' } },
 	});

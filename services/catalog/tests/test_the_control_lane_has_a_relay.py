@@ -24,6 +24,7 @@ It signs nothing, so it cannot vouch for an actor nobody authenticated.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -43,6 +44,7 @@ from lakehouse.control_emit import DaprControlEmitter
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
 from lakehouse.lineage import SigningKey, parse_published_keys
+from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
 
 
@@ -299,17 +301,20 @@ def test_pointing_the_control_outbox_at_the_LINEAGE_prefix_is_REFUSED_at_boot() 
         _settings("s3://bucket/_lineage_outbox", lineage_uri="s3://bucket/_lineage_outbox")
 
 
-def test_the_binding_name_IS_the_served_path(tmp_path: Path) -> None:
+def test_the_binding_name_IS_the_served_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A Dapr input binding is delivered to POST /<component-name> at the POD ROOT. A component named
-    one thing and a route mounted at another is a cron that fires into a 404 on every tick."""
+    one thing and a route mounted at another is a cron that fires into a 404 on every tick. The pre-flight answers the
+    sidecar alone: an anonymous 2xx would tell any peer that reaches the port which bindings the estate runs."""
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     settings = _settings(f"file://{tmp_path}/control-outbox")
     app = _relay_app(settings, _Recorder())
+    install_problem_handlers(app, logging.getLogger(__name__))
     binding = settings.control_relay_binding_name
 
     assert f"/{binding}" in app.openapi()["paths"], f"the relay serves no route at /{binding} — the cron Component ticks into a 404"
     with TestClient(app) as client:
-        assert client.options(f"/{binding}").status_code == 200, (
-            "Dapr's OPTIONS binding-discovery pre-flight is unanswered — the sidecar logs the binding as not consumed and never delivers"
+        assert (client.options(f"/{binding}", headers={"dapr-api-token": "s3cret"}).status_code, client.options(f"/{binding}").status_code) == (200, 403), (
+            "Dapr's OPTIONS binding-discovery pre-flight must answer the sidecar (or it logs the binding as not consumed and never delivers) and nobody else"
         )
 
 

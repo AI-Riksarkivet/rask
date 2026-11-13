@@ -22,6 +22,7 @@ export const ME_ADMIN = {
 	name: 'Alice',
 	email: 'alice@example.com',
 	estate_admin: true,
+	can_create_project: true,
 	projects: [] as Array<{ project: string; role: 'admin' | 'member' }>,
 };
 
@@ -32,6 +33,7 @@ export const ME_MEMBER = {
 	name: 'Bob',
 	email: 'bob@example.com',
 	estate_admin: false,
+	can_create_project: false,
 	projects: [{ project: 'acme', role: 'member' }],
 };
 

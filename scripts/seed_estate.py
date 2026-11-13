@@ -263,7 +263,7 @@ DEMO_ESTATE = Estate(
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
         Grant("role:acme/validators#assignee", "validator", "namespace:acme-gold"),
         Grant("user:carol", "reader", "warehouse:acme-bucket"),
-        # gina: a plain tenant member (not via acme's admins role) — a viewer who is not an admin.
+        # gina: a plain tenant member (not via acme's admins role): listed in the tenant and granted no data rung.
         Grant("user:gina", "member", "project:acme"),
         # ---- UPWARD VISIBILITY (C1) --------------------------------------------------------------
         # ivan holds ONE grant, on ONE table. The containers above it become VISIBLE — the breadcrumb

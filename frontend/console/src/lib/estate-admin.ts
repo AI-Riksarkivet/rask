@@ -25,7 +25,7 @@ export function requireEstateAdmin(me: Me | null, area: string): Me {
 	if (!isEstateAdmin(me))
 		error(403, {
 			title,
-			message: `Only estate admins can open ${area}: it needs can_observe_events on the estate root.`,
+			message: `Only estate admins can open ${area}: it needs owner on the estate root.`,
 		});
 	return me;
 }

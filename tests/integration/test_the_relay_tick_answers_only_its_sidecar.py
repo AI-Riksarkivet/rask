@@ -2,8 +2,9 @@
 
 The tick drains the lineage outbox, prunes the feed and forwards it to the graph backend, so a caller who could drive
 it could re-publish whatever is staged and push the feed out on demand. The route is mounted only when the chart names
-a binding, answers Dapr's discovery pre-flight without the app token (the probe carries none), and refuses a POST
-without it. Driven through lineage's router over the real store in a live catalog (`lineage_app`), with a recording
+a binding, and answers Dapr's discovery pre-flight and a POST only with the app token, which the sidecar stamps on
+both (measured on daprd 1.19.0-rc.4, 2026-11-13): an anonymous 2xx on the pre-flight would tell any peer that reaches
+the port which bindings the estate runs. Driven through lineage's router over the real store in a live catalog (`lineage_app`), with a recording
 graph backend, so a refused tick is seen to forward nothing.
 
 Through a read-only window (`LINEAGE_READ_ONLY`, rendered from the chart's one `readOnlyWindow`) the tick is answered and
@@ -60,12 +61,13 @@ def test_the_app_mounts_the_tick_only_when_a_binding_names_it() -> None:
     assert (TestClient(bare).options(f"/{RELAY}").status_code, TestClient(mounted).options(f"/{RELAY}").status_code) == (404, 200)
 
 
-def test_the_discovery_preflight_is_answered_at_the_binding_name_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_discovery_preflight_answers_its_sidecar_alone_at_the_binding_name_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+    sidecar = {"dapr-api-token": "s3cret"}
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, set()) as lineage:
-        answers = (lineage.options(f"/{RELAY}"), lineage.options("/other-binding"))
+        answers = (lineage.options(f"/{RELAY}", headers=sidecar), lineage.options(f"/{RELAY}"), lineage.options("/other-binding", headers=sidecar))
 
-    assert (answers[0].json(), answers[1].status_code) == ({"status": "ok"}, 404)
+    assert (answers[0].json(), answers[1].status_code, answers[2].status_code) == ({"status": "ok"}, 403, 404)
 
 
 @pytest.mark.parametrize(("read_only", "forwarded"), [pytest.param(False, 1, id="outside-a-window"), pytest.param(True, 0, id="through-a-read-only-window")])

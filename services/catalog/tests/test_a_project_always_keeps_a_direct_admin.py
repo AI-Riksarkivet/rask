@@ -49,7 +49,7 @@ def acme(request: pytest.FixtureRequest, governed_catalog: Any) -> Any:  # noqa:
     default, an admin revision already written), or root and alice with no revoke yet (``fresh``, no revision)."""
     catalog = governed_catalog
     fresh = getattr(request, "param", "settled") == "fresh"
-    catalog.store.write((catalog.person("root"), "owner", "estate:rask"))
+    catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _ok(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")))
     for user, relation in (("dex~alice", "admin"), ("dex~gina", "member"), *([] if fresh else [("dex~bob", "admin")])):
         _ok(catalog.client.put(MEMBERS, json={"user": user, "relation": relation}, headers=catalog.bearer("root")))

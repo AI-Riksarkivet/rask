@@ -11,6 +11,7 @@ const me: Me = {
 	name: 'Alice Ackerman',
 	email: 'alice@example.com',
 	estate_admin: true,
+	can_create_project: true,
 	projects: [{ project: 'acme', role: 'admin' }],
 };
 

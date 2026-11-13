@@ -21,6 +21,8 @@ export type GalleryData = {
 	/** A session exists but the catalog could not confirm WHO — not the same as signed out. */
 	identityUnavailable: boolean;
 	estateAdmin: boolean;
+	/** Whether the catalog's create door would admit the caller (`can_create_project` on the estate root). */
+	canCreateProject: boolean;
 	/** The signed-in caller's principal key (`<idp-id>~<user id>`), prefilled into the initial-admin
 	 *  field of the create dialog. Empty when there is no resolvable identity. */
 	meSubject: string;
@@ -51,6 +53,7 @@ export function galleryOf(
 			signedIn: false,
 			identityUnavailable: hasSession,
 			estateAdmin: false,
+			canCreateProject: false,
 			meSubject: '',
 			projects: [],
 		};
@@ -64,6 +67,7 @@ export function galleryOf(
 		signedIn: true,
 		identityUnavailable: false,
 		estateAdmin: isEstateAdmin(me),
+		canCreateProject: me.can_create_project,
 		meSubject: me.sub,
 	};
 	if (!isEstateAdmin(me) || !listing?.ok) return { ...base, projects: memberships };

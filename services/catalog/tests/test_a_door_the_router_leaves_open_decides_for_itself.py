@@ -311,7 +311,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     catalog = request.getfixturevalue("governed_catalog")
     client, alice = catalog.client, catalog.bearer("alice")
-    catalog.store.write((catalog.person("alice"), "owner", "estate:rask"))
+    catalog.store.write((catalog.person("alice"), "admin", "estate:rask"))
     _ok(client.post("/management/v1/projects", json={"id": PROJECT}, headers=alice))
     settings = get_settings()
     root, so, now = settings.registry_root, settings.storage_options(), datetime.now(UTC)

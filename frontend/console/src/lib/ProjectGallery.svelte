@@ -33,6 +33,7 @@
 	const signedIn = $derived(gallery.signedIn);
 	const identityUnavailable = $derived(gallery.identityUnavailable);
 	const estateAdmin = $derived(gallery.estateAdmin);
+	const canCreateProject = $derived(gallery.canCreateProject);
 	const meSubject = $derived(gallery.meSubject);
 	const projects = $derived(gallery.projects);
 
@@ -145,9 +146,9 @@
 					     are not creatable in this product, when the truth is that THEY cannot create one — and
 					     only the second version tells them whom to ask. -->
 					<GatedAction
-						allowed={estateAdmin}
+						allowed={canCreateProject}
 						action="New project"
-						reason="estate-admin only (needs can_observe_events on the FGA root)"
+						reason="needs can_create_project on the estate root (an estate admin or an operator)"
 					>
 						<Button variant="outline" size="sm" onclick={() => (creating = true)}>
 							<Plus /> New project

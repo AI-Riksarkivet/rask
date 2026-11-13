@@ -237,9 +237,8 @@ control event.
 
 - **Project and warehouse: yes.** They are the tenant and binding levels above the namespace spec, configuration rather
   than data, and an install from git that cannot recreate them is not an install from git (ADR 0199, the open question
-  "whether projects, warehouses and grants become resources declared in git"). Prerequisites: LH-076 (#128), because the
-  project door checks `can_observe_events` (`projects.py:235`) where the model's `can_create_project` is `admin or
-  operator` (`model.fga:148`); and the `managed_by` marker.
+  "whether projects, warehouses and grants become resources declared in git"). Prerequisite: the `managed_by` marker
+  (the project door asks `can_create_project`, `admin or operator`, since LH-076, #128).
 - **Grants: yes, for a principal that is not a person.** This is the direction ADR 0199 records for ADR 0192 ("grants
   declared in git and converged by the planned operator, the doors kept for people"). A grant CR names an object, a
   rung and a principal key and calls that object's grant door; on removal it revokes only a tuple it wrote, recorded in

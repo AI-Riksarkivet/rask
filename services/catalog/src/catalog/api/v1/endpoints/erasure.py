@@ -78,7 +78,7 @@ def get_table_owners(client: FgaClientDep, settings: SettingsDep) -> TableOwners
     async def _owners(object_id: str) -> list[str]:
         if not settings.fga_enabled or client is None:
             return []
-        return await fga.list_users(client, relation="owner", obj=object_id, qualified=True)
+        return await fga.list_users(client, relation="owner_effective", obj=object_id, qualified=True)
 
     return _owners
 

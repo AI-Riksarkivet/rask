@@ -1,6 +1,6 @@
 """A project is read by the callers its list shows it to ([[LH-587]]).
 
-`GET /management/v1/projects` answers a project to an estate observer and to each of its members.
+`GET /management/v1/projects` answers a project to the estate admin and to each of its members.
 `GET /management/v1/projects/{project_id}` answers the same record to the same callers, so a project's member who observes
 nothing estate-wide opens the project the list shows them, and the audit trail records each read as allowed on the object
 that opened it: the project for a member, the estate for an observer. A caller the list shows nothing is answered what a
@@ -33,7 +33,7 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
     """acme, made through its door by alice, who owns the estate as the chart's bootstrap hook grants it, with carol a
     member of it and erin another owner of the estate."""
     catalog = governed_catalog
-    catalog.store.write((catalog.person(OWNER), "owner", ESTATE), (catalog.person(OBSERVER), "owner", ESTATE))
+    catalog.store.write((catalog.person(OWNER), "admin", ESTATE), (catalog.person(OBSERVER), "owner", ESTATE))
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(OWNER))
     assert made.status_code == 200, made.text
     catalog.store.write((catalog.person(MEMBER), "member", f"project:{PROJECT}"))
@@ -61,7 +61,7 @@ def _recorded(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str, str, str
     ("caller", "opened_by"),
     [
         pytest.param(MEMBER, ("member", f"project:{PROJECT}"), id="a-member-who-observes-nothing-estate-wide"),
-        pytest.param(OBSERVER, ("can_observe_events", ESTATE), id="an-estate-observer-who-is-no-member"),
+        pytest.param(OBSERVER, ("can_list_all_projects", ESTATE), id="an-estate-observer-who-is-no-member"),
     ],
 )
 def test_a_project_is_read_by_a_caller_its_list_shows_it_to(
@@ -95,6 +95,6 @@ def test_a_caller_the_list_shows_nothing_is_answered_what_a_missing_project_answ
     assert _answer(missing) == (404, "application/problem+json", 4, "project not found: ghost")
     assert _answer(refused) == (404, "application/problem+json", 4, f"project not found: {PROJECT}")
     assert _recorded(caplog) == [
-        (AuditAction.AUTHZ, AuditOutcome.DENY, "can_observe_events", ESTATE),
+        (AuditAction.AUTHZ, AuditOutcome.DENY, "can_list_all_projects", ESTATE),
         (AuditAction.AUTHZ, AuditOutcome.DENY, "member", f"project:{PROJECT}"),
     ]

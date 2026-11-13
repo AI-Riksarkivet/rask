@@ -21,7 +21,7 @@ const nav = (page: Page) => page.getByRole('navigation', { name: 'Pages' });
 /** The rail the screenshots frame: the `Pages` landmark is `display: contents`, so it has no box. */
 const rail = (page: Page) => page.locator('[data-slot="sidebar-inner"]');
 
-const NON_ADMIN = { ...ME_ADMIN, estate_admin: false, projects: [] };
+const NON_ADMIN = { ...ME_ADMIN, estate_admin: false, can_create_project: false, projects: [] };
 const SHOTS = 'e2e/__shots__';
 
 test.beforeEach(async ({ context }, testInfo) => {
@@ -103,6 +103,6 @@ test('the route: a non-admin is refused /settings WITH the reason, not a 404', a
 	await seed(page, { 'GET /management/v1/me': NON_ADMIN });
 	await page.goto('/settings');
 	await expect(page.getByText('HTTP 403', { exact: true })).toBeVisible();
-	await expect(page.getByText('can_observe_events', { exact: false })).toBeVisible();
+	await expect(page.getByText('owner on the estate root', { exact: false })).toBeVisible();
 	await page.screenshot({ path: `${SHOTS}/143-settings-403.png` });
 });

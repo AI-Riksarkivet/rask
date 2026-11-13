@@ -36,7 +36,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     of acme and judy holding `manage_grants` on the warehouse."""
     monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     catalog = request.getfixturevalue("governed_catalog")
-    catalog.store.write((catalog.person(ADMIN), "owner", "estate:rask"))
+    catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"))
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
     settings = get_settings()
@@ -71,8 +71,8 @@ def _answered(door: str, answer: Any) -> Answered:
     return answer.json()
 
 
-def _granted(relation: str, *, granted: bool) -> dict[str, object]:
-    return {"object": f"warehouse:{WAREHOUSE}", "name": None, "user": f"user:dex~{GRANTEE}", "relation": relation, "granted": granted}
+def _granted(relation: str, *, granted: bool, user: str = GRANTEE) -> dict[str, object]:
+    return {"object": f"warehouse:{WAREHOUSE}", "name": None, "user": f"user:dex~{user}", "relation": relation, "granted": granted}
 
 
 @pytest.mark.parametrize(
@@ -85,6 +85,17 @@ def _granted(relation: str, *, granted: bool) -> dict[str, object]:
         pytest.param(MEMBER, "revoke", GRANTEE, "writer", {"writer"}, REFUSED, {"writer"}, id="a-project-member-is-refused-revoking"),
         pytest.param(MEMBER, "list", GRANTEE, "writer", {"writer"}, REFUSED, {"writer"}, id="a-project-member-is-refused-the-listing"),
         pytest.param(GRANTER, "grant", GRANTER, "reader", set(), REFUSED, set(), id="a-grant-may-not-raise-the-callers-own-access"),
+        # alice owns the warehouse through her project, which no tuple on the warehouse says: the rung she grants herself is one she holds.
+        pytest.param(
+            ADMIN,
+            "grant",
+            ADMIN,
+            "reader",
+            set(),
+            _granted("reader", granted=True, user=ADMIN),
+            {"reader"},
+            id="a-rung-the-caller-holds-by-inheritance-is-theirs-to-store",
+        ),
     ],
 )
 def test_a_rung_is_granted_revoked_and_listed_only_by_who_may_manage_its_grants(

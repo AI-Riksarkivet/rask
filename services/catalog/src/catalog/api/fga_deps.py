@@ -723,6 +723,21 @@ def _grant_actions(fga_type: str) -> frozenset[str]:
     return frozenset()
 
 
+@lru_cache
+def _holding_relation(fga_type: str, rung: str) -> str:
+    """The relation that answers "does a subject hold ``rung`` on an object of ``fga_type``".
+
+    A data rung is stored under its bare name, which holds only what was granted on the object, and held through its
+    ``_effective`` twin, which adds what implies it and what is inherited ([[LH-222]]). A rung with no twin (``apply``,
+    ``manage_grants``) is held as it is stored.
+    """
+    twin = f"{rung}_effective"
+    for td in fga.load_model()["type_definitions"]:
+        if td["type"] == fga_type and twin in (td.get("relations") or {}):
+            return twin
+    return rung
+
+
 async def _authorize_grant(
     request: Request,
     client: OpenFgaClient,
@@ -845,7 +860,7 @@ async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: ob
             return
     # The caller is the grantee. Allowed only when it changes nothing they do not already have.
     try:
-        already = await fga.check(client, user=subject, relation=relation, obj=obj, qualify=False)
+        already = await fga.check(client, user=subject, relation=_holding_relation(obj.partition(":")[0], relation), obj=obj, qualify=False)
     except ServiceUnavailableError:
         audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation="can_grant_self", subject=user, resource=obj, reason="authz_unavailable")
         raise
@@ -1186,25 +1201,36 @@ def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClien
 #: byte ([[LH-534]]).
 _UNIDENTIFIED_TABLE_RUNG: Final = "can_deregister"
 
+#: What the estate admin is asked, on the estate root, to deregister such a table.
+_UNIDENTIFIED_TABLE_ESTATE_VERB: Final = "can_deregister_unidentified_table"
+
 
 async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user: str, root: str, rung: tier_policy.Rung) -> None:
     """Admit the estate admin to deregister a table no uuid identifies, and refuse anyone else as a name holding nothing is refused.
 
-    Every grant is held by an object's uuid (ADR 0173 §8), so such a table holds none, and its deregister asks the rung
-    every estate-wide door asks, ``can_observe_events`` on the estate root ([[LH-534]]). The decision is audited on the
+    Every grant is held by an object's uuid (ADR 0173 §8), so such a table holds none, and its deregister asks the estate
+    admin's verb for it, ``can_deregister_unidentified_table`` on the estate root ([[LH-534]]). The decision is audited on the
     table by its name, with the root it was decided on; a refusal names the door's own rung on the name, so it tells no
     caller that the name holds a table.
     """
     label = _label(rung)
     try:
-        allowed = await fga.check(client, user=user, relation="can_observe_events", obj=root)
+        allowed = await fga.check(client, user=user, relation=_UNIDENTIFIED_TABLE_ESTATE_VERB, obj=root)
     except ServiceUnavailableError:  # authz layer down during an access attempt — audit, then fail closed
-        audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation="can_observe_events", subject=user, resource=label, decided_on=root, reason="authz_unavailable")
+        audit(
+            AuditAction.AUTHZ,
+            AuditOutcome.FAILURE,
+            relation=_UNIDENTIFIED_TABLE_ESTATE_VERB,
+            subject=user,
+            resource=label,
+            decided_on=root,
+            reason="authz_unavailable",
+        )
         raise
     audit(
         AuditAction.AUTHZ,
         AuditOutcome.ALLOW if allowed else AuditOutcome.DENY,
-        relation="can_observe_events",
+        relation=_UNIDENTIFIED_TABLE_ESTATE_VERB,
         subject=user,
         resource=label,
         decided_on=root,
@@ -2886,15 +2912,14 @@ async def require_tier_authority(client: OpenFgaClient | None, settings: Setting
     """Raise 403 unless the caller may declare or drop a namespace's ``rask.tier`` (ADR 0160).
 
     That is the namespace's project admin (``can_administer`` on ``project:<project>``), or the estate admin
-    (``can_observe_events`` on the root object, the bar ``POST /management/v1/projects`` asks) where no project owns
-    the namespace. With FGA off it allows (:func:`authorization`).
+    (``can_declare_unowned_tier`` on the root object) where no project owns the namespace. With FGA off it allows (:func:`authorization`).
     """
     if (authz := authorization(settings, client, token)) is None:
         return
     if project is not None:
         await authz.require("can_administer", f"project:{project}")
     else:
-        await authz.require("can_observe_events", settings.fga_root_object)
+        await authz.require("can_declare_unowned_tier", settings.fga_root_object)
 
 
 async def require_can_create_warehouse(
@@ -2913,7 +2938,7 @@ async def require_can_create_warehouse(
 
     There is deliberately NO bootstrap exception any more. It existed because a not-yet-existing
     project had no tuples, so its first warehouse was uncreatable — the estate admin got a side door
-    (``can_observe_events`` on the root). Decision 1 replaced the implicit mint: the estate admin
+    on the root. Decision 1 replaced the implicit mint: the estate admin
     creates the PROJECT explicitly (``POST /management/v1/projects``, which seeds its admin), and
     ``require_project_exists`` refuses a warehouse for an unknown tenant BEFORE this gate runs — so
     by the time we are here, the project exists and has admins, and one door is enough."""

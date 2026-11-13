@@ -5,7 +5,7 @@ The estate has **two** identity facts, both from the frozen `GET /management/v1/
 
 | Fact                         | Type                       | Means                                                                 |
 | ---------------------------- | -------------------------- | --------------------------------------------------------------------- |
-| `estate_admin`               | `boolean`                  | `can_observe_events` on the FGA root object — the whole-estate tier.    |
+| `estate_admin`               | `boolean`                  | `can_administer_estate` on the FGA root object: the estate owner.      |
 | `projects[].role`            | `'admin' \| 'member'`      | Per-project membership, one row per project the caller can see.        |
 
 There is no third tier and no client-side role invention: anything finer (can this user drop THIS

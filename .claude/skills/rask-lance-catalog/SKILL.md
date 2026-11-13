@@ -184,7 +184,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   table whose location carries no claim recording a uuid, or a namespace with no `rask.uuid`, raises
   `object_uuids.UnidentifiedObjectError` (code 18) at every door that resolves it. A listing leaves it out and logs
   `listing_left_out_unidentified_object` at ERROR with its name and location, so it never fails the listing for every
-  caller. `POST /v1/table/{id}/deregister` on such a table asks `can_observe_events` on the estate root in place of
+  caller. `POST /v1/table/{id}/deregister` on such a table asks `can_deregister_unidentified_table` on the estate root in place of
   `can_deregister` (`fga_deps._rung_check`) and refuses anyone else with the refusal an absent name gets; the door
   fences the location, detaches the row, releases the claim and announces `table_deregistered` naming it
   `table:<name>` with no `object_uuid`. It emits no lineage marker, since lineage refuses an output no uuid names
@@ -269,7 +269,7 @@ Three layers, each owned in ONE place:
 holds tuples for it. `POST /management/v1/projects` writes the record AND the `project#admin` tuple (the creator's; a
 machine identity names the person in `admin` and is never admin itself, LH-433, `fga_deps.project_admin_for`; a
 service account's subject is never a person, `is_person_subject`) in
-one operation (estate-admin gated on `can_observe_events` at the root), which is what stops existence
+one operation (gated on `can_create_project` at the estate root: the estate admin or an operator, ADR 0143), which is what stops existence
 and permission drifting apart. **A project always keeps a direct admin** ([[LH-434]]): the members door
 (`DELETE /management/v1/projects/{id}/members`) refuses the last one 409 code 14, and the store arbitrates the guard.
 An admin revoke deletes the admin tuple and moves `project#admin_revision` (`revision:<n>` to `<n+1>`, a bookkeeping
@@ -286,9 +286,9 @@ client, XC-183), and revokes a machine role on the estate root (a relation only 
 holder was granted it at a door ([[LH-563]]). It records `_principals/<blake2s>.json` (`GET` on the same path), answers `revoked` as the tuples it removed and
 emits `principal_deleted` (signed by the catalog), on which a notifier erases what it keeps for the person. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create: one
 door, and a warehouse-owner cannot ride a create into project admin. **A project is read by the callers its list shows
-it to** ([[LH-587]]): the list answers an estate observer every tenant and anyone else the projects they are a `member`
+it to** ([[LH-587]]): the list answers the estate admin (`can_list_all_projects`) every tenant and anyone else the projects they are a `member`
 of (`projects._visible_projects`), and `GET /management/v1/projects/{id}` decides over the same two doors
-(`fga_deps.require_any_relation`: `can_observe_events` on the estate root, or `member` on the project), so the trail
+(`fga_deps.require_any_relation`: `can_list_all_projects` on the estate root, or `member` on the project), so the trail
 holds one ALLOW naming the door that opened the read, or a DENY on each for a caller holding neither, who is answered
 the missing project's 404. Pinned by `services/catalog/tests/test_a_project_is_read_by_those_its_list_shows_it_to.py`.
 
@@ -319,7 +319,7 @@ the provenance namespace, which the catalog never announces, is served then.
 **A table's tier is the `rask.tier` property of the nearest enclosing namespace that declares one** (ADR 0156 C8,
 ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
 - **Declared once.** Only the namespace's project admin (`can_administer` on `project:<p>`, resolved through the
-  warehouse binding) declares it, or the estate admin (`can_observe_events` on the root) where no project owns the
+  warehouse binding) declares it, or the estate admin (`can_declare_unowned_tier` on the root) where no project owns the
   namespace. It is declared at create, on `POST /v1/namespace/{id}/create` or the warehouse door's `properties`.
   The catalog's own Overwrite is the only way to change or drop it, and it asks the same admin; no Lance operation
   alters a namespace's properties.

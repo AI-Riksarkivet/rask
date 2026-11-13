@@ -121,6 +121,18 @@ is the stored id (decoded and encoded again, so an id a reader echoes back names
 principal key. A tuple, a seed or a test that spells a user by hand is refused by the store or names the wrong one;
 spell it through `user_object`.
 
+**Every data rung is a stored relation and an `_effective` twin** ([[LH-222]], `auth/CHANGELOG.md`). On `warehouse`,
+`namespace`, `table` and `materialized_view` the bare name (`reader`) holds only what was granted on the object: grant
+doors write it and list it. `reader_effective` adds the rungs that imply it and what flows from the parent, and no
+`can_*` reads a bare data rung. A check that means "holds it here" asks a `can_*` or a twin, never the bare rung; a new rung ships
+as both relations. `visible_below` (upward visibility) reads the bare `owner`/`writer`/`reader` and recurses downward
+through `child` only: never define it over a twin, which sends every descendant back up to the project on each refusal
+(measured 2026-11-13 on a local OpenFGA, 234 descendants: 167 ms refused before the split, 17 ms after). A project
+`member` holds no data rung. A change to `model.fga` adds an entry to `auth/CHANGELOG.md` saying whether a store's
+tuples are rewritten or added to. **Each estate-admin door asks a verb of its own on the estate root** ([[LH-076]]):
+a new estate-wide door adds a computed `can_<purpose>: owner` and its `model.fga.yaml` rows, never a second use of an
+existing verb.
+
 **Every table and namespace object is its uuid, `table:<uuid>` / `namespace:<uuid>`** (ADR 0173 §8, [[LH-524]];
 `fga.table_object`, `fga.namespace_object`), the uuid the catalog minted (a table's in its location claim, a namespace's
 its `rask.uuid`; DescribeTable and DescribeNamespace answer it). No name reaches OpenFGA: a rename writes no tuple, a

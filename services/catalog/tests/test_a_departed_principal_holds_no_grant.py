@@ -57,7 +57,7 @@ def estate(governed_catalog: Any) -> tuple[Any, _Recorder]:  # noqa: ANN401 — 
     catalog = governed_catalog
     recorder = _Recorder()
     catalog.client.app.dependency_overrides[get_control_emitter] = lambda: recorder
-    catalog.store.write((catalog.person("root"), "owner", "estate:rask"))
+    catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _ok(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")))
     for user, relation in (("dex~alice", "admin"), ("dex~bob", "admin"), ("dex~gina", "member")):
         _ok(catalog.client.put("/management/v1/projects/acme/members", json={"user": user, "relation": relation}, headers=catalog.bearer("root")))

@@ -220,7 +220,7 @@ async def create_warehouse(
     # Cross-tenant takeover guard: `can_create_warehouse` gates on the caller-named `project`, so an admin of
     # ANY project could otherwise re-POST an EXISTING warehouse id under their own project — the seed ADDS
     # `warehouse:<id> project project:<theirs>` alongside the original owner's tuples, making their project's
-    # members readers of the victim's warehouse + every table under it (routing still points at the same
+    # admins owners of the victim's warehouse + every table under it (routing still points at the same
     # bucket → full cross-tenant disclosure). Reject a collision with a warehouse owned by another project.
     # A same-project re-create stays idempotent (the partial-failure retry path below relies on it).
     existing = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)

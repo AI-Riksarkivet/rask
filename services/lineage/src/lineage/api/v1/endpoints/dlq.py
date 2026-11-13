@@ -29,7 +29,16 @@ from lakehouse.governed import audit, fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome
 from lakehouse.lineage_events import dataset_uuids
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, Governed, enforce_bus_authz, enforce_output_authz, governed, governed_refs, require_estate_admin
+from lineage.api.fga_deps import (
+    FilterDep,
+    Governed,
+    enforce_bus_authz,
+    enforce_output_authz,
+    governed,
+    governed_refs,
+    require_parks_reader,
+    require_parks_replayer,
+)
 from lineage.api.security import CurrentToken
 from lineage.core.config import storage_options
 from lineage.core.metrics import Door, Outcome, record_outcome
@@ -185,13 +194,13 @@ async def replay_dlq(
     return DlqReplayResponse(status="replayed", run_id=run_id)
 
 
-@router.get("/parked", dependencies=[Depends(require_estate_admin)])
+@router.get("/parked", dependencies=[Depends(require_parks_reader)])
 async def list_parked(provenance: ProvenanceDep) -> ParkedRuns:
     """The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]])."""
     return ParkedRuns(runs=dict(Counter(delivery.run_id or "" for delivery in await provenance.parked())))
 
 
-@router.post("/parked/{run_id}/replay", dependencies=[Depends(require_estate_admin)])
+@router.post("/parked/{run_id}/replay", dependencies=[Depends(require_parks_replayer)])
 async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep, settings: SettingsDep, token: CurrentToken) -> DlqReplayResponse:
     """Re-present the deliveries of ``run_id`` the parking route kept, once their cause is fixed ([[LH-148]]).
 
@@ -202,7 +211,7 @@ async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep
     judged on its own feed row: one the feed then holds is RECOVERED and no longer kept, and one it still lacks stays
     kept, so a run whose START landed while its COMPLETE is still refused keeps the COMPLETE.
 
-    The estate admin's door (:func:`require_estate_admin`, asked before any kept row is read, so it names no run to
+    The estate admin's door (:func:`require_parks_replayer`, asked before any kept row is read, so it names no run to
     anyone else).
 
     Raises:

@@ -68,7 +68,7 @@ export interface paths {
          *     judged on its own feed row: one the feed then holds is RECOVERED and no longer kept, and one it still lacks stays
          *     kept, so a run whose START landed while its COMPLETE is still refused keeps the COMPLETE.
          *
-         *     The estate admin's door (:func:`require_estate_admin`, asked before any kept row is read, so it names no run to
+         *     The estate admin's door (:func:`require_parks_replayer`, asked before any kept row is read, so it names no run to
          *     anyone else).
          *
          *     Raises:

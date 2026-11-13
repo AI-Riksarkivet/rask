@@ -179,6 +179,490 @@ tuples:
   - { user: 'namespace:depth_6', relation: parent, object: 'namespace:depth_7' }
   - { user: 'warehouse:depth_probe', relation: parent, object: 'namespace:depth_1' }
   - { user: 'user:deepest', relation: reader, object: 'namespace:depth_7' }
+  # ---- the BREADTH probe ([[LH-222]]) ----
+  # One warehouse holding 234 descendants (18 namespaces of 12 tables, the width the refused describe was
+  # measured on), every edge written both ways as `grant_on_create` writes them. `user:wide_reader` reads the
+  # warehouse; `user:wide_one` holds `reader` on one table and nothing else; `user:wide_stranger` holds nothing.
+  - { user: 'project:wide_co', relation: project, object: 'warehouse:wide' }
+  - { user: 'user:wide_reader', relation: reader, object: 'warehouse:wide' }
+  - { user: 'user:wide_one', relation: reader, object: 'table:wide_17_11' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_0' }
+  - { user: 'table:wide_0_0', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_1' }
+  - { user: 'table:wide_0_1', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_2' }
+  - { user: 'table:wide_0_2', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_3' }
+  - { user: 'table:wide_0_3', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_4' }
+  - { user: 'table:wide_0_4', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_5' }
+  - { user: 'table:wide_0_5', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_6' }
+  - { user: 'table:wide_0_6', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_7' }
+  - { user: 'table:wide_0_7', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_8' }
+  - { user: 'table:wide_0_8', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_9' }
+  - { user: 'table:wide_0_9', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_10' }
+  - { user: 'table:wide_0_10', relation: child, object: 'namespace:wide_0' }
+  - { user: 'namespace:wide_0', relation: parent, object: 'table:wide_0_11' }
+  - { user: 'table:wide_0_11', relation: child, object: 'namespace:wide_0' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_0' }
+  - { user: 'table:wide_1_0', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_1' }
+  - { user: 'table:wide_1_1', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_2' }
+  - { user: 'table:wide_1_2', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_3' }
+  - { user: 'table:wide_1_3', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_4' }
+  - { user: 'table:wide_1_4', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_5' }
+  - { user: 'table:wide_1_5', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_6' }
+  - { user: 'table:wide_1_6', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_7' }
+  - { user: 'table:wide_1_7', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_8' }
+  - { user: 'table:wide_1_8', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_9' }
+  - { user: 'table:wide_1_9', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_10' }
+  - { user: 'table:wide_1_10', relation: child, object: 'namespace:wide_1' }
+  - { user: 'namespace:wide_1', relation: parent, object: 'table:wide_1_11' }
+  - { user: 'table:wide_1_11', relation: child, object: 'namespace:wide_1' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_0' }
+  - { user: 'table:wide_2_0', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_1' }
+  - { user: 'table:wide_2_1', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_2' }
+  - { user: 'table:wide_2_2', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_3' }
+  - { user: 'table:wide_2_3', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_4' }
+  - { user: 'table:wide_2_4', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_5' }
+  - { user: 'table:wide_2_5', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_6' }
+  - { user: 'table:wide_2_6', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_7' }
+  - { user: 'table:wide_2_7', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_8' }
+  - { user: 'table:wide_2_8', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_9' }
+  - { user: 'table:wide_2_9', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_10' }
+  - { user: 'table:wide_2_10', relation: child, object: 'namespace:wide_2' }
+  - { user: 'namespace:wide_2', relation: parent, object: 'table:wide_2_11' }
+  - { user: 'table:wide_2_11', relation: child, object: 'namespace:wide_2' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_0' }
+  - { user: 'table:wide_3_0', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_1' }
+  - { user: 'table:wide_3_1', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_2' }
+  - { user: 'table:wide_3_2', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_3' }
+  - { user: 'table:wide_3_3', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_4' }
+  - { user: 'table:wide_3_4', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_5' }
+  - { user: 'table:wide_3_5', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_6' }
+  - { user: 'table:wide_3_6', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_7' }
+  - { user: 'table:wide_3_7', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_8' }
+  - { user: 'table:wide_3_8', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_9' }
+  - { user: 'table:wide_3_9', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_10' }
+  - { user: 'table:wide_3_10', relation: child, object: 'namespace:wide_3' }
+  - { user: 'namespace:wide_3', relation: parent, object: 'table:wide_3_11' }
+  - { user: 'table:wide_3_11', relation: child, object: 'namespace:wide_3' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_0' }
+  - { user: 'table:wide_4_0', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_1' }
+  - { user: 'table:wide_4_1', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_2' }
+  - { user: 'table:wide_4_2', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_3' }
+  - { user: 'table:wide_4_3', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_4' }
+  - { user: 'table:wide_4_4', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_5' }
+  - { user: 'table:wide_4_5', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_6' }
+  - { user: 'table:wide_4_6', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_7' }
+  - { user: 'table:wide_4_7', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_8' }
+  - { user: 'table:wide_4_8', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_9' }
+  - { user: 'table:wide_4_9', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_10' }
+  - { user: 'table:wide_4_10', relation: child, object: 'namespace:wide_4' }
+  - { user: 'namespace:wide_4', relation: parent, object: 'table:wide_4_11' }
+  - { user: 'table:wide_4_11', relation: child, object: 'namespace:wide_4' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_0' }
+  - { user: 'table:wide_5_0', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_1' }
+  - { user: 'table:wide_5_1', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_2' }
+  - { user: 'table:wide_5_2', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_3' }
+  - { user: 'table:wide_5_3', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_4' }
+  - { user: 'table:wide_5_4', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_5' }
+  - { user: 'table:wide_5_5', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_6' }
+  - { user: 'table:wide_5_6', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_7' }
+  - { user: 'table:wide_5_7', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_8' }
+  - { user: 'table:wide_5_8', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_9' }
+  - { user: 'table:wide_5_9', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_10' }
+  - { user: 'table:wide_5_10', relation: child, object: 'namespace:wide_5' }
+  - { user: 'namespace:wide_5', relation: parent, object: 'table:wide_5_11' }
+  - { user: 'table:wide_5_11', relation: child, object: 'namespace:wide_5' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_0' }
+  - { user: 'table:wide_6_0', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_1' }
+  - { user: 'table:wide_6_1', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_2' }
+  - { user: 'table:wide_6_2', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_3' }
+  - { user: 'table:wide_6_3', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_4' }
+  - { user: 'table:wide_6_4', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_5' }
+  - { user: 'table:wide_6_5', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_6' }
+  - { user: 'table:wide_6_6', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_7' }
+  - { user: 'table:wide_6_7', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_8' }
+  - { user: 'table:wide_6_8', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_9' }
+  - { user: 'table:wide_6_9', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_10' }
+  - { user: 'table:wide_6_10', relation: child, object: 'namespace:wide_6' }
+  - { user: 'namespace:wide_6', relation: parent, object: 'table:wide_6_11' }
+  - { user: 'table:wide_6_11', relation: child, object: 'namespace:wide_6' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_0' }
+  - { user: 'table:wide_7_0', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_1' }
+  - { user: 'table:wide_7_1', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_2' }
+  - { user: 'table:wide_7_2', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_3' }
+  - { user: 'table:wide_7_3', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_4' }
+  - { user: 'table:wide_7_4', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_5' }
+  - { user: 'table:wide_7_5', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_6' }
+  - { user: 'table:wide_7_6', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_7' }
+  - { user: 'table:wide_7_7', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_8' }
+  - { user: 'table:wide_7_8', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_9' }
+  - { user: 'table:wide_7_9', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_10' }
+  - { user: 'table:wide_7_10', relation: child, object: 'namespace:wide_7' }
+  - { user: 'namespace:wide_7', relation: parent, object: 'table:wide_7_11' }
+  - { user: 'table:wide_7_11', relation: child, object: 'namespace:wide_7' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_0' }
+  - { user: 'table:wide_8_0', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_1' }
+  - { user: 'table:wide_8_1', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_2' }
+  - { user: 'table:wide_8_2', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_3' }
+  - { user: 'table:wide_8_3', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_4' }
+  - { user: 'table:wide_8_4', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_5' }
+  - { user: 'table:wide_8_5', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_6' }
+  - { user: 'table:wide_8_6', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_7' }
+  - { user: 'table:wide_8_7', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_8' }
+  - { user: 'table:wide_8_8', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_9' }
+  - { user: 'table:wide_8_9', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_10' }
+  - { user: 'table:wide_8_10', relation: child, object: 'namespace:wide_8' }
+  - { user: 'namespace:wide_8', relation: parent, object: 'table:wide_8_11' }
+  - { user: 'table:wide_8_11', relation: child, object: 'namespace:wide_8' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_0' }
+  - { user: 'table:wide_9_0', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_1' }
+  - { user: 'table:wide_9_1', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_2' }
+  - { user: 'table:wide_9_2', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_3' }
+  - { user: 'table:wide_9_3', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_4' }
+  - { user: 'table:wide_9_4', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_5' }
+  - { user: 'table:wide_9_5', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_6' }
+  - { user: 'table:wide_9_6', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_7' }
+  - { user: 'table:wide_9_7', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_8' }
+  - { user: 'table:wide_9_8', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_9' }
+  - { user: 'table:wide_9_9', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_10' }
+  - { user: 'table:wide_9_10', relation: child, object: 'namespace:wide_9' }
+  - { user: 'namespace:wide_9', relation: parent, object: 'table:wide_9_11' }
+  - { user: 'table:wide_9_11', relation: child, object: 'namespace:wide_9' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_0' }
+  - { user: 'table:wide_10_0', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_1' }
+  - { user: 'table:wide_10_1', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_2' }
+  - { user: 'table:wide_10_2', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_3' }
+  - { user: 'table:wide_10_3', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_4' }
+  - { user: 'table:wide_10_4', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_5' }
+  - { user: 'table:wide_10_5', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_6' }
+  - { user: 'table:wide_10_6', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_7' }
+  - { user: 'table:wide_10_7', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_8' }
+  - { user: 'table:wide_10_8', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_9' }
+  - { user: 'table:wide_10_9', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_10' }
+  - { user: 'table:wide_10_10', relation: child, object: 'namespace:wide_10' }
+  - { user: 'namespace:wide_10', relation: parent, object: 'table:wide_10_11' }
+  - { user: 'table:wide_10_11', relation: child, object: 'namespace:wide_10' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_0' }
+  - { user: 'table:wide_11_0', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_1' }
+  - { user: 'table:wide_11_1', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_2' }
+  - { user: 'table:wide_11_2', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_3' }
+  - { user: 'table:wide_11_3', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_4' }
+  - { user: 'table:wide_11_4', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_5' }
+  - { user: 'table:wide_11_5', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_6' }
+  - { user: 'table:wide_11_6', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_7' }
+  - { user: 'table:wide_11_7', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_8' }
+  - { user: 'table:wide_11_8', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_9' }
+  - { user: 'table:wide_11_9', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_10' }
+  - { user: 'table:wide_11_10', relation: child, object: 'namespace:wide_11' }
+  - { user: 'namespace:wide_11', relation: parent, object: 'table:wide_11_11' }
+  - { user: 'table:wide_11_11', relation: child, object: 'namespace:wide_11' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_0' }
+  - { user: 'table:wide_12_0', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_1' }
+  - { user: 'table:wide_12_1', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_2' }
+  - { user: 'table:wide_12_2', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_3' }
+  - { user: 'table:wide_12_3', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_4' }
+  - { user: 'table:wide_12_4', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_5' }
+  - { user: 'table:wide_12_5', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_6' }
+  - { user: 'table:wide_12_6', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_7' }
+  - { user: 'table:wide_12_7', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_8' }
+  - { user: 'table:wide_12_8', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_9' }
+  - { user: 'table:wide_12_9', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_10' }
+  - { user: 'table:wide_12_10', relation: child, object: 'namespace:wide_12' }
+  - { user: 'namespace:wide_12', relation: parent, object: 'table:wide_12_11' }
+  - { user: 'table:wide_12_11', relation: child, object: 'namespace:wide_12' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_0' }
+  - { user: 'table:wide_13_0', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_1' }
+  - { user: 'table:wide_13_1', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_2' }
+  - { user: 'table:wide_13_2', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_3' }
+  - { user: 'table:wide_13_3', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_4' }
+  - { user: 'table:wide_13_4', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_5' }
+  - { user: 'table:wide_13_5', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_6' }
+  - { user: 'table:wide_13_6', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_7' }
+  - { user: 'table:wide_13_7', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_8' }
+  - { user: 'table:wide_13_8', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_9' }
+  - { user: 'table:wide_13_9', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_10' }
+  - { user: 'table:wide_13_10', relation: child, object: 'namespace:wide_13' }
+  - { user: 'namespace:wide_13', relation: parent, object: 'table:wide_13_11' }
+  - { user: 'table:wide_13_11', relation: child, object: 'namespace:wide_13' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_0' }
+  - { user: 'table:wide_14_0', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_1' }
+  - { user: 'table:wide_14_1', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_2' }
+  - { user: 'table:wide_14_2', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_3' }
+  - { user: 'table:wide_14_3', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_4' }
+  - { user: 'table:wide_14_4', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_5' }
+  - { user: 'table:wide_14_5', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_6' }
+  - { user: 'table:wide_14_6', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_7' }
+  - { user: 'table:wide_14_7', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_8' }
+  - { user: 'table:wide_14_8', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_9' }
+  - { user: 'table:wide_14_9', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_10' }
+  - { user: 'table:wide_14_10', relation: child, object: 'namespace:wide_14' }
+  - { user: 'namespace:wide_14', relation: parent, object: 'table:wide_14_11' }
+  - { user: 'table:wide_14_11', relation: child, object: 'namespace:wide_14' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_0' }
+  - { user: 'table:wide_15_0', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_1' }
+  - { user: 'table:wide_15_1', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_2' }
+  - { user: 'table:wide_15_2', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_3' }
+  - { user: 'table:wide_15_3', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_4' }
+  - { user: 'table:wide_15_4', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_5' }
+  - { user: 'table:wide_15_5', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_6' }
+  - { user: 'table:wide_15_6', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_7' }
+  - { user: 'table:wide_15_7', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_8' }
+  - { user: 'table:wide_15_8', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_9' }
+  - { user: 'table:wide_15_9', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_10' }
+  - { user: 'table:wide_15_10', relation: child, object: 'namespace:wide_15' }
+  - { user: 'namespace:wide_15', relation: parent, object: 'table:wide_15_11' }
+  - { user: 'table:wide_15_11', relation: child, object: 'namespace:wide_15' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_0' }
+  - { user: 'table:wide_16_0', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_1' }
+  - { user: 'table:wide_16_1', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_2' }
+  - { user: 'table:wide_16_2', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_3' }
+  - { user: 'table:wide_16_3', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_4' }
+  - { user: 'table:wide_16_4', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_5' }
+  - { user: 'table:wide_16_5', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_6' }
+  - { user: 'table:wide_16_6', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_7' }
+  - { user: 'table:wide_16_7', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_8' }
+  - { user: 'table:wide_16_8', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_9' }
+  - { user: 'table:wide_16_9', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_10' }
+  - { user: 'table:wide_16_10', relation: child, object: 'namespace:wide_16' }
+  - { user: 'namespace:wide_16', relation: parent, object: 'table:wide_16_11' }
+  - { user: 'table:wide_16_11', relation: child, object: 'namespace:wide_16' }
+  - { user: 'warehouse:wide', relation: parent, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: child, object: 'warehouse:wide' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_0' }
+  - { user: 'table:wide_17_0', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_1' }
+  - { user: 'table:wide_17_1', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_2' }
+  - { user: 'table:wide_17_2', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_3' }
+  - { user: 'table:wide_17_3', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_4' }
+  - { user: 'table:wide_17_4', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_5' }
+  - { user: 'table:wide_17_5', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_6' }
+  - { user: 'table:wide_17_6', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_7' }
+  - { user: 'table:wide_17_7', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_8' }
+  - { user: 'table:wide_17_8', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_9' }
+  - { user: 'table:wide_17_9', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_10' }
+  - { user: 'table:wide_17_10', relation: child, object: 'namespace:wide_17' }
+  - { user: 'namespace:wide_17', relation: parent, object: 'table:wide_17_11' }
+  - { user: 'table:wide_17_11', relation: child, object: 'namespace:wide_17' }
+  # ---- the ROLE CYCLE ([[LH-222]]) ----
+  # Two roles of one project, each an assignee of the other, which the role doors' nesting allows a mistake to
+  # write. `user:cycle_member` is in one of them; the cycle's userset reads one table of the wide warehouse.
+  - { user: 'project:wide_co', relation: project, object: 'role:cycle_a' }
+  - { user: 'project:wide_co', relation: project, object: 'role:cycle_b' }
+  - { user: 'role:cycle_b#assignee', relation: assignee, object: 'role:cycle_a' }
+  - { user: 'role:cycle_a#assignee', relation: assignee, object: 'role:cycle_b' }
+  - { user: 'user:cycle_member', relation: assignee, object: 'role:cycle_b' }
+  - { user: 'role:cycle_a#assignee', relation: reader, object: 'table:wide_0_0' }
   # A PIPELINE'S OWN OUTPUT — the tuple `register_table` writes for itself. Registering calls
   # `seed_ownership_or_compensate(resource="table")`, so the identity that registered a table is
   # granted `owner` on it. That is what decides whether a pipeline can publish what it just wrote, and
@@ -323,7 +807,7 @@ tests:
       # which is the reach that makes the identity worth asserting on a leaf rather than a container.
       - user: user:alice
         object: table:acme_gold_catalog
-        assertions: { owner: true, can_drop: true, can_set_protection: true }
+        assertions: { owner_effective: true, can_drop: true, can_set_protection: true }
       - user: user:peter
         object: table:acme_gold_catalog
         assertions: { can_write_data: true, can_drop: false, can_set_protection: false }
@@ -333,7 +817,7 @@ tests:
       # carol reads acme_bronze through her warehouse grant and must not arm anything on it.
       - user: user:carol
         object: namespace:acme_bronze
-        assertions: { reader: true, can_delete: false, can_set_protection: false }
+        assertions: { reader_effective: true, can_delete: false, can_set_protection: false }
   - name: classifying is INDEPENDENT of writing, in both directions
     # [[LH-058]]. The reference model's principle — "independent of `modify` (separation of duties:
     # classify without holding data/DDL rights)" — as behaviour rather than as a comment. The hole it
@@ -437,7 +921,7 @@ tests:
       - user: user:carol
         object: namespace:acme_bronze
         assertions:
-          reader: true                        # inherited from her warehouse reader grant
+          reader_effective: true                      # inherited from her warehouse reader grant
           can_get_metadata: true              # what a reader IS entitled to
           can_delete: false                   # DESTRUCTIVE and owner-tier; was widenable to reader
           can_create_namespace: false
@@ -447,7 +931,7 @@ tests:
       - user: user:carol
         object: table:acme_silver_features
         assertions:
-          reader: true                        # inherited through namespace:acme_silver
+          reader_effective: true                      # inherited through namespace:acme_silver
           can_read_data: true                 # what a reader IS entitled to
           can_write_data: false               # writer-tier; the read/write boundary itself was unpinned
           can_create_version: false           # a reader commits nothing, through `version/create` either
@@ -598,10 +1082,8 @@ tests:
     #   alice/bob — role:acme_admins assignees, admins of project:acme, so warehouse owners
     #   carol     — reader granted on warehouse:acme_bucket directly
     #   dave      — writer on the warehouse (writer implies reader, concentrically)
-    #   gina      — member of project:acme, which `warehouse#reader` includes via `member from project`
-    #   rita      — the same edge as gina. Added 2026-08-22 as the plain-member subject that pins
-    #               `project.can_administer: admin` against a widening to `member`; her arrival here
-    #               is not incidental, it re-proves that `member from project` reaches this far.
+    #   gina and rita, plain members of project:acme, are ABSENT: membership lists a person in the tenant and
+    #               confers no data rung ([[LH-222]]), so a member is told about a container once granted on it.
     #   service-silver-to-gold — the cascade writer, and it belongs here for the same reason dave does:
     #               it holds `writer` on the warehouse, and a pipeline READS the tier below the one
     #               it writes, so reader is a rung it genuinely needs rather than a side effect to trim.
@@ -613,7 +1095,7 @@ tests:
         user_filter: [{ type: user }]
         assertions:
           can_be_notified:
-            users: [user:alice, user:bob, user:carol, user:dave, user:gina, user:rita, user:service-silver-to-gold]
+            users: [user:alice, user:bob, user:carol, user:dave, user:service-silver-to-gold]
 
   - name: create-on-parent — create perms are gated on the PARENT object (design-create-on-parent)
     check:
@@ -1114,6 +1596,79 @@ tests:
         assertions:
           can_get_metadata: true
 
+  - name: a refused metadata check on a WIDE warehouse answers false, and visibility below reads only what each object was granted
+    check:
+      # The refusal that must walk the whole subtree before it can say no.
+      - user: user:wide_stranger
+        object: warehouse:wide
+        assertions:
+          can_get_metadata: false
+          visible_below: false
+      # One grant on one of the 216 tables lights the path above it, and only that path.
+      - user: user:wide_one
+        object: warehouse:wide
+        assertions: { can_get_metadata: true, visible_below: true, reader_effective: false }
+      - user: user:wide_one
+        object: namespace:wide_17
+        assertions: { can_get_metadata: true, visible_below: true }
+      - user: user:wide_one
+        object: namespace:wide_16
+        assertions: { can_get_metadata: false, visible_below: false }
+      # THE BOUND. A warehouse reader sees every namespace through `reader_effective`, and `visible_below` on a
+      # namespace she holds no grant IN is false: it counts grants stored beneath, never a rung inherited from
+      # above. It flips if `visible_below` is widened to an effective twin, which is what would send each of
+      # the 234 descendants back up to the project on every refusal.
+      - user: user:wide_reader
+        object: namespace:wide_3
+        assertions: { can_get_metadata: true, reader_effective: true, visible_below: false }
+      - user: user:wide_reader
+        object: warehouse:wide
+        assertions: { visible_below: true }
+
+  - name: a stored rung holds what was granted on the object, and its effective twin what is inherited as well
+    check:
+      # carol's `reader` is a tuple on the warehouse: stored there, inherited beneath.
+      - user: user:carol
+        object: warehouse:acme_bucket
+        assertions: { reader: true, reader_effective: true }
+      - user: user:carol
+        object: table:acme_silver_features
+        assertions: { reader: false, reader_effective: true }
+      # dave's `writer` on the warehouse implies reading and flows down, and neither is stored below.
+      - user: user:dave
+        object: namespace:acme_silver
+        assertions: { writer: false, writer_effective: true, reader: false, reader_effective: true }
+      # alice owns through her project's admin role, which is no tuple on any object beneath the project.
+      - user: user:alice
+        object: warehouse:acme_bucket
+        assertions: { owner: false, owner_effective: true }
+
+  - name: a project MEMBER is listed in the tenant and holds no data rung — reading a warehouse is its own grant
+    check:
+      - user: user:rita
+        object: project:acme
+        assertions: { member: true, can_list_roles: true }
+      - user: user:rita
+        object: warehouse:acme_bucket
+        assertions: { reader_effective: false, can_get_metadata: false, can_be_notified: false, can_create_table: false }
+      - user: user:rita
+        object: table:acme_gold_catalog
+        assertions: { can_read_data: false, can_get_metadata: false }
+
+  - name: a ROLE CYCLE resolves — a member of the cycle is granted, a stranger is refused, and neither check errors
+    check:
+      - user: user:cycle_member
+        object: table:wide_0_0
+        assertions: { can_read_data: true }
+      # Reaching the warehouse means `visible_below` met the cycle's userset on the way down.
+      - user: user:cycle_member
+        object: warehouse:wide
+        assertions: { can_get_metadata: true }
+      # The refusal is the direction that would loop: no assignee of either role is this user.
+      - user: user:wide_stranger
+        object: table:wide_0_0
+        assertions: { can_read_data: false }
+
   - name: managed access binds the WAREHOUSE OWNER too — the rung the subtraction used to miss
     check:
       # oskar owns the managed warehouse outright. Before the subtraction reached this rung he kept
@@ -1133,8 +1688,8 @@ tests:
       - user: user:oskar
         object: warehouse:beta_bucket
         assertions:
-          reader: true
-          writer: true
+          reader_effective: true
+          writer_effective: true
           can_get_metadata: true
       # The records manager is exactly who the flag centralizes granting ON, so she still grants here.
       - user: user:nora
@@ -1321,10 +1876,10 @@ tests:
       # operation nothing can perform.
       - user: user:service-maintenance
         object: warehouse:acme_bucket
-        assertions: { maintainer: true }
+        assertions: { maintainer_effective: true }
       - user: user:service-maintenance
         object: namespace:acme_silver
-        assertions: { maintainer: true }
+        assertions: { maintainer_effective: true }
       - user: user:service-maintenance
         object: table:acme_silver_features
         assertions:
@@ -1382,7 +1937,7 @@ tests:
         assertions: { publisher: true, writer: true, validator: true }
       - user: user:service-silver-to-gold
         object: namespace:acme_gold
-        assertions: { publisher: true }
+        assertions: { publisher_effective: true }
       - user: user:service-silver-to-gold
         object: table:acme_gold_catalog
         assertions:
@@ -1545,8 +2100,7 @@ tests:
   # whether it WORKS. That is the gap these cases close.
   #
   # Every rung here is checked by a lakehouse door on the root object, and a client gating an estate-wide
-  # surface asks one of them (`can_observe_events`) through the decision door, so the estate carries no tier
-  # below its owner.
+  # surface asks an owner-tier verb through the decision door, so the estate carries no tier below its owner.
   - name: the estate root's rungs open only their own doors, and a machine identity is a relation
     tuples:
       - user: user:root_admin
@@ -1600,7 +2154,7 @@ tests:
           can_reclaim_trash: false
           can_reconcile_grants: false
       # EACH CHECK-ONLY SERVICE OPENS THE DECISION ROUTES IT IS GRANTED AND NOTHING ELSE ON THE ROOT ([[LH-442]]).
-      # Each flips if a role is folded into another, or into a rung that edits the graph (`can_observe_events`).
+      # Each flips if a role is folded into another, or into a rung that edits the graph (`can_administer_authz`).
       - user: user:lineage
         object: estate:rask
         assertions:
@@ -1664,15 +2218,48 @@ tests:
           can_create_project: true
           can_observe_events: true
       # A FEED READER READS THE WHOLE RUN FEED AND NOTHING ELSE ON THE ROOT ([[CTL-021]]). The two
-      # refusals that matter are the doors that mint a tenant (`POST /management/v1/projects` checks
-      # `can_observe_events`; `can_create_project` is the model's own verb) and the raw tuple editor
-      # (`can_observe_events` too). Each flips if `event_reader` is folded into a rung that carries them.
+      # refusals that matter are the door that mints a tenant (`POST /management/v1/projects`,
+      # `can_create_project`) and the raw tuple editor (`can_administer_authz`). Each flips if `event_reader`
+      # is folded into a rung that carries them.
       - user: user:a-notifier
         object: estate:rask
         assertions:
           can_read_event_feed: true
           can_observe_events: false
           can_create_project: false
+          can_administer_authz: false
+      # EACH ESTATE-ADMIN VERB IS THE ESTATE OWNER'S AND NOBODY ELSE'S ([[LH-076]]): one verb per purpose, so a
+      # door's relation says what it opens. The estate admin holds every one.
+      - user: user:root_admin
+        object: estate:rask
+        assertions:
+          can_list_all_projects: true
+          can_finish_project_delete: true
+          can_administer_authz: true
+          can_declare_unowned_tier: true
+          can_deregister_unidentified_table: true
+          can_read_parked_events: true
+          can_replay_parked_events: true
+          can_administer_estate: true
+      # An operator provisions tenants and opens none of them; a feed reader and a tenant admin likewise.
+      # Each flips if a verb is widened to `operator`, to `event_reader`, or onto a tier a tenant can hold.
+      - user: user:provisioner
+        object: estate:rask
+        assertions: &no_estate_admin_verb
+          can_list_all_projects: false
+          can_finish_project_delete: false
+          can_administer_authz: false
+          can_declare_unowned_tier: false
+          can_deregister_unidentified_table: false
+          can_read_parked_events: false
+          can_replay_parked_events: false
+          can_administer_estate: false
+      - user: user:a-notifier
+        object: estate:rask
+        assertions: *no_estate_admin_verb
+      - user: user:alice
+        object: estate:rask
+        assertions: *no_estate_admin_verb
       # The estate owner keeps it concentrically, as with every other rung here.
       - user: user:root_admin
         object: estate:rask
@@ -1816,7 +2403,7 @@ tests:
         object: classification:pii
         assertions: { can_apply: true, can_grant_apply: true }
       # ESTATE `owner` IS NOT ENOUGH, and that is deliberate rather than an oversight. `owner` on the
-      # estate opens every estate-wide surface `can_observe_events` gates, so a subject holding it for one
+      # estate opens every estate-admin verb, so a subject holding it for one
       # of them would silently gain the power to mint classification labels. Minting is `admin`.
       - user: user:root_admin
         object: classification:pii

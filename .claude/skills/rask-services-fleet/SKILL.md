@@ -41,8 +41,11 @@ with its Gateway provider switched on by `deploy/k3s/traefik-gateway.yaml` (a He
 sets `forwardedAllowIps: 10.42.0.0/16`.
 
 **The route publishes doors, never a service's root** ([[CTL-001]]): the probes, `/dapr/subscribe`, the Dapr deliveries
-and the cron ticks are not published at the edge (a request there falls to the console's 404), though the pod's port
-still admits any peer. **Adding a
+and the cron ticks are not published at the edge (a request there falls to the console's 404). The pod's port still
+admits any peer (ADR 0165), so the services guard them: `/dapr/subscribe`, each delivery and each tick with its
+`OPTIONS` pre-flight answer the sidecar's app token alone (`require_dapr_token`; daprd stamps it on all of them), and
+only the probes answer a caller with none. A docs page (`docs.enabled`) names its schema, and the schema its server, by
+relative URL, so it works under any public prefix. **Adding a
 door at a service's root** is one path in its `rask.apiRoutes` row (`prefix`, `component`, `service`, `port`, `rewrite`
 true to land each path on itself, false to forward unchanged, `paths`); the offline render gate
 `tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` boots each app under its rendered env and fails

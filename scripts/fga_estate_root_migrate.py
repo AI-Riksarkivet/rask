@@ -1,7 +1,7 @@
 """Carry the estate PRIVILEGES from the default warehouse onto the estate root ([[LH-055]]).
 
 `fga_root_object` moves from `warehouse:lance_catalog` to `estate:rask`, and every check aimed at it
-moves with it: `can_observe_events` (the admin console, every estate-wide door, and each client's estate-wide
+moves with it: the estate-admin verbs (the admin console, every estate-wide door, and each client's estate-wide
 surface, asked through the decision door).
 
 THE TUPLES DO NOT MOVE THEMSELVES. A principal holding `owner` on the old root passes every one of
@@ -14,9 +14,9 @@ NOTHING IS REMOVED. The old tuples keep governing the WAREHOUSE, which is their 
 job: `warehouse:lance_catalog` parents the estate's top-level namespaces, so `owner` there is what makes
 the medallion cascade reach bronze/silver/gold. A revoke would take that with it.
 
-DIRECT TUPLES ONLY, and that is a TIGHTENING rather than an oversight. `warehouse#reader` resolves
-`or member from project`, so on an estate that binds the default warehouse to a project every member of
-that project passes the estate doors — estate-wide read conferred by tenant membership, which is the
+DIRECT TUPLES ONLY, and that is a TIGHTENING rather than an oversight. `warehouse#owner_effective` resolves
+`or admin from project`, so on an estate that binds the default warehouse to a project every admin of
+that project owns it — an estate-wide rung conferred by tenant administration, which is the
 conflation this port exists to end. Such holders are not carried over; the run REPORTS whether any
 exist rather than deciding for the operator.
 
@@ -137,8 +137,8 @@ def main() -> int:
     by_relation = _principals_on(api, store_id, OLD_ROOT)
 
     if by_relation.get("project"):
-        print(f">> NOTE: {OLD_ROOT} is bound to {by_relation['project']} — every member of that project reads it")
-        print("   transitively and passes the estate doors today. Those holders are NOT carried over.")
+        print(f">> NOTE: {OLD_ROOT} is bound to {by_relation['project']} — every admin of that project owns it")
+        print("   transitively. Those holders are NOT carried over.")
 
     writes: list[dict[str, str]] = []
     for old_rung, new_rung in RUNG_MAP.items():
