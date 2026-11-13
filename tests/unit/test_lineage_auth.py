@@ -306,16 +306,16 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
 
 
 @pytest.mark.parametrize(
-    ("limit", "visible_at", "own_tables", "log"),
+    ("limit", "visible_at", "own_tables", "cursor", "log"),
     [
         pytest.param(
             8,
             {150, 100, 99, 98, 97, 96, 95, 94},
             True,
+            94,
             # The first chunk is judged before anything more is read. The second (64 rows) is judged on a full batch of
-            # objects while the next chunk's first 64 rows are read, and the rest of that chunk, sized by the verdict,
-            # after it; the window holds the 128 rows left. The third is judged while 128 more are asked for, and fills
-            # the page.
+            # objects while the last chunk's first 64 rows are read, and the rest of the window after the verdict; the
+            # window holds 128 rows more, and they fill the page.
             [
                 ("read", 8),
                 ("judging", 8),
@@ -324,9 +324,8 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
                 ("judging", 64),
                 ("read", 64),
                 ("judged", 64),
-                ("read", 944),
+                ("read", 1864),
                 ("judging", 121),
-                ("read", 128),
                 ("judged", 121),
             ],
             id="judged-on-full-batches-reads-ahead",
@@ -335,17 +334,47 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
             2,
             {190, 189},
             False,
+            189,
             # The second chunk is judged on one undecided object, too little to hide a read, and its verdict fills the page.
             [("read", 2), ("judging", 1), ("judged", 1), ("read", 16), ("judging", 1), ("judged", 1)],
             id="judged-on-one-object-reads-nothing-ahead",
         ),
+        pytest.param(
+            60,
+            set(),
+            True,
+            None,
+            # The first chunk is judged on a full batch of objects, and nothing is read beside it: its verdict fills most
+            # pages. The second read empties the window, so nothing is read beside its judging either.
+            [("read", 60), ("judging", 60), ("judged", 60), ("read", 480), ("judging", 140), ("judged", 140)],
+            id="the-first-chunk-reads-nothing-ahead",
+        ),
+        pytest.param(
+            50,
+            {190, 180, 170, 160},
+            False,
+            None,
+            # Four of the first fifty rows are visible: the page still needs 46, some 575 rows at that share, and reads
+            # four times that, which is the rest of its window.
+            [("read", 50), ("judging", 2), ("judged", 2), ("read", 1950)],
+            id="a-sparse-first-chunk-reads-the-rest-second",
+        ),
+        pytest.param(
+            1,
+            set(),
+            False,
+            None,
+            # A page that finds no visible row reads its window in three reads: one row, eight more, then the rest.
+            [("read", 1), ("judging", 1), ("judged", 1), ("read", 8), ("read", 1991)],
+            id="all-hidden-reads-the-window-in-three",
+        ),
     ],
 )
-def test_a_sparse_page_reads_its_next_chunk_while_a_chunk_is_judged(
-    monkeypatch: pytest.MonkeyPatch, limit: int, visible_at: set[int], own_tables: bool, log: list[tuple[str, int]]
+def test_a_sparse_page_reads_its_window_in_three_reads_at_most_the_next_beside_a_long_judging(
+    monkeypatch: pytest.MonkeyPatch, limit: int, visible_at: set[int], own_tables: bool, cursor: int | None, log: list[tuple[str, int]]
 ) -> None:
-    """From the second chunk on, a chunk judged on a full OpenFGA batch of objects has the next chunk's first part, at most
-    its own size, read beside its judging, and the chunks still grow; a chunk judged on fewer has none ([[LH-590]])."""
+    """A governed page reads its window in at most three reads; from the second on, a chunk judged on a full OpenFGA
+    batch of objects has the next chunk's first part, at most its own size, read beside its judging ([[LH-590]])."""
     from lineage.api.v1.endpoints.events import get_events
 
     settings = _settings(**_FULL_AUTH)
@@ -369,7 +398,7 @@ def test_a_sparse_page_reads_its_next_chunk_while_a_chunk_is_judged(
 
     page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=limit, names=NO_CATALOG_NAMES, bearer=None))
 
-    assert ([e.seq for e in page.events], page.next_cursor) == (sorted(visible_at, reverse=True), min(visible_at))
+    assert ([e.seq for e in page.events], page.next_cursor) == (sorted(visible_at, reverse=True), cursor)
     assert repo.log == log
 
 

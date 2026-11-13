@@ -41,12 +41,16 @@ log = logging.getLogger(__name__)
 # so the fetch window collapses to `limit` there.
 _EVENTS_FETCH = 2000
 _EVENTS_RETURN = 500
-#: How many times the rows read so far a governed page reads next while none was visible: a page whose caller sees a
-#: row near the head finds it in a read or two, and one whose window is all hidden reads it in a few.
+#: How many reads a governed page makes of its window at most: `limit` rows, a second sized from what the first showed,
+#: then the rest. A read is a round trip to the catalog and a judging, about 0.1 s and 0.03 to 0.4 s on the dev estate
+#: (2026-11-13), whatever it returns, where a row costs next to nothing; so a page is bounded in reads, not in rows.
+_MOST_READS: Final = 3
+#: How many times the rows read so far a governed page's second read takes while none was visible: a page whose caller
+#: sees a row near the head finds it there.
 _CHUNK_GROWTH: Final = 8
-#: How many rows past the estimate a governed page's next read takes once some were visible, so a page whose rows grow
-#: sparser is not read in many small reads.
-_CHUNK_MARGIN: Final = 2
+#: How many times the estimate a governed page's second read takes once some rows were visible, so a page whose
+#: visible rows come in clumps is still filled by it.
+_CHUNK_MARGIN: Final = 4
 
 
 def _column_lineage_datasets(event: dict) -> set[str]:
@@ -223,51 +227,62 @@ async def _visible_page(
 
     Read and judged a chunk at a time, stopping once ``limit`` rows are visible: each row is judged on its own, so the
     page and its cursor are the ones judging the whole window gives, and a page whose first rows are visible reads only
-    those ([[LH-590]]). A later chunk grows from the rows read while none was visible, and is sized from the share of
-    rows visible once some were.
+    those ([[LH-590]]). A page makes at most :data:`_MOST_READS` reads (:func:`_next_chunk`).
 
-    From the second chunk on, a chunk whose judging asks the authorization service about a full OpenFGA batch of objects
-    or more (``undecided``) has the first part of the next chunk read beside it, as much as the chunk holds and no more
-    than the next chunk would be if the chunk held no visible row; the rest of the next chunk, sized by the verdict, is
-    read after it. A row read beyond what the verdict asks for is judged as any other, which moves no stop, and a page
-    the verdict fills waits for the read ahead and leaves it, so a read ahead costs at most one chunk, and only beside a
-    judging long enough to hide it. Measured on the dev estate 2026-11-13, a 2,000-row page's judging of 668 objects
-    took 397 ms, against 163 ms for the read after it.
+    The second chunk, when its judging asks the authorization service about a full OpenFGA batch of objects or more
+    (``undecided``), has the first part of the last chunk read beside it, as many rows as it holds itself; the rest of
+    the window is read after the verdict. A page the verdict fills waits for that read and leaves it, so a read ahead
+    costs at most one chunk, and only beside a judging long enough to hide it. The first chunk has none: its verdict
+    fills most pages. Measured on the dev estate 2026-11-13, a 2,000-row page's judging of 668 objects took 397 ms,
+    against 163 ms for the read after it.
     """
     records: list[EventRecord] = []
     visible: list[EventRecord] = []
     read = await window.take(min(limit, fetch))
+    # A read that comes back short of what it asked for emptied the window: nothing is left to read ahead or after.
+    exhausted = len(read) < min(limit, fetch)
+    reads = 1
     while read:
         records += read
+        left = 0 if exhausted else fetch - len(records)
         ahead = None
-        if len(read) < len(records) < fetch and undecided(read) >= fga.CHECKS_PER_BATCH:
-            ahead_rows = min(_next_chunk(limit, len(records), len(visible)), len(read), fetch - len(records))
+        if reads == _MOST_READS - 1 and left and undecided(read) >= fga.CHECKS_PER_BATCH:
+            ahead_rows = min(left, len(read))
             ahead = asyncio.create_task(window.take(ahead_rows))
         try:
             visible += await judge(read)
         except BaseException:
             await _finish(ahead)
             raise
-        if len(visible) >= limit or len(records) >= fetch:
+        if len(visible) >= limit or not left:
             await _finish(ahead)
             break
-        want = min(_next_chunk(limit, len(records), len(visible)), fetch - len(records))
+        want = _next_chunk(limit, len(records), len(visible), left, reads)
+        reads += 1
         if ahead is None:
             read = await window.take(want)
+            exhausted = len(read) < want
             continue
-        # The rows read ahead are the next chunk's first part; the rest of it is read after the verdict, unless the
-        # window ran out under the read ahead.
-        head = await ahead
-        rest = want - len(head) if len(head) == ahead_rows else 0
-        read = head + await window.take(rest) if rest > 0 else head
+        # The rows read ahead are the last chunk's first part; the rest of the window is read after the verdict, unless
+        # it ran out under the read ahead or that read already took it all.
+        read = await ahead
+        exhausted = len(read) < ahead_rows
+        if not exhausted and want > len(read):
+            tail = await window.take(want - len(read))
+            exhausted = len(tail) < want - len(read)
+            read = read + tail
     return records, visible
 
 
-def _next_chunk(limit: int, read: int, visible: int) -> int:
-    """How many rows a page reads next, having read ``read`` rows of which ``visible`` were visible."""
+def _next_chunk(limit: int, read: int, visible: int, left: int, reads: int) -> int:
+    """How many of the ``left`` rows of its window a page reads next, after ``reads`` reads of ``read`` rows of which
+    ``visible`` were visible: the rest of them on its last read, and before it eight times the rows read while none was
+    visible, else four times the rows the visible share says the page still needs."""
+    if reads + 1 >= _MOST_READS:
+        return left
     if not visible:
-        return read * _CHUNK_GROWTH
-    return -(-(limit - visible) * read // visible) * _CHUNK_MARGIN
+        return min(left, read * _CHUNK_GROWTH)
+    return min(left, -(-(limit - visible) * read // visible) * _CHUNK_MARGIN)
 
 
 async def _finish(ahead: asyncio.Future[list[EventRecord]] | None) -> None:
