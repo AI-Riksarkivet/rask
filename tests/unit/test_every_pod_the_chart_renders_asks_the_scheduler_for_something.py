@@ -13,7 +13,7 @@ the ordinary prod control, and the reason anyone audits this — REJECTS a pod w
 no requests. The fleet would come up and the release would never converge, because the bootstrap Jobs
 that create the buckets, the streams and the OpenFGA schema would never be admitted.
 
-THE JOB TEMPLATES ALREADY DO THIS (bootstrap-admin among them), each with an
+THE JOB TEMPLATES ALREADY DO THIS, each with an
 inline block sized to its own work. This gate is what makes the next one inherit the rule instead of
 relearning it.
 

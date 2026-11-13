@@ -159,7 +159,7 @@ check_catalog_restarted() {
 }
 
 # (c) OpenFGA's tuples, read through its HTTP API from inside the catalog container (its NetworkPolicy reaches OpenFGA),
-# with a token OpenFGA admits: rask-sa-jobs's, projected for its audience, given on stdin.
+# with a token OpenFGA admits: rask-sa-hooks's (the model hook's), projected for its audience, given on stdin.
 # The store every reader and writer names (lakehouse.governed.auth.write_model.STORE_NAME); each store of that name is
 # read, the newest being the one the services use.
 FGA_STORE="lance-catalog"
@@ -185,7 +185,7 @@ for s in stores:
 # fga_tuple_count: prints `<store> <count>` per store named FGA_STORE, then `total=<n>`; fails when it cannot read.
 fga_tuple_count() {
   local out
-  out="$(kubectl create token rask-sa-jobs --audience rask-openfga --duration 10m |
+  out="$(kubectl create token rask-sa-hooks --audience rask-openfga --duration 10m |
     kubectl exec -i deploy/rask-catalog -c catalog -- python -c "$FGA_READ" http://rask-openfga:8080 "$FGA_STORE" "$FGA_OBJECT" "$FGA_RELATION" "$FGA_USER" 2>&1)" ||
     { echo "OpenFGA unreadable: $out"; return 1; }
   echo "$out"

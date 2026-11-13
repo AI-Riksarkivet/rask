@@ -100,13 +100,16 @@ class _Converger:
         await self._attempt("grants", partial(self._grants, declared))
         return self.tick
 
-    async def _attempt(self, what: str, step: Callable[[], Awaitable[None]]) -> None:
+    async def _attempt(self, what: str, step: Callable[[], Awaitable[None]]) -> bool:
+        """Run ``step``; whether it ran to its end."""
         try:
             await step()
         except Exception:  # noqa: BLE001 — one object's failure leaves every other object to this tick
             log.warning("declaration_converge_failed", extra={"object": what}, exc_info=True)
             _failed.add(1, {"lance.catalog.object": what})
             self.tick.failed.append(what)
+            return False
+        return True
 
     async def _project(self, declared: DeclaredProject) -> None:
         record = await run_in_threadpool(project_registry.get_project, self._root, self._so, declared.id)
@@ -187,23 +190,67 @@ class _Converger:
 
         The admins of a project git stopped declaring are not revoked: a released project is its doors' as it stands,
         its people included, so its admins are handed over by forgetting that the declaration wrote them.
+
+        Nothing is revoked on an object whose grant failed this tick, so a principal git replaced keeps its rungs until
+        its successor holds them: moving the estate's administrator never leaves the estate with none between ticks.
         """
         if self._client is None:
             return
-        wanted = declared.tuples
+        wanted = self._wanted(declared)
         recorded = await run_in_threadpool(declaration.recorded_grants, self._root, self._so)
         held = {obj: await _held(self._client, obj) for obj in sorted({grant.object for grant in wanted | recorded})}
+        ungranted: set[str] = set()
         for grant in sorted(wanted, key=_order):
-            if (grant.user, grant.relation) not in held[grant.object]:
-                await self._attempt(f"grant:{grant.object}#{grant.relation}", partial(self._grant, self._client, grant))
+            if (grant.user, grant.relation) in held[grant.object]:
+                continue
+            if not await self._attempt(f"grant:{grant.object}#{grant.relation}", partial(self._grant, self._client, grant)):
+                ungranted.add(grant.object)
         released = {f"project:{record['id']}" for record in await run_in_threadpool(project_registry.list_projects, self._root, self._so)} - {
             f"project:{project.id}" for project in declared.projects
         }
         for grant in sorted(recorded - wanted, key=_order):
+            if grant.object in ungranted:
+                continue
             if grant.relation == project_admins.ADMIN and grant.object in released:
                 await run_in_threadpool(declaration.forget_grant, self._root, self._so, grant)
                 continue
             await self._attempt(f"revoke:{grant.object}#{grant.relation}", partial(self._revoke, self._client, grant))
+        for obj in self._estate_objects:
+            await self._attempt(f"own:{obj}", partial(self._revoke_undeclared_own_roles, self._client, obj, wanted))
+
+    @property
+    def _estate_objects(self) -> tuple[str, str]:
+        """The estate root and the estate's own warehouse, which stand with no registry record."""
+        return self._settings.fga_root_object, self._settings.fga_default_warehouse_object
+
+    def _wanted(self, declared: Declaration) -> set[GrantTuple]:
+        """What the declaration asks for, and the maintainer rung on the estate's own warehouse.
+
+        Every registered warehouse's maintainers are written with it and converged at boot (``fga_deps.cascade_tuples``);
+        the estate's own warehouse has no record to be written with, so its maintainers converge here, from the same setting.
+        """
+        root, estate_warehouse = self._estate_objects
+        maintainers = {GrantTuple(user=t.user, relation=t.relation, object=t.object) for t in fga_deps.maintainer_tuples(self._settings, estate_warehouse)}
+        return declared.tuples(root=root, estate_warehouse=estate_warehouse) | maintainers
+
+    async def _revoke_undeclared_own_roles(self, client: OpenFgaClient, obj: str, wanted: set[GrantTuple]) -> None:
+        """Take back from the release's own accounts each machine role on ``obj`` git does not declare.
+
+        The release's accounts are its own (``LANCE_OWN_ACCOUNTS``): no door grants one a machine role on the estate, so
+        a role git stopped declaring is revoked whether or not this ledger wrote it. A role naming any other principal
+        was granted at a door and stays ([[LH-563]]).
+        """
+        own = fga_deps.own_users(self._settings)
+        if not own:
+            return
+        declared = [grant.client_tuple for grant in wanted if grant.object == obj]
+        for relation in sorted(fga.machine_relations(obj.partition(":")[0])):
+            revoked = await fga.revoke_undeclared(  # noqa: TID251 — the declaration's revoking site
+                client, declared, obj=obj, relation=relation, own=own, actor=DECLARATION.subject, origin="declaration"
+            )
+            for gone in revoked:
+                await run_in_threadpool(declaration.forget_grant, self._root, self._so, GrantTuple(user=gone.user, relation=gone.relation, object=gone.object))
+            self.tick.grants_revoked += len(revoked)
 
     async def _grant(self, client: OpenFgaClient, grant: GrantTuple) -> None:
         if not await self._stands(grant.object):
@@ -234,6 +281,8 @@ class _Converger:
         self.tick.grants_revoked += 1
 
     async def _stands(self, obj: str) -> bool:
+        if obj in self._estate_objects:
+            return True
         kind, _, object_id = obj.partition(":")
         if kind == "project":
             return await run_in_threadpool(project_registry.get_project, self._root, self._so, object_id) is not None

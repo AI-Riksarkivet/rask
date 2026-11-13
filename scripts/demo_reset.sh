@@ -36,7 +36,7 @@ S3_ACCESS_KEY="${S3_ACCESS_KEY:-rustfsadmin}"
 S3_SECRET_KEY="${S3_SECRET_KEY:-rustfsadmin}"
 ROOT_BUCKET="${ROOT_BUCKET:-lance-catalog}" # the catalog root/registry bucket (objectStore.bucket)
 OPENFGA_API_URL="${OPENFGA_API_URL:-http://localhost:8081}"
-# OpenFGA admits only a projected `rask-openfga` token (XC-077): `kubectl create token rask-sa-jobs --audience rask-openfga > "$OPENFGA_TOKEN_FILE"`.
+# OpenFGA admits only a projected `rask-openfga` token (XC-077): `kubectl create token rask-sa-hooks --audience rask-openfga > "$OPENFGA_TOKEN_FILE"`.
 OPENFGA_TOKEN_FILE="${OPENFGA_TOKEN_FILE:-}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

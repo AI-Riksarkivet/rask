@@ -707,7 +707,7 @@ class OpenFgaStore:
         self.store_id, self.model_id = asyncio.run(fga.provision(url, token_file=None, store_name=f"test-{uuid.uuid4().hex}"))  # noqa: TID251
 
     def write(self, *tuples: tuple[str, str, str]) -> None:
-        """Write `(user, relation, object)` tuples straight to the store, as the chart's bootstrap hook seeds them."""
+        """Write `(user, relation, object)` tuples straight to the store, as a write past every door would."""
         import asyncio
 
         from openfga_sdk.client.models import ClientTuple, ClientWriteRequest

@@ -210,8 +210,8 @@ init loops until the AGE StatefulSet (applied in the same wave) answers, migrate
 stops crash-looping and goes Ready; `--wait` returns. No wrapper script, no ordering knowledge
 outside the chart.
 
-Jobs that depend on the APPS instead (bootstrap-admin needs a booted catalog) stay post-install hooks — nothing waits on them, which is precisely
-what a post-install hook is for.
+Work that depends on the APPS instead (the estate's first grants need a booted catalog) is the catalog's own: its
+declaration converge grants them once it serves, and nothing waits on it.
 
 A plain Job's spec is IMMUTABLE, so the name carries the release revision: an upgrade renders a
 new name (new Job, re-runs — the same semantics `before-hook-creation` gave the hooks), helm
@@ -235,10 +235,10 @@ only when its inputs change is [[XC-160]]'s.
 
 ## `{{- define "lance.fgaMaintainers" -}}`
 
-The identities the release declares as maintainers, the one condition both writers of the rung read: the bootstrap hook
-grants it on the default warehouse and the catalog (`LANCE_FGA_MAINTAINERS`) on every warehouse it mints and, at boot, on
-every one it holds, and each takes back the rung from an own account it no longer names. One source keeps the two from
-disagreeing, which would make one grant what the other revokes on every reconcile ([[XC-164]]).
+The identities the release declares as maintainers, read by the catalog alone (`LANCE_FGA_MAINTAINERS`): it grants the rung
+on every warehouse it mints and, at boot, on every one it holds, and its declaration converge grants it on the estate's
+own warehouse, which has no record ([[XC-011]]); each takes back the rung from an own account it no longer names. One
+source keeps the grants from disagreeing, which would make one grant what the other revokes on every reconcile ([[XC-164]]).
 
 ## `{{- define "lance.devCredentials" -}}`
 
@@ -273,7 +273,7 @@ Answers the string "true" or "" so a caller can use it in a `ternary` or an `if`
 The namespace the catalog keeps for provenance, rendered into both the catalog and lineage so the two cannot name
 different ones. Every name's first segment is its warehouse, and the provenance namespace belongs to the estate's own
 warehouse, `lance_catalog` (the catalog's `RASK_FGA_DEFAULT_WAREHOUSE_OBJECT`, which the chart leaves at its default,
-as `bootstrap-admin.yaml`'s `FGA_ROOT_OBJECT` does). The catalog refuses to boot on a namespace outside it, so the
+as the catalog's declaration converge does). The catalog refuses to boot on a namespace outside it, so the
 render refuses one first, naming the value, rather than leaving a pod to crash-loop on it.
 
 ## `{{- define "lance.ageHost" -}}{{ .Release.Name }}-age{{- end -}}`
@@ -839,9 +839,9 @@ for an idp id); the render refusal names the value before any pod starts.
 
 ## `{{- define "lance.bootstrapAdmin" -}}`
 
-`auth.bootstrapAdmin`, which the bootstrap-admin hook grants the estate's two standing authorities, must be a person's
-principal, `<idp-id>~<user id>`. A bare name is refused at render because no token could ever prove it, a `user:` id
-because the hook encodes the principal itself (`fga.user_object`), and a `kubernetes~` principal because a machine
+`auth.bootstrapAdmin`, which the catalog's declaration grants the estate's two standing authorities ([[XC-011]]), must be a
+person's principal, `<idp-id>~<user id>`. A bare name is refused at render because no token could ever prove it, a `user:`
+id because the catalog encodes the principal itself (`fga.user_object`), and a `kubernetes~` principal because a machine
 administers no tenant (LH-433).
 
 ## `{{- define "lance.governedFgaEnv" -}}`
@@ -858,7 +858,7 @@ include "lance.fgaToken" (list "env"|"volumes"|"mounts").
 
 THE SERVICES THAT WRITE OPENFGA TUPLES, space-joined: the catalog alone (ADR 0197). OpenFGA authorizes none of its
 callers, so a client able to write one tuple writes any; every other service asks the catalog's doors. The network policy
-admits exactly these, beside the model hook and bootstrap-admin, to OpenFGA's API.
+admits exactly these, beside the model hook, to OpenFGA's API.
 
 ## `{{- define "lance.openfgaClients" -}}`
 
@@ -875,8 +875,8 @@ instead (ADR 0197).
 ## `{{- define "lance.fgaEstateRoles" -}}`
 
 THE MACHINE ROLES ON THE ESTATE ROOT THE RELEASE DECLARES, one JSON object from each account's subject to the roles it
-holds there, which bootstrap-admin reads as `FGA_ESTATE_ROLES`, grants, and converges the release's own accounts to
-([[LH-442]], [[LH-563]]; bootstrap-admin.yaml.md). Empty with auth off. Lineage holds `decider` (the catalog
+holds there, which `lance.declaration` renders as the declaration's `estate.roles`, and which the catalog grants and
+converges the release's own accounts to ([[LH-442]], [[LH-563]], [[XC-011]]). Empty with auth off. Lineage holds `decider` (the catalog
 decision door's `check`, estate-wide, since lineage records every tenant's runs) and `governance_prober` (its `governed`
 and `locate`), on its in-release subject (`lance.saSubject`). A client of the lakehouse, none of which this chart
 renders, is granted its roles at the catalog's access doors as its own identity, and this chart declares none.
@@ -888,7 +888,7 @@ maintenance holds no OpenFGA token (ADR 0197).
 ## `{{- define "lance.ownAccounts" -}}`
 
 THE RELEASE'S OWN ACCOUNTS, the subject of every ServiceAccount it renders (`lance.subjectOf` of each of
-`lance.serviceAccounts`), which bootstrap-admin reads as `FGA_OWN_ACCOUNTS` and the catalog as `LANCE_OWN_ACCOUNTS`:
+`lance.serviceAccounts`), which the catalog reads as `LANCE_OWN_ACCOUNTS`:
 the accounts whose estate roles and provenance `writer` are what git declares ([[LH-563]]). Built from the list the
 release renders rather than from a name prefix, since a client's ServiceAccount may carry the release's prefix and is no
 account of this release. The console's account is left out: it mounts no token, calls no door and holds no role, so no
@@ -899,7 +899,7 @@ converger has anything of it to grant or keep.
 The operator-pinned FGA store/model ids — optional, and emitted at DIFFERENT positions by
 different callers relative to their own service-specific vars, which is why they are not folded
 into the block above: doing so would reorder a caller's env list, a change this refactor has no
-business making. The store id is the SAME auth.fgaStoreId the bootstrap-admin Job grants into,
+business making. The store id is the SAME auth.fgaStoreId the model hook publishes into,
 so a pinned store can never diverge from the store the services check against. Unset =
 provision-by-name at boot (`lance-catalog`).
 

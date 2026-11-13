@@ -176,7 +176,7 @@ MAINTENANCE'S OWN RUNG: maintenance rewrites HOW a dataset is stored and must ho
 `maintainer` and nothing else. `can_maintain` neither implies nor is implied by
 `can_write_data`, so no writer identity may ride this list. ADR 0156 C4 narrows the
 maintain vend tier to this identity alone (LH-473, #599).
-GATED EXACTLY LIKE THE BOOTSTRAP HOOK'S OWN GRANT (`bootstrap-admin.yaml`), so an
+GATED by `maintenance.vendWriteCredentials` (`lance.fgaMaintainers`), so an
 estate that vends no write credentials grants nothing — a standing tuple for a
 service that is not using it is the kind nobody remembers to revoke.
 Measured 2026-09-15: without this the catalog's list was empty in every deployment,
@@ -185,7 +185,8 @@ had it written by hand into the live store.
 
 ## `- { name: LANCE_OWN_ACCOUNTS, value: {{ include "lance.ownAccounts" $root | quote }} }`
 
-The release's own accounts, the list bootstrap-admin converges (`lance.ownAccounts`): the catalog's boot takes back a
+The release's own accounts (`lance.ownAccounts`), whose machine roles on the estate the catalog's declaration converge
+holds to what git declares ([[XC-011]]): the catalog's boot takes back a
 `writer` on the provenance namespace that `LANCE_PROVENANCE_WRITERS` no longer names only from one of these, so a
 `writer` granted at the namespace's access door to an account outside the release stands ([[LH-563]]). Rendered empty,
 the boot takes back nothing, and a writer the release stopped naming keeps writing lineage's tables.
@@ -326,8 +327,8 @@ cannot drift from theirs: `lance.governedOidcEnv` in _helpers.tpl.
 
 ## `- { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }`
 
-Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
-Job use (see the catalog twin above). Unset = provision-by-name at boot.
+Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the model hook
+use (see the catalog twin above). Unset = provision-by-name at boot.
 
 ## `- { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | qu...`
 

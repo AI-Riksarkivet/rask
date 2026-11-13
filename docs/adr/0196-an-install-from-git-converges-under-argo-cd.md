@@ -44,6 +44,8 @@ Measured at main `5f5810964` on offline renders and in Argo CD v3.5.7's source (
 5. **The release's own accounts converge to what it declares** on every object a service grant lands on: the hook on
    the estate root and the default warehouse, the catalog's boot backfill on every warehouse it holds, from one
    declaration of the maintainers (`lance.fgaMaintainers`). A person's grant is never taken back.
+   (Amended by ADR 0206's amendment of 2026-11-13: the catalog's declaration converge does it on the estate root and
+   the estate's own warehouse, and the hook is gone.)
 6. **An autoscaled Deployment renders no `replicas`**, so the HPA owns the count.
 7. **Git names every image an estate runs**: the dev estate's pins are committed (`deploy/values-live-pins.yaml`), a
    released chart pins its image by digest, and a real deployment is refused a first-party registry image at the `dev`

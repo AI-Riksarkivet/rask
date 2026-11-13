@@ -137,10 +137,10 @@ if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing=
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip, which fails the run):%s\n' "$_missing"
 if [ -n "$FGA" ]; then
   # OPENFGA ADMITS ONLY A PROJECTED `rask-openfga` TOKEN ([[XC-077]]), so this runner and the suites speak
-  # to it as the bootstrap Job's ServiceAccount, the identity that writes the estate's standing tuples. A
+  # to it as the model hook's ServiceAccount, one of the two identities OpenFGA admits. A
   # TokenRequest, written to the file the suites re-read (`fga-token`); no secret is stored.
-  minted="$(kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h)" \
-    || fail "could not mint a rask-openfga token for $RELEASE-sa-jobs"
+  minted="$(kubectl create token "$RELEASE-sa-hooks" --audience rask-openfga --duration 2h)" \
+    || fail "could not mint a rask-openfga token for $RELEASE-sa-hooks"
   keep fga-token "$minted"
   # THE STORE THE ESTATE USES: the catalog's `RASK_FGA_STORE_ID` pin, else the newest store named
   # `lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).

@@ -5,7 +5,7 @@ its location's claim are released (:mod:`catalog.services.clone_endings`). One i
 its finish is asked for by maintenance's hourly audit: maintenance's store policy writes no source's ``_refs/tags``, so
 the release is the catalog's, judged on its own reads. Both doors ask ``can_reclaim_trash`` on the estate root, the
 rung the trash doors ask (``trash_reclaim``), which only the ``reclaimer`` role opens, seeded for maintenance's
-ServiceAccount by the chart's bootstrap-admin hook: no new grant. Each finish is recorded on the audit trail, since it
+ServiceAccount by the catalog's declaration: no new grant. Each finish is recorded on the audit trail, since it
 deletes tags and releases a claim on the catalog's own session.
 
 The router guard leaves these paths to their handlers (``fga_deps._RESOURCES`` names none of them), so the gate is this

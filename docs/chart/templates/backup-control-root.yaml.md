@@ -33,7 +33,7 @@ silence.
 
 ## `image: "{{ include "lance.catalogImage" . }}"`
 
-The SAME helper the sibling hooks use (`bootstrap-admin`, `openfga-model`). Spelling
+The SAME helper the sibling hooks use (`openfga-model`, `object-store-provisioning`). Spelling
 the stem by hand here produced `rest-catalog` against a chart default of
 `lance-rest-catalog`, which is a reference that exists in no registry — the Job sat
 in ImagePullBackOff and the CronJob looked healthy.

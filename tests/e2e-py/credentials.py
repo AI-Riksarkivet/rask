@@ -29,7 +29,7 @@ class Credential(StrEnum):
     TOKEN = "token"
     #: The secret of the confidential sign-in client the live lanes' password grant presents.
     DEX_SECRET = "dex-secret"
-    #: A `rask-openfga` TokenRequest for the bootstrap Job's ServiceAccount; it expires, so its readers re-read the file.
+    #: A `rask-openfga` TokenRequest for the model hook's ServiceAccount; it expires, so its readers re-read the file.
     FGA_TOKEN = "fga-token"
     #: A TokenRequest for lineage's ServiceAccount at the catalog's own door audience.
     SERVICE_TOKEN = "service-token"

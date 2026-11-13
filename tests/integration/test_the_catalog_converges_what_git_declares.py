@@ -1,4 +1,4 @@
-"""The catalog converges the projects, warehouses and service grants git declares ([[XC-213]], ADR 0206).
+"""The catalog converges the projects, warehouses and service grants git declares, and the estate's own grants ([[XC-213]], [[XC-011]], ADR 0206).
 
 The declaration is the file the chart renders from its values and the catalog mounts. A tick creates what it names and
 corrects what drifted, through the functions the doors call, so an install from git holds its tenants with no call to
@@ -18,12 +18,13 @@ from typing import Any
 import boto3
 import pytest
 from fastapi.testclient import TestClient
+from lance_namespace import ServiceUnavailableError
 from moto.server import ThreadedMotoServer
 
 from catalog.api.declaration_converge import mount_declaration_converge
 from catalog.services import warehouses
 from lakehouse.governed import fga
-from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
+from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 
 
 TICK = "catalog-declaration-converge-cron"
@@ -31,6 +32,10 @@ ESTATE_BUCKET = "estate"
 CONNECTOR, IDP = "local", "dex"
 #: A pipeline's service account: the kind of principal a declaration grants, never a person.
 PIPELINE = "kubernetes~system:serviceaccount:default:pipeline"
+#: One of the release's own accounts (``LANCE_OWN_ACCOUNTS``), whose machine roles on the estate converge to git's.
+MAINTENANCE = "kubernetes~system:serviceaccount:default:rask-sa-maintenance"
+ROOT, ESTATE_WAREHOUSE = "estate:rask", "warehouse:lance_catalog"
+WRITE, DELETE = AuditAction.ACCESS_TUPLE_WRITE, AuditAction.ACCESS_TUPLE_DELETE
 PROBLEM = "application/problem+json"
 
 
@@ -43,7 +48,7 @@ class Estate:
         self._dex = dex
         self._declaration = declaration
 
-    def declare(self, **declared: list[dict[str, Any]]) -> None:
+    def declare(self, **declared: Any) -> None:
         """Replace the declaration, as a reconcile of the chart's ConfigMap does."""
         self._declaration.write_text(json.dumps(declared))
 
@@ -116,6 +121,7 @@ def estate(store_url: str, openfga_store: Any, dex_issuer: Any, tmp_path: Path, 
         "RASK_FGA_API_URL": openfga_store.url,
         "RASK_FGA_STORE_ID": openfga_store.store_id,
         "RASK_FGA_MODEL_ID": openfga_store.model_id,
+        "LANCE_OWN_ACCOUNTS": json.dumps([MAINTENANCE]),
     }
     declaration = tmp_path / "declaration.json"
     with _catalog(store_url, declaration, monkeypatch, governed) as client:
@@ -274,23 +280,111 @@ def test_a_deactivated_warehouse_is_told_only_to_a_caller_its_door_would_admit(e
     }
 
 
-def test_a_tick_on_an_estate_as_declared_changes_nothing(estate: Estate) -> None:
-    _declared_acme(estate)
+def _declared_writes(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str, str, str]]:
+    """Each tuple the declaration wrote or deleted, as the audit trail names it: action, grantee, relation, object."""
+    rows = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__.get("audit.subject") == "system:declaration"]
+    return sorted(
+        (row["audit.action"], row["audit.grantee"], row["audit.relation"], row["audit.resource"]) for row in rows if row["audit.action"] in (WRITE, DELETE)
+    )
+
+
+def test_a_fresh_install_grants_the_estate_admin_git_declares_and_audits_each_tuple(estate: Estate, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    estate.declare(estate={"admins": [f"{IDP}~alice"]})
+
+    estate.tick()
+
+    alice = fga.user_object(f"{IDP}~alice")
+    assert _declared_writes(caplog) == [(WRITE, alice, "admin", ROOT), (WRITE, alice, "owner", ESTATE_WAREHOUSE)]
+    assert {(alice, "admin", ROOT), (alice, "owner", ESTATE_WAREHOUSE)} <= estate.store.tuples()
+
+
+def test_a_tick_on_an_estate_as_declared_changes_nothing(estate: Estate, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    estate.declare(
+        projects=[_project("acme")],
+        warehouses=[_warehouse("acme", "acme")],
+        estate={"admins": [f"{IDP}~alice"], "roles": [{"relation": "reclaimer", "principal": MAINTENANCE}]},
+    )
+    estate.tick()
+    held = estate.store.tuples()
+    caplog.clear()
 
     answer = estate.tick()
 
-    assert (answer["converged"], answer["grants_written"], answer["failed"]) == ([], 0, [])
+    assert (answer["converged"], answer["grants_written"], answer["grants_revoked"], answer["failed"]) == ([], 0, 0, [])
+    assert (_declared_writes(caplog), estate.store.tuples()) == ([], held)
+
+
+def test_another_estate_admin_in_git_moves_both_grants_and_the_audit_trail_names_each(estate: Estate, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    estate.declare(estate={"admins": [f"{IDP}~alice"]})
+    estate.tick()
+    caplog.clear()
+    estate.declare(estate={"admins": [f"{IDP}~carol"]})
+
+    estate.tick()
+
+    alice, carol = fga.user_object(f"{IDP}~alice"), fga.user_object(f"{IDP}~carol")
+    assert _declared_writes(caplog) == [
+        (DELETE, alice, "admin", ROOT),
+        (DELETE, alice, "owner", ESTATE_WAREHOUSE),
+        (WRITE, carol, "admin", ROOT),
+        (WRITE, carol, "owner", ESTATE_WAREHOUSE),
+    ]
+    assert {(user, relation, obj) for user, relation, obj in estate.store.tuples() if obj in (ROOT, ESTATE_WAREHOUSE) and relation in ("admin", "owner")} == {
+        (carol, "admin", ROOT),
+        (carol, "owner", ESTATE_WAREHOUSE),
+    }
+
+
+def test_an_estate_admin_whose_successor_could_not_be_granted_keeps_the_estate(estate: Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The store refuses carol's grant on the tick that moves the estate to her: alice keeps both rungs until carol
+    holds them, so the estate never stands without an administrator between ticks."""
+    estate.declare(estate={"admins": [f"{IDP}~alice"]})
+    estate.tick()
+    alice, carol = fga.user_object(f"{IDP}~alice"), fga.user_object(f"{IDP}~carol")
+    write = fga.write_tuples
+
+    async def refusing_carol(client: Any, tuples: list[fga.ClientTuple], **kwargs: Any) -> Any:
+        if any(t.user == carol for t in tuples):
+            raise ServiceUnavailableError("the store did not answer")
+        return await write(client, tuples, **kwargs)
+
+    monkeypatch.setattr(fga, "write_tuples", refusing_carol)
+    estate.declare(estate={"admins": [f"{IDP}~carol"]})
+
+    answer = estate.tick()
+
+    held = {(user, relation, obj) for user, relation, obj in estate.store.tuples() if obj in (ROOT, ESTATE_WAREHOUSE) and relation in ("admin", "owner")}
+    assert (answer["grants_revoked"], held) == (0, {(alice, "admin", ROOT), (alice, "owner", ESTATE_WAREHOUSE)})
+
+
+def test_a_machine_role_git_stopped_declaring_is_taken_from_the_release_and_one_granted_elsewhere_stands(estate: Estate) -> None:
+    """The release's own account held ``reconciler`` before any ledger did, as an earlier install writes it; a pipeline
+    outside the release was made a ``decider`` at a door. Git declares neither, so only the release's role goes."""
+    maintenance, pipeline = fga.user_object(MAINTENANCE), fga.user_object(PIPELINE)
+    estate.store.write((maintenance, "reconciler", ROOT), (maintenance, "reclaimer", ROOT), (pipeline, "decider", ROOT))
+    estate.declare(estate={"roles": [{"relation": "reclaimer", "principal": MAINTENANCE}]})
+
+    estate.tick()
+
+    held = {(user, relation) for user, relation, obj in estate.store.tuples() if obj == ROOT}
+    assert held == {(maintenance, "reclaimer"), (pipeline, "decider")}
 
 
 @pytest.mark.parametrize(
-    "grant",
+    "granted",
     [
-        pytest.param({"object": "warehouse:../acme", "relation": "writer", "principal": PIPELINE}, id="object-id-no-control-id"),
-        pytest.param({"object": "warehouse:acme", "relation": "writer", "principal": f"{IDP}~alice"}, id="a-person"),
+        pytest.param({"grants": [{"object": "warehouse:../acme", "relation": "writer", "principal": PIPELINE}]}, id="object-id-no-control-id"),
+        pytest.param({"grants": [{"object": "warehouse:acme", "relation": "writer", "principal": f"{IDP}~alice"}]}, id="a-person"),
+        pytest.param({"estate": {"admins": [PIPELINE]}}, id="a-machine-administers-the-estate"),
+        pytest.param({"estate": {"roles": [{"relation": "reclaimer", "principal": f"{IDP}~alice"}]}}, id="a-person-holds-a-machine-role"),
+        pytest.param({"estate": {"roles": [{"relation": "admin", "principal": MAINTENANCE}]}}, id="a-role-that-is-no-machine-role"),
     ],
 )
-def test_a_declaration_granting_what_it_may_not_converges_nothing(estate: Estate, grant: dict[str, str]) -> None:
-    estate.declare(projects=[_project("acme")], warehouses=[_warehouse("acme", "acme")], grants=[grant])
+def test_a_declaration_granting_what_it_may_not_converges_nothing(estate: Estate, granted: dict[str, Any]) -> None:
+    estate.declare(projects=[_project("acme")], warehouses=[_warehouse("acme", "acme")], **granted)
 
     answer = estate.tick()
 

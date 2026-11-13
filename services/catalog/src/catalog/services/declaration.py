@@ -1,7 +1,8 @@
 """What git declares of the estate's tenants, and the record of the tuples written from it ([[XC-213]], ADR 0206).
 
-The chart renders its ``catalog.declared`` values into a file the catalog mounts: the projects, the warehouses and the
-grants to principals that are not people. The catalog converges the estate onto it (``catalog.api.declaration_converge``),
+The chart renders its ``catalog.declared`` values into a file the catalog mounts: the projects, the warehouses, the
+grants to principals that are not people, and the estate's own grants (its administrators, ``auth.bootstrapAdmin``, and
+the roles the release's services hold on its root, [[XC-011]]). The catalog converges the estate onto it (``catalog.api.declaration_converge``),
 so an install from git holds its tenants with no call to any door. People's grants, namespaces and tables are not
 declared: they stay with their doors.
 
@@ -103,12 +104,45 @@ class GrantTuple(BaseModel):
         return fga.ClientTuple(user=self.user, relation=self.relation, object=self.object)
 
 
+class DeclaredEstateRole(_Declared):
+    """A machine role on the estate root, held by one of the release's own services."""
+
+    relation: str
+    principal: PrincipalKey
+
+    @model_validator(mode="after")
+    def _a_machine_role(self) -> Self:
+        if self.relation not in fga.machine_relations("estate"):
+            raise ValueError(f"{self.relation!r} is not a machine role on the estate root")
+        if is_person_subject(self.principal):
+            raise ValueError(f"{self.principal!r} is a person: a machine role names a service's own account")
+        return self
+
+
+class DeclaredEstate(_Declared):
+    """The estate's own grants: the people who administer it and the roles the release's services hold on its root.
+
+    An administrator holds ``admin`` on the estate root and ``owner`` of the estate's own warehouse, the grant every
+    other one in the estate starts from, so it is declared rather than written by anyone: changing it in git moves it.
+    """
+
+    admins: list[PrincipalKey] = Field(default_factory=list)
+    roles: list[DeclaredEstateRole] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _people_administer(self) -> Self:
+        if machines := sorted(admin for admin in self.admins if not is_person_subject(admin)):
+            raise ValueError(f"{', '.join(machines)} administer nothing: the estate's administrator is a person, and a service holds a role")
+        return self
+
+
 class Declaration(_Declared):
-    """Everything git declares of the estate's tenants."""
+    """Everything git declares of the estate and its tenants."""
 
     projects: list[DeclaredProject] = Field(default_factory=list)
     warehouses: list[DeclaredWarehouse] = Field(default_factory=list)
     grants: list[DeclaredGrant] = Field(default_factory=list)
+    estate: DeclaredEstate = Field(default_factory=DeclaredEstate)
 
     @model_validator(mode="after")
     def _each_id_once(self) -> Self:
@@ -117,13 +151,23 @@ class Declaration(_Declared):
                 raise ValueError(f"{kind} declared more than once: {', '.join(repeated)}")
         return self
 
-    @property
-    def tuples(self) -> set[GrantTuple]:
-        """Every tuple the declaration asks for: each project's admins, then each grant."""
+    def tuples(self, *, root: str, estate_warehouse: str) -> set[GrantTuple]:
+        """Every tuple the declaration asks for: each project's admins, each grant, and the estate's own.
+
+        Args:
+            root: The estate root's object (``RASK_FGA_ROOT_OBJECT``).
+            estate_warehouse: The estate's own warehouse's object (``RASK_FGA_DEFAULT_WAREHOUSE_OBJECT``).
+        """
         admins = {
             GrantTuple(user=fga.user_object(admin), relation="admin", object=f"project:{project.id}") for project in self.projects for admin in project.admins
         }
-        return admins | {declared.grant for declared in self.grants}
+        estate = {
+            GrantTuple(user=fga.user_object(admin), relation=relation, object=obj)
+            for admin in self.estate.admins
+            for relation, obj in (("admin", root), ("owner", estate_warehouse))
+        }
+        roles = {GrantTuple(user=fga.user_object(role.principal), relation=role.relation, object=root) for role in self.estate.roles}
+        return admins | {declared.grant for declared in self.grants} | estate | roles
 
 
 class DeclarationUnreadableError(ValueError):

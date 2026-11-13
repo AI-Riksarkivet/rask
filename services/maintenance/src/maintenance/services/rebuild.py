@@ -14,7 +14,7 @@ resilience gap rather than a missing convenience.
 
 **STRUCTURE IS REBUILT; A PERMISSION IS NEVER RE-GRANTED.** The rebuild writes the parent/child edges between
 the estate, projects, warehouses, namespaces, tables and roles, and leaves ownership tuples, grants, role assignments,
-bootstrap admin tuples and the model's own bookkeeping alone.
+the estate administrator's tuples and the model's own bookkeeping alone.
 
 THE REASON IT IS THE RIGHT LINE: **the registry does not record REVOCATION.** A project record carries ``created_by`` — 93 of 93, measured on the live
 control root 2026-09-19 — but that field says who created the tenant, not who may administer it today.

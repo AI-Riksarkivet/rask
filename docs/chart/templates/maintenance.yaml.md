@@ -69,8 +69,8 @@ scan's purge asks for a session that deletes that one table's bytes (`POST .../c
 deletes, like the audit's and the scan's tombstone sweep, asks it to end the record once its place holds nothing
 (`DELETE /management/v1/trash/{kind}/{uuid}`).
 
-GATED by `maintenance.vendWriteCredentials` (on by default). Off, the chart wires no door, the bootstrap-admin hook
-takes maintenance's maintainer grant back, and every rewrite is refused (`VendingNotDirect`): reclamation pauses while
+GATED by `maintenance.vendWriteCredentials` (on by default). Off, the chart wires no door, the catalog takes
+maintenance's maintainer grant back, and every rewrite is refused (`VendingNotDirect`): reclamation pauses while
 each table's pass, the due list and the drift report run, since maintenance's own session writes only its own records.
 
 What its own session signs are reads no per-table credential could express: each table's pass reading its datasets and

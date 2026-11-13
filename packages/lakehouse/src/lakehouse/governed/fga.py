@@ -736,8 +736,8 @@ def newest_store(stores: Iterable[Any], name: str) -> Any | None:
 class ModelHistory(BaseModel):
     """A store's models read against one body: its newest model, and the newest one carrying that body.
 
-    Nothing treats the store's newest model as authoritative ([[LH-201]]): every service, the hook and
-    `bootstrap-admin` use the id of the model their own image carries. ``carrying`` below ``newest``
+    Nothing treats the store's newest model as authoritative ([[LH-201]]): every service and the hook
+    use the id of the model their own image carries. ``carrying`` below ``newest``
     is therefore no failure — an older image, a revert, or a writer that wrote since — and writing the
     body again would only grow the history. ``carrying`` absent is a model the store has never held.
     """
@@ -819,8 +819,8 @@ async def provision(
     store (creators silently lose access). This image's model is written when the store has never held
     its body, removals included: every component checks against the model its own image carries, so a
     narrower body governs only the pods built with it ([[LH-201]]). Tuples live on the store and survive
-    new model versions. A pinned ``store_id`` (``RASK_FGA_STORE_ID``) is used as is, the store the hook and
-    ``bootstrap-admin`` use too.
+    new model versions. A pinned ``store_id`` (``RASK_FGA_STORE_ID``) is used as is, the store the hook uses
+    too.
     """
     model = load_model()
     store_is_new = False

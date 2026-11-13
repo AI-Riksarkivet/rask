@@ -24,7 +24,7 @@ before-hook-creation delete policy never matches the previous one — without a 
 
 ## `labels:`
 
-The explicit component label (the P4 landmine, see bootstrap-admin.yaml): `nats-stream` is on the bus's exclusive
+The explicit component label (the P4 landmine): `nats-stream` is on the bus's exclusive
 client list (`lance.busClients`), which admits it to the development bus's 4222 (network-policy.yaml (3f)) and to the
 platform bus's egress on a real deployment ([[XC-202]]); a Job without it reaches no bus under the isolation layer.
 

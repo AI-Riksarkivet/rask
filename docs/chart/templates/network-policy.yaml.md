@@ -52,7 +52,7 @@ rows' callers, each under the condition its template renders: the API server's a
 lineage under `auth.enabled`, reading the service-account issuer's discovery and key set), the issuer mirror, the dev
 store's pod (the openbao fixture's; its Kubernetes auth backend reviews ESO's logins), the Collector (`k8sattributes`
 reads pod metadata), the volume-snapshot CronJob (`kubectl`) and the Dapr dashboard; OpenFGA's are the tuple writers
-(`lance.fgaWriters`), the model hook and the bootstrap-admin Job, the list its in-namespace ingress admits; the secret
+(`lance.fgaWriters`) and the model hook, the list its in-namespace ingress admits; the secret
 store's are the pods whose sidecar reads it (`lance.secretReaderComponents`, as the dev store's ingress lock); the
 telemetry backend's is the Collector; the S3's are the pods holding a store session (`lance.objectStoreClients`), whose
 STS answers at addresses the same rules name; the IdP's are the doors verifying a person's token (`lance.tokenVerifiers`);

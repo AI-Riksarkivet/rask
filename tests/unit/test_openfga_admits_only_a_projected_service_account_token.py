@@ -13,9 +13,9 @@ then answers an uncredentialed call 401 is the live probe's (`scratch/probe_open
 
 from __future__ import annotations
 
-import json
 from pathlib import PurePosixPath
 
+from catalog.services.declaration import Declaration
 from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
 
 
@@ -40,9 +40,10 @@ def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playgroun
     assert server.get("OPENFGA_HTTP_CORS_ALLOWED_ORIGINS", "*") != "*"
 
 
-#: The accounts that write tuples ([[LH-442]]): the catalog, plus the jobs that publish the model and seed the estate's
-#: grants, whatever else the release runs. Every other governed service decides through the catalog.
-_WRITERS = {"catalog", "jobs", "hooks"}
+#: The accounts that write to OpenFGA ([[LH-442]], [[XC-011]]): the catalog, which also grants the estate's first tuples
+#: from its declaration, and the hook that publishes the model, whatever else the release runs. Every other governed
+#: service decides through the catalog.
+_WRITERS = {"catalog", "hooks"}
 
 
 def _projected(pod: dict, container: dict, path: str) -> set[tuple[str | None, str]]:
@@ -75,7 +76,12 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
     server_pod = next(d for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"] == "rask-openfga")["spec"]["template"]
     named = (server_pod["metadata"].get("annotations") or {}).get("rask.dev/openfga-clients", "")
     writers = {f"system:serviceaccount:default:rask-sa-{w}" for w in _WRITERS}
-    seeded = json.loads(next(env_of(c)["FGA_ESTATE_ROLES"] for w, _n, c in containers(docs) if w == "Job/rask-bootstrap-admin"))
+    declared = Declaration.model_validate_json(
+        next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "rask-catalog-declaration")["data"]["declaration.json"]
+    )
+    seeded: dict[str, list[str]] = {}
+    for role in declared.estate.roles:
+        seeded.setdefault(role.principal, []).append(role.relation)
     reaching = next(d for d in docs if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"] == "rask-openfga")["spec"]["ingress"][0]["from"]
     reachers = {v for peer in reaching for e in peer["podSelector"]["matchExpressions"] for v in e["values"]}
 
@@ -109,10 +115,10 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
         f"OpenFGA admits {sorted(admitted)}; its clients are {sorted(openfga_clients)}; the writers are {sorted(writers)}; its pod names {named!r}"
     )
     deciding = {subject for subject, roles in seeded.items() if "decider" in roles}
-    assert deciders and set(deciders) == deciding, f"deciders {sorted(deciders)} vs the decision roles bootstrap seeds {sorted(deciding)}"
+    assert deciders and set(deciders) == deciding, f"deciders {sorted(deciders)} vs the decision roles the declaration grants {sorted(deciding)}"
     # The estate roles beside the decision roles are maintenance's, which reaches the store's grants only through the
     # catalog: its reclaim of the trash and its drift reconciler ([[XC-084]]).
     assert {subject: roles for subject, roles in seeded.items() if subject not in deciding} == {
         "kubernetes~system:serviceaccount:default:rask-sa-maintenance": ["reclaimer", "reconciler"]
     }, seeded
-    assert reachers == {"catalog", "bootstrap-admin", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"
+    assert reachers == {"catalog", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"

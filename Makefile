@@ -533,7 +533,7 @@ K3S_PINS = deploy/values-live-pins.yaml
 K3S_PINS_ARG = $(if $(K3S_REGISTRY),-f $(K3S_PINS),$(if $(wildcard $(K3S_PINS)),-f $(K3S_PINS)))
 K3S_PINS_CHECK = $(if $(K3S_REGISTRY),for s in $(K3S_IMAGES); do grep -q "^    $$s: " $(K3S_PINS) 2>/dev/null || { echo "!! $(K3S_PINS) pins no tag for $$s: the release would pull $(K3S_REGISTRY)/$$s:dev. Name the build with make k3s-pins TAGS=\"$$s=<tag>\" (or K3S_REGISTRY= for side-loaded images)" >&2; exit 1; }; done,:)
 # The estate admin is the Dex fixture's alice, whose principal is derived from the fixture's own values as the live
-# lanes derive theirs (scripts/stack_values.sh). The bootstrap-admin hook grants it `admin` on estate:rask; without it
+# lanes derive theirs (scripts/stack_values.sh). The catalog's declaration grants it `admin` on estate:rask; without it
 # nobody can mint a project. Expanded once, and only by a target that composes the values.
 DEV_ADMIN_EMAIL ?= alice@example.com
 DEV_ADMIN = $(eval DEV_ADMIN := $(shell uv run --no-project --with pyyaml python scripts/dex_principal.py $(DEV_ADMIN_EMAIL)))$(DEV_ADMIN)

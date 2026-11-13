@@ -39,7 +39,14 @@ applies the chart; the catalog reconciles what the chart declares.
   (a service account, `kubernetes~system:serviceaccount:<namespace>:<name>`). A person's grant is refused in the
   declaration; it is made at the catalog's access doors.
 
-Namespaces, tables and people's grants other than a project's admins are never declared: they stay with their doors.
+The chart adds the estate's own grants to the same file ([[XC-011]]): `estate.admins`, from `auth.bootstrapAdmin`
+(`admin` on `estate:rask` and `owner` of the estate's own warehouse, `warehouse:lance_catalog`), and `estate.roles`, the
+machine roles the release's services hold on the estate root (`lance.fgaEstateRoles`). Changing `auth.bootstrapAdmin`
+moves both tuples to the new principal at the next tick, and the audit trail names each revoke and grant
+(`access_tuple_delete`, `access_tuple_write`, subject `system:declaration`). No hook writes OpenFGA.
+
+Namespaces, tables and people's grants other than a project's admins and the estate's are never declared: they stay with
+their doors.
 The chart renders the lists into the ConfigMap `<release>-catalog-declaration` (key `declaration.json`), which the
 catalog mounts as a volume at `/etc/rask/declaration` (`LANCE_DECLARATION_FILE`), so a change reaches a running pod with
 no roll.

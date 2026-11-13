@@ -7,7 +7,7 @@ no admin. The door now deletes the admin tuple and moves the project's ``admin_r
 store refuses whole once another revoke moved the revision, and the loser reads again and judges the admins it finds.
 
 Every decision is the real model's, on a store of this test's own. The estate admin's ``owner`` tuple on the estate is
-seeded as the chart's bootstrap hook seeds it; everything else goes through the doors: root creates ``acme`` and grants
+seeded as the catalog's declaration grants it; everything else goes through the doors: root creates ``acme`` and grants
 the rungs, and the ``acme`` fixture says which two direct admins it leaves.
 """
 

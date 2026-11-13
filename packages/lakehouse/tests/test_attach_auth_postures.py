@@ -149,7 +149,7 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provision", [False, True], ids=["resolve", "provision"])
 async def test_a_pinned_store_reaches_the_lookup(fga_calls: _Recorder, provision: bool) -> None:
-    """The hook and `bootstrap-admin` write into a pinned store; a service that looked its store up by
+    """The model hook writes into a pinned store; a service that looked its store up by
     name instead would check against a different one ([[LH-201]])."""
     await build_fga_client(_Settings(fga_store_id="01PINNED"), service="t", provision=provision)
 

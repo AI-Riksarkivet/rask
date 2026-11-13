@@ -30,7 +30,7 @@ NOT_FOUND = (404, "application/problem+json", 4)
 
 @pytest.fixture
 def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Any:
-    """acme, made through its door by alice, who owns the estate as the chart's bootstrap hook grants it, and acme's
+    """acme, made through its door by alice, who owns the estate as the catalog's declaration grants it, and acme's
     warehouse, written where its door keeps it (the door provisions a bucket and probes the store), with dave a second
     admin of acme, bob the warehouse's owner and carol a member of acme."""
     catalog = request.getfixturevalue("governed_catalog")

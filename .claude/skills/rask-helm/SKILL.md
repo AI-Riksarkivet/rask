@@ -188,7 +188,9 @@ provisioned by its operator and attested by `signing.provisioned`).
 - Every helm call goes through `scripts/helm.sh`.
 - **The estate's tenants are chart values too** ([[XC-213]], ADR 0206). `catalog.declared` (`projects`, `warehouses`,
   `grants` to principals that are not people; the default declares the project `default`, administered by
-  `auth.bootstrapAdmin` when it names no admin) renders to the ConfigMap `<release>-catalog-declaration`
+  `auth.bootstrapAdmin` when it names no admin), with the estate's own grants (`estate.admins`: `auth.bootstrapAdmin`;
+  `estate.roles`: `lance.fgaEstateRoles`, [[XC-011]]; no hook writes OpenFGA), renders to the ConfigMap
+  `<release>-catalog-declaration`
   (`templates/catalog-declaration.yaml`, key `declaration.json`, built by `lance.declaration` in `_helpers.tpl`). The
   catalog mounts it as a VOLUME at `/etc/rask/declaration` (`LANCE_DECLARATION_FILE`), never through env, so a changed
   declaration reaches the running pod with no roll (the kubelet refreshes the file), and the
@@ -409,7 +411,7 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   playground off, CORS closed. A pod that names OpenFGA renders all three parts of `lance.fgaToken` (env,
   volume, mount) under the condition its URL has, and `lance.openfgaSubjects` must list its account under
   the same condition. A list-valued `OPENFGA_*` env is comma-joined (measured on v1.18.3). An operator tool
-  mints a token with `kubectl create token <release>-sa-jobs --audience rask-openfga`. The gate is
+  mints a token with `kubectl create token <release>-sa-hooks --audience rask-openfga`. The gate is
   `tests/unit/test_openfga_admits_only_a_projected_service_account_token.py`; `openfga-authn.yaml` fails
   the render when OpenFGA's audience, issuer alias or subject source drifts from the clients'.
 - **The gate is the render, judged by what each role grants**, so a new subchart that binds a

@@ -273,7 +273,7 @@ class GovernedCatalog:
 
     Nothing stands in for the governance plane: the lifespan builds the deployed verifier against ``dex_issuer`` and the
     deployed OpenFGA client against the test's own store, and every tuple a test relies on is written by the door that
-    writes it in production, or seeded straight to the store as the chart's bootstrap hook seeds it.
+    writes it in production, or seeded straight to the store as the catalog's declaration grants it.
     """
 
     #: The Dex connector the lane's people sign in through, and the idp id the deployment maps it to.
@@ -298,7 +298,7 @@ class GovernedCatalog:
         """Create namespace ``lance_catalog$<name>`` as ``user_id``, who holds ``writer`` on the estate's warehouse for that create alone.
 
         A namespace directly in a warehouse is created on the warehouse's ``can_create_namespace`` ([[LH-593]]), which
-        the chart's bootstrap hook seeds on the estate's warehouse. The grant is withdrawn once the door answers, because
+        the catalog's declaration grants on the estate's warehouse. The grant is withdrawn once the door answers, because
         a warehouse rung reaches every namespace beneath it and would hand the creator every other test principal's.
         """
         grant = (self.person(user_id), "writer", self.ESTATE)

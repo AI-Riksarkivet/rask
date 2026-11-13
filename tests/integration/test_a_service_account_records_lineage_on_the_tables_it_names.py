@@ -19,7 +19,7 @@ before the catalog is asked anything.
 Nothing stands in: the catalog's own app on a real `dir` namespace with OpenFGA on a store of this test's own, lineage's
 own app and lifespan asking it through `CatalogDecider` and recording into its provenance namespace, and every caller a
 token a real verifier checks: the loopback Dex for the person who makes the tables, the loopback service-account issuer
-for lineage and the producer. The grants a deployment's bootstrap hook writes are seeded straight to the store.
+for lineage and the producer. The grants a deployment's declaration writes are seeded straight to the store.
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
         httpx.Client(base_url=catalog_url, headers=alice, timeout=60) as catalog,
         ExitStack() as stack,
     ):
-        # alice owns the estate's own warehouse, as the chart's bootstrap hook makes its admin, so she may create in it.
+        # alice owns the estate's own warehouse, as the catalog's declaration makes its admin, so she may create in it.
         openfga_store.write((fga.user_object("dex~alice"), "owner", "warehouse:lance_catalog"))
         assert catalog.post("/v1/namespace/lance_catalog$acme/create", json={}).status_code == 200
         namespace_uuid = catalog.post("/v1/namespace/lance_catalog$acme/describe", json={}).json()["properties"]["rask.uuid"]

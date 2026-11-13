@@ -224,7 +224,7 @@ async def test_a_history_read_that_fails_at_first_is_waited_out(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_a_pinned_store_is_used_without_a_name_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The hook and `bootstrap-admin` honour `RASK_FGA_STORE_ID`, so every reader must, or the model is
+    """The model hook honours `RASK_FGA_STORE_ID`, so every reader must, or the model is
     written to one store and looked for in another."""
     fake = _OpenFga([[_SCRATCH]], [[_stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)

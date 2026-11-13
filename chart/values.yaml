@@ -426,7 +426,7 @@ auth:
   # the subject `kubernetes~system:serviceaccount:<ns>:<sa>`, from whatever namespace (ADR 0156 C5): no
   # list of accounts stands at the door, and OpenFGA alone decides what the subject may do. Each of the
   # release's own services is the subject of its ServiceAccount (`lance.saSubject`), which is the subject
-  # its grants (bootstrap-admin, LANCE_FGA_MAINTAINERS) and its event signatures name.
+  # its grants (the catalog's declaration, LANCE_FGA_MAINTAINERS) and its event signatures name.
   # The issuer serves discovery and keys only to a bearer from a private CA (k3s runs
   # `--anonymous-auth=false`), so each door also projects an API-audience token (3600 s) and
   # `kube-root-ca.crt` at /var/run/secrets/rask/sa-fetch. Never the automount token: it is a one-year
@@ -500,36 +500,35 @@ auth:
   # the stream even with auth on.
   # -- Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.
   audit: true
-  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
+  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writer (the catalog) and the openfga-model hook dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
   fgaApiUrl: ""
-  # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the catalog and the openfga-model hook) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.
   fgaEgress: []
   # OpenFGA authorizes none of its callers, so only the services that write tuples hold a `rask-openfga` token
   # ([[LH-442]]); every other governed service asks the catalog's decision door (`/management/v1/decisions`) as its own
   # ServiceAccount. Lineage's decision roles and maintenance's reclaim of the trash are this release's own estate roles
-  # (`lance.fgaEstateRoles`, seeded by bootstrap-admin). A
+  # (`lance.fgaEstateRoles`, declared to the catalog in `<release>-catalog-declaration`, which converges them). A
   # client of the lakehouse is granted its roles at the catalog's access doors as its own identity ([[LH-563]]), and
   # this chart names none. OpenFGA reads its own subject list (the writers) only at start, so a change to it needs an
   # OpenFGA restart.
   #
-  # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services, the openfga-model hook and the
-  # bootstrap-admin Job) uses that store; empty (default) = the newest store named `lance-catalog`. A
+  # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services and the openfga-model hook) uses that
+  # store; empty (default) = the newest store named `lance-catalog`. A
   # MODEL pin makes every service check against that one model whatever its image carries; no deployment
   # sets it, and removing the knob is parked as LH-309.
-  # -- Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`.
+  # -- Pin the OpenFGA store id used by every service and the openfga-model hook. Empty = the newest store named `lance-catalog`.
   fgaStoreId: ""
   # -- Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model.
   fgaModelId: ""
-  # First estate admin, seeded BY THE CHART (goal cond 4): a person's principal, `<idp-id>~<user id>` (the idp id
+  # The estate's administrator, declared in git ([[XC-011]]): a person's principal, `<idp-id>~<user id>` (the idp id
   # `auth.oidc.connectors` gives their connector; `dex~<userID>` for a development Dex user), which the render
-  # refuses when it is a bare name, a `user:` id or a service account's. It is granted
-  # TWO tuples by the bootstrap-admin post-install/upgrade hook Job, because they are two authorities —
-  # `owner` on the default warehouse (warehouse:lance_catalog), which cascades into every namespace and
-  # table it parents, and `admin` on the estate root (estate:rask), which every estate-wide surface
-  # (GET /management/v1/events, the admin console) gates on. Empty (default) = the human grants
-  # stay out-of-band (seed scripts / the UI) while the SERVICE grants below still render.
-  # Requires auth.enabled.
-  # -- The person's principal (`<idp-id>~<user id>`, e.g. `dex~<userID>`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask; a bare name fails the render. Empty = human grants are made out of band.
+  # refuses when it is a bare name, a `user:` id or a service account's. The chart renders it into the catalog's
+  # declaration (`estate.admins`), and the catalog's declaration-converge tick grants it TWO tuples, because they are
+  # two authorities: `owner` on the estate's own warehouse (warehouse:lance_catalog), which cascades into every
+  # namespace and table it parents, and `admin` on the estate root (estate:rask), which every estate-wide surface gates
+  # on. Each tuple the tick writes or revokes is audited as `system:declaration`'s; a change here moves both tuples to
+  # the new principal at the next tick, and emptied, the tick revokes what it granted. Requires auth.enabled.
+  # -- The person's principal (`<idp-id>~<user id>`, e.g. `dex~<userID>`) the catalog grants `owner` on the estate's own warehouse and `admin` on estate:rask from its declaration, moving both when it changes; a bare name fails the render. Empty = no administrator is declared.
   bootstrapAdmin: ""
 
 # === Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ====
@@ -746,7 +745,9 @@ catalog:
   # and the catalog converges the estate onto it on the declarationConverge tick: it makes what is missing, corrects
   # what drifted, and marks each declared project and warehouse `managed_by: git`, after which its doors refuse a change
   # to what is declared here. Removed from the list, a project or warehouse keeps its data and is its doors' again; a
-  # removed grant is revoked. People's grants, namespaces and tables are never declared: they stay with their doors.
+  # removed grant is revoked. The chart adds the estate's own grants to the same file ([[XC-011]]): `auth.bootstrapAdmin`
+  # and the roles the release's services hold on the estate root (`lance.fgaEstateRoles`). People's other grants,
+  # namespaces and tables are never declared: they stay with their doors.
   declared:
     # -- Projects git declares, each `{id, admins, protected}`: `admins` lists people's principals (`<idp-id>~<user id>`), and a project naming none is administered by `auth.bootstrapAdmin` when that is set; `protected` arms its deletion protection. The default declares one project, so a one-team install never creates one.
     projects:
@@ -1735,7 +1736,7 @@ openfga:
   # refuses a render where it differs from the clients the chart derives (`lance.openfgaClients`).
   # -- Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits, so a change to them restarts it.
   podAnnotations:
-    rask.dev/openfga-clients: "catalog,hooks,jobs"
+    rask.dev/openfga-clients: "catalog,hooks"
   # AUTHENTICATED ([[XC-077]]). With no authn the API answers any pod that presents no credential, so code in any pod
   # could write `estate#admin` for itself or replace the model with no rask audit record. The API authenticates
   # each client as an OIDC client of the cluster ServiceAccount issuer (D1), so a client presents its pod's

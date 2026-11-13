@@ -13,7 +13,7 @@ current name beside it, and its ``object`` filter, like every door, takes the ob
 ([[LH-591]]).
 
 Every answer is the real OpenFGA's, on a store of this test's own. The estate admin's ``owner`` tuple on the estate is
-seeded as the chart's bootstrap hook seeds it; the label tuples are written through the raw-tuple door the browser
+seeded as the catalog's declaration grants it; the label tuples are written through the raw-tuple door the browser
 reads them back from.
 """
 

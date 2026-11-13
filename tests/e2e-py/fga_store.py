@@ -1,7 +1,7 @@
 """The catalog's OpenFGA store, read directly, for a claim about the tuples it holds.
 
 No catalog door lists a store's raw tuples to a tenant, so a leg holding a door to the tuples it seeds, or a refused call
-to the tuples it leaves, reads the store itself, as the bootstrap Job's ServiceAccount (the run's `fga-token`
+to the tuples it leaves, reads the store itself, as the model hook's ServiceAccount (the run's `fga-token`
 credential, [[XC-077]]). The store is `LANCE_E2E_FGA_STORE_ID` when the runner pinned one, else the newest store named
 `lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).
 """

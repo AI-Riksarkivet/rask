@@ -6,7 +6,7 @@ only check hold none and ask the catalog: `lakehouse.governed.decider.CatalogDec
 of the test's own.
 
 A service's scope is a grant to its own identity. Lineage serves every tenant and holds `decider` and `governance_prober`
-on the estate root, as the chart's bootstrap hook writes them. A service serving one tenant holds `decider` on that
+on the estate root, as the catalog's declaration writes them. A service serving one tenant holds `decider` on that
 tenant's project alone, granted by the project's admin at the project's access door, and is answered about the
 project's tables: another project's table is answered refused, exactly as a table that does not exist is, so the service
 learns nothing outside its scope. A notifier holds `member_expander` on the estate root, which the estate admin grants at
@@ -96,7 +96,7 @@ _FORBIDDEN, _MALFORMED = Refused(status=403, code=15), Refused(status=400, code=
 
 
 def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]]:  # noqa: ANN401 — the root conftest's OpenFgaStore and DexIssuer
-    """root, the estate admin as the bootstrap hook grants it, makes both tenants through the doors and grants bob reading
+    """root, the estate admin as the catalog's declaration grants it, makes both tenants through the doors and grants bob reading
     both tables and acme's membership; acme's admin grants acme's service the asking on acme, and the estate admin grants
     a notifier the expansion of members at the tuple door."""
     from lance_namespace import connect

@@ -411,9 +411,9 @@ door "$ALICE" POST /management/v1/projects "{\"id\":\"$PROJECT\"}" 200 201 409 |
 # double-create (two catalog pods provisioning against a freshly-rolled OpenFGA) can never make the seeder
 # and the serving catalog disagree about which store the grants live in (CI flake 2026-07-15: the CLI
 # verified can_create_warehouse=allowed on stores[0] while the catalog checked its own newer store → 403).
-# OpenFGA admits only a projected `rask-openfga` token ([[XC-077]]): the seeder speaks as the bootstrap Job's
+# OpenFGA admits only a projected `rask-openfga` token ([[XC-077]]): the seeder speaks as the model hook's
 # ServiceAccount, through a TokenRequest the suites re-read from the run's `fga-token` credential.
-FGA_TOKEN="$(kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 2h)" || { echo "!! could not mint a rask-openfga token"; exit 1; }
+FGA_TOKEN="$(kubectl create token "$RELEASE-sa-hooks" --audience rask-openfga --duration 2h)" || { echo "!! could not mint a rask-openfga token"; exit 1; }
 keep fga-token "$FGA_TOKEN"
 SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" \
   | uv run python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'])")"

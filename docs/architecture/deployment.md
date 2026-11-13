@@ -131,8 +131,8 @@ The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind it (t
 `rask-age` StatefulSet). Development runs both. **Production names the platform's** ([[XC-132]], ADR 0153),
 and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.enabled: false`):
 
-- `auth.fgaApiUrl` is the platform's OpenFGA HTTP API, https on a real deployment. Every FGA client, the `openfga-model`
-  hook and the bootstrap-admin Job dial it. Each one presents its projected ServiceAccount token: audience `rask-openfga`, issuer
+- `auth.fgaApiUrl` is the platform's OpenFGA HTTP API, https on a real deployment. Every FGA client and the `openfga-model`
+  hook dial it. Each one presents its projected ServiceAccount token: audience `rask-openfga`, issuer
   `auth.serviceAccountIssuer`, subject `system:serviceaccount:<namespace>:<release>-sa-<component>`. The platform's
   OpenFGA takes OIDC against that issuer, fetching its keys from the cluster's ServiceAccount JWKS. rask's issuer
   mirror and subject ConfigMap serve only the in-chart OpenFGA. The subjects to admit are the ones
@@ -318,9 +318,10 @@ repository supplies its values to a lakehouse install with `-f`. A platform brin
 
 `auth.bootstrapAdmin` names the first estate admin by principal, `<idp-id>~<user id>` (the idp id `auth.oidc.connectors`
 gives their Dex connector; `dex~<userID>` for a development Dex user, LH-063), and the render refuses a bare name: a
-post-install/upgrade hook Job grants that principal `owner` on the default warehouse and `admin` on the estate root,
-the grants the estate-wide surfaces gate on, and the chart's declaration (`catalog.declared`) names it admin of each
-declared project that names none, the default project `default` included, which the catalog converges
+the chart renders it into the catalog's declaration, whose converge tick grants that principal `owner` on the estate's
+own warehouse and `admin` on the estate root, the grants the estate-wide surfaces gate on, audits each tuple it writes
+or revokes, and moves both when the value changes ([[XC-011]]); the declaration also names it admin of each declared
+project that names none, the default project `default` included, which the catalog converges
 ([OPERATORS.md § 2](../OPERATORS.md)). Empty seeds no human grant. `make k3s-up` names the Dex fixture's alice
 (`DEV_ADMIN_EMAIL`), derived by `scripts/dex_principal.py` as the live lanes derive it.
 

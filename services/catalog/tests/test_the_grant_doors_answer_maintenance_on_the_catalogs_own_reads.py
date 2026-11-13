@@ -8,7 +8,7 @@ deployment keeps for itself (the estate root and the default warehouse, which no
 for a warehouse no record names. The revoke of a ghost's grants is driven end to end by
 `tests/integration/test_drift_repair_keeps_the_grants_of_a_table_in_the_trash.py`.
 
-On a real OpenFGA, each caller a person holding the `reconciler` estate role as the chart's bootstrap hook seeds it for
+On a real OpenFGA, each caller a person holding the `reconciler` estate role as the catalog's declaration grants it to
 maintenance's ServiceAccount.
 """
 

@@ -74,14 +74,11 @@ def test_the_provenance_tables_keep_the_versions_the_estate_declares() -> None:
     assert catalog["LANCE_PROVENANCE_RETAIN_VERSIONS"] == "20"
 
 
-def test_the_catalog_takes_back_a_writer_only_from_the_accounts_the_bootstrap_hook_converges() -> None:
-    """The catalog's boot and the bootstrap hook converge one list of the release's own accounts, and every provenance
-    writer the catalog is told is on it, so a writer the release stops naming is taken back at the next boot. Rendered
-    empty, the boot takes back nothing and the retired writer keeps writing lineage's tables."""
-    rendered = containers(render(*DEFAULT_ARGS))
-    catalog = next(env_of(container) for workload, name, container in rendered if workload.endswith("-catalog") and name == "catalog")
-    hook = next(env_of(container) for workload, _, container in rendered if workload.endswith("-bootstrap-admin"))
+def test_the_catalog_takes_back_a_writer_only_from_the_release_s_own_accounts() -> None:
+    """The catalog's boot and its declaration converge take back a role only from the release's own accounts, and every
+    provenance writer the catalog is told is on that list, so a writer the release stops naming is taken back at the next
+    boot. Rendered empty, the boot takes back nothing and the retired writer keeps writing lineage's tables."""
+    catalog = next(env_of(container) for workload, name, container in containers(render(*DEFAULT_ARGS)) if workload.endswith("-catalog") and name == "catalog")
     own, writers = json.loads(catalog.get("LANCE_OWN_ACCOUNTS", "[]")), json.loads(catalog["LANCE_PROVENANCE_WRITERS"])
 
-    assert own == json.loads(hook["FGA_OWN_ACCOUNTS"])
     assert writers and set(writers) <= set(own), f"provenance writers {writers} outside the release's own accounts {own}"

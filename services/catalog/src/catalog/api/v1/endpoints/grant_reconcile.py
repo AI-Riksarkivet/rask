@@ -5,7 +5,7 @@ Maintenance holds no OpenFGA credential, since one could write any tuple (:mod:`
 drift report reads the store's grant census here, and its repair and rebuild ask the catalog to revoke the grants of an
 object no registry names and to write a warehouse's tenancy edge its record justifies; the catalog judges each candidate
 again on its own reads, and answers what it did and what it refused, with why. Every door asks ``can_reconcile_grants``
-on the estate root, which only the ``reconciler`` role opens (the chart's bootstrap-admin hook seeds it for maintenance's
+on the estate root, which only the ``reconciler`` role opens (the catalog's declaration grants it to maintenance's
 ServiceAccount, ``lance.fgaEstateRoles``).
 
 The router guard leaves these paths to their handlers (``fga_deps._RESOURCES`` names no ``grants``), so the gate is this

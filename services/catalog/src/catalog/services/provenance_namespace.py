@@ -22,7 +22,7 @@ can: no session policy refuses a put over an existing key (`catalog.core.vending
 
 THE WRITERS ARE WHAT THE SETTINGS DECLARE, both ways, for the release's own accounts: recording lineage is the
 lakehouse's own, so a direct `writer` tuple on the namespace naming one of `LANCE_OWN_ACCOUNTS` that `LANCE_PROVENANCE_WRITERS`
-does not name is revoked at boot, as the bootstrap hook converges those accounts' estate roles ([[LH-563]]). Every other
+does not name is revoked at boot, as the declaration converge does those accounts' estate roles ([[LH-563]]). Every other
 grant there was made at a door and stands, a compaction job's, a reader's and a writer granted to an account outside the
 release alike. A replica booting with an older list during a rollout grants and revokes by that list until a replica
 boots again.

@@ -215,7 +215,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $rows = append $rows (dict "name" "apiserver" "value" "networkPolicy.apiServerEgress" "rules" $v.networkPolicy.apiServerEgress "reaches" "the Kubernetes API server's endpoints, at the port a policy sees after the kubernetes Service's translation" "components" $api) -}}
 {{- end -}}
 {{- if not $v.openfga.enabled -}}
-{{- $rows = append $rows (dict "name" "openfga" "value" "auth.fgaEgress" "rules" $v.auth.fgaEgress "reaches" "the platform's OpenFGA at auth.fgaApiUrl" "components" (concat (include "lance.fgaWriters" . | splitList " ") (list "bootstrap-admin" "openfga-model"))) -}}
+{{- $rows = append $rows (dict "name" "openfga" "value" "auth.fgaEgress" "rules" $v.auth.fgaEgress "reaches" "the platform's OpenFGA at auth.fgaApiUrl" "components" (concat (include "lance.fgaWriters" . | splitList " ") (list "openfga-model"))) -}}
 {{- end -}}
 {{- if not $v.openbao.enabled -}}
 {{- $rows = append $rows (dict "name" "secret-store" "value" "openbao.egress" "rules" $v.openbao.egress "reaches" "the platform's secret store at openbao.externalAddr" "components" (splitList "," (include "lance.secretReaderComponents" .) | compact)) -}}
@@ -780,7 +780,12 @@ buckets as the estate's reads already are. */ -}}
 {{- if and (not $project.admins) $admin -}}{{- $_ := set $project "admins" (list $admin) -}}{{- end -}}
 {{- $projects = append $projects $project -}}
 {{- end -}}
-{{- dict "projects" $projects "warehouses" (.Values.catalog.declared.warehouses | default list) "grants" (.Values.catalog.declared.grants | default list) | toJson -}}
+{{- $roles := list -}}
+{{- range $principal, $relations := (include "lance.fgaEstateRoles" . | fromJson) -}}
+{{- range $relations -}}{{- $roles = append $roles (dict "relation" . "principal" $principal) -}}{{- end -}}
+{{- end -}}
+{{- $estate := dict "admins" (ternary (list $admin) list (ne $admin "")) "roles" $roles -}}
+{{- dict "projects" $projects "warehouses" (.Values.catalog.declared.warehouses | default list) "grants" (.Values.catalog.declared.grants | default list) "estate" $estate | toJson -}}
 {{- end -}}
 
 {{- define "lance.oidcAudience" -}}
@@ -825,7 +830,7 @@ catalog
 {{- end -}}
 
 {{- define "lance.openfgaClients" -}}
-{{- list "catalog" "hooks" "jobs" | sortAlpha | join "," -}}
+{{- list "catalog" "hooks" | sortAlpha | join "," -}}
 {{- end -}}
 
 {{- define "lance.openfgaSubjects" -}}

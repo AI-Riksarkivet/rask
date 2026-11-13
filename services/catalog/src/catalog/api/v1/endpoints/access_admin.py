@@ -71,7 +71,7 @@ log = logging.getLogger(__name__)
 
 #: OpenFGA's Read page-size ceiling — a larger request is a server-side 400, so cap it at the API edge.
 _MAX_PAGE_SIZE = subject_tuples.PAGE_SIZE
-#: The warehouse relation only the chart's bootstrap hook and the catalog's own maintainer seed write ([[LH-473]]).
+#: The warehouse relation only the catalog's own maintainer seed and its declaration converge write ([[LH-473]]).
 _MAINTENANCE = "maintenance"
 
 
@@ -693,12 +693,13 @@ def _principal_key(principal: str) -> str:
 PrincipalPath = Annotated[str, Path(description="the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')")]
 
 
-def _refuse_a_principal_the_chart_grants(key: str, naming: list[fga.ClientTuple], settings: Settings) -> None:
+def _refuse_a_principal_git_declares(key: str, naming: list[fga.ClientTuple], settings: Settings) -> None:
     """Refuse (400, code 13) a principal the next upgrade or boot would grant again, naming where it is declared.
 
-    The chart's bootstrap hook grants a person's rung on the estate root, and lineage's machine roles there (the root's
-    relations only a user holds directly, `fga.machine_relations`); only it and the catalog's own seed write a warehouse
-    ``maintenance`` tuple; the catalog grants the accounts its settings name at boot. A machine role on the estate root
+    The catalog's declaration grants a person's rung on the estate root (``auth.bootstrapAdmin``) and the release's
+    machine roles there (the root's relations only a user holds directly, `fga.machine_relations`); only the catalog's own
+    seed and that declaration write a warehouse ``maintenance`` tuple; the catalog grants the accounts its settings name
+    at boot. A machine role on the estate root
     naming anyone else was made at a door ([[LH-563]]), so it is revoked like any grant. Judging the tuples rather than a
     list the chart renders keeps the catalog naming no client.
     """
@@ -708,8 +709,8 @@ def _refuse_a_principal_the_chart_grants(key: str, naming: list[fga.ClientTuple]
     declared = (t for t in naming if (t.object == settings.fga_root_object and t.relation not in machine) or t.relation == _MAINTENANCE)
     if authorities := sorted(f"{t.relation} on {t.object}" for t in declared):
         raise InvalidInputError(
-            f"{key} holds an estate authority the chart's bootstrap hook grants ({', '.join(authorities)}): remove it from the "
-            "values that declare it (auth.bootstrapAdmin, the services the hook grants), or revoke those tuples first"
+            f"{key} holds an estate authority git declares ({', '.join(authorities)}): remove it from the values that "
+            "declare it (auth.bootstrapAdmin, the release's services), or revoke those tuples first"
         )
 
 
@@ -725,7 +726,7 @@ async def delete_principal(
     is revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the
     store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
     what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
-    them, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_the_chart_grants`). Re-running the door
+    them, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_git_declares`). Re-running the door
     revokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed
     before the revoke and sent once the deletion is recorded, so a door failing after the record still announces it
     ([[LH-576]]). ``revoked`` counts the tuples this call removed.
@@ -736,7 +737,7 @@ async def delete_principal(
         raise InvalidInputError("an estate admin cannot offboard themselves: the rung this door asks would go with them")
     user = fga.user_object(key)
     naming = await subject_tuples.tuples_naming(client, user)
-    _refuse_a_principal_the_chart_grants(key, naming, settings)
+    _refuse_a_principal_git_declares(key, naming, settings)
     await subject_tuples.refuse_stranding(client, user, naming, who=key)
     deleted = CatalogControlEvent(
         action="principal_deleted",

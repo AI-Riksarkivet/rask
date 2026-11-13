@@ -12,12 +12,12 @@ The store was the third and was checked by nothing.
 
 WHAT THAT COST, measured 2026-09-18: the store's newest model defined 26/27/26 relations on
 warehouse/namespace/table against 30/29/29 in the repo. `warehouse#maintainer` existed in the model
-the code reasons about and could not be written, so `bootstrap-admin` — the hook two weights later —
-CrashLooped on `Invalid tuple '…#maintainer@user:service-maintenance'` and wedged the release in
+the code reasons about and could not be written, so the hook Job that granted it CrashLooped on `Invalid tuple '…#maintainer@user:service-maintenance'` and wedged the release in
 `pending-upgrade`, which refuses every later upgrade.
 
 PRE-UPGRADE ([[LH-201]]): each service resolves its image's model at boot, so it must exist before new
-pods start; `post-install` covers a first install. Either way it precedes `bootstrap-admin` (weight 5).
+pods start; `post-install` covers a first install. Either way it precedes the catalog's first tuple write, which waits for
+the model its image carries.
 Under Argo CD it is a `Sync` hook (`lance.reconciledJob`): Argo maps `pre-upgrade` to PreSync, which runs before the
 sync applies anything, so on a first sync this Job would wait in PreSync for its ServiceAccount and for OpenFGA, both
 applied only in Sync, and the sync would never get there ([[XC-164]]). In Sync it runs beside them, and the services

@@ -7,7 +7,7 @@ surface, asked through the decision door).
 THE TUPLES DO NOT MOVE THEMSELVES. A principal holding `owner` on the old root passes every one of
 those doors today and NONE of them the moment the setting flips, so the grants have to exist on the new
 object BEFORE the repoint is deployed — which is why this is a script that can run against a live store
-rather than a note in the row. The chart's bootstrap hook seeds `auth.bootstrapAdmin` and the event reader;
+rather than a note in the row. The catalog's declaration grants `auth.bootstrapAdmin` and the release's services' roles;
 this covers everyone else, including the subjects a running estate acquired outside the chart.
 
 NOTHING IS REMOVED. The old tuples keep governing the WAREHOUSE, which is their other and still-correct

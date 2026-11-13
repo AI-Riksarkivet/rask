@@ -285,7 +285,7 @@ def _ok(answer: httpx.Response) -> httpx.Response:
 def estate(request: pytest.FixtureRequest) -> Any:
     """The catalog as deployed, holding one of each object a door the router leaves open names.
 
-    alice owns the estate, as the chart's bootstrap hook grants it, and makes ``acme``, the two namespaces in its
+    alice owns the estate, as the catalog's declaration grants it, and makes ``acme``, the two namespaces in its
     warehouse, a table in one, an erasure obligation on that table and bob's grant on the other namespace through the
     doors. What no door on a ``dir`` estate makes is written where its writer keeps it: the warehouse's record, its row in
     its root's catalog and its project edge (its door provisions a bucket and probes the store), maintenance's due record and a promotion hold (written by a

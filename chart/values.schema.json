@@ -73,7 +73,7 @@
                     "type": "boolean"
                 },
                 "bootstrapAdmin": {
-                    "description": "The person's principal (`\u003cidp-id\u003e~\u003cuser id\u003e`, e.g. `dex~\u003cuserID\u003e`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask; a bare name fails the render. Empty = human grants are made out of band.",
+                    "description": "The person's principal (`\u003cidp-id\u003e~\u003cuser id\u003e`, e.g. `dex~\u003cuserID\u003e`) the catalog grants `owner` on the estate's own warehouse and `admin` on estate:rask from its declaration, moving both when it changes; a bare name fails the render. Empty = no administrator is declared.",
                     "type": "string"
                 },
                 "enabled": {
@@ -81,11 +81,11 @@
                     "type": "boolean"
                 },
                 "fgaApiUrl": {
-                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
+                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writer (the catalog) and the openfga-model hook dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
                     "type": "string"
                 },
                 "fgaEgress": {
-                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.",
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the catalog and the openfga-model hook) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.",
                     "type": "array"
                 },
                 "fgaModelId": {
@@ -93,7 +93,7 @@
                     "type": "string"
                 },
                 "fgaStoreId": {
-                    "description": "Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`.",
+                    "description": "Pin the OpenFGA store id used by every service and the openfga-model hook. Empty = the newest store named `lance-catalog`.",
                     "type": "string"
                 },
                 "issuerMirror": {

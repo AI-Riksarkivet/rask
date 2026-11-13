@@ -226,7 +226,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         # this one wrote; `build_fga_client` defaults to the read-only half for that reason.
         # The catalog is the publisher because it owns the governed plane the model describes, it
         # is `fatal=True` so a failure to build is a refusal to serve rather than an open door,
-        # and the chart's bootstrap-admin hook already seeds the first tuples against its objects.
+        # and its declaration converge writes the estate's first tuples against its objects.
         provision=True,
     )
     # Credential vending (data plane): turn an authorized (table location, tier) into the scoped

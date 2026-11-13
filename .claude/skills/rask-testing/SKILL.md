@@ -144,7 +144,7 @@ Don't redo any of it in a suite. At import, before collection builds any app, th
 On request the root `conftest.py` also serves the identity and authorization plane for real: `sa_issuer` and
 `dex_issuer` (loopback issuers that mint tokens), `openfga` (the pinned OpenFGA server in memory, one per xdist worker,
 failing the test when the binary is missing) and `openfga_store` (a fresh store on it holding the bundled model, with
-`write()` for seeding tuples as the chart's bootstrap hook does).
+`write()` for seeding tuples as the catalog's declaration does).
 
 It also resets the process-global state the `lakehouse` library and its `dapr` dependency keep. It makes bare
 `@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the

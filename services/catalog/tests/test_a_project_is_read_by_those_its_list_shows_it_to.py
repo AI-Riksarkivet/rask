@@ -30,7 +30,7 @@ OWNER, MEMBER, OBSERVER, STRANGER = "alice", "carol", "erin", "mallory"
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """acme, made through its door by alice, who owns the estate as the chart's bootstrap hook grants it, with carol a
+    """acme, made through its door by alice, who owns the estate as the catalog's declaration grants it, with carol a
     member of it and erin another owner of the estate."""
     catalog = governed_catalog
     catalog.store.write((catalog.person(OWNER), "admin", ESTATE), (catalog.person(OBSERVER), "owner", ESTATE))

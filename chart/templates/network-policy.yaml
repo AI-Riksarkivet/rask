@@ -176,8 +176,8 @@ spec:
 {{- if .Values.openfga.enabled }}
 ---
 # (3b') openfga:8080/8081 — the authorization store, which authorizes none of its callers ([[LH-442]]): any token it
-# admits may write any tuple. Only the tuple writers reach its API (the catalog and the jobs that publish the model and
-# seed the estate's grants, `lance.fgaWriters`); every other service asks the catalog's doors. The Collector reaches the metrics port alone.
+# admits may write any tuple. Only the tuple writers reach its API (the catalog, `lance.fgaWriters`, and the hook that
+# publishes the model); every other service asks the catalog's doors. The Collector reaches the metrics port alone.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -194,7 +194,7 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
                 values:
-                  {{- range (concat (include "lance.fgaWriters" . | splitList " ") (list "bootstrap-admin" "openfga-model")) }}
+                  {{- range (concat (include "lance.fgaWriters" . | splitList " ") (list "openfga-model")) }}
                   - {{ . }}
                   {{- end }}
       ports:

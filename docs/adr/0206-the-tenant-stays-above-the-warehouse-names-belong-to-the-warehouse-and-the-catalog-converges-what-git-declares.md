@@ -85,6 +85,34 @@ planned, `docs/architecture/operator-findings.md` § 2). The owner had chosen an
 - Until the operator exists, whether a declared object has converged is read from the catalog's log and doors, not from
   `kubectl` or Argo CD.
 
+## Amendment, 2026-11-13: the estate's own grants are declared too ([[XC-011]])
+
+The chart's `bootstrap-admin` hook wrote the estate's first grants straight to OpenFGA on every install, upgrade and
+sync: `owner` on the estate's own warehouse and `admin` on the estate root for `auth.bootstrapAdmin`, the maintainers'
+`maintenance` on the estate's own warehouse, the release services' machine roles on the root, and the deletes that took
+back a release account's undeclared role (ADR 0196 decision 5). It held an OpenFGA token of its own (`rask-sa-jobs`), a
+second writer beside the catalog, and its writes left no record of who was bootstrapped or what a run changed.
+
+1. **The hook is gone.** The chart renders `auth.bootstrapAdmin` and `lance.fgaEstateRoles` into the declaration's
+   `estate` section (`admins`, `roles`), and the converge tick grants them through the grant ledger, as it grants every
+   declared tuple: each tuple it writes or revokes is audited as `system:declaration`'s (`access_tuple_write`,
+   `access_tuple_delete`), a tick on an estate as declared changes nothing and audits nothing, and a changed
+   `auth.bootstrapAdmin` moves both tuples to the new principal at the next tick. The estate's own warehouse has no
+   record, so its maintainers converge on the same tick from `LANCE_FGA_MAINTAINERS`.
+2. **ADR 0196 decision 5 moves into the catalog**: on the estate root and the estate's own warehouse, a machine role a
+   release account (`LANCE_OWN_ACCOUNTS`) holds that git does not declare is revoked, whether the ledger wrote it or not;
+   one naming any other principal stands.
+3. **Only the catalog and the model hook hold a `rask-openfga` token**: `rask-sa-jobs` leaves `lance.openfgaClients`
+   and OpenFGA's ingress, and an operator tool mints its token as `rask-sa-hooks`.
+
+The row asked for a bootstrap door the hook would call. The converge needs none: it is already the catalog writing
+what git declares, authored and audited, with no Job and no identity of its own, so a door would add a caller and keep
+a hook (GitOps: the estate is the declaration; zero trust: one writer, no extra token).
+
+A tuple an earlier hook wrote is held unrecorded, so the ledger never revokes it: a release whose `auth.bootstrapAdmin`
+changes after it moved off the hook keeps the earlier principal's tuples until revoked at a door (the release's own
+accounts' roles are converged regardless, item 2).
+
 ## Not confirmed
 
 - Whether an operator or Terraform provider for any reference exists outside its own repository.

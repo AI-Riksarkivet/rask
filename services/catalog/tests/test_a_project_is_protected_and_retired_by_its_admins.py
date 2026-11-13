@@ -52,7 +52,7 @@ REFUSED_UNLESS_FORCED = (
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """acme, made through its door by alice, who owns the estate as the chart's bootstrap hook grants it, with dave a
+    """acme, made through its door by alice, who owns the estate as the catalog's declaration grants it, with dave a
     second admin of acme, carol a member of it, and erin another owner of the estate."""
     catalog = governed_catalog
     catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"), (catalog.person(ESTATE_OWNER), "owner", "estate:rask"))

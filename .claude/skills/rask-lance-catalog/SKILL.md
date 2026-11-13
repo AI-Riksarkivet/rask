@@ -310,10 +310,10 @@ datastore and a 409 rollback on a SQL one. Both doors that revoke a project `adm
 and the estate admin's offboarding door ([[LH-233]]), `DELETE /management/v1/access/principals/{principal}`, which revokes
 every tuple naming a principal (read type by type), refuses 409 code 14 before revoking anything while the principal is
 any project's only direct admin, refuses 400 code 13 the caller and every principal whose grants git declares (one holding
-a rung on the estate root other than a machine role, or a warehouse `maintenance` tuple, which only the bootstrap hook and
-the catalog's own seed write, and the accounts the catalog's settings name; judged on the tuples, so the catalog names no
+a rung on the estate root other than a machine role, or a warehouse `maintenance` tuple, which only the catalog's own seed
+and its declaration converge write, and the accounts the catalog's settings name; judged on the tuples, so the catalog names no
 client, XC-183), and revokes a machine role on the estate root (a relation only a user holds directly,
-`fga.machine_relations`) like any other grant: the hook grants one only to the release's own accounts, and any other
+`fga.machine_relations`) like any other grant: the declaration grants one only to the release's own accounts, and any other
 holder was granted it at a door ([[LH-563]]). It records `_principals/<blake2s>.json` (`GET` on the same path), answers `revoked` as the tuples it removed and
 emits `principal_deleted` (signed by the catalog), on which a notifier erases what it keeps for the person. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create: one
 door, and a warehouse-owner cannot ride a create into project admin. **A project is read by the callers its list shows
@@ -505,10 +505,26 @@ tables are never declared.
   `admin` goes through `project_admins.revoke_admin`, which keeps a project its last direct admin: that revoke fails,
   and is counted on every tick, until another admin is granted. A grant on an object with no registry record is not
   written (`LookupError`, counted). With FGA off no grant is converged.
+- **The estate's own grants** ([[XC-011]]). The declaration's `estate` section carries `admins` (people:
+  `auth.bootstrapAdmin`, which the chart renders there) and `roles` (`{relation, principal}`, a machine relation of the
+  estate root held by one of the release's services: `lance.fgaEstateRoles`, lineage's `decider` and
+  `governance_prober`, maintenance's `reclaimer` and `reconciler`); `catalog.services.declaration.DeclaredEstate`
+  refuses a machine as an admin and a person or a non-machine relation as a role. An admin is `admin` on the estate root
+  (`RASK_FGA_ROOT_OBJECT`) and `owner` of the estate's own warehouse (`RASK_FGA_DEFAULT_WAREHOUSE_OBJECT`); a role is
+  held on the root; `LANCE_FGA_MAINTAINERS` are `maintenance` on the estate's own warehouse, which has no record for
+  `cascade_tuples` to be written with (`Declaration.tuples(root=..., estate_warehouse=...)`, `_Converger._wanted`).
+  Both objects stand with no registry record. They go through the same ledger, so a fresh install's grants are each
+  audited `access_tuple_write` as `system:declaration`, a tick as declared writes and audits nothing, and a changed
+  `auth.bootstrapAdmin` revokes the old principal's two tuples and grants the new one's, each audited. Beyond the ledger,
+  each machine role on those two objects held by one of the release's own accounts (`LANCE_OWN_ACCOUNTS`) that git does
+  not declare is revoked (`_Converger._own_accounts`, `fga.revoke_undeclared`), recorded or not, since no door grants
+  the release's accounts an estate role; one naming any other principal was made at a door and stands. No chart hook
+  writes OpenFGA: only the catalog and the model hook hold a `rask-openfga` token.
 
 Pinned by `tests/integration/test_the_catalog_converges_what_git_declares.py` (the real app, a real OpenFGA, moto, the
 tick delivered as the sidecar delivers it), `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`
-(the render: the default project `default`, administered by `auth.bootstrapAdmin` when it names no admin) and, live,
+(the render: the default project `default`, administered by `auth.bootstrapAdmin` when it names no admin, and the
+estate's admin and roles) and, live,
 `tests/e2e-py/test_the_estate_is_what_git_declares.py`. `docs/OPERATORS.md` § 2 is the operator's procedure.
 
 ## Storage — what state lives where (and why there is NO app database)
@@ -518,7 +534,7 @@ tick delivered as the sidecar delivers it), `tests/unit/test_the_chart_declares_
 | table data + versions | Lance datasets on object storage (rustfs) |
 | project registry (`_projects/<id>.json`), warehouse registry (`_warehouses/<id>.json`, its bucket claims under `_warehouses/bucket-claims/`), the declared-grant ledger (`_declared_grants/`) | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `lakehouse.records.create_json`): project mint, warehouse mint and a declared grant's record are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. `put_warehouse` / `put_project` remain as SEEDING primitives with no production caller, pinned by `tests/unit/test_registry_writes_are_conditional.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
 | authz | OpenFGA on its chart-managed Postgres |
-| lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `lance_catalog$provenance`, a namespace of the estate's own warehouse, which the render and the catalog's settings both require): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, revokes a `writer` the settings no longer name from one of the release's own accounts (`LANCE_OWN_ACCOUNTS`, the chart's `lance.ownAccounts`, the list the bootstrap hook converges), and leaves every other grant there to the doors: a bring-your-own compaction job's account is granted `reader` and `maintainer` at the namespace's access door, and no boot revokes it, nor a `writer` granted there to an account outside the release ([[LH-563]]). It writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane holds the table's pass, which expires it (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
+| lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `lance_catalog$provenance`, a namespace of the estate's own warehouse, which the render and the catalog's settings both require): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, revokes a `writer` the settings no longer name from one of the release's own accounts (`LANCE_OWN_ACCOUNTS`, the chart's `lance.ownAccounts`, the list the declaration converge holds the estate's machine roles to), and leaves every other grant there to the doors: a bring-your-own compaction job's account is granted `reader` and `maintainer` at the namespace's access door, and no boot revokes it, nor a `writer` granted there to an account outside the release ([[LH-563]]). It writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane holds the table's pass, which expires it (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
 
 A relational app-DB was removed at P7a and must not creep back for the catalog: registry writes are
 admin-frequency, the conditional creates arbitrate the id-mint races, and deletes are bottom-up
@@ -952,8 +968,8 @@ governing their data. The project-scoped surface is the console's project page, 
   dev estate vends the RustFS fixture's node port (`DEV_VENDED_ENDPOINT`); the warehouse scope probe keeps the
   catalog's own address. The maintain tier opens to
   `can_vend_maintain` alone ([[LH-473]], ADR 0156 C4): the model's `maintenance` relation, which the catalog writes
-  for `LANCE_FGA_MAINTAINERS` on every warehouse (`cascade_tuples`, backfilled at startup, and the chart's
-  `bootstrap-admin` hook) and no grant door hands out. The list holds principals, maintenance's service-account principal
+  for `LANCE_FGA_MAINTAINERS` on every warehouse (`cascade_tuples`, backfilled at startup; on the estate's own
+  warehouse, which has no record, the declaration converge) and no grant door hands out. The list holds principals, maintenance's service-account principal
   (`kubernetes~system:serviceaccount:<ns>:<release>-sa-maintenance`, `lance.saSubject`), each written as the user it is
   (`fga.user_object`); a bare name in it is refused when the catalog's settings are read ([[LH-063]]). An owner is a
   maintainer and keeps the maintainer doors, and is
@@ -970,8 +986,8 @@ governing their data. The project-scoped surface is the console's project page, 
   policy state and lineage outbox (`lance.objectStorePolicy.maintenance`, `chart/templates/_helpers.tpl`), so it asks four doors
   under `/management/v1/trash/{kind}/{uuid}` (`api/v1/endpoints/trash_reclaim.py`, judgement
   `services/trash_reclaim.py`, client `maintenance.services.credentials`), each asking `can_reclaim_trash` on the
-  estate root, which only the `reclaimer` estate role opens (seeded for maintenance's ServiceAccount by the chart's
-  bootstrap-admin hook, `lance.fgaEstateRoles`): `POST .../release` revokes the object's grants once the record is past
+  estate root, which only the `reclaimer` estate role opens (granted to maintenance's ServiceAccount by the catalog's
+  declaration, `lance.fgaEstateRoles`): `POST .../release` revokes the object's grants once the record is past
   its deadline by `trash.RELEASE_SETTLE`, announces a catalog-signed `grant_revoked` per person and stamps the record;
   `POST .../credentials` vends a released table record's bytes session (`vending.ReclaimScope`: list and delete over its
   location in both spellings and its data directories, nothing on the control root, a whole-bucket place refused, and

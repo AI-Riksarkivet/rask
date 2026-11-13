@@ -6,7 +6,8 @@ parses it with the catalog's own model (`catalog.services.declaration.Declaratio
 what the catalog was handed. Then, read back on the deployed catalog with no call to a door that makes anything:
 
 - each declared project and warehouse stands, its record marked `managed_by: git`, and each tuple the declaration asks
-  for (a project's admins, each declared grant) is held on its object, read through the estate admin's tuple door;
+  for (a project's admins, each declared grant, the estate's administrator and its services' roles, [[XC-011]]) is held
+  on its object, read through the estate admin's tuple door;
 - a door asked to change what git declares of a warehouse refuses: a deactivation answers 403 code 15 naming git, and
   the warehouse's record reads the same after it.
 
@@ -30,6 +31,10 @@ from scratch_tenant import ADMIN_USER, CATALOG, DEX, Identity, ok, tuples_on
 from catalog.services.declaration import Declaration
 from lakehouse.problem import PROBLEM_JSON
 
+
+#: The estate root and the estate's own warehouse: the defaults of `RASK_FGA_ROOT_OBJECT` and
+#: `RASK_FGA_DEFAULT_WAREHOUSE_OBJECT`, which no chart value changes.
+ESTATE_ROOT, ESTATE_WAREHOUSE = "estate:rask", "warehouse:lance_catalog"
 
 pytestmark = [
     pytest.mark.e2e,
@@ -58,8 +63,9 @@ def test_every_declared_project_warehouse_and_grant_stands_managed_by_git(declar
         warehouse.id: ok(admin.http.get(f"{CATALOG}/management/v1/warehouses/{warehouse.id}", timeout=60)).get("managed_by")
         for warehouse in declaration.warehouses
     }
-    held = {obj: tuples_on(admin, obj) for obj in sorted({grant.object for grant in declaration.tuples})}
-    missing = sorted(f"{grant.user} {grant.relation} {grant.object}" for grant in declaration.tuples if (grant.user, grant.relation) not in held[grant.object])
+    wanted = declaration.tuples(root=ESTATE_ROOT, estate_warehouse=ESTATE_WAREHOUSE)
+    held = {obj: tuples_on(admin, obj) for obj in sorted({grant.object for grant in wanted})}
+    missing = sorted(f"{grant.user} {grant.relation} {grant.object}" for grant in wanted if (grant.user, grant.relation) not in held[grant.object])
 
     assert (projects, warehouses, missing) == (
         dict.fromkeys((project.id for project in declaration.projects), "git"),

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from catalog.services.declaration import Declaration, DeclaredGrant, DeclaredProject, DeclaredWarehouse
+from catalog.services.declaration import Declaration, DeclaredEstate, DeclaredEstateRole, DeclaredGrant, DeclaredProject, DeclaredWarehouse
 from tests.unit.chart_render import DEFAULT_ARGS, render
 
 
@@ -29,10 +29,30 @@ def _declaration(*extra: str) -> Declaration:
     return Declaration.model_validate_json(config["data"][path.removeprefix(f"{mount['mountPath']}/")])
 
 
-def test_a_fresh_install_declares_the_default_project_administered_by_the_bootstrap_admin() -> None:
+def _account(component: str) -> str:
+    return f"kubernetes~system:serviceaccount:default:rask-sa-{component}"
+
+
+def test_a_fresh_install_declares_the_bootstrap_admin_over_the_estate_and_its_default_project() -> None:
+    """The release's own services' roles on the estate root are declared beside the person ([[XC-011]]): no hook writes
+    either, so the catalog, which converges the declaration, is the only writer of the estate's first grants."""
     declared = _declaration("--set-string", "auth.bootstrapAdmin=dex~alice")
 
-    assert declared == Declaration(projects=[DeclaredProject(id="default", admins=["dex~alice"])])
+    assert declared == Declaration(
+        projects=[DeclaredProject(id="default", admins=["dex~alice"])],
+        estate=DeclaredEstate(
+            admins=["dex~alice"],
+            roles=[
+                DeclaredEstateRole(relation=relation, principal=_account(component))
+                for component, relation in (
+                    ("lineage", "decider"),
+                    ("lineage", "governance_prober"),
+                    ("maintenance", "reclaimer"),
+                    ("maintenance", "reconciler"),
+                )
+            ],
+        ),
+    )
 
 
 def test_declared_projects_warehouses_and_grants_reach_the_catalog_as_declared() -> None:
@@ -45,7 +65,7 @@ def test_declared_projects_warehouses_and_grants_reach_the_catalog_as_declared()
         f'catalog.declared.grants=[{{"object":"warehouse:acme","relation":"writer","principal":"{PIPELINE}"}}]',
     )
 
-    assert declared == Declaration(
+    assert declared.model_copy(update={"estate": DeclaredEstate()}) == Declaration(
         projects=[DeclaredProject(id="acme", admins=["dex~bob"], protected=True)],
         warehouses=[
             DeclaredWarehouse.model_validate(

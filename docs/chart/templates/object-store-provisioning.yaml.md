@@ -52,7 +52,7 @@ estate 2026-09-11.
 
 ## `"helm.sh/hook-weight": "5"`
 
-Ordering WITHIN a phase: after `openfga-model` (0) and before `bootstrap-admin` (10).
+Ordering WITHIN a phase: after `openfga-model` (0).
 
 ## `backoffLimit: 20`
 

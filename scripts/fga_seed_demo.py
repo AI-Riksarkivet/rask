@@ -1,7 +1,7 @@
 """Load a REALISTIC estate into the live OpenFGA store — the demo seed that does not exist.
 
-Why this is separate from the bootstrap (the ``bootstrap-admin`` Helm Job, which superseded the old
-``fga_bootstrap_owner.py`` script): bootstrap grants a first admin and nothing else — three tuples
+Why this is separate from the bootstrap (the estate administrator the catalog's declaration grants,
+``auth.bootstrapAdmin``): bootstrap grants a first admin and nothing else — three tuples
 (one ``owner`` on the root plus two structural ``parent`` edges), because
 its job is to make a locked-out cluster usable, not to populate it. The consequence is that a fresh
 cluster's authorization graph has **four nodes** — one user, one warehouse, one namespace, one table —
@@ -113,7 +113,7 @@ def main() -> int:
     ap.add_argument(
         "--token-file",
         default=os.environ.get("OPENFGA_TOKEN_FILE"),
-        help="a rask-openfga token, e.g. `kubectl create token rask-sa-jobs --audience rask-openfga` written to a file (XC-077)",
+        help="a rask-openfga token, e.g. `kubectl create token rask-sa-hooks --audience rask-openfga` written to a file (XC-077)",
     )
     ap.add_argument("--dry-run", action="store_true", help="print what would be written, write nothing")
     ap.add_argument(

@@ -85,8 +85,8 @@ def carried_model(api: str, *, token_file: str | None, pinned: str = "") -> tupl
 
     A tuple request naming no ``authorization_model_id``, or naming the store's newest, is validated against
     whichever image wrote last ([[LH-201]]). In the LH-201 review (OpenFGA v1.18.3) a legacy image's narrower
-    newest model refused every ``estate`` tuple on ``type 'estate' not found``. So the rule is the one the hook,
-    ``bootstrap-admin`` and every service share: the ``pinned`` store (``RASK_FGA_STORE_ID``) when given, else
+    newest model refused every ``estate`` tuple on ``type 'estate' not found``. So the rule is the one the hook and every
+    service share: the ``pinned`` store (``RASK_FGA_STORE_ID``) when given, else
     the newest named ``STORE_NAME``, and in it the model whose canonical body is this package's ``model.json``.
 
     Raises:

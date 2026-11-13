@@ -3006,8 +3006,19 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
         # `maintenance` ALONE: the platform's maintenance identity, a maintainer that may also be vended the
         # maintain tier. Maintenance rewrites how a dataset is stored and must not be able to drop it or change
         # what it says, which is exactly the separation `can_maintain` was minted to express.
-        *(fga.ClientTuple(user=fga.user_object(subject), relation="maintenance", object=obj) for subject in settings.fga_maintainers),
+        *maintainer_tuples(settings, obj),
     ]
+
+
+def maintainer_tuples(settings: Settings, obj: str) -> list[fga.ClientTuple]:
+    """The maintenance rung of each of ``LANCE_FGA_MAINTAINERS`` on the warehouse ``obj``: one builder for every writer of
+    it (a warehouse's create, the boot backfill, the declaration converge on the estate's own warehouse)."""
+    return [fga.ClientTuple(user=fga.user_object(subject), relation="maintenance", object=obj) for subject in settings.fga_maintainers]
+
+
+def own_users(settings: Settings) -> set[str]:
+    """The release's own accounts (``LANCE_OWN_ACCOUNTS``) as the users a tuple names."""
+    return {fga.user_object(account) for account in settings.own_accounts}
 
 
 async def converge_cascade_grants(
@@ -3034,7 +3045,7 @@ async def converge_cascade_grants(
         return 0
     tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
     await fga.write_tuples(client, tuples, actor=actor, origin="cascade_backfill")  # noqa: TID251
-    own = {fga.user_object(account) for account in settings.own_accounts}
+    own = own_users(settings)
     revoked = await fga.revoke_undeclared(  # noqa: TID251 — the cascade's revoking site
         client, tuples, obj=f"warehouse:{warehouse_id}", relation="maintenance", own=own, actor=actor, origin="cascade_backfill"
     )

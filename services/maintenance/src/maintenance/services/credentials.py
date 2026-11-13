@@ -152,7 +152,7 @@ def denial_remedy(*, asked_for: str, identity: str) -> str:
 def reclaim_denial_remedy(*, identity: str) -> str:
     """The sentence a 403 at a trash door ends with: the estate rung every one of them asks."""
     return (
-        f"{identity!r} holds no can_reclaim_trash on the estate root: the chart's bootstrap-admin hook grants "
+        f"{identity!r} holds no can_reclaim_trash on the estate root: the catalog's declaration grants "
         f"maintenance's ServiceAccount the reclaimer role (lance.fgaEstateRoles); check that {identity!r} is this pod's "
         "service-account subject."
     )
@@ -161,7 +161,7 @@ def reclaim_denial_remedy(*, identity: str) -> str:
 def reconcile_denial_remedy(*, identity: str) -> str:
     """The sentence a 403 at a grant door ends with: the estate rung every one of them asks."""
     return (
-        f"{identity!r} holds no can_reconcile_grants on the estate root: the chart's bootstrap-admin hook grants "
+        f"{identity!r} holds no can_reconcile_grants on the estate root: the catalog's declaration grants "
         f"maintenance's ServiceAccount the reconciler role (lance.fgaEstateRoles); check that {identity!r} is this pod's "
         "service-account subject."
     )

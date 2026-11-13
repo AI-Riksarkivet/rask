@@ -4,7 +4,7 @@ Maintenance holds no write of its own on the store and no client that writes gra
 the catalog's, judged on its own reads (:mod:`catalog.services.trash_reclaim`): it releases a drop past its deadline,
 vends the session that deletes a table's bytes, ends the record once nothing it names holds a byte, and notes
 maintenance's own refusals on it. Every door asks ``can_reclaim_trash`` on the estate root, which only the ``reclaimer``
-role opens (the chart's bootstrap-admin hook seeds it for maintenance's ServiceAccount, ``lance.fgaEstateRoles``). A
+role opens (the catalog's declaration grants it to maintenance's ServiceAccount, ``lance.fgaEstateRoles``). A
 record a judgement refuses answers 409 (code 19) and the refusal is noted on it; a uuid no trash record holds answers
 404.
 

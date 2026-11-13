@@ -8,7 +8,7 @@
 BASE_A="s3://mb-a"
 BASE_B="s3://mb-b"
 # THE ESTATE ADMIN IS THE IDENTITY THE SUITES DRIVE AS, named at install the way the live estate names it. Minting a
-# project gates on the estate root, and only the bootstrap-admin hook writes that grant, so without it every suite that
+# project gates on the estate root, and only the catalog's declaration writes that grant, so without it every suite that
 # mints a tenant is refused 403 `can_create_project required on estate:rask` before it asserts anything.
 # The script imports PyYAML alone, so it runs in an environment of that and nothing else: syncing the workspace would
 # install every client's dependencies, and one of them builds from source on arm64.

@@ -202,8 +202,8 @@ type estate
         # catalog every question its gates need. The catalog is the store's only client: every other service asks
         # it through its batch decision door.
         #
-        # ESTATE-WIDE HERE, and only for a service that serves every tenant: lineage, whose roles the chart's
-        # bootstrap hook writes, and a client the estate admin grants at the tuple door. A service serving some
+        # ESTATE-WIDE HERE, and only for a service that serves every tenant: lineage, whose roles the catalog's
+        # declaration writes, and a client the estate admin grants at the tuple door. A service serving some
         # tenants holds `decider` on their projects or warehouses instead ([[LH-563]]), and the door asks the
         # scope on each object a question names, this rung or that object's own `can_decide_access`.
         #
@@ -227,14 +227,14 @@ type estate
         # judged on the record. Estate-wide because the trash is: a record keeps its object's location, and a warehouse
         # rung would find a record's warehouse only through a warehouse record its delete may have removed. `[user]` alone and
         # reached from no tier, like the decision roles: the holder is the one maintenance identity, whose role the
-        # chart's bootstrap hook writes (`lance.fgaEstateRoles`).
+        # catalog's declaration writes (`lance.fgaEstateRoles`).
         define reclaimer: [user]
         define can_reclaim_trash: reclaimer
         # MAINTENANCE'S DRIFT RECONCILER ([[LH-061]], [[XC-084]]). Maintenance holds no OpenFGA credential, since one could
         # write any tuple: its drift report reads the store's grant census through the catalog, and its repair and rebuild
         # ask the catalog to revoke the grants of an object no registry names or to write a warehouse's tenancy edge, each
         # judged again on the catalog's own registries. `[user]` alone and reached from no tier, like `reclaimer`: the
-        # holder is the one maintenance identity, whose role the chart's bootstrap hook writes (`lance.fgaEstateRoles`).
+        # holder is the one maintenance identity, whose role the catalog's declaration writes (`lance.fgaEstateRoles`).
         define reconciler: [user]
         define can_reconcile_grants: reconciler
 
@@ -689,7 +689,7 @@ type table
     define can_grant_validator: manage_grants or (validator_effective and pass_grants)
     define can_grant_maintainer: manage_grants or (maintainer_effective and pass_grants)
     # GRANTABLE THROUGH THE API, unlike `maintainer` and `publisher` — and the difference is WHO holds it.
-    # Those two are service rungs the chart's bootstrap hook seeds; `classifier` is meant for a PERSON (a
+    # Those two are service rungs the catalog seeds; `classifier` is meant for a PERSON (a
     # data-protection officer labelling data they may not read), and a person's grant belongs on the grant
     # door rather than in a deploy. `_grant_actions` reads this set off the model, so without this line
     # the rung would be declared and reachable by owners alone — a separation of duties nobody could

@@ -1,9 +1,9 @@
-"""Grant one person ``owner`` on the estate's own warehouse in a lane's OpenFGA store, as the chart's bootstrap hook does.
+"""Grant one person ``owner`` on the estate's own warehouse in a lane's OpenFGA store, as the catalog's declaration does.
 
-A lane that brings its services up as Dagger services runs no chart, so no ``bootstrap-admin`` hook seeds the estate's
-first owner (``auth.bootstrapAdmin``). Every name begins with a warehouse and a namespace is created by a caller holding
+A lane that brings its services up as Dagger services runs no chart and mounts no declaration, so nothing grants the
+estate's first owner (``auth.bootstrapAdmin``). Every name begins with a warehouse and a namespace is created by a caller holding
 ``can_create_namespace`` on it, so without that owner nobody in the lane can create anything in the estate's own
-warehouse. This writes the one tuple the hook writes for the admin, to the store the lane's catalog made.
+warehouse. This writes the one tuple the declaration grants the admin there, to the store the lane's catalog made.
 
 Usage: ``lane_estate_owner.py <principal>`` with ``LANCE_E2E_FGA`` naming the store's API, ``RASK_FGA_TOKEN_FILE`` the
 token it admits (empty where the lane's OpenFGA admits anyone), and ``RASK_FGA_DEFAULT_WAREHOUSE_OBJECT`` the estate's

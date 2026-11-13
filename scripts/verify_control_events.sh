@@ -23,8 +23,8 @@ export RASK_EXPECT_CONTEXT
 # catalog.controlEmit defaults ON, so the broadcast component + NATS stream + subscription render. This
 # script port-forwards read-only; run it OUTSIDE auto mode (or `!`-prefix the invocation).
 #
-# Alice's estate-admin grant is ASSERTED, not seeded (goal cond 4): the chart's auth.bootstrapAdmin
-# post-install hook Job owns that grant now (deploy with --set auth.bootstrapAdmin=dex~<alice's userID>).
+# Alice's estate-admin grant is ASSERTED, not seeded (goal cond 4): the catalog's declaration grants
+# auth.bootstrapAdmin (deploy with --set auth.bootstrapAdmin=dex~<alice's userID>).
 # Pass --seed for legacy runs to seed it manually via the fga CLI. Bob's project-admin tuple is a pure
 # negative-test fixture (a PROJECT admin must 403 on the estate feed) and is seeded in both modes.
 #
@@ -52,7 +52,7 @@ kubectl port-forward "svc/$RELEASE-catalog" "$CAT_PORT:2333" >/tmp/pf-cat.log 2>
 kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PIDS+=($!)
 # OpenFGA admits only a projected `rask-openfga` token (XC-077); speak as the bootstrap Job's ServiceAccount.
-FGA_TOKEN="$(kubectl create token "$RELEASE-sa-jobs" --audience rask-openfga --duration 1h)"
+FGA_TOKEN="$(kubectl create token "$RELEASE-sa-hooks" --audience rask-openfga --duration 1h)"
 for i in $(seq 1 30); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 "http://localhost:$CAT_PORT/livez" 2>/dev/null || true)
   d=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:5556/dex/.well-known/openid-configuration 2>/dev/null || true)
@@ -77,8 +77,8 @@ ALICE_SUB="$(principal_of "$ALICE")"; BOB_SUB="$(principal_of "$BOB")"
 [ -n "$ALICE_SUB" ] && [ -n "$BOB_SUB" ] || fail "the catalog named no principal for alice or bob"
 ALICE_USER="$(fga_user "$ALICE_SUB")"; BOB_USER="$(fga_user "$BOB_SUB")"
 
-# Estate-admin grant: ASSERT by default — the chart's auth.bootstrapAdmin hook Job owns seeding alice's
-# `owner warehouse:lance_catalog` now (cond 4); --seed writes it manually for legacy stacks. Bob's
+# Estate-admin grant: ASSERT by default — the catalog's declaration grants alice (auth.bootstrapAdmin)
+# `owner warehouse:lance_catalog` (cond 4); --seed writes it manually for legacy stacks. Bob's
 # project-admin tuple stays script-seeded in BOTH modes: it is a negative-test fixture (a mere project
 # admin must 403 on the estate feed), not part of the estate bootstrap. ROOT = fga_root_object default.
 SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" 2>/dev/null | python3 -c "import sys,json;s=json.load(sys.stdin).get('stores',[]);print(s[0]['id'] if s else '')")"
@@ -100,7 +100,7 @@ for i in $(seq 1 "$TRIES"); do
       fail "alice never became an estate admin (can_observe_events) — OpenFGA lag or seeding failed"
     fi
     fail "alice is NOT an estate admin (can_observe_events on warehouse:lance_catalog). The chart owns this \
-grant now: deploy with --set auth.bootstrapAdmin=$ALICE_SUB (the bootstrap-admin hook Job seeds it), or rerun \
+grant now: deploy with --set auth.bootstrapAdmin=$ALICE_SUB (the catalog's declaration converge grants it), or rerun \
 with --seed for legacy manual seeding."
   fi
   sleep 1

@@ -5,7 +5,7 @@ catalog's lifetime (``LANCE_IDEMPOTENCY_LIFETIME_SECONDS``) and is read by no re
 scan asks for those records to go ([[LH-576]]): maintenance's store policy writes nothing of the control root, so the
 delete is the catalog's, judged on its own reads (:func:`lakehouse.idempotency.reclaim`). Asked on
 ``can_reclaim_trash`` on the estate root, the rung the trash and clone-ending doors ask, which only the ``reclaimer``
-role opens, seeded for maintenance's ServiceAccount by the chart's bootstrap-admin hook: no new grant. Each reclaim is
+role opens, granted to maintenance's ServiceAccount by the catalog's declaration: no new grant. Each reclaim is
 recorded on the audit trail, since it deletes records on the catalog's own session.
 
 The router guard leaves this path to its handler (``fga_deps._RESOURCES`` names none of it), so the gate is this

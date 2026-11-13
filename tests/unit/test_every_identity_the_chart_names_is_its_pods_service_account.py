@@ -40,7 +40,7 @@ def test_every_service_identity_is_the_subject_of_its_own_pods_service_account()
     docs = render(*RENDERED)
     accounts: dict[str, str] = {}
     named: list[tuple[str, str, str]] = []
-    hook = ""
+    maintainers = ""
     for doc in docs:
         spec = (doc.get("spec") or {}).get("template", {}).get("spec") or {}
         name = doc.get("metadata", {}).get("name", "")
@@ -49,12 +49,10 @@ def test_every_service_identity_is_the_subject_of_its_own_pods_service_account()
             for container in spec["containers"]:
                 env = env_of(container)
                 named += [(name, key, env[key]) for key in ("RASK_SIGNING_IDENTITY", "MAINTENANCE_CATALOG_SERVICE_IDENTITY") if key in env]
-        if doc.get("kind") == "Job" and name.endswith("-bootstrap-admin"):
-            hook = spec["containers"][0]["args"][0]
+                maintainers = env.get("LANCE_FGA_MAINTAINERS", maintainers)
 
     wrong = {f"{pod} {key}": value for pod, key, value in named if value != _subject(accounts[pod])}
     assert {key for _pod, key, _value in named} == {"RASK_SIGNING_IDENTITY", "MAINTENANCE_CATALOG_SERVICE_IDENTITY"}, f"the render names {named}"
     assert not wrong, f"identities that are not their pod's service-account subject: {wrong}"
 
-    granted = {line.split(" = ", 1)[0].strip(): json.loads(line.split(" = ", 1)[1]) for line in hook.splitlines() if line.strip().startswith("maintainers =")}
-    assert granted == {"maintainers": [_subject(accounts["rask-maintenance"])]}, f"the bootstrap hook grants {granted}"
+    assert json.loads(maintainers) == [_subject(accounts["rask-maintenance"])], f"the catalog grants the maintainer rung to {maintainers}"
