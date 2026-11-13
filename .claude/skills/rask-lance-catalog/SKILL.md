@@ -665,10 +665,14 @@ governing their data. The project-scoped surface is the console's project page, 
   (`TaskQueue.claim`); a replica whose credential the bus takes no longer (revoked when its grants changed,
   or expired) ends itself and starts again on the store's current one (`TaskQueue.connect`); a pass
   past twice `maxPassSeconds` ends its replica, and a task that outlived its worker on all `maxDeliver` deliveries is
-  ended unrun on the one more the consumer allows. The worker counts each task retried, ended, completed (and its time
-  from claim to ack), each store event by how it settled, and each fired schedule the queue refused, and samples every
-  minute each stream's depth and oldest message's age and each durable's ack-pending and redelivered counts
-  (`maintenance.services.queue.sample_queue`, `maintenance.queue.*`), which the `maintenance` alert group reads. With
+  ended unrun on the one more the consumer allows. The worker counts each task retried, delivered past its first delivery
+  (`maintenance.tasks.redelivered`, a worker's death included), ended, completed (and its time from claim to ack), each
+  task's wait from its queuing to its first delivery (`maintenance.tasks.wait`), each store event by how it settled, and
+  each fired schedule the queue refused, and samples every 15 s each stream's depth and oldest message's age and each
+  durable's undelivered (`maintenance.queue.waiting`), ack-pending and redelivered counts
+  (`maintenance.services.queue.sample_queue`, `maintenance.queue.*`), which the `maintenance` alert group reads:
+  `MaintenanceQueueStalled` pages when tasks wait and no delivery awaits an ack for ten minutes. Measured 2026-11-13, the
+  queue costs 3 to 6 ms a task and its rate is the replica count over the pass time (ADR 0198's amendment of that day). With
   store events expected, the hourly audit also reads each governed bucket's event configuration and reports each
   sending no `s3:ObjectCreated:*` event, counting each bucket once per audit on `maintenance.store_event_buckets.checked` by
   outcome (`configured`, `without`, `unknown`; `maintenance.services.bucket_events`, alerts `MaintenanceBucketWithoutStoreEvents`

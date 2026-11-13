@@ -22,7 +22,7 @@ Two deliberate choices:
 * **Best-effort.** A sidecar/broker outage logs + drops; auditing must never fail a maintenance sweep.
 
 This layer is **pure** (builders + emitter transports only); the per-sweep orchestration that needs the
-:class:`~maintenance.services.expiry.DatasetResult` type lives in ``maintenance.services.sweep`` so ``core``
+:class:`~maintenance.services.expiry.DatasetResult` type lives in ``maintenance.services.table_pass`` so ``core``
 never imports up into ``services``.
 """
 
@@ -285,8 +285,8 @@ class DaprMaintenanceEmitter:
         await self._publish(event, table_id)
 
     async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
-        # DETERMINISTIC run id — the flood guard: the cron re-sweeps every ~2 min, so a persistently
-        # failing dataset would otherwise mint a fresh run, and a fresh feed row, per tick. One id per
+        # DETERMINISTIC run id — the flood guard: a failed pass is tried again every `retrySeconds`, so a persistently
+        # failing dataset would otherwise mint a fresh run, and a fresh feed row, per try. One id per
         # dataset → the feed's key for a terminal state (`<run_id>@FAIL`) is the same on every tick, and its
         # insert-only merge lands the first FAIL row and nothing after. Accepted consequence (§4): across
         # DISTINCT failure episodes the feed keeps the FIRST FAIL row (its keep-first terminal contract)

@@ -324,6 +324,24 @@ _task_duration = _meter.create_histogram(
     explicit_bucket_boundaries_advisory=[0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 1800.0, 3600.0],
 )
 
+#: One task's wait, from its queuing to its first delivery, by kind: what a backlog costs each table, where
+#: `maintenance.queue.oldest` reads only the one message waiting longest. Boundaries up to the day a task is kept
+#: (MAINTENANCE_TASKS' max age, `chart/templates/nats-stream-job.yaml`).
+_task_wait = _meter.create_histogram(
+    "maintenance.tasks.wait",
+    unit="s",
+    description="Seconds from a task's queuing to its first delivery to a worker, by kind.",
+    explicit_bucket_boundaries_advisory=[0.1, 0.5, 1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0, 21600.0, 86400.0],
+)
+#: A delivery of a task past its first, by kind, whatever brought it back: a failed run handed back
+#: (`maintenance.tasks.retried` counts those alone), a table another pass held, or a worker that died holding it, which
+#: nothing else counts.
+_tasks_redelivered = _meter.create_counter(
+    "maintenance.tasks.redelivered",
+    unit="{delivery}",
+    description="Deliveries of a maintenance task past its first, by kind.",
+)
+
 #: How the worker settled one store event it pulled (:meth:`maintenance.services.queue.Worker.run_store_events`), the
 #: closed `outcome` set of `maintenance.store_events.settled`: acknowledged with a table's pass held (``held``),
 #: acknowledged holding nothing (``ignored``: a key under no table, a delete, or a table whose follow-up was held
@@ -344,7 +362,7 @@ _schedules_not_queued = _meter.create_counter(
     description="Fired schedules the work queue refused or did not answer, each given back to be moved again.",
 )
 
-#: What the worker's sampler reads off the bus every minute (:func:`maintenance.services.queue.sample_queue`). Synchronous
+#: What the worker's sampler reads off the bus every 15 s (:func:`maintenance.services.queue.sample_queue`). Synchronous
 #: gauges: one exports nothing until it is first set, so a web pod, which imports this module and runs no sampler,
 #: exports no constant 0 beside the worker's truth, and once set it exports its last value at every collection
 #: (measured on opentelemetry-sdk 1.45.2, cumulative temporality). A sample the bus does not answer leaves a gauge at
@@ -360,6 +378,11 @@ _queue_oldest = _meter.create_gauge(
     "maintenance.queue.oldest",
     unit="s",
     description="Age of the oldest message a work-queue stream holds (0 when it holds none), by stream, as the worker last sampled it.",
+)
+_queue_waiting = _meter.create_gauge(
+    "maintenance.queue.waiting",
+    unit="{message}",
+    description="Messages a maintenance durable consumer has not yet delivered, by consumer, as the worker last sampled it.",
 )
 _queue_ack_pending = _meter.create_gauge(
     "maintenance.queue.ack_pending",
@@ -397,7 +420,7 @@ def create_task_series(kinds: tuple[str, ...]) -> None:
     `increase()` sees no increase and the first task ended or overrun never pages, and a worker that has completed
     nothing yet would read "no data"."""
     for kind in kinds:
-        for counter in (_tasks_completed, _tasks_ended, _passes_overran, _tasks_retried):
+        for counter in (_tasks_completed, _tasks_ended, _passes_overran, _tasks_retried, _tasks_redelivered):
             counter.add(0, {"kind": kind})
     _tasks_ended.add(0, {"kind": "unreadable"})
     for outcome in get_args(StoreEventOutcome.__value__):
@@ -410,6 +433,16 @@ def create_task_series(kinds: tuple[str, ...]) -> None:
 def record_task_retried(*, kind: str) -> None:
     """Record a task handed back for another delivery after its run failed."""
     _tasks_retried.add(1, {"kind": kind})
+
+
+def record_task_redelivered(*, kind: str) -> None:
+    """Record a delivery of a task past its first."""
+    _tasks_redelivered.add(1, {"kind": kind})
+
+
+def record_task_wait(*, kind: str, seconds: float) -> None:
+    """Record how long a task waited on the queue before its first delivery."""
+    _task_wait.record(seconds, {"kind": kind})
 
 
 def record_task_duration(*, kind: str, seconds: float) -> None:
@@ -435,8 +468,9 @@ def record_stream_depth(*, stream: str, messages: int, oldest_seconds: float | N
         _queue_oldest.set(oldest_seconds, {"stream": stream})
 
 
-def record_consumer_backlog(*, consumer: str, ack_pending: int, redelivered: int) -> None:
+def record_consumer_backlog(*, consumer: str, waiting: int, ack_pending: int, redelivered: int) -> None:
     """Set a durable consumer's sampled backlog."""
+    _queue_waiting.set(waiting, {"consumer": consumer})
     _queue_ack_pending.set(ack_pending, {"consumer": consumer})
     _queue_redelivered.set(redelivered, {"consumer": consumer})
 

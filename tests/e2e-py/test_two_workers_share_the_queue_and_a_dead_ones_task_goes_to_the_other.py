@@ -785,13 +785,18 @@ async def _never_run(task: Task) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_worker_settles_each_store_event_by_what_its_handling_found(tmp_path: Path, maintenance_metrics: Measured) -> None:
+async def test_a_worker_settles_each_store_event_by_what_its_handling_found(
+    tmp_path: Path, maintenance_metrics: Measured, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A store event is acknowledged once its table's pass is held, ended at once when it is no store event, delivered
-    again after a delay when the store refused a claim's read, the delay doubling with each delivery, and ended on its last
+    again after its delivery's retry delay when the store refused a claim's read, and ended on its last
     delivery when the store refuses it on every one; each settling is counted by its outcome. The handling is the service's own
     (`maintenance.services.store_events.StoreEvents`), on a control root of the test's own, where a claim the store cannot
     read is a directory standing at its key. The worker ends an event on the third delivery, which the consumer the
     render declares at `_MAX_DELIVER` allows (one past it)."""
+    # The delay is drawn at random beneath a bound that doubles (`redelivery_delay`, whose draw has a test of its own);
+    # drawn here at 6 s a delivery, each gap names the delivery it followed.
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda delivered: 6.0 * delivered)
     tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
     control = tmp_path / "control"
     control.mkdir()
@@ -872,7 +877,7 @@ async def test_a_worker_settles_each_store_event_by_what_its_handling_found(tmp_
     locked = handled[events["locked"]]
     waits = [round(later - earlier) for earlier, later in pairwise(locked)]
     assert {name: len(handled[body]) for name, body in events.items()} == {"held": 1, "unreadable": 1, "flaky": 2, "locked": 3}
-    assert 10 <= waits[0] < 25 and waits[1] >= 25, f"the refused event came back after {waits} s, not after a doubling retry delay"
+    assert 5 <= waits[0] < 10 and 11 <= waits[1] < 17, f"the refused event came back after {waits} s, not after each delivery's retry delay"
     assert held == {"held": True, "flaky": True, "locked": False}
     assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"held": 2, "retried": 3, "unreadable": 1, "ended": 1}
 
@@ -884,12 +889,15 @@ class _Panic(BaseException):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [pytest.param(RuntimeError, id="an-error"), pytest.param(_Panic, id="a-native-panic")])
 async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_delivery_and_an_unreadable_one_ends_at_once(
-    tmp_path: Path, maintenance_metrics: Measured, failure: type[BaseException], caplog: pytest.LogCaptureFixture
+    tmp_path: Path, maintenance_metrics: Measured, failure: type[BaseException], caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A task whose run raises, an error or a native library's panic, is delivered again after its retry delay, and on its
     last delivery is ended with the failure's traceback logged, its next try held a recheck out, while its worker serves
-    on; a message on the queue that is no task is ended without running. Each hand-back and each end is counted by kind."""
+    on; a message on the queue that is no task is ended without running. Each hand-back, each delivery past a task's first
+    and each end is counted by kind."""
     caplog.set_level(logging.ERROR, logger=worker_queue.__name__)
+    # The delay is drawn at random beneath its bound; drawn here at 12 s, the gap between two runs is the rule's delay.
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 12.0)
     tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
     worker = mint_.credentials[_WORKER]
     runs: list[float] = []
@@ -954,10 +962,15 @@ async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_deli
         finally:
             broker.stop()
 
-    assert 10.0 <= runs[1] - runs[0] < 30.0, f"the failed task came back after {runs[1] - runs[0]:.1f} s, not after its retry delay"
+    assert 11.0 <= runs[1] - runs[0] < 17.0, f"the failed task came back after {runs[1] - runs[0]:.1f} s, not after its retry delay"
     assert held_at is not None and abs((held_at - ended_at).total_seconds() - 3600) < 10, f"the ended task's next try is held for {held_at}, not a recheck out"
-    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("retried", "ended", "completed")}
-    assert counted == {"retried": {"table": _MAX_DELIVER - 1}, "ended": {"table": 1, "unreadable": 1}, "completed": {}}
+    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("retried", "redelivered", "ended", "completed")}
+    assert counted == {
+        "retried": {"table": _MAX_DELIVER - 1},
+        "redelivered": {"table": _MAX_DELIVER - 1},
+        "ended": {"table": 1, "unreadable": 1},
+        "completed": {},
+    }
     ended_by = [record.exc_info[0] for record in caplog.records if record.message == "maintenance_task_ended" and record.exc_info]
     assert ended_by == [failure], f"the ended task's failure was not logged with its traceback: {ended_by}"
 
@@ -970,11 +983,13 @@ async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_deli
         pytest.param(1, "stopping", id="on-its-last-delivery-it-is-handled-where-it-arrived"),
     ],
 )
-async def test_a_task_a_pull_answers_as_its_worker_stops(tmp_path: Path, allowed: int, taken_by: str) -> None:
+async def test_a_task_a_pull_answers_as_its_worker_stops(tmp_path: Path, maintenance_metrics: Measured, allowed: int, taken_by: str) -> None:
     """A pull in flight when a worker is asked to stop can still be answered. With a delivery to spare the task is given
     back at once and another replica runs it, rather than its pass starting under the drain; on the last delivery the
     worker allows it is handled where it arrived, since a hand-back would spend the consumer's last delivery and leave
-    the task on the queue, undelivered, for good. And a connection the bus has gone from still closes."""
+    the task on the queue, undelivered, for good. Either way the task's wait is recorded once, at its first delivery, and
+    the delivery the hand-back causes is counted as a redelivery, though no run failed. And a connection the bus has gone
+    from still closes."""
     tools, docs, mint_, broker = _the_bus(tmp_path)
     worker = mint_.credentials[_WORKER]
     ran: list[str] = []
@@ -1030,6 +1045,8 @@ async def test_a_task_a_pull_answers_as_its_worker_stops(tmp_path: Path, allowed
                 closed_without_its_bus = exc
 
     assert ran == [taken_by]
+    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("wait", "redelivered", "retried")}
+    assert counted == {"wait": {"table": 1}, "redelivered": {"table": 1} if taken_by == "next" else {}, "retried": {}}
     assert closed_without_its_bus is None, f"a connection whose bus is gone did not close: {closed_without_its_bus!r}"
 
 
@@ -1087,10 +1104,13 @@ async def test_an_idle_worker_stops_and_closes_its_connection_at_once(tmp_path: 
     ],
 )
 @pytest.mark.asyncio
-async def test_two_tasks_holding_one_claim_never_run_at_once(tmp_path: Path, first: Task, second: Task) -> None:
+async def test_two_tasks_holding_one_claim_never_run_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: Task, second: Task) -> None:
     """The audit and the scan each repair the estate from a drift report of their own, and a table's orphan check reads
     the files its pass's cleanup deletes, so each pair holds one claim: one waits out the other's while it runs, on two
     replicas, and runs once it is done."""
+    # The give-back's delay is drawn at random beneath 15 s; drawn here at the bound, the second delivery comes after the
+    # release below, where a short draw would spend the task's last delivery on the claim still held.
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 15.0)
     tools, docs, mint_, broker = _the_bus(tmp_path)
     worker = mint_.credentials[_WORKER]
     runs = _Runs()
@@ -1542,10 +1562,11 @@ _AGED = 5.0
 @pytest.mark.asyncio
 async def test_the_sampler_reads_the_queue_as_the_bus_holds_it_and_keeps_what_it_cannot_read(tmp_path: Path, maintenance_metrics: Measured) -> None:
     """The worker's sampler (`maintenance.services.queue.sample_queue`), as `maintenance-worker` under the grants the
-    render issues, reads each stream's depth and its oldest message's age, and each durable's deliveries awaiting an ack
-    and redeliveries, as the bus holds them: a task running and one queued behind it, and a store event delivered twice
-    and unsettled. A stream it cannot read leaves its gauges at their last values. And the task that ran is timed from its
-    claim to its acknowledgement."""
+    render issues, reads each stream's depth and its oldest message's age, and each durable's messages not yet delivered,
+    deliveries awaiting an ack and redeliveries, as the bus holds them: a task running and one queued behind it, and a
+    store event delivered twice and unsettled. A stream it cannot read leaves its gauges at their last values. The task
+    that ran is timed from its claim to its acknowledgement, and each task's wait from its queuing to its first
+    delivery."""
     tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
     worker = mint_.credentials[_WORKER]
     runs = _Runs()
@@ -1579,7 +1600,7 @@ async def test_the_sampler_reads_the_queue_as_the_bus_holds_it_and_keeps_what_it
         sampled_at = clock()
         depth = maintenance_metrics.by("maintenance.queue.messages", "stream")
         oldest = maintenance_metrics.by("maintenance.queue.oldest", "stream")
-        backlog = {name: maintenance_metrics.by(f"maintenance.queue.{name}", "consumer") for name in ("ack_pending", "redelivered")}
+        backlog = {name: maintenance_metrics.by(f"maintenance.queue.{name}", "consumer") for name in ("waiting", "ack_pending", "redelivered")}
 
         dropped = await rig.request(f"$JS.API.STREAM.DELETE.{STORE_EVENTS_STREAM}")
         assert dropped is not None and dropped.get("success") is True, f"the store events' stream was not removed: {dropped}"
@@ -1594,6 +1615,8 @@ async def test_the_sampler_reads_the_queue_as_the_bus_holds_it_and_keeps_what_it
         release.set()
         timed = await _until(lambda: maintenance_metrics.of("maintenance.tasks.duration", kind="table") == 1, 15)
         acked_by = clock()
+        waited = await _until(lambda: maintenance_metrics.of("maintenance.tasks.wait", kind="table") == 2, 15)
+        delivered_by = clock()
     finally:
         try:
             if replica is not None:
@@ -1611,10 +1634,15 @@ async def test_the_sampler_reads_the_queue_as_the_bus_holds_it_and_keeps_what_it
     assert abs(oldest[TASKS_STREAM] - (sampled_at - queued_at)) < 1.5, f"the oldest task's age read {oldest[TASKS_STREAM]:.1f} s"
     assert abs(oldest[STORE_EVENTS_STREAM] - (sampled_at - published_at)) < 1.5, f"the oldest event's age read {oldest[STORE_EVENTS_STREAM]:.1f} s"
     assert backlog == {
+        "waiting": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 0},
         "ack_pending": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 1},
         "redelivered": {"maintenance-worker": 0, "maintenance-due": 0, "maintenance-store-events": 1},
     }
     assert (unread_once_gone, kept) == (2, (1, oldest[STORE_EVENTS_STREAM], 1))
     total = maintenance_metrics.total("maintenance.tasks.duration", kind="table")
     assert timed and total is not None and released_at - started_at <= total <= acked_by - queued_at, f"the task ran {total} s by its count"
+    # The first task was delivered as it was queued; the second waited behind it from its queuing, before `published_at`,
+    # until the first was released.
+    waits = maintenance_metrics.total("maintenance.tasks.wait", kind="table")
+    assert waited and waits is not None and released_at - published_at <= waits <= delivered_by - queued_at, f"the two tasks waited {waits} s by their count"
     assert [v for v in violations(broker.log_text()) if mint_.user_of(v.user_key) == _WORKER] == []

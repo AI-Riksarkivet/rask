@@ -487,3 +487,55 @@ warehouse cascade), `test_a_door_refused_before_its_row_would_go_files_no_ending
 `test_a_registration_while_a_clones_ending_stands_is_refused_until_it_is_finished`,
 `test_the_audit_asks_the_catalog_to_finish_every_clones_ending_it_lists` and the two doors' rows in
 `test_a_door_the_router_leaves_open_decides_for_itself.py`.
+
+## Amendment, 2026-11-13: a task's wait is measured, and a queue nobody pulls from pages ([[LH-571]], #791)
+
+Three readings joined the queue's (the 2026-11-10 amendment): each durable's messages not yet delivered
+(`maintenance.queue.waiting`, from the consumer's `num_pending`), each task's wait from its queuing to its first
+delivery (`maintenance.tasks.wait`, by kind, read off the delivery's own stream timestamp), and each delivery of a task
+past its first (`maintenance.tasks.redelivered`, by kind), which counts what `maintenance.tasks.retried` cannot: a task
+handed on because its worker died. The sampler reads the bus every 15 s. `MaintenanceQueueStalled` pages when
+MAINTENANCE_TASKS holds undelivered tasks and no delivery awaits an acknowledgement for ten minutes, which is a fleet
+that pulls nothing (no replica ready, or every task loop silent); a long pass keeps a delivery awaiting its ack, so tasks
+waiting behind it do not fire it. A fired schedule the queue refuses is given back under the same jittered, doubling
+delay as a failed task (`redelivery_delay`), no longer every 15 s in step. A task's wait is recorded at its first
+delivery whether a worker runs it or, stopping, hands it on, so a rollout's hand-backs lose no wait and show as
+redeliveries with no retry beside them.
+
+The row asked for the readings under other names, and two of its clauses are met differently or not at all:
+
+* **In flight** is `maintenance.queue.ack_pending` (the consumer's `num_ack_pending`), kept under the name the
+  2026-11-10 amendment gave it; no `maintenance.queue.in_flight` exists.
+* **The oldest age** is `maintenance.queue.oldest` (series `maintenance_queue_oldest_seconds`), also kept. It is the age
+  of the stream's first message, which a work queue keeps until its acknowledgement, so it counts a task in flight too
+  and reads a long pass's own length while nothing waits; it is 0 on an empty stream. The row meant the age of the
+  oldest task still waiting, which JetStream's stream and consumer info do not state. What waits is read from
+  `maintenance.queue.waiting`, and how long tasks wait from `maintenance.tasks.wait`.
+* **A task the stream drops at its 24 h max age is still counted nowhere.** JetStream tells no consumer of it. It is
+  preceded by `MaintenanceQueueStalled` (ten minutes of nobody pulling) or `MaintenanceTaskAging` (six hours on the
+  queue), and the hourly audit queues the table again.
+
+### What the queue costs, measured 2026-11-13 on the bus lane
+
+Method (`scripts/measure_maintenance_queue.py`, run with the bus lane's tools): three nats-server 2.15.2 in operator mode with every stream at three replicas, declared by the chart's stream
+Job at the chart's default timings (ack wait 60 s, heartbeat 20 s), on one 20-CPU aarch64 host. A burst of tasks, each
+for a table of its own, is queued first; then 1, 2 or 4 `Worker`s start, each on a connection of its own as
+`maintenance-worker`, all in one process, and run every task as a sleep of the stated length. Three runs per row; the
+spread across runs was under 7 % on every rate and wait. A task's wait is counted from the workers' start to its run's start,
+and the overhead per task is the drain time times the workers over the tasks, less the sleep: the pull, the claim on
+the table, the first heartbeat and claim renewal, the acknowledgement and the claim's release.
+
+| Workers | Tasks | Pass | Tasks per second | Wait, median | Wait, 95th | Queue overhead per task |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 200 | 0 s | 341 to 352 | 0.27 to 0.28 s | 0.53 to 0.55 s | 2.8 to 2.9 ms |
+| 2 | 200 | 0 s | 616 to 656 | 0.14 to 0.15 s | 0.28 to 0.29 s | 3.1 to 3.2 ms |
+| 4 | 200 | 0 s | 1,091 to 1,097 | 0.09 s | 0.15 to 0.16 s | 3.6 to 3.7 ms |
+| 1 | 80 | 0.5 s | 1.98 | 19.9 s | 37.9 s | 4.7 to 5.1 ms |
+| 2 | 80 | 0.5 s | 3.96 | 9.8 to 9.9 s | 18.7 s | 4.7 to 5.4 ms |
+| 4 | 80 | 0.5 s | 7.91 to 7.92 | 4.8 s | 9.1 s | 4.8 to 5.8 ms |
+
+Read: the queue takes 3 to 6 ms of a task, and with a pass of any length the rate is the worker count over the pass
+time, doubling with the workers (1.98, 3.96, 7.92). What bounds maintenance is therefore how long a pass runs and how
+many replicas run, never the bus; a queue of N tasks behind passes of length P on R replicas is waited out in N x P / R.
+Not measured here: a real pass (its store reads and Lance's cleanup), which the estate's own
+`maintenance.tasks.duration` reads, and workers in processes of their own, each under its own CPU limit.

@@ -471,6 +471,13 @@ Every log line named is in the service's container log (`kubectl logs deploy/ras
 
 - `MaintenanceTaskMetricsMissing` (critical): no `maintenance_tasks_completed_total` series at all. First check:
   whether a maintenance pod runs, then its OTLP export.
+- `MaintenanceQueueStalled` (critical): tasks wait on MAINTENANCE_TASKS and no delivery has awaited an acknowledgement
+  for ten minutes, so no worker replica is pulling. First check: that the `maintenance-worker` pods run and are ready (a
+  worker whose signing key is unresolved takes no task), then their `maintenance_bind_failed` and
+  `maintenance_bus_unanswered` WARNING lines.
+- `MaintenanceTaskAging` (warning): the oldest message on MAINTENANCE_TASKS is over six hours old, of the 24 the stream
+  keeps it. First check: `maintenance_queue_waiting` and `maintenance_queue_ack_pending` for consumer
+  `maintenance-worker`, and `maintenance_passes_overran_total`.
 - `MaintenanceAuditNotCompleting` (critical): no hourly audit has completed in two hours. First check:
   `maintenance_tasks_ended_total` and `maintenance_passes_overran_total` for kind `audit`, and the
   `maintenance_task_retried` lines.

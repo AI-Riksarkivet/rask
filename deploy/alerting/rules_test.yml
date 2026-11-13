@@ -844,6 +844,51 @@ tests:
         alertname: MaintenanceTaskAging
         exp_alerts: []
 
+  # Tasks wait and no delivery awaits an ack, as two replicas sample it: held ten minutes, it pages once. The same
+  # readings on the store events' consumer are not this rule's.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_queue_waiting{consumer="maintenance-worker",instance="a"}'
+        values: "0x4 3x20"
+      - series: 'maintenance_queue_waiting{consumer="maintenance-worker",instance="b"}'
+        values: "0x4 3x20"
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-worker",instance="a"}'
+        values: "1x4 0x20"
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-worker",instance="b"}'
+        values: "1x4 0x20"
+      - series: 'maintenance_queue_waiting{consumer="maintenance-store-events"}'
+        values: "9x24"
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-store-events"}'
+        values: "0x24"
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: MaintenanceQueueStalled
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: MaintenanceQueueStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: maintenance
+            exp_annotations:
+              summary: "Maintenance tasks wait and no worker has taken one for ten minutes"
+              description: "MAINTENANCE_TASKS holds 3 tasks its consumer has not delivered, and no delivery awaits an acknowledgement: no worker replica is pulling. No table is passed, no drop released and no audit run until one does. Check that the maintenance-worker pods run and are ready (a worker whose signing key is unresolved takes no task), and read their maintenance_bind_failed and maintenance_bus_unanswered WARNING lines; maintenance_tasks_wait_seconds_bucket shows how long tasks waited before this."
+
+  # A long, healthy pass: one task held for an hour with others waiting behind it stays quiet, and so does an empty queue.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_queue_waiting{consumer="maintenance-worker"}'
+        values: "5x60 0x30"
+      - series: 'maintenance_queue_ack_pending{consumer="maintenance-worker"}'
+        values: "1x60 0x30"
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: MaintenanceQueueStalled
+        exp_alerts: []
+      - eval_time: 85m
+        alertname: MaintenanceQueueStalled
+        exp_alerts: []
+
   # A store event ended pages on the evaluation that sees it, by outcome; held and retried ones do not.
   - interval: 1m
     input_series:

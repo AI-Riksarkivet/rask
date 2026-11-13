@@ -629,7 +629,7 @@ groups:
             maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later
             commit's pass of its table can start.
 
-      # The queue as the worker samples it each minute (`maintenance.services.queue.sample_queue`). The gauge's
+      # The queue as the worker samples it every 15 s (`maintenance.services.queue.sample_queue`). The gauge's
       # instrument is `maintenance.queue.oldest` with unit `s`, which the exporter appends, as for `outbox_oldest_age_seconds`
       # above. Every replica samples the same streams, so `max` reads one value. MAINTENANCE_TASKS drops a message at its
       # 24 h max age (`chart/templates/nats-stream-job.yaml`) with no consumer told, so a task waiting 6 h is the warning
@@ -648,6 +648,27 @@ groups:
             maintenance_queue_redelivered for consumer maintenance-worker (deliveries stuck, or a task delivered again and
             again), maintenance_passes_overran_total (a pass holding its replica), and whether any worker replica runs and
             is ready (maintenance_tasks_completed_total).
+
+      # Tasks wait and no worker holds one: the durable has messages it has not delivered (`maintenance.queue.waiting`) and
+      # awaits no acknowledgement (`maintenance.queue.ack_pending`), sampled every 15 s. A worker between two tasks reads
+      # so for milliseconds; ten minutes of it is a fleet that pulls nothing, as when no replica is ready (its signing key
+      # unresolved) or its task loop no longer asks. A long pass keeps ack_pending at 1 or more, so tasks waiting behind
+      # it stay quiet here and are MaintenancePassesOverran's and MaintenanceTaskAging's. A fleet that is gone samples
+      # nothing, which is MaintenanceTaskMetricsMissing's.
+      - alert: MaintenanceQueueStalled
+        expr: (max(maintenance_queue_waiting{consumer="maintenance-worker"}) > 0) and (max(maintenance_queue_ack_pending{consumer="maintenance-worker"}) == 0)
+        for: 10m
+        labels:
+          severity: critical
+          service: maintenance
+        annotations:
+          summary: "Maintenance tasks wait and no worker has taken one for ten minutes"
+          description: >-
+            MAINTENANCE_TASKS holds {{ $value }} tasks its consumer has not delivered, and no delivery awaits an
+            acknowledgement: no worker replica is pulling. No table is passed, no drop released and no audit run until one
+            does. Check that the maintenance-worker pods run and are ready (a worker whose signing key is unresolved takes
+            no task), and read their maintenance_bind_failed and maintenance_bus_unanswered WARNING lines;
+            maintenance_tasks_wait_seconds_bucket shows how long tasks waited before this.
 
       # A store event the worker ended (its handling refused on every delivery, or outlived its worker every time) or could
       # not read: its table's overwrite check waits for the daily recheck. Every outcome's series is created at 0 when a
@@ -719,7 +740,8 @@ groups:
             names each bucket and the error; grant maintenance's store identity s3:GetBucketNotification on the bucket,
             or restore the store.
 
-      # A fired schedule the queue refused or did not answer is given back and moved again 15 s later, so one refusal
+      # A fired schedule the queue refused or did not answer is given back and moved again within its retry's bound (15 s
+      # at first, `redelivery_delay`), so one refusal
       # heals; a refusal standing an hour is a table whose time never comes. Its series is created at 0 when a worker
       # starts.
       - alert: MaintenanceSchedulesNotQueued

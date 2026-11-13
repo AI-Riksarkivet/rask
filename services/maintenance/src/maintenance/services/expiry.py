@@ -14,7 +14,7 @@ import logging
 import re
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import lance
 from pydantic import BaseModel, ConfigDict, Field
@@ -383,9 +383,9 @@ def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, policy: 
     if not _versions_due(result, policy):
         log.debug("maintenance_expiry_below_threshold", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
         return
-    stats: Any = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
-    result.old_versions_removed = int(getattr(stats, "old_versions", 0))
-    result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
+    stats = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
+    result.old_versions_removed = stats.old_versions
+    result.bytes_removed = stats.bytes_removed
 
 
 def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions) -> None:

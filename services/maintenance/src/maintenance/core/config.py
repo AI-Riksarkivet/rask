@@ -76,8 +76,8 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # threshold — to GC aggressively, use a small positive value, not 0.
     older_than_days: int = Field(default=7, ge=1, alias="MAINTENANCE_OLDER_THAN_DAYS")
 
-    # Behind a Dapr sidecar? — when true, boot fails closed if the app-token is unset (the cron route would
-    # otherwise be an open forged-sweep path). Symmetric with the lineage service. Off in dev (no sidecar).
+    # Behind a Dapr sidecar? — when true, boot fails closed if the app-token is unset (the write-event route would
+    # otherwise be an open forged-commit path). Symmetric with the lineage service. Off in dev (no sidecar).
     dapr_enabled: bool = Field(default=False, alias="MAINTENANCE_DAPR_ENABLED")
 
     # --- The write-event lane (`/maintenance-arrival`). A write a signed producer announced on `lineage.events.v1`

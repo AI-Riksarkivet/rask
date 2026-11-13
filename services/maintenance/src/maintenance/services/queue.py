@@ -63,7 +63,9 @@ from maintenance.core.metrics import (
     record_task_completed,
     record_task_duration,
     record_task_ended,
+    record_task_redelivered,
     record_task_retried,
+    record_task_wait,
 )
 
 
@@ -221,11 +223,28 @@ class _StreamInfo(BaseModel):
 
 
 class ConsumerState(BaseModel):
-    """What a durable consumer awaits, as its info states it: deliveries not yet acknowledged, and messages delivered more
-    than once and not yet settled."""
+    """What a durable consumer awaits, as its info states it: messages not yet delivered, deliveries not yet acknowledged,
+    and messages delivered more than once and not yet settled."""
 
+    #: Required: read as 0 when the answer lacks it, a backlog would read as an empty queue and the stalled-queue alert
+    #: never fire; an answer without it is an unread sample instead (:func:`sample_queue`).
+    num_pending: int
     num_ack_pending: int = 0
     num_redelivered: int = 0
+
+
+def _record_delivery(task: Task, msg: Msg) -> None:
+    """Count ``msg`` as a delivery of ``task``: its first records how long the task waited on the queue, whether a worker
+    runs it or hands it on as it stops; any later one is a redelivery.
+
+    The delivery carries when the stream stored the message, by the bus's clock (measured on nats-server 2.15.2, nats-py
+    2.16.0: a task queued behind a held one reads the time it was held). This replica's clock reads the delivery, so a
+    skew between the two never reads as a negative wait.
+    """
+    if (msg.metadata.num_delivered or 1) > 1:
+        record_task_redelivered(kind=task.kind)
+        return
+    record_task_wait(kind=task.kind, seconds=max((datetime.now(UTC) - msg.metadata.timestamp).total_seconds(), 0.0))
 
 
 def _parsed(msg: Msg) -> Task | None:
@@ -799,6 +818,8 @@ class Worker:
     async def _hand_on(self, msg: Msg, received: float) -> None:
         """Give back, undelayed, a task a pull answered as the worker stopped: started now, its pass would run under the
         drain and end this replica when the drain did, so another replica takes it instead."""
+        if (task := _parsed(msg)) is not None:
+            _record_delivery(task, msg)
         await self._tell(msg, _nak(0), _Lease(until=received + self._ack_wait))
 
     async def _handle(self, msg: Msg, received: float) -> None:
@@ -808,6 +829,7 @@ class Worker:
             await self._tell(msg, Msg.Ack.Term, lease)
             record_task_ended(kind="unreadable")
             return
+        _record_delivery(task, msg)
         if (delivered := msg.metadata.num_delivered or 1) > self._max_deliver:
             await self._end(msg, task, lease, deliveries=delivered, error="every delivery outlived its worker")
             return
@@ -1096,7 +1118,7 @@ class Worker:
         except QueueUnavailableError as exc:
             log.warning("maintenance_due_not_queued", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
             record_schedule_not_queued()
-            await msg.nak(delay=_RETRY_FIRST)
+            await msg.nak(delay=redelivery_delay(msg.metadata.num_delivered or 1))
             return
         if not queued and msg.subject == task.follow_up_subject("due"):
             await msg.nak(delay=_FOLLOW_UP_RETRY)
@@ -1110,8 +1132,9 @@ class Worker:
 SAMPLED_STREAMS: Final = ((TASKS_STREAM, True), (SCHEDULES_STREAM, False), (STORE_EVENTS_STREAM, True))
 #: The durable consumers the sampler reads, each with its stream.
 SAMPLED_CONSUMERS: Final = ((TASKS_STREAM, TASK_CONSUMER), (SCHEDULES_STREAM, DUE_CONSUMER), (STORE_EVENTS_STREAM, STORE_EVENTS_CONSUMER))
-#: How often the worker samples them.
-SAMPLE_SECONDS: Final = 60.0
+#: How often the worker samples them: six reads of the bus, a quarter of a minute apart, so a rule held for minutes reads
+#: many samples of a backlog and not one.
+SAMPLE_SECONDS: Final = 15.0
 
 
 async def sample_queue(queue: TaskQueue) -> int:
@@ -1134,5 +1157,5 @@ async def sample_queue(queue: TaskQueue) -> int:
             log.warning("maintenance_queue_unsampled", extra={"consumer": durable, "error": str(exc)[:300]})
             unread += 1
             continue
-        record_consumer_backlog(consumer=durable, ack_pending=backlog.num_ack_pending, redelivered=backlog.num_redelivered)
+        record_consumer_backlog(consumer=durable, waiting=backlog.num_pending, ack_pending=backlog.num_ack_pending, redelivered=backlog.num_redelivered)
     return unread
