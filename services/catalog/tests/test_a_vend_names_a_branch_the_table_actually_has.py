@@ -20,10 +20,10 @@ THE SPEC NAMES THE CODE: `lance_docs/ns_catalog/spec.yaml:2434` — "22 - TableB
 specified table branch does not exist". Raised as the typed error and translated by
 `install_problem_handlers`, never a hand-picked status.
 
-THE BROADER QUESTION IS NOT ANSWERED HERE and must not be read as settled: whether a caller holding
-`can_write_data` on a table may be vended for ANY of its branches, including a colleague's in-flight
-one. That needs a ruling. This closes the half that needs none — a branch that does not exist is not
-somebody's work, it is nobody's.
+A caller holding `can_write_data` on a table is vended for ANY of its branches, a colleague's in-flight one
+included: ADR 0159 D3 rules that a table writer writes every branch, pinned with authorization on by
+`test_a_table_writer_writes_every_branch_of_its_table.py`. This file pins the
+other half: a branch that does not exist is not somebody's work, it is nobody's.
 """
 
 from __future__ import annotations

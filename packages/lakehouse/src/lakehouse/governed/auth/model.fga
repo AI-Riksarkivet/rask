@@ -665,10 +665,12 @@ type table
     # act too. Inside a managed scope an owner holds no grant authority, and without this could take the table out to
     # where owning grants again. A rename that keeps its namespace moves no grant anywhere and stays at `can_drop`.
     define can_move: manage_grants and can_drop
-    # Ref-plane / history ops. A plain data WRITER appends/overwrites within the current line; FORKING
-    # history (branch) or REWINDING it (restore) is privileged and stays at the OWNER tier —
-    # admin-inclusive via the parent cascade, never grantable to a mere writer, because `can_restore`
-    # is DESTRUCTIVE.
+    # Ref-plane / history ops (ADR 0159 D3). A table WRITER (`can_write_data`) writes EVERY branch of the table: a
+    # branch is a parameter of a table operation in the namespace spec, not an object with an authorization of its
+    # own, so insert, merge_insert, a write vend naming a branch and a stock client's writer operations committed on
+    # one ask `can_write_data` on the table, as on main. CREATING or deleting a branch and REWINDING history (restore)
+    # stay at the OWNER tier, admin-inclusive via the parent cascade and never grantable to a mere writer, because
+    # `can_restore` is DESTRUCTIVE; the tag rungs below admit an owner or a publisher.
     define can_create_branch: owner_effective
     # THE TAG RUNGS ADMIT A PUBLISHER; `can_create_branch` and `can_restore` beside them do not, and
     # that split is the whole reason the rung exists. A tag is a NAMED POINTER at a version that

@@ -159,9 +159,11 @@ _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
 # act on the source. Its grants stay on its uuid (ADR 0173 §8), which is why a rename into ANOTHER namespace asks
 # :data:`_MOVE_RELATION` in this rung's place (:func:`_rename_relation`).
 # ``restore`` REWINDS the table to an older version (destructive) and ``branches/create`` FORKS history;
-# both are privileged and stay at the owner rung. ``tags/create`` / ``tags/update`` re-point the
-# ref-plane and are privileged too — above the writer rung, since a plain data writer appends and
-# overwrites within the current line only — but they resolve through ``owner or publisher`` rather than
+# both are privileged and stay at the owner rung. A table writer writes every branch of the table (ADR 0159 D3): a
+# branch is a parameter of a table operation, so ``insert``, ``merge_insert`` and a write vend naming one ask
+# ``can_write_data`` on the table as on main. ``tags/create`` / ``tags/update`` re-point the
+# ref-plane and are privileged too — above the writer rung, since moving a named pointer is no data
+# write — but they resolve through ``owner or publisher`` rather than
 # ``owner`` alone (owner ruling 2026-09-10). A tag is a NAMED POINTER at a version that already exists,
 # so blessing one destroys nothing, and welding that to ownership is what forced every cascade identity
 # to hold ``owner`` on every tenant. Their ``*/list`` / ``*/version`` siblings are reads, resolved on the
