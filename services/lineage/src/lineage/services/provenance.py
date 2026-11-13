@@ -27,11 +27,13 @@ concurrent deliveries recorded one commit each took 16, 16 and 13 commits on `ru
 catalog refused some of them 429 at its concurrent-write cap; 200 recorded by group commit took 2 on each, and none was
 refused.
 
-A READ IS TWO QUERIES, pinned to one version: the keys of the rows the cursor selects, then the rows between
-the first and last of them. Lance evaluates a ``_rowid`` filter on the manifest's row-id sequences without
-reading a data file (measured on pylance 13.0.0: the plan's first read projects no column), so a follower at
-the head of the feed reads only the rows after its cursor. A read with no cursor, and ``feed_bounds``, read
-every retained row's key, which the feed's retention bounds.
+A PAGE COSTS THE ROWS IT RETURNS, NOT THE FEED'S LENGTH ([[LH-590]]). A read is pinned to one version: a count and a
+one-row probe name the feed's bounds and one more count proves them (:meth:`ProvenanceStore._feed_ids`), then the page's
+rows are read by row-id range (:class:`FeedWindow`). The spec's query takes no order (`QueryTableRequest`), so no read
+trusts one: a range of ``w`` ids holds at most ``w`` rows. Lance evaluates a ``_rowid`` filter on the manifest's row-id
+sequences without reading a data file (measured on pylance 13.0.0: the plan's first read projects no column). Measured on
+the dev estate 2026-11-13 at 3,825 rows: a read of every retained row's key took 0.5 s, a one-row probe 75 ms and a
+count on row ids 150 ms.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ import json
 import logging
 import threading
 from collections import deque
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, TypeVar
@@ -191,6 +193,8 @@ _BATCH_BYTES: Final = 16 * 1024 * 1024
 _REFUSED_ROWS: Final = frozenset({400, 413, 422})
 _SUMMARY_COLUMNS: Final = ["event_type", "event_time", "job", "author", "inputs", "outputs", "table_uuids", "namespace_uuids", "unresolved_tables"]
 _FEED_COLUMNS: Final = [*_SUMMARY_COLUMNS, "event"]
+#: What a bounds probe projects: one fixed-width column, so the catalog sizes its answer without sampling a row.
+_PROBE_COLUMNS: Final = ["received_at"]
 
 
 def parked_delivery(key: str, run_id: str | None, cloud_event: dict[str, Any]) -> ParkedDelivery:
@@ -728,39 +732,49 @@ class ProvenanceStore:
 
     # ---- reads --------------------------------------------------------------------------------------------
 
-    async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
-        """Feed rows: newest first, older than ``after``, or oldest first after ``since`` (the follower's read).
+    async def window(self, *, after: int | None = None, since: int | None = None, summary: bool = False) -> FeedWindow:
+        """One read of the feed at its current version: newest first, older than ``after``, or oldest first after ``since``.
 
-        ``summary`` leaves the payload out of the read itself. Passing both cursors is a caller error.
+        ``summary`` leaves the payload out of every read the window makes. Passing both cursors is a caller error.
         """
         if after is not None and since is not None:
-            raise ValueError("list_events takes `after` or `since`, not both")
-        return await self._run(lambda: self._list_events(limit, after=after, since=since, summary=summary))
-
-    def _list_events(self, limit: int, *, after: int | None, since: int | None, summary: bool) -> list[EventRecord]:
+            raise ValueError("a feed read takes `after` or `since`, not both")
         reader = self._reader(FEED)
-        version = reader.table_version()
-        if since is not None:
-            selector: str | None = f"_rowid >= {since}"
-        elif after is not None:
-            selector = f"_rowid < {after - 1}" if after > 1 else None
-            if selector is None:
-                return []
-        else:
-            selector = None
-        ids = _row_ids(reader.to_table(columns=["event_key"], filter=selector, with_row_id=True, version=version))
-        forward = since is not None
-        chosen = sorted(ids, reverse=not forward)[:limit]
-        if not chosen:
-            return []
-        rows = reader.to_table(
-            columns=_SUMMARY_COLUMNS if summary else _FEED_COLUMNS,
-            filter=f"_rowid >= {min(chosen)} AND _rowid <= {max(chosen)}",
-            with_row_id=True,
-            version=version,
-        )
-        records = [_record_of(row, summary=summary) for row in rows.to_pylist()]
-        return sorted(records, key=lambda record: record.seq, reverse=not forward)
+        version = await self._run(reader.table_version)
+        ids = await self._feed_ids(reader, version)
+        return FeedWindow(self._run, reader, version=version, row_ids=ids, after=after, since=since, summary=summary)
+
+    async def _feed_ids(self, reader: CatalogTableReader, version: int) -> tuple[int, int] | None:
+        """The lowest and the highest row id the feed holds at ``version``, or ``None`` when it holds none.
+
+        Read without trusting the order a query answers in: the probes NAME the bounds (the first row a query answers, and
+        the row at offset ``total - 1``), and one count proves them, since no row lies outside ``[lo, hi]`` exactly when
+        those are the bounds. Measured on the dev estate 2026-11-13 (3,825 rows), the first probe and the count settle it,
+        because the feed's ids are dense; the offset probe serves a feed with holes (a prune whose cut is not a prefix of
+        commit order); a store answering out of row-id order, which none has, costs the whole read it saves elsewhere.
+        Proven on each read rather than kept per table version: a feed table created again numbers its versions from the
+        start, so a version kept from before would name another table's bounds.
+        """
+        async with asyncio.TaskGroup() as group:
+            counted = group.create_task(self._run(lambda: reader.count_rows(version=version)))
+            probed = group.create_task(self._run(lambda: _row_ids(reader.to_table(columns=_PROBE_COLUMNS, with_row_id=True, limit=1, version=version))))
+        total, first = counted.result(), probed.result()
+        if not total:
+            return None
+        if first:
+            lo = first[0]
+            if not await self._run(lambda: _held_outside(reader, version, lo, lo + total - 1)):
+                return lo, lo + total - 1
+            last = await self._run(lambda: _row_ids(reader.to_table(columns=_PROBE_COLUMNS, with_row_id=True, limit=1, offset=total - 1, version=version)))
+            if last and last[0] >= lo and not await self._run(lambda: _held_outside(reader, version, lo, last[0])):
+                return lo, last[0]
+        log.warning("provenance_feed_bounds_read_whole", extra={"version": version, "rows": total})
+        ids = await self._run(lambda: _row_ids(reader.to_table(columns=_PROBE_COLUMNS, with_row_id=True, version=version)))
+        return (min(ids), max(ids)) if ids else None
+
+    async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
+        """Feed rows: newest first, older than ``after``, or oldest first after ``since`` (the follower's read)."""
+        return await (await self.window(after=after, since=since, summary=summary)).take(limit)
 
     async def feed_bounds(self) -> tuple[int, int] | None:
         """The oldest and the newest seq the feed holds, or ``None`` when it holds nothing.
@@ -768,12 +782,7 @@ class ProvenanceStore:
         ``None`` rather than a floor of ``0`` on an empty feed: zero would read as "everything since the
         beginning is still here", the opposite of what an empty feed means after retention.
         """
-
-        def bounds() -> tuple[int, int] | None:
-            ids = _row_ids(self._reader(FEED).to_table(columns=["event_key"], with_row_id=True))
-            return (min(ids) + 1, max(ids) + 1) if ids else None
-
-        return await self._run(bounds)
+        return (await self.window()).bounds
 
     async def recorded_event(self, key: str) -> dict[str, Any] | None:
         """The payload the feed holds under the row key ``key`` (:func:`feed_key`); ``None`` when it holds none."""
@@ -833,6 +842,71 @@ def _cursor_row(follower: str, seq: int) -> pa.Table:
 
 def _row_ids(table: pa.Table) -> list[int]:
     return [int(value) for value in table.column("_rowid").to_pylist()] if "_rowid" in table.column_names else []
+
+
+def _held_outside(reader: CatalogTableReader, version: int, lo: int, hi: int) -> bool:
+    """Whether the feed holds a row outside ``[lo, hi]`` at ``version``: a count on row ids alone, which reads no data file."""
+    return bool(reader.count_rows(f"_rowid < {lo} OR _rowid > {hi}", version=version))
+
+
+class FeedWindow:
+    """One read of the commit feed, pinned to one table version, handing out its rows in cursor order.
+
+    Every read names a range of row ids, never an order: a range of ``w`` ids holds at most ``w`` rows, since a row id
+    is unique, so a range read is exact whatever order the query answers in, and a page costs the rows it returns, not
+    the feed's length. A range that comes back short (a hole a prune or a delete left) is followed by one twice as wide,
+    and rows read past what a take asked for wait for the next take. ``bounds`` is the oldest and the newest seq the feed
+    holds at that version.
+    """
+
+    def __init__(
+        self,
+        run: Callable[[Callable[[], list[EventRecord]]], Awaitable[list[EventRecord]]],
+        reader: CatalogTableReader,
+        *,
+        version: int,
+        row_ids: tuple[int, int] | None,
+        after: int | None,
+        since: int | None,
+        summary: bool,
+    ) -> None:
+        self._run = run
+        self._reader = reader
+        self._version = version
+        self._columns = _SUMMARY_COLUMNS if summary else _FEED_COLUMNS
+        self._summary = summary
+        self._forward = since is not None
+        self._buffer: deque[EventRecord] = deque()
+        # `row_ids` is the lowest and highest row id the feed holds; a seq is a row id plus one, so `bounds` is in seqs,
+        # `since` is the first row id after it and the row below `after` is row id `after - 2`.
+        self.bounds = (row_ids[0] + 1, row_ids[1] + 1) if row_ids else None
+        # The row ids left to read, `[_low, _high]`.
+        self._low, self._high = row_ids or (1, 0)
+        if since is not None:
+            self._low = max(self._low, since)
+        elif after is not None:
+            self._high = min(self._high, after - 2)
+
+    async def take(self, n: int) -> list[EventRecord]:
+        """The next ``n`` rows in cursor order (oldest first after ``since``, else newest first); fewer once none are left."""
+        return await self._run(lambda: self._take(n))
+
+    def _take(self, n: int) -> list[EventRecord]:
+        width = n - len(self._buffer)
+        while len(self._buffer) < n and self._low <= self._high:
+            if self._forward:
+                lo, hi = self._low, min(self._high, self._low + width - 1)
+                self._low = hi + 1
+            else:
+                lo, hi = max(self._low, self._high - width + 1), self._high
+                self._high = lo - 1
+            rows = self._reader.to_table(columns=self._columns, filter=f"_rowid >= {lo} AND _rowid <= {hi}", with_row_id=True, version=self._version)
+            records = sorted((_record_of(row, summary=self._summary) for row in rows.to_pylist()), key=lambda record: record.seq, reverse=not self._forward)
+            self._buffer.extend(records)
+            # A short range met a hole: doubling crosses a hole of `h` ids in about log2(h / n) more reads, and reads at
+            # most twice the ids a take needs, the rest waiting in the buffer.
+            width *= 2
+        return [self._buffer.popleft() for _ in range(min(n, len(self._buffer)))]
 
 
 def _record_of(row: dict[str, Any], *, summary: bool) -> EventRecord:

@@ -672,19 +672,24 @@ class DatasetFilter:
         self._request = request
         self._settings = settings
         self._token = token
+        #: This request's decisions, so a page governed a chunk at a time asks about each object once ([[LH-590]]).
+        self._decided: dict[str, bool] = {}
 
     async def visible(self, objects: Iterable[str]) -> set[str]:
         """Return the subset of ``objects`` the caller may read (``can_get_metadata``)."""
         unique = list(dict.fromkeys(objects))
         if not self._settings.fga_enabled or not unique:
             return set(unique)
-        decider = getattr(self._request.app.state, "decider", None)
-        if decider is None:
-            raise ServiceUnavailableError("authorization service is not available")
-        if self._token is None:
-            raise UnauthenticatedError("authentication required")
-        allowed = await decider.batch_check(user=self._token.subject, relation="can_get_metadata", objects=unique)
-        return {obj for obj in unique if allowed.get(obj)}
+        undecided = [obj for obj in unique if obj not in self._decided]
+        if undecided:
+            decider = getattr(self._request.app.state, "decider", None)
+            if decider is None:
+                raise ServiceUnavailableError("authorization service is not available")
+            if self._token is None:
+                raise UnauthenticatedError("authentication required")
+            allowed = await decider.batch_check(user=self._token.subject, relation="can_get_metadata", objects=undecided)
+            self._decided.update({obj: bool(allowed.get(obj)) for obj in undecided})
+        return {obj for obj in unique if self._decided[obj]}
 
 
 def get_dataset_filter(request: Request, settings: SettingsDep, token: CurrentToken) -> DatasetFilter:

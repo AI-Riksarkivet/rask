@@ -12,15 +12,18 @@ header. The visibility filter is the claim of the second test, and neither stand
 
 A compaction of a feed table is no recorded event's commit, so the catalog announces it as it announces any table's
 ([[LH-529]]): lineage records it once, and recording it is a row write the catalog keeps to itself, so it ends there.
+
+A page reads only its own rows ([[LH-590]]): the catalog's traffic for a page is counted at the store's transport, the
+one seam every feed read goes through, and a store answering its queries in another order stands in at the same seam.
 """
 
 from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import lance
@@ -31,9 +34,18 @@ import pytest
 from fastapi.testclient import TestClient
 from lance.optimize import Compaction
 
+from lakehouse.arrow_ipc import decode_arrow_response
+from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport
+from lakehouse.lancekit.writer import RestCatalogWriteTransport
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
-from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, live_lineage, run_event
+from lineage.models import parse_event
+from lineage.services.provenance import FEED, ProvenanceStore
+from tests.integration.lineage_app import SUBJECT_HEADER, ensure_tables, governed_lineage, live_catalog, live_lineage, run_event
 from tests.loopback import free_port
+
+
+if TYPE_CHECKING:
+    from lance_namespace_urllib3_client import QueryTableRequest
 
 
 #: The pipeline reading the feed, under its own service account.
@@ -148,8 +160,6 @@ def _stamped(event: dict[str, Any], uuid_of: Mapping[str, DatasetUuids]) -> dict
 @pytest.fixture
 def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Lineage's router behind its real authentication-then-FGA gate, over a feed the store wrote to the catalog."""
-    from lineage.models import parse_event
-
     feed = [
         run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:01+00:00", outputs=["acme-silver$pages"]),
         run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:02+00:00", outputs=["acme-silver$hidden"]),
@@ -181,3 +191,136 @@ def test_a_table_or_namespace_filter_narrows_the_feed_and_hidden_events_stay_hid
     assert outputs(_follow(governed_feed, caller, table="acme-silver$pages")) == [["acme-silver$pages"], ["acme-gold$catalog"]]
     assert outputs(_follow(governed_feed, caller, namespace="acme-gold")) == [["acme-gold$catalog"], ["acme-gold$index"]]
     assert _follow(governed_feed, caller, table="acme-silver$hidden") == []
+
+
+def _recorded(store: ProvenanceStore, events: list[dict[str, Any]]) -> None:
+    """Record ``events`` concurrently, as the bus delivers them, so they land in a few group commits."""
+
+    async def burst() -> None:
+        await asyncio.gather(*(store.record(parse_event(event)) for event in events))
+
+    asyncio.run(burst())
+
+
+class _CatalogTraffic:
+    """What the store's transport asks of the catalog: one entry per call, its kind and the rows a query answered."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.calls: list[tuple[str, int]] = []
+        query, count, version = RestCatalogTransport.query, RestCatalogTransport.count, RestCatalogTransport.table_version
+
+        def counted_query(transport: RestCatalogTransport, request: QueryTableRequest) -> bytes:
+            answer = query(transport, request)
+            self.calls.append(("query", decode_arrow_response(answer).num_rows))
+            return answer
+
+        def counted_count(transport: RestCatalogTransport, table_id: list[str], filter: str | None, *, version: int | None = None) -> int:
+            self.calls.append(("count", 0))
+            return count(transport, table_id, filter, version=version)
+
+        def counted_version(transport: RestCatalogTransport, table_id: list[str]) -> int:
+            self.calls.append(("describe", 0))
+            return version(transport, table_id)
+
+        monkeypatch.setattr(RestCatalogTransport, "query", counted_query)
+        monkeypatch.setattr(RestCatalogTransport, "count", counted_count)
+        monkeypatch.setattr(RestCatalogTransport, "table_version", counted_version)
+
+    def of(self, page: Callable[[], object]) -> list[tuple[str, int]]:
+        """The calls ``page`` made and the rows each answered, sorted, since a window's first two calls run concurrently and
+        land in either order: a page's cost."""
+        self.calls.clear()
+        page()
+        return sorted(self.calls)
+
+
+def test_a_page_costs_the_same_whatever_the_feeds_length(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A page reads a bounded number of catalog queries, none of them a scan of every row, newest first, after a cursor
+    and forward from one, under the governance filter ([[LH-590]])."""
+
+    def visible(at: str) -> dict[str, Any]:
+        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["acme-silver$pages"])
+
+    def hidden(at: str) -> dict[str, Any]:
+        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["globex-silver$orders"])
+
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url:
+        uuid_of = _declared(url, _TABLES)
+        granted = {(_PIPELINE, "can_get_metadata", f"table:{uuid_of[name].table_uuid}") for name in _VISIBLE}
+        with governed_lineage(url, monkeypatch, granted) as client:
+            store = client.app.state.provenance
+            caller = {SUBJECT_HEADER: _PIPELINE}
+            traffic = _CatalogTraffic(monkeypatch)
+
+            def costs() -> list[list[tuple[str, int]]]:
+                newest = client.get("/events", params={"limit": 1, "summary": "true"}, headers=caller).json()["events"][0]["seq"]
+                return [
+                    traffic.of(lambda: client.get("/events", params={"limit": 1, "summary": "true"}, headers=caller)),
+                    traffic.of(lambda: client.get("/events", params={"limit": 1, "after": newest}, headers=caller)),
+                    traffic.of(lambda: client.get("/events", params={"limit": 1, "since": 0}, headers=caller)),
+                ]
+
+            def stamped(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+                return [_stamped(event, uuid_of) for event in events]
+
+            _recorded(store, stamped([visible("2026-10-15T10:00:01+00:00"), hidden("2026-10-15T10:00:02+00:00")]))
+            _recorded(store, stamped([visible("2026-10-15T10:00:03+00:00")]))
+            _recorded(store, stamped([visible("2026-10-15T10:00:04+00:00")]))
+            short = costs()
+            _recorded(store, stamped([hidden(f"2026-10-15T11:00:{n:02d}+00:00") if n % 3 else visible(f"2026-10-15T11:00:{n:02d}+00:00") for n in range(60)]))
+            _recorded(store, stamped([visible("2026-10-15T12:00:01+00:00")]))
+            _recorded(store, stamped([visible("2026-10-15T12:00:02+00:00")]))
+            long = costs()
+
+    assert long == short, f"a page of a 66-row feed cost {long}, of a 6-row feed {short}"
+
+
+def _newest_first(query: Callable[[RestCatalogTransport, QueryTableRequest], bytes]) -> Callable[[RestCatalogTransport, QueryTableRequest], bytes]:
+    """A catalog whose query answers its rows newest first: what the spec leaves a store free to do (`QueryTableRequest`
+    names no order)."""
+
+    def answered(transport: RestCatalogTransport, request: QueryTableRequest) -> bytes:
+        whole = decode_arrow_response(query(transport, request.model_copy(update={"k": 10_000, "offset": None})))
+        ordered = whole.sort_by([("_rowid", "descending")]) if "_rowid" in whole.column_names else whole
+        page = ordered.slice(request.offset or 0, request.k)
+        sink = pa.BufferOutputStream()
+        with ipc.new_file(sink, page.schema) as writer:
+            writer.write_table(page)
+        return sink.getvalue().to_pybytes()
+
+    return answered
+
+
+@pytest.mark.parametrize("newest_first", [pytest.param(False, id="as-the-catalog-answers"), pytest.param(True, id="a-store-answering-newest-first")])
+def test_every_cursor_pages_the_rows_a_pruned_feed_with_holes_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, newest_first: bool) -> None:
+    """Every page answers the rows, in the order, its cursor selects: newest first, older than ``after`` and forward from
+    ``since``, over a feed a prune cut and deletes left holes in, whatever order the store answers a query in."""
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url:
+        store = ProvenanceStore(catalog_url=url, namespace=["provenance"], token=lambda: None, refuse_foreign_runs=False)
+        ensure_tables(store)
+        for burst in range(3):
+            _recorded(
+                store, [run_event(str(uuid.uuid4()), "COMPLETE", f"2026-10-15T1{burst}:00:{n:02d}+00:00", outputs=["acme-silver$pages"]) for n in range(8)]
+            )
+        RestCatalogWriteTransport(url, ["provenance", FEED]).delete("_rowid < 3 OR _rowid = 4 OR (_rowid >= 10 AND _rowid <= 15) OR _rowid = 20")
+        held = CatalogTableReader(RestCatalogTransport(url), ["provenance", FEED]).to_table(columns=["received_at"], with_row_id=True)
+        seqs = sorted(int(row_id) + 1 for row_id in held.column("_rowid").to_pylist())
+        if newest_first:
+            monkeypatch.setattr(RestCatalogTransport, "query", _newest_first(RestCatalogTransport.query))
+
+        def page(*, after: int | None = None, since: int | None = None) -> list[int]:
+            return [record.seq for record in asyncio.run(store.list_events(3, after=after, since=since))]
+
+        answered = {
+            "newest": page(),
+            "bounds": asyncio.run(store.feed_bounds()),
+            "since": {cursor: page(since=cursor) for cursor in range(seqs[-1] + 2)},
+            "after": {cursor: page(after=cursor) for cursor in range(1, seqs[-1] + 3)},
+        }
+
+    assert answered == {
+        "newest": seqs[::-1][:3],
+        "bounds": (seqs[0], seqs[-1]),
+        "since": {cursor: [seq for seq in seqs if seq > cursor][:3] for cursor in range(seqs[-1] + 2)},
+        "after": {cursor: [seq for seq in seqs[::-1] if seq < cursor][:3] for cursor in range(1, seqs[-1] + 3)},
+    }

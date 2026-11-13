@@ -35,6 +35,9 @@ router = APIRouter(tags=["query"])
 # so the fetch window collapses to `limit` there.
 _EVENTS_FETCH = 2000
 _EVENTS_RETURN = 500
+#: How much larger each read of a governed page's window is than the last: a page whose first rows are visible reads
+#: about `limit` rows, and one whose window is mostly hidden reaches `_EVENTS_FETCH` in a few reads and FGA checks.
+_CHUNK_GROWTH: Final = 4
 
 
 def _column_lineage_datasets(event: dict) -> set[str]:
@@ -253,8 +256,9 @@ async def get_events_projection(
     """
     _one_direction(after, since)
     await require_event_feed_reader(request, settings, token)
-    records = await provenance.list_events(limit=limit, after=after, since=since, summary=False)
-    bounds = await provenance.feed_bounds()
+    window = await provenance.window(after=after, since=since)
+    records = await window.take(limit)
+    bounds = window.bounds
     if since is not None:
         next_cursor: int | None = _forward_cursor(records, records, limit=limit, since=since, head=bounds[1] if bounds else 0)
     else:
@@ -310,20 +314,27 @@ async def get_events(
     # Unfiltered with auth off, every fetched row is returned, so read exactly `limit` rows. A scope
     # filter or the governance filter drops rows, so keep the wide window then, or a page starves.
     fetch = _EVENTS_FETCH if settings.fga_enabled or scope.scoped else limit
-    records = await provenance.list_events(limit=fetch, after=after, since=since, summary=summary)
-    # Govern on EVERY dataset the returned payload discloses — not just top-level inputs/outputs. The full
-    # raw ``event`` payload (present when summary=False) carries columnLineage facets that name SOURCE datasets
-    # + column schemas NOT in the top-level inputs; without unioning them in, a caller who can see the output
-    # would receive column schemas of input datasets they cannot read (audit: cross-tenant facet leak). When
-    # summary=True the payload is dropped, so the extra set is empty and nothing is over-restricted.
-    visible = await governed(
-        datasets,
-        settings.fga_enabled,
-        [record for record in records if scope.names(record)],
-        _governed_datasets,
-    )
+    window = await provenance.window(after=after, since=since, summary=summary)
+    records: list[EventRecord] = []
+    visible: list[EventRecord] = []
+    # The window is read and governed a chunk at a time, stopping once `limit` rows are visible: each row is judged on
+    # its own, so the page and its cursor are the ones governing the whole window gives, and a page whose first rows
+    # are visible reads only those ([[LH-590]]).
+    chunk = limit
+    while len(visible) < limit and len(records) < fetch:
+        read = await window.take(min(chunk, fetch - len(records)))
+        if not read:
+            break
+        records += read
+        # Govern on EVERY dataset the returned payload discloses — not just top-level inputs/outputs. The full
+        # raw ``event`` payload (present when summary=False) carries columnLineage facets that name SOURCE datasets
+        # + column schemas NOT in the top-level inputs; without unioning them in, a caller who can see the output
+        # would receive column schemas of input datasets they cannot read (audit: cross-tenant facet leak). When
+        # summary=True the payload is dropped, so the extra set is empty and nothing is over-restricted.
+        visible += await governed(datasets, settings.fga_enabled, [record for record in read if scope.names(record)], _governed_datasets)
+        chunk *= _CHUNK_GROWTH
     returned = visible[:limit]
-    bounds = await provenance.feed_bounds()
+    bounds = window.bounds
     if since is not None:
         next_cursor: int | None = _forward_cursor(returned, records, limit=limit, since=since, head=bounds[1] if bounds else 0)
     elif len(returned) == limit and returned:

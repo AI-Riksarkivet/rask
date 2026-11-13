@@ -214,13 +214,25 @@ async def _batch_allow_a(_client: object, *, objects: list[str], **_kw: object) 
 # --------------------------------------------------------------------------- #
 
 
+class _FakeWindow:
+    """One read of `_FakeStore`'s canned feed, handing out its rows in the order they are canned."""
+
+    def __init__(self, events: list[EventRecord], bounds: tuple[int, int] | None) -> None:
+        self._events = events
+        self.bounds = bounds
+
+    async def take(self, n: int) -> list[EventRecord]:
+        read, self._events = self._events[:n], self._events[n:]
+        return read
+
+
 class _FakeStore:
     """The store surface the feed door and the ingest door reach: a canned feed, and what was recorded."""
 
     def __init__(self) -> None:
         self.recorded: RunEvent | None = None
         self.events: list[EventRecord] = []
-        self.list_events_calls: list[dict[str, object]] = []
+        self.windows: list[dict[str, object]] = []
         self.oldest: int | None = None
 
     async def record(self, event: RunEvent) -> None:
@@ -229,12 +241,10 @@ class _FakeStore:
     async def run_author(self, _run_id: str) -> str | None:
         return None
 
-    async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
-        self.list_events_calls.append({"limit": limit, "after": after, "summary": summary})
-        return self.events
-
-    async def feed_bounds(self) -> tuple[int, int] | None:
-        return (self.oldest, max((event.seq for event in self.events), default=self.oldest)) if self.oldest is not None else None
+    async def window(self, *, after: int | None = None, since: int | None = None, summary: bool = False) -> _FakeWindow:
+        self.windows.append({"after": after, "since": since, "summary": summary})
+        bounds = (self.oldest, max((event.seq for event in self.events), default=self.oldest)) if self.oldest is not None else None
+        return _FakeWindow(list(self.events), bounds)
 
 
 def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,16 +286,16 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
     settings = _settings(**_FULL_AUTH)
     repo = _FakeStore()
     repo.events = [
+        EventRecord(seq=4, outputs=["b"], inputs=[], table_uuids=[_uuid("b")], event={}),  # hidden — must never surface
         EventRecord(seq=3, outputs=["a"], inputs=[], table_uuids=[_uuid("a")], event={}),
         EventRecord(seq=2, outputs=["b"], inputs=[], table_uuids=[_uuid("b")], event={}),  # hidden — must never surface
         EventRecord(seq=1, outputs=["a"], inputs=[], table_uuids=[_uuid("a")], event={}),
     ]
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
     result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=1, names=NO_CATALOG_NAMES, bearer=None))
+    # auth ON reads past a hidden newest row rather than answering an empty page
     assert [e.seq for e in result.events] == [3]
     assert result.next_cursor == 3  # continue below the last VISIBLE row — not below the hidden one
-    # auth ON keeps the wide fetch window so filtered-out rows don't starve the page
-    assert repo.list_events_calls[-1]["limit"] == 2000
 
 
 def test_get_events_cursor_and_fetch_width(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -301,17 +311,17 @@ def test_get_events_cursor_and_fetch_width(monkeypatch: pytest.MonkeyPatch) -> N
         EventRecord(seq=4, outputs=["a"], inputs=[], event={}),
     ]
     page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2, names=NO_CATALOG_NAMES, bearer=None))
-    assert repo.list_events_calls[-1] == {"limit": 2, "after": None, "summary": False}
+    assert repo.windows[-1] == {"after": None, "since": None, "summary": False}
     assert [e.seq for e in page.events] == [5, 4] and page.next_cursor == 4  # full page → continue
 
     repo.events = [EventRecord(seq=3, outputs=["a"], inputs=[], event={})]
     page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, after=4, limit=2, names=NO_CATALOG_NAMES, bearer=None))
-    assert repo.list_events_calls[-1] == {"limit": 2, "after": 4, "summary": False}
+    assert repo.windows[-1] == {"after": 4, "since": None, "summary": False}
     assert [e.seq for e in page.events] == [3] and page.next_cursor is None  # short page → exhausted
 
     # summary rides through to the store's read untouched
     asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, summary=True, names=NO_CATALOG_NAMES, bearer=None))
-    assert repo.list_events_calls[-1]["summary"] is True
+    assert repo.windows[-1]["summary"] is True
 
 
 def test_ingest_handler_binds_verified_author() -> None:

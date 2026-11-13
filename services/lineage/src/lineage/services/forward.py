@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from lakehouse.governed.secrets import fetch_required_secrets
 from lineage.core import metrics
 from lineage.core.config import LineageSettings
-from lineage.services.provenance import ProvenanceStore
+from lineage.services.provenance import FeedWindow, ProvenanceStore
 
 
 log = logging.getLogger(__name__)
@@ -77,15 +77,15 @@ async def _authorization(settings: LineageSettings) -> dict[str, str]:
     return {"Authorization": f"Bearer {bundle[settings.forward_api_key_field]}"}
 
 
-async def _send(provenance: ProvenanceStore, settings: LineageSettings, client: httpx.AsyncClient, url: str, mark: int) -> tuple[int, ForwardOutcome]:
-    """POST up to ``forward_batch`` events after ``mark``, a page at a time.
+async def _send(window: FeedWindow, settings: LineageSettings, client: httpx.AsyncClient, url: str, mark: int) -> tuple[int, ForwardOutcome]:
+    """POST up to ``forward_batch`` events of ``window``, the feed after ``mark``, a page at a time.
 
     Returns the seq of the last event the backend answered, which the cursor may move to, and what was sent.
     """
     reached, forwarded, refused = mark, 0, 0
     headers: dict[str, str] | None = None
     while forwarded + refused < settings.forward_batch:
-        records = await provenance.list_events(limit=min(_PAGE, settings.forward_batch - forwarded - refused), since=reached)
+        records = await window.take(min(_PAGE, settings.forward_batch - forwarded - refused))
         if not records:
             break
         if headers is None:
@@ -111,15 +111,18 @@ async def forward(provenance: ProvenanceStore, settings: LineageSettings, client
     url = endpoint_url(settings)
     name = follower(settings)
     mark = await provenance.cursor(name)
-    bounds = await provenance.feed_bounds()
+    # One read of the feed serves the whole tick: its bounds judge the cursor and its rows are the pages sent.
+    window = await provenance.window(since=mark)
+    bounds = window.bounds
     if bounds is not None and bounds[1] < mark:
         # A cursor this feed never issued: it was taken on another feed (the store moved, or was restored).
         log.warning("lineage_forward_cursor_ahead_of_feed", extra={"cursor": mark, "head": bounds[1]})
         mark = bounds[0] - 1
         await provenance.reset_cursor(name, mark)
+        window = await provenance.window(since=mark)
     elif bounds is not None and mark and bounds[0] > mark + 1:
         log.error("lineage_forward_pruned_before_forwarded", extra={"cursor": mark, "oldest_seq": bounds[0]})
-    reached, outcome = await _send(provenance, settings, client, url, mark)
+    reached, outcome = await _send(window, settings, client, url, mark)
     if reached > mark:
         await provenance.advance_cursor(name, reached)
     metrics.record_forwarded(forwarded=outcome.forwarded, refused=outcome.refused, stalled=outcome.stalled is not None)

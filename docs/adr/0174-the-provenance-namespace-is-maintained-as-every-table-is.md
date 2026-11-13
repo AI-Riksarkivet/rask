@@ -90,7 +90,7 @@ Maintenance).
   writer can, which changes what the table says without a commit.
 - A catalog replica that boots with an older list of maintainers during a rollout grants and revokes by that list until
   a replica boots again.
-- A reader whose pinned version is expired between its two queries gets the spec's 404 and retries.
+- A reader whose pinned version is expired between the queries of one read gets the spec's 404 and retries.
 - Pinned by `services/catalog/tests/test_the_provenance_namespace_is_kept_as_its_settings_declare.py`,
   `tests/integration/test_the_commit_feed_is_a_lance_table_followed_forward.py`,
   `services/table-maintenance/tests/test_the_job_compacts_every_due_table_it_may_maintain.py`,

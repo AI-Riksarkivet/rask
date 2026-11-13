@@ -99,21 +99,31 @@ DEFAULT_RUN = {
 }
 
 
+class _Window:
+    """One read of `_Feed`, handing out its rows in cursor order."""
+
+    def __init__(self, rows: list[EventRecord], bounds: tuple[int, int] | None) -> None:
+        self._rows = rows
+        self.bounds = bounds
+
+    async def take(self, n: int) -> list[EventRecord]:
+        taken, self._rows = self._rows[:n], self._rows[n:]
+        return taken
+
+
 class _Feed:
     """Lineage's durable feed as the store serves it: oldest first after `since`, else newest first."""
 
     def __init__(self, rows: list[EventRecord]) -> None:
         self._rows = sorted(rows, key=lambda row: row.seq)
 
-    async def list_events(self, limit: int = 500, *, after: int | None = None, since: int | None = None, summary: bool = False) -> list[EventRecord]:
+    async def window(self, *, after: int | None = None, since: int | None = None, summary: bool = False) -> _Window:
         if since is not None:
-            rows = [row for row in self._rows if row.seq > since][:limit]
+            rows = [row for row in self._rows if row.seq > since]
         else:
-            rows = [row for row in reversed(self._rows) if after is None or row.seq < after][:limit]
-        return [row.model_copy(update={"event": {}}) for row in rows] if summary else rows
-
-    async def feed_bounds(self) -> tuple[int, int] | None:
-        return (self._rows[0].seq, self._rows[-1].seq) if self._rows else None
+            rows = [row for row in reversed(self._rows) if after is None or row.seq < after]
+        rows = [row.model_copy(update={"event": {}}) for row in rows] if summary else rows
+        return _Window(rows, (self._rows[0].seq, self._rows[-1].seq) if self._rows else None)
 
 
 class _OpenFga:
