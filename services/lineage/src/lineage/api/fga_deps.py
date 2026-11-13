@@ -675,6 +675,13 @@ class DatasetFilter:
         #: This request's decisions, so a page governed a chunk at a time asks about each object once ([[LH-590]]).
         self._decided: dict[str, bool] = {}
 
+    def undecided(self, objects: Iterable[str]) -> int:
+        """How many of ``objects`` :meth:`visible` would ask the authorization service about: none while FGA is off, and
+        none that is no object id, which the check answers without asking."""
+        if not self._settings.fga_enabled:
+            return 0
+        return len({obj for obj in objects if obj not in self._decided and fga.is_object_id(obj)})
+
     async def visible(self, objects: Iterable[str]) -> set[str]:
         """Return the subset of ``objects`` the caller may read (``can_get_metadata``)."""
         unique = list(dict.fromkeys(objects))

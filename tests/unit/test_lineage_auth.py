@@ -217,14 +217,16 @@ async def _batch_allow_a(_client: object, *, objects: list[str], **_kw: object) 
 class _FakeWindow:
     """One read of `_FakeStore`'s canned feed, handing out its rows in the order they are canned."""
 
-    def __init__(self, events: list[EventRecord], bounds: tuple[int, int] | None) -> None:
+    def __init__(self, events: list[EventRecord], bounds: tuple[int, int] | None, log: list[tuple[str, int]]) -> None:
         self._events = events
         self._bounds = bounds
+        self._log = log
 
     async def bounds(self) -> tuple[int, int] | None:
         return self._bounds
 
     async def take(self, n: int) -> list[EventRecord]:
+        self._log.append(("read", n))
         read, self._events = self._events[:n], self._events[n:]
         return read
 
@@ -236,6 +238,8 @@ class _FakeStore:
         self.recorded: RunEvent | None = None
         self.events: list[EventRecord] = []
         self.windows: list[dict[str, object]] = []
+        #: Each read a window made and each judgment, in the order they happened.
+        self.log: list[tuple[str, int]] = []
         self.oldest: int | None = None
 
     async def record(self, event: RunEvent) -> None:
@@ -247,7 +251,7 @@ class _FakeStore:
     async def window(self, *, after: int | None = None, since: int | None = None, summary: bool = False) -> _FakeWindow:
         self.windows.append({"after": after, "since": since, "summary": summary})
         bounds = (self.oldest, max((event.seq for event in self.events), default=self.oldest)) if self.oldest is not None else None
-        return _FakeWindow(list(self.events), bounds)
+        return _FakeWindow(list(self.events), bounds, self.log)
 
 
 def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -299,6 +303,74 @@ def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.M
     # auth ON reads past a hidden newest row rather than answering an empty page
     assert [e.seq for e in result.events] == [3]
     assert result.next_cursor == 3  # continue below the last VISIBLE row — not below the hidden one
+
+
+@pytest.mark.parametrize(
+    ("limit", "visible_at", "own_tables", "log"),
+    [
+        pytest.param(
+            8,
+            {150, 100, 99, 98, 97, 96, 95, 94},
+            True,
+            # The first chunk is judged before anything more is read. The second (64 rows) is judged on a full batch of
+            # objects while the next chunk's first 64 rows are read, and the rest of that chunk, sized by the verdict,
+            # after it; the window holds the 128 rows left. The third is judged while 128 more are asked for, and fills
+            # the page.
+            [
+                ("read", 8),
+                ("judging", 8),
+                ("judged", 8),
+                ("read", 64),
+                ("judging", 64),
+                ("read", 64),
+                ("judged", 64),
+                ("read", 944),
+                ("judging", 121),
+                ("read", 128),
+                ("judged", 121),
+            ],
+            id="judged-on-full-batches-reads-ahead",
+        ),
+        pytest.param(
+            2,
+            {190, 189},
+            False,
+            # The second chunk is judged on one undecided object, too little to hide a read, and its verdict fills the page.
+            [("read", 2), ("judging", 1), ("judged", 1), ("read", 16), ("judging", 1), ("judged", 1)],
+            id="judged-on-one-object-reads-nothing-ahead",
+        ),
+    ],
+)
+def test_a_sparse_page_reads_its_next_chunk_while_a_chunk_is_judged(
+    monkeypatch: pytest.MonkeyPatch, limit: int, visible_at: set[int], own_tables: bool, log: list[tuple[str, int]]
+) -> None:
+    """From the second chunk on, a chunk judged on a full OpenFGA batch of objects has the next chunk's first part, at most
+    its own size, read beside its judging, and the chunks still grow; a chunk judged on fewer has none ([[LH-590]])."""
+    from lineage.api.v1.endpoints.events import get_events
+
+    settings = _settings(**_FULL_AUTH)
+    repo = _FakeStore()
+
+    async def judged_after_a_yield(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
+        repo.log.append(("judging", len(objects)))
+        await asyncio.sleep(0)
+        repo.log.append(("judged", len(objects)))
+        return {o: o == _object("a") for o in objects}
+
+    def table(seq: int) -> str:
+        """The table a row names: `a` where the caller may see it, else a table of its own or one shared hidden table."""
+        if seq in visible_at:
+            return "a"
+        return f"hidden-{seq}" if own_tables else "b"
+
+    monkeypatch.setattr(fga, "batch_check", judged_after_a_yield)
+    repo.events = [EventRecord(seq=seq, outputs=["t"], inputs=[], table_uuids=[_uuid(table(seq))], event={}) for seq in range(200, 0, -1)]
+    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
+
+    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=limit, names=NO_CATALOG_NAMES, bearer=None))
+
+    assert ([e.seq for e in page.events], page.next_cursor) == (sorted(visible_at, reverse=True), min(visible_at))
+    assert repo.log == log
 
 
 def test_get_events_cursor_and_fetch_width(monkeypatch: pytest.MonkeyPatch) -> None:

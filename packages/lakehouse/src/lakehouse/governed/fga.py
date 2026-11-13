@@ -58,6 +58,7 @@ from openfga_sdk.client.models import (
 from openfga_sdk.client.models.list_users_request import ClientListUsersRequest
 from openfga_sdk.client.models.read_changes_request import ClientReadChangesRequest
 from openfga_sdk.configuration import RetryParams
+from openfga_sdk.constants import CLIENT_MAX_BATCH_SIZE
 from openfga_sdk.credentials import CredentialConfiguration, Credentials
 from openfga_sdk.exceptions import ApiException, ForbiddenException, UnauthorizedException
 from openfga_sdk.models.check_error import CheckError
@@ -1088,6 +1089,24 @@ def _fresh_read_options(**options: int | str) -> dict[str, int | str | dict[str,
     return {"consistency": ConsistencyPreference.HIGHER_CONSISTENCY, **options}
 
 
+#: The checks one OpenFGA batch request carries: the SDK's own batch size, which :func:`batch_check` sends by.
+CHECKS_PER_BATCH: Final = CLIENT_MAX_BATCH_SIZE
+#: The most batch requests one :func:`batch_check` sends at once: a decision question's whole 1,000 objects
+#: (`decider.MAX_OBJECTS_PER_QUESTION`), where the SDK's default of 10 sent them in two waves ([[LH-590]]). It holds
+#: for every caller, the catalog's filtered listings among them: a check of up to 1,000 objects is one wave of at most
+#: twenty requests on OpenFGA, rather than two of ten.
+_MOST_PARALLEL_BATCHES: Final = 20
+
+
+def _parallel_batches(checks: int) -> int:
+    """How many batch requests to send at once so ``checks`` checks go in one wave, up to :data:`_MOST_PARALLEL_BATCHES`.
+
+    Measured on the dev estate 2026-11-13: lineage governing a 2,000-row page named 668 objects, which the catalog's
+    decision door sent as 14 batches, ten at a time, in 397 ms.
+    """
+    return max(1, min(_MOST_PARALLEL_BATCHES, -(-checks // CHECKS_PER_BATCH)))
+
+
 def reject_stored_clock(tuples: Iterable[ClientTuple]) -> None:
     """Refuse any tuple whose condition context carries :data:`CLOCK_PARAMETER`.
 
@@ -1234,7 +1253,8 @@ async def batch_check(
         return unaskable
 
     async def _do_batch_check() -> dict[str, bool]:
-        response = await client.batch_check(ClientBatchCheckRequest(checks=items), options=_fresh_read_options())
+        options = _fresh_read_options(max_parallel_requests=_parallel_batches(len(items)))
+        response = await client.batch_check(ClientBatchCheckRequest(checks=items), options=options)
         unanswered = {r.request.object: r.error for r in response.result if r.error is not None}
         if unanswered:
             raise _UnansweredBatchItems(unanswered)

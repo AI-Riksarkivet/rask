@@ -10,6 +10,9 @@ the estate rung ``can_read_event_feed`` and cut to the fields that decide whom t
 
 from __future__ import annotations
 
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Query, Request
@@ -25,9 +28,12 @@ from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, o
 from lineage.api.security import CurrentToken
 from lineage.schemas import EventRecord, Events, FeedProjection, ProjectedEvent
 from lineage.services.names import CatalogNames
+from lineage.services.provenance import FeedWindow
 
 
 router = APIRouter(tags=["query"])
+
+log = logging.getLogger(__name__)
 
 # /events fetches a wider window than it returns so the visibility filter (which can drop rows) still
 # yields up to `limit` newest *visible* events, not "the visible subset of the newest `limit`". (#22
@@ -205,6 +211,74 @@ async def _scope(names: CatalogNames, bearer: str | None, *, table: str | None, 
     )
 
 
+async def _visible_page(
+    window: FeedWindow,
+    *,
+    limit: int,
+    fetch: int,
+    judge: Callable[[list[EventRecord]], Awaitable[list[EventRecord]]],
+    undecided: Callable[[list[EventRecord]], int],
+) -> tuple[list[EventRecord], list[EventRecord]]:
+    """Read ``window`` up to ``fetch`` rows and judge them, until ``limit`` are visible: the rows read, and those visible.
+
+    Read and judged a chunk at a time, stopping once ``limit`` rows are visible: each row is judged on its own, so the
+    page and its cursor are the ones judging the whole window gives, and a page whose first rows are visible reads only
+    those ([[LH-590]]). A later chunk grows from the rows read while none was visible, and is sized from the share of
+    rows visible once some were.
+
+    From the second chunk on, a chunk whose judging asks the authorization service about a full OpenFGA batch of objects
+    or more (``undecided``) has the first part of the next chunk read beside it, as much as the chunk holds and no more
+    than the next chunk would be if the chunk held no visible row; the rest of the next chunk, sized by the verdict, is
+    read after it. A row read beyond what the verdict asks for is judged as any other, which moves no stop, and a page
+    the verdict fills waits for the read ahead and leaves it, so a read ahead costs at most one chunk, and only beside a
+    judging long enough to hide it. Measured on the dev estate 2026-11-13, a 2,000-row page's judging of 668 objects
+    took 397 ms, against 163 ms for the read after it.
+    """
+    records: list[EventRecord] = []
+    visible: list[EventRecord] = []
+    read = await window.take(min(limit, fetch))
+    while read:
+        records += read
+        ahead = None
+        if len(read) < len(records) < fetch and undecided(read) >= fga.CHECKS_PER_BATCH:
+            ahead_rows = min(_next_chunk(limit, len(records), len(visible)), len(read), fetch - len(records))
+            ahead = asyncio.create_task(window.take(ahead_rows))
+        try:
+            visible += await judge(read)
+        except BaseException:
+            await _finish(ahead)
+            raise
+        if len(visible) >= limit or len(records) >= fetch:
+            await _finish(ahead)
+            break
+        want = min(_next_chunk(limit, len(records), len(visible)), fetch - len(records))
+        if ahead is None:
+            read = await window.take(want)
+            continue
+        # The rows read ahead are the next chunk's first part; the rest of it is read after the verdict, unless the
+        # window ran out under the read ahead.
+        head = await ahead
+        rest = want - len(head) if len(head) == ahead_rows else 0
+        read = head + await window.take(rest) if rest > 0 else head
+    return records, visible
+
+
+def _next_chunk(limit: int, read: int, visible: int) -> int:
+    """How many rows a page reads next, having read ``read`` rows of which ``visible`` were visible."""
+    if not visible:
+        return read * _CHUNK_GROWTH
+    return -(-(limit - visible) * read // visible) * _CHUNK_MARGIN
+
+
+async def _finish(ahead: asyncio.Future[list[EventRecord]] | None) -> None:
+    """Wait for a read ahead whose rows the page will not use; a failure of it is logged, since nothing else reads it."""
+    if ahead is None:
+        return
+    (outcome,) = await asyncio.gather(ahead, return_exceptions=True)
+    if isinstance(outcome, BaseException):
+        log.warning("lineage_events_read_ahead_failed", extra={"error": f"{type(outcome).__name__}: {outcome}"})
+
+
 def _forward_cursor(returned: list[EventRecord], records: list[EventRecord], *, limit: int, since: int, head: int) -> int:
     """The ``since`` a follower passes next: the last seq this page COVERED, never behind ``since`` within this feed.
 
@@ -318,26 +392,27 @@ async def get_events(
     # filter or the governance filter drops rows, so keep the wide window then, or a page starves.
     fetch = _EVENTS_FETCH if settings.fga_enabled or scope.scoped else limit
     window = await provenance.window(after=after, since=since, summary=summary)
-    records: list[EventRecord] = []
-    visible: list[EventRecord] = []
-    # The window is read and governed a chunk at a time, stopping once `limit` rows are visible: each row is judged on
-    # its own, so the page and its cursor are the ones governing the whole window gives, and a page whose first rows
-    # are visible reads only those ([[LH-590]]). Each later chunk grows from the rows read while none was visible, and is
-    # sized from the share of rows visible once some were, so a mostly hidden window is read in a few reads.
-    chunk = limit
-    while len(visible) < limit and len(records) < fetch:
-        if records:
-            chunk = len(records) * _CHUNK_GROWTH if not visible else -(-(limit - len(visible)) * len(records) // len(visible)) * _CHUNK_MARGIN
-        read = await window.take(min(chunk, fetch - len(records)))
-        if not read:
-            break
-        records += read
-        # Govern on EVERY dataset the returned payload discloses — not just top-level inputs/outputs. The full
-        # raw ``event`` payload (present when summary=False) carries columnLineage facets that name SOURCE datasets
-        # + column schemas NOT in the top-level inputs; without unioning them in, a caller who can see the output
-        # would receive column schemas of input datasets they cannot read (audit: cross-tenant facet leak). When
-        # summary=True the payload is dropped, so the extra set is empty and nothing is over-restricted.
-        visible += await governed(datasets, settings.fga_enabled, [record for record in read if scope.names(record)], _governed_datasets)
+
+    # Govern on EVERY dataset the returned payload discloses — not just top-level inputs/outputs. The full
+    # raw ``event`` payload (present when summary=False) carries columnLineage facets that name SOURCE datasets
+    # + column schemas NOT in the top-level inputs; without unioning them in, a caller who can see the output
+    # would receive column schemas of input datasets they cannot read (audit: cross-tenant facet leak). When
+    # summary=True the payload is dropped, so the extra set is empty and nothing is over-restricted.
+    governs: dict[int, Governed] = {}
+
+    def governed_by(record: EventRecord) -> Governed:
+        """What ``record`` is judged against, worked out once a row: with the payload read, it parses the event."""
+        if record.seq not in governs:
+            governs[record.seq] = _governed_datasets(record)
+        return governs[record.seq]
+
+    async def judge(read: list[EventRecord]) -> list[EventRecord]:
+        return await governed(datasets, settings.fga_enabled, [record for record in read if scope.names(record)], governed_by)
+
+    def undecided(read: list[EventRecord]) -> int:
+        return datasets.undecided(obj for record in read if scope.names(record) for obj in governed_by(record).objects)
+
+    records, visible = await _visible_page(window, limit=limit, fetch=fetch, judge=judge, undecided=undecided)
     returned = visible[:limit]
     bounds = await window.bounds()
     if since is not None:

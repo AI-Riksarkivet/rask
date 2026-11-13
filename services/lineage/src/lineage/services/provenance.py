@@ -874,7 +874,7 @@ class FeedWindow:
             return
         named = (first[0], first[0] + self._total - 1)
         self._start(named)
-        self._proof = asyncio.ensure_future(self._run(lambda: not self._held_outside(*named)))
+        self._proof = asyncio.create_task(self._run(lambda: not self._held_outside(*named)))
 
     async def bounds(self) -> tuple[int, int] | None:
         """The oldest and the newest seq the feed holds at this version, or ``None`` when it holds none."""
@@ -887,7 +887,7 @@ class FeedWindow:
         if self._proof is None:
             return await self._run(lambda: self._take(n))
         # The first read goes beside the proof; its rows are handed out only once the bounds it read within hold.
-        read = asyncio.ensure_future(self._run(lambda: self._take(n)))
+        read = asyncio.create_task(self._run(lambda: self._take(n)))
         try:
             held = await self._proven()
         except BaseException:

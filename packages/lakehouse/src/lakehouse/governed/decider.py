@@ -50,8 +50,7 @@ DECISIONS_PREFIX: Final = "/management/v1/decisions"
 
 #: The most objects one question may name: above it the door answers 400, and the client asks in chunks. The door
 #: answers a question with one `fga.batch_check`, which the OpenFGA SDK sends as batches of `CLIENT_MAX_BATCH_SIZE` (50)
-#: checks, at most `CLIENT_MAX_METHOD_PARALLEL_REQUESTS` (10) at a time (openfga-sdk 0.10.4), so one question costs the
-#: store at most twenty batch requests in two waves.
+#: checks, all at once (`fga.batch_check`), so one question costs the store at most twenty batch requests in one wave.
 MAX_OBJECTS_PER_QUESTION: Final = 1000
 
 #: How often a decision is re-sent after the catalog could not be reached at all. Only a connection that never opened
