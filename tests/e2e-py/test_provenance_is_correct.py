@@ -81,11 +81,13 @@ def test_the_edge_list_holds_one_edge_for_each_input_a_version_names_and_no_othe
 
 def test_the_feed_is_the_events_table_of_the_estate_warehouses_provenance_namespace(byo_tenant: Tenant, byo_run: ScenarioRun) -> None:
     """Each row the feed served about the drive is a row of `lance_catalog$provenance$events`, read by the estate's owner
-    through the stock client, and the release names that namespace as lineage's."""
+    through the stock client, and the release names that namespace as lineage's. A feed row's `seq` is its stable row
+    id in that table plus one."""
     served = sorted(int(row["seq"]) for row in feed_of(byo_tenant.pipeline, byo_run))
     events = lance.dataset(namespace_client=byo_tenant.admin.namespace(), table_id=[ESTATE_WAREHOUSE, "provenance", "events"])
 
-    held = sorted(events.to_table(columns=["seq"], filter=f"seq IN ({', '.join(map(str, served))})").column("seq").to_pylist())
+    rows = events.to_table(columns=["_rowid"], filter=f"_rowid IN ({', '.join(str(seq - 1) for seq in served)})")
+    held = sorted(row_id + 1 for row_id in rows.column("_rowid").to_pylist())
 
     assert served, "the feed served no row about the drive, so there is nothing to find in the provenance namespace"
     assert (PROVENANCE_NAMESPACE, held) == (f"{ESTATE_WAREHOUSE}$provenance", served)
