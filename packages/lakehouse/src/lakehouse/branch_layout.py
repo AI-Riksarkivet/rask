@@ -41,6 +41,16 @@ RESERVED_SEGMENTS: Final = frozenset({*BRANCH_FILE_DIRS, "_refs", "_mem_wal", "t
 BRANCH_CONTAINER: Final = "tree"
 
 
+def ref_root(dataset_root: str, branch: str | None) -> str:
+    """The directory a ref keeps its own files under: the dataset root for main, ``<root>/tree/<branch>`` for a branch.
+
+    A handle checked out on a branch answers the dataset root as its ``uri`` (measured on pylance 13.0.0), so a reader of
+    a branch's own files names the branch to find them.
+    """
+    root = dataset_root.rstrip("/")
+    return f"{root}/{BRANCH_CONTAINER}/{branch}" if branch else root
+
+
 def reserved_segment(name: str) -> str | None:
     """The first segment of ``name`` that is a layout name, or ``None``."""
     return next((segment for segment in name.split("/") if segment in RESERVED_SEGMENTS), None)

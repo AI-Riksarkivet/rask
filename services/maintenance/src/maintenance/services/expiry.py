@@ -32,7 +32,7 @@ from lakehouse.features import (
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
-from lakehouse.stored_objects import delete_objects, list_under_at
+from lakehouse.stored_objects import delete_objects, list_under_at, recording_removed_transactions
 from maintenance.core.config import shared_lance_session
 from maintenance.core.metrics import CatalogRefusal
 from maintenance.services import base_reclaim
@@ -374,16 +374,18 @@ def _versions_due(result: DatasetResult, policy: ExpiryPolicy) -> bool:
     return policy.cleanup_enabled and (result.reclaimable_versions or 0) >= policy.min_reclaimable
 
 
-def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, policy: ExpiryPolicy) -> None:
+def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
     """Reclaim superseded versions once enough are reclaimable; tagged versions are EXEMPT.
 
     ``error_if_tagged_old_versions=False``: the default RAISES once any tag ages past ``older_than``, and the catalog's
-    long-lived ``published`` tag would then stall reclamation on that dataset forever.
+    long-lived ``published`` tag would then stall reclamation on that dataset forever. Each transaction file the cleanup
+    removes is recorded under the vend ([[LH-232]]); Lance records the rest itself.
     """
     if not _versions_due(result, policy):
         log.debug("maintenance_expiry_below_threshold", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
         return
-    stats = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
+    with recording_removed_transactions(target.uri, vend):
+        stats = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
     result.old_versions_removed = stats.old_versions
     result.bytes_removed = stats.bytes_removed
 
@@ -475,7 +477,7 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: Datas
                 log.info("maintenance_table_trashed_mid_pass", extra={"uri": result.uri, "uuid": target.table_uuid})
                 result.trashed = target.table_uuid
                 return result
-            _reclaim_versions(opened.ds, result=result, policy=policy)
+            _reclaim_versions(opened.ds, result=result, target=target, vend=vend, policy=policy)
             _reclaim_data_directories(opened.ds, result=result, target=target, vend=vend)
         # Whether or not any version is due: a lost staged manifest is no version's, so no ref's fence guards it, and a
         # pass that left it would find the table due again at once.

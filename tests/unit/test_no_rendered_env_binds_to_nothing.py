@@ -44,6 +44,12 @@ from chart_render import containers, uvicorn_target  # noqa: E402
 from test_invariants import _rendered_docs  # noqa: E402
 
 
+#: Names under a settings prefix that a library in the process reads, so no settings class need. `LANCE_LOG` is pylance's
+#: env_logger filter, read at import (measured on pylance 13.0.0: with it set, a cleanup wrote a
+#: `lance::events::file_audit` delete line per file on stderr, [[LH-232]]).
+_READ_BY_A_LIBRARY = frozenset({"LANCE_LOG"})
+
+
 def _app_modules() -> dict[str, bool]:
     """The module of every uvicorn target the render runs (`catalog.main:app` -> `catalog.main`), and whether it builds
     its app when imported: a target uvicorn calls with `--factory` builds nothing until called."""
@@ -121,7 +127,7 @@ def test_no_rendered_env_binds_to_nothing() -> None:
     prefixes, names = _accepted_names()
     unbound: dict[str, set[str]] = {}
     for deployment, env in _rendered_env():
-        if env.startswith(tuple(prefixes)) and env not in names:
+        if env.startswith(tuple(prefixes)) and env not in names and env not in _READ_BY_A_LIBRARY:
             unbound.setdefault(env, set()).add(deployment)
 
     assert not unbound, (

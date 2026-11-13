@@ -12,8 +12,10 @@ through pyarrow's filesystem.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Iterator, Mapping, Sequence
+import logging
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -34,6 +36,18 @@ _IDENTITY_READS: Final = MAX_POOL_CONNECTIONS
 
 #: How much of a local object :func:`identities` hashes per read.
 _HASH_CHUNK: Final = 1 << 20
+
+#: The logger every object :func:`delete_objects` removes is recorded on, one line per object ([[LH-232]]). Lance writes
+#: its own deletes as ``lance::events::file_audit`` lines on stderr when ``LANCE_LOG`` asks for them; rask's deletes by
+#: key are ones Lance never sees, so this records them in the same shape (``mode="delete" type=... path=...``), and one
+#: query of the general log table for ``file_audit`` and ``mode="delete"`` reads every file a pass removed. Its ``path``
+#: is the store path, ``<bucket>/<key>`` on S3, where Lance's names the key alone.
+FILE_AUDIT_LOGGER: Final = "lakehouse.file_audit"
+_file_audit = logging.getLogger(FILE_AUDIT_LOGGER)
+log = logging.getLogger(__name__)
+
+#: A Lance table's directories, each with the kind Lance's ``file_audit`` line names its files by.
+_LAYOUT_KINDS: Final = (("_versions", "manifest"), ("_indices", "index"), ("_deletions", "deletion"), ("_transactions", "transaction"), ("data", "data"))
 
 
 class StoredObject(BaseModel):
@@ -261,11 +275,26 @@ def remove_object(uri: str, storage_options: StorageOptions, key: str) -> None:
         raise OSError(f"the store could not be reached deleting {bucket}/{full_key}: {exc}") from exc
 
 
+def _file_kind(path: str) -> str:
+    """What a store path is in a Lance table's layout, as Lance's own ``file_audit`` line names it: ``manifest``, ``data``,
+    ``index``, ``deletion`` or ``transaction`` by the directory it lies in (``lance_docs/lance/format/table/layout.md``),
+    and ``object`` for anything else (a blob sidecar under ``data/`` is ``data``)."""
+    directories = path.split("/")[:-1]
+    for directory, kind in _LAYOUT_KINDS:
+        if directory in directories:
+            return kind
+    return "object"
+
+
 def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) -> None:
-    """Delete the store ``paths``, every one beneath ``uri``'s bucket or root, by key.
+    """Delete the store ``paths``, every one beneath ``uri``'s bucket or root, by key, and record each one deleted.
 
     Any ``s3://`` root takes the object client, endpoint or none: pyarrow's delete puts the deleted object's parent back as
-    a directory marker (measured on pyarrow 25.0.0), a write outside what a session scoped to the location may make.
+    a directory marker (measured on pyarrow 25.0.0), a write outside what a session scoped to the location may make. A path
+    already absent is deleted, as S3 answers it. Each path the store deleted is written on :data:`FILE_AUDIT_LOGGER` as it
+    goes, so a delete that stops part-way records what it removed; one the store refused is not. An absent path is no
+    error: S3's DeleteObjects answers it as deleted, so it is recorded there, while a local root records only a path it
+    found. The paths may lie in several buckets; each bucket's are sent in requests of their own.
 
     Raises:
         OSError: The store refused a delete.
@@ -275,12 +304,73 @@ def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) 
     if not on_s3(uri):
         fs, _ = fs_and_base(uri, storage_options)
         for path in paths:
-            fs.delete_file(path)
+            with suppress(FileNotFoundError):
+                fs.delete_file(path)
+                _record_deleted(path)
         return
     client = object_client(storage_options)
-    bucket = paths[0].partition("/")[0]
-    keys = [path.partition("/")[2] for path in paths]
-    for start in range(0, len(keys), _DELETE_BATCH):
-        answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys[start : start + _DELETE_BATCH]], "Quiet": True})
-        if refused := answered.get("Errors"):
-            raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
+    by_bucket: dict[str, list[str]] = {}
+    for path in paths:
+        bucket, _, key = path.partition("/")
+        by_bucket.setdefault(bucket, []).append(key)
+    for bucket, keys in by_bucket.items():
+        for start in range(0, len(keys), _DELETE_BATCH):
+            batch = keys[start : start + _DELETE_BATCH]
+            answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True})
+            refused = answered.get("Errors") or []
+            refused_keys = {str(error.get("Key")) for error in refused}
+            for key in batch:
+                if key not in refused_keys:
+                    _record_deleted(f"{bucket}/{key}")
+            if refused:
+                raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
+
+
+@contextmanager
+def recording_removed_transactions(ref_root: str, storage_options: StorageOptions) -> Generator[None]:
+    """Record each ``_transactions/`` file a Lance cleanup of the ref at ``ref_root`` removes, one line per file.
+
+    Lance's ``file_audit`` lines name every data, deletion and index file and every manifest its cleanup deletes, and no
+    transaction file (measured on pylance 13.0.0: a cleanup that removed 5 transaction files wrote 0 lines for them, its
+    other 12 deletes one line each), and nothing left once they are gone names them. So the ref's ``_transactions/`` is
+    listed before the cleanup and again after it, part-way or not, and each file gone is recorded as rask's own deletes
+    are. A file gone that the cleanup did not remove (another reclaim of the same ref meanwhile) is a removed file too.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the listing before the cleanup.
+    """
+    directory = f"{ref_root.rstrip('/')}/_transactions"
+    before = _paths_under(directory, storage_options)
+    try:
+        yield
+    finally:
+        try:
+            gone = before - _paths_under(directory, storage_options)
+        except OSError:
+            log.exception("file_audit_transactions_unrecorded", extra={"directory": directory, "listed_before": len(before)})
+        else:
+            for path in sorted(gone):
+                _record_deleted(path)
+
+
+def _paths_under(uri: str, storage_options: StorageOptions) -> set[str]:
+    """The store path of every object beneath ``uri``.
+
+    Raises:
+        OSError: The store refused the listing, or could not be reached.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    try:
+        return {stored.path for stored in iter_under(uri, storage_options)}
+    except (ClientError, BotoCoreError) as exc:
+        raise OSError(f"the store refused listing {uri}: {exc}") from exc
+
+
+def _record_deleted(path: str) -> None:
+    """One line on :data:`FILE_AUDIT_LOGGER` for a store path rask deleted, in the shape of Lance's own delete line."""
+    kind = _file_kind(path)
+    _file_audit.info(
+        f'target="{FILE_AUDIT_LOGGER}" mode="delete" type="{kind}" path="{path}"',
+        extra={"file_audit.mode": "delete", "file_audit.type": kind, "file_audit.path": path},
+    )

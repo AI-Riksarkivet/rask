@@ -119,7 +119,7 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
-from lakehouse import clone_sources
+from lakehouse import branch_layout, clone_sources, stored_objects
 from lakehouse.base_refs import normalise
 from lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
 from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
@@ -428,7 +428,7 @@ def verify(
     #    the earlier one, and a version newer than it was inside that cleanup's window. A ref absent from `cutoffs` was
     #    not reclaimed, so nothing but that keeps its versions. A ref whose head still holds the subject is not
     #    reclaimed: its history would go while the subject's bytes stay in its live data files ([[LH-210]]).
-    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, retention=retention, history=history)
+    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, retention=retention, history=history, storage_options=storage_options)
 
     # 4. VERIFY EVERY REF, because every step above is an ATTEMPT and only this is evidence. Every head can be clean and
     #    the row still readable at a version a branch or a tag stands on, which is the one outcome an erasure must never
@@ -570,6 +570,7 @@ def _reclaim(
     clean: Collection[str | None],
     retention: timedelta,
     history: TableHistory | None,
+    storage_options: StorageOptions,
 ) -> dict[str | None, datetime]:
     """Step 3: clean up every ref whose head is clean, deepest first; each reclaimed ref's cutoff.
 
@@ -578,10 +579,10 @@ def _reclaim(
     reclaimed and each says so, so the obligation stays open for the next verification.
     """
     if history is None:
-        return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention)
+        return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
     try:
         with history.held(HistoryWork.RECLAIM):
-            return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention)
+            return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
     except HistoryFencedError as exc:
         log.info("erasure_history_fenced", extra={"table": report.table, "reason": str(exc)})
         report.surfaces += [SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail=f"{exc} Not reclaimed.") for ref in deepest_first]
@@ -595,8 +596,10 @@ def _reclaim_refs(
     *,
     clean: Collection[str | None],
     retention: timedelta,
+    storage_options: StorageOptions,
 ) -> dict[str | None, datetime]:
-    """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff.
+    """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff. Each transaction file a cleanup removes is
+    recorded ([[LH-232]]); Lance records the rest itself.
 
     A registered clone of this table needs no refusal here: its tag keeps the version it reads, which every cleanup
     exempts and :func:`_drop_subject_tags` never drops (ADR 0198 §1).
@@ -623,7 +626,8 @@ def _reclaim_refs(
                 log.warning("erasure_cleanup_refused", extra={"table": report.table, "ref": _label(ref), "reason": refused})
                 report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"maintenance refused: {refused}. Not reclaimed."))
                 continue
-            stats = handle.cleanup_old_versions(retention, error_if_tagged_old_versions=False)
+            with stored_objects.recording_removed_transactions(branch_layout.ref_root(dataset.uri, ref), storage_options):
+                stats = handle.cleanup_old_versions(retention, error_if_tagged_old_versions=False)
             cutoffs[ref] = datetime.now(UTC) - retention
             versions, freed = int(getattr(stats, "old_versions", 0) or 0), int(getattr(stats, "bytes_removed", 0) or 0)
             report.versions_reclaimed += versions

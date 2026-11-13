@@ -2082,5 +2082,14 @@ observability:
     auditHeaders: {}
     # -- NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled.
     egress: []
+  # LANCE'S OWN PER-FILE RECORD ([[LH-232]]). pylance reads `LANCE_LOG` (env_logger syntax) and writes each event to
+  # the container's stderr, outside OTLP: `lance::events::file_audit` one line per file it creates or deletes (mode,
+  # type, path) and `lance::events::dataset_events` one per load, write, commit and cleanup (the dataset's URI). The
+  # Collector's filelog receiver keeps a lakehouse pod's stderr line that is not Python's (it starts with `[`), so the
+  # lines reach the general log table beside rask's own `lakehouse.file_audit` lines. Measured on pylance 13.0.0: a
+  # cleanup writes a delete line per data and manifest file with its path and none for a transaction file it removes,
+  # and a create line names its file bare (a manifest's by a placeholder), so the record is whole for data files and manifests.
+  # -- `LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off.
+  lanceLog: "warn,lance::events::file_audit=info,lance::events::dataset_events=info"
   # -- Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request.
   samplingRate: "1" # Dapr trace sampling — full, so the catalog→lineage context always propagates

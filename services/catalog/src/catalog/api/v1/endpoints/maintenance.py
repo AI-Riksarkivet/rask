@@ -32,7 +32,7 @@ from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, St
 from catalog.api.security import CurrentToken
 from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import maintenance, maintenance_commits, table_claims
-from lakehouse import maintenance_due
+from lakehouse import branch_layout, maintenance_due, stored_objects
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryWork
 
@@ -103,7 +103,8 @@ async def run_maintenance(
     def _reclaim() -> maintenance.GcRunData:
         # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
         # version this deletes. A ref write holding it answers this request 409.
-        with table.history_held(HistoryWork.RECLAIM):
+        # [[LH-232]] Each transaction file the cleanup removes is recorded; Lance records the rest itself.
+        with table.history_held(HistoryWork.RECLAIM), stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, branch), so):
             return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch)
 
     return GcRunResult(**await run_in_threadpool(_reclaim))

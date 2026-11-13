@@ -46,7 +46,7 @@ from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
-from lakehouse import commit_records
+from lakehouse import branch_layout, commit_records, stored_objects
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.history_fences import HistoryWork
@@ -370,6 +370,7 @@ def _delete_versions(table: DoorTable, so: StorageOptions, body: BatchDeleteTabl
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
     # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
     # version this deletes. A ref write holding it answers this request 409.
-    with table.history_held(HistoryWork.RECLAIM):
+    # [[LH-232]] Each transaction file the cleanup removes is recorded; Lance records the rest itself.
+    with table.history_held(HistoryWork.RECLAIM), stored_objects.recording_removed_transactions(branch_layout.ref_root(ds.uri, body.branch), so):
         deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch)
     return BatchDeleteTableVersionsResponse(deleted_count=deleted)

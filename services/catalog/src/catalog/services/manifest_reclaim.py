@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from catalog.core.config import Settings, shared_lance_session
 from catalog.services import warehouses
-from lakehouse import control_prefixes
+from lakehouse import control_prefixes, stored_objects
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 
@@ -66,5 +66,6 @@ def reclaim(root: str, storage_options: StorageOptions, *, older_than: timedelta
     if fs.get_file_info(f"{base}/{MANIFEST_TABLE}/_versions").type != pafs.FileType.Directory:
         return None
     index = lance.dataset(f"{root}/{MANIFEST_TABLE}", storage_options=storage_options.in_clear(), session=shared_lance_session())
-    stats = index.cleanup_old_versions(older_than=older_than, error_if_tagged_old_versions=False)
+    with stored_objects.recording_removed_transactions(f"{root}/{MANIFEST_TABLE}", storage_options):
+        stats = index.cleanup_old_versions(older_than=older_than, error_if_tagged_old_versions=False)
     return RootReclaim(root=root, versions_removed=stats.old_versions, bytes_removed=stats.bytes_removed, versions_kept=len(index.versions()))

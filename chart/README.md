@@ -228,6 +228,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | observability.export.endpoint | string | `""` | OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render, and http on a real deployment. |
 | observability.export.headers | object | `{}` | Headers sent on every export: the backend's ingestion contract, none by default (the dev overlay names GreptimeDB's). |
 | observability.export.traceHeaders | object | `{}` | Headers added to the trace export. |
+| observability.lanceLog | string | `"warn,lance::events::file_audit=info,lance::events::dataset_events=info"` | `LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off. |
 | observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
 | observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
 | openbao.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false. |

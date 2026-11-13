@@ -1277,6 +1277,10 @@
                         }
                     }
                 },
+                "lanceLog": {
+                    "description": "`LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off.",
+                    "type": "string"
+                },
                 "otelCollector": {
                     "type": "object",
                     "properties": {

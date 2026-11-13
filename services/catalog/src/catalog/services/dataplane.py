@@ -130,6 +130,7 @@ from lakehouse import (
     data_directories,
     file_identities,
     location_claims,
+    stored_objects,
     trash,
 )
 from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
@@ -1903,17 +1904,19 @@ def discard_detached_manifest(location: str, so: StorageOptions, version: int) -
 def delete_table_object(location: str, so: StorageOptions, relative: str) -> None:
     """Delete ``<location>/<relative>``, writing nothing else.
 
-    S3 goes through the storage seam's plain DeleteObject: pyarrow's ``S3FileSystem.delete_file`` PUTs the parent's
-    directory marker after the delete, which left a ``_versions/`` object beside the table's manifests (measured on
-    moto). A delete that fails leaves an inert object, never a wrong table, so it is logged rather than raised.
+    It deletes by key through :func:`lakehouse.stored_objects.delete_objects`, which records the delete ([[LH-232]]):
+    pyarrow's ``S3FileSystem.delete_file`` PUTs the parent's directory marker after the delete, which left a
+    ``_versions/`` object beside the table's manifests (measured on moto). A delete that fails leaves an inert object,
+    never a wrong table, so it is logged rather than raised.
     """
     try:
         if on_s3(location):
             bucket, prefix = split_s3_uri(location.rstrip("/"))
-            object_client(so).delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
+            path = f"{bucket}/{prefix}/{relative}"
         else:
-            fs, base = dataset_fs(location, so)
-            fs.delete_file(f"{base.rstrip('/')}/{relative}")
+            _, base = dataset_fs(location, so)
+            path = f"{base.rstrip('/')}/{relative}"
+        stored_objects.delete_objects(location, so, [path])
     except Exception:
         log.warning("catalog_table_object_left", extra={"location": location, "object": relative}, exc_info=True)
 
@@ -1924,9 +1927,6 @@ _VERSIONS_DIR: Final = "_versions"
 #: How many list-and-delete passes a destroy makes before it reports what is left. A pass deletes every object it
 #: listed, so a second pass finds only what a writer put meanwhile.
 _DELETE_PASSES: Final = 3
-
-#: The most keys one S3 DeleteObjects request takes.
-_DELETE_BATCH: Final = 1000
 
 
 class TableBytesLeftError(PartiallyApplied):
@@ -2200,41 +2200,16 @@ def _delete_everything_under(location: str, so: StorageOptions, stored: str, spe
         held = [obj for path in paths for obj in _objects_under(location, so, path)]
         if not held:
             return
-        rest = [obj for obj in held if not obj.startswith(versions)]
-        last = [obj for obj in held if obj.startswith(versions)]
-        if on_s3(location):
-            _delete_objects(so, rest)
-            _delete_objects(so, last)
-        else:
+        stored_objects.delete_objects(location, so, [obj for obj in held if not obj.startswith(versions)])
+        stored_objects.delete_objects(location, so, [obj for obj in held if obj.startswith(versions)])
+        if not on_s3(location):
             fs, _ = dataset_fs(location, so)
-            for obj in rest:
-                with suppress(FileNotFoundError):
-                    fs.delete_file(obj)
             for path in [versions.rstrip("/"), *paths]:
                 with suppress(FileNotFoundError):
                     fs.delete_dir(path)
     left = [obj for path in paths for obj in _objects_under(location, so, path)]
     if left:
         raise OSError(f"{len(left)} object(s) remain under {location} after {_DELETE_PASSES} delete passes: {left[:5]}")
-
-
-def _delete_objects(so: StorageOptions, objects: Sequence[str]) -> None:
-    """DeleteObjects on S3 store paths (``bucket/key``); a key already absent is deleted. Any other error raises.
-
-    Raises:
-        OSError: The store refused a key.
-    """
-    client = object_client(so)
-    by_bucket: dict[str, list[str]] = {}
-    for obj in objects:
-        bucket, _, key = obj.partition("/")
-        by_bucket.setdefault(bucket, []).append(key)
-    for bucket, keys in by_bucket.items():
-        for start in range(0, len(keys), _DELETE_BATCH):
-            batch = keys[start : start + _DELETE_BATCH]
-            answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True})
-            if refused := answered.get("Errors"):
-                raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
 
 
 # Scalar Arrow type names → pyarrow factory, for the alter_columns re-type path. A ``JsonArrowDataType``

@@ -5,6 +5,7 @@
 {{- with $root -}}
 {{- $arrival := and (not $worker) .Values.maintenance.arrivalEnabled -}}
 {{- include "lance.allocatorEnv" (list $root) | nindent 0 }}
+{{- include "lance.fileAuditEnv" (list $root) | nindent 0 }}
 {{- if include "lance.otelEnabled" $root }}
 {{- include "lance.otelEnv" (list $root .Values.maintenance.daprAppId) | nindent 0 }}
 {{- end }}

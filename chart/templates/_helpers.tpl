@@ -996,6 +996,13 @@ dapr.io/volume-mounts: "openbao-identity:/var/run/secrets/rask/openbao"
 - { name: ARROW_DEFAULT_MEMORY_POOL, value: {{ $root.Values.allocator.arrowMemoryPool | quote }} }
 {{- end -}}
 
+{{- define "lance.fileAuditEnv" -}}
+{{- $root := index . 0 -}}
+{{- with $root.Values.observability.lanceLog }}
+- { name: LANCE_LOG, value: {{ . | quote }} }
+{{- end -}}
+{{- end -}}
+
 {{- define "lance.daprConfigSpecBody" -}}
   {{- /**/}}
   features:

@@ -582,9 +582,8 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     When the store refuses the table's own deletes after its row is gone, the door answers 503 naming the table and
     its location, the residue record stands, and it keeps the location's claim once the drop's fence lapses: no
     register adopts the bytes, and no undrop restores them."""
-    import catalog.services.dataplane as dataplane_mod
     from catalog.core.config import get_settings
-    from lakehouse import trash
+    from lakehouse import stored_objects, trash
 
     prefix = uuid.uuid4().hex[:8]
     namespace = f"lh532r{prefix}"
@@ -598,14 +597,14 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     table_uuid = _uuid(moto_client, f"{namespace}$t")
     location = str(moto_client.post(f"/v1/table/{namespace}$t/describe", json={}).json()["location"])
     stored = decoded_path(location).partition("/")[2]
-    real_delete = dataplane_mod._delete_objects
+    real_delete = stored_objects.delete_objects
 
-    def _refuse_the_versions(so: Any, objects: Any) -> None:
+    def _refuse_the_versions(uri: str, so: Any, objects: list[str]) -> None:
         if any(obj.startswith(f"{BUCKET}/{stored}/_versions/") for obj in objects):
             raise OSError("the store refused the delete")
-        real_delete(so, objects)
+        real_delete(uri, so, objects)
 
-    monkeypatch.setattr(dataplane_mod, "_delete_objects", _refuse_the_versions)
+    monkeypatch.setattr(stored_objects, "delete_objects", _refuse_the_versions)
 
     dropped = moto_client.post(f"/v1/table/{namespace}$t/drop?purge=true", json={})
 

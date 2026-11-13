@@ -27,6 +27,7 @@ and dropped through its doors, so its base record and its directory claim are th
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -48,6 +49,7 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
+from lakehouse.stored_objects import FILE_AUDIT_LOGGER
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.due import TableIds
@@ -57,6 +59,15 @@ from maintenance.services.plan import PlanContext
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors, described_by, maintain_tier_door
+
+
+def _deleted(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """The store paths rask's own deletes recorded, one line per object ([[LH-232]])."""
+    return [
+        str(getattr(record, "file_audit.path"))
+        for record in caplog.records
+        if record.name == FILE_AUDIT_LOGGER and getattr(record, "file_audit.mode", None) == "delete"
+    ]
 
 
 def _ids(start: int, stop: int) -> pa.Table:
@@ -171,7 +182,7 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     ("days", "superseded_kept"),
     [pytest.param(0, True, id="a-file-younger-than-the-age-is-kept"), pytest.param(8, False, id="a-file-past-the-age-is-reclaimed")],
 )
-def test_the_expiry_pass_reclaims_a_base_file_nothing_references(estate: _Estate, days: int, superseded_kept: bool) -> None:
+def test_the_expiry_pass_reclaims_a_base_file_nothing_references(estate: _Estate, days: int, superseded_kept: bool, caplog: pytest.LogCaptureFixture) -> None:
     table = f"db$t{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ids(0, 3))
     directory = estate.directory(location)
@@ -183,6 +194,9 @@ def test_the_expiry_pass_reclaims_a_base_file_nothing_references(estate: _Estate
     current = {name: size for name, size in estate.files(directory).items() if name not in branched and name not in superseded}
     estate.door(table, "delete", predicate="id = 6")
     assert len(branched) == len(superseded) == len(current) == 1, f"precondition: one base file per write: {estate.files(directory)}"
+    transactions = f"{location.removeprefix(f'{estate.root}/')}/_transactions/"
+    held = set(estate.keys(estate.bucket, transactions))
+    caplog.set_level(logging.INFO, logger=FILE_AUDIT_LOGGER)
 
     result = estate.maintained(table, location, now=datetime.now(UTC) + timedelta(days=days))
 
@@ -190,6 +204,10 @@ def test_the_expiry_pass_reclaims_a_base_file_nothing_references(estate: _Estate
     assert estate.files(directory) == {**branched, **current, **(superseded if superseded_kept else {})}
     assert (result.base_files_removed, result.base_bytes_removed) == ((0, 0) if superseded_kept else (1, sum(superseded.values())))
     assert result.base_fragments_holding_deleted_rows == 1
+    # [[LH-232]] Lance's own lines name no transaction file it removes, so the pass records each one.
+    removed = sorted(f"{estate.bucket}/{key}" for key in held - set(estate.keys(estate.bucket, transactions)))
+    assert removed, "precondition: the pass reclaimed versions, and with them their transaction files"
+    assert sorted(path for path in _deleted(caplog) if path in removed) == removed, "a transaction file the pass removed has no delete line"
 
 
 def _clean_report() -> ReconcileReport:
@@ -218,7 +236,7 @@ def _expired(estate: _Estate, table: str) -> None:
         pytest.param("released", id="its-claim-released-by-an-earlier-tick"),
     ],
 )
-def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate: _Estate, claim: str) -> None:
+def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate: _Estate, claim: str, caplog: pytest.LogCaptureFixture) -> None:
     table = f"db$p{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ids(0, 3))
     estate.create(table, _ids(3, 6), mode="overwrite")
@@ -233,6 +251,10 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
         (dropped,) = trash.named(estate.root, estate.key, table)
         location_claims.release_directory(claims, directory, uuid=trash.object_uuid(dropped))
     markers = {key for key in estate.keys(estate.bucket, "") if key.endswith("/")}
+    removed = sorted(
+        [*(f"{estate.bucket}/{key}" for key in estate.keys(estate.bucket, root_prefix)), *(f"{directory}/{name}" for name in estate.files(directory))]
+    )
+    caplog.set_level(logging.INFO, logger=FILE_AUDIT_LOGGER)
 
     with catalog_doors(estate.client):
         out = asyncio.run(
@@ -247,6 +269,7 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
     assert out.refused == [], out.refused
     assert [(purged.id, purged.files_deleted, purged.bytes_deleted) for purged in out.purged] == [(table, len(held), sum(held.values()))]
     assert (estate.keys(estate.bucket, root_prefix), estate.files(directory)) == ({}, {}), "the purge left bytes of the table it reclaimed"
+    assert sorted(path for path in _deleted(caplog) if path in removed) == removed, "a file the purge removed has no delete line of its own"
     # The reclaim session gets and deletes the base record and puts nothing under `_bases/`, so a store that matches the
     # session's grant as AWS does refuses the marker a record delete would write, and the purge writes none ([[LH-535]]).
     assert {key for key in estate.keys(estate.bucket, "") if key.endswith("/")} <= markers, "the purge wrote a directory marker"
@@ -346,12 +369,17 @@ def warehoused(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Ware
         pytest.param("warehouse", True, False, id="a-warehouse-cascade-keeping-its-bucket-over-a-trashed-table"),
     ],
 )
-def test_every_door_that_ends_a_tables_bytes_ends_its_data_directory_with_them(warehoused: _Warehoused, door: str, trashed: bool, purge: bool) -> None:
+def test_every_door_that_ends_a_tables_bytes_ends_its_data_directory_with_them(
+    warehoused: _Warehoused, door: str, trashed: bool, purge: bool, caplog: pytest.LogCaptureFixture
+) -> None:
     table = f"{warehoused.namespace}$t"
     location = warehoused.create(table, _ids(0, 3))
     directory = warehoused.directory(location)
     created = warehoused.files(directory)
     assert created, "precondition: the create put the table's fragments in its data directory"
+    bucket, _, root_key = location.removeprefix("s3://").partition("/")
+    removed = sorted([*(f"{bucket}/{key}" for key in warehoused.keys(bucket, f"{root_key}/")), *(f"{directory}/{name}" for name in created)])
+    caplog.set_level(logging.INFO, logger=FILE_AUDIT_LOGGER)
     if trashed:
         warehoused.door(table, "drop")
 
@@ -367,6 +395,9 @@ def test_every_door_that_ends_a_tables_bytes_ends_its_data_directory_with_them(w
 
     assert answer.status_code == 200, answer.text
     assert warehoused.files(directory) == ({} if purge else created)
+    if door in {"table", "namespace"}:
+        # A destructive drop and a destroying cascade delete through `destroy_table`, which records each object it removes.
+        assert sorted(path for path in _deleted(caplog) if path in removed) == removed, "a file the drop removed has no delete line of its own"
     # [[LH-279]] Only a detach that keeps the bytes keeps the record vouching for their bases; a trashed table's goes with its trash.
     assert (base_registry.read_base_record(warehoused.registry, location) is not None) == (not purge and not trashed)
 
