@@ -140,7 +140,7 @@ def named(governed_catalog: Any, tmp_path: Path) -> Any:
     return catalog
 
 
-def test_the_browser_names_each_table_and_namespace_as_it_is_named_now_and_filters_by_name(named: Any) -> None:
+def test_the_browser_names_each_table_and_namespace_as_it_is_named_now_filters_by_name_and_revokes_a_tuple_as_answered(named: Any) -> None:
     table, registered = f"table:{_uuid(named, 'table', 'db$u')}", f"table:{_uuid(named, 'table', 'db$reg')}"
     namespace, inner = f"namespace:{_uuid(named, 'namespace', 'db')}", f"namespace:{_uuid(named, 'namespace', 'db$inner')}"
 
@@ -167,3 +167,9 @@ def test_the_browser_names_each_table_and_namespace_as_it_is_named_now_and_filte
     by_name = named.client.get(TUPLES, params={"object": "table:db$u"}, headers=named.bearer("root")).json()
     assert by_name == named.client.get(TUPLES, params={"object": table}, headers=named.bearer("root")).json()
     assert {t["user"] for t in by_name["tuples"]} == {alice, bob, namespace}
+    # A tuple sent back to the delete door exactly as the browser answered it, its name beside its object, is revoked.
+    answered = next(t for t in by_name["tuples"] if t["user"] == bob)
+    revoked = named.client.request("DELETE", TUPLES, json=answered, headers=named.bearer("root"))
+    assert revoked.status_code == 200, revoked.text
+    after = named.client.get(TUPLES, params={"object": table}, headers=named.bearer("root")).json()
+    assert {t["user"] for t in after["tuples"]} == {alice, namespace}

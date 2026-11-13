@@ -437,13 +437,17 @@ async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, r
 
 
 @router.delete("/tuples")
-async def delete_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+async def delete_access_tuple(
+    client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: NamedAccessTuple
+) -> AccessTuple:
     """Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
 
     A table or namespace named by its name is resolved as the write door resolves it (:func:`_held_object`), so a
-    revoke sent with the body its grant was written with removes that grant.
+    revoke sent with the body its grant was written with removes that grant. The body may be a tuple exactly as the
+    tuple browser answered it: its ``name`` is the browser's display of the object and is never read, since the object
+    decides what is revoked.
     """
-    held = body.model_copy(update={"object": await _held_object(resolver, body.object)})
+    held = AccessTuple(user=body.user, relation=body.relation, object=await _held_object(resolver, body.object), condition=body.condition)
     return await _mutate_tuple(client, announcer, token, held, write=False)
 
 

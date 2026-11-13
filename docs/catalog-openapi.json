@@ -13420,7 +13420,7 @@
     },
     "/management/v1/access/tuples": {
       "delete": {
-        "description": "Delete ONE raw tuple (idempotent \u2014 an already-absent tuple is success), echoing the tuple removed.\n\nA table or namespace named by its name is resolved as the write door resolves it (:func:`_held_object`), so a\nrevoke sent with the body its grant was written with removes that grant.",
+        "description": "Delete ONE raw tuple (idempotent \u2014 an already-absent tuple is success), echoing the tuple removed.\n\nA table or namespace named by its name is resolved as the write door resolves it (:func:`_held_object`), so a\nrevoke sent with the body its grant was written with removes that grant. The body may be a tuple exactly as the\ntuple browser answered it: its ``name`` is the browser's display of the object and is never read, since the object\ndecides what is revoked.",
         "operationId": "delete_access_tuple_management_v1_access_tuples_delete",
         "parameters": [
           {
@@ -13446,7 +13446,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AccessTuple"
+                "$ref": "#/components/schemas/NamedAccessTuple"
               }
             }
           },

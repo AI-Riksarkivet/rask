@@ -32,6 +32,7 @@ from catalog.schemas import (
     AccessListUsersRequest,
     AccessSimulateRequest,
     AccessTuple,
+    NamedAccessTuple,
     TupleCondition,
 )
 from lakehouse.control_emit import NoopControlEmitter
@@ -157,7 +158,7 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
             client=_fga_client(),
             announcer=unfiled(NoopControlEmitter()),
             token=_token("root_admin"),
-            body=body,
+            body=NamedAccessTuple.model_validate(body.model_dump()),
         )
     )
     return written, response
@@ -216,7 +217,7 @@ def _mutate_recording_emission(
     monkeypatch.setattr(ep.fga, "write_tuples" if write else "delete_tuples", _fake_mutation)
     # The control emitter is INJECTED now (catalog-api-09) rather than dug out of `request.app.state`.
     handler = partial(ep.write_access_tuple if write else ep.delete_access_tuple, resolver=_RESOLVER)
-    asyncio.run(handler(client=_fga_client(), announcer=unfiled(emitter), token=_token("root_admin"), body=body))
+    asyncio.run(handler(client=_fga_client(), announcer=unfiled(emitter), token=_token("root_admin"), body=NamedAccessTuple.model_validate(body.model_dump())))
     return emitter
 
 

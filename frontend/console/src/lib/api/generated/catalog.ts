@@ -283,7 +283,9 @@ export interface paths {
          * @description Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
          *
          *     A table or namespace named by its name is resolved as the write door resolves it (:func:`_held_object`), so a
-         *     revoke sent with the body its grant was written with removes that grant.
+         *     revoke sent with the body its grant was written with removes that grant. The body may be a tuple exactly as the
+         *     tuple browser answered it: its ``name`` is the browser's display of the object and is never read, since the object
+         *     decides what is revoked.
          */
         delete: operations["delete_access_tuple_management_v1_access_tuples_delete"];
         options?: never;
@@ -10476,7 +10478,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AccessTuple"];
+                "application/json": components["schemas"]["NamedAccessTuple"];
             };
         };
         responses: {
