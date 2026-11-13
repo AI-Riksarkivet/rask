@@ -40,7 +40,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import lance
 import pyarrow.fs as pafs
@@ -58,6 +58,10 @@ from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.naming import TableIds
+
+
+if TYPE_CHECKING:
+    from lakehouse.storage import S3Client
 
 
 log = logging.getLogger(__name__)
@@ -1249,10 +1253,11 @@ async def reconcile(
     resolved_control_root = control_root or settings.resolved_control_root
     resolved_namespace_root = namespace_root or f"s3://{settings.s3_bucket}"
     storage_options = settings.storage_options()
+    own_client: S3Client | None = None
     if bucket_client is None and on_s3(resolved_namespace_root):
         # The storage seam's client for the sweep's own options: signed by the whole credential in force (a session's
         # access key signs only beside its token), at the options' endpoint and region, never by the ambient chain.
-        bucket_client = object_client(storage_options)
+        bucket_client = own_client = object_client(storage_options)
 
     # `settings.platform_buckets`, not `sweep_buckets`: the swept set alone omits infrastructure the
     # estate creates for ITSELF and never governs — `rask-observability` (GreptimeDB's object store,
@@ -1263,13 +1268,18 @@ async def reconcile(
         if (bucket := _bucket_of(uri)) is not None:
             platform.add(bucket)
 
-    sources = await load_sources(
-        grants=grants,
-        control_root=resolved_control_root,
-        namespace_root=resolved_namespace_root,
-        storage_options=storage_options,
-        bucket_client=bucket_client,
-    )
+    try:
+        sources = await load_sources(
+            grants=grants,
+            control_root=resolved_control_root,
+            namespace_root=resolved_namespace_root,
+            storage_options=storage_options,
+            bucket_client=bucket_client,
+        )
+    finally:
+        # The one read that uses the client is done; a client this run built is closed with it, its connections with it.
+        if own_client is not None:
+            own_client.close()
     if into_sources is not None:
         into_sources.append(sources)
     report = build_report(
