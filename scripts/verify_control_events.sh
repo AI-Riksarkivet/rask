@@ -18,8 +18,7 @@ export RASK_EXPECT_CONTEXT
 #
 # Prereq: kind `lance` up with the stack deployed control-on + auth-on + fga-on, e.g.
 #   make frontend-load
-#   helm upgrade --install lance-ns ./chart --set auth.enabled=true \
-#     --set catalog.warehouses.enabled=true --set dapr.enabled=true
+#   helm upgrade --install lance-ns ./chart --set auth.enabled=true --set dapr.enabled=true
 #   kubectl rollout restart deploy/lance-ns-dex
 # catalog.controlEmit defaults ON, so the broadcast component + NATS stream + subscription render. This
 # script port-forwards read-only; run it OUTSIDE auto mode (or `!`-prefix the invocation).
@@ -125,8 +124,9 @@ echo "$BASE" | python3 -c "import sys,json;d=json.load(sys.stdin);assert 'cursor
 CURSOR="$(echo "$BASE" | python3 -c "import sys,json;print(json.load(sys.stdin)['cursor'])")"
 ok "estate-admin alice → 200 (baseline cursor=$CURSOR)"
 
-# 2) drive a control-plane MUTATION as alice (create a top-level namespace under the root) → namespace_created.
-NS="ctlverify$$"
+# 2) drive a control-plane MUTATION as alice (create a namespace in the estate's own warehouse, `lance_catalog`, the
+#    first segment of the name) → namespace_created.
+NS="lance_catalog\$ctlverify$$"
 mc="$(code -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' -d '{"mode":null}' "$CAT/v1/namespace/$NS/create")"
 [ "$mc" = "200" ] || [ "$mc" = "201" ] || fail "alice namespace create expected 2xx, got $mc"
 ok "drove mutation: alice created namespace:$NS"

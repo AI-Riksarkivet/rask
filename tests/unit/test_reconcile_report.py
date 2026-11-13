@@ -35,6 +35,9 @@ from maintenance.services.purge import report_is_clean
 
 _PRIMARY_BUCKET = "lance-catalog"
 
+#: The estate's own warehouse: the first segment of every name its own root holds.
+ESTATE = "lance_catalog"
+
 #: The categories whose answer comes (wholly or partly) from OpenFGA — so an FGA outage must degrade
 #: EXACTLY these and nothing else. Kept as one named set rather than repeated literals: a new
 #: authz-derived category that forgets to degrade is the failure this pins, and a hand-copied literal
@@ -104,7 +107,7 @@ def _settings() -> MaintenanceSettings:
 
 
 class _Estate:
-    """A consistent estate: one project, one warehouse, one bound namespace, and the tuples for both."""
+    """A consistent estate: one project, one warehouse holding one namespace, and the tuples for both."""
 
     def __init__(self, tmp_path: Path) -> None:
         self.control_root = f"file://{tmp_path / 'control'}"
@@ -124,8 +127,11 @@ class _Estate:
             StorageOptions(),
             {"id": "wh-a", "bucket": "bkt-a", "root_uri": self.warehouse_root, "project": "acme", "created_at": "t"},
         )
-        wh_svc.bind_namespace(self.control_root, StorageOptions(), "team_ns", "wh-a", self.warehouse_root)
-        self.namespace_dir(tmp_path, "team_ns")
+        # Each catalog holds its warehouse's own row, the estate's under its own id, and every name beneath begins with it.
+        wh_svc.ensure_catalog_row(connect("dir", {"root": str(tmp_path / "data")}), ESTATE)
+        warehouse = connect("dir", {"root": str(tmp_path / "wh-a")})
+        wh_svc.ensure_catalog_row(warehouse, "wh-a")
+        warehouse.create_namespace(CreateNamespaceRequest(id=["wh-a", "team_ns"]))
         self.fga = _FakeGrants(
             {
                 "project:acme": [("user:alice", "admin")],
@@ -135,18 +141,19 @@ class _Estate:
         self.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a"])
 
     @staticmethod
-    def namespace_dir(tmp_path: Path, name: str, *, dataset: bool = False) -> None:
-        """Create a top-level namespace on the shared default root through the CATALOG'S OWN BACKEND —
+    def top_level_row(root: Path, name: str, *, dataset: bool = False) -> None:
+        """Record a top-level namespace row ``name`` on ``root`` through the CATALOG'S OWN BACKEND —
         ``lance_namespace.connect("dir", …)``, the impl the chart runs (``LANCE_REST_IMPL=dir``).
 
         Not ``mkdir``. A namespace is NOT a directory on this impl: ``create_namespace`` writes a row in
         ``__manifest`` and touches nothing else, while a table lands flat at the root as
         ``<uuid>_<ns>$<table>/``. A fixture that hand-builds directories would let a reconciler that
         scans prefixes pass here and find nothing at all on a real estate — the exact failure this file
-        is supposed to gate. With ``dataset`` a real top-level TABLE is created instead, which is the
+        is supposed to gate. No door makes such a row, since every name begins with its root's warehouse: it is the
+        drift `unreachable_namespaces` reports. With ``dataset`` a real top-level TABLE is created instead, which is the
         thing a prefix scan mistakes for a namespace.
         """
-        ns = connect("dir", {"root": str(tmp_path / "data")})
+        ns = connect("dir", {"root": str(root)})
         if not dataset:
             ns.create_namespace(CreateNamespaceRequest(id=[name]))
             return
@@ -156,12 +163,11 @@ class _Estate:
             writer.write_table(arrow)
         ns.create_table(CreateTableRequest(id=[name]), sink.getvalue())
 
-    def run(self, monkeypatch: pytest.MonkeyPatch, *, warehouses_enabled: bool = True) -> mod.ReconcileReport:
+    def run(self, monkeypatch: pytest.MonkeyPatch) -> mod.ReconcileReport:
         return asyncio.run(
             mod.reconcile(
                 _settings(),
                 self.fga.census,
-                warehouses_enabled=warehouses_enabled,
                 control_root=self.control_root,
                 namespace_root=self.namespace_root,
                 bucket_client=self.s3,
@@ -227,30 +233,31 @@ def test_unreferenced_projects_fires_on_a_record_with_no_tuples(tmp_path: Path, 
 
 
 # --------------------------------------------------------------------------- #
-# 4 — unbound namespaces, gated on the warehouse feature
+# 4 — unreachable namespaces: a top-level row its root's warehouses do not name
 # --------------------------------------------------------------------------- #
 
 
-def test_a_top_level_table_is_not_mistaken_for_an_unbound_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A top-level TABLE is the only thing the catalog DOES lay out as a root directory — and it is not
-    drift. The manifest's `object_type` tells them apart; a scan keying on the directory would report
-    every root-level table as an unbound namespace forever."""
+def test_a_top_level_table_is_not_mistaken_for_an_unreachable_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A top-level TABLE is what the catalog lays out as a root directory, and it is no namespace row. The manifest's
+    `object_type` tells them apart; a scan keying on the directory would report every root-level table forever."""
     estate = _Estate(tmp_path)
-    _Estate.namespace_dir(tmp_path, "orders", dataset=True)
+    _Estate.top_level_row(tmp_path / "data", "orders", dataset=True)
     report = estate.run(monkeypatch)
-    assert report.unbound_namespaces == []
+    assert report.unreachable_namespaces == []
 
 
-def test_unbound_namespaces_is_skipped_not_zero_when_warehouses_are_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the feature off an unbound namespace is CORRECT. The category is recorded as SKIPPED and
-    kept out of `counts` — a 0 there would read as "checked and clean", which it is not."""
-    estate = _Estate(tmp_path)
-    _Estate.namespace_dir(tmp_path, "legacy_ns")
-    report = estate.run(monkeypatch, warehouses_enabled=False)
-    assert report.unbound_namespaces == []
-    assert {s.category for s in report.skipped} == {"unbound_namespaces", "unregistered_datasets", "absent_datasets"}
-    assert "unbound_namespaces" not in report.counts
-    assert report.total == 0
+def test_served_by_root_maps_each_root_to_every_warehouse_it_serves() -> None:
+    """The estate's own warehouse on the estate's root, and each registered warehouse on its root: two sharing a bucket
+    (a work and a gold warehouse of one project) both serve it, so neither one's row reads as unreachable."""
+    records = [
+        {"id": "acme-work", "root_uri": "s3://acme-bkt"},
+        {"id": "acme-gold", "root_uri": "s3://acme-bkt"},
+        {"id": "beta-wh", "root_uri": "s3://beta-bkt"},
+    ]
+
+    served = mod.served_by_root(records, namespace_root="s3://lance-catalog", estate_warehouse=ESTATE)
+
+    assert served == {"s3://lance-catalog": {ESTATE}, "s3://acme-bkt": {"acme-work", "acme-gold"}, "s3://beta-bkt": {"beta-wh"}}
 
 
 # --------------------------------------------------------------------------- #
@@ -268,20 +275,6 @@ def test_orphan_buckets_fires_on_a_bucket_no_warehouse_record_claims(tmp_path: P
 
 
 # --------------------------------------------------------------------------- #
-# 6 — dangling bindings: a namespace routed at a warehouse that is gone
-# --------------------------------------------------------------------------- #
-
-
-def test_dangling_bindings_fires_when_the_bound_warehouse_has_no_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The routing resolver fails CLOSED on this (403), so the namespace is unreachable rather than
-    misrouted — but nothing tells anyone it happened. This does. The live binding stays silent."""
-    estate = _Estate(tmp_path)
-    wh_svc.bind_namespace(estate.control_root, StorageOptions(), "stranded_ns", "wh-gone", "s3://bkt-gone")
-    report = estate.run(monkeypatch)
-    assert [(d.top_ns, d.warehouse_id) for d in report.dangling_bindings] == [("stranded_ns", "wh-gone")]
-
-
-# --------------------------------------------------------------------------- #
 # degradation + honesty about partial scans
 # --------------------------------------------------------------------------- #
 
@@ -293,8 +286,7 @@ def test_an_openfga_outage_degrades_only_the_categories_that_needed_it(tmp_path:
     adding a category cannot leave it silently unasserted."""
     estate = _Estate(tmp_path)
     estate.fga.error = ServiceUnavailableError("openfga down")
-    _Estate.namespace_dir(tmp_path, "legacy_ns")
-    wh_svc.bind_namespace(estate.control_root, StorageOptions(), "stranded_ns", "wh-gone", "s3://bkt-gone")
+    _Estate.top_level_row(tmp_path / "data", "legacy_ns")
     estate.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a", "bkt-orphan"])
 
     report = estate.run(monkeypatch)
@@ -303,13 +295,12 @@ def test_an_openfga_outage_degrades_only_the_categories_that_needed_it(tmp_path:
     # The storage-only categories this fixture exercises. The walk's two are skipped for a reason of their
     # own rather than an FGA one, which is why this cannot simply be `CATEGORIES - _FGA_DERIVED`. The
     # DERIVED claim in the docstring is about the unavailable set above.
-    assert set(report.counts) == {"unbound_namespaces", "orphan_buckets", "orphaned_trash", "dangling_bindings"}
-    assert [n.namespace for n in report.unbound_namespaces] == ["legacy_ns"]
+    assert set(report.counts) == {"unreachable_namespaces", "orphan_buckets", "orphaned_trash"}
+    assert [n.namespace for n in report.unreachable_namespaces] == ["legacy_ns"]
     assert [b.bucket for b in report.orphan_buckets] == ["bkt-orphan"]
-    assert [d.top_ns for d in report.dangling_bindings] == ["stranded_ns"]
     # Asserted on COUNTS, not on `total`. Since T8, `total` is the purge GATE and excludes the two
     # doorless categories, so it is not a drift count — every category is still counted and named here.
-    assert sum(report.counts.values()) == 3
+    assert sum(report.counts.values()) == 2
 
 
 #: The categories whose answer is derived from BOTH the FGA tuple scan and the project registry. MAINT-10:
@@ -323,7 +314,7 @@ def test_categories_over_the_same_two_sources_report_the_same_reason() -> None:
     sources.tuples_error = "openfga: ServiceUnavailableError"
     sources.project_records_error = "registry: PermissionError"
 
-    report = mod.build_report(sources, warehouses_enabled=False, platform_buckets=set())
+    report = mod.build_report(sources, served={}, platform_buckets=set())
 
     reasons = {u.category: u.reason for u in report.unavailable if u.category in _TUPLES_AND_PROJECTS}
     assert set(reasons) == _TUPLES_AND_PROJECTS, f"a category over these two sources went missing: {reasons}"
@@ -335,7 +326,7 @@ def test_a_single_failing_source_is_still_the_reason_every_time() -> None:
     sources = mod.Sources()
     sources.project_records_error = "registry: PermissionError"
 
-    report = mod.build_report(sources, warehouses_enabled=False, platform_buckets=set())
+    report = mod.build_report(sources, served={}, platform_buckets=set())
 
     reasons = {u.reason for u in report.unavailable if u.category in _TUPLES_AND_PROJECTS}
     assert reasons == {"registry: PermissionError"}
@@ -357,7 +348,7 @@ def test_an_unreadable_trash_index_degrades_only_the_categories_that_read_it(tmp
     it apart from a ghost ([[LH-516]]). With the index unreadable, `ghost_tables` reports UNAVAILABLE beside
     `orphaned_trash` rather than naming the trash as ghosts for drift repair to revoke."""
     estate = _Estate(tmp_path)
-    estate.fga.tuples["table:team_ns$dropped"] = [("user:alice", "owner")]
+    estate.fga.tuples["table:wh-a$team_ns$dropped"] = [("user:alice", "owner")]
     Path(estate.control_root.removeprefix("file://"), "_trash").write_text("a file where the trash index belongs")
 
     report = estate.run(monkeypatch)
@@ -392,7 +383,6 @@ def test_a_missing_control_root_is_not_a_crash(tmp_path: Path, monkeypatch: pyte
         mod.reconcile(
             _settings(),
             _FakeGrants().census,
-            warehouses_enabled=True,
             control_root=f"file://{tmp_path / 'nothing-here'}",
             namespace_root=f"file://{tmp_path / 'nothing-here'}",
             bucket_client=_FakeS3([]),
@@ -411,7 +401,6 @@ def test_an_unwired_grant_census_is_reported_not_assumed_clean(tmp_path: Path, m
         mod.reconcile(
             _settings(),
             None,
-            warehouses_enabled=True,
             control_root=estate.control_root,
             namespace_root=estate.namespace_root,
             bucket_client=estate.s3,
@@ -438,8 +427,7 @@ def test_a_full_run_leaves_every_store_byte_identical(tmp_path: Path, monkeypatc
     raise on every write verb, so a mutation is a failure rather than an unnoticed success."""
     estate = _Estate(tmp_path)
     estate.fga.tuples["project:phantom"] = [("user:mallory", "admin")]
-    _Estate.namespace_dir(tmp_path, "legacy_ns")
-    wh_svc.bind_namespace(estate.control_root, StorageOptions(), "stranded_ns", "wh-gone", "s3://bkt-gone")
+    _Estate.top_level_row(tmp_path / "data", "legacy_ns")
     proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
     estate.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a", "bkt-orphan"])
 
@@ -449,7 +437,7 @@ def test_a_full_run_leaves_every_store_byte_identical(tmp_path: Path, monkeypatc
 
     # COUNTS, not `total`: since T8 the total is the purge gate and omits the doorless categories, so
     # it would understate how drifted this fixture is — and the point here is that it IS drifted.
-    assert sum(report.counts.values()) == 5, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
+    assert sum(report.counts.values()) == 4, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
     assert after == before
 
 
@@ -522,26 +510,23 @@ def test_a_registry_bucket_that_duplicates_the_configured_one_is_not_scanned_twi
 # --------------------------------------------------------------------------- #
 
 
-def test_an_unbound_namespace_in_a_WAREHOUSE_bucket_is_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The blind spot: a warehouse-enabled estate puts each tenant's namespaces in that tenant's OWN
-    bucket, and the scan read only the shared default root.
+def test_a_row_on_a_WAREHOUSE_root_that_names_another_warehouse_is_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every warehouse root is scanned, not the estate's alone: each tenant's names are in its OWN bucket, and a scan of
+    one root would leave every other warehouse's layer UNREPORTED. And this report is the gate `purge_expired_trash`
+    consults before deleting anything (`report_is_clean`), so a blind spot would certify an estate never looked at.
 
-    So an entire per-warehouse namespace layer sat outside the reconciler's field of view — not merely
-    unrepaired, UNREPORTED. And this report is the gate `purge_expired_trash` consults before deleting
-    anything (`report_is_clean`), so the blind spot let the reclaimer certify an estate it had never
-    looked at.
-
-    The finding carries the root it was actually found on, because with more than one root in play
-    "which bucket do I go and look in" is the only actionable part.
+    The finding carries the root it was found on, because with more than one root in play "which bucket do I go and
+    look in" is the only actionable part. A row is judged against ITS root: the estate's id is a served row on the
+    estate's root and an unreachable one on a tenant's. The warehouse's own row on its root stays silent.
     """
     estate = _Estate(tmp_path)
-    # A namespace created in the WAREHOUSE's own root, claimed by no binding.
-    connect("dir", {"root": str(tmp_path / "wh-a")}).create_namespace(CreateNamespaceRequest(id=["stray_tenant_ns"]))
+    _Estate.top_level_row(tmp_path / "wh-a", "stray_tenant_ns")
+    _Estate.top_level_row(tmp_path / "wh-a", ESTATE)
 
     report = estate.run(monkeypatch)
 
-    found = {(u.namespace, u.root) for u in report.unbound_namespaces}
-    assert ("stray_tenant_ns", estate.warehouse_root) in found, f"the warehouse root was not scanned — unbound_namespaces reported {found}"
+    found = [(u.namespace, u.root) for u in report.unreachable_namespaces]
+    assert found == [(ESTATE, estate.warehouse_root), ("stray_tenant_ns", estate.warehouse_root)]
 
 
 def test_one_unreadable_warehouse_root_does_not_blind_the_whole_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -559,20 +544,20 @@ def test_one_unreadable_warehouse_root_does_not_blind_the_whole_scan(tmp_path: P
         StorageOptions(),
         {"id": "wh-gone", "bucket": "bkt-gone", "root_uri": "s3://bkt-gone", "project": "acme", "created_at": "t"},
     )
-    connect("dir", {"root": str(tmp_path / "wh-a")}).create_namespace(CreateNamespaceRequest(id=["still_found"]))
+    _Estate.top_level_row(tmp_path / "wh-a", "still_found")
 
     report = estate.run(monkeypatch)
 
     # The category still REPORTS — it is not unavailable…
-    assert "unbound_namespaces" not in {u.category for u in report.unavailable}
-    assert "still_found" in {u.namespace for u in report.unbound_namespaces}
+    assert "unreachable_namespaces" not in {u.category for u in report.unavailable}
+    assert [u.namespace for u in report.unreachable_namespaces] == ["still_found"]
     # …and the unreadable root is named rather than silently dropped.
     assert any(i.source == "catalog:namespaces:s3://bkt-gone" for i in report.incomplete), f"the unreadable root was not reported: {report.incomplete}"
 
 
 def test_the_DOORLESS_category_is_reported_but_does_not_gate_the_purge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """T8. `unbound_namespaces` counted into `total`, and `report_is_clean` refuses on any non-zero
-    total — but NO endpoint in the product clears it.
+    """T8. A category counted into `total` makes `report_is_clean` refuse, and NO endpoint in the product removes or
+    moves an unreachable namespace row.
 
     So the gate was not strict, it was unsatisfiable. MEASURED on the live estate 2026-08-16: the
     doorless categories sat at 5 and 3 with every other category at zero, meaning `report_is_clean`
@@ -580,26 +565,26 @@ def test_the_DOORLESS_category_is_reported_but_does_not_gate_the_purge(tmp_path:
     reached at all.
 
     The gate's job is to prove the STORAGE state is understood before deleting expired trash bytes.
-    An unbound namespace is not a storage fact: it is a missing routing record, and cannot change
-    which bytes the purge touches.
+    An unreachable namespace row is a fact about naming, not about which bytes exist, and cannot change which bytes
+    the purge touches.
 
     Both halves are asserted, and the second is the one that matters: the category must still be
     COUNTED and NAMED. Excluding them from the report rather than from the gate would trade an
     unreachable purge for invisible drift.
     """
     estate = _Estate(tmp_path)
-    _Estate.namespace_dir(tmp_path, "legacy_ns")
+    _Estate.top_level_row(tmp_path / "data", "legacy_ns")
     report = estate.run(monkeypatch)
 
-    assert report.counts["unbound_namespaces"] == 1, "the category must still be COUNTED"
-    assert [n.namespace for n in report.unbound_namespaces] == ["legacy_ns"], "…and still NAMED"
+    assert report.counts["unreachable_namespaces"] == 1, "the category must still be COUNTED"
+    assert [n.namespace for n in report.unreachable_namespaces] == ["legacy_ns"], "…and still NAMED"
     assert report.total == 0, f"a doorless category still gates the purge: counts={report.counts} total={report.total}"
     walked = report.model_copy(update={"skipped": []})
     assert report_is_clean(walked) is None, "a report whose only drift is doorless still blocks the purge"
 
 
 def test_a_category_WITH_a_door_still_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The exclusion is exactly two categories, not a general relaxation. A ghost project has a door —
+    """The exclusion is a named set (`NON_GATING_CATEGORIES`), not a general relaxation. A ghost project has a door —
     revoke its tuples — so it must still block the purge."""
     estate = _Estate(tmp_path)
     estate.fga.tuples["project:ghosty"] = [("user:mallory", "admin")]

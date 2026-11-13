@@ -41,6 +41,8 @@ PROMOTIONS: Final = "_promotions"
 TABLE_INPUTS: Final = "_table_inputs"
 ROLES: Final = "_roles"
 PRINCIPALS: Final = "_principals"
+#: The tuples the catalog wrote from what git declares, one record each ([[XC-213]]).
+DECLARED_GRANTS: Final = "_declared_grants"
 
 # The queues: events staged before they are published.
 LINEAGE_OUTBOX: Final = "_lineage_outbox"
@@ -83,6 +85,7 @@ RECORD_PREFIXES: Final[frozenset[str]] = frozenset(
         TABLE_INPUTS,
         ROLES,
         PRINCIPALS,
+        DECLARED_GRANTS,
     }
 )
 """The records a control-root backup copies and a restore brings back."""

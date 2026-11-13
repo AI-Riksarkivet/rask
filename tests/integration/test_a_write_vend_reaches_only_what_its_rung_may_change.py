@@ -56,7 +56,7 @@ from tests.integration import store_requests
 
 
 _SCHEMA = pa.schema([("id", pa.int64()), lance.blob_field("payload")])
-_TABLE = "db$pages"
+_TABLE = "lance_catalog$db$pages"
 
 
 def _rows(ids: list[int], blob_bytes: int = 16) -> pa.Table:
@@ -68,7 +68,7 @@ class _Estate:
 
     def __init__(self, client: httpx.Client, s3: Any, bucket: str) -> None:  # noqa: ANN401 — a boto3 S3 client
         self.client, self.s3, self.bucket = client, s3, bucket
-        assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         self.location = self.create(_TABLE)
         created = client.post(f"/v1/table/{_TABLE}/branches/create", json={"name": "b1"})
         assert created.status_code == 200, created.text
@@ -306,10 +306,10 @@ def _dropped(estate: _Estate, monkeypatch: pytest.MonkeyPatch, *, grace_days: st
 
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", grace_days)
     get_settings.cache_clear()
-    location = estate.create(f"db${name}")
-    described = estate.client.post(f"/v1/table/db${name}/describe", json={})
+    location = estate.create(f"lance_catalog$db${name}")
+    described = estate.client.post(f"/v1/table/lance_catalog$db${name}/describe", json={})
     assert described.status_code == 200, described.text
-    dropped = estate.client.post(f"/v1/table/db${name}/drop")
+    dropped = estate.client.post(f"/v1/table/lance_catalog$db${name}/drop")
     assert dropped.status_code == 200, dropped.text
     return str(described.json()["properties"]["rask.uuid"]), location
 
@@ -463,7 +463,9 @@ def test_a_writer_lands_rows_with_only_what_its_vend_allows(estate: _Estate) -> 
     stock = lance_namespace.connect("rest", {"uri": str(estate.client.base_url)})
     before = estate.keys()
 
-    lance.write_dataset(_rows([1, 2], blob_bytes=200_000), namespace_client=stock, table_id=["db", "pages"], mode="append", storage_options=options)
+    lance.write_dataset(
+        _rows([1, 2], blob_bytes=200_000), namespace_client=stock, table_id=["lance_catalog", "db", "pages"], mode="append", storage_options=options
+    )
 
     new = sorted(key for key in estate.keys() - before if key.startswith(f"{_within(estate.location, estate.bucket)}/"))
     finalized = [key for key in new if _FINAL_MANIFEST.search(key)]

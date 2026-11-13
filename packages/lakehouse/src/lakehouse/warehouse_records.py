@@ -1,12 +1,12 @@
 """READ-ONLY access to the warehouse registry, for services that are not the catalog.
 
 The catalog owns the registry and its writes (`catalog/services/warehouses.py` — provisioning,
-binding, CAS, delete). Nothing else may import that: services share only cross-cutting libraries,
+CAS, delete). Nothing else may import that: services share only cross-cutting libraries,
 never each other. But the maintenance sweep genuinely needs to know WHICH buckets exist, and the
 answer changes at runtime — a warehouse is provisioned by an API call, not by a config edit.
 
 So the reader lives here, in the shared lakehouse library, deliberately narrow: it reads records and
-nothing else. It cannot write, bind, or delete, which keeps the catalog the only writer while giving
+nothing else. It cannot write or delete, which keeps the catalog the only writer while giving
 the sweep a truthful answer. Same store shape as its siblings (one JSON per record under a prefix),
 and that primitive now exists: :mod:`lakehouse.record_store`.
 """
@@ -16,14 +16,14 @@ from __future__ import annotations
 from typing import Any, Final
 
 from lakehouse import control_prefixes
+from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.record_store import list_records, read_record
 from lakehouse.storage_options import StorageOptions
 
 
-#: Where the catalog writes warehouse records, a top namespace's binding to its warehouse, and which project owns a bucket.
-#: Kept in sync with `catalog/services/warehouses.py`.
+#: Where the catalog writes warehouse records and which project owns a bucket. Kept in sync with
+#: `catalog/services/warehouses.py`.
 REGISTRY_PREFIX = control_prefixes.WAREHOUSES
-_BINDINGS_PREFIX: Final = f"{REGISTRY_PREFIX}/bindings"
 _BUCKET_CLAIMS_PREFIX: Final = f"{REGISTRY_PREFIX}/bucket-claims"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
@@ -77,25 +77,20 @@ def is_deactivated(record: dict[str, Any]) -> bool:
     return str(record.get("status", "active")).lower() == "deactivated"
 
 
-def namespace_warehouse(control_root: str, storage_options: StorageOptions, top_namespace: str) -> dict[str, Any] | None:
-    """The record of the warehouse the top-level namespace ``top_namespace`` is bound to, read by its key, or ``None`` when
-    the namespace is bound to none (its tables are on the default root).
+def warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> dict[str, Any] | None:
+    """The record of warehouse ``warehouse_id``, read by its key, or ``None`` when no record holds that id.
+
+    A warehouse is the first segment of every name beneath it ([[LH-593]]), so a table's warehouse is read here by the
+    table's own first segment, one read whatever the registry holds. The estate's own warehouse has no record, so the
+    caller tells it apart before asking. An id that is not a control id is no record's (it would name another key).
 
     Raises:
-        ValueError: The binding or the warehouse record cannot be read as one, or the binding names a warehouse with no
-            record.
-        OSError: The store failed a read.
+        ValueError: The record cannot be read as one.
+        OSError: The store failed the read.
     """
-    binding = read_record(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_namespace}.json")
-    if binding is None:
+    if not CONTROL_ID_RE.fullmatch(warehouse_id):
         return None
-    warehouse_id = binding.get("warehouse_id")
-    if not isinstance(warehouse_id, str) or not warehouse_id:
-        raise ValueError(f"the binding of namespace {top_namespace!r} names no warehouse")
-    record = read_record(control_root, storage_options, f"{REGISTRY_PREFIX}/{warehouse_id}.json")
-    if record is None:
-        raise ValueError(f"namespace {top_namespace!r} is bound to warehouse {warehouse_id!r}, which has no record")
-    return record
+    return read_record(control_root, storage_options, f"{REGISTRY_PREFIX}/{warehouse_id}.json")
 
 
 def bucket_project(control_root: str, storage_options: StorageOptions, bucket: str) -> str | None:

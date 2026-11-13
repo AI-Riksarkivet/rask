@@ -66,7 +66,8 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.api import announcing, fga_deps
-from catalog.api.announcing import AnnouncerDep
+from catalog.api.announcing import Announcer, AnnouncerDep
+from catalog.api.declared import Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken, current_subject
 from catalog.core.config import Settings
@@ -81,9 +82,9 @@ from catalog.schemas import (
 from catalog.services import projects as project_registry
 from catalog.services import role_grants, roles, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
-from catalog.services.control_records import ProtectionChange
+from catalog.services.control_records import GIT, MANAGED_BY, ProtectionChange
 from lakehouse import maintenance_policies, protection
-from lakehouse.control_emit import emit_control
+from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -185,6 +186,7 @@ class Tenant(BaseModel):
             admins=admins,
             protected=protection.is_protected(record),
             protected_by=record.get("protected_by"),
+            managed_by=GIT if record.get(MANAGED_BY) == GIT else "self",
         )
 
 
@@ -223,6 +225,22 @@ async def _converge_project(settings: Settings, so: StorageOptions, record: dict
         raise ConcurrentModificationError(f"project {record['id']!r} is being deleted; create it once its delete has finished") from None
 
 
+async def _write_project_record(settings: Settings, so: StorageOptions, record: dict[str, str], *, existing: dict[str, str] | None) -> dict[str, str]:
+    """Mint ``record``, or converge the ``existing`` record that stands onto it; the record as written."""
+    if existing is not None:
+        return await _converge_project(settings, so, record)
+    # The tenant MINT is conditional (F1): two concurrent creates of one id both read "absent"; the store refuses the
+    # second, which then converges on the winner's identity fields exactly like the sequential idempotent re-POST.
+    try:
+        await run_in_threadpool(project_registry.create_project_record, settings.registry_root, so, record)
+    except RecordExistsError:
+        # Lost the mint race — converge on the WINNER, conditionally (diff2 F1 leg c). The merge
+        # happens inside the write, against the record as it actually stands, so a protection
+        # change landing in this window is preserved instead of clobbered.
+        return await _converge_project(settings, so, record)
+    return record
+
+
 @router.post("", response_model_exclude_none=True)
 async def create_project(
     settings: SettingsDep,
@@ -244,16 +262,34 @@ async def create_project(
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
     admin = fga_deps.project_admin_for(token, body.admin)
     await fga_deps.require_relation(client, settings, token, relation="can_create_project", obj=settings.fga_root_object)
+    record = await establish_project(settings, client, announcer, project_id=project_id, admin=admin, author=author_of(token))
+    return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, project_id))
+
+
+async def establish_project(
+    settings: Settings, client: OpenFgaClient | None, announcer: Announcer, *, project_id: str, admin: str | None, author: Author | None
+) -> dict[str, str]:
+    """Make project ``project_id``, or converge the one that stands; its record as written.
+
+    What the create door does once its caller is authorized, and what the catalog does for a project git declares
+    ([[XC-213]]): the registry record and, where ``admin`` names one, that person's ``admin`` tuple, in one operation.
+    Idempotent: an existing id keeps ``created_at``/``created_by`` and its deletion protection and has the admin tuple
+    re-asserted. The grant is audited and published like any other ACL change, only when it was actually written; what
+    the create announces is filed before the record, so a create that fails after it still announces it ([[LH-576]]).
+
+    Raises:
+        ConcurrentModificationError: The project is being deleted, or its write raced a delete.
+    """
     so = settings.storage_options()
     existing = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
-    actor = f"user:{token.subject}" if token else None
+    actor = author.actor if author is not None else None
     obj = f"project:{project_id}"
     created = Announcement(
         evidence=RecordHeld(key=project_registry.record_key(project_id)),
         message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=obj, actor=actor)),
     )
     # `seed_project_admin` writes the admin's grant exactly when authorization is on and an admin is named.
-    seeds = settings.fga_enabled and token is not None and client is not None and admin is not None
+    seeds = settings.fga_enabled and author is not None and client is not None and admin is not None
     admin_granted = (
         announcing.grant_announcement(
             fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=obj), action="grant_added", actor=actor, extra={"reason": "project_created"}
@@ -265,23 +301,11 @@ async def create_project(
     record = {
         "id": project_id,
         "created_at": (existing.get("created_at") if existing else None) or datetime.now(UTC).isoformat(),
-        "created_by": (existing.get("created_by") if existing else None) or (token.subject if token else ""),
+        "created_by": (existing.get("created_by") if existing else None) or (author.subject if author is not None else ""),
     }
     async with filed as filing:
-        if existing is None:
-            # The tenant MINT is conditional (F1): two concurrent creates of one id both read "absent"
-            # above; the store refuses the second, which then converges on the winner's identity fields
-            # exactly like the sequential idempotent re-POST.
-            try:
-                await run_in_threadpool(project_registry.create_project_record, settings.registry_root, so, record)
-            except RecordExistsError:
-                # Lost the mint race — converge on the WINNER, conditionally (diff2 F1 leg c). The merge
-                # happens inside the write, against the record as it actually stands, so a protection
-                # change landing in this window is preserved instead of clobbered.
-                record = await _converge_project(settings, so, record)
-        else:
-            record = await _converge_project(settings, so, record)
-        granted = await fga_deps.seed_project_admin(client, settings, token, project=project_id, admin=admin)
+        record = await _write_project_record(settings, so, record, existing=existing)
+        granted = await fga_deps.seed_project_admin(client, settings, author.subject if author is not None else None, project=project_id, admin=admin)
         log.info("project_created", extra={"project": project_id, "existing": existing is not None})
         await filing.send(created)
         if granted and admin is not None and admin_granted is not None:
@@ -295,7 +319,7 @@ async def create_project(
                 reason="project_created",
             )
             await filing.send(admin_granted)
-    return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, project_id))
+    return record
 
 
 async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
@@ -442,10 +466,29 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     return record
 
 
-ProjectToDeleteDep = Annotated[dict[str, str], Depends(project_to_delete)]
+def project_its_doors_protect(project_id: str, record: Annotated[dict[str, str], Depends(administered_project)], token: CurrentToken) -> None:
+    """Admit a change to the deletion protection of a project the caller administers and git does not declare ([[XC-213]]).
+
+    Raises:
+        PermissionDeniedError: Git declares the project, so its declaration owns the protection.
+    """
+    refuse_what_git_declares(record, obj=f"project:{project_id}", token=token)
 
 
-@router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(administered_project)])
+def project_its_doors_delete(project_id: str, record: Annotated[dict[str, str], Depends(project_to_delete)], token: CurrentToken) -> dict[str, str]:
+    """The record of a project the caller may delete and git does not declare ([[XC-213]]).
+
+    Raises:
+        PermissionDeniedError: Git declares the project, so removing it from the declaration comes first.
+    """
+    refuse_what_git_declares(record, obj=f"project:{project_id}", token=token)
+    return record
+
+
+ProjectToDeleteDep = Annotated[dict[str, str], Depends(project_its_doors_delete)]
+
+
+@router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(project_its_doors_protect)])
 async def set_project_protection(
     project_id: str,
     body: SetProtectionRequest,
@@ -477,17 +520,29 @@ async def set_project_protection(
     """
     actor = f"user:{token.subject}" if token is not None else None
     change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    await protect_project(settings, control, project_id, change=change, actor=actor)
+    return ProtectionResponse(id=project_id, protected=body.protected)
+
+
+async def protect_project(settings: Settings, control: ControlEmitter, project_id: str, *, change: ProtectionChange, actor: str | None) -> None:
+    """Arm or clear project ``project_id``'s deletion protection and announce it.
+
+    What the protection door does once its caller is authorized, and what the catalog does for a project whose
+    protection drifted from what git declares ([[XC-213]]).
+
+    Raises:
+        TableNotFoundError: The project's record is gone.
+    """
     if await run_in_threadpool(project_registry.set_project_protection, settings.registry_root, settings.storage_options(), project_id, change) is None:
         raise TableNotFoundError(f"project not found: {project_id}")
-    log.info("project_protection_set", extra={"project": project_id, "protected": body.protected})
+    log.info("project_protection_set", extra={"project": project_id, "protected": change.protected})
     await emit_control(
         control,
-        action="project_protected" if body.protected else "project_unprotected",
+        action="project_protected" if change.protected else "project_unprotected",
         object_type="project",
         object_id=f"project:{project_id}",
         actor=actor,
     )
-    return ProtectionResponse(id=project_id, protected=body.protected)
 
 
 async def _start_delete(project_id: str, record: dict[str, str], settings: Settings, token: CurrentToken, *, force: bool) -> None:

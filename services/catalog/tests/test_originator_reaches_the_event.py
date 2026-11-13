@@ -43,7 +43,7 @@ class _Recording:
     def __init__(self) -> None:
         self.writes: list[dict[str, Any]] = []
 
-    async def project_for(self, top_ns: str) -> str | None:
+    async def project_for(self, warehouse_id: str) -> str | None:
         return None
 
     async def emit_create(self, **kwargs: Any) -> None:

@@ -121,6 +121,14 @@ argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 {{- if or (not .Values.openbao.enabled) (not $sideloaded) -}}true{{- end -}}
 {{- end -}}
 
+{{- define "lance.provenanceNamespace" -}}
+{{- $ns := .Values.services.lineage.provenanceNamespace | default "" -}}
+{{- if or (not (hasPrefix "lance_catalog$" $ns)) (eq $ns "lance_catalog$") -}}
+{{- fail (printf "services.lineage.provenanceNamespace %q must be a namespace of the estate's own warehouse, lance_catalog$<namespace>: the first segment of every name is its warehouse, and the catalog refuses to boot on any other" $ns) -}}
+{{- end -}}
+{{- $ns -}}
+{{- end -}}
+
 {{- define "lance.labels" -}}
 app.kubernetes.io/name: lance-ns
 app.kubernetes.io/instance: {{ .Release.Name }}
@@ -762,6 +770,17 @@ buckets as the estate's reads already are. */ -}}
 {{- fail (printf "auth.bootstrapAdmin=%s is not a person's principal: name them <idp-id>~<user id>, the idp id auth.oidc.connectors gives their Dex connector and the user id it reports (dex~<userID> for a development Dex user)" $admin) -}}
 {{- end -}}
 {{- $admin -}}
+{{- end -}}
+
+{{- define "lance.declaration" -}}
+{{- $admin := include "lance.bootstrapAdmin" . -}}
+{{- $projects := list -}}
+{{- range .Values.catalog.declared.projects -}}
+{{- $project := deepCopy . -}}
+{{- if and (not $project.admins) $admin -}}{{- $_ := set $project "admins" (list $admin) -}}{{- end -}}
+{{- $projects = append $projects $project -}}
+{{- end -}}
+{{- dict "projects" $projects "warehouses" (.Values.catalog.declared.warehouses | default list) "grants" (.Values.catalog.declared.grants | default list) | toJson -}}
 {{- end -}}
 
 {{- define "lance.oidcAudience" -}}

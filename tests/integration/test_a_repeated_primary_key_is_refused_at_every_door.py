@@ -32,7 +32,7 @@ from fastapi.testclient import TestClient
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-TABLE = "lh243$t"
+TABLE = "lance_catalog$lh243$t"
 _SCHEMA = pa.schema([pa.field("id", pa.int64(), nullable=False, metadata={"lance-schema:unenforced-primary-key": "true"}), pa.field("v", pa.string())])
 
 type Act = Callable[[TestClient, str], list[httpx.Response]]
@@ -123,7 +123,7 @@ def _two_inserts_of_one_new_key(client: TestClient, _location: str, context: dic
 def test_a_write_repeating_the_primary_key_is_refused_and_the_table_keeps_each_key_once(
     real_ns_client: TestClient, act: Act, seeded: bool, statuses: list[int], ids: list[int] | None
 ) -> None:
-    assert real_ns_client.post("/v1/namespace/lh243/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$lh243/create", json={}).status_code == 200
     location = ""
     before = None
     if seeded:
@@ -155,7 +155,7 @@ def test_a_merge_inserting_a_held_key_nested_in_a_struct_is_refused(real_ns_clie
     def rows(*pairs: tuple[int, str]) -> bytes:
         return _ipc(pa.table({"s": [{"id": i} for i, _ in pairs], "v": [v for _, v in pairs]}, schema=schema))
 
-    assert real_ns_client.post("/v1/namespace/lh243/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$lh243/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=rows((1, "v1"), (2, "v2")), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])

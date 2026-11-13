@@ -11,7 +11,9 @@ to the version and ref it wrote. This module holds Lance to what the pipeline di
    `version/create`, and silver's create and insert name theirs, with bronze at the version they read, in the spec
    Context of the catalog's doors;
 2. the edge list holds exactly one edge for each input a version names, to that version on its ref, on the commit's run
-   and by its author, and no other edge names either table.
+   and by its author, and no other edge names either table;
+3. the feed lineage serves about the drive is the table `lance_catalog$provenance$events`: the provenance namespace is a
+   namespace of the estate's own warehouse ([[LH-593]]), and a stock client reaches its tables by that full id.
 
 How each ref's history and the edge list are read, branches included, is `correctness`'s, which criterion 5's drills
 and the soak read the same way.
@@ -30,9 +32,15 @@ from collections import Counter
 
 import bus
 import byo_scenario as scenario
+import lance
 import pytest
 from byo_scenario import ScenarioRun, Tenant
-from correctness import Edge, History, as_named, edges_named, history_of, recorded_edges
+from correctness import PROVENANCE_NAMESPACE, Edge, History, as_named, edges_named, feed_of, history_of, recorded_edges
+
+
+#: The estate's own warehouse, served from the catalog's own root with no registry record: the chart renders it as
+#: `warehouse:lance_catalog` and refuses a `services.lineage.provenanceNamespace` outside it.
+ESTATE_WAREHOUSE = "lance_catalog"
 
 
 pytestmark = [
@@ -69,3 +77,15 @@ def test_the_edge_list_holds_one_edge_for_each_input_a_version_names_and_no_othe
 
     assert expected, "no version names an input, so there is no edge to hold the list to"
     assert Counter(edges) == Counter(expected)
+
+
+def test_the_feed_is_the_events_table_of_the_estate_warehouses_provenance_namespace(byo_tenant: Tenant, byo_run: ScenarioRun) -> None:
+    """Each row the feed served about the drive is a row of `lance_catalog$provenance$events`, read by the estate's owner
+    through the stock client, and the release names that namespace as lineage's."""
+    served = sorted(int(row["seq"]) for row in feed_of(byo_tenant.pipeline, byo_run))
+    events = lance.dataset(namespace_client=byo_tenant.admin.namespace(), table_id=[ESTATE_WAREHOUSE, "provenance", "events"])
+
+    held = sorted(events.to_table(columns=["seq"], filter=f"seq IN ({', '.join(map(str, served))})").column("seq").to_pylist())
+
+    assert served, "the feed served no row about the drive, so there is nothing to find in the provenance namespace"
+    assert (PROVENANCE_NAMESPACE, held) == (f"{ESTATE_WAREHOUSE}$provenance", served)

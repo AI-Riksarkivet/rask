@@ -2,10 +2,11 @@
  * The catalog's identifier grammar — the ONE place the estate agrees on how a hierarchical catalog
  * object is written as a flat string.
  *
- * The catalog is a hierarchy (warehouse → namespace → nested namespaces → table), but the two things
- * that consume an object's identity are flat strings: an HTTP path segment, and an OpenFGA object id.
- * So the hierarchy is joined with a delimiter — `bronze$pages` is the table `pages` inside the
- * namespace `bronze`, and `acme$bronze$pages` is the same table one level deeper.
+ * The catalog is a hierarchy (warehouse → namespace → nested namespaces → table), and every id names
+ * its whole path, joined with a delimiter: `acme-wh$bronze$pages` is the table `pages` in the namespace
+ * `bronze` of the warehouse `acme-wh`. The FIRST segment is always the warehouse (ADR 0206): a name of
+ * one segment is a warehouse, a namespace has at least two, a table at least three. So the warehouse of
+ * any id is read off the id itself, and its project is that warehouse's project.
  *
  * It lives beside the catalog client (`#lib/api`) rather than in any one page, because more than one
  * page splits these ids and a second copy of the grammar is how a wrong one appears (see
@@ -13,23 +14,36 @@
  *
  * ## Why the delimiter is a constant and not fetched
  *
- * `LANCE_NS_DELIMITER` looks operator-settable, and I described it that way before checking. It is not:
- * `chart/templates/services.yaml` sets `{ name: LANCE_NS_DELIMITER, value: "$" }` as a LITERAL and
- * exposes no `values.yaml` key for it, so changing the delimiter is already an edit to a file in this
- * repo. A constant in the same repo therefore ships in the same commit as the chart change, and a
- * config endpoint to discover the value at runtime would buy nothing. That is a decision, not a
- * deferral — do not add `GET /v1/config` for this.
+ * The catalog's delimiter is a constant in the lakehouse library (`lakehouse.naming.CATALOG_DELIMITER`),
+ * not a setting: no value or environment changes it, and the catalog refuses a request that names
+ * another. A constant here ships in the same repository as that one, so a config door to discover the
+ * value at runtime would buy nothing. That is a decision, not a deferral — do not add one.
  */
 
-/** The character joining hierarchy levels into one flat id. Mirrors the catalog's `settings.delimiter`. */
+/** The character joining hierarchy levels into one flat id. Mirrors `lakehouse.naming.CATALOG_DELIMITER`. */
 export const DELIMITER = '$';
+
+/**
+ * The warehouse an id lies in: its FIRST segment (ADR 0206), the catalog's `warehouse_of`. A one-segment
+ * id is a warehouse, and is its own.
+ */
+export function warehouseOf(id: string): string {
+	const cut = id.indexOf(DELIMITER);
+	return cut < 0 ? id : id.slice(0, cut);
+}
+
+/** The id of the child `name` under the namespace or warehouse `parent`. */
+export function childId(parent: string, name: string): string {
+	return `${parent}${DELIMITER}${name}`;
+}
 
 /**
  * OUT OF CONTRACT: the ROOT namespace.
  *
  * The catalog represents the root namespace as the bare delimiter — `parse_identifier` maps "empty or
- * delimiter-only" to the root `[]` (`catalog/core/identifiers.py:59-62`). None of the helpers below
- * model that: `parentNamespace('$')` is `''`, `leafSegment('$')` is `''`.
+ * delimiter-only" to the root `[]` (`catalog/core/identifiers.py`, `parse_identifier`). The console only
+ * LISTS the root (its children are the warehouses). None of the helpers below model it:
+ * `parentNamespace('$')` is `''`, `leafSegment('$')` is `''`.
  *
  * That is a deliberate boundary, not an oversight. Every caller here derives an id from a TABLE or a
  * NAMESPACE the catalog already named, and the root is neither — no table is registered at the root,

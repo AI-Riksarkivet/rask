@@ -20,7 +20,7 @@ maintenance's, which the catalog's announcement of each compaction commit sets o
 Usage::
 
     COMPACT_CATALOG_TOKEN="$(...the person's OIDC id_token...)" uv run python scripts/compact_due_tables.py
-    uv run python scripts/compact_due_tables.py --catalog-url http://localhost:8080/api/catalog --only provenance
+    uv run python scripts/compact_due_tables.py --catalog-url http://localhost:8080/api/catalog --only 'lance_catalog$provenance'
 
 Env (argparse overrides both)::
 
@@ -113,13 +113,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Compact each table the catalog lists as due, through the catalog's doors.")
     parser.add_argument("--catalog-url", default=os.environ.get("COMPACT_CATALOG_URL", "http://localhost:8080/api/catalog"))
     parser.add_argument("--token", default=os.environ.get("COMPACT_CATALOG_TOKEN", ""), help="the caller's OIDC bearer (empty = auth off)")
-    parser.add_argument("--only", default="", help="compact only the tables under this top-level namespace, e.g. provenance")
+    parser.add_argument(
+        "--only",
+        default="",
+        help="compact only the tables under this warehouse or namespace, named in full from the warehouse, e.g. 'lance_catalog$provenance'",
+    )
     args = parser.parse_args()
     headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
 
     with httpx.Client(base_url=args.catalog_url.rstrip("/"), headers=headers, timeout=_TIMEOUT_SECONDS) as client:
         listed = due_tables(client)
-    chosen = [due for due in listed if due.compaction is not None and (not args.only or due.table.split(_DELIMITER)[0] == args.only)]
+    chosen = [due for due in listed if due.compaction is not None and (not args.only or due.table.startswith(f"{args.only}{_DELIMITER}"))]
     print(f"due list: {len(listed)} tables, {len(chosen)} to compact")
     failed = 0
     for due in chosen:

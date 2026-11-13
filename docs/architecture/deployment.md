@@ -319,7 +319,9 @@ repository supplies its values to a lakehouse install with `-f`. A platform brin
 `auth.bootstrapAdmin` names the first estate admin by principal, `<idp-id>~<user id>` (the idp id `auth.oidc.connectors`
 gives their Dex connector; `dex~<userID>` for a development Dex user, LH-063), and the render refuses a bare name: a
 post-install/upgrade hook Job grants that principal `owner` on the default warehouse and `admin` on the estate root,
-the grants the estate-wide surfaces gate on. Empty seeds no human grant. `make k3s-up` names the Dex fixture's alice
+the grants the estate-wide surfaces gate on, and the chart's declaration (`catalog.declared`) names it admin of each
+declared project that names none, the default project `default` included, which the catalog converges
+([OPERATORS.md § 2](../OPERATORS.md)). Empty seeds no human grant. `make k3s-up` names the Dex fixture's alice
 (`DEV_ADMIN_EMAIL`), derived by `scripts/dex_principal.py` as the live lanes derive it.
 
 ### StorageClasses: omit, don't guess

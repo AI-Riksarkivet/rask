@@ -93,6 +93,15 @@ and `test_an_absent_object_is_not_found_rather_than_forbidden.py` are the exampl
   (`LANCE_REST_IMPL=dir`, `LANCE_REST_ROOT=<tmp_path>`, and `get_namespace` overridden with
   `lance_namespace.connect("dir", {"root": ...})`). Every create goes through the real 2.2 +
   stable-row-ids write.
+- **Every name begins with its warehouse** ([[LH-593]], ADR 0206): a table at the catalog's own root is
+  `lance_catalog$<namespace>$<table>`, a namespace `lance_catalog$<namespace>`, and a table needs three segments (a
+  two-segment table id is refused 400 before any authorization). The directory catalog refuses a namespace whose
+  parent has no row (measured 2026-11-13 on pylance 13.0.0: `create_namespace(["acme", "bronze"])` raises
+  `NamespaceNotFound` until row `acme` exists), so each warehouse root needs the warehouse's own row first. The
+  catalog's lifespan writes the estate's (`lance_catalog`) at boot, so a `TestClient(app)` has it; a bare
+  `connect("dir", ...)` a test drives directly, or another warehouse's root, gets it from
+  `catalog.services.warehouses.ensure_catalog_row(ns, "<warehouse id>")`, which mints its `rask.uuid` as the doors do
+  (`services/catalog/tests/test_an_undrop_announces_the_table_exists_again.py`).
 - **An unusual manifest, written by Lance**: `tests/unit/conftest.py::overlay_dataset`, a factory
   fixture that builds a dataset with data-overlay files (manifest feature flag 64) through
   `LanceFileWriter` and a `LanceOperation.DataOverlay` commit. Build other odd manifests the same way,

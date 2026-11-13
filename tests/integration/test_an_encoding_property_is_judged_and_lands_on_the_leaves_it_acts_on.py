@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 INVALID_INPUT = 13
-TABLE = "/v1/table/db$t"
+TABLE = "/v1/table/lance_catalog$db$t"
 PREFIX = b"lance-encoding:"
 
 #: One field of each shape the knobs tell apart: 64-, 32- and 16-bit fixed width, boolean, variable width, a list's
@@ -93,7 +93,7 @@ def _with_item_metadata(metadata: dict[str, str]) -> pa.Schema:
 
 @pytest.fixture
 def client(real_ns_client: TestClient) -> TestClient:
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     return real_ns_client
 
 

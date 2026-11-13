@@ -6,7 +6,7 @@ several held one name) and its deadline. It asks `can_get_metadata` on each tras
 tasks doors ask on the one they are addressed by, and fills its page from what the caller may see; another warehouse's
 trash is never in it. `?namespace=` lists what was dropped beneath that name.
 
-Against the catalog as deployed with warehouses on, a loopback Dex signing callers in and a real OpenFGA deciding on a
+Against the catalog as deployed, a loopback Dex signing callers in and a real OpenFGA deciding on a
 store of the test's own ([[LH-235]]).
 """
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import lance_namespace
 import pyarrow as pa
 import pytest
 
@@ -43,13 +44,12 @@ def _table(catalog: Any, name: str) -> str:  # noqa: ANN401 — the conftest's G
 
 @pytest.fixture
 def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> tuple[Any, dict[str, str]]:
-    """acme's two warehouses, each written where its door keeps it (the door provisions a bucket), alice its admin.
+    """acme's two warehouses on one root, each written where its door keeps it (the door provisions a bucket), alice its admin.
 
-    Under ``wh-here``: ``sales``, from which ``sales$mine`` and ``sales$shared`` (bob reads it) were dropped, and ``gone``, a
-    namespace dropped with its table ``gone$t``. Under ``wh-elsewhere``: ``far``, from which ``far$t`` was dropped.
-    Answers the catalog and each dropped object's uuid by name.
+    In ``wh-here``: ``sales``, from which ``sales$mine`` and ``sales$shared`` (bob reads it) were dropped, and ``gone``, a
+    namespace dropped with its table ``gone$t``. In ``wh-elsewhere``: ``far``, from which ``far$t`` was dropped. Answers the
+    catalog and each dropped object's uuid by its name inside its warehouse.
     """
-    monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "7")
     catalog = request.getfixturevalue("governed_catalog")
     catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"))
@@ -65,15 +65,19 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> t
             "created_at": datetime.now(UTC).isoformat(),
         }
         warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), record)
+        warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": settings.root}), warehouse)
         catalog.store.write((f"project:{PROJECT}", "project", f"warehouse:{warehouse}"))
-    for warehouse, namespace in ((HERE, "sales"), (HERE, "gone"), (ELSEWHERE, "far")):
-        _ok(catalog, "POST", f"/management/v1/warehouses/{warehouse}/namespaces", json={"namespace": namespace})
-    uuids = {name: _table(catalog, name) for name in ("sales$mine", "sales$shared", "gone$t", "far$t")}
-    uuids["gone"] = str(_ok(catalog, "POST", "/v1/namespace/gone/describe", json={}).json()["properties"]["rask.uuid"])
-    _ok(catalog, "POST", "/management/v1/table/sales$shared/access/grant", json={"user": catalog.person(READER), "relation": "reader"})
-    for name in ("sales$mine", "sales$shared", "far$t"):
+    for name in (f"{HERE}$sales", f"{HERE}$gone", f"{ELSEWHERE}$far"):
+        _ok(catalog, "POST", f"/v1/namespace/{name}/create", json={})
+    uuids = {
+        name: _table(catalog, f"{warehouse}${name}")
+        for warehouse, name in ((HERE, "sales$mine"), (HERE, "sales$shared"), (HERE, "gone$t"), (ELSEWHERE, "far$t"))
+    }
+    uuids["gone"] = str(_ok(catalog, "POST", f"/v1/namespace/{HERE}$gone/describe", json={}).json()["properties"]["rask.uuid"])
+    _ok(catalog, "POST", f"/management/v1/table/{HERE}$sales$shared/access/grant", json={"user": catalog.person(READER), "relation": "reader"})
+    for name in (f"{HERE}$sales$mine", f"{HERE}$sales$shared", f"{ELSEWHERE}$far$t"):
         _ok(catalog, "POST", f"/v1/table/{name}/drop", json={})
-    _ok(catalog, "POST", "/v1/namespace/gone/drop", json={"behavior": "Cascade"})
+    _ok(catalog, "POST", f"/v1/namespace/{HERE}$gone/drop", json={"behavior": "Cascade"})
     return catalog, uuids
 
 
@@ -98,10 +102,10 @@ def _listed(catalog: Any, caller: str, namespace: str | None) -> list[tuple[str,
 
 #: Every drop under ``wh-here``, as ``(kind, name, the name its uuid is kept under)``.
 EVERY_DROP_HERE = [
-    ("namespace", "gone", "gone"),
-    ("table", "sales$mine", "sales$mine"),
-    ("table", "sales$shared", "sales$shared"),
-    ("table", "gone$t", "gone$t"),
+    ("namespace", f"{HERE}$gone", "gone"),
+    ("table", f"{HERE}$sales$mine", "sales$mine"),
+    ("table", f"{HERE}$sales$shared", "sales$shared"),
+    ("table", f"{HERE}$gone$t", "gone$t"),
 ]
 
 
@@ -109,8 +113,8 @@ EVERY_DROP_HERE = [
     ("caller", "namespace", "authorized", "expected"),
     [
         pytest.param(ADMIN, None, True, EVERY_DROP_HERE, id="its-admin-sees-every-drop-under-it"),
-        pytest.param(ADMIN, "gone", True, [("table", "gone$t", "gone$t")], id="a-namespace-lists-what-was-dropped-beneath-it"),
-        pytest.param(READER, None, True, [("table", "sales$shared", "sales$shared")], id="a-reader-sees-only-the-table-granted"),
+        pytest.param(ADMIN, f"{HERE}$gone", True, [("table", f"{HERE}$gone$t", "gone$t")], id="a-namespace-lists-what-was-dropped-beneath-it"),
+        pytest.param(READER, None, True, [("table", f"{HERE}$sales$shared", "sales$shared")], id="a-reader-sees-only-the-table-granted"),
         pytest.param(READER, None, False, EVERY_DROP_HERE, id="with-authorization-off-every-drop-under-it-is-listed"),
     ],
 )

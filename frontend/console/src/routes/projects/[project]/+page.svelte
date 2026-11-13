@@ -6,7 +6,7 @@
 	// links to its catalog page.
 	//
 	// Gated by the catalog; every degrade state is named honestly rather than collapsed into "empty".
-	import { AlertTriangle, FolderKanban, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
+	import { FolderKanban, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { Button } from '@rask/ui/button';
 	import { ProjectHierarchy, type HierarchyHref } from '#lib/flow/hierarchy/index.ts';
 	import { goto } from '$app/navigation';
@@ -23,12 +23,12 @@
 		fetchProjectPolicies,
 		setProjectPolicy,
 	} from '#lib/remote/policies.api.ts';
-	import {
-		fetchProject,
-		namespaceTables,
-		projectEvents,
-		warehouseNamespaces,
-	} from '#lib/remote/warehouses.api.ts';
+	import { fetchProject, namespaceTables, projectEvents } from '#lib/remote/warehouses.api.ts';
+	import { fetchWarehouseNamespaces } from '#lib/data/remote/warehouses.api.ts';
+	import DeclaredInGit, {
+		declaredInGit,
+		DECLARED_IN_GIT_REASON,
+	} from '#lib/data/DeclaredInGit.svelte';
 
 	const project = $derived(page.params.project ?? '');
 
@@ -234,6 +234,7 @@
 	<header>
 		<FolderKanban size={15} />
 		<h1 class="mono">{project}</h1>
+		{#if declaredInGit(detail)}<DeclaredInGit />{/if}
 	</header>
 
 	{#if unauthorized}
@@ -284,7 +285,7 @@
 			<ProjectHierarchy
 				{project}
 				warehouses={detail.warehouses}
-				fetchNamespaces={warehouseNamespaces}
+				fetchNamespaces={fetchWarehouseNamespaces}
 				fetchTables={namespaceTables}
 				hrefFor={rungHref}
 			/>
@@ -381,20 +382,6 @@
 					read.
 				</p>
 			{:else if policies}
-				{#if policies.incomplete}
-					<!-- A binding the catalog could not read is a namespace it could not see. Saying so is the
-					     whole point: a quietly short list reads as "checked and clean". -->
-					<p class="warn">
-						<AlertTriangle size={13} />
-						This list may be short — {policies.skipped_bindings.length} namespace binding record{policies
-							.skipped_bindings.length === 1
-							? ''
-							: 's'} could not be read, so any policy under {policies.skipped_bindings.length === 1
-							? 'that namespace'
-							: 'those namespaces'} is missing from it.
-					</p>
-				{/if}
-
 				{#if editingPolicy}
 					<div class="policy-edit">
 						<label
@@ -488,7 +475,7 @@
 				<h3>Records inside this project</h3>
 				{#if scopedPolicies.length === 0}
 					<p class="mut">
-						No table or namespace policy in this project{policies.namespaces.length === 0 && policies.buckets.length === 0
+						No table or namespace policy in this project{policies.warehouses.length === 0
 							? ' (it has no warehouses yet)'
 							: ''}.
 					</p>
@@ -535,7 +522,18 @@
 				{detail.warehouses.length === 1 ? 'warehouse' : 'warehouses'} — and the buckets behind
 				{detail.warehouses.length === 1 ? 'it' : 'them'} — have to be retired one rung at a time first.
 			</p>
-			<Button variant="destructive" size="sm" onclick={() => (deleting = true)}>
+			{#if declaredInGit(detail)}
+				<!-- Its delete door answers 403 for a project git declares, so the control stays on screen,
+				     disabled, with the reason beside it. -->
+				<p class="mut" id="project-git-reason">{DECLARED_IN_GIT_REASON}</p>
+			{/if}
+			<Button
+				variant="destructive"
+				size="sm"
+				disabled={declaredInGit(detail)}
+				aria-describedby={declaredInGit(detail) ? 'project-git-reason' : undefined}
+				onclick={() => (deleting = true)}
+			>
 				<Trash2 size={14} /> Delete project
 			</Button>
 		</section>
@@ -612,19 +610,6 @@
 	.mut :global(button) {
 		margin-left: 6px;
 		vertical-align: middle;
-	}
-	/* The short-list banner: NOT a .mut. A list that may be missing records has to read differently
-	   from prose, or it is exactly the swallowed degrade the `incomplete` flag exists to prevent. */
-	.warn {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		font-size: 12px;
-		color: var(--amber, #d18b28);
-		border: 1px solid color-mix(in srgb, var(--amber, #d18b28) 45%, var(--line));
-		border-radius: var(--radius-sm);
-		padding: 6px 9px;
-		margin: 8px 0;
 	}
 	.error {
 		font-size: 12px;

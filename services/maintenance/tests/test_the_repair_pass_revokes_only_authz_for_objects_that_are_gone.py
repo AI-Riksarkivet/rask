@@ -12,7 +12,7 @@ remove anyone's access to anything, because the object they grant on is gone: `g
 
 WHAT IT MUST NEVER TOUCH IS THE POINT OF THIS SUITE. `ungoverned_tables` is the inverse shape — a
 REAL table that carries no tuples — and a pass that "cleaned up drift" by acting on it would delete
-live data to fix an authorization gap. `unbound_namespaces` and `unreferenced_projects` are likewise
+live data to fix an authorization gap. `unreachable_namespaces` and `unreferenced_projects` are likewise
 real records, and `orphan_buckets`/`orphaned_trash` are bytes. None is in this
 increment, and the refusal is asserted per category rather than by a total, because a pass that
 planned one data-tier deletion among many revokes would still pass a count.
@@ -40,8 +40,8 @@ from maintenance.services.reconcile import (
     OrphanBucket,
     OrphanedTrash,
     ReconcileReport,
-    UnboundNamespace,
     UngovernedTable,
+    UnreachableNamespace,
     UnreferencedProject,
 )
 from maintenance.services.repair import RepairReport
@@ -55,7 +55,7 @@ def _report() -> ReconcileReport:
         ghost_warehouses=[GhostObject(kind="warehouse", id="gone-w", fga_object="warehouse:gone-w", tuples=2)],
         ghost_tables=[GhostObject(kind="table", id="ns$gone-t", fga_object="table:ns$gone-t", tuples=4)],
         ungoverned_tables=[UngovernedTable(table="ns$live", root="s3://wh")],
-        unbound_namespaces=[UnboundNamespace(namespace="legacy", root="s3://shared")],
+        unreachable_namespaces=[UnreachableNamespace(namespace="legacy", root="s3://shared")],
         unreferenced_projects=[UnreferencedProject(id="stranded-p")],
         orphan_buckets=[OrphanBucket(bucket="nobodys-bucket")],
         orphaned_trash=[OrphanedTrash(id="tr-1", uuid="b47e2c9a-5f13-4d86-a2c0-8e6f1b3d5a97", kind="table", location="s3://gone/t.lance")],

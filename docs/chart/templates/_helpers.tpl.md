@@ -252,14 +252,13 @@ keys this lists.
 ## `{{- define "lance.replicaBounds" -}}`
 
 The fewest and most replicas a request-serving service runs: an autoscaler's `minReplicas` and `maxReplicas` while
-`autoscaling.enabled`, else its own `replicas` for both. The PodDisruptionBudget reads the fewest, the catalog's
-multi-replica guard the most, so an autoscaled catalog that may scale past one needs `catalog.controlEmit` like a
-fixed one does.
+`autoscaling.enabled`, else its own `replicas` for both. The PodDisruptionBudget reads the fewest, and the catalog's
+and lineage's Deployments render the fewest as their `replicas`.
 
 ## `{{- define "rask.isRealDeployment" -}}`
 
 IS THIS A REAL DEPLOYMENT? One definition, because two are two chances to answer it too narrowly at
-once — the argument `prod-credentials.yaml` makes for itself and which now has a second consumer.
+once — the argument `prod-credentials.yaml` makes for itself, shared with `route.yaml`.
 
 BOTH SIGNALS ARE FACTS THE DEPLOY ALREADY DEPENDS ON, never a flag someone must remember to arm. A
 guard reachable only by remembering an opt-in protects the installs that did not need protecting.
@@ -268,6 +267,14 @@ this node means the deployment is not the local loop — `make k3s-up` renders `
 side-loaded images, and the three dev-registry addresses are unroutable from anywhere but the node.
 
 Answers the string "true" or "" so a caller can use it in a `ternary` or an `if`.
+
+## `{{- define "lance.provenanceNamespace" -}}`
+
+The namespace the catalog keeps for provenance, rendered into both the catalog and lineage so the two cannot name
+different ones. Every name's first segment is its warehouse, and the provenance namespace belongs to the estate's own
+warehouse, `lance_catalog` (the catalog's `RASK_FGA_DEFAULT_WAREHOUSE_OBJECT`, which the chart leaves at its default,
+as `bootstrap-admin.yaml`'s `FGA_ROOT_OBJECT` does). The catalog refuses to boot on a namespace outside it, so the
+render refuses one first, naming the value, rather than leaving a pod to crash-loop on it.
 
 ## `{{- define "lance.ageHost" -}}{{ .Release.Name }}-age{{- end -}}`
 

@@ -7,8 +7,8 @@ to exist, so the ONLY thing standing between a seeder and another ghost is the o
 what it does when a call is refused. Both are what these tests pin.
 
 No live catalog is involved: the HTTP layer is an ``httpx.MockTransport`` that records every request, so
-the ordering, the route CHOICE (a top-level namespace has exactly one legal door), the convergence rule
-and the refusal handling are all assertable offline.
+the ordering, the route CHOICE (a namespace is created inside its warehouse, through the spec's own door), the
+convergence rule and the refusal handling are all assertable offline.
 """
 
 from __future__ import annotations
@@ -43,8 +43,8 @@ def _load(name: str) -> ModuleType:
 seed_estate = _load("seed_estate")
 
 #: A refusal rule: given a request, either a ``(status, problem body)`` to answer with, or None to let
-#: the fake catalog succeed. A callable rather than a path→response map because three namespaces share
-#: one route — the body is what tells them apart.
+#: the fake catalog succeed. A callable rather than a path→response map because some layers share one route
+#: (every warehouse create is the same POST) and only the body tells them apart.
 Refusal = Callable[[httpx.Request], "tuple[int, object] | None"]
 
 #: The layer each POST route belongs to, in hierarchy order. A seeded estate is only reachable if these
@@ -62,7 +62,7 @@ def _layer(request: httpx.Request) -> str:
         return "project"
     if path == "/management/v1/warehouses":
         return "warehouse"
-    if path.endswith("/namespaces"):
+    if path.startswith("/v1/namespace/") and path.endswith("/create"):
         return "namespace"
     if path.endswith("/declare"):
         return "table"
@@ -82,15 +82,15 @@ def _problem(title: str, detail: str, code: int) -> dict[str, object]:
 #: DATA so a test can take something away from it and prove the read-back notices; a mock that answered the
 #: same listing regardless of what was written could not tell a seeded estate from an empty one.
 _REGISTRY = [
-    {"project": "acme", "warehouses": [{"id": "acme-bucket", "bucket": "acme-bucket", "status": "active"}], "admins": ["user:alice"]},
-    {"project": "beta", "warehouses": [{"id": "beta-bucket", "bucket": "beta-bucket", "status": "active"}], "admins": []},
-    {"project": "research", "warehouses": [{"id": "research-bucket", "bucket": "research-bucket", "status": "active"}], "admins": []},
+    {"project": "acme", "warehouses": [{"id": "acme", "bucket": "acme-bucket", "status": "active"}], "admins": ["user:alice"]},
+    {"project": "beta", "warehouses": [{"id": "beta", "bucket": "beta-bucket", "status": "active"}], "admins": []},
+    {"project": "research", "warehouses": [{"id": "research", "bucket": "research-bucket", "status": "active"}], "admins": []},
 ]
-#: Per-namespace, not one answer for all of them: `acme-gold` holds `catalog`, not `features`, and a mock
+#: Per-namespace, not one answer for all of them: `acme$gold` holds `catalog`, not `features`, and a mock
 #: that ignored the namespace let a read-back "verify" a table the plan never declared there.
-#: `beta-locked` is the managed-access scope's stage — its table is what makes the C4 fixture a real
+#: `beta$locked` is the managed-access scope's stage — its table is what makes the C4 fixture a real
 #: object rather than a tuple about nothing.
-_TABLES = {"acme-bronze": [], "acme-silver": ["features", "undeclared"], "acme-gold": ["catalog"], "beta-locked": ["records"]}
+_TABLES = {"acme$bronze": [], "acme$silver": ["features", "undeclared"], "acme$gold": ["catalog"], "beta$locked": ["records"]}
 #: The roles each project's role door lists after a clean seed, each with the uuid the fake minted for it.
 _ROLES = {"acme": ["admins", "validators"], "research": ["admins"], "beta": ["admins"]}
 
@@ -161,9 +161,9 @@ def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_i
     # …and the acme chain specifically, since a globally-sorted run could still mis-order one tenant.
     assert (
         _index(recorded, lambda r: r.url.path == "/management/v1/projects" and _body(r).get("id") == "acme")
-        < _index(recorded, lambda r: r.url.path == "/management/v1/warehouses" and _body(r).get("id") == "acme-bucket")
-        < _index(recorded, lambda r: r.url.path.endswith("/namespaces") and _body(r).get("namespace") == "acme-gold")
-        < _index(recorded, lambda r: r.url.path == "/v1/table/acme-gold$catalog/declare")
+        < _index(recorded, lambda r: r.url.path == "/management/v1/warehouses" and _body(r).get("id") == "acme")
+        < _index(recorded, lambda r: r.url.path == "/v1/namespace/acme$gold/create")
+        < _index(recorded, lambda r: r.url.path == "/v1/table/acme$gold$catalog/declare")
     )
 
 
@@ -184,13 +184,13 @@ def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
     described = [described for request in recorded if (described := _describe(request.url.path)) is not None and described[0] == "table"]
     granted = [str(_body(request)["object"]) for request in recorded if _layer(request) == "grant"]
 
-    assert "/v1/table/acme-gold$catalog/declare" in declared
-    assert described == [("table", "acme-gold$catalog")], f"the table grant did not resolve the table this run declared: {described}"
-    assert _object("table", "acme-gold$catalog") in granted, f"the table grant is not on the uuid its table resolved to: {granted}"
-    assert not [obj for obj in granted if "acme-gold" in obj], f"a name reached the wire: {granted}"
+    assert "/v1/table/acme$gold$catalog/declare" in declared
+    assert described == [("table", "acme$gold$catalog")], f"the table grant did not resolve the table this run declared: {described}"
+    assert _object("table", "acme$gold$catalog") in granted, f"the table grant is not on the uuid its table resolved to: {granted}"
+    assert not [obj for obj in granted if "acme$gold" in obj], f"a name reached the wire: {granted}"
     # And it is ORDERED behind the declare: a grant resolved before its table is declared names nothing yet.
-    assert _index(recorded, lambda r: r.url.path == "/v1/table/acme-gold$catalog/declare") < _index(
-        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == _object("table", "acme-gold$catalog")
+    assert _index(recorded, lambda r: r.url.path == "/v1/table/acme$gold$catalog/declare") < _index(
+        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == _object("table", "acme$gold$catalog")
     )
 
 
@@ -212,7 +212,7 @@ def test_the_bearer_token_rides_every_call_and_is_absent_when_there_is_none() ->
 def test_an_already_exists_refusal_is_convergence_and_the_run_still_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if _layer(request) in {"namespace", "table"}:
-            return 409, _problem("NamespaceAlreadyExistsError", "namespace 'acme-gold' already exists", 2)
+            return 409, _problem("NamespaceAlreadyExistsError", "namespace 'acme$gold' already exists", 2)
         return None
 
     recorded: list[httpx.Request] = []
@@ -230,32 +230,12 @@ def test_a_warehouse_id_collision_is_a_failure_not_convergence() -> None:
     # 409 on warehouse-create is the cross-tenant takeover guard, not "already there" — the create is
     # idempotent server-side for the SAME project, so this 409 can only mean another project owns the id.
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if _layer(request) == "warehouse" and _body(request).get("id") == "acme-bucket":
-            return 409, _problem("NamespaceAlreadyExistsError", "warehouse 'acme-bucket' is already registered to another project", 2)
+        if _layer(request) == "warehouse" and _body(request).get("id") == "acme":
+            return 409, _problem("NamespaceAlreadyExistsError", "warehouse 'acme' is already registered to another project", 2)
         return None
 
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
-
-
-def test_a_namespace_already_bound_to_another_warehouse_is_a_failure_not_convergence() -> None:
-    # The namespace door answers 409 for THREE things with one error class and one code: "already here"
-    # (the re-run this script must survive) and the two binding guards. Swallowing a binding guard is the
-    # ghost at its worst — the run would declare tables into a bucket it does not own and hand a validator
-    # rung on another tenant's stage to role:validators, then print "seeded".
-    def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if _layer(request) == "namespace" and _body(request).get("namespace") == "acme-gold":
-            return 409, _problem("NamespaceAlreadyExistsError", "namespace 'acme-gold' is already bound to another warehouse", 2)
-        return None
-
-    recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
-
-    grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
-    assert not [grant for grant in grants if grant["object"] == _object("namespace", "acme-gold")]
-    assert "/v1/table/acme-gold$catalog/declare" not in [request.url.path for request in recorded]
-    # The sibling namespace is untouched: one refused bind must not empty the rest of the estate.
-    assert "/v1/table/acme-silver$features/declare" in [request.url.path for request in recorded]
 
 
 def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(capsys: pytest.CaptureFixture[str]) -> None:
@@ -279,15 +259,15 @@ def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> Non
     # namespace's validator grant after that namespace failed to be created is exactly how the live
     # estate got three tenants the catalog had never heard of.
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if _layer(request) == "namespace" and _body(request).get("namespace") == "acme-gold":
-            return 403, _problem("PermissionDeniedError", "can_create_namespace required on warehouse:acme-bucket", 15)
+        if request.url.path == "/v1/namespace/acme$gold/create":
+            return 403, _problem("PermissionDeniedError", "can_create_namespace required on warehouse:acme", 15)
         return None
 
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
 
     grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
-    assert not [grant for grant in grants if grant["object"] == _object("namespace", "acme-gold")]
+    assert not [grant for grant in grants if grant["object"] == _object("namespace", "acme$gold")]
     # Everything the failure does NOT block still lands: one broken branch must not empty the estate.
     assert {"demo~dave", "demo~carol", "demo~gina"} <= {str(grant["user"]) for grant in grants}
 
@@ -302,8 +282,8 @@ def test_a_failed_create_blocks_only_its_own_descendants() -> None:
     assert _run(recorded, refuse) == 1
 
     warehouses = [_body(request).get("id") for request in recorded if _layer(request) == "warehouse"]
-    assert "beta-bucket" not in warehouses
-    assert {"acme-bucket", "research-bucket"} <= set(warehouses)
+    assert "beta" not in warehouses
+    assert {"acme", "research"} <= set(warehouses)
 
 
 def test_an_estate_that_cannot_be_read_back_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
@@ -356,18 +336,18 @@ def test_a_warehouse_the_project_does_not_hold_is_not_reported_as_seeded(capsys:
 
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
-    assert "warehouse acme-bucket is absent from project acme" in capsys.readouterr().err
+    assert "warehouse acme is absent from project acme" in capsys.readouterr().err
 
 
 def test_a_declared_table_the_namespace_does_not_list_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
     # `declare` returning 200 says the call was accepted. Only the namespace's own listing says the table
     # is there — and the two disagreeing is the whole class of bug this script was written against.
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        return (200, {"tables": []}) if request.url.path == "/v1/namespace/acme-gold/table/list" else None
+        return (200, {"tables": []}) if request.url.path == "/v1/namespace/acme$gold/table/list" else None
 
     recorded: list[httpx.Request] = []
     assert _run(recorded, refuse) == 1
-    assert "table catalog is absent from namespace acme-gold" in capsys.readouterr().err
+    assert "table catalog is absent from namespace acme$gold" in capsys.readouterr().err
 
 
 def test_a_read_back_that_is_not_json_is_a_failure_and_never_a_crash(capsys: pytest.CaptureFixture[str]) -> None:
@@ -391,7 +371,9 @@ def test_the_demo_estate_covers_every_tenant_warehouse_and_namespace_the_fga_fix
     """The replacement claim, made checkable: what ``fga_seed_demo`` seeds as tuples exists here as objects.
 
     Ids are normalised ``_`` → ``-`` because the catalog validates warehouse/bucket/namespace ids against
-    a DNS-safe pattern — the fixture's ``acme_bucket`` cannot be created through any door.
+    a DNS-safe pattern — the fixture's ``acme_bucket`` cannot be created through any door. A fixture warehouse is
+    the seed's warehouse BUCKET (``acme_bucket`` is the warehouse ``acme`` over ``acme-bucket``), and a fixture
+    namespace ``acme_gold`` is the namespace ``gold`` inside the warehouse ``acme``.
     """
     fixtures = _load("fga_seed_demo").load_fixtures()
     named = {tuple_["object"] for tuple_ in fixtures} | {tuple_["user"] for tuple_ in fixtures}
@@ -402,8 +384,8 @@ def test_the_demo_estate_covers_every_tenant_warehouse_and_namespace_the_fga_fix
     estate = seed_estate.DEMO_ESTATE
     assert wanted("project:") == {project.id for project in estate.projects}
     # `lance-catalog` is the ESTATE ROOT, granted by the bootstrap job — not a tenant's warehouse.
-    assert wanted("warehouse:", excluding={"lance-catalog"}) == {warehouse.id for _, warehouse in seed_estate._warehouse_pairs(estate)}
-    assert wanted("namespace:") == {namespace.name for _, namespace in seed_estate._namespace_pairs(estate)}
+    assert wanted("warehouse:", excluding={"lance-catalog"}) == {warehouse.bucket for _, warehouse in seed_estate._warehouse_pairs(estate)}
+    assert wanted("namespace:") == {f"{warehouse.id}-{namespace.name}" for warehouse, namespace in seed_estate._namespace_pairs(estate)}
 
 
 def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo_idp() -> None:
@@ -416,30 +398,3 @@ def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo
     # Only the SUBJECT side: the wildcard, a userset or an object type is never a principal to remap.
     assert seed_estate.remap_subject("user:*", principals) == "user:*"
     assert seed_estate.remap_subject("role:acme/validators#assignee", principals) == "role:acme/validators#assignee"
-
-
-# --------------------------------------------------------------------------- #
-# Adoption — the fourth meaning of 409
-# --------------------------------------------------------------------------- #
-
-
-def test_adopt_existing_asks_the_catalog_to_converge_the_unbound_namespace() -> None:
-    """The FOURTH meaning of 409, and the one this script could not converge.
-
-    `POST /management/v1/warehouses/{id}/namespaces` answers `NamespaceAlreadyExistsError` for four states, not the
-    three listed beside BINDING_REFUSALS: converged, bound elsewhere, taken in the default root — and
-    the namespace whose BYTES are already at THIS warehouse's root while its binding was never written.
-    That last one was observed on the live estate 2026-08-23: the acme tiers existed as directories, the
-    bindings map held no entry for them, so routing fell through to the default root and every table
-    declare answered `NamespaceNotFoundError` for a namespace whose create had just said "already
-    exists". The run reported converged and then failed two tables.
-
-    It is not convergence and it is not a takeover; it is the bytes-first migration mid-flight, and the
-    catalog's own door for it is `adopt_existing`, which runs the binding + FGA trailer the state is
-    missing. Opt-in, because the hazard guards it does NOT relax are the whole reason it is a flag.
-    """
-    recorded: list[httpx.Request] = []
-    assert _run(recorded, argv=["--catalog", "http://catalog", "--adopt-existing"]) == 0
-    bodies = [_body(request) for request in recorded if _layer(request) == "namespace"]
-    assert bodies, "no namespace creates recorded"
-    assert all(body.get("adopt_existing") is True for body in bodies), bodies

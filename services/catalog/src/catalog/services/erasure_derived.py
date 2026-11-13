@@ -56,6 +56,7 @@ from lance_namespace import DescribeTableRequest, LanceNamespace, NamespaceNotFo
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core.config import Settings
+from catalog.core.identifiers import parse_identifier
 from catalog.services import erasure_obligations, native, table_claims, table_inputs
 from catalog.services.erasure import OPEN_OUTCOMES, SurfaceResult, derived_key, derived_surface
 from catalog.services.erasure_obligations import ErasureObligation
@@ -233,7 +234,7 @@ def _edge_list(settings: Settings, ns: LanceNamespace | None, so: StorageOptions
     if ns is None:
         return None
     try:
-        described = native.call(ns, "describe_table", DescribeTableRequest(id=[settings.provenance_namespace, derived_tables.EDGES]))
+        described = native.call(ns, "describe_table", DescribeTableRequest(id=[*parse_identifier(settings.provenance_namespace), derived_tables.EDGES]))
     except (NamespaceNotFoundError, TableNotFoundError):
         return None
     return lance.dataset(str(described.location), storage_options=so.in_clear() or None)

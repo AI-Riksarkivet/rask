@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-TABLE = "b1$t"
+TABLE = "lance_catalog$b1$t"
 
 
 def _ipc(table: pa.Table) -> bytes:
@@ -77,7 +77,7 @@ def _branch_objects(table_dir: Path) -> list[str]:
 )
 def test_a_malformed_branch_name_is_refused_on_every_try_and_leaves_nothing_behind(real_ns_client: TestClient, name: str, collapses_to: str) -> None:
     rows = pa.table({"id": pa.array(range(3), pa.int64())})
-    assert real_ns_client.post("/v1/namespace/b1/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$b1/create", json={}).status_code == 200
     assert real_ns_client.post(f"/v1/table/{TABLE}/create", content=_ipc(rows), headers=ARROW).status_code == 200
     # The described location is a `file://` URI; the table's directory is its path.
     table_dir = Path(urlsplit(real_ns_client.post(f"/v1/table/{TABLE}/describe", json={}).json()["table_uri"]).path)

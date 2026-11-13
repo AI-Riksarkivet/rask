@@ -539,14 +539,14 @@ test('surfaces the Lance file format badge (#78)', async ({ page }) => {
 test('danger-zone drop confirms via the AlertDialog, closes it, and the registry row is gone (#85)', async ({
 	page,
 }) => {
-	// The table's warehouse keeps drops for an hour, so the dialog names a deadline, not "permanently".
+	// The table's warehouse — the first segment of its id — keeps drops for an hour, so the dialog
+	// names a deadline, not "permanently".
 	await seed(page, {
-		'GET /management/v1/warehouses/-/bindings': { bindings: { db1: 'wh1' } },
-		'GET /management/v1/warehouses/wh1': {
-			id: 'wh1',
+		'GET /management/v1/warehouses/db1': {
+			id: 'db1',
 			project: 'acme',
-			bucket: 'wh1',
-			root_uri: 's3://wh1',
+			bucket: 'db1',
+			root_uri: 's3://db1',
 			delete_profile: { mode: 'soft', grace_days: 1 / 24 },
 		},
 	});

@@ -34,9 +34,9 @@ def _ipc(table: pa.Table) -> bytes:
 
 def _create(client: TestClient, table: str, *, stamp_lineage: bool = False) -> None:
     """Create ``m1$<table>`` through the catalog's own Arrow create path."""
-    client.post("/v1/namespace/m1/create", json={})
+    client.post("/v1/namespace/lance_catalog$m1/create", json={})
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    created = client.post(f"/v1/table/m1${table}/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = client.post(f"/v1/table/lance_catalog$m1${table}/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     if stamp_lineage:
         # The SAME keys the create endpoint stamps when lineage emission is on (it is off by default in
@@ -48,13 +48,13 @@ def _create(client: TestClient, table: str, *, stamp_lineage: bool = False) -> N
 
 def _properties(client: TestClient, table: str) -> dict[str, str]:
     """The table's user-visible properties, read back the way the console reads them."""
-    resp = client.post(f"/v1/table/m1${table}/describe?load_detailed_metadata=true", json={})
+    resp = client.post(f"/v1/table/lance_catalog$m1${table}/describe?load_detailed_metadata=true", json={})
     assert resp.status_code == 200, resp.text
     return resp.json().get("metadata") or {}
 
 
 def _location(client: TestClient, table: str) -> str:
-    resp = client.post(f"/v1/table/m1${table}/describe", json={})
+    resp = client.post(f"/v1/table/lance_catalog$m1${table}/describe", json={})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     return str(body.get("table_uri") or body["location"])
@@ -64,11 +64,11 @@ def test_null_value_deletes_the_key(real_ns_client: TestClient) -> None:
     # THE gap: the properties editor's remove button omitted the key and reported "Saved." — and the key
     # stayed. Deletion has to be something a caller can SAY, which is what the null carries.
     _create(real_ns_client, "t1")
-    seeded = real_ns_client.post("/v1/table/m1$t1/schema_metadata/update", json={"owner": "alice", "tier": "gold"})
+    seeded = real_ns_client.post("/v1/table/lance_catalog$m1$t1/schema_metadata/update", json={"owner": "alice", "tier": "gold"})
     assert seeded.status_code == 200, seeded.text
     assert _properties(real_ns_client, "t1") == {"owner": "alice", "tier": "gold"}
 
-    resp = real_ns_client.post("/v1/table/m1$t1/schema_metadata/update", json={"tier": None})
+    resp = real_ns_client.post("/v1/table/lance_catalog$m1$t1/schema_metadata/update", json={"tier": None})
     assert resp.status_code == 200, resp.text
     assert _properties(real_ns_client, "t1") == {"owner": "alice"}
     # The response echoes the table's NEW full map, so a caller never has to re-read to know what stuck.
@@ -79,9 +79,9 @@ def test_omitting_a_key_is_a_merge_not_a_replace(real_ns_client: TestClient) -> 
     # The spec's own wording ("Replace schema metadata") is wrong about the backend, and three source
     # comments repeated it. Pin the real semantic so the next reader can't be misled by the spec text.
     _create(real_ns_client, "t2")
-    real_ns_client.post("/v1/table/m1$t2/schema_metadata/update", json={"owner": "alice", "tier": "gold"})
+    real_ns_client.post("/v1/table/lance_catalog$m1$t2/schema_metadata/update", json={"owner": "alice", "tier": "gold"})
 
-    resp = real_ns_client.post("/v1/table/m1$t2/schema_metadata/update", json={"owner": "bob"})
+    resp = real_ns_client.post("/v1/table/lance_catalog$m1$t2/schema_metadata/update", json={"owner": "bob"})
     assert resp.status_code == 200, resp.text
     assert _properties(real_ns_client, "t2") == {"owner": "bob", "tier": "gold"}
 
@@ -91,15 +91,15 @@ def test_delete_does_not_drop_lineage_coordinates(real_ns_client: TestClient) ->
     # that replaces rather than merges silently destroys the #21 self-describing coordinates. Assert on the
     # FILE, not on the API's (filtered) view, because that is where the loss would happen.
     _create(real_ns_client, "t3", stamp_lineage=True)
-    real_ns_client.post("/v1/table/m1$t3/schema_metadata/update", json={"owner": "alice"})
+    real_ns_client.post("/v1/table/lance_catalog$m1$t3/schema_metadata/update", json={"owner": "alice"})
 
-    resp = real_ns_client.post("/v1/table/m1$t3/schema_metadata/update", json={"owner": None})
+    resp = real_ns_client.post("/v1/table/lance_catalog$m1$t3/schema_metadata/update", json={"owner": None})
     assert resp.status_code == 200, resp.text
     assert _properties(real_ns_client, "t3") == {}
     assert resp.json() == {}  # the echo is filtered the same way the read twin is; direct map since A2
 
     on_disk = lance.dataset(_location(real_ns_client, "t3")).schema.metadata or {}
-    table_uuid = real_ns_client.post("/v1/table/m1$t3/describe", json={}).json()["properties"]["rask.uuid"]
+    table_uuid = real_ns_client.post("/v1/table/lance_catalog$m1$t3/describe", json={}).json()["properties"]["rask.uuid"]
     assert on_disk.get(b"lineage.dataset_id") == table_uuid.encode(), on_disk
     assert on_disk.get(b"lineage.namespace") == b"m1", on_disk
 
@@ -108,17 +108,17 @@ def test_a_field_metadata_update_replaces_only_the_entries_that_ask(real_ns_clie
     """``replace`` belongs to its entry (``lance_docs/ns_catalog/spec.yaml`` UpdateFieldMetadataEntry): an entry that replaces
     keeps only what it names, and an entry beside it that merges keeps every key it does not name, sets the ones it does,
     and deletes the one it names with a null ([[LH-573]])."""
-    real_ns_client.post("/v1/namespace/m1/create", json={})
+    real_ns_client.post("/v1/namespace/lance_catalog$m1/create", json={})
     rows = pa.table({"id": pa.array([1], pa.int64()), "v": ["a"]})
-    assert real_ns_client.post("/v1/table/m1$t4/create", content=_ipc(rows), headers=ARROW).status_code == 200
+    assert real_ns_client.post("/v1/table/lance_catalog$m1$t4/create", content=_ipc(rows), headers=ARROW).status_code == 200
     seeded = real_ns_client.post(
-        "/v1/table/m1$t4/update_field_metadata",
+        "/v1/table/lance_catalog$m1$t4/update_field_metadata",
         json={"updates": [{"path": "id", "metadata": {"unit": "n", "note": "x"}}, {"path": "v", "metadata": {"desc": "text", "note": "x"}}]},
     )
     assert seeded.status_code == 200, seeded.text
 
     resp = real_ns_client.post(
-        "/v1/table/m1$t4/update_field_metadata",
+        "/v1/table/lance_catalog$m1$t4/update_field_metadata",
         json={"updates": [{"path": "id", "metadata": {"unit": "count"}, "replace": True}, {"path": "v", "metadata": {"lang": "sv", "note": None}}]},
     )
 

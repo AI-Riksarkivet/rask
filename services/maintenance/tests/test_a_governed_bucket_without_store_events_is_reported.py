@@ -35,7 +35,6 @@ async def _reconcile(
     settings: MaintenanceSettings,
     grants: GrantCensusReader | None = None,
     *,
-    warehouses_enabled: bool,
     control_root: str | None = None,
     namespace_root: str | None = None,
     into_sources: list[Sources] | None = None,

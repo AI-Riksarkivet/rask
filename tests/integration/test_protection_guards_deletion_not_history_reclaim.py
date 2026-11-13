@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-TABLE = "lh300$t"
+TABLE = "lance_catalog$lh300$t"
 
 
 def _ipc(*ids: int) -> bytes:
@@ -38,7 +38,7 @@ def _ipc(*ids: int) -> bytes:
 def protected(real_ns_client: TestClient) -> TestClient:
     """`lh300$t` at version 3, its version 1 tagged `release` and its head cut as the branch `staging`, then protected."""
     client = real_ns_client
-    assert client.post("/v1/namespace/lh300/create", json={}).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$lh300/create", json={}).status_code == 200
     created = client.post(f"/v1/table/{TABLE}/create?mode=create", content=_ipc(1, 2), headers=ARROW)
     assert created.status_code == 200, created.text
     for ids in ((3,), (4,)):

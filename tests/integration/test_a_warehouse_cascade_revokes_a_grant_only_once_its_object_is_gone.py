@@ -8,8 +8,8 @@ through. Measured on the live estate 2026-10-15: `lh467-8ba7d771-bronze$t`, stil
 drop had detached: the grants that drop keeps for an undrop (#75) outlived the trash record the warehouse delete
 clears with the warehouse.
 
-ONE TENANT ON MOTO: the real catalog app, its warehouse bucket provisioned through the create door, its namespaces bound
-through the warehouse door, each table created through the namespace doors on real pylance, and the in-memory
+ONE TENANT ON MOTO: the real catalog app, its warehouse bucket provisioned through the create door, its namespaces and
+tables created as `acme-wh$...` names through the namespace doors on real pylance, and the in-memory
 `TupleStore` behind the real `lakehouse.governed.fga` seed and revoke. Every check is allowed, because who may act is
 not the claim: the tuples each call leaves behind are. A table's tuples are what its owner reads it through
 (`model.fga.yaml` pins that a project's admin owns a table through its parent edges).
@@ -39,7 +39,7 @@ from openfga_sdk.client.models import ClientWriteRequest
 
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
-from catalog.services import native, warehouses
+from catalog.services import native
 from lakehouse import base_registry, clone_endings, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
@@ -50,6 +50,7 @@ from tests.integration.openfga_grants import Options, TupleStore, act_as
 
 
 PROJECT = "acme"
+WAREHOUSE = "acme-wh"
 _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
@@ -77,18 +78,19 @@ class _Outage(TupleStore):
 class _Tenant:
     """Project ``acme`` and its warehouse on a bucket of its own, driven by the project's admin."""
 
-    def __init__(self, client: TestClient, store: _Outage, posted: list[dict[str, Any]], s3: S3Client, warehouse: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(self, client: TestClient, store: _Outage, posted: list[dict[str, Any]], s3: S3Client, bucket: str, monkeypatch: pytest.MonkeyPatch) -> None:
         self.client = client
         self.store = store
         self.posted = posted
         self.s3 = s3
-        self.warehouse = warehouse
+        self.warehouse = WAREHOUSE
+        self.bucket = bucket
         self.monkeypatch = monkeypatch
         #: The uuid each table's policy is kept under, as the policy door answered it (ADR 0173 §8).
         self.policy_uuids: dict[str, str] = {}
         #: The FGA object each ``<kind>:<name>`` this tenant made is governed as (ADR 0173 §8): its warehouse by id,
         #: every table and namespace by the uuid it was minted.
-        self.objects: dict[str, str] = {f"warehouse:{warehouse}": f"warehouse:{warehouse}"}
+        self.objects: dict[str, str] = {f"warehouse:{WAREHOUSE}": f"warehouse:{WAREHOUSE}"}
 
     def _minted(self, kind: str, name: str) -> None:
         answer = self.client.post(f"/v1/{kind}/{name}/describe", json={})
@@ -111,11 +113,6 @@ class _Tenant:
             return real(control_root, storage_options, kind, object_uuid)
 
         self.monkeypatch.setattr(object_records, "end_object_records", end_object_records)
-
-    def bind(self, namespace: str) -> None:
-        answer = self.client.post(f"/management/v1/warehouses/{self.warehouse}/namespaces", json={"namespace": namespace})
-        assert answer.status_code == 200, answer.text
-        self._minted("namespace", namespace)
 
     def create_namespace(self, namespace: str) -> None:
         answer = self.client.post(f"/v1/namespace/{namespace}/create", json={})
@@ -180,14 +177,10 @@ class _Tenant:
 
     def bucket_exists(self) -> bool:
         try:
-            self.s3.head_bucket(Bucket=self.warehouse)
+            self.s3.head_bucket(Bucket=self.bucket)
         except ClientError:
             return False
         return True
-
-    def bound(self, namespace: str) -> bool:
-        settings = get_settings()
-        return warehouses.binding_for_namespace(settings.registry_root, settings.storage_options(), namespace) is not None
 
 
 def _lifecycle(event: dict[str, Any]) -> str | None:
@@ -199,7 +192,7 @@ def _lifecycle(event: dict[str, Any]) -> str | None:
 def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
     """The catalog on a control bucket of its own, with OIDC and FGA on once its lifespan has run, as alice."""
     control = f"lh495-{uuid.uuid4().hex[:10]}"
-    warehouse = f"{control}-wh"
+    bucket = f"{control}-wh"
     s3: S3Client = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     s3.create_bucket(Bucket=control)
     for key, value in {
@@ -210,7 +203,6 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_WAREHOUSES_ENABLED": "true",
         "LANCE_TRASH_GRACE_DAYS": "7",
     }.items():
         monkeypatch.setenv(key, value)
@@ -247,45 +239,54 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
             dataset_namespace="lance-namespace://localhost/api/catalog",
         )
         monkeypatch.setattr(app.state, "lineage_emitter", emitter, raising=False)
-        for path, body in (("/management/v1/projects", {"id": PROJECT}), ("/management/v1/warehouses", {"id": warehouse, "project": PROJECT})):
+        for path, body in (
+            ("/management/v1/projects", {"id": PROJECT}),
+            ("/management/v1/warehouses", {"id": WAREHOUSE, "project": PROJECT, "bucket": bucket}),
+        ):
             answer = client.post(path, json=body)
             assert answer.status_code == 200, f"{path}: {answer.text}"
-        yield _Tenant(client, store, posted, s3, warehouse, monkeypatch)
+        yield _Tenant(client, store, posted, s3, bucket, monkeypatch)
     app.dependency_overrides.clear()
     get_settings.cache_clear()
 
 
 def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(tenant: _Tenant) -> None:
-    """Tables under the bound namespace and under a nested one are detached, each location free again, and so is the
+    """Tables under a namespace of the warehouse and under a nested one are detached, each location free again, and so is the
     namespace subtree. The warehouse's own trash ends with it: a table a recoverable drop detached, a namespace a
     recoverable cascade dropped with its table, and a trashed table whose namespace was dropped since each lose the grants,
     policy and records their undrop needed, a table's base record among them. The count the door reports is what the store
     lost."""
-    tenant.bind("bronze")
-    for table in ("bronze$a", "bronze$b"):
+    tenant.create_namespace("acme-wh$bronze")
+    for table in ("acme-wh$bronze$a", "acme-wh$bronze$b"):
         tenant.create_table(table)
-    tenant.create_namespace("bronze$inner")
-    tenant.create_table("bronze$inner$c")
-    tenant.create_table("bronze$trashed")
-    tenant.drop("table", "bronze$trashed")
-    tenant.bind("silver")
-    tenant.create_table("silver$s")
-    tenant.set_policy("silver$s")
-    tenant.drop("namespace", "silver", {"behavior": "Cascade"})
-    tenant.bind("gold")
-    tenant.create_table("gold$g")
-    tenant.drop("table", "gold$g")
-    tenant.drop("namespace", "gold")
-    trash_held = [("table", "bronze$trashed"), ("table", "silver$s"), ("namespace", "silver"), ("table", "gold$g")]
-    tables = ["bronze$a", "bronze$b", "bronze$inner$c", "bronze$trashed", "silver$s", "gold$g"]
-    governed = [f"warehouse:{tenant.warehouse}", "namespace:bronze", "namespace:bronze$inner", "namespace:silver", *(f"table:{table}" for table in tables)]
+    tenant.create_namespace("acme-wh$bronze$inner")
+    tenant.create_table("acme-wh$bronze$inner$c")
+    tenant.create_table("acme-wh$bronze$trashed")
+    tenant.drop("table", "acme-wh$bronze$trashed")
+    tenant.create_namespace("acme-wh$silver")
+    tenant.create_table("acme-wh$silver$s")
+    tenant.set_policy("acme-wh$silver$s")
+    tenant.drop("namespace", "acme-wh$silver", {"behavior": "Cascade"})
+    tenant.create_namespace("acme-wh$gold")
+    tenant.create_table("acme-wh$gold$g")
+    tenant.drop("table", "acme-wh$gold$g")
+    tenant.drop("namespace", "acme-wh$gold")
+    trash_held = [("table", "acme-wh$bronze$trashed"), ("table", "acme-wh$silver$s"), ("namespace", "acme-wh$silver"), ("table", "acme-wh$gold$g")]
+    tables = ["acme-wh$bronze$a", "acme-wh$bronze$b", "acme-wh$bronze$inner$c", "acme-wh$bronze$trashed", "acme-wh$silver$s", "acme-wh$gold$g"]
+    governed = [
+        f"warehouse:{tenant.warehouse}",
+        "namespace:acme-wh$bronze",
+        "namespace:acme-wh$bronze$inner",
+        "namespace:acme-wh$silver",
+        *(f"table:{table}" for table in tables),
+    ]
     assert len(tenant.store.naming(tenant.fga(governed))) == len(governed), "an object was seeded no tuple, so the revoke below would pass vacuously"
-    assert tenant.trashed(trash_held) == trash_held and tenant.has_policy("silver$s"), "nothing kept for an undrop, so its end would pass vacuously"
-    locations = tenant.trash_locations(["bronze$trashed", "silver$s", "gold$g"])
+    assert tenant.trashed(trash_held) == trash_held and tenant.has_policy("acme-wh$silver$s"), "nothing kept for an undrop, so its end would pass vacuously"
+    locations = tenant.trash_locations(["acme-wh$bronze$trashed", "acme-wh$silver$s", "acme-wh$gold$g"])
     assert len(tenant.base_recorded(locations)) == 3, "a trashed table kept no base record, so its end would pass vacuously"
-    assert "bronze" in tenant.client.app.state.warehouse_binding_cache, "nothing routed through the binding, so its eviction below would pass vacuously"
     detached = {
-        table: str(tenant.client.post(f"/v1/table/{table}/describe", json={}).json()["location"]) for table in ("bronze$a", "bronze$b", "bronze$inner$c")
+        table: str(tenant.client.post(f"/v1/table/{table}/describe", json={}).json()["location"])
+        for table in ("acme-wh$bronze$a", "acme-wh$bronze$b", "acme-wh$bronze$inner$c")
     }
     held = len(tenant.store.tuples)
     tenant.posted.clear()
@@ -299,14 +300,13 @@ def test_a_cascade_removes_every_table_and_namespace_then_revokes_their_grants(t
         "a detached table's location stayed claimed"
     )
     body = answer.json()
-    assert (body["namespaces_dropped"], body["bucket_purged"]) == (["bronze$inner", "bronze"], True)
+    assert (body["namespaces_dropped"], body["bucket_purged"]) == (["acme-wh$bronze$inner", "acme-wh$bronze"], True)
     assert tenant.store.naming(tenant.fga(governed)) == {}, "a grant outlived the object it was on"
-    assert (tenant.trashed(trash_held), tenant.has_policy("silver$s")) == ([], False), "the warehouse's trash outlived it"
+    assert (tenant.trashed(trash_held), tenant.has_policy("acme-wh$silver$s")) == ([], False), "the warehouse's trash outlived it"
     assert tenant.base_recorded(locations) == [], "a trashed table's base record outlived its warehouse"
     assert body["tuples_revoked"] == held - len(tenant.store.tuples), "the door reported a count the store did not lose"
-    assert sorted(tenant.announced_drops()) == ["bronze$a", "bronze$b", "bronze$inner$c"]
+    assert sorted(tenant.announced_drops()) == ["acme-wh$bronze$a", "acme-wh$bronze$b", "acme-wh$bronze$inner$c"]
     assert not tenant.bucket_exists()
-    assert not tenant.bound("bronze") and "bronze" not in tenant.client.app.state.warehouse_binding_cache
 
 
 def _the_backend_does_not_answer_one_detach(tenant: _Tenant) -> None:
@@ -325,8 +325,8 @@ def _the_backend_does_not_answer_one_detach(tenant: _Tenant) -> None:
 @pytest.mark.parametrize(
     "fail",
     [
-        pytest.param(lambda tenant: tenant.store.stop_after_one(tenant.objects["table:bronze$b"]), id="openfga-stops-in-a-bound-namespace"),
-        pytest.param(lambda tenant: tenant.store.stop_after_one(tenant.objects["table:bronze$inner$d"]), id="openfga-stops-in-its-trash"),
+        pytest.param(lambda tenant: tenant.store.stop_after_one(tenant.objects["table:acme-wh$bronze$b"]), id="openfga-stops-in-a-namespace-of-the-warehouse"),
+        pytest.param(lambda tenant: tenant.store.stop_after_one(tenant.objects["table:acme-wh$bronze$inner$d"]), id="openfga-stops-in-its-trash"),
         pytest.param(lambda tenant: tenant.break_policy_store_once(), id="the-control-root-fails-after-a-revoke"),
         pytest.param(_the_backend_does_not_answer_one_detach, id="the-backend-does-not-answer-one-detach"),
     ],
@@ -334,24 +334,24 @@ def _the_backend_does_not_answer_one_detach(tenant: _Tenant) -> None:
 def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_and_a_reissue_finishes_it(
     tenant: _Tenant, fail: Callable[[_Tenant], None]
 ) -> None:
-    """OpenFGA stops answering part-way through one object's grants, among a bound namespace's objects or among the
+    """OpenFGA stops answering part-way through one object's grants, among a namespace's objects or among the
     trash the warehouse ends, the control root fails once the first trashed object's grants are gone, or the backend
     does not answer one table's detach, which leaves its row and the claim the cascade held it by: the 503 names
     exactly what is gone and counts what the store lost, every object the catalog still serves keeps every grant but the
     edges to what is gone, and the same call issued again finishes the delete. The trash holds a nested
-    namespace a recoverable cascade detached, which names no location: only its top-level namespace's binding ties it
-    to this warehouse, so the re-issue finds it only if the binding still stands."""
-    for namespace in ("bronze", "silver"):
-        tenant.bind(namespace)
-    tables = ["bronze$a", "bronze$b", "silver$c"]
+    namespace a recoverable cascade detached, which names no location: its name, which begins with the warehouse's, is
+    what ties it to this warehouse, so the re-issue finds it by name."""
+    for namespace in ("acme-wh$bronze", "acme-wh$silver"):
+        tenant.create_namespace(namespace)
+    tables = ["acme-wh$bronze$a", "acme-wh$bronze$b", "acme-wh$silver$c"]
     for table in tables:
         tenant.create_table(table)
-    tenant.create_namespace("bronze$inner")
-    tenant.create_table("bronze$inner$d")
-    tenant.drop("namespace", "bronze$inner", {"behavior": "Cascade"})
-    trash_held = [("table", "bronze$inner$d"), ("namespace", "bronze$inner")]
+    tenant.create_namespace("acme-wh$bronze$inner")
+    tenant.create_table("acme-wh$bronze$inner$d")
+    tenant.drop("namespace", "acme-wh$bronze$inner", {"behavior": "Cascade"})
+    trash_held = [("table", "acme-wh$bronze$inner$d"), ("namespace", "acme-wh$bronze$inner")]
     kept = [f"{kind}:{name}" for kind, name in trash_held]
-    governed = [f"warehouse:{tenant.warehouse}", "namespace:bronze", "namespace:silver", *(f"table:{table}" for table in tables)]
+    governed = [f"warehouse:{tenant.warehouse}", "namespace:acme-wh$bronze", "namespace:acme-wh$silver", *(f"table:{table}" for table in tables)]
     assert tenant.trashed(trash_held) == trash_held and len(tenant.store.naming(tenant.fga(kept))) == len(kept), (
         "nothing kept for an undrop, so its end would pass vacuously"
     )
@@ -389,18 +389,20 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
 def test_a_cascade_refused_before_anything_landed_answers_its_refusal(tenant: _Tenant) -> None:
     """A cascade refused at its first table, whose claim a drop in flight holds fenced, has removed nothing: the refusal is
     its answer, never a partial delete that counts nothing and asks for a re-issue ([[LH-572]])."""
-    tenant.bind("bronze")
-    tenant.create_table("bronze$a")
+    tenant.create_namespace("acme-wh$bronze")
+    tenant.create_table("acme-wh$bronze$a")
     settings = get_settings()
     claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
-    location = tenant.client.post("/v1/table/bronze$a/describe", json={}).json()["location"]
+    location = tenant.client.post("/v1/table/acme-wh$bronze$a/describe", json={}).json()["location"]
     in_flight = location_claims.read(claims, location)
-    location_claims.fence(claims, location, in_flight, table="bronze$a", segments=["bronze", "a"], token="a-drop-in-flight", is_gone=lambda _claim: False)
+    location_claims.fence(
+        claims, location, in_flight, table="acme-wh$bronze$a", segments=[WAREHOUSE, "bronze", "a"], token="a-drop-in-flight", is_gone=lambda _claim: False
+    )
 
     refused = tenant.delete_warehouse()
 
     assert (refused.status_code, refused.headers["content-type"], refused.json().get("code")) == (409, "application/problem+json", 14), refused.text
-    assert tenant.present(["namespace:bronze", "table:bronze$a"]) == ["namespace:bronze", "table:bronze$a"]
+    assert tenant.present(["namespace:acme-wh$bronze", "table:acme-wh$bronze$a"]) == ["namespace:acme-wh$bronze", "table:acme-wh$bronze$a"]
 
 
 def _a_store_that_will_not_delete_a_tag(source_location: str, tag: str, *, storage_options: StorageOptions) -> bool:
@@ -410,13 +412,13 @@ def _a_store_that_will_not_delete_a_tag(source_location: str, tag: str, *, stora
 def _registered_clone(tenant: _Tenant, moto_url: str) -> tuple[lance.LanceDataset, str, dict[str, str]]:
     """``bronze$src`` in the warehouse and a shallow clone of it registered as ``bronze$silver``: the source, the clone's
     location and the store key."""
-    tenant.bind("bronze")
-    tenant.create_table("bronze$src")
+    tenant.create_namespace("acme-wh$bronze")
+    tenant.create_table("acme-wh$bronze$src")
     key = {"aws_endpoint": moto_url, "aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_region": "us-east-1", "aws_allow_http": "true"}
-    source = lance.dataset(tenant.client.post("/v1/table/bronze$src/describe", json={}).json()["location"], storage_options=key)
-    clone = f"s3://{tenant.warehouse}/silver"
+    source = lance.dataset(tenant.client.post("/v1/table/acme-wh$bronze$src/describe", json={}).json()["location"], storage_options=key)
+    clone = f"s3://{tenant.bucket}/silver"
     source.shallow_clone(clone, source.version, storage_options=key)
-    assert tenant.client.post("/v1/table/bronze$silver/register", json={"location": "silver"}).status_code == 200
+    assert tenant.client.post("/v1/table/acme-wh$bronze$silver/register", json={"location": "silver"}).status_code == 200
     return source, clone, key
 
 
@@ -429,7 +431,7 @@ def test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location_unt
     as maintenance's audit asks it, releases the tag and the location, records on the audit trail which clone it ended
     and which sources it released, and the warehouse is then purged with its source."""
     source, clone, key = _registered_clone(tenant, moto_url)
-    clone_uuid = str(tenant.client.post("/v1/table/bronze$silver/describe", json={}).json()["properties"]["rask.uuid"])
+    clone_uuid = str(tenant.client.post("/v1/table/acme-wh$bronze$silver/describe", json={}).json()["properties"]["rask.uuid"])
     settings = get_settings()
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     sources = base_registry.clone_source_locations(base_registry.read_base_record(registry, clone))
@@ -441,9 +443,9 @@ def test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location_unt
     settings = get_settings()
     claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
     held = location_claims.holder(claims, clone)
-    detached = tenant.client.post("/v1/table/bronze$silver/describe", json={}).status_code
+    detached = tenant.client.post("/v1/table/acme-wh$bronze$silver/describe", json={}).status_code
     assert (ended.status_code, ended.json().get("code"), detached) == (503, 17, 404), ended.text
-    assert held is not None and held.table == "bronze$silver", "the clone's location was freed with its tag still standing"
+    assert held is not None and held.table == "acme-wh$bronze$silver", "the clone's location was freed with its tag still standing"
     tenant.monkeypatch.setattr(clone_sources, "delete_tag", real_delete)
     tenant.monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
     (listed,) = tenant.client.get("/management/v1/clone-endings").json()["endings"]
@@ -452,7 +454,7 @@ def test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location_unt
     assert (finished.status_code, finished.json()) == (200, {"tags_released": 1, "kept": False}), finished.text
     (record,) = [r.__dict__ for r in caplog.records if r.__dict__.get("audit.action") == AuditAction.CLONE_ENDING_FINISH]
     named = (record["audit.outcome"], record["audit.resource"], record["audit.table"], record["audit.sources_released"])
-    assert named == (AuditOutcome.SUCCESS, f"table:{clone_uuid}", "bronze$silver", ",".join(sources))
+    assert named == (AuditOutcome.SUCCESS, f"table:{clone_uuid}", "acme-wh$bronze$silver", ",".join(sources))
     assert [tag for tag in lance.dataset(source.uri, storage_options=key).tags.list() if tag.startswith(clone_sources.TAG_PREFIX)] == []
     assert location_claims.holder(claims, clone) is None, "the finish left the clone's location held"
     assert tenant.delete_warehouse().status_code == 200
@@ -477,7 +479,7 @@ def test_a_purging_cascade_whose_clone_ending_cannot_be_filed_deletes_nothing(te
 
     ended = tenant.delete_warehouse()
 
-    described = tenant.client.post("/v1/table/bronze$silver/describe", json={})
+    described = tenant.client.post("/v1/table/acme-wh$bronze$silver/describe", json={})
     silver = described.json().get("properties", {}).get(UUID_PROPERTY)
     assert (ended.status_code, ended.json().get("code"), described.status_code, silver in reached) == (503, 17, 200, False), ended.text
 
@@ -519,7 +521,7 @@ def _a_backend_that_removes_the_row_and_answers_not_found(tenant: _Tenant) -> No
     [
         pytest.param(_a_store_that_will_not_delete_directories, (503, 17, 200), False, id="directory-delete-before-the-native-call"),
         pytest.param(_a_backend_that_will_not_deregister, (503, 17, 200), True, id="the-native-call-failed"),
-        pytest.param(_a_backend_that_removes_the_row_and_answers_not_found, (200, None, 403), True, id="the-native-call-answered-not-found"),
+        pytest.param(_a_backend_that_removes_the_row_and_answers_not_found, (200, None, 404), True, id="the-native-call-answered-not-found"),
     ],
 )
 def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_never_reached_the_row(
@@ -529,7 +531,8 @@ def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_n
     that fails leaves the row, and with it the clone's holds, its own, so the cascade removes the ending it filed. A native
     deregister that was attempted leaves the ending, whatever it answered (a failure with the row in place, or
     TableNotFound once another request removed it): no read tells the cascade whether the row it then finds is still the
-    clone's, and the finish judges it. A table the cascade did not detach keeps its location's claim, with the fence the
+    clone's, and the finish judges it. Every check is allowed, so once the warehouse is gone its name still vouches for
+    asking and a describe answers the absent clone 404. A table the cascade did not detach keeps its location's claim, with the fence the
     cascade held it by lifted."""
     _, clone, _ = _registered_clone(tenant, moto_url)
     failing(tenant)
@@ -538,24 +541,24 @@ def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_n
 
     settings = get_settings()
     claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
-    described = tenant.client.post("/v1/table/bronze$silver/describe", json={}).status_code
+    described = tenant.client.post("/v1/table/acme-wh$bronze$silver/describe", json={}).status_code
     assert (ended.status_code, ended.json().get("code"), described) == answered, ended.text
     assert bool(clone_endings.standing(claims)) is ending_stands
     held = location_claims.holder(claims, clone)
-    assert held is not None and (held.table, held.fence) == ("bronze$silver", None), f"the clone's location is left as {held}"
+    assert held is not None and (held.table, held.fence) == ("acme-wh$bronze$silver", None), f"the clone's location is left as {held}"
 
 
 def test_a_cascade_holds_the_table_it_is_detaching_and_ends_none_renamed_out_before_its_turn(tenant: _Tenant) -> None:
     """A warehouse cascade holds each table's claim fenced while it detaches it, as the deregister door does ([[LH-586]]).
-    As the first row is about to go, both tables of a bound namespace are renamed into another namespace of the
+    As the first row is about to go, both tables of a namespace are renamed into another namespace of the
     warehouse: the one being detached refuses, and the other, whose turn has not come, moves. The cascade ends only
     what it detached, so the moved table keeps every grant under its new name. It now stands in a namespace the cascade
     listed as empty, so the call answers what landed, for a re-issue to finish."""
-    for namespace in ("bronze", "silver"):
-        tenant.bind(namespace)
-    for table in ("bronze$a", "bronze$t"):
+    for namespace in ("acme-wh$bronze", "acme-wh$silver"):
+        tenant.create_namespace(namespace)
+    for table in ("acme-wh$bronze$a", "acme-wh$bronze$t"):
         tenant.create_table(table)
-    tables = {name: tenant.objects[f"table:bronze${name}"] for name in ("a", "t")}
+    tables = {name: tenant.objects[f"table:acme-wh$bronze${name}"] for name in ("a", "t")}
     held = {name: tenant.store.naming([obj])[obj] for name, obj in tables.items()}
     real_call = native.call
     renamed: dict[str, tuple[int, int | None]] = {}
@@ -566,7 +569,9 @@ def test_a_cascade_holds_the_table_it_is_detaching_and_ends_none_renamed_out_bef
         if operation == "deregister_table" and pending:
             pending.clear()
             for name in tables:
-                answered = tenant.client.post(f"/v1/table/bronze${name}/rename", json={"new_namespace_id": ["silver"], "new_table_name": name})
+                answered = tenant.client.post(
+                    f"/v1/table/acme-wh$bronze${name}/rename", json={"new_namespace_id": [WAREHOUSE, "silver"], "new_table_name": name}
+                )
                 renamed[name] = (answered.status_code, answered.json().get("code"))
         return real_call(ns, operation, *args)
 
@@ -577,23 +582,23 @@ def test_a_cascade_holds_the_table_it_is_detaching_and_ends_none_renamed_out_bef
     assert sorted(renamed.values(), key=str) == [(200, None), (409, ConcurrentModificationError.code)], renamed
     (moved,) = [name for name, answer in renamed.items() if answer[0] == 200]
     (taken,) = [name for name in tables if name != moved]
-    bronze, silver = tenant.objects["namespace:bronze"], tenant.objects["namespace:silver"]
+    bronze, silver = tenant.objects["namespace:acme-wh$bronze"], tenant.objects["namespace:acme-wh$silver"]
     whole_in_silver = {tuple(silver if part == bronze else part for part in triple) for triple in held[moved]}
     assert (
         (ended.status_code, ended.json().get("code")),
-        tenant.present([f"table:{namespace}${name}" for namespace in ("bronze", "silver") for name in tables]),
+        tenant.present([f"table:{namespace}${name}" for namespace in ("acme-wh$bronze", "acme-wh$silver") for name in tables]),
         tenant.store.naming([tables[moved]]),
         tenant.store.naming([tables[taken]]),
-    ) == ((503, 17), [f"table:silver${moved}"], {tables[moved]: whole_in_silver}, {}), ended.text
+    ) == ((503, 17), [f"table:acme-wh$silver${moved}"], {tables[moved]: whole_in_silver}, {}), ended.text
 
 
 def test_a_cascade_releases_only_the_claim_of_the_table_it_identified(tenant: _Tenant) -> None:
     """A warehouse cascade's fence on a table's claim can lapse before the claim is released, and the same name can then
     take the location's claim, under a uuid of its own: the cascade releases the claim only under the uuid it listed the
     table by, and the new holder keeps it."""
-    tenant.bind("bronze")
-    tenant.create_table("bronze$t")
-    location = str(tenant.client.post("/v1/table/bronze$t/describe", json={}).json()["location"])
+    tenant.create_namespace("acme-wh$bronze")
+    tenant.create_table("acme-wh$bronze$t")
+    location = str(tenant.client.post("/v1/table/acme-wh$bronze$t/describe", json={}).json()["location"])
     settings = get_settings()
     claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
     real_release = base_registry.release_clone_sources
@@ -602,7 +607,7 @@ def test_a_cascade_releases_only_the_claim_of_the_table_it_identified(tenant: _T
     def _release_then_the_same_name_takes_the_location(registry: base_registry.BaseRegistry, at: str, *, uuid: str | None) -> list[str]:
         released = real_release(registry, at, uuid=uuid)
         taken.append(str(_uuid4()))
-        location_claims.take(claims, at, "bronze$t", ["bronze", "t"], is_gone=lambda _claim: True, uuid=taken[0])
+        location_claims.take(claims, at, "acme-wh$bronze$t", [WAREHOUSE, "bronze", "t"], is_gone=lambda _claim: True, uuid=taken[0])
         return released
 
     tenant.monkeypatch.setattr(base_registry, "release_clone_sources", _release_then_the_same_name_takes_the_location)

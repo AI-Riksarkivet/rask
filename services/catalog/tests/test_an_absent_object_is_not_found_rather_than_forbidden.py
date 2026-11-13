@@ -46,13 +46,13 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the catalog confte
     """`db1` with `db1$shared`, which bob reads, and `db1$real` and `db1$private`, which he does not; alice owns them all."""
     alice = governed_catalog.bearer("alice")
     client = governed_catalog.client
-    for namespace in ("db1", "db1$private"):
-        assert client.post(f"/v1/namespace/{namespace}/create", json={}, headers=alice).status_code == 200
+    assert governed_catalog.create_in_the_estate("alice", "db1").status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$db1$private/create", json={}, headers=alice).status_code == 200
     rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
     for table in ("shared", "real"):
-        created = client.post(f"/v1/table/db1${table}/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        created = client.post(f"/v1/table/lance_catalog$db1${table}/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert created.status_code == 200, created.text
-    granted = client.post("/management/v1/table/db1$shared/access/grant", json={"user": "dex~bob", "relation": "reader"}, headers=alice)
+    granted = client.post("/management/v1/table/lance_catalog$db1$shared/access/grant", json={"user": "dex~bob", "relation": "reader"}, headers=alice)
     assert granted.status_code == 200, granted.text
     return governed_catalog
 
@@ -60,13 +60,17 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the catalog confte
 @pytest.mark.parametrize(
     ("caller", "door", "status", "code"),
     [
-        pytest.param("bob", "/v1/table/db1$ghost/describe", 404, TABLE_NOT_FOUND, id="an-absent-table-under-a-readable-parent-is-not-found"),
-        pytest.param("bob", "/v1/table/db1$real/describe", 404, TABLE_NOT_FOUND, id="a-table-the-caller-cannot-see-answers-as-an-absent-one"),
+        pytest.param("bob", "/v1/table/lance_catalog$db1$ghost/describe", 404, TABLE_NOT_FOUND, id="an-absent-table-under-a-readable-parent-is-not-found"),
+        pytest.param("bob", "/v1/table/lance_catalog$db1$real/describe", 404, TABLE_NOT_FOUND, id="a-table-the-caller-cannot-see-answers-as-an-absent-one"),
         pytest.param(
-            "bob", "/v1/table/db1$private$ghost/describe", 404, TABLE_NOT_FOUND, id="a-name-under-a-hidden-namespace-answers-as-one-under-an-absent-one"
+            "bob",
+            "/v1/table/lance_catalog$db1$private$ghost/describe",
+            404,
+            TABLE_NOT_FOUND,
+            id="a-name-under-a-hidden-namespace-answers-as-one-under-an-absent-one",
         ),
-        pytest.param("bob", "/v1/table/db1$ghost/drop", 403, PERMISSION_DENIED, id="a-destructive-door-keeps-its-403-for-an-absent-table"),
-        pytest.param("carol", "/v1/table/db1$ghost/describe", 403, PERMISSION_DENIED, id="no-parent-rung-no-answer"),
+        pytest.param("bob", "/v1/table/lance_catalog$db1$ghost/drop", 403, PERMISSION_DENIED, id="a-destructive-door-keeps-its-403-for-an-absent-table"),
+        pytest.param("carol", "/v1/table/lance_catalog$db1$ghost/describe", 403, PERMISSION_DENIED, id="no-parent-rung-no-answer"),
     ],
 )
 def test_a_refused_read_answers_not_found_alike_for_an_absent_and_a_hidden_name_to_a_caller_who_sees_above_it(
@@ -89,26 +93,34 @@ def cascaded(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "0" if layout == "destroyed" else "7")
     catalog = request.getfixturevalue("estate")
     alice = catalog.bearer("alice")
-    for namespace in ("tree", "tree$kids", "db1$sub", "db1$sub$leaf"):
+    assert catalog.create_in_the_estate("alice", "tree").status_code == 200
+    for namespace in ("lance_catalog$tree$kids", "lance_catalog$db1$sub", "lance_catalog$db1$sub$leaf"):
         assert catalog.client.post(f"/v1/namespace/{namespace}/create", json={}, headers=alice).status_code == 200
-    for top in ("tree", "db1$sub"):
+    for top in ("lance_catalog$tree", "lance_catalog$db1$sub"):
         dropped = catalog.client.post(f"/v1/namespace/{top}/drop", json={"behavior": "CASCADE"}, headers=alice)
         assert dropped.status_code == 200, dropped.text
     if layout == "recreated":
-        assert catalog.client.post("/v1/namespace/tree/create", json={}, headers=catalog.bearer("bob")).status_code == 200
+        assert catalog.create_in_the_estate("bob", "tree").status_code == 200
     return catalog
 
 
 @pytest.mark.parametrize(
     ("cascaded", "caller", "namespace", "status", "code"),
     [
-        pytest.param("recoverable", "alice", "tree", 404, NAMESPACE_NOT_FOUND, id="a-dropped-top-is-not-found-to-who-holds-it-in-the-trash"),
-        pytest.param("recoverable", "alice", "tree$kids", 404, NAMESPACE_NOT_FOUND, id="its-child-is-not-found-to-who-holds-it-in-the-trash"),
-        pytest.param("destroyed", "bob", "db1$sub$leaf", 404, NAMESPACE_NOT_FOUND, id="a-destroyed-child-is-not-found-to-a-reader-of-what-still-stands"),
-        pytest.param("recoverable", "carol", "tree$kids", 403, PERMISSION_DENIED, id="a-caller-who-held-nothing-learns-nothing"),
-        pytest.param("destroyed", "bob", "nosuch", 403, PERMISSION_DENIED, id="a-top-level-name-is-never-answered-from-its-warehouse"),
+        pytest.param("recoverable", "alice", "lance_catalog$tree", 404, NAMESPACE_NOT_FOUND, id="a-dropped-top-is-not-found-to-who-holds-it-in-the-trash"),
+        pytest.param("recoverable", "alice", "lance_catalog$tree$kids", 404, NAMESPACE_NOT_FOUND, id="its-child-is-not-found-to-who-holds-it-in-the-trash"),
         pytest.param(
-            "recreated", "alice", "tree$kids", 404, NAMESPACE_NOT_FOUND, id="a-trashed-grant-answers-alike-whether-or-not-its-name-was-recreated-since"
+            "destroyed", "bob", "lance_catalog$db1$sub$leaf", 404, NAMESPACE_NOT_FOUND, id="a-destroyed-child-is-not-found-to-a-reader-of-what-still-stands"
+        ),
+        pytest.param("recoverable", "carol", "lance_catalog$tree$kids", 403, PERMISSION_DENIED, id="a-caller-who-held-nothing-learns-nothing"),
+        pytest.param("destroyed", "bob", "lance_catalog$nosuch", 404, NAMESPACE_NOT_FOUND, id="a-name-directly-in-a-warehouse-is-answered-from-the-warehouse"),
+        pytest.param(
+            "recreated",
+            "alice",
+            "lance_catalog$tree$kids",
+            404,
+            NAMESPACE_NOT_FOUND,
+            id="a-trashed-grant-answers-alike-whether-or-not-its-name-was-recreated-since",
         ),
     ],
     indirect=["cascaded"],
@@ -119,3 +131,27 @@ def test_a_namespace_a_cascade_dropped_is_not_found_to_a_caller_who_held_a_right
     answered = cascaded.client.post(f"/v1/namespace/{namespace}/describe", json={}, headers=cascaded.bearer(caller))
 
     assert (answered.status_code, answered.json()["code"]) == (status, code), answered.text
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("lance_catalog$db1", id="a-namespace-that-exists"),
+        pytest.param("lance_catalog$ghost", id="an-absent-namespace-in-the-same-warehouse"),
+        pytest.param("nowarehouse$db1", id="a-namespace-in-a-warehouse-that-does-not-exist"),
+    ],
+)
+def test_a_caller_holding_nothing_on_a_warehouse_learns_neither_its_names_nor_whether_it_exists(estate: Any, name: str) -> None:
+    """Carol holds nothing on the estate's warehouse, and there is no warehouse ``nowarehouse`` ([[LH-593]])."""
+    answered = estate.client.post(f"/v1/namespace/{name}/describe", json={}, headers=estate.bearer("carol"))
+
+    assert answered.status_code == 403
+    assert answered.headers["content-type"] == "application/problem+json"
+    assert answered.json() == {
+        "type": "https://lance.org/problems/permissiondeniederror",
+        "title": "PermissionDeniedError",
+        "status": 403,
+        "detail": f"can_get_metadata required on namespace:{name}",
+        "code": PERMISSION_DENIED,
+        "error": f"can_get_metadata required on namespace:{name}",
+    }

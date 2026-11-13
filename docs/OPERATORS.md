@@ -22,34 +22,107 @@ The lakehouse runs no compute and submits no job ([ADR 0155](adr/0155-the-medall
 KubeRay, Kueue, GPU operators and whatever orchestrates a pipeline belong to the user who runs that pipeline, and no
 lakehouse service imports `ray` (the import contract `the-lakehouse-knows-no-client`).
 
-## 2 · A rask operator is planned, and it owns intent, never state
+## 2 · The catalog converges what git declares; an operator comes later
 
-No operator of rask's own exists yet. One is planned as the reconciler that makes the estate what git declares
-([ADR 0199](adr/0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md); the GitOps fact in
-`CLAUDE.md`), beside Argo CD, which applies the chart.
+The tenants an estate holds are declared in git and converged by the catalog itself
+([ADR 0206](adr/0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md),
+XC-213), so an install from git holds its projects, warehouses and service grants with no call to any door. Argo CD
+applies the chart; the catalog reconciles what the chart declares.
 
-The state of record stays where it is: catalog and lakehouse state, lineage's commit feed and edge list included,
-lives in **Lance manifests on S3**, and authorization in **OpenFGA**. An operator that copied either into custom
-resources would be a second owner of state that already has one, so it does not. What it reconciles is declared
-intent inside the catalog ([architecture/operator-findings.md](architecture/operator-findings.md), read from the two
-reference operators' source 2026-11-10):
+**What is declared, and where.** The chart's `catalog.declared` values hold three lists:
 
-- **Projects, warehouses and grants** declared in git as namespaced resources, each reconciled only through the
-  catalog's audited doors as the operator's own ServiceAccount identity, never the store or OpenFGA directly. The
-  catalog stays the state of record: a deletion defaults to retaining what is behind the resource, and a grant
-  resource revokes only the tuple it wrote. Until it is built,
-  [ADR 0192](adr/0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) stands: a
-  grant is made at the catalog's access doors.
-- **It replaces none of the chart's provisioning Jobs.** Reconciling the object store's policies, the bus permissions
-  or the signing pairs continuously would mean holding the platform store's admin credential, the bus account's
-  signing key and write access to the secret store, which zero trust refuses. Those stay idempotent Jobs for the
-  development fixtures and the platform's own controllers in production (§ 3 for the streams).
+- `projects`: `{id, admins, protected}`. `admins` are people's principals (`<idp-id>~<user id>`); a project naming none
+  is administered by `auth.bootstrapAdmin` when that is set. The default values declare one project, `default`.
+- `warehouses`: `{id, project, bucket, delete_profile, protected, active}`. `bucket` defaults to the id; the id is the
+  first segment of every name in the warehouse (`<warehouse>$<namespace>…$<table>`).
+- `grants`: `{object, relation, principal}` on `project:<id>` or `warehouse:<id>`, to a principal that is not a person
+  (a service account, `kubernetes~system:serviceaccount:<namespace>:<name>`). A person's grant is refused in the
+  declaration; it is made at the catalog's access doors.
 
-It is written in Go on kubebuilder (controller-runtime), namespace-scoped and shipped as its own release (owner,
-2026-11-10: "Go for operator"), which makes Go a third language of the product beside Python and TypeScript.
+Namespaces, tables and people's grants other than a project's admins are never declared: they stay with their doors.
+The chart renders the lists into the ConfigMap `<release>-catalog-declaration` (key `declaration.json`), which the
+catalog mounts as a volume at `/etc/rask/declaration` (`LANCE_DECLARATION_FILE`), so a change reaches a running pod with
+no roll.
 
-It installs none of the platform's operators in § 1, and it holds no credential a service does not already hold by
-its own ServiceAccount: one Role in its namespace, with no access to Secrets, Deployments or Jobs.
+**The tick.** The Dapr cron Component `catalog-declaration-converge-cron` (`catalog.declarationConverge`, every 60 s by
+default) delivers to the catalog, which reads the mounted file and converges onto it in order: projects, then
+warehouses, then what git stopped declaring, then grants (`catalog/api/declaration_converge.py`). It makes what is
+missing and corrects what drifted (a warehouse's bucket, delete profile, status and protection; a project's
+protection) through the same functions the doors call, so each change is audited and announced as a door's is, its
+actor `system:declaration`. One object's failure leaves every other object to that tick, and the next tick tries again.
+A file that cannot be read as a declaration converges nothing and releases nothing.
+
+**`managed_by: git` and the lock.** Each declared project and warehouse carries `managed_by: git` on its record. A
+door asked to change what git declares of it answers 403 code 15 naming the declaration, audited as a denial with reason
+`managed_by_git`: for a warehouse, a re-`POST /management/v1/warehouses` of its id, `deactivate`, `activate`,
+`protection` and `DELETE`; for a project, `protection` and `DELETE`. The lock is asked after the door's own
+authorization, so only a caller who could otherwise make the change learns that git owns it, and it holds on a stack
+that authenticates nobody. Grants, namespaces and tables beneath a declared object stay with their doors. A warehouse is
+marked only once the catalog has established it to the end (its record, its row in its own catalog, its grants), so
+one whose establish failed part-way is established again by the next tick and is not locked meanwhile.
+
+**A warehouse does not move between projects.** A declaration naming a standing warehouse under another project than
+its record's is refused for that warehouse on every tick (`warehouse:<id>` under `failed`), and its status, protection
+and mark stay as they are: correct the declaration, or delete the warehouse and declare it anew.
+
+**Removal from git.** A project or warehouse removed from the lists is released: its `managed_by` clears, its data and
+records stay, and its doors change it again. A declared grant is recorded under `_declared_grants/` on the control root
+before its tuple is written, and only a recorded tuple is revoked once git stops declaring it; a tuple the store already
+held when the declaration asked for it is not recorded, so a grant made at a door is never taken. A project's declared
+admin is revoked through the members door's own rule, which keeps a project its last direct admin: that revoke is
+refused, and counted as a failure on each tick, until another admin is granted.
+
+**Reading whether it converged.** Until the operator exists there is no per-object status in Kubernetes; read the
+catalog:
+
+- the log line `declaration_converged` (logged when a tick changed something or failed), whose `converged`,
+  `released`, `grants_written`, `grants_revoked` and `failed` name what it did; `declaration_converge_failed` (WARNING)
+  for each object a tick could not converge, and `declaration_unreadable` (ERROR) for a file it could not read;
+- the counter `catalog.declaration_converge.failed`, labelled `lance.catalog.object` (`project:<id>`, `warehouse:<id>`,
+  `grant:…`, `revoke:…`, `declaration`);
+- `managed_by` on `GET /management/v1/projects/{id}` and `GET /management/v1/warehouses/{id}` (`"git"`, or `"self"` for one its own doors manage), which
+  the console shows as "Declared in git".
+
+**Procedure.** Each step is a change to the values in git, applied by Argo CD (or `make k3s-up` in development); the
+catalog converges it within a tick.
+
+1. Declare a project, a warehouse and a service grant:
+
+   ```yaml
+   catalog:
+     declared:
+       projects:
+         - id: acme
+           admins: ["dex~alice"]
+       warehouses:
+         - id: acme-bronze
+           project: acme
+           delete_profile: {mode: soft, grace_days: 7}
+       grants:
+         - object: warehouse:acme-bronze
+           relation: writer
+           principal: "kubernetes~system:serviceaccount:pipelines:ingest"
+   ```
+
+   Read it back: `GET /management/v1/warehouses/acme-bronze` answers `managed_by: "git"`, and the catalog's log holds a
+   `declaration_converged` line naming `project:acme` and `warehouse:acme-bronze` with `grants_written` counting the
+   admin and the service grant. Names in the warehouse begin with its id: `POST /v1/namespace/acme-bronze$sales/create`.
+2. Change one: set `active: false` (or `protected: true`) on the warehouse in git. The next tick deactivates it; a
+   `POST /management/v1/warehouses/acme-bronze/activate` at the door is refused 403 code 15 while git declares it.
+3. Remove one: delete the grant from `grants`, and the next tick revokes that tuple alone. Delete the warehouse from
+   `warehouses`, and the next tick releases it (`released` names it): its tables stay, and its own doors (including
+   `DELETE`) apply to it again.
+
+**The operator comes later** (XC-210, ADR 0206 § 5) and is thinner than first planned: it would write the same
+declaration from custom resources and add a status per object, which today is read from the catalog's log and doors.
+It is not a prerequisite for GitOps. The state of record stays where it is: catalog and lakehouse state, lineage's
+commit feed and edge list included, lives in **Lance manifests on S3**, and authorization in **OpenFGA**; the
+declaration is intent, never a copy of either. The chart's provisioning Jobs (the object store's policies, the bus
+permissions, the signing pairs) stay idempotent Jobs for the development fixtures and the platform's own controllers in
+production (§ 3 for the streams): reconciling them continuously would mean holding the platform store's admin
+credential, the bus account's signing key and write access to the secret store, which zero trust refuses. The
+reference operators' source was read on 2026-11-10
+([architecture/operator-findings.md](architecture/operator-findings.md)).
 
 ## 3 · Optional: NACK for the streams
 

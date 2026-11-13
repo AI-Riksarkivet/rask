@@ -19,6 +19,7 @@ Config via env (defaults target the local governance stack):
     LINEAGE_URL   (default http://localhost:8000)
     DEX_URL       (default http://localhost:5556/dex)
     DEX_CLIENT_SECRET  the confidential sign-in client `rask-web`'s secret (default the dev Dex's, `lance-catalog-secret`)
+    ESTATE_WAREHOUSE   the warehouse the demo's namespace is created in (default the estate's own, `lance_catalog`)
 
 Exits non-zero if any governance invariant does not hold.
 """
@@ -40,6 +41,8 @@ CATALOG = os.environ.get("CATALOG_URL", "http://localhost:2333").rstrip("/")
 LINEAGE = os.environ.get("LINEAGE_URL", "http://localhost:8000").rstrip("/")
 DEX = os.environ.get("DEX_URL", "http://localhost:5556/dex").rstrip("/")
 DEX_CLIENT_SECRET = os.environ.get("DEX_CLIENT_SECRET", "lance-catalog-secret")
+#: Every name's first segment is its warehouse; the estate's own is the id of the catalog's RASK_FGA_DEFAULT_WAREHOUSE_OBJECT.
+ESTATE_WAREHOUSE = os.environ.get("ESTATE_WAREHOUSE", "lance_catalog")
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 GREEN, RED, BOLD, RESET = "\033[32m", "\033[31m", "\033[1m", "\033[0m"
 
@@ -111,7 +114,7 @@ def poll(fn: Callable[[], object], want: object, *, tries: int = 20, delay: floa
 
 
 def main() -> int:
-    ns = f"demo{os.getpid()}"
+    ns = f"{ESTATE_WAREHOUSE}$demo{os.getpid()}"
     bronze, silver = f"{ns}$bronze$events", f"{ns}$silver$events"
 
     step("Tokens from Dex (the IdP)")

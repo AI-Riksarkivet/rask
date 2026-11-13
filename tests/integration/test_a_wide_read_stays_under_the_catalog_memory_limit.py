@@ -34,12 +34,14 @@ import pyarrow.ipc as ipc
 import pytest
 from lance_namespace import CreateNamespaceRequest, DeclareTableRequest, connect
 
+from catalog.services.warehouses import ensure_catalog_row
+
 
 #: The catalog's memory limit, `chart/values.yaml` (catalog resources.limits.memory: 512Mi).
 _LIMIT_KB = 512 * 1024
 _ROWS, _DIM = 40_000, 1024
 _BUCKET = "wide-read"
-_TABLE = "wide$t"
+_TABLE = "lance_catalog$wide$t"
 #: The table has no vector index, so every query is a flat search over the whole vector column: the most
 #: a bounded `/query` can cost on it.
 _PROBE = [0.5] * _DIM
@@ -58,8 +60,9 @@ def wide_store(moto_url: str) -> str:
         "storage.allow_http": "true",
     }
     ns = connect("dir", props)
-    ns.create_namespace(CreateNamespaceRequest(id=["wide"]))
-    location = ns.declare_table(DeclareTableRequest(id=["wide", "t"])).location
+    ensure_catalog_row(ns, "lance_catalog")
+    ns.create_namespace(CreateNamespaceRequest(id=["lance_catalog", "wide"]))
+    location = ns.declare_table(DeclareTableRequest(id=["lance_catalog", "wide", "t"])).location
     values = pa.array(np.random.default_rng(0).random(_ROWS * _DIM, dtype=np.float32))
     table = pa.table({"id": pa.array(range(_ROWS), pa.int64()), "vec": pa.FixedSizeListArray.from_arrays(values, _DIM)})
     storage = {key.removeprefix("storage."): value for key, value in props.items() if key.startswith("storage.")}

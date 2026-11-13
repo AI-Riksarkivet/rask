@@ -18,8 +18,9 @@ never by listing `tree/`, and reads each one's versions past that parent version
 
 The edge list is read once lineage has acknowledged every message the bus held, so a missing or a duplicated edge is
 lineage's decision, never an announcement still in flight; the read then waits out an announcement the catalog left in
-its outbox for the relay. It is read the way its owner reads any table, by a stock client opening `provenance$edges`
-through the namespace: the estate's owner owns the provenance namespace through the estate's default warehouse
+its outbox for the relay. It is read the way its owner reads any table, by a stock client opening
+`lance_catalog$provenance$edges` through the namespace: the estate's owner owns the provenance namespace through the
+estate's own warehouse
 (`catalog.services.provenance_namespace`).
 
 EVENTS. Nothing a drive caused parks on the DLQ stream (`bus.messages_since("DLQ", ...)`), and the catalog's two
@@ -55,8 +56,9 @@ from lakehouse.naming import uuid_of
 from lakehouse.storage_options import StorageOptions
 
 
-#: The namespace the catalog keeps lineage's tables in (`services.lineage.provenanceNamespace`).
-PROVENANCE_NAMESPACE = os.environ.get("LANCE_E2E_PROVENANCE_NAMESPACE", "provenance")
+#: The namespace the catalog keeps lineage's tables in (`services.lineage.provenanceNamespace`), a namespace of the
+#: estate's own warehouse: its first segment is that warehouse's id.
+PROVENANCE_NAMESPACE = os.environ.get("LANCE_E2E_PROVENANCE_NAMESPACE", "lance_catalog$provenance")
 #: The durable consumer through which lineage records what the catalog announces.
 LINEAGE_DURABLE = "lineage-durable"
 #: The catalog's control outbox (`LANCE_CONTROL_OUTBOX_URI`), and the store the outboxes live in.

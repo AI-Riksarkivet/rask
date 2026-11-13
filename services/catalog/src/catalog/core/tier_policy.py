@@ -84,7 +84,7 @@ class Write(BaseModel):
 
     ``op`` is the route suffix (``insert``, ``create``, ``rename``) and ``obj`` the object written, by its name, for the
     audit. ``rung`` is what the route maps declare for it, asked on the parent namespace for a create; it is ``None``
-    only for a top-level create the deployment leaves open (``fga_lock_root_create`` off). ``table`` is the table the
+    for a vend, whose rungs the vend door has already asked. ``table`` is the table the
     write lands in, which for a rename is the destination.
     """
 
@@ -148,8 +148,9 @@ async def tier_of(ns: LanceNamespace, namespace: Sequence[str]) -> str | None:
     """The tier of the namespace path ``namespace``: the shallowest declaration on it, or ``None``.
 
     Shallowest first, because a deeper namespace may only repeat its ancestor's tier (the create door
-    refuses a different one), so the first declaration found is the answer and a top-level tier
-    namespace costs one describe. A namespace that does not exist declares nothing; the door that
+    refuses a different one), so the first declaration found is the answer. The walk starts at the name's first segment,
+    its warehouse's own row, which no door gives a tier, so a tier namespace directly in a warehouse costs two describes.
+    A namespace that does not exist declares nothing; the door that
     needs it answers its own 404.
     """
     for depth in range(1, len(namespace) + 1):
@@ -164,8 +165,8 @@ async def judge(
     """Allow ``op`` or refuse it with the spec's typed error.
 
     ``check`` asks the rung (``None`` with FGA off, when no rung exists to ask). ``inputs`` judges the inputs a stamping
-    door's run names. ``namespace`` yields the connection a top-level namespace resolves through, and is only awaited
-    once the rung allowed.
+    door's run names. ``namespace`` yields the connection of the warehouse a name's first segment names, and is only
+    awaited once the rung allowed.
 
     A rename commits nothing, so no run can reach it: one that moves a table into a silver or gold namespace from a
     namespace of another tier is refused, because it would place data in the derived tier that no run produced.
@@ -194,7 +195,7 @@ async def judge(
 
 
 async def _tier_of_table(namespace: Callable[[str], Awaitable[LanceNamespace]], table: Sequence[str]) -> str | None:
-    """The tier of the namespace path table ``table`` lies in, read through its top-level namespace's connection."""
+    """The tier of the namespace path table ``table`` lies in, read through its warehouse's connection."""
     return await tier_of(await namespace(table[0]), table[:-1]) if len(table) > 1 else None
 
 

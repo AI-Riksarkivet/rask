@@ -54,7 +54,7 @@ class _Estate:
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         self.victim = f"s3://{bucket}/models/victim/tok/weights.bin"
         self.policies: list[dict[str, Any]] = []
-        assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
     def create(self, table: str, rows: pa.Table, external_blob_base: str | None) -> Any:  # noqa: ANN401 — the httpx response
         return self.client.post(
@@ -118,11 +118,11 @@ def estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
 )
 def test_a_create_is_vended_nothing_outside_its_table_prefix(estate: _Estate, requested: str | None) -> None:
     rows = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([b"inline-bytes"])})
-    created = estate.create("db$plain", rows, requested.format(corpus=estate.corpus) if requested else None)
+    created = estate.create("lance_catalog$db$plain", rows, requested.format(corpus=estate.corpus) if requested else None)
     assert created.status_code == 200, created.text
     prefix = str(created.json()["location"]).removeprefix(f"s3://{estate.bucket}/").rstrip("/")
 
-    vended = estate.client.post("/management/v1/table/db$plain/credentials", params={"tier": "read"})
+    vended = estate.client.post("/management/v1/table/lance_catalog$db$plain/credentials", params={"tier": "read"})
 
     assert vended.status_code == 200, vended.text
     assert vended.json()["mode"] == "direct", vended.text
@@ -141,11 +141,11 @@ def test_a_create_is_vended_nothing_outside_its_table_prefix(estate: _Estate, re
 def test_a_create_pointing_at_another_tenants_object_is_refused(estate: _Estate, requested: str | None, refusal: str) -> None:
     rows = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([Blob.from_uri(estate.victim)])})
 
-    created = estate.create("db$thief", rows, requested.format(bucket=estate.bucket) if requested else None)
+    created = estate.create("lance_catalog$db$thief", rows, requested.format(bucket=estate.bucket) if requested else None)
 
     assert (created.status_code, created.json().get("code")) == (400, _INVALID_INPUT), created.text
     assert refusal in created.json()["detail"], created.text
-    assert estate.client.post("/v1/table/db$thief/describe", json={}).status_code == 404
+    assert estate.client.post("/v1/table/lance_catalog$db$thief/describe", json={}).status_code == 404
 
 
 def test_a_derived_tier_takes_its_upstreams_carried_pointers(estate: _Estate) -> None:
@@ -154,12 +154,12 @@ def test_a_derived_tier_takes_its_upstreams_carried_pointers(estate: _Estate) ->
     base = f"s3://{estate.corpus}/media/pages/"
     estate.s3.put_object(Bucket=estate.corpus, Key="media/pages/p-1.bin", Body=b"PAGE-ONE")
     rows = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([Blob.from_uri(f"{base}p-1.bin")])})
-    bronze = estate.create("db$bronze", rows.schema.empty_table(), base)
+    bronze = estate.create("lance_catalog$db$bronze", rows.schema.empty_table(), base)
     assert bronze.status_code == 200, bronze.text
     bronze_uri = str(bronze.json()["location"])
     lance.write_dataset(rows, bronze_uri, mode="append", storage_options=estate.key.in_clear())
 
-    silver = estate.create("db$silver", rows.schema.empty_table(), base)
+    silver = estate.create("lance_catalog$db$silver", rows.schema.empty_table(), base)
     assert silver.status_code == 200, silver.text
     silver_uri = str(silver.json()["location"])
 
@@ -172,7 +172,7 @@ def test_a_derived_tier_takes_its_upstreams_carried_pointers(estate: _Estate) ->
 def test_a_base_over_the_model_tree_is_sanctioned_by_nothing_but_a_record(estate: _Estate) -> None:
     """A write-vend holder can write any manifest: a base inside the configured ``models/`` entry, planted with
     ``add_bases`` and pointed through, is refused at the blob door, and a dataset declaring one is refused at register."""
-    created = estate.create("db$plant", pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([b"own"])}), None)
+    created = estate.create("lance_catalog$db$plant", pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([b"own"])}), None)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     planted = lance.DatasetBasePath(f"s3://{estate.bucket}/models/victim/", name="planted", is_dataset_root=False)
@@ -188,8 +188,8 @@ def test_a_base_over_the_model_tree_is_sanctioned_by_nothing_but_a_record(estate
         enable_stable_row_ids=True,
     )
 
-    served = estate.client.get("/management/v1/table/db$plant/blobs", params={"column": "payload", "row": 1})
-    registered = estate.client.post("/v1/table/db$registered/register", json={"location": "registered"})
+    served = estate.client.get("/management/v1/table/lance_catalog$db$plant/blobs", params={"column": "payload", "row": 1})
+    registered = estate.client.post("/v1/table/lance_catalog$db$registered/register", json={"location": "registered"})
 
     assert (served.status_code, registered.status_code) == (409, 400), (served.content[:200], registered.text)
     assert (served.json()["code"], registered.json()["code"]) == (_INVALID_TABLE_STATE, _INVALID_INPUT)

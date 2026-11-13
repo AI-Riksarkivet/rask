@@ -183,7 +183,7 @@ export interface paths {
          *     is revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the
          *     store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
          *     what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
-         *     them, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door
+         *     them, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_the_chart_grants`). Re-running the door
          *     revokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed
          *     before the revoke and sent once the deletion is recorded, so a door failing after the record still announces it
          *     ([[LH-576]]). ``revoked`` counts the tuples this call removed.
@@ -1311,12 +1311,7 @@ export interface paths {
          *     offboarding.
          *
          *     Tolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning
-         *     by the registry primitives themselves. An unreadable BINDING is different and is reported —
-         *     ``read_bindings`` (not ``list_bindings``) so the skip list crosses the return boundary into
-         *     ``incomplete``/``skipped_bindings``. A binding you cannot read is a namespace you cannot see, and a
-         *     quietly short list would read as checked-and-clean. It still answers 200: this is a listing, not the
-         *     destructive door ``namespaces_bound_to`` guards, where one corrupt object correctly refuses the whole
-         *     operation.
+         *     by the registry primitives themselves.
          */
         get: operations["list_project_policies_management_v1_projects__id__policies_get"];
         put?: never;
@@ -2546,49 +2541,13 @@ export interface paths {
          * Create Warehouse
          * @description Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
          *
-         *     Order (fail-closed): the project must EXIST (``require_project_exists`` — 404 naming
+         *     Order (fail-closed): the request's shape (400), then the project must EXIST (``require_project_exists`` — 404 naming
          *     ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
-         *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the
-         *     bucket (idempotent), probe its store, write the registry record, and grant the caller ``owner`` on
-         *     ``warehouse:<id>`` with its ``project`` edge. The probe refuses a store that ignores credential scope or a
-         *     conditional put (400) and one it cannot reach (503), so no such warehouse becomes routable ([[LH-481]]). A re-run with the same id is idempotent (bucket + record overwrite-safe).
-         *
-         *     The estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at
-         *     ``POST /management/v1/projects``, which seeds the project's admin — so by the time this runs the project has
-         *     admins of its own and one door is enough.
+         *     it runs before authz), THEN authorize ``can_create_warehouse`` on the project, then :func:`establish_warehouse`
+         *     makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is, and the catalog converges
+         *     it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
          */
         post: operations["create_warehouse_management_v1_warehouses_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/warehouses/-/bindings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Estate Bindings
-         * @description Every binding the caller may see, from ONE ``list_bindings`` pass (#86).
-         *
-         *     ``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/…`` and
-         *     ``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's
-         *     warehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires ≥3 chars with alphanumeric ends),
-         *     which makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route
-         *     in the estate and it is our own convention, borrowed from GitLab — the Lance spec's own root
-         *     placeholder is the delimiter, which is not available here.
-         *
-         *     Governed exactly like the warehouse listing it complements: with FGA on, filtered to the
-         *     warehouses the caller can ``can_get_metadata`` — a binding names a namespace AND the tenant
-         *     bucket it lives in, so leaking one leaks another tenant's shape.
-         */
-        get: operations["list_estate_bindings_management_v1_warehouses___bindings_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2611,7 +2570,8 @@ export interface paths {
         post?: never;
         /**
          * Delete Warehouse
-         * @description Delete a warehouse: its bindings, its tuples and its registry record — and its BUCKET only if asked.
+         * @description Delete a warehouse: its namespaces (on ``?cascade=true``), its trash, its tuples and its registry record — and
+         *     its BUCKET only if asked.
          *
          *     Gated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the
          *     warehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own
@@ -2627,16 +2587,16 @@ export interface paths {
          *        PROTECTION ONLY — step 2 has already run, identically, with or without it.
          *     4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not
          *        say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with
-         *        everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to
+         *        everything in them. Before anything is removed, every namespace's subtree is enumerated and held to
          *        its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless
          *        ``force=true``, and that refusal changes nothing.
          *     5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,
-         *        policy, claim and base record, its trash record last. The bindings select it, so it goes while they still
-         *        stand, and a re-issue after a failure here selects the same records. Then the cascade removes each bound
+         *        policy, claim and base record, its trash record last. A record is the warehouse's when its name begins with the
+         *        warehouse's id, so a re-issue after a failure here selects the same records. Then the cascade removes each
          *        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
          *        the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
          *        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
-         *        (``fga_deps.end_removed_subtree``), the binding last.
+         *        (``fga_deps.end_removed_subtree``), and the warehouse's own row in its catalog last.
          *        ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
          *        namespace Restrict whatever ``behavior`` says (measured: ``behavior="Cascade"`` is ignored, not
          *        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
@@ -2652,9 +2612,8 @@ export interface paths {
          *        (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping
          *        the bytes keeps the claim, so no other project adopts what the bucket still holds.
          *
-         *     The routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings
-         *     POSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the
-         *     cache would keep routing that namespace into a warehouse that no longer exists.
+         *     Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
+         *     reaches its bucket.
          */
         delete: operations["delete_warehouse_management_v1_warehouses__warehouse_id__delete"];
         options?: never;
@@ -2673,7 +2632,7 @@ export interface paths {
         put?: never;
         /**
          * Activate Warehouse
-         * @description Reactivate a quarantined warehouse (#3-A lifecycle) — restores routing to its bound namespaces.
+         * @description Reactivate a quarantined warehouse (#3-A lifecycle) — restores routing to the names beneath it.
          *     Admin-gated on the warehouse's project. Idempotent.
          */
         post: operations["activate_warehouse_management_v1_warehouses__warehouse_id__activate_post"];
@@ -2694,90 +2653,12 @@ export interface paths {
         put?: never;
         /**
          * Deactivate Warehouse
-         * @description Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on its bound namespaces
+         * @description Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on a name beneath it
          *     (403), so no new tables are created and existing ones are suspended — the tenant-offboarding first step.
          *     Admin-gated on the warehouse's project. Idempotent (re-deactivating is a no-op).
          */
         post: operations["deactivate_warehouse_management_v1_warehouses__warehouse_id__deactivate_post"];
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/warehouses/{warehouse_id}/namespaces": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Warehouse Namespaces
-         * @description The namespaces bound to this warehouse, read from the REGISTRY — the same source the delete
-         *     door consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse
-         *     page used to derive its namespace list by grouping the table registry, which made an EMPTY
-         *     namespace structurally invisible — the page said "no namespaces" while the delete door refused
-         *     409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);
-         *     a missing warehouse is the same 404 as everywhere else.
-         */
-        get: operations["list_warehouse_namespaces_management_v1_warehouses__warehouse_id__namespaces_get"];
-        put?: never;
-        /**
-         * Create Warehouse Namespace
-         * @description Create a top-level namespace INSIDE this warehouse's bucket and bind it, so all its tables route
-         *     there (#3-A physical isolation). Gated on ``can_create_namespace`` (writer) on ``warehouse:<id>``.
-         *
-         *     The namespace is created via the warehouse's bucket-rooted connection (not the default), the binding is
-         *     persisted + cached (so subsequent table ops resolve without a registry read), and FGA is seeded with the
-         *     namespace's ``parent`` edge pointing at the warehouse — so the owner's grant cascades into the tables.
-         */
-        post: operations["create_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/warehouses/{warehouse_id}/namespaces/{top_ns}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Unbind Warehouse Namespace
-         * @description Detach a top-level namespace from its warehouse WITHOUT dropping either.
-         *
-         *     THE REPAIR A BINDING NEEDS WHEN IT OUTLIVES WHAT IT POINTED AT. A binding is a routing record —
-         *     `top_ns -> warehouse_id -> root_uri` — and until this door existed the only way to remove one was
-         *     `POST /v1/namespace/{id}/drop`, which destroys the namespace and its tables to reach a JSON file.
-         *     Three such records were found stranded on this estate (§ Q15-1), naming warehouses that hold no
-         *     bytes, and the repair was blocked on having no non-destructive door.
-         *
-         *     THE ORDER IS `delete_warehouse`'s, scaled to one binding, and every step carries its reason:
-         *
-         *     1. the warehouse record must exist (404);
-         *     2. **authorize first** on ``project#can_administer`` — detaching a namespace's storage routing is a
-         *        tenant-level act, the same reasoning that put the warehouse delete on the tenant's admin bar
-         *        rather than a rung someone holds on this one warehouse. A denial collapses to the same 404 the
-         *        missing warehouse gets (the NO EXISTENCE ORACLE class rule, audit #4), so nobody probes ids here
-         *        that the louder doors protect;
-         *     3. the binding must name THIS warehouse (404 otherwise) — a tenant may not unbind a namespace
-         *        through a warehouse id that does not hold it;
-         *     4. **emptiness**: a namespace still holding tables refuses 409 NAMING them. Unbinding a live
-         *        namespace does not delete a byte and is still the worst outcome available — every table in it
-         *        becomes unresolvable, because routing no longer knows which bucket holds it. Silent
-         *        unreachability beats a loud refusal for nobody;
-         *     5. remove the record, then broadcast ``warehouse_unbound`` so every replica evicts. The binding
-         *        cache is positive-and-forever, so without the broadcast the registry says unbound while running
-         *        pods keep routing — the repair would report success and change nothing.
-         */
-        delete: operations["unbind_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces__top_ns__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3133,17 +3014,15 @@ export interface paths {
         };
         /**
          * List All Tables
-         * @description List every table in the namespace via ``list_all_tables``; when FGA is on,
-         *     filter the result down to the tables the caller can ``can_read_data``.
+         * @description List every table of every warehouse; when FGA is on, only those the caller can ``can_read_data``.
+         *
          *     ``include_declared=false`` lists only the tables that hold a committed version, each judged by its own storage
          *     (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
          *
-         *     Pagination is applied to the FINAL merged result, never to the native root call: the response is
-         *     root tables + bound seeds + the namespace walk, so a native-level ``limit`` would truncate only
-         *     the first ingredient and silently DROP tables from every page (#141 — the endpoint advertised
-         *     pagination and ignored it). The merged list is sorted and deduped, so the cursor is keyset-style:
-         *     ``page_token`` = the last name of the page, stateless and stable across pages. The walk itself
-         *     still costs the full estate server-side per call — acceptable at admin frequency, and honest now.
+         *     Pagination is applied to the merged, sorted result, never to a native call, whose ``limit`` would truncate one
+         *     warehouse's walk and drop tables from every page. The cursor is keyset-style: ``page_token`` is the last name of
+         *     the page, stateless and stable across pages. The walk costs the full estate server-side per call, acceptable at
+         *     admin frequency.
          */
         get: operations["list_all_tables_v1_table_get"];
         put?: never;
@@ -5623,7 +5502,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted" | "role_created" | "role_deleted";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted" | "role_created" | "role_deleted";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -6316,20 +6195,6 @@ export interface components {
              */
             transaction_id?: string | null;
             version?: components["schemas"]["TableVersion"] | null;
-        };
-        /** CreateWarehouseNamespaceRequest */
-        CreateWarehouseNamespaceRequest: {
-            /**
-             * Adopt Existing
-             * @default false
-             */
-            adopt_existing?: boolean;
-            /** Namespace */
-            namespace: string;
-            /** Properties */
-            properties?: {
-                [key: string]: string;
-            } | null;
         };
         /** CreateWarehouseRequest */
         CreateWarehouseRequest: {
@@ -7428,21 +7293,6 @@ export interface components {
         ErasureVerifyRequest: {
             /** Predicate */
             predicate: string;
-        };
-        /**
-         * EstateBindingsResponse
-         * @description Every namespace→warehouse binding the caller can see, in ONE read (#86).
-         *
-         *     The per-warehouse sibling answers for one id; a page listing the estate's namespaces was
-         *     calling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the
-         *     estate before filtering in Python — O(warehouses × bindings) for a union the underlying
-         *     ``list_bindings`` already produces in a single pass.
-         */
-        EstateBindingsResponse: {
-            /** Bindings */
-            bindings: {
-                [key: string]: string;
-            };
         };
         /**
          * EventsResponse
@@ -8764,16 +8614,9 @@ export interface components {
          *     actually in force across a tenant, so a project admin could not tell which of their namespaces or
          *     tables carries a retention override without already knowing its id. This is that read.
          *
-         *     ``buckets`` and ``namespaces`` are the SCOPE the listing was computed from — the project's warehouse
-         *     buckets and the top-level namespaces bound to those warehouses — reported so a surprising list can be
-         *     explained without a second call.
-         *
-         *     ``incomplete`` / ``skipped_bindings`` are load-bearing, not diagnostics. The namespace half of the
-         *     scope is derived from the namespace→warehouse bindings, so a binding record that cannot be read is a
-         *     namespace whose policies cannot be seen: a silently-narrowed list would read as "checked and clean",
-         *     which is the ``unbound_namespaces`` bug class. The listing still answers 200 (it is a read, not a
-         *     destructive door — see ``warehouses.namespaces_bound_to`` for the opposite posture) and SAYS it may
-         *     be short.
+         *     ``buckets`` and ``warehouses`` are the SCOPE the listing was computed from — the project's warehouses and
+         *     their buckets — reported so a surprising list can be explained without a second call. A table or namespace
+         *     record is in scope when its name begins with one of those warehouses.
          *
          *     **Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record
          *     shadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not
@@ -8782,19 +8625,12 @@ export interface components {
         ProjectPoliciesResponse: {
             /** Buckets */
             buckets: string[];
-            /**
-             * Incomplete
-             * @default false
-             */
-            incomplete?: boolean;
-            /** Namespaces */
-            namespaces: string[];
             /** Policies */
             policies: components["schemas"]["PolicyResponse"][];
             /** Project */
             project: string;
-            /** Skipped Bindings */
-            skipped_bindings?: string[];
+            /** Warehouses */
+            warehouses: string[];
         };
         /**
          * ProjectResponse
@@ -8804,6 +8640,12 @@ export interface components {
         ProjectResponse: {
             /** Admins */
             admins: string[];
+            /**
+             * Managed By
+             * @default self
+             * @enum {string}
+             */
+            managed_by?: "git" | "self";
             /** Project */
             project: string;
             /**
@@ -9745,22 +9587,6 @@ export interface components {
             name: string;
         };
         /**
-         * UnbindWarehouseNamespaceResponse
-         * @description What the unbind actually did — the binding, and whether any replica was still caching it.
-         *
-         *     `evicted` is reported rather than assumed because the binding cache is positive-and-forever: the
-         *     registry record going away is only half the repair, and an operator who cannot see the other half
-         *     has no way to tell a completed unbind from one the running estate never heard about.
-         */
-        UnbindWarehouseNamespaceResponse: {
-            /** Namespace */
-            namespace: string;
-            /** Unbound */
-            unbound: boolean;
-            /** Warehouse Id */
-            warehouse_id: string;
-        };
-        /**
          * UpdateFieldMetadataEntry
          * @description UpdateFieldMetadataEntry
          */
@@ -10006,15 +9832,6 @@ export interface components {
              */
             start_version: number;
         };
-        /**
-         * WarehouseNamespacesResponse
-         * @description The namespaces BOUND to one warehouse — the registry's answer, same shape as the spec's
-         *     ListNamespaces (``{"namespaces": [...]}``) so a spec client parses it unchanged.
-         */
-        WarehouseNamespacesResponse: {
-            /** Namespaces */
-            namespaces: string[];
-        };
         /** WarehouseResponse */
         WarehouseResponse: {
             /** Bucket */
@@ -10028,6 +9845,12 @@ export interface components {
             endpoint?: string | null;
             /** Id */
             id: string;
+            /**
+             * Managed By
+             * @default self
+             * @enum {string}
+             */
+            managed_by?: "git" | "self";
             /** Primary */
             primary?: boolean | null;
             /** Project */
@@ -13991,38 +13814,6 @@ export interface operations {
             };
         };
     };
-    list_estate_bindings_management_v1_warehouses___bindings_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EstateBindingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_warehouse_management_v1_warehouses__warehouse_id__get: {
         parameters: {
             query?: {
@@ -14149,113 +13940,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WarehouseResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_warehouse_namespaces_management_v1_warehouses__warehouse_id__namespaces_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WarehouseNamespacesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path: {
-                warehouse_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateWarehouseNamespaceRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CreateNamespaceResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    unbind_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces__top_ns__delete: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path: {
-                warehouse_id: string;
-                top_ns: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnbindWarehouseNamespaceResponse"];
                 };
             };
             /** @description Validation Error */

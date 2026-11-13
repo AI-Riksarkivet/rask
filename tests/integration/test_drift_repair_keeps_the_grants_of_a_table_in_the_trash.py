@@ -46,9 +46,12 @@ class _Estate:
         self.store = store
         self.warehouse = warehouse
 
-    def bind(self, namespace: str) -> None:
-        answer = self.catalog.post(f"/management/v1/warehouses/{self.warehouse}/namespaces", json={"namespace": namespace})
+    def create_namespace(self, namespace: str) -> str:
+        """``namespace`` in the warehouse; its full name."""
+        name = f"{self.warehouse}${namespace}"
+        answer = self.catalog.post(f"/v1/namespace/{name}/create", json={})
         assert answer.status_code == 200, answer.text
+        return name
 
     def create_table(self, table: str) -> None:
         answer = self.catalog.post(f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
@@ -88,17 +91,17 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
 
 
 def test_an_audit_revokes_a_ghost_and_keeps_the_grants_of_a_table_in_the_trash(estate: _Estate) -> None:
-    estate.bind("bronze")
-    for table in ("bronze$kept", "bronze$dropped", "bronze$before"):
+    bronze = estate.create_namespace("bronze")
+    for table in (f"{bronze}$kept", f"{bronze}$dropped", f"{bronze}$before"):
         estate.create_table(table)
-    renamed = estate.catalog.post("/v1/table/bronze$before/rename", json={"new_table_name": "after"})
+    renamed = estate.catalog.post(f"/v1/table/{bronze}$before/rename", json={"new_table_name": "after"})
     assert renamed.status_code == 200, renamed.text
-    dropped = f"table:{estate.uuid_of('bronze$dropped')}"
-    estate.drop_table("bronze$dropped")
+    dropped = f"table:{estate.uuid_of(f'{bronze}$dropped')}"
+    estate.drop_table(f"{bronze}$dropped")
     gone = str(uuid.uuid4())
     estate.store.tuples.add((user_object(principal_key("alice")), "owner", f"table:{gone}"))
     held = estate.store.naming([dropped])
-    assert held and estate.in_trash("bronze$dropped"), "the drop kept nothing for an undrop, so keeping it would pass vacuously"
+    assert held and estate.in_trash(f"{bronze}$dropped"), "the drop kept nothing for an undrop, so keeping it would pass vacuously"
 
     with catalog_doors(estate.catalog):
         audit = audited(estate.maintenance)

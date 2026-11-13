@@ -1,6 +1,6 @@
 ---
 name: rask-lance-catalog
-description: "The Lance catalog and the governance layer above it — the Lance Namespace spec (54 ops, the 24-code problem+json error model, the `POST /v1/<object>/{id}/<action>` route grammar) and rask's own `project > warehouse > namespace > table` hierarchy: the guards, the registries, protection/trash, and `services/maintenance`. Use when adding or changing a catalog endpoint; raising an error from the catalog; touching the hierarchy guards, the project/warehouse registries or `seed_ownership`; designing create/drop/undrop/cascade or protection semantics; working on compaction, maintenance's work queue and a table's pass, the hourly audit or the daily scan, a table's orphan check or the listing-floor raise, or the reconciler; or answering \"is this spec-conformant\"."
+description: "The Lance catalog and the governance layer above it — the Lance Namespace spec (54 ops, the 24-code problem+json error model, the `POST /v1/<object>/{id}/<action>` route grammar) and rask's own `project > warehouse > namespace > table` hierarchy (a name's first segment is its warehouse): the guards, the registries, the declaration git holds, protection/trash, and `services/maintenance`. Use when adding or changing a catalog endpoint; raising an error from the catalog; touching the hierarchy guards, the project/warehouse registries, the declaration converge (`catalog.declared`, `managed_by: git`) or `seed_ownership`; designing create/drop/undrop/cascade or protection semantics; working on compaction, maintenance's work queue and a table's pass, the hourly audit or the daily scan, a table's orphan check or the listing-floor raise, or the reconciler; or answering \"is this spec-conformant\"."
 ---
 
 # rask lance catalog — the spec and the estate's layer above it
@@ -56,7 +56,10 @@ Two contracts stack here, and confusing them is how bugs happen:
   rename lifts it, once its `child` edge is written, so a RegisterTable of the destination landed inside the rename
   answers 409 code 14 and detaches the row it attached; where that row still stands as the rename registers its
   destination, the rename answers the name's conflict (409 code 5) with the source put back. A dead rename's fence
-  lapses with its claim's `LEASE`. **A rename into another namespace takes the table's grants along, so it asks
+  lapses with its claim's `LEASE`. **A rename keeps its table in its warehouse** ([[LH-593]]): a destination naming
+  another warehouse, or no namespace of one, is refused 400 by the rename door
+  (`fga_deps.require_rename_within_its_warehouse`, called in `endpoints/tables.py`), since a rename moves a pointer in one directory catalog and never
+  bytes, so no rename crosses tenants. **A rename into another namespace takes the table's grants along, so it asks
   grant authority** ([[LH-568]]): `can_move` on the table (`manage_grants and can_drop`) in `can_drop`'s place
   (`fga_deps._rename_relation`, asked by the router) and `can_accept_moved_table` on the namespace it enters in
   `can_create_table`'s (`fga_deps.require_rename_destination`), so under managed access a writer brings no table in
@@ -154,7 +157,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   `tests/integration/test_the_door_that_makes_a_table_or_namespace_mints_its_uuid.py`.
 - **Every grant is held by the object's uuid** ([[LH-524]], ADR 0173 §8): OpenFGA objects are `table:<uuid>` and
   `namespace:<uuid>` (`fga.table_object`, `fga.namespace_object`), the parent and child edges join uuids, and a
-  top-level namespace's parent is its warehouse. Every door stays addressed by name and resolves it ONCE per request
+  namespace directly in a warehouse (a two-segment name) has `warehouse:<id>` as its parent. Every door stays addressed by name and resolves it ONCE per request
   (`catalog.api.dependencies.Resolver`, `ResolverDep`, which `authorize`, the tier judge and `ResolvedTableDep` share),
   so a door acts on the table it authorized. An absent name is refused 403, audited and refused by the name, and only a
   READ door converts a refusal to 404, answering a name the caller cannot see exactly as an absent one, so the answer never
@@ -162,8 +165,10 @@ Two contracts stack here, and confusing them is how bugs happen:
   seeing its children, since the model grants `can_get_metadata` upward from any one child. It converts for a caller
   holding `can_get_metadata` on ANY ancestor namespace that stands, a hidden one between them never ending the walk, or on
   an object a recoverable drop trashed at the name or an ancestor's, whatever stands there now ([[LH-536]]: a cascade
-  leaves children whose parent went too). A top-level name is never answered from its warehouse, since upward
-  visibility makes every holder of one namespace a reader of it. Pinned by
+  leaves children whose parent went too). The warehouse, a name's first segment, is one of the ancestors asked
+  (`Resolver.object` answers a one-segment name as `warehouse:<id>`), so a name directly in a warehouse is answered 404
+  to a reader of the warehouse; a caller holding nothing on it is answered 403 for any name in it, and for a warehouse
+  that does not exist, alike. Pinned by
   `services/catalog/tests/test_an_absent_object_is_not_found_rather_than_forbidden.py` on a real OpenFGA. A rename writes no tuple, except
   that a rename into another namespace moves the table's parent and child edges, under the rename's claim
   (`fga_deps.parent_edge_mover`, [[LH-568]]); a table created again
@@ -192,14 +197,14 @@ Two contracts stack here, and confusing them is how bugs happen:
   (before LH-528's second commit) re-registered its table at a location no claim named. Pinned by
   `services/catalog/tests/test_the_estate_admin_deregisters_a_table_no_uuid_identifies.py` and the listing test above.
 - **A table the catalog makes lives at `<namespace root>/<table uuid>`** ([[LH-520]], ADR 0173 §5), the namespace root
-  being the root of the warehouse its top-level namespace is bound to (`NamespaceRootDep`; CONTEXT.md's
-  `<warehouse root>/<table uuid>`), else the catalog's root. Create and declare
+  being the root of the warehouse its name's first segment names (`NamespaceRootDep`; CONTEXT.md's
+  `<warehouse root>/<table uuid>`), the catalog's own root for the estate's warehouse. Create and declare
   run the `dir` catalog's own DeclareTable steps with the catalog choosing the location (`dataplane.declare_table`): mint
   the uuid and take the location's claim before any backend call, write `.lance-reserved` there, then record the row
   through RegisterTable's relative location, which answers `is_only_declared` until data lands (measured on pylance
   13.0.0). The backend's own DeclareTable refuses every location but its `<hash>_<object_id>`, so the catalog never calls
-  it; a declare naming a location is refused 400, a root-level table id 400 (`dir` resolves one by `<name>.lance`, never
-  by its row), and create and declare `properties` are kept nowhere (RegisterTable keeps none, `spec.yaml:2719-2724`;
+  it; a declare naming a location is refused 400, a table id of fewer than three segments 400 (a table lies in a namespace
+  of a warehouse; `dir` resolves a root-level one by `<name>.lance`, never by its row), and create and declare `properties` are kept nowhere (RegisterTable keeps none, `spec.yaml:2719-2724`;
   create still stamps them on the schema metadata, [[LH-503]]). So no name reaches a vended prefix. A REGISTERED table
   keeps its registrar's location, which `describe_table` answers percent-encoded; every vend
   (`vending.split_s3_location`) and every catalog read and write of a table object (`dataplane.dataset_fs`,
@@ -226,6 +231,32 @@ Two contracts stack here, and confusing them is how bugs happen:
   `+` (so refused), and a `%2F` is refused 400 before routing. The Gateway's `/api/catalog` route forwards the path
   unrewritten and the catalog strips the prefix itself (`LANCE_PUBLIC_PATH_PREFIX`), since Traefik's URLRewrite rebuilds
   the path from its decoded form.
+- **A name's first segment is its warehouse** ([[LH-593]], ADR 0206): `acme$bronze$t` is table `t` in namespace
+  `bronze` of warehouse `acme`. The catalog routes every `{id}` by that segment (`catalog.api.dependencies._route_for`,
+  `get_namespace`, `NamespaceRootDep`): the estate's own warehouse (`settings.estate_warehouse`, the id of
+  `RASK_FGA_DEFAULT_WAREHOUSE_OBJECT`, default `lance_catalog`) is served from `settings.root` and has no registry
+  record; any other is its record's `root_uri`, read once per request (`dependencies.ServedWarehouse`; a registry that
+  does not answer 503); a first segment naming no warehouse is served from no catalog (`core.namespace.NO_WAREHOUSE`,
+  every name absent), so nobody learns which warehouses exist. A deactivated warehouse refuses every operation beneath
+  it 403, told only after the router's permission check passed (`fga_deps.authorize`, then
+  `dependencies.require_active_warehouse`; `Resolver` resolves its names without refusing), so a caller holding
+  nothing on it is answered as for any other name. A caller holding a name rather than a request id (`GET /v1/table`, a tick)
+  routes through `namespace_for_warehouse`. A one-segment namespace id is the warehouse itself, governed as
+  `warehouse:<id>` (`dependencies.warehouse_object`): only its read doors answer (`list`, `table/list`, `describe`,
+  `exists`, `access/my-permissions`), and every other namespace door is refused 400 naming
+  `/management/v1/warehouses`; a table or view id needs three segments at least, refused 400 otherwise
+  (`fga_deps._require_a_name_inside_a_warehouse`, on the shape rung, so 400 before 403). `GET /v1/namespace/$/list`
+  answers the warehouses the caller holds `can_get_metadata` on, the estate's included (`warehouses.served_ids`), and
+  `GET /v1/table` walks every warehouse. A rename keeps its table in its warehouse
+  (`fga_deps.require_rename_within_its_warehouse`, 400): a rename moves a pointer in one directory catalog and never
+  bytes. `MAX_NAMESPACE_DEPTH` is 9 and counts the warehouse: the deepest namespace a door makes has 8 segments, the
+  warehouse's included. Each warehouse root's directory catalog holds a row named after the warehouse, carrying a minted
+  `rask.uuid` (`warehouses.ensure_catalog_row`), because the `dir` catalog refuses a namespace whose parent has no row
+  (measured 2026-11-13 on pylance 13.0.0: `create_namespace(["acme", "bronze"])` raises `NamespaceNotFoundError`
+  "parent namespace 'acme'" until row `acme` exists): the warehouse door and the declaration converge write a tenant
+  warehouse's, the catalog's boot the estate's. Names in each root's `__manifest` are therefore full ids
+  (`acme$bronze$t`). Names are unique per warehouse, and two warehouses may hold the same names. Pinned by
+  `tests/integration/test_warehouse_routing.py`.
 - **Identity headers:** `api_key` → `x-api-key`, `auth_token` → `Authorization: Bearer`; arbitrary
   context maps BOTH WAYS through a `header.<name>` context KEY — `{"header.x-trace-id": "abc"}` is
   sent as `x-trace-id: abc` (prefix stripped) and every response header returns as `header.<name>`
@@ -261,9 +292,9 @@ Three layers, each owned in ONE place:
 
 | Layer | Owner |
 | --- | --- |
-| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `require_warehouse_scoped` (a top-level namespace only via `POST /management/v1/warehouses/{id}/namespaces`; **no-op when `warehouses_enabled` is off** — single-bucket deployments have no warehouse to demand), `require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /management/v1/projects`), `require_not_protected` (deletion protection — the `force` rule is under Lifecycle) |
+| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `_require_a_name_inside_a_warehouse` (a namespace id names a warehouse first and a table or view id has three segments; a one-segment namespace id reaches only the warehouse's read doors), `require_rename_within_its_warehouse`, `require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /management/v1/projects`), `require_not_protected` (deletion protection — the `force` rule is under Lifecycle) |
 | who | the FGA model's `can_*` relations (`lakehouse/governed/auth/model.fga`) — the app never invents policy |
-| what is possible NOW | the registries, checked BEFORE the native write: **project records** (`catalog/services/projects.py`, `_projects/<id>.json`), warehouse records + `top_ns → warehouse_id → root_uri` bindings (`catalog/services/warehouses.py`) |
+| what is possible NOW | the registries, checked BEFORE the native write: **project records** (`catalog/services/projects.py`, `_projects/<id>.json`), warehouse records (`catalog/services/warehouses.py`, `_warehouses/<id>.json`), each naming its project, bucket and `root_uri`, read by a name's first segment |
 
 **A tenant EXISTS when its registry record does** — not when a warehouse implies it and not when FGA
 holds tuples for it. `POST /management/v1/projects` writes the record AND the `project#admin` tuple (the creator's; a
@@ -292,8 +323,8 @@ of (`projects._visible_projects`), and `GET /management/v1/projects/{id}` decide
 holds one ALLOW naming the door that opened the read, or a DENY on each for a caller holding neither, who is answered
 the missing project's 404. Pinned by `services/catalog/tests/test_a_project_is_read_by_those_its_list_shows_it_to.py`.
 
-Check order at every create door: **identity (401) → shape (`InvalidInput` 400) → parent exists
-(404) → authz (403) → conflict (409) → native write → tuples (`seed_ownership`) → events.** Guards
+Check order at every create door: **identity (401) → shape (`InvalidInput` 400, the warehouse rule above
+included) → parent exists (404) → authz (403) → conflict (409) → native write → tuples (`seed_ownership`) → events.** Guards
 run BEFORE `native.call` — rejecting after leaves a real Lance object with no authz parent.
 
 `project` and `warehouse` are **rask's objects, not spec objects** — their endpoints
@@ -318,9 +349,9 @@ the provenance namespace, which the catalog never announces, is served then.
 
 **A table's tier is the `rask.tier` property of the nearest enclosing namespace that declares one** (ADR 0156 C8,
 ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
-- **Declared once.** Only the namespace's project admin (`can_administer` on `project:<p>`, resolved through the
-  warehouse binding) declares it, or the estate admin (`can_declare_unowned_tier` on the root) where no project owns the
-  namespace. It is declared at create, on `POST /v1/namespace/{id}/create` or the warehouse door's `properties`.
+- **Declared once.** Only the namespace's project admin (`can_administer` on `project:<p>`, the project of the
+  name's warehouse, `warehouses.project_of`) declares it, or the estate admin (`can_declare_unowned_tier` on the root) where no project owns the
+  namespace. It is declared at create, on `POST /v1/namespace/{id}/create`.
   The catalog's own Overwrite is the only way to change or drop it, and it asks the same admin; no Lance operation
   alters a namespace's properties.
 - **What a declaration may say.** A value outside bronze/silver/gold, a deeper namespace declaring a different tier
@@ -405,7 +436,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   table's writer suppress another's announcements. The `catalog-commit-reconcile-cron` tick
   (`catalog.api.commit_reconcile`) lists every held location claim whose name still describes to it, reads each ref's
   versions after its mark (`_commit_marks/`) older than `LANCE_COMMIT_RECONCILE_GRACE_SECONDS`, looks each up on
-  `provenance$events` by the table's uuid, ref and version (so a renamed table is not announced again), and announces
+  `lance_catalog$provenance$events` by the table's uuid, ref and version (so a renamed table is not announced again), and announces
   every one the feed lacks from the version log alone, signed for the author the catalog recorded authorizing the commit,
   never for the `rask.author` a version carries, which any writer that can put a final manifest can stamp, so lineage
   records it on the catalog's signature as it records the original ([[LH-551]], [[LH-550]]); each find counts
@@ -433,14 +464,61 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   drop, deregister) are filed before their change, with the control event each door sends, and a door that fails after its change has them sent by the catalog's finish (`POST /management/v1/announcement-intents/finish`, asked by maintenance's hourly audit), under the run id and event id the door built (ADR 0205, [[LH-576]]); the namespace and warehouse cascades file theirs the same way. Pinned by
   `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
 
+## The declaration: the catalog converges what git declares ([[XC-213]], ADR 0206)
+
+An install from git holds its tenants with no call to any door. The chart's `catalog.declared` values (`projects`
+`{id, admins, protected}`, `warehouses` `{id, project, bucket, delete_profile, protected, active}`, `grants`
+`{object, relation, principal}` on `project:<id>` or `warehouse:<id>`) render to the ConfigMap
+`<release>-catalog-declaration`, mounted as a volume at `LANCE_DECLARATION_FILE`, so a change reaches the pod with no
+roll. The models are `catalog.services.declaration` (`Declaration`, `DeclaredProject`, `DeclaredWarehouse`,
+`DeclaredGrant`, each `extra="forbid"`): a grant to a person is refused at load (`is_person_subject`), and so is a
+relation the model does not admit for a principal on that type (`fga.admits`). People's other grants, namespaces and
+tables are never declared.
+
+- **The tick** is `catalog-declaration-converge-cron` (`catalog.api.declaration_converge`, `mount_cron`, `@every 60s`),
+  one at a time per process. It converges projects, then warehouses, then releases what git stopped declaring, then
+  grants, each object in `_attempt`, so one failure is logged (`declaration_converge_failed`), counted
+  (`catalog.declaration_converge.failed`, by `lance.catalog.object`) and leaves the rest; a file that cannot be read as a
+  declaration converges and releases nothing (`declaration_unreadable`). A tick that changed or failed anything logs
+  `declaration_converged` with what it did (`ConvergeTick`).
+- **Through the doors' own functions, authored by the declaration** (`catalog.api.declared.DECLARATION`, actor and
+  subject `system:declaration`), so every change is audited and announced as a door's: `establish_project`
+  (`endpoints/projects.py`), `establish_warehouse` and `change_warehouse_status` (`endpoints/warehouses.py`),
+  `protect_project` and `protect_warehouse`. A standing warehouse whose bucket or delete profile drifted from git is
+  established again; its status and protection are corrected one by one. A warehouse is established until it carries
+  the mark, which is written only after an establish ran to its end, so a failure after the record (its catalog row,
+  its grants) is completed by the next tick. One whose record names another project than git does is refused whole
+  (`InvalidInputError`, counted), nothing about it touched.
+- **`managed_by: git` and the lock.** The tick marks each declared project and warehouse `managed_by: git`
+  (`control_records.MANAGED_BY`/`GIT`, `projects.set_project_manager`, `warehouses.set_warehouse_manager`), and
+  `ProjectResponse.managed_by`/`WarehouseResponse.managed_by` answer it (`git`, else `self`). `catalog.api.declared.refuse_what_git_declares`
+  refuses a door's change, after that door's own authorization, 403 code 15 audited `managed_by_git`: on a warehouse its
+  re-`POST /management/v1/warehouses` (whoever makes it but the declaration, a stack with no caller included), `deactivate`, `activate`, `protection` and `DELETE`
+  (`warehouse_its_doors_manage`), on a project its `protection` and `DELETE` (`project_its_doors_protect`,
+  `project_its_doors_delete`). A project's re-`POST` changes no declared field and is not locked.
+- **Release on removal.** A record still `managed_by: git` that git no longer names has the marker cleared and keeps
+  its data, records and doors (`_release`).
+- **The grant ledger** `_declared_grants/` (`control_prefixes.DECLARED_GRANTS`, one record per tuple keyed by its
+  sha256): a declared tuple the store lacks is recorded BEFORE it is written (`declaration.record_grant`), so a tuple
+  never outlives its declaration unrecorded; a declared tuple the store already holds is not recorded, so a grant made at
+  a door is never taken. A recorded tuple git no longer asks for is revoked, then its record forgotten. A project
+  `admin` goes through `project_admins.revoke_admin`, which keeps a project its last direct admin: that revoke fails,
+  and is counted on every tick, until another admin is granted. A grant on an object with no registry record is not
+  written (`LookupError`, counted). With FGA off no grant is converged.
+
+Pinned by `tests/integration/test_the_catalog_converges_what_git_declares.py` (the real app, a real OpenFGA, moto, the
+tick delivered as the sidecar delivers it), `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`
+(the render: the default project `default`, administered by `auth.bootstrapAdmin` when it names no admin) and, live,
+`tests/e2e-py/test_the_estate_is_what_git_declares.py`. `docs/OPERATORS.md` § 2 is the operator's procedure.
+
 ## Storage — what state lives where (and why there is NO app database)
 
 | State | Store |
 | --- | --- |
 | table data + versions | Lance datasets on object storage (rustfs) |
-| project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `lakehouse.records.create_json`): project mint, warehouse mint and the write-once bindings are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. `put_warehouse` / `put_project` remain as SEEDING primitives with no production caller, pinned by `tests/unit/test_registry_writes_are_conditional.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
+| project registry (`_projects/<id>.json`), warehouse registry (`_warehouses/<id>.json`, its bucket claims under `_warehouses/bucket-claims/`), the declared-grant ledger (`_declared_grants/`) | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `lakehouse.records.create_json`): project mint, warehouse mint and a declared grant's record are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. `put_warehouse` / `put_project` remain as SEEDING primitives with no production caller, pinned by `tests/unit/test_registry_writes_are_conditional.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
 | authz | OpenFGA on its chart-managed Postgres |
-| lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `provenance`): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, revokes a `writer` the settings no longer name from one of the release's own accounts (`LANCE_OWN_ACCOUNTS`, the chart's `lance.ownAccounts`, the list the bootstrap hook converges), and leaves every other grant there to the doors: a bring-your-own compaction job's account is granted `reader` and `maintainer` at the namespace's access door, and no boot revokes it, nor a `writer` granted there to an account outside the release ([[LH-563]]). It writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane holds the table's pass, which expires it (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
+| lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `lance_catalog$provenance`, a namespace of the estate's own warehouse, which the render and the catalog's settings both require): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, revokes a `writer` the settings no longer name from one of the release's own accounts (`LANCE_OWN_ACCOUNTS`, the chart's `lance.ownAccounts`, the list the bootstrap hook converges), and leaves every other grant there to the doors: a bring-your-own compaction job's account is granted `reader` and `maintainer` at the namespace's access door, and no boot revokes it, nor a `writer` granted there to an account outside the release ([[LH-563]]). It writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane holds the table's pass, which expires it (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
 
 A relational app-DB was removed at P7a and must not creep back for the catalog: registry writes are
 admin-frequency, the conditional creates arbitrate the id-mint races, and deletes are bottom-up
@@ -479,11 +557,10 @@ governing their data. The project-scoped surface is the console's project page, 
   warehouse delete gates on the PROJECT's `can_administer`; bucket purge is a **separate opt-in**;
   project delete has **no cascade at all**.
 - **A cascade revokes a grant only once its object is gone** ([[LH-495]]). The warehouse door's `?cascade=true` first
-  enumerates every bound namespace's subtree and holds it to its protection (`force` turns those locks as it turns the
-  warehouse's), and selects its own trash (`warehouses.trash_owned_by`: records under a namespace bound to it or a
-  trashed namespace whose binding names it, and tables in its bucket whose namespace is no other warehouse's, never a
-  sibling's on a shared bucket), so a refusal changes nothing. It ends that trash FIRST, while the bindings that select
-  it stand, so a re-issue selects the same records: each trashed object's grants, policy, claim and base record, its
+  enumerates every namespace directly under the warehouse's name, with its subtree, and holds it to its protection
+  (`force` turns those locks as it turns the warehouse's), and selects its own trash (`warehouses.trash_owned_by`: every
+  record whose name begins with the warehouse's id, so a sibling's on a shared bucket is never among them), so a refusal
+  changes nothing. It ends that trash FIRST, so a re-issue selects the same records: each trashed object's grants, policy, claim and base record, its
   trash record last. Then, one namespace at a time, it detaches every table with `deregister_table` (the bytes stay
   unless `purge_bucket`, and only a purge forgets the base record), drops the namespaces deepest first (the `dir` drop
   is Restrict whatever `behavior` says), and only then ends what each object held, children first, through
@@ -526,8 +603,8 @@ governing their data. The project-scoped surface is the console's project page, 
   answers one from the trash record (`Queued` inside the window, `Running` past it), asked on the trashed table's own
   grants (`Resolver.trashed_as_transaction`). **The grace period is per warehouse**: `POST /management/v1/warehouses`'
   `delete_profile` (`{"mode": "hard"}`, `{"mode": "soft", "grace_days": n}`, or `{"mode": "estate"}` to clear it; kept
-  as `delete_mode`/`trash_grace_days` on the record, carried forward by a re-POST naming none) decides a drop under any namespace bound to it, else
-  `LANCE_TRASH_GRACE_DAYS` (`warehouses.grace_days_under`, read at the drop and stamped on the record). Pinned by
+  as `delete_mode`/`trash_grace_days` on the record, carried forward by a re-POST naming none) decides a drop of any name in it (its first segment), else
+  `LANCE_TRASH_GRACE_DAYS`, which the estate's own warehouse always takes (`warehouses.grace_days_under`, read at the drop and stamped on the record). Pinned by
   `tests/integration/test_a_drop_is_kept_as_its_warehouse_says_until_its_deadline_releases_it.py`. `undrop` re-registers with a
   **RELATIVE** location: `register_table` refuses the absolute URI `describe_table` had just reported and keeps a
   relative one as the literal key it is given, so the undrop passes the key the recorded URL decodes to under the
@@ -630,17 +707,15 @@ governing their data. The project-scoped surface is the console's project page, 
   (`projects_claiming_bucket` subtracts the caller's own project on purpose — the work+gold pair),
   so `?purge_bucket=true` checks same-project siblings AND the reserved platform buckets before the
   cascade. Without it, deleting the work warehouse wiped gold's data.
-- Anything making a DESTRUCTIVE decision reads `read_bindings` (which returns unparseable paths) and
-  refuses on a non-empty skip list; `list_bindings` is the tolerant half, for enumeration only. A
-  binding you cannot read is a namespace you cannot see. The warehouse registry and the trash have the same pair
-  ([[LH-572]]): `warehouses.every_warehouse` refuses while a record cannot be read (a project delete, the purge's
+- Anything making a DESTRUCTIVE decision reads strictly, and only enumeration reads tolerantly. The warehouse registry
+  and the trash each have the pair ([[LH-572]]): `warehouses.every_warehouse` refuses while a record cannot be read (a project delete, the purge's
   sibling guard, a project policy set) where `list_warehouses` skips it, and `trash.every_record` raises where
   `trash.list_all` skips (`trash.named`, an undrop restoring its cascade, `warehouses.trash_owned_by`, a cascade's
   `fga_deps._trashed_objects`). A record you cannot read may be the one the decision is about. Every such refusal tells
   an outage from a record (`lakehouse.outage.store_refusal`): a store that did not answer is 503 code 17, which a retry
   may clear; a record that is there and cannot be read as one is 500 code 18, which only writing it again clears. The
   registry reader raises the outage itself, so even a tolerant listing never reads one as a corrupt record.
-- `deactivate` = offboarding step one (quarantine; resolver 403s bound namespaces).
+- `deactivate` = offboarding step one (quarantine; routing 403s every name whose first segment is the warehouse).
 - Maintenance lives in **`services/maintenance`** and DECIDES; it rewrites no data (ADR 0162, [[LH-467]]). It runs
   version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, each table's orphan check and cross-store reconcile, and
   writes the DUE LIST: one record per table that needs compacting or an index optimize, under `_maintenance_due/` on
@@ -1082,7 +1157,7 @@ governing their data. The project-scoped surface is the console's project page, 
 - **An erasure is held until every table derived from its table holds an obligation following it** ([[LH-332]],
   ADR 0178, ADR 0183). A table is derived when a run writing it declared the source, or a table derived from it. The
   verification's step 5 (`catalog.services.erasure_derived`) walks the catalog's input record (`table_inputs`, written
-  before each declaring commit, so a write is named while lineage is down) together with `provenance$edges`, located
+  before each declaring commit, so a write is named while lineage is down) together with `lance_catalog$provenance$edges`, located
   through DescribeTable on the provenance namespace and read in-process, to the last table with lineage's own walk
   (`lakehouse.derived_tables`, which `GET /tables/{name}/derived` shares). A release stays final: the commit
   reconciler's tick lists a late derived table (found after the release, its write declared before it) in the
@@ -1149,8 +1224,9 @@ governing their data. The project-scoped surface is the console's project page, 
   loses them to the `cleanup_old_versions` a table's pass runs.
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
   "ghost projects". The replacement SHIPPED: `scripts/seed_estate.py` drives the real doors in
-  hierarchy order — `POST /management/v1/projects` → `POST /management/v1/warehouses` → `POST /management/v1/warehouses/{id}/namespaces`
-  → `/declare` → `POST /management/v1/access/tuples` LAST — so every guard runs and a state that cannot be
+  hierarchy order — `POST /management/v1/projects` → `POST /management/v1/warehouses` → `POST /v1/namespace/{warehouse}${ns}/create`
+  → `POST /v1/table/{warehouse}${ns}${table}/declare` → a project's roles and their assignees →
+  `POST /management/v1/access/tuples` LAST — so every guard runs and a state that cannot be
   reached through the UI cannot be seeded either. A grant whose create failed is SKIPPED rather than
   written; writing it is exactly how a ghost is made.
 - **The control-event vocabulary is a wire contract in three files.** `ControlAction` /
@@ -1160,10 +1236,11 @@ governing their data. The project-scoped surface is the console's project page, 
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
   (`lakehouse/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
 - Maintenance covers EVERY warehouse bucket, not a static list (#81): a table's pass runs only on a table in a bucket
-  it governs, read per task (`table_pass.governs`: a namespace bound to a warehouse is judged by that warehouse's
-  status first, so a deactivated warehouse's table is not governed even in a configured bucket; only a namespace bound to
-  none falls to `s3_bucket` + `MAINTENANCE_S3_EXTRA_BUCKETS`; an unreadable binding or warehouse record decides nothing
-  and the pass is tried again after `retrySeconds`), and a table's orphan check asks the same `governs`. The purge's
+  it governs, read per task (`table_pass.governs`, by the table name's first segment: a registered warehouse is judged
+  by its status, so a deactivated warehouse's table is not governed even in a configured bucket; only the estate's own
+  warehouse, which has no record, falls to `s3_bucket` + `MAINTENANCE_S3_EXTRA_BUCKETS`; a first segment naming no
+  warehouse is not governed; an unreadable warehouse record decides nothing and the pass is tried again after
+  `retrySeconds`), and a table's orphan check asks the same `governs`. The purge's
   maintained estate (`purge.maintained_roots`) and the release's roots (`trash_release.roots_read`) read the registry
   strictly (`warehouse_records.read_warehouse_records`): one record either cannot read stops the step, since a root left
   out reads its live tables as gone — a bucket is created by an API CALL at runtime, so a config-time list goes stale by construction. The daily
@@ -1281,7 +1358,7 @@ governing their data. The project-scoped surface is the console's project page, 
   no stage. **The promotion gate is the `published` tag** (ADR 0156 C1, ADR 0161, [[LH-466]]): readers of a
   governed tier read `@published`, and `POST /management/v1/table/{id}/publish` runs the project's quality gate
   (`/management/v1/project/{id}/gate/*`) against the committed version; a pass advances the tag. A declaration that
-  exists and cannot be read, or the table's binding to its project, refuses the publish (503 when the store did not
+  exists and cannot be read, or the table's warehouse record (which names its project), refuses the publish (503 when the store did not
   answer, 500 code 18 for a record that cannot be read as one) rather than judging it against the request's own weaker
   values (`publication.declared_gate`, [[LH-572]]). With
   `review_enabled` on that gate, a version whose non-structural assertions fail, or whose row count moves past
@@ -1301,7 +1378,7 @@ governing their data. The project-scoped surface is the console's project page, 
   RESERVED bucket — while the WAREHOUSE route over that bucket is refused: `POST /management/v1/warehouses
   {bucket: lance-catalog}` answers **400 "bucket 'lance-catalog' is reserved platform storage …"**
   (`catalog/api/v1/endpoints/warehouses.py`, `settings.reserved_bucket_set`). The reason is the disclosure
-  the bind would create: `provision_bucket` is idempotent on an existing bucket, so the claim would
+  the claim would create: `provision_bucket` is idempotent on an existing bucket, so the claim would
   silently succeed, make that project the bucket's owner, and let **a later project-policy set govern
   every tenant's data in the shared catalog bucket**. The reservation is DEFENCE IN DEPTH in three
   places: `reserved_bucket_set` (`catalog/core/config.py` — the catalog root, the control/registry root,
@@ -1410,7 +1487,8 @@ governing their data. The project-scoped surface is the console's project page, 
 - **A namespace is a `__manifest` ROW, not a directory** (the `dir` impl the chart runs —
   `LANCE_REST_IMPL=dir`). Only a TABLE materialises a directory. Any scan that enumerates namespaces
   by listing directories silently returns `[]` on every real estate — which reads as "checked and
-  clean". The reconciler's `unbound_namespaces` detector shipped with exactly that bug.
+  clean". The reconciler's `unreachable_namespaces` (a top-level row on a root that does not serve the warehouse it
+  names, so no name reaches it; reported, never gating the purge) reads each root's `__manifest` rows for that reason.
 - **`__manifest` is the catalog's to reclaim, and its connections are why** ([[LH-251]], ADR 0185). Every namespace
   operation rewrites a root's index whole as a new version, and the backend's rewrite skips `lance.auto_cleanup.*`, so
   nothing but `catalog-manifest-reclaim-cron` (`catalog.api.manifest_reclaim`) bounds it: Lance's own
@@ -1423,19 +1501,11 @@ governing their data. The project-scoped surface is the console's project page, 
   index with a shorter `older_than` than the chart's retention, and never by hand on a live root. The catalog sets
   `inline_optimization_enabled=false`: the spec's three indexes cost store requests on every create and describe at
   estate scale (measured over moto).
-- **The `warehouse_binding_cache` is invalidated ACROSS replicas by the control-event broadcast
-  (#46, 2026-08-05).** `_resolve_warehouse_root` caches bindings positively and forever on the
-  premise that a binding is immutable; the warehouse delete breaks that premise, and the local
-  `pop` only fixed the deleting replica. Now `on_control_event` (`catalog/api/dapr.py`) — the same
-  broadcast subscription that feeds the ring buffer, no queueGroup so EVERY replica hears every
-  event — calls `warehouses.evict_stale_bindings`: `warehouse_deleted` evicts the event's
-  `namespaces_dropped` PLUS a warehouse-id scan (a Decision-3 partial delete can unbind more than
-  the event recorded); `warehouse_bound` evicts the re-bound namespace; `namespace_dropped` evicts
-  the id's top segment. Deactivation is deliberately absent — warehouse STATUS is read live per
-  request. The chart couples the two: `services.catalog.replicas > 1` with `catalog.controlEmit`
-  off FAILS the render (`chart/templates/services.yaml`), so an overlay cannot scale into
-  staleness. (`GET /management/v1/events`' ring buffer stays per-replica by design — the poll endpoint serves
-  each replica's own buffer.)
+- **A warehouse's root is read once per request and never cached across requests**
+  (`dependencies._resolve_warehouse_root` keeps it on `request.state`): its record and status are read live, so a
+  deactivation or a delete is in force from the next request on every replica, and no control event evicts anything.
+  The chart couples no catalog replica count to `catalog.controlEmit`. (`GET /management/v1/events`' ring buffer stays
+  per-replica by design — the poll endpoint serves each replica's own buffer.)
 - The `\Z`-anchored `CONTROL_ID_RE` (`catalog/core/identifiers.py`) is the ONE id-shape rule. It was
   three copies that had already drifted: Python's `$` also matches before a trailing newline, so
   `"acme\n"` was refused by one door and accepted by another.

@@ -9,7 +9,7 @@
 	import { formatAbsolute } from '@rask/ui/utils';
 	import ProjectFilter from '#lib/data/ProjectFilter.svelte';
 	import ProjectFilterNotice from '#lib/data/ProjectFilterNotice.svelte';
-	import { filterVerdict, projectFilterOf, projectOfTable } from '#lib/data/project-filter.ts';
+	import { filterVerdict, projectFilterOf, projectOf } from '#lib/data/project-filter.ts';
 	import { showProject } from '#lib/data/project-filter-url.ts';
 	import { ProjectIndexRead } from '#lib/data/project-index.svelte.ts';
 
@@ -29,7 +29,7 @@
 	const allRows = $derived(
 		holds.map((hold) => ({
 			hold,
-			project: projects.index ? projectOfTable(projects.index, hold.table) : null,
+			project: projects.index ? projectOf(projects.index, hold.table) : null,
 		})),
 	);
 	// What the filter does, from the holds the catalog answered and the projects the caller can see.

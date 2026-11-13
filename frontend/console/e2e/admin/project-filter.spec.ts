@@ -38,12 +38,11 @@ test.beforeEach(async ({ context, request }, testInfo) => {
 					WAREHOUSE('acme-wh', 'acme'),
 					WAREHOUSE('globex-wh', 'globex'),
 				],
-				'GET /management/v1/warehouses/-/bindings': {
-					bindings: { db1: 'acme-wh', db2: 'globex-wh' },
+				'GET /v1/table': {
+					tables: ['acme-wh$db1$t', 'globex-wh$db2$u', 'lance_catalog$provenance$events'],
 				},
-				'GET /v1/table': { tables: ['db1$t', 'db2$u', 'provenance$events'] },
 				'GET /management/v1/promotions?limit=100': {
-					holds: [HOLD('db1$t'), HOLD('db2$u')],
+					holds: [HOLD('acme-wh$db1$t'), HOLD('globex-wh$db2$u')],
 					page_token: null,
 				},
 				// The projects the caller can see: `globex` is one this caller holds no role on, and
@@ -96,18 +95,18 @@ test('the warehouses list filters by project, in the URL, over every project the
 });
 
 test('the namespaces list filters by project, in the URL', async ({ page }) => {
-	await proveFilter(page, '/catalog/namespaces', 'db1', 'db2');
+	await proveFilter(page, '/catalog/namespaces', 'acme-wh$db1', 'globex-wh$db2');
 });
 
-test('the tables list filters by project, in the URL, and a table with no project shows a dash', async ({
+test('the tables list filters by project, in the URL, and a table in the estate warehouse shows a dash', async ({
 	page,
 }) => {
-	await proveFilter(page, '/catalog/tables', 'db1$t', 'db2$u');
-	await expect(await cellUnder(page, 'provenance$events', 'project')).toHaveText('—');
+	await proveFilter(page, '/catalog/tables', 'acme-wh$db1$t', 'globex-wh$db2$u');
+	await expect(await cellUnder(page, 'lance_catalog$provenance$events', 'project')).toHaveText('—');
 });
 
 test('the promotions list filters by project, in the URL', async ({ page }) => {
-	await proveFilter(page, '/catalog/promotions', 'db1$t', 'db2$u');
+	await proveFilter(page, '/catalog/promotions', 'acme-wh$db1$t', 'globex-wh$db2$u');
 });
 
 test('a filter the list cannot apply says why and offers to clear it, and an empty match names the project', async ({
@@ -122,21 +121,21 @@ test('a filter the list cannot apply says why and offers to clear it, and an emp
 		data: {
 			bearer,
 			routes: {
-				'GET /management/v1/warehouses/-/bindings': {
+				'GET /management/v1/warehouses': {
 					status: 503,
-					body: { detail: 'bindings unavailable' },
+					body: { detail: 'warehouses unavailable' },
 				},
 			},
 		},
 	});
 	await page.goto('/catalog/tables?project=acme');
 	const notice = page.getByRole('alert').filter({ hasText: 'cannot be applied' });
-	await expect(notice).toContainText('the namespace bindings read answered HTTP 503');
+	await expect(notice).toContainText('the warehouses read answered HTTP 503');
 	// No rows at all, rather than every row shown as though it were filtered.
-	await expect(page.getByText('db1$t', { exact: true })).toHaveCount(0);
+	await expect(page.getByText('acme-wh$db1$t', { exact: true })).toHaveCount(0);
 	await notice.getByRole('button', { name: 'Show all projects' }).click();
 	await expect(page).not.toHaveURL(/project=/);
-	await expect(page.getByText('db2$u', { exact: true })).toBeVisible();
+	await expect(page.getByText('globex-wh$db2$u', { exact: true })).toBeVisible();
 });
 
 test('promotions filtered to a project with no hold say so, and say the filter reads only the holds loaded', async ({
@@ -169,7 +168,7 @@ test('a filter naming no project the reader can see, and no row, says so and off
 	await page.keyboard.press('Escape');
 	await notice.getByRole('button', { name: 'Show all projects' }).click();
 	await expect(page).not.toHaveURL(/project=/);
-	await expect(page.getByText('db2$u', { exact: true })).toBeVisible();
+	await expect(page.getByText('globex-wh$db2$u', { exact: true })).toBeVisible();
 });
 
 test('a filter to a project the reader holds rows in, though no member of it, shows those rows', async ({
@@ -185,8 +184,8 @@ test('a filter to a project the reader holds rows in, though no member of it, sh
 		},
 	});
 	await page.goto('/catalog/tables?project=globex');
-	await expect(page.getByText('db2$u', { exact: true })).toBeVisible();
-	await expect(page.getByText('db1$t', { exact: true })).toHaveCount(0);
+	await expect(page.getByText('globex-wh$db2$u', { exact: true })).toBeVisible();
+	await expect(page.getByText('acme-wh$db1$t', { exact: true })).toHaveCount(0);
 	await expect(page.getByTestId('project-filter-notice')).toHaveCount(0);
 });
 
@@ -225,12 +224,12 @@ test('each filter change is a history entry, so Back is the list as it was', asy
 		.getByRole('navigation', { name: 'Pages' })
 		.getByRole('link', { name: 'Tables', exact: true })
 		.click();
-	await expect(page.getByText('db2$u', { exact: true })).toBeVisible();
+	await expect(page.getByText('globex-wh$db2$u', { exact: true })).toBeVisible();
 	await filterBy(page, 'acme');
 	await expect(page).toHaveURL(/project=acme/);
 	await page.goBack();
 	await expect(page).toHaveURL(/\/catalog\/tables$/);
-	await expect(page.getByText('db2$u', { exact: true })).toBeVisible();
+	await expect(page.getByText('globex-wh$db2$u', { exact: true })).toBeVisible();
 });
 
 test('the project select is labelled on screen', async ({ page }) => {

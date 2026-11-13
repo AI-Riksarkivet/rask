@@ -39,7 +39,7 @@ from lineage.services.consumer import handle_cloud_event
 from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, run_event
 
 
-_TABLE = "acme-silver$pages"
+_TABLE = "lance_catalog$acme-silver$pages"
 _ALICE = "dex~alice"
 _BOB = "dex~bob"
 
@@ -50,7 +50,7 @@ def _declared(catalog_url: str, table: str) -> str:
     Lineage's HTTP door resolves each name an event names to that uuid as the caller, and checks the grants on it
     ([[LH-524]]), so the table must exist for any event naming it to be admitted.
     """
-    namespace = table.split("$")[0]
+    namespace = table.rsplit("$", 1)[0]
     with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
         assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200

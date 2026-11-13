@@ -105,7 +105,6 @@
 - { name: MAINTENANCE_S3_EXTRA_BUCKETS, value: {{ $extra | uniq | join "," | quote }} }
 - { name: MAINTENANCE_S3_PLATFORM_BUCKETS, value: {{ include "lance.maintenancePlatformBuckets" . | quote }} }
 - { name: MAINTENANCE_S3_REGION, value: "us-east-1" }
-- { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
 - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
 {{- end -}}
 {{- end -}}

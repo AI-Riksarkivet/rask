@@ -1,16 +1,16 @@
 """The namespace the catalog keeps for provenance: lineage's commit feed and edge list are tables in it (ADR 0158).
 
 THE CATALOG KEEPS IT, NO TENANT DOES. Lineage's tables are governed like any other table — every write is
-authorized, judged and audited at the catalog's doors — but they are no tenant's data, so the namespace
-belongs to no warehouse and resolves to the catalog's default root, the way the `dir` catalog keeps its own
-`__manifest` table in its root (`lance_docs/ns_catalog/catalog/dir/index.md`). The catalog creates it at boot
-from `LANCE_PROVENANCE_NAMESPACE`, rather than through the namespace door, because the door demands a
-warehouse for a top-level namespace.
+authorized, judged and audited at the catalog's doors — but they are no tenant's data, so the namespace lies in the
+estate's own warehouse (`lance_catalog$provenance` by default, [[LH-593]]), served from the catalog's own root and owned
+by no project, the way the `dir` catalog keeps its own `__manifest` table in its root
+(`lance_docs/ns_catalog/catalog/dir/index.md`). The catalog creates it at boot from `LANCE_PROVENANCE_NAMESPACE`, rather
+than through the namespace door, because it is the catalog's own and no caller asks for it.
 
 WHO MAY WRITE IT is configuration, `LANCE_PROVENANCE_WRITERS`: each subject is granted `writer` on the
 namespace, which reaches every table in it (`table#writer ... from parent`) and nothing outside it. The parent
-edge hangs it off the estate's default warehouse, so the estate's owner owns it as they own every unbound
-namespace. It is protected against deletion.
+edge hangs it off the estate's own warehouse, so the estate's owner owns it as they own every namespace in that
+warehouse. It is protected against deletion.
 
 ITS HISTORY IS BOUNDED AS EVERY TABLE'S IS ([[LH-529]]). Each recorded event is a commit, so each of its tables gains a
 version and a fragment per event, and Lance lists `_versions/` on every open. `LANCE_PROVENANCE_RETAIN_VERSIONS` is the
@@ -147,10 +147,10 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
     )
     await run_in_threadpool(keep_declared_retention, settings, canonical=canonical, namespace_uuid=namespace_uuid)
     if settings.fga_enabled and client is not None:
-        # A top-level namespace hangs off the default warehouse; a nested one off its parent namespace's uuid.
+        # A namespace directly in the estate's warehouse hangs off it; a deeper one off its parent namespace's uuid.
         parent = (
             fga.namespace_object(await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments[:-1]))
-            if len(segments) > 1
+            if len(segments) > 2
             else settings.fga_default_warehouse_object
         )
         tuples = provenance_tuples(settings, namespace_uuid=namespace_uuid, parent=parent)

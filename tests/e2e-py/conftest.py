@@ -159,29 +159,25 @@ def byo_run(request: pytest.FixtureRequest, byo_tenant: Tenant) -> Iterator[Scen
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _unbind_what_this_run_bound() -> Iterator[None]:
-    """Remove the namespaces this run BOUND, and say plainly what it could not.
+def _drop_what_this_run_created() -> Iterator[None]:
+    """Drop the namespaces this run CREATED, and say plainly what it could not.
 
-    THE RESIDUE HAS A SOURCE, and it is here. These suites write into the estate's real catalog, and
-    nothing removed what they left. Lineage's feed converges by retention; the BINDINGS have no
-    retention at all, which is § Q15-1 — three stale ones hijacking medallion names.
+    These suites write into the estate's real catalog, and nothing else removes what they leave: lineage's feed
+    converges by retention, a namespace does not. Autouse and session-scoped so a suite cannot forget it, and
+    `topology.create_namespace` is the one door they all create through.
 
-    Autouse and session-scoped so a suite cannot forget it, and `topology.create_top_level` is the one
-    door they all bind through.
-
-    WHAT IT WILL NOT DO is force. A namespace still holding tables answers 409 naming them, and that
-    refusal is correct — unbinding it would leave real tables unresolvable. Those are reported as a
-    warning rather than swallowed or escalated: a cleanup that deletes what a guard refused is worse
-    than the residue, and residue nobody is told about grows unseen.
+    WHAT IT WILL NOT DO is force. A namespace still holding tables answers 409 naming them, and that refusal is correct:
+    a cleanup that takes what a guard refused is worse than the residue. Those are reported as a warning rather than
+    swallowed or escalated, because residue nobody is told about grows unseen.
     """
     yield
-    from topology import unbind_created
+    from topology import drop_created
 
-    left = unbind_created()
+    left = drop_created()
     if left:
         import warnings
 
         warnings.warn(
-            "e2e left bindings behind (each names why; a 409 means the namespace still holds tables): " + "; ".join(left),
+            "e2e left namespaces behind (each names why; a 409 means the namespace still holds tables): " + "; ".join(left),
             stacklevel=1,
         )

@@ -37,7 +37,7 @@ const WAREHOUSE = {
 	status: 'active',
 };
 
-const TABLES = ['acme-silver$features', 'acme-gold$catalog', 'bronze$events'];
+const TABLES = ['acme-wh$silver$features', 'acme-wh$gold$catalog', 'other-wh$bronze$events'];
 
 let token: string;
 
@@ -58,10 +58,9 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 		// `status` key — which every warehouse record does — is otherwise read as that form, and the
 		// record's `"active"` becomes the HTTP status.
 		'GET /management/v1/warehouses/acme-wh': { status: 200, body: WAREHOUSE },
-		// The namespaces the REGISTRY binds to this warehouse — the list the page renders (#66).
-		'GET /management/v1/warehouses/acme-wh/namespaces': {
-			namespaces: ['acme-silver', 'acme-gold'],
-		},
+		// The warehouse's own listing (the spec's ListNamespaces on its name) answers the NAMES of the
+		// namespaces under it — the list the page renders, an empty one included (#66).
+		'GET /v1/namespace/acme-wh/list': { namespaces: ['silver', 'gold', 'raw'] },
 		'GET /v1/table': { tables: TABLES },
 	});
 });
@@ -72,25 +71,27 @@ test('drills warehouse → namespace with tier badges along the way', async ({ p
 	// warehouses-drawers.spec.ts.
 	await page.goto('/catalog/warehouses/acme-wh');
 
-	// The warehouse rung: registry facts + the namespaces the registry binds to it, each carrying its
-	// tier badge; a namespace bound elsewhere (`bronze`) must NOT appear.
+	// The warehouse rung: registry facts + the namespaces its listing names, each by its whole id and
+	// carrying its tier badge; a namespace in another warehouse must NOT appear.
 	await expect(page).toHaveURL(/\/catalog\/warehouses\/acme-wh$/);
 	await expect(page.getByText('s3://acme-bucket')).toBeVisible();
 	// The way back UP: the project's own page.
 	const up = page.getByRole('link', { name: 'acme', exact: true });
 	await expect(up).toHaveAttribute('href', '/projects/acme');
-	const silverRow = page.locator('a.row', { hasText: 'acme-silver' });
+	const silverRow = page.locator('a.row', { hasText: 'acme-wh$silver' });
 	await expect(silverRow).toBeVisible();
 	await expect(silverRow.locator('.stage')).toHaveText('silver');
-	await expect(page.locator('a.row', { hasText: 'acme-gold' }).locator('.stage')).toHaveText(
+	await expect(page.locator('a.row', { hasText: 'acme-wh$gold' }).locator('.stage')).toHaveText(
 		'gold',
 	);
-	await expect(page.locator('a.row', { hasText: 'bronze$events' })).toHaveCount(0);
+	// An empty namespace is listed with no tables, not left out.
+	await expect(page.locator('a.row', { hasText: 'acme-wh$raw' })).toContainText('0 tables');
+	await expect(page.locator('a.row', { hasText: 'bronze' })).toHaveCount(0);
 	await silverRow.click();
 
 	// The namespace rung (existing page): its member table listed.
-	await expect(page).toHaveURL(/\/catalog\/namespaces\/acme-silver$/);
-	await expect(page.getByRole('link', { name: 'acme-silver$features' })).toBeVisible();
+	await expect(page).toHaveURL(/\/catalog\/namespaces\/acme-wh%24silver$/);
+	await expect(page.getByRole('link', { name: 'acme-wh$silver$features' })).toBeVisible();
 });
 
 // DELETED WITH ITS SURFACE, and the gap is named rather than quietly closed: this file used to end

@@ -14,9 +14,9 @@ the tuple door. What may be asked is closed: a role such as `writer` is not a qu
 a decision rung. The door refuses a route its caller holds no rung for 403 (code 15) and a question it does not answer
 400 (code 13), and every refusal reaches the service as `ServiceUnavailableError`, its gates' 503.
 
-Arranged through the doors on a `dir` catalog with warehouses on: two projects, each holding one warehouse, whose record
-and project edge are written where the warehouse door writes them (the door provisions a bucket), a namespace bound to
-it through the warehouse's namespace door and one table.
+Arranged through the doors on a `dir` catalog: two projects, each holding one warehouse, whose record, project edge and
+own catalog row are written where the warehouse door writes them (the door provisions a bucket), a namespace in it
+through the namespace door and one table.
 """
 
 from __future__ import annotations
@@ -42,10 +42,10 @@ from lakehouse.governed.decider import CatalogDecider, TableDecision
 from lakehouse.governed.fga import user_object
 
 
-#: The two tenants, each mapped to its warehouse and the namespace bound to it; each namespace holds one table, `<ns>$t`.
+#: The two tenants, each mapped to its warehouse and the namespace in it; each namespace holds one table, `<ns>$t`.
 ACME, BETA = "acme", "beta"
-_TENANTS = {ACME: ("wh-acme", "lake"), BETA: ("wh-beta", "far")}
-LAKE, FAR = "lake$t", "far$t"
+_TENANTS = {ACME: ("wh-acme", "wh-acme$lake"), BETA: ("wh-beta", "wh-beta$far")}
+LAKE, FAR = "wh-acme$lake$t", "wh-beta$far$t"
 #: The accounts that ask: lineage, a service of acme's and a notifier.
 LINEAGE, ACME_SERVICE, NOTIFIER = "rask-sa-lineage", "rask-sa-acme-service", "rask-sa-a-notifier"
 #: A table uuid no table holds and no tuple names.
@@ -99,6 +99,8 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
     """root, the estate admin as the bootstrap hook grants it, makes both tenants through the doors and grants bob reading
     both tables and acme's membership; acme's admin grants acme's service the asking on acme, and the estate admin grants
     a notifier the expansion of members at the tuple door."""
+    from lance_namespace import connect
+
     from catalog.core.config import get_settings
     from catalog.services import warehouses
 
@@ -122,7 +124,8 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
             }
             warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), made)
             store.write((f"project:{project}", "project", f"warehouse:{warehouse}"))
-            _ok(client.post(f"/management/v1/warehouses/{warehouse}/namespaces", json={"namespace": namespace}))
+            warehouses.ensure_catalog_row(connect("dir", {"root": settings.root}), warehouse)
+            _ok(client.post(f"/v1/namespace/{namespace}/create", json={}))
             table = f"{namespace}$t"
             _ok(client.post(f"/v1/table/{table}/create", content=rows, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}))
             _ok(client.post(f"/management/v1/table/{table}/access/grant", json={"user": "dex~bob", "relation": "reader"}))
@@ -144,7 +147,6 @@ def estate(sa_issuer: Any, dex_issuer: Any, openfga_store: Any, tmp_path: Path, 
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_WAREHOUSES_ENABLED": "true",
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": dex_issuer.issuer,
         "RASK_OIDC_AUDIENCE": "lance-catalog",

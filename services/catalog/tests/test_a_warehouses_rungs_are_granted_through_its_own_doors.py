@@ -34,7 +34,6 @@ type Answered = tuple[int, int] | dict[str, object] | list[str]
 def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Any:
     """acme, made through its door by alice, and acme's warehouse, written where its door keeps it, with carol a member
     of acme and judy holding `manage_grants` on the warehouse."""
-    monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     catalog = request.getfixturevalue("governed_catalog")
     catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"))
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ADMIN))

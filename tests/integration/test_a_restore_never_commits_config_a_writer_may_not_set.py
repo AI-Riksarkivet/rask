@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-TABLE = "lh538$t"
+TABLE = "lance_catalog$lh538$t"
 
 
 def _ipc(table: pa.Table) -> bytes:
@@ -38,7 +38,7 @@ def _ipc(table: pa.Table) -> bytes:
     ],
 )
 def test_a_restore_of_a_version_carrying_refused_config_is_refused_and_moves_nothing(real_ns_client: TestClient, config: dict[str, str | None]) -> None:
-    assert real_ns_client.post("/v1/namespace/lh538/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$lh538/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=_ipc(pa.table({"id": pa.array([1, 2], pa.int64())})), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])

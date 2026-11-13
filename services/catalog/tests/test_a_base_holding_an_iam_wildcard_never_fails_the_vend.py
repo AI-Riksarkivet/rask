@@ -70,7 +70,7 @@ def test_a_base_holding_a_wildcard_never_fails_the_vend(
         enable_stable_row_ids=True,
         initial_bases=[lance.DatasetBasePath(base, is_dataset_root=False, name="wild")],
     )
-    table = f"mb$wild{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$mb$wild{uuid.uuid4().hex[:8]}"
     registered = two_store_catalog.post(f"/v1/table/{table}/register", json={"location": location})
     assert registered.status_code == 200, f"precondition: the register door admits the base on its location: {registered.text}"
     sent = _capture_policy(two_store_catalog)

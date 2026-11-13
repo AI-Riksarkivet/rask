@@ -69,8 +69,8 @@ vend, and that write credentials never reach `_refs/` or a final manifest, is LH
 
 **Why STS is the right default for a *governed* lakehouse:**
 
-- **Least privilege, per table.** The session policy means a token minted for `silver$features`
-  can't touch `gold$revenue`. The OpenFGA decision (`can_read_data` / `can_write_data`) is
+- **Least privilege, per table.** The session policy means a token minted for `acme$silver$features`
+  can't touch `acme$gold$revenue`. The OpenFGA decision (`can_read_data` / `can_write_data`) is
   **projected onto the storage layer**, so authorization still holds on the direct-I/O fast path —
   not just at the API.
 - **Short-lived.** Tokens expire in minutes (`expires_at_millis`); a leaked one has a small,
@@ -169,11 +169,13 @@ HTTP request
 ### What exists today (P0 — shipped & tested)
 
 ```
-catalog                      (the root; "the project" today)
-  └── namespace              (self-nesting: bronze, bronze$domain1, …)
-        └── table
+estate                       (the root the estate admin's rungs are held on)
+project                      (the tenant: admins, members, roles, the quality gate)
+  └── warehouse              (one bucket; its id is the first segment of every name in it: acme)
+        └── namespace        (self-nesting: acme$bronze, acme$bronze$domain1, …)
+              └── table      (acme$bronze$images; held by its uuid, `table:<uuid>`)
 
-types:   user, role, catalog, namespace, table
+types:   user, role, revision, estate, project, warehouse, namespace, table, classification, materialized_view
 subjects: user:<sub>  AND  role:<name>#assignee   (grant a team/role, not just a person)
 rungs:   owner ⊇ writer ⊇ reader   (concentric; cascade DOWN via `parent`)
 actions: can_get_metadata, can_read_data, can_write_data, can_drop, can_deregister,
@@ -243,7 +245,7 @@ gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 | Medallion model + tests (bronze/silver/gold + persona roles) | ✅ done (model + `model.fga.yaml`) |
 | Tier movement (bronze→silver→gold) | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog runs the publish-time quality gate, and the ADR 0156 tier rules are tracked in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) |
 | `project` type + 3-axis governance (teams × projects × tiers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
-| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), Dapr cron bindings drive lineage's relay tick and the catalog's five reconcilers, and NATS JetStream, the one bus (ADR 0199), carries the internal events |
+| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), Dapr cron bindings drive lineage's relay tick and the catalog's six ticks, and NATS JetStream, the one bus (ADR 0199), carries the internal events |
 | Lineage (authenticated OpenLineage intake, the commit feed and table-level edges as catalog-governed Lance tables, a forwarder to a bring-your-own graph backend; producer-side emitter) | ✅ service built & deployed; read-side authz implemented (see §9, `docs/LINEAGE.md`) |
 | OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-observability`-verified |
 
@@ -295,7 +297,7 @@ commit  ──▶  OpenFGA check (may you?)        ← access control      [done
 
 **Provenance as a service, the graph bring-your-own.** `services/lineage/` is a small FastAPI app that keeps no
 database. It ingests OpenLineage events at the standard `POST /api/v1/lineage` path (and from the bus and the outbox),
-and records each as a row of `provenance$events` and its table-level edges in `provenance$edges`: Lance tables in the
+and records each as a row of `lance_catalog$provenance$events` and its table-level edges in `lance_catalog$provenance$edges`: Lance tables in the
 catalog's provenance namespace, written through the catalog's `merge_insert` door as lineage's own principal, so every
 write is authorized, tier-judged and audited like any writer's. `GET /tables/{name}/derived` walks the edge list (how an
 erasure finds every derived table), and a relay tick forwards every recorded event as standard OpenLineage to the

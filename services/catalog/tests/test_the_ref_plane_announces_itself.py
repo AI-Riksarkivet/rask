@@ -13,9 +13,8 @@ DRIVEN THROUGH THE ROUTES against a real `dir` namespace and real pylance refs, 
 whether the DOOR emits. A unit test on the emitter would pass with no route calling it, which is the
 state this file was written to end.
 
-THE OBJECT ID IS THE TABLE, not the ref. A consumer joins events by `object_id` -- the catalog's own
-`evict_stale_bindings` does exactly that -- so a branch event has to carry the same id a publication for
-that table carries, with the ref itself in `extra`. Naming the branch there instead would give every
+THE OBJECT ID IS THE TABLE, not the ref. A consumer joins events by `object_id`, so a branch event has to
+carry the same id a publication for that table carries, with the ref itself in `extra`. Naming the branch there instead would give every
 branch its own object and join nothing.
 
 `fga.canonical_object_id(segments, ...)` is used for consistency with every other table emitter here, not

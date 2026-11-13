@@ -13,12 +13,10 @@ const SHOTS = 'e2e/__shots__';
 // surface at all; the LIST is what makes a surface possible, because a page cannot describe records
 // whose ids it would have to already know.
 //
-// Three things are pinned here, and each is a way the page could be green and wrong:
+// Two things are pinned here, and each is a way the page could be green and wrong:
 //
 //  1. the DRILL-DOWN — every record row links DOWN a rung to its catalog page (namespace or table).
-//  2. the SHORT-LIST banner — `incomplete` means a namespace binding could not be read, so policies
-//     under it are missing. Swallowed, the list reads as checked-and-clean.
-//  3. the SET body — an omitted knob means INHERIT. `put_policy` overwrites the whole record, so a
+//  2. the SET body — an omitted knob means INHERIT. `put_policy` overwrites the whole record, so a
 //     form that posted its model's defaults for untouched fields would silently clear the compaction
 //     memory bound and flip version-reclamation ownership.
 
@@ -33,13 +31,11 @@ const DETAIL = {
 const POLICIES = {
 	project: 'acme',
 	buckets: ['acme-bucket'],
-	namespaces: ['gold'],
-	incomplete: false,
-	skipped_bindings: [],
+	warehouses: ['acme-wh'],
 	policies: [
 		{
 			kind: 'namespace',
-			id: 'gold',
+			id: 'acme-wh$gold',
 			set: true,
 			retention_days: 30,
 			compact_enabled: true,
@@ -58,7 +54,7 @@ const POLICIES = {
 		},
 		{
 			kind: 'table',
-			id: 'gold$pages',
+			id: 'acme-wh$gold$pages',
 			set: true,
 			compact_enabled: false,
 			cleanup_enabled: false,
@@ -92,7 +88,7 @@ test('renders the project record and every record that shadows it', async ({ pag
 	await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible();
 
 	// …and the tiers below it, read-only, each on its own rung.
-	const ns = page.getByRole('row').filter({ hasText: 'gold$pages' });
+	const ns = page.getByRole('row').filter({ hasText: 'acme-wh$gold$pages' });
 	await expect(ns.getByRole('cell').first()).toHaveText('table');
 	await expect(ns).toContainText('off'); // compact_enabled:false is a STATE, not an absence
 
@@ -109,27 +105,13 @@ test('each record row links to its catalog page', async ({ page }) => {
 	await page.goto('/projects/acme');
 	// A namespace record links to the namespace rung, a table record to the table rung — the lakehouse
 	// owns both, and the console's route manifest owns neither.
-	for (const href of ['/catalog/namespaces/gold', '/catalog/tables/gold%24pages']) {
+	for (const href of [
+		'/catalog/namespaces/acme-wh%24gold',
+		'/catalog/tables/acme-wh%24gold%24pages',
+	]) {
 		const link = page.locator(`a[href="${href}"]`);
 		await expect(link).toBeVisible();
 	}
-});
-
-test('an unreadable binding is announced as a short list, never swallowed', async ({ page }) => {
-	await seed(page, {
-		'GET /management/v1/projects/acme/policies': {
-			...POLICIES,
-			policies: [],
-			namespaces: [],
-			incomplete: true,
-			skipped_bindings: ['file:///control/_warehouses/bindings/zzz.json'],
-		},
-	});
-	await page.goto('/projects/acme');
-	// The whole point of the flag: an empty list that MIGHT be short must not read as "checked and
-	// clean" — the same failure class as the reconciler's `unbound_namespaces` detector.
-	await expect(page.getByText(/This list may be short/)).toBeVisible();
-	await expect(page.getByText(/1 namespace binding record could not be read/)).toBeVisible();
 });
 
 test('a denied listing is named, never rendered as “no policies”', async ({ page }) => {

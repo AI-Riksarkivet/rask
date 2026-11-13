@@ -33,7 +33,6 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     """acme, made through its door by alice, who owns the estate as the chart's bootstrap hook grants it, and acme's
     warehouse, written where its door keeps it (the door provisions a bucket and probes the store), with dave a second
     admin of acme, bob the warehouse's owner and carol a member of acme."""
-    monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     catalog = request.getfixturevalue("governed_catalog")
     catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"))
     made = catalog.client.post("/management/v1/projects", json={"id": PROJECT}, headers=catalog.bearer(ADMIN))

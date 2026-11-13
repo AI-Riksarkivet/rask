@@ -27,7 +27,7 @@ from lance_namespace import ConcurrentModificationError, NamespaceNotFoundError,
 from pydantic import BaseModel
 
 from catalog.api.cron import mount_cron
-from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, StorageOptionsDep, namespace_for_top_ns
+from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, StorageOptionsDep, namespace_for_warehouse
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import promotions, provenance_namespace, table_claims
@@ -115,7 +115,7 @@ async def _unpin(request: Request, settings: Settings, so: StorageOptions, table
     """
     segments = parse_identifier(table)
     try:
-        ns = await namespace_for_top_ns(request, settings, segments[0])
+        ns = await namespace_for_warehouse(request, settings, segments[0])
         # The pin moves only on the hold's own table: the name is resolved once and must still be that uuid ([[LH-530]]).
         named = await run_in_threadpool(
             partial(table_claims.door_table, announces=provenance_namespace.announcer(segments, settings)), ns, table_claims.claim_store(settings), segments

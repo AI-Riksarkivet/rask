@@ -60,17 +60,12 @@ def test_a_warehouse_with_NO_endpoint_uses_the_estate_default(settings: Settings
 class _Req:
     """The one piece of `request` the resolver touches, without standing up an app.
 
-    Handed over with an explicit `cast` at each call rather than a `type: ignore`: the resolver reads
-    `request.app.state.warehouse_binding_cache` and keeps what it resolved on the request's own `state`, and nothing
-    else, so the cast states what is actually required of the argument instead of silencing the checker.
+    Handed over with an explicit `cast` at each call rather than a `type: ignore`: the resolver keeps what it resolved on
+    the request's own `state`, and touches nothing else, so the cast states what is actually required of the argument
+    instead of silencing the checker.
     """
 
-    class _State:
-        def __init__(self) -> None:
-            self.warehouse_binding_cache: dict[str, dict[str, str]] = {}
-
     def __init__(self) -> None:
-        self.app = type("_App", (), {"state": _Req._State()})()
         self.state = type("_RequestState", (), {})()
 
 
@@ -89,15 +84,14 @@ async def test_the_resolver_carries_the_RECORDS_endpoint(
     """
     from catalog.api import dependencies
 
-    record: dict[str, str] = {"id": "wh-1", "status": "active"}
+    record: dict[str, str] = {"id": "wh-1", "status": "active", "root_uri": "s3://tenant-bucket"}
     if record_endpoint is not None:
         record["endpoint"] = record_endpoint
-    monkeypatch.setattr(dependencies.warehouses, "binding_for_namespace", lambda *a, **k: {"warehouse_id": "wh-1", "root_uri": "s3://tenant-bucket"})
     monkeypatch.setattr(dependencies.warehouses, "get_warehouse", lambda *a, **k: record)
 
-    resolved = await dependencies._resolve_warehouse_root(cast(Request, _Req()), settings, "tenant-ns")
+    resolved = await dependencies._resolve_warehouse_root(cast(Request, _Req()), settings, "wh-1")
 
-    assert resolved == ("s3://tenant-bucket", expected)
+    assert resolved == dependencies.ServedWarehouse(root_uri="s3://tenant-bucket", endpoint=expected)
 
 
 def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500(settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

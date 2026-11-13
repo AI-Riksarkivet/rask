@@ -39,7 +39,6 @@ from tests.unit.named_resolver import NamedResolver
 
 
 class _Settings:
-    warehouses_enabled = False
     fga_enabled = True
 
 
@@ -54,13 +53,11 @@ async def _create(
 ) -> CreateNamespaceResponse:
     """Drive the handler with the guards and the backend faked.
 
-    The guards are stubbed rather than satisfied because they answer different questions (warehouse
-    scope, depth) and each has its own suite; what is under test is what the door does with
-    `mode` once they pass.
+    The depth guard is stubbed rather than satisfied because it answers a different question and has its own
+    suite; what is under test is what the door does with `mode` once it passes.
     """
     announced = [] if announced is None else announced
 
-    monkeypatch.setattr(ns_ep.fga_deps, "require_warehouse_scoped", lambda *a, **k: None)
     monkeypatch.setattr(ns_ep.fga_deps, "require_namespace_depth", lambda *a, **k: None)
 
     async def _seed(
@@ -98,7 +95,7 @@ async def _create(
     monkeypatch.setattr(ns_ep.native, "call", _native)
 
     return await ns_ep.create_namespace(
-        id="acme",
+        id="lance_catalog$acme",
         ns=MagicMock(),
         settings=cast(Settings, _Settings()),
         token=MagicMock(sub="bob"),
@@ -107,7 +104,7 @@ async def _create(
         # this argument is inert here rather than that its type is inconvenient.
         control=cast(Any, None),
         resolver=NamedResolver(),
-        body=CreateNamespaceRequest(id=["acme"], mode=mode),
+        body=CreateNamespaceRequest(id=["lance_catalog", "acme"], mode=mode),
     )
 
 
@@ -132,7 +129,7 @@ async def test_exist_ok_on_a_free_id_still_creates_AND_seeds(monkeypatch: pytest
     await _create(mode="ExistOk", exists=False, monkeypatch=monkeypatch, seeded=seeded, created=created)
 
     assert created == ["create_namespace"]
-    assert seeded == [("namespace", "acme")], "a namespace this call really created must get its owner"
+    assert seeded == [("namespace", "lance_catalog", "acme")], "a namespace this call really created must get its owner"
 
 
 @pytest.mark.anyio

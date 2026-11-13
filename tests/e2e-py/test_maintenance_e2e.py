@@ -43,7 +43,7 @@ def _due_record(tenant: Tenant, table_uuid: str) -> dict[str, Any] | None:
 
 
 def test_a_commit_is_followed_by_its_tables_pass(byo_tenant: Tenant) -> None:
-    table_id = [byo_tenant.bronze, f"maintained-{uuid.uuid4().hex[:6]}"]
+    table_id = [*byo_tenant.bronze.split("$"), f"maintained-{uuid.uuid4().hex[:6]}"]
     table = "$".join(table_id)
     stock = byo_tenant.pipeline.namespace()
     lance.write_dataset(rows_of(range(10)), namespace_client=stock, table_id=table_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)

@@ -3,6 +3,8 @@ import * as v from 'valibot';
 import type { ApiResult } from '#lib/api/client.ts';
 import { DropNamespaceResponseSchema, type DropNamespace } from '../catalog';
 import { fetchTables, TrashEntrySchema, type TrashEntry } from './catalog.api';
+import { fetchWarehouseNamespaces } from './warehouses.api';
+import { warehouseOf } from '#lib/api/identifiers.ts';
 import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
 import { PolicyDeleteResponseSchema, type NamespacePolicyDelete } from '../namespace';
 
@@ -115,9 +117,13 @@ export const dropNamespace = command(
 			}),
 			DropNamespaceResponseSchema,
 		);
-		// The registry IS the table list folded by namespace — a dropped namespace (and, on Cascade, its
-		// tables) must leave it in the same flight, or the row the drop just removed re-renders intact.
-		if (result.ok) void fetchTables().refresh();
+		// The registry is the warehouses' listings and the table list folded by namespace — a dropped
+		// namespace (and, on Cascade, its tables) must leave both in the same flight, or the row the drop
+		// just removed re-renders intact.
+		if (result.ok) {
+			void fetchTables().refresh();
+			void fetchWarehouseNamespaces(warehouseOf(namespace)).refresh();
+		}
 		return result;
 	},
 );

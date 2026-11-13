@@ -41,9 +41,9 @@ def _ipc(table: pa.Table) -> bytes:
 @pytest.fixture
 def table(real_ns_client: TestClient) -> TestClient:
     """A real two-column table at ``c1$t`` — ``id: int64``, ``v: string``."""
-    assert real_ns_client.post("/v1/namespace/c1/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$c1/create", json={}).status_code == 200
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
-    created = real_ns_client.post("/v1/table/c1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = real_ns_client.post("/v1/table/lance_catalog$c1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     return real_ns_client
 
@@ -60,7 +60,7 @@ def test_add_columns_with_an_unknown_field_in_the_expression_is_a_400(table: Tes
     """The expression is the caller's, and Lance's rejection NAMES the fields that do exist — the single
     most useful sentence in the response. It is invalid input, not a missing column: nothing was targeted
     by name, an expression failed to resolve."""
-    r = table.post("/v1/table/c1$t/add_columns", json={"new_columns": [{"name": "x", "expression": "nosuchcol + 1"}]})
+    r = table.post("/v1/table/lance_catalog$c1$t/add_columns", json={"new_columns": [{"name": "x", "expression": "nosuchcol + 1"}]})
     assert r.status_code == 400, r.text
     body = _problem(r)
     assert body["code"] == 13, body  # INVALID_INPUT
@@ -72,7 +72,7 @@ def test_add_columns_with_an_unknown_field_in_the_expression_is_a_400(table: Tes
 
 def test_add_columns_with_a_name_the_table_already_has_is_a_400(table: TestClient) -> None:
     """A duplicate column is a conflicting REQUEST, not a server fault."""
-    r = table.post("/v1/table/c1$t/add_columns", json={"new_columns": [{"name": "id", "expression": "id + 1"}]})
+    r = table.post("/v1/table/lance_catalog$c1$t/add_columns", json={"new_columns": [{"name": "id", "expression": "id + 1"}]})
     assert r.status_code == 400, r.text
     body = _problem(r)
     assert body["code"] == 13, body
@@ -83,7 +83,7 @@ def test_drop_columns_of_a_missing_column_is_a_404_column_not_found(table: TestC
     """A column named by the caller that is not there is exactly ``TableColumnNotFound`` (code 12) — the
     spec has a code for it, so the answer must carry that code, not a 400 and certainly not a 500. Lance
     raises this one as an UNMARKED ``ValueError``: the marker-only translator could never have caught it."""
-    r = table.post("/v1/table/c1$t/drop_columns", json={"columns": ["nope"]})
+    r = table.post("/v1/table/lance_catalog$c1$t/drop_columns", json={"columns": ["nope"]})
     assert r.status_code == 404, r.text
     body = _problem(r)
     assert body["code"] == 12, body  # TABLE_COLUMN_NOT_FOUND
@@ -96,7 +96,7 @@ def test_drop_columns_of_a_missing_column_is_a_404_column_not_found(table: TestC
 def test_dropping_every_column_is_a_400(table: TestClient) -> None:
     """A table with no columns is not a thing Lance will make. The columns all exist, so this is not a
     not-found — it is a refusal of a well-formed but impossible request."""
-    r = table.post("/v1/table/c1$t/drop_columns", json={"columns": ["id", "v"]})
+    r = table.post("/v1/table/lance_catalog$c1$t/drop_columns", json={"columns": ["id", "v"]})
     assert r.status_code == 400, r.text
     assert _problem(r)["code"] == 13
 
@@ -104,7 +104,7 @@ def test_dropping_every_column_is_a_400(table: TestClient) -> None:
 def test_renaming_a_missing_column_is_a_404_column_not_found(table: TestClient) -> None:
     """Same class as the drop, reported by Lance in a different shape (``OSError`` WITH the marker) — both
     must land on the same code, or a client cannot dispatch on it."""
-    r = table.post("/v1/table/c1$t/alter_columns", json={"alterations": [{"path": "nope", "rename": "x"}]})
+    r = table.post("/v1/table/lance_catalog$c1$t/alter_columns", json={"alterations": [{"path": "nope", "rename": "x"}]})
     assert r.status_code == 404, r.text
     body = _problem(r)
     assert body["code"] == 12, body
@@ -114,7 +114,7 @@ def test_renaming_a_missing_column_is_a_404_column_not_found(table: TestClient) 
 def test_an_impossible_cast_is_a_400_that_names_the_cast(table: TestClient) -> None:
     """The column exists; the CAST is what cannot be done. The message names both types, which is what
     tells the caller whether to pick a different target type or rewrite the column."""
-    r = table.post("/v1/table/c1$t/alter_columns", json={"alterations": [{"path": "id", "data_type": {"type": "string"}}]})
+    r = table.post("/v1/table/lance_catalog$c1$t/alter_columns", json={"alterations": [{"path": "id", "data_type": {"type": "string"}}]})
     assert r.status_code == 400, r.text
     body = _problem(r)
     assert body["code"] == 13, body
@@ -126,7 +126,7 @@ def test_an_impossible_cast_is_a_400_that_names_the_cast(table: TestClient) -> N
 def test_field_metadata_on_an_unknown_path_is_a_404_column_not_found(table: TestClient) -> None:
     """``update_field_metadata`` targets a field BY PATH, so an unknown path is the same 404. Lance's own
     message already enumerates the available fields — the catalog must not append a second copy."""
-    r = table.post("/v1/table/c1$t/update_field_metadata", json={"updates": [{"path": "nope", "metadata": {"a": "b"}}]})
+    r = table.post("/v1/table/lance_catalog$c1$t/update_field_metadata", json={"updates": [{"path": "nope", "metadata": {"a": "b"}}]})
     assert r.status_code == 404, r.text
     body = _problem(r)
     assert body["code"] == 12, body
@@ -142,7 +142,7 @@ def test_backfill_tells_the_caller_what_is_unsupported(table: TestClient) -> Non
     it and was told the server had broken. It names an operation and leaks nothing; it is not redacted.
     406 since Q3 (2026-09-02) — the spec's status for Unsupported, which also stops a capability answer
     being counted as a server fault in the RED metrics."""
-    r = table.post("/v1/table/c1$t/backfill_column", json={"column": "id"})
+    r = table.post("/v1/table/lance_catalog$c1$t/backfill_column", json={"column": "id"})
     assert r.status_code == 406, r.text
     body = _problem(r)
     assert body["code"] == 0, body  # UNSUPPORTED

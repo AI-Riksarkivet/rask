@@ -61,8 +61,9 @@ one user and never a userset.
 ## `- { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }`
 
 The DEFAULT WAREHOUSE, matching `fga_default_warehouse_object` in
-packages/lakehouse/src/lakehouse/governed/settings.py — the structural root a
-top-level namespace hangs off, not the estate root the privileges are checked on.
+packages/lakehouse/src/lakehouse/governed/settings.py — the estate's own warehouse, whose id is the first
+segment of every name the estate root serves (`lance_catalog$<namespace>`) and which parents each namespace under it,
+not the estate root the privileges are checked on.
 `tests/unit/test_the_bootstrap_hook_grants_against_the_model_its_image_carries.py`
 holds the two apart: it runs this hook's default-render grants against a stub OpenFGA
 that refuses a relation its object's own type does not define.

@@ -81,7 +81,8 @@ class PolicyOwners(BaseModel):
     """The objects whose maintenance policy may govern one table (ADR 0173 §8): the table, then its namespaces."""
 
     table_uuid: str
-    #: The uuids of the table's ancestor namespaces, outermost first.
+    #: The uuids of the table's ancestor namespaces, outermost first. The warehouse's own row, a name's first segment, is
+    #: none of them: the catalog keeps no namespace policy on a warehouse ([[LH-593]]).
     namespace_uuids: list[str]
 
 
@@ -132,7 +133,7 @@ def policy_owners(names: TableIds, table: str, *, claims: location_claims.ClaimS
     if uuid is None:
         return None
     segments = table.split(CATALOG_DELIMITER)
-    ancestors = [fga.canonical_object_id(segments[:depth]) for depth in range(1, len(segments))]
+    ancestors = [fga.canonical_object_id(segments[:depth]) for depth in range(2, len(segments))]
     unnamed = [ancestor for ancestor in ancestors if ancestor not in names.namespace_uuids]
     if unnamed:
         log.warning("maintenance_namespace_uuid_unread", extra={"table": table, "namespaces": unnamed})

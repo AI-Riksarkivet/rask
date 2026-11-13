@@ -71,10 +71,12 @@ class _Estate:
         assert answer.status_code == 200, f"{path}: {answer.text}"
         return answer.json()
 
-    def warehouse(self, warehouse: str, namespace: str, profile: dict[str, Any] | None = None) -> None:
-        """``warehouse``, in its own bucket, under ``profile``, with ``namespace`` bound to it."""
+    def warehouse(self, warehouse: str, namespace: str, profile: dict[str, Any] | None = None) -> str:
+        """``warehouse``, in its own bucket, under ``profile``, with ``namespace`` in it; the namespace's full name."""
         self.post("/management/v1/warehouses", {"id": warehouse, "project": PROJECT, **({"delete_profile": profile} if profile else {})})
-        self.post(f"/management/v1/warehouses/{warehouse}/namespaces", {"namespace": namespace})
+        name = f"{warehouse}${namespace}"
+        self.post(f"/v1/namespace/{name}/create")
+        return name
 
     def create_table(self, table: str) -> str:
         """``table``, created with two rows; the uuid the catalog minted for it."""
@@ -119,20 +121,20 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
 
 def test_a_drop_under_a_warehouse_is_kept_as_its_delete_profile_says(estate: _Estate) -> None:
     suffix = uuid.uuid4().hex[:6]
-    estate.warehouse(f"hard-{suffix}", "hot", {"mode": "hard"})
-    estate.warehouse(f"soft-{suffix}", "warm", {"mode": "soft", "grace_days": 2})
-    destroyed = estate.create_table("hot$t")
-    kept = estate.create_table("warm$t")
-    destroyed_at = estate.location("hot$t")
+    hot = estate.warehouse(f"hard-{suffix}", "hot", {"mode": "hard"})
+    warm = estate.warehouse(f"soft-{suffix}", "warm", {"mode": "soft", "grace_days": 2})
+    destroyed = estate.create_table(f"{hot}$t")
+    kept = estate.create_table(f"{warm}$t")
+    destroyed_at = estate.location(f"{hot}$t")
 
-    estate.post("/v1/table/hot$t/drop")
-    trashed = estate.post("/v1/table/warm$t/drop")
+    estate.post(f"/v1/table/{hot}$t/drop")
+    trashed = estate.post(f"/v1/table/{warm}$t/drop")
     reposted = estate.post("/management/v1/warehouses", {"id": f"soft-{suffix}", "project": PROJECT})
     cleared = estate.post("/management/v1/warehouses", {"id": f"soft-{suffix}", "project": PROJECT, "delete_profile": {"mode": "estate"}})
 
     assert estate.record(destroyed) is None and estate.objects_at(destroyed_at) == [], "a hard warehouse's drop kept the table"
     record = estate.record(kept)
-    assert record is not None and trashed.get("transaction_id") == f"warm$t${kept}", trashed
+    assert record is not None and trashed.get("transaction_id") == f"{warm}$t${kept}", trashed
     grace = datetime.fromisoformat(str(record["expires_at"])) - datetime.fromisoformat(str(record["dropped_at"]))
     assert grace == timedelta(days=2), f"the soft warehouse's drop kept the estate's grace, not its own: {grace}"
     assert reposted["delete_profile"] == {"mode": "soft", "grace_days": 2}, "a re-POST naming no profile reset the warehouse's"
@@ -143,20 +145,20 @@ def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_
     """Every release and every end of a record is on the audit trail, as it lands or as the catalog refuses it: each
     revokes grants or ends a record on the catalog's own session, for whoever asked."""
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
-    estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
-    expired, waiting, live = (estate.create_table(f"bronze${name}") for name in ("expired", "waiting", "live"))
-    estate.post("/v1/namespace/bronze$gone/create")
-    nested = estate.create_table("bronze$gone$t")
-    namespace = str(estate.post("/v1/namespace/bronze$gone/describe")["properties"]["rask.uuid"])
-    location = estate.location("bronze$expired")
-    estate.post("/v1/table/bronze$expired/drop")
-    estate.post("/v1/table/bronze$waiting/drop")
-    estate.post("/v1/namespace/bronze$gone/drop", {"behavior": "Cascade"})
+    bronze = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
+    expired, waiting, live = (estate.create_table(f"{bronze}${name}") for name in ("expired", "waiting", "live"))
+    estate.post(f"/v1/namespace/{bronze}$gone/create")
+    nested = estate.create_table(f"{bronze}$gone$t")
+    namespace = str(estate.post(f"/v1/namespace/{bronze}$gone/describe")["properties"]["rask.uuid"])
+    location = estate.location(f"{bronze}$expired")
+    estate.post(f"/v1/table/{bronze}$expired/drop")
+    estate.post(f"/v1/table/{bronze}$waiting/drop")
+    estate.post(f"/v1/namespace/{bronze}$gone/drop", {"behavior": "Cascade"})
     estate.age(expired)
     estate.age(nested)
     estate.age(namespace, kind="namespace")
     past = datetime.now(UTC) - timedelta(days=1)
-    estate.put_record(trash.make_record("bronze$live", uuid=live, location=estate.location("bronze$live"), dropped_by=None, grace_days=0, now=past))
+    estate.put_record(trash.make_record(f"{bronze}$live", uuid=live, location=estate.location(f"{bronze}$live"), dropped_by=None, grace_days=0, now=past))
     released = {f"table:{expired}", f"table:{nested}", f"namespace:{namespace}"}
     kept = {f"table:{waiting}", f"table:{live}"}
     held = estate.store.naming(sorted(released | kept))
@@ -176,7 +178,7 @@ def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_
         record = estate.record(object_uuid, kind="namespace" if prefix == "namespace" else "table")
         assert record is not None and trash.is_released(record), f"the record of {obj} was not stamped released: {record}"
     assert estate.objects_at(location), "the tick deleted the bytes the purge owns"
-    refused = estate.catalog.post("/management/v1/table/bronze$expired/undrop", json={})
+    refused = estate.catalog.post(f"/management/v1/table/{bronze}$expired/undrop", json={})
     assert (refused.status_code, "grace period ended" in refused.text) == (409, True), f"an expired drop undropped: {refused.text}"
 
     # The end of a released record naming no bytes lands; a release before the deadline and the end of a record whose
@@ -223,11 +225,11 @@ def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_rec
     What it reads is its record's, never the estate's: the record by its key, and whether its table stands again from the
     ``__manifest`` of the bucket its location is in. It lists no trash, no warehouse registry and no other bucket's
     manifest, which a task per drop reading them would make cost the estate's size each, counted on the wire."""
-    estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
-    dropped, other = (estate.create_table(f"bronze${name}") for name in ("dropped", "other"))
-    location = estate.location("bronze$dropped")
-    estate.post("/v1/table/bronze$dropped/drop")
-    estate.post("/v1/table/bronze$other/drop")
+    bronze = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
+    dropped, other = (estate.create_table(f"{bronze}${name}") for name in ("dropped", "other"))
+    location = estate.location(f"{bronze}$dropped")
+    estate.post(f"/v1/table/{bronze}$dropped/drop")
+    estate.post(f"/v1/table/{bronze}$other/drop")
     task = Task(kind="trash", uuid=dropped)
     queue = _RecordingQueue()
 

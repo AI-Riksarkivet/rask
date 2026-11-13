@@ -8,17 +8,19 @@ operations the native backend does not implement.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 import time
 import weakref
 from collections.abc import Callable, Collection, Iterable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final, NoReturn, override
 
 import lance
 from lance.namespace import DirectoryNamespace
 from lance_namespace import (
     LanceNamespace,
+    NamespaceNotFoundError,
     ServiceUnavailableError,
     TableBranchNotFoundError,
     TableNotFoundError,
@@ -445,3 +447,52 @@ def warn_if_mixed_file_versions(location: str, storage_options: StorageOptions, 
         return
     if facts is not None and facts.mixed:
         log.warning("restored_mixed_file_versions", extra={"table": table, "location": location})
+
+
+#: The operations whose request names a namespace, or a table to make in one: on no warehouse the namespace is absent.
+_NAMESPACE_OPERATIONS: Final = (
+    "create_namespace",
+    "describe_namespace",
+    "drop_namespace",
+    "list_namespaces",
+    "list_tables",
+    "namespace_exists",
+    "create_table",
+    "create_empty_table",
+    "declare_table",
+    "register_table",
+    "create_materialized_view",
+)
+
+
+class NoWarehouse(LanceNamespace):
+    """The catalog of a name whose first segment is no warehouse ([[LH-593]]): it holds nothing, and nothing is made in it.
+
+    Every namespace operation answers the spec's NamespaceNotFound and every table operation its TableNotFound, so a
+    door answers such a name as absent. Routing it to the estate's own catalog instead would let a row standing there
+    under that segment answer for it.
+    """
+
+    @override
+    def namespace_id(self) -> str:
+        return "NoWarehouse"
+
+
+def _the_namespace_is_absent(_self: NoWarehouse, request: BaseModel) -> NoReturn:
+    raise NamespaceNotFoundError(f"namespace not found: {getattr(request, 'id', None)}")
+
+
+def _the_table_is_absent(_self: NoWarehouse, request: BaseModel) -> NoReturn:
+    raise TableNotFoundError(f"table not found: {getattr(request, 'id', None)}")
+
+
+def _spec_operations() -> list[str]:
+    """Every operation the namespace interface declares, by name."""
+    return [name for name, _ in inspect.getmembers(LanceNamespace, inspect.isfunction) if not name.startswith("_") and name != "namespace_id"]
+
+
+for _operation in _spec_operations():
+    setattr(NoWarehouse, _operation, _the_namespace_is_absent if _operation in _NAMESPACE_OPERATIONS else _the_table_is_absent)
+
+#: The one such catalog: it has no state.
+NO_WAREHOUSE: Final = NoWarehouse()

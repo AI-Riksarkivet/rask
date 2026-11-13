@@ -70,31 +70,33 @@ def _keyed_post_paths(app: Any) -> tuple[set[str], set[str]]:
 class TestAReplayIsAnsweredNotReExecuted:
     def test_the_same_key_returns_the_first_answer_and_leaves_the_table_alone(self, real_ns_client: TestClient) -> None:
         """The defect this closes: the second call must not re-enter the create path at all."""
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         headers = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f60"}
 
-        first = real_ns_client.post("/v1/table/db$keyed/create", content=_rows(3), headers=headers)
+        first = real_ns_client.post("/v1/table/lance_catalog$db$keyed/create", content=_rows(3), headers=headers)
         assert first.status_code == 200, first.text
-        after_first = _versions(real_ns_client, "db$keyed")
+        after_first = _versions(real_ns_client, "lance_catalog$db$keyed")
 
         # A REPLAY CARRYING DIFFERENT BYTES. The key says "this is the same request"; honouring the
         # body instead would let a retry silently overwrite the table with something else.
-        second = real_ns_client.post("/v1/table/db$keyed/create?mode=Overwrite", content=_rows(99), headers=headers)
+        second = real_ns_client.post("/v1/table/lance_catalog$db$keyed/create?mode=Overwrite", content=_rows(99), headers=headers)
 
         assert second.status_code == 200, second.text
         assert second.json() == first.json(), "a replay must answer with the first attempt's response"
-        assert _versions(real_ns_client, "db$keyed") == after_first, "the replay re-executed the create"
+        assert _versions(real_ns_client, "lance_catalog$db$keyed") == after_first, "the replay re-executed the create"
 
     def test_a_DIFFERENT_key_is_a_different_request(self, real_ns_client: TestClient) -> None:
         """Convergence must not become deduplication of unrelated calls."""
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         first = real_ns_client.post(
-            "/v1/table/db$two/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f61"}
+            "/v1/table/lance_catalog$db$two/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f61"}
         )
         assert first.status_code == 200, first.text
 
         second = real_ns_client.post(
-            "/v1/table/db$two/create?mode=Overwrite", content=_rows(5), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f62"}
+            "/v1/table/lance_catalog$db$two/create?mode=Overwrite",
+            content=_rows(5),
+            headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f62"},
         )
 
         assert second.status_code == 200, second.text
@@ -112,7 +114,7 @@ class TestTheHeaderIsConstrainedAtTheDoor:
         above already expects 400 for a CROSSED key, so a malformed one answering 422 had the same door
         giving two statuses for two flavours of the same invalid input.
         """
-        response = real_ns_client.post("/v1/table/db$y/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": bad})
+        response = real_ns_client.post("/v1/table/lance_catalog$db$y/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": bad})
 
         assert (response.status_code, response.json().get("code")) == (400, 13), response.text
 
@@ -127,63 +129,63 @@ class TestTheDestructiveDoorsConvergeToo:
     """
 
     def test_a_replayed_drop_answers_once_and_the_second_call_does_not_re_enter(self, real_ns_client: TestClient) -> None:
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/db$doomed/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$db$doomed/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
         headers = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f63"}
 
-        first = real_ns_client.post("/v1/table/db$doomed/drop", headers=headers)
+        first = real_ns_client.post("/v1/table/lance_catalog$db$doomed/drop", headers=headers)
         assert first.status_code == 200, first.text
 
         # Without convergence this re-enters the door and answers NotFound — a successful drop
         # reported as a failure, which is the create door's 409 problem wearing another status.
-        second = real_ns_client.post("/v1/table/db$doomed/drop", headers=headers)
+        second = real_ns_client.post("/v1/table/lance_catalog$db$doomed/drop", headers=headers)
 
         assert second.status_code == 200, second.text
         assert second.json() == first.json()
 
     def test_a_replayed_rename_does_not_report_the_success_as_a_missing_source(self, real_ns_client: TestClient) -> None:
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/db$before/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$db$before/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
         headers = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f64"}
-        body = {"id": ["db", "before"], "new_table_name": "after"}
+        body = {"id": ["lance_catalog", "db", "before"], "new_table_name": "after"}
 
-        first = real_ns_client.post("/v1/table/db$before/rename", json=body, headers=headers)
+        first = real_ns_client.post("/v1/table/lance_catalog$db$before/rename", json=body, headers=headers)
         assert first.status_code == 200, first.text
 
-        second = real_ns_client.post("/v1/table/db$before/rename", json=body, headers=headers)
+        second = real_ns_client.post("/v1/table/lance_catalog$db$before/rename", json=body, headers=headers)
 
         assert second.status_code == 200, second.text
-        assert real_ns_client.post("/v1/table/db$after/describe", json={}).status_code == 200, "the destination must still be there"
+        assert real_ns_client.post("/v1/table/lance_catalog$db$after/describe", json={}).status_code == 200, "the destination must still be there"
 
     def test_each_door_owns_its_key_namespace(self, real_ns_client: TestClient) -> None:
         """One key across create and drop is the cross-endpoint refusal, not a replay — proven here at
         the doors rather than only at the seam, because the endpoint string is what binds them and a
         typo in one would silently merge two operations' keys."""
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert (
             real_ns_client.post(
-                "/v1/table/db$shared/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f65"}
+                "/v1/table/lance_catalog$db$shared/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f65"}
             ).status_code
             == 200
         )
 
-        crossed = real_ns_client.post("/v1/table/db$shared/drop", headers={"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f65"})
+        crossed = real_ns_client.post("/v1/table/lance_catalog$db$shared/drop", headers={"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f65"})
 
         assert crossed.status_code == 400, crossed.text
 
     def test_a_key_reused_on_another_table_is_refused_and_the_table_is_left(self, real_ns_client: TestClient) -> None:
         """[[LH-576]] A key binds the canonical id of the object its door acts on as well as the door: answered with the
         first table's drop, a second drop under the key would report success and leave the second table standing."""
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        for table in ("db$one", "db$other"):
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        for table in ("lance_catalog$db$one", "lance_catalog$db$other"):
             assert real_ns_client.post(f"/v1/table/{table}/create", content=_rows(), headers=ARROW_STREAM).status_code == 200
         keyed = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f66"}
-        assert real_ns_client.post("/v1/table/db$one/drop", headers=keyed).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$db$one/drop", headers=keyed).status_code == 200
 
-        reused = real_ns_client.post("/v1/table/db$other/drop", headers=keyed)
+        reused = real_ns_client.post("/v1/table/lance_catalog$db$other/drop", headers=keyed)
 
         assert (reused.status_code, reused.headers["content-type"], reused.json().get("code")) == (400, "application/problem+json", 13), reused.text
-        assert real_ns_client.post("/v1/table/db$other/describe", json={}).status_code == 200, "the refused drop must leave the table"
+        assert real_ns_client.post("/v1/table/lance_catalog$db$other/describe", json={}).status_code == 200, "the refused drop must leave the table"
 
 
 class TestARetriedAppendLandsOnce:
@@ -192,22 +194,24 @@ class TestARetriedAppendLandsOnce:
     nothing, whatever bytes it carries; a key the append has not used is another append."""
 
     def test_the_same_key_appends_once_and_answers_the_first_response(self, real_ns_client: TestClient) -> None:
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/db$grown/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
-        before = _version(real_ns_client, "db$grown")
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$db$grown/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
+        before = _version(real_ns_client, "lance_catalog$db$grown")
         keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f67"}
 
-        first = real_ns_client.post("/v1/table/db$grown/insert?mode=append", content=_rows(2), headers=keyed)
+        first = real_ns_client.post("/v1/table/lance_catalog$db$grown/insert?mode=append", content=_rows(2), headers=keyed)
         assert first.status_code == 200, first.text
-        again = real_ns_client.post("/v1/table/db$grown/insert?mode=append", content=_rows(5), headers=keyed)
+        again = real_ns_client.post("/v1/table/lance_catalog$db$grown/insert?mode=append", content=_rows(5), headers=keyed)
         other = real_ns_client.post(
-            "/v1/table/db$grown/insert?mode=append", content=_rows(1), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f68"}
+            "/v1/table/lance_catalog$db$grown/insert?mode=append",
+            content=_rows(1),
+            headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f68"},
         )
 
         assert (again.status_code, again.json()) == (200, first.json()), again.text
         assert other.status_code == 200, other.text
-        counted = real_ns_client.post("/v1/table/db$grown/count_rows", json={})
-        assert (_version(real_ns_client, "db$grown"), counted.text) == (before + 2, "6"), "a replayed append appended again"
+        counted = real_ns_client.post("/v1/table/lance_catalog$db$grown/count_rows", json={})
+        assert (_version(real_ns_client, "lance_catalog$db$grown"), counted.text) == (before + 2, "6"), "a replayed append appended again"
 
     def test_an_append_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """The answer of an append can be lost after it committed (its pod ended, or a fault after the commit), and a resend
@@ -216,9 +220,9 @@ class TestARetriedAppendLandsOnce:
         from catalog.api import idempotency as keyed_doors
         from lakehouse import idempotency
 
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/db$lost/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
-        before = _version(real_ns_client, "db$lost")
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$db$lost/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
+        before = _version(real_ns_client, "lance_catalog$db$lost")
         keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f69"}
 
         async def lost(*_args: object, **_kwargs: object) -> None:
@@ -227,25 +231,25 @@ class TestARetriedAppendLandsOnce:
         with monkeypatch.context() as during:
             during.setattr(keyed_doors.Converge, "remember", lost)
             with pytest.raises(RuntimeError, match="the pod ended"):
-                real_ns_client.post("/v1/table/db$lost/insert?mode=append", content=_rows(2), headers=keyed)
+                real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=_rows(2), headers=keyed)
         monkeypatch.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
-        again = real_ns_client.post("/v1/table/db$lost/insert?mode=append", content=_rows(2), headers=keyed)
+        again = real_ns_client.post("/v1/table/lance_catalog$db$lost/insert?mode=append", content=_rows(2), headers=keyed)
 
         assert (again.status_code, again.json()) == (200, {"num_inserted_rows": 2, "version": before + 1}), again.text
-        counted = real_ns_client.post("/v1/table/db$lost/count_rows", json={})
-        assert (_version(real_ns_client, "db$lost"), counted.text) == (before + 1, "5"), "the append ran again after its lease"
+        counted = real_ns_client.post("/v1/table/lance_catalog$db$lost/count_rows", json={})
+        assert (_version(real_ns_client, "lance_catalog$db$lost"), counted.text) == (before + 1, "5"), "the append ran again after its lease"
 
     def test_the_key_names_one_append_on_one_ref(self, real_ns_client: TestClient) -> None:
         """The same key on another mode or another ref is another operation, refused rather than answered with this one."""
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        assert real_ns_client.post("/v1/table/db$moded/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
+        assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$db$moded/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
         keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f6a"}
-        assert real_ns_client.post("/v1/table/db$moded/insert?mode=append", content=_rows(2), headers=keyed).status_code == 200
+        assert real_ns_client.post("/v1/table/lance_catalog$db$moded/insert?mode=append", content=_rows(2), headers=keyed).status_code == 200
 
-        crossed = real_ns_client.post("/v1/table/db$moded/insert?mode=overwrite", content=_rows(1), headers=keyed)
+        crossed = real_ns_client.post("/v1/table/lance_catalog$db$moded/insert?mode=overwrite", content=_rows(1), headers=keyed)
 
         assert (crossed.status_code, crossed.json().get("code")) == (400, 13), crossed.text
-        assert real_ns_client.post("/v1/table/db$moded/count_rows", json={}).text == "5"
+        assert real_ns_client.post("/v1/table/lance_catalog$db$moded/count_rows", json={}).text == "5"
 
 
 class TestEveryTableDoorThatMintsOrRetiresConverges:

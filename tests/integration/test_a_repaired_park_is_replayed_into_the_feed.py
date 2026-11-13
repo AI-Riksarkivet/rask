@@ -27,7 +27,7 @@ from lakehouse.governed.fga import user_object
 from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineage, live_catalog, run_event
 
 
-_TABLE = "acme-silver$parked"
+_TABLE = "lance_catalog$acme-silver$parked"
 _RUN = "run-parked"
 _ADMIN = "dex~root"
 _AUTHOR = "dex~alice"
@@ -46,7 +46,7 @@ class _Publisher:
 
 
 def _declared(catalog_url: str, table: str) -> str:
-    namespace = table.split("$")[0]
+    namespace = table.rsplit("$", 1)[0]
     with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
         assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200

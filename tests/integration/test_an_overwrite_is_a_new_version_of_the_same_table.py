@@ -35,7 +35,7 @@ from lakehouse.control_events import CatalogControlEvent
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-TABLE = "lh242$t"
+TABLE = "lance_catalog$lh242$t"
 #: The two doors, by the query that puts each in Overwrite mode.
 DOORS = {"create": "create?mode=overwrite", "insert": "insert?mode=overwrite"}
 
@@ -85,7 +85,7 @@ class _Control:
 @pytest.fixture
 def protected(real_ns_client: TestClient) -> str:
     """`lh242$t` at version 1 with three rows, protected through the catalog's own door. Returns its location."""
-    assert real_ns_client.post("/v1/namespace/lh242/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$lh242/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create?mode=create", content=_ipc(_rows(1, 2, 3)), headers=ARROW)
     assert created.status_code == 200, created.text
     armed = real_ns_client.post(f"/management/v1/table/{TABLE}/protection", json={"protected": True})
@@ -142,7 +142,7 @@ def test_a_forced_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
 
 
 def test_an_overwrite_create_of_an_absent_table_is_announced_as_a_created_table(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert real_ns_client.post("/v1/namespace/lh242/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$lh242/create", json={}).status_code == 200
     control = _Control()
     monkeypatch.setattr(real_ns_client.app.state, "control_emitter", control, raising=False)
 

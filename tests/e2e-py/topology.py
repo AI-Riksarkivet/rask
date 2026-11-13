@@ -1,24 +1,13 @@
-"""Create a top-level namespace through whichever door THIS estate admits.
+"""Create a suite's namespace in the estate's warehouse, through the spec's own door, and drop it again at session end.
 
-Which door is right is a property of the estate, not of a suite. With `catalog.warehouses.enabled`
-on, `POST /v1/namespace/{name}/create` answers 400 `top-level namespace '<n>' must belong to a
-warehouse` — a TOPOLOGY refusal raised by `require_warehouse_scoped`, not an authorization one — and
-the namespace has to arrive through its warehouse instead.
+Every name's first segment is its warehouse ([[LH-593]]), so a namespace a suite nests its tables under is
+`<WAREHOUSE>$<name>`, created with `POST /v1/namespace/<WAREHOUSE>$<name>/create`. The door choice lives in ONE place:
+a copy per suite is what let one migration land and four not (2026-09-06), and `tests/e2e-py/conftest.py` puts this
+directory on `sys.path` so a flat helper beside a suite is importable by name.
 
-FOUR SUITES CARRIED THE SAME DRIFT and were found together on 2026-09-06, once the live runner stopped
-withholding the env that had been making them skip. Each fired the root door, DISCARDED the response,
-and then failed further down on a parent that had never been created: `test_governance_e2e` read the
-400 as a governance defect, `test_client_direct_e2e` and `test_multibase_e2e` got 403
-`can_create_table required on namespace:<n>` — a refusal on a namespace that does not exist — and
-`test_observability_e2e` errored in fixture setup. Only one suite had been migrated, by hand, on
-2026-08-25.
-
-So the door choice lives in ONE place. A copy per suite is what let one migration happen and four not,
-and `tests/e2e-py/conftest.py` puts this directory on `sys.path` precisely so a flat helper beside a
-suite is importable by name.
-
-`adopt_existing` is what makes it idempotent across re-runs against a long-lived estate: these suites
-are written to be run repeatedly against a deployed release, not against a fresh one.
+The create is idempotent across re-runs against a long-lived estate: these suites run repeatedly against a deployed
+release, so a 409 (`NamespaceAlreadyExists`, the spec's default `Create` mode) means the namespace is already there
+and the suite proceeds in it.
 """
 
 from __future__ import annotations
@@ -28,11 +17,11 @@ import os
 import requests
 
 
-#: The warehouse to nest a suite's top-level namespace under. Empty means the estate serves no
-#: warehouses, which is what `catalog.warehouses.enabled=false` looks like — then the root door is
-#: correct and is what the catalog expects. `scripts/e2e_live.sh` discovers this from the deployed
-#: catalog rather than hardcoding it.
-WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
+#: The warehouse a suite's namespaces are created in: the first segment of each name. `scripts/e2e_live.sh` discovers it
+#: from the deployed catalog (the project's oldest active warehouse, else the estate's own) and `scripts/e2e_stack.sh`
+#: names the one it makes. Unset, it is the estate's own warehouse at the chart's default id, which a lane that runs the
+#: catalog straight from its settings (`dagger call governance-chain`) serves.
+WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE") or "lance_catalog"
 
 
 #: WHO IS ACTUALLY AN OUTSIDER HERE, for the legs that assert a 403 on someone with no grant.
@@ -60,59 +49,52 @@ WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 OUTSIDER = os.environ.get("LANCE_E2E_OUTSIDER", "publisher@rask.internal")
 
 
-#: What THIS process bound, so the session teardown can unbind it — `(server, namespace, headers)`.
+#: What THIS process created, so the session teardown can drop it — `(server, namespace id, headers)`.
 #:
 #: RECORDED HERE because this is the one door every suite goes through, and cleaning up at the seam
 #: that creates is the only way that does not need every suite retrofitted. Only a genuine CREATE is
-#: recorded: a 409 means `adopt_existing` matched a namespace that was already there, and removing
-#: something this run did not make is how a cleanup becomes the incident.
+#: recorded: a 409 means the namespace was already there, and removing something this run did not make
+#: is how a cleanup becomes the incident.
 CREATED: list[tuple[str, str, dict[str, str]]] = []
 
 
-def create_top_level(server: str, name: str, headers: dict[str, str], *, timeout: float = 15.0) -> requests.Response:
-    """POST the create, through the warehouse door when the estate has one, and REMEMBER it."""
-    if WAREHOUSE:
-        response = requests.post(
-            f"{server.rstrip('/')}/management/v1/warehouses/{WAREHOUSE}/namespaces",
-            headers=headers,
-            json={"namespace": name, "adopt_existing": True},
-            timeout=timeout,
-        )
-        if response.status_code in (200, 201):
-            CREATED.append((server, name, dict(headers)))
-        return response
-    return requests.post(f"{server.rstrip('/')}/v1/namespace/{name}/create", headers=headers, json={}, timeout=timeout)
+def namespace_id(name: str) -> str:
+    """The full id of the namespace ``name`` in the suites' warehouse: `<WAREHOUSE>$<name>`."""
+    return f"{WAREHOUSE}${name}"
 
 
-def unbind_created(*, timeout: float = 15.0) -> list[str]:
-    """Unbind what this run bound; return a line per namespace that could NOT be removed.
+def create_namespace(server: str, name: str, headers: dict[str, str], *, timeout: float = 15.0) -> str:
+    """Create `<WAREHOUSE>$<name>` through the spec's create door, REMEMBER a genuine create, and return its full id.
 
-    THE REFUSALS ARE THE POINT, not an error to swallow. A namespace still holding tables answers 409
-    `NamespaceNotEmptyError` naming them, and that is correct — unbinding it would leave real tables
-    unresolvable. Measured on the live estate 2026-09-10: `bronze-media` refused exactly that way while
-    a plan built on a storage-prefix listing had called it empty. So this reports what it leaves behind
-    instead of claiming a clean run, because residue nobody is told about is how § Q8-15 accumulated
-    1,163 dataset nodes.
+    200 is a create and 409 is a namespace an earlier run left, kept as it is; any other answer fails here, naming it,
+    because a create whose answer nobody reads is how three suites failed further down on a parent that was never
+    there.
+    """
+    made = namespace_id(name)
+    response = requests.post(f"{server.rstrip('/')}/v1/namespace/{made}/create", headers=headers, json={}, timeout=timeout)
+    assert response.status_code in (200, 409), f"could not create the namespace {made!r} this suite nests under: {response.status_code} {response.text[:400]}"
+    if response.status_code == 200:
+        CREATED.append((server, made, dict(headers)))
+    return made
+
+
+def drop_created(*, timeout: float = 15.0) -> list[str]:
+    """Drop what this run created; return a line per namespace that could NOT be removed.
+
+    THE REFUSALS ARE THE POINT, not an error to swallow. The drop is the spec's default `Restrict`, so a namespace still
+    holding tables answers 409 naming them, and that is correct: this cleanup does not take a suite's tables with it. An
+    empty one is purged, so no trash record holds its name for the grace window after the run. So
+    this reports what it leaves behind instead of claiming a clean run, because residue nobody is told about is how
+    § Q8-15 accumulated 1,163 dataset nodes.
     """
     left: list[str] = []
     while CREATED:
-        server, name, headers = CREATED.pop()
+        server, made, headers = CREATED.pop()
         try:
-            response = requests.delete(f"{server.rstrip('/')}/management/v1/warehouses/{WAREHOUSE}/namespaces/{name}", headers=headers, timeout=timeout)
+            response = requests.post(f"{server.rstrip('/')}/v1/namespace/{made}/drop", headers=headers, params={"purge": "true"}, json={}, timeout=timeout)
         except requests.RequestException as exc:  # noqa: PERF203 — one unreachable catalog must not hide the rest
-            left.append(f"{name}: unreachable ({type(exc).__name__})")
+            left.append(f"{made}: unreachable ({type(exc).__name__})")
             continue
-        if response.status_code not in (200, 204, 404):
-            left.append(f"{name}: {response.status_code} {response.text[:160]}")
+        if response.status_code not in (200, 404):
+            left.append(f"{made}: {response.status_code} {response.text[:160]}")
     return left
-
-
-def assert_parent_exists(response: requests.Response, name: str) -> None:
-    """A create whose response nobody reads is how three suites failed on a missing parent.
-
-    409 is success here — the namespace already exists from a previous run against this estate, which
-    is the normal case and the reason `adopt_existing` is set.
-    """
-    assert response.status_code in (200, 201, 409), (
-        f"could not create the top-level namespace {name!r} this suite nests under: {response.status_code} {response.text[:400]}"
-    )

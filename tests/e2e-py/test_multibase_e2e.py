@@ -25,7 +25,7 @@ import requests
 from credentials import Credential, credential
 from liveness import skip_unless_live
 from store_identity import store_options
-from topology import assert_parent_exists, create_top_level
+from topology import create_namespace
 
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.storage_options import s3_filesystem
@@ -86,21 +86,14 @@ def catalog() -> str:
 
 @pytest.fixture(scope="module")
 def catalog_ns(catalog: str) -> str:
-    """Ensure the caller OWNS the parent namespace ``mbns``. With FGA on, a nested table's create gates on
-    ``can_create_table`` on its parent namespace — so without this the create 403s at the router before the
-    allowlist check is even reached (idempotent: an already-existing namespace is fine).
-
-    The door is chosen by `topology.create_top_level`, and the RESPONSE IS READ. This fixture used to
-    fire the root door and discard the answer on the premise "lockRootCreate is off → this top-level
-    namespace-create is self-serve": true once, false since the warehouses guard landed 2026-08-04. The
-    400 went unseen, `mbns` was never created, and all three legs then 403'd `can_create_table required
-    on namespace:mbns` — a refusal about a namespace that did not exist, which reads as a grant defect.
+    """The parent namespace `<warehouse>$mbns`, which the caller must own: with FGA on, a nested table's create gates
+    on ``can_create_table`` on its parent namespace, so without it the create 403s at the router before the allowlist
+    check is even reached. `scripts/e2e_stack.sh` makes it; the create here keeps one already there (409).
     """
-    assert_parent_exists(create_top_level(catalog, "mbns", _auth()), "mbns")
-    return catalog
+    return create_namespace(catalog, "mbns", _auth())
 
 
-def test_multibase_redirects_data_and_reads_fan_out(catalog_ns: str) -> None:
+def test_multibase_redirects_data_and_reads_fan_out(catalog: str, catalog_ns: str) -> None:
     if not (BASE_A and BASE_B):
         pytest.skip(
             "set LANCE_E2E_BASE_A + LANCE_E2E_BASE_B to two buckets that are BOTH on the deployed "
@@ -109,8 +102,7 @@ def test_multibase_redirects_data_and_reads_fan_out(catalog_ns: str) -> None:
         )
     import lance
 
-    catalog = catalog_ns
-    tbl = "mbns" + CATALOG_DELIMITER + "mbtbl"
+    tbl = catalog_ns + CATALOG_DELIMITER + "mbtbl"
     q = f"data_base={BASE_A}&data_base={BASE_B}"
     r = requests.post(
         # mode=overwrite for REPEATABILITY (testing.md F.I.R.S.T.) — a re-run must not collide on the

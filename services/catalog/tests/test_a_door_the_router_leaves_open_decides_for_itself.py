@@ -10,7 +10,7 @@ listing behind a gate does so for every caller the gate admits. Nothing at the r
 either, and a handler that forgets passes every other test, so one corpus holds a request for each such route, and the
 drive fails on a route that falls through with no entry as it does on an entry whose route is gone.
 
-Against the catalog as deployed with warehouses on, a loopback Dex signing callers in and a real OpenFGA deciding on a
+Against the catalog as deployed, a loopback Dex signing callers in and a real OpenFGA deciding on a
 store of the test's own ([[LH-235]]): a signed-in stranger holding no grant is refused at every door deciding one object,
 by a decision the trail records for that request, and is shown none of the estate's objects at every listing.
 `GET /management/v1/me` answers its caller about themself, and is the one route no grant decides.
@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
+import lance_namespace
 import pyarrow as pa
 import pytest
 import router_walk
@@ -48,8 +49,8 @@ from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.maintenance_due import CompactionDue, DueRecord
 
 
-#: The estate the doors name: acme's warehouse, the two namespaces bound to it, and a table in one.
-PROJECT, WAREHOUSE, NAMESPACE, SIDE, TABLE = "acme", "wh-acme", "lake", "side", "lake$t"
+#: The estate the doors name: acme's warehouse, two namespaces in it, and a table in one.
+PROJECT, WAREHOUSE, NAMESPACE, SIDE, TABLE = "acme", "wh-acme", "wh-acme$lake", "wh-acme$side", "wh-acme$lake$t"
 #: A role id the role doors are asked about: a stranger is refused on it by a decision, whatever it names.
 ROLE = "00000000-0000-4000-8000-000000000001"
 #: A signed-in person holding no grant, and one who reads `SIDE` and nothing else.
@@ -212,7 +213,6 @@ _DOORS: list[_Door] = [
         refused=_NOT_FOUND,
     ),
     _Refusing(method="POST", route="/management/v1/warehouses/{warehouse_id}/validate", params={"warehouse_id": WAREHOUSE}, refused=_NOT_FOUND),
-    _Refusing(method="GET", route="/management/v1/warehouses/{warehouse_id}/namespaces", params={"warehouse_id": WAREHOUSE}),
     _Refusing(method="GET", route="/management/v1/warehouses/{warehouse_id}/trash", params={"warehouse_id": WAREHOUSE}),
     # Maintenance's reclaim of a trash record, every door asked before any record is read, so the uuid names none.
     _Refusing(method="POST", route="/management/v1/trash/{kind}/{uuid}/credentials", params={"kind": "table", "uuid": ROLE}),
@@ -230,22 +230,6 @@ _DOORS: list[_Door] = [
     _Refusing(method="GET", route="/management/v1/grants/census"),
     _Refusing(method="POST", route="/management/v1/grants/ghosts/revoke", body={"objects": [f"project:{PROJECT}"]}),
     _Refusing(method="POST", route="/management/v1/grants/tenancy/rebuild", body={"warehouses": [WAREHOUSE]}),
-    # The same listing behind its gate: bob reads `side` alone, which opens the warehouse to him through its `child` edge,
-    # and is shown that namespace and not its sibling.
-    _Listing(
-        method="GET",
-        route="/management/v1/warehouses/{warehouse_id}/namespaces",
-        params={"warehouse_id": WAREHOUSE},
-        caller=READER,
-        shown={"namespaces": [SIDE]},
-    ),
-    _Refusing(method="POST", route="/management/v1/warehouses/{warehouse_id}/namespaces", params={"warehouse_id": WAREHOUSE}, body={"namespace": "rival"}),
-    _Refusing(
-        method="DELETE",
-        route="/management/v1/warehouses/{warehouse_id}/namespaces/{top_ns}",
-        params={"warehouse_id": WAREHOUSE, "top_ns": NAMESPACE},
-        refused=_NOT_FOUND,
-    ),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/my-permissions", params={"id": WAREHOUSE}),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/list", params={"id": WAREHOUSE}, body={}),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/grant", params={"id": WAREHOUSE}, body={"user": "dex~erin", "relation": "reader"}),
@@ -261,7 +245,6 @@ _DOORS: list[_Door] = [
     ),
     _Listing(method="GET", route="/management/v1/projects", shown=[]),
     _Listing(method="GET", route="/management/v1/warehouses", shown=[]),
-    _Listing(method="GET", route="/management/v1/warehouses/-/bindings", shown={"bindings": {}}),
     _Listing(method="GET", route="/v1/table", shown={"tables": []}),
     _Listing(method="GET", route="/management/v1/erasures", shown={"obligations": [], "page_token": None}),
     _Listing(method="GET", route="/management/v1/maintenance/due", shown={"tables": [], "page_token": None}),
@@ -299,16 +282,15 @@ def _ok(answer: httpx.Response) -> httpx.Response:
 
 
 @pytest.fixture
-def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Any:
-    """The catalog as deployed with warehouses on, holding one of each object a door the router leaves open names.
+def estate(request: pytest.FixtureRequest) -> Any:
+    """The catalog as deployed, holding one of each object a door the router leaves open names.
 
-    alice owns the estate, as the chart's bootstrap hook grants it, and makes ``acme``, the two namespaces bound to its
+    alice owns the estate, as the chart's bootstrap hook grants it, and makes ``acme``, the two namespaces in its
     warehouse, a table in one, an erasure obligation on that table and bob's grant on the other namespace through the
-    doors. What no door on a ``dir`` estate makes is written where its writer keeps it: the warehouse's record and project
-    edge (its door provisions a bucket and probes the store), maintenance's due record and a promotion hold (written by a
+    doors. What no door on a ``dir`` estate makes is written where its writer keeps it: the warehouse's record, its row in
+    its root's catalog and its project edge (its door provisions a bucket and probes the store), maintenance's due record and a promotion hold (written by a
     publish a review gate holds).
     """
-    monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     catalog = request.getfixturevalue("governed_catalog")
     client, alice = catalog.client, catalog.bearer("alice")
     catalog.store.write((catalog.person("alice"), "admin", "estate:rask"))
@@ -317,9 +299,10 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     root, so, now = settings.registry_root, settings.storage_options(), datetime.now(UTC)
     record = {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": settings.root, "project": PROJECT, "status": "active", "created_at": now.isoformat()}
     warehouses.create_warehouse_record(root, so, record)
+    warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": settings.root}), WAREHOUSE)
     catalog.store.write((f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"))
     for namespace in (NAMESPACE, SIDE):
-        _ok(client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": namespace}, headers=alice))
+        _ok(client.post(f"/v1/namespace/{namespace}/create", json={}, headers=alice))
     _ok(client.post(f"/management/v1/namespace/{SIDE}/access/grant", json={"user": f"dex~{READER}", "relation": "reader"}, headers=alice))
     _ok(client.post(f"/v1/table/{TABLE}/create", content=_ROWS, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE}))
     obliged = client.post(f"/management/v1/table/{TABLE}/erasure", json={"predicate": "id = 1"}, headers=alice)

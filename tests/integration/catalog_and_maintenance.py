@@ -60,13 +60,11 @@ def catalog_and_maintenance(
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_WAREHOUSES_ENABLED": "true",
         "MAINTENANCE_S3_ENDPOINT": moto_url,
         "MAINTENANCE_S3_ACCESS_KEY_ID": "test",
         "MAINTENANCE_S3_SECRET_ACCESS_KEY": "test",
         "MAINTENANCE_S3_BUCKET": bucket,
         "MAINTENANCE_CONTROL_ROOT": f"s3://{bucket}",
-        "MAINTENANCE_WAREHOUSES_ENABLED": "true",
         **env,
     }.items():
         monkeypatch.setenv(key, value)

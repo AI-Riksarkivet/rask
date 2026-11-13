@@ -53,8 +53,8 @@ class _Lanes:
         self.events.append(event)
         self._stop()
 
-    async def project_for(self, top_ns: str) -> str | None:
-        del top_ns
+    async def project_for(self, warehouse_id: str) -> str | None:
+        del warehouse_id
         return None
 
     async def emit_create(self, *, table_id: str, namespace: str, author: str | None, version: int, **fields: Unpack[EmitFields]) -> None:
@@ -78,13 +78,14 @@ class _Lanes:
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Iterator[tuple[Any, _Lanes]]:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """alice's project acme with carol its member, alice's namespace ``db``, and maintenance holding the estate's
+    """alice's project acme with carol its member, alice's namespace ``lance_catalog$db``, and maintenance holding the estate's
     ``reclaimer`` role, which the finish door asks; both lanes recorded from here on."""
     catalog = governed_catalog
     catalog.store.write((catalog.person(ADMIN), "admin", "estate:rask"), (catalog.person(RECLAIMER), "reclaimer", "estate:rask"))
-    for path, body in (("/management/v1/projects", {"id": "acme"}), ("/v1/namespace/db/create", {})):
-        made = catalog.client.post(path, json=body, headers=catalog.bearer(ADMIN))
-        assert made.status_code == 200, made.text
+    made = catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer(ADMIN))
+    assert made.status_code == 200, made.text
+    made = catalog.create_in_the_estate(ADMIN, "db")
+    assert made.status_code == 200, made.text
     catalog.store.write((catalog.person(MEMBER), "member", "project:acme"))
     lanes = _Lanes()
     app = catalog.client.app
@@ -148,7 +149,7 @@ def _declared(catalog: Any) -> None:  # noqa: ANN401 — the conftest's Governed
 
 
 def _created(catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    made = catalog.client.post("/v1/table/db$t/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    made = catalog.client.post("/v1/table/lance_catalog$db$t/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert made.status_code == 200, made.text
 
 
@@ -160,21 +161,36 @@ def _written_outside(catalog: Any) -> None:  # noqa: ANN401 — the conftest's G
 
 
 def _nested(catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    made = catalog.client.post("/v1/namespace/db$sub/create", json={}, headers=catalog.bearer(ADMIN))
+    made = catalog.client.post("/v1/namespace/lance_catalog$db$sub/create", json={}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
-    made = catalog.client.post("/v1/table/db$sub$t/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    made = catalog.client.post(
+        "/v1/table/lance_catalog$db$sub$t/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE}
+    )
     assert made.status_code == 200, made.text
 
 
 @pytest.mark.parametrize(
     ("arranged", "path", "body", "operation", "named", "told", "unlanded"),
     [
-        pytest.param(_declared, "/v1/table/db$t/declare", {}, "declare_table", "db$t", "table_declared", 0, id="declare"),
-        pytest.param(_written_outside, "/v1/table/db$t/register", {"location": "outside/t"}, "register_table", "db$t", "table_registered", 0, id="register"),
-        pytest.param(_created, "/v1/table/db$t/rename", {"new_table_name": "u"}, "rename_table", "db$u", "table_renamed", 0, id="rename"),
-        pytest.param(_created, "/v1/table/db$t/drop", {}, "drop_table", "db$t", "table_dropped", 0, id="drop"),
+        pytest.param(_declared, "/v1/table/lance_catalog$db$t/declare", {}, "declare_table", "lance_catalog$db$t", "table_declared", 0, id="declare"),
+        pytest.param(
+            _written_outside,
+            "/v1/table/lance_catalog$db$t/register",
+            {"location": "outside/t"},
+            "register_table",
+            "lance_catalog$db$t",
+            "table_registered",
+            0,
+            id="register",
+        ),
+        pytest.param(
+            _created, "/v1/table/lance_catalog$db$t/rename", {"new_table_name": "u"}, "rename_table", "lance_catalog$db$u", "table_renamed", 0, id="rename"
+        ),
+        pytest.param(_created, "/v1/table/lance_catalog$db$t/drop", {}, "drop_table", "lance_catalog$db$t", "table_dropped", 0, id="drop"),
         # Stopped at its one table's marker, a cascade has dropped that table and not yet its namespace.
-        pytest.param(_nested, "/v1/namespace/db$sub/drop", {"behavior": "Cascade"}, "drop_table", "db$sub$t", None, 1, id="namespace-cascade"),
+        pytest.param(
+            _nested, "/v1/namespace/lance_catalog$db$sub/drop", {"behavior": "Cascade"}, "drop_table", "lance_catalog$db$sub$t", None, 1, id="namespace-cascade"
+        ),
     ],
 )
 def test_a_tables_lifecycle_door_that_stopped_after_its_change_is_announced_by_the_finish(

@@ -1,19 +1,14 @@
-// Medallion-tier derivation from NAMES (goal cond 3): the estate's namespaces follow the
-// `[<project>-]bronze|silver|gold` convention (#84 per-tenant pages; bare stage names are the
-// projectless default path). Those three are the governed tiers: raw is the external world, never a
-// governed tier (R23). This is a NAMING-derived hint — the honest wording everywhere is "derived",
-// never presented as a catalog fact.
+// Medallion-tier derivation from NAMES (goal cond 3): a namespace named `bronze`, `silver` or `gold`,
+// or ending in `-bronze` and the like, is badged with that tier. Those three are the governed tiers:
+// raw is the external world, never a governed tier (R23). This is a NAMING-derived hint — the honest
+// wording everywhere is "derived", never presented as a catalog fact — and it says nothing about a
+// project: a name's project is its warehouse's (`project-filter.ts`), never a prefix of the name.
 
 export type Stage = 'bronze' | 'silver' | 'gold';
 
-export type StageInfo = {
-	stage: Stage;
-	/** The tenant prefix, or null on the projectless path (bare `bronze`, `gold`, …). */
-	project: string | null;
-};
+export type StageInfo = { stage: Stage };
 
-// Non-greedy project prefix + literal stage names, so `acme-data-silver` parses as
-// project `acme-data`, stage `silver` (a greedy prefix would eat the stage).
+// An optional `<anything>-` prefix, then a literal stage name, so `acme-data-silver` is `silver`.
 /**
  * The identifier grammar lives in `#lib/api/identifiers.ts`, the one copy every reader shares: a second
  * copy that split on the FIRST delimiter would name the wrong namespace for a nested one. Re-exported
@@ -23,7 +18,7 @@ import { leafSegment, parentNamespace } from '#lib/api/identifiers.ts';
 
 export { parentNamespace as namespaceOfTable } from '#lib/api/identifiers.ts';
 
-const STAGE_RE = /^(?:([a-z0-9][a-z0-9_-]*?)-)?(bronze|silver|gold)$/;
+const STAGE_RE = /^(?:[a-z0-9][a-z0-9_-]*?-)?(bronze|silver|gold)$/;
 
 /**
  * The medallion stage a namespace encodes, or null for a non-medallion namespace.
@@ -39,7 +34,7 @@ const STAGE_RE = /^(?:([a-z0-9][a-z0-9_-]*?)-)?(bronze|silver|gold)$/;
 export function stageOf(namespace: string): StageInfo | null {
 	const m = STAGE_RE.exec(leafSegment(namespace));
 	if (!m) return null;
-	return { stage: m[2] as Stage, project: m[1] ?? null };
+	return { stage: m[1] as Stage };
 }
 
 /** The medallion stage of a table id, derived from its namespace segment. */

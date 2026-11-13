@@ -45,12 +45,12 @@ def _wide_table(rows: int) -> bytes:
     ],
 )
 def test_an_unbounded_row_count_is_refused_as_invalid_input(real_ns_client: TestClient, door: str, body: dict[str, object]) -> None:
-    assert real_ns_client.post("/v1/namespace/wide/create", json={}).status_code == 200
-    created = real_ns_client.post("/v1/table/wide$t/create", content=_wide_table(8), headers=_ARROW)
+    assert real_ns_client.post("/v1/namespace/lance_catalog$wide/create", json={}).status_code == 200
+    created = real_ns_client.post("/v1/table/lance_catalog$wide$t/create", content=_wide_table(8), headers=_ARROW)
     assert created.status_code == 200, created.text
 
     # The same app, answering a server fault as the 500 a caller would receive rather than re-raising it here.
-    response = TestClient(real_ns_client.app, raise_server_exceptions=False).post(f"/v1/table/wide$t/{door}", json=body)
+    response = TestClient(real_ns_client.app, raise_server_exceptions=False).post(f"/v1/table/lance_catalog$wide$t/{door}", json=body)
 
     problem = response.json() if response.headers["content-type"].startswith("application/problem+json") else {}
     assert (response.status_code, problem.get("code")) == (400, 13), response.text[:300]

@@ -239,8 +239,8 @@ def report_is_clean(report: ReconcileReport) -> str | None:
     from, which deletes the bytes under ONE trashed location after refusing any location a live table resolves into
     (:func:`resolves_into`) on the roots the warehouse registry names (:func:`maintained_roots`):
 
-    * **No gating finding** (``report.total``). ``orphan_buckets`` and ``dangling_bindings`` say the registry and the
-      store disagree about which buckets exist, and the purge's liveness check reads only the roots the registry names:
+    * **No gating finding** (``report.total``). ``orphan_buckets`` says the registry and the store disagree about which
+      buckets exist, and the purge's liveness check reads only the roots the registry names:
       a live table under a root no record names, whose location resolves into the trashed one, would be invisible to
       it. ``ghost_projects``, ``ghost_warehouses`` and ``unreferenced_projects`` say authorization and the registries
       disagree, which leaves the registries the purge reads in a state nobody has accounted for. The categories in
@@ -259,8 +259,8 @@ def report_is_clean(report: ReconcileReport) -> str | None:
     """
     if report.total:
         # THE GATING CATEGORIES ONLY, matching what `report.total` counts. `NON_GATING_CATEGORIES`
-        # (`unbound_namespaces` among them) are excluded from the total because none is a storage fact,
-        # and `unbound_namespaces` HAS NO DOOR — no endpoint binds a legacy namespace. Naming them here
+        # (`unreachable_namespaces` among them) are excluded from the total because none is a storage fact,
+        # and `unreachable_namespaces` HAS NO DOOR — no endpoint moves or removes a stray row. Naming them here
         # pointed an operator at work that cannot be done and would not have unblocked the purge if it
         # could, which is the same failure the total's own exclusion exists to prevent: the categories that
         # DO matter hidden behind ones that never fall. Measured live 2026-09-10, where 13 findings were

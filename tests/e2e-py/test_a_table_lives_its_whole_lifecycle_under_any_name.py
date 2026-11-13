@@ -111,7 +111,7 @@ def _versions_once_gone(client: lance_namespace.LanceNamespace, table_id: list[s
 def test_a_table_lives_its_whole_lifecycle_under_any_name(tenant: Tenant, name: str) -> None:
     admin, client = tenant.admin, tenant.admin.namespace()
     feed_reader = scenario.Identity(admin.bearer)
-    made, renamed = [tenant.bronze, name], [tenant.bronze, f"{name} renamed"]
+    made, renamed = [*tenant.bronze.split("$"), name], [*tenant.bronze.split("$"), f"{name} renamed"]
     since = scenario.feed_start(feed_reader)
 
     # A stock client makes the table, writes it and reads it, at versions 1 and 2.

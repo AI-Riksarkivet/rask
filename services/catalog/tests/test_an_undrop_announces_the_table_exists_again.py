@@ -29,6 +29,7 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespace_doors
 from catalog.api.v1.endpoints import tables as table_doors
 from catalog.core.identifiers import with_minted_uuid
+from catalog.services import warehouses
 from catalog.services.dataplane import create_table
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.control_emit import NoopControlEmitter
@@ -48,8 +49,8 @@ _CALLER = PersonPrincipal(
     principal=Principal(idp_id="dex", subject="08a8684b-db88-4b73-90a9-3cd1661f5466"),
     claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
 )
-NS = "zone"
-TABLES = (["zone", "alpha"], ["zone", "beta"])
+NS = "lance_catalog$zone"
+TABLES = (["lance_catalog", "zone", "alpha"], ["lance_catalog", "zone", "beta"])
 
 
 def _returning(value: object) -> Callable[[], object]:
@@ -65,7 +66,8 @@ def emitted() -> list[dict[str, Any]]:
 @pytest.fixture
 def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     ns = connect("dir", {"root": str(tmp_path / "data")})
-    ns.create_namespace(CreateNamespaceRequest(id=[NS], properties=with_minted_uuid(None)))
+    warehouses.ensure_catalog_row(ns, "lance_catalog")
+    ns.create_namespace(CreateNamespaceRequest(id=NS.split("$"), properties=with_minted_uuid(None)))
     control = tmp_path / "control"
     registry = BaseRegistry(control_root=str(control), storage_options={})
     for table_id in TABLES:
@@ -79,7 +81,12 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         application.include_router(door.management_router)
     control.mkdir(exist_ok=True)
     settings = SimpleNamespace(
-        registry_root=str(control), storage_options=lambda **_: StorageOptions(), trash_grace_days=7, fga_enabled=False, warehouses_enabled=False
+        registry_root=str(control),
+        storage_options=lambda **_: StorageOptions(),
+        trash_grace_days=7,
+        fga_enabled=False,
+        estate_warehouse="lance_catalog",
+        root=str(tmp_path / "data"),
     )
     for dependency, value in (
         (SettingsDep, settings),
@@ -116,21 +123,21 @@ def _registered(emitted: list[dict[str, Any]]) -> dict[str, str | None]:
 
 
 def test_a_table_undrop_announces_the_table_exists_again(client: TestClient, emitted: list[dict[str, Any]]) -> None:
-    location = client.post("/v1/table/zone$alpha/describe", json={"vend_credentials": False}).json()["location"]
-    assert client.post("/v1/table/zone$alpha/drop", json={}).status_code == 200, "the recoverable drop failed"
+    location = client.post("/v1/table/lance_catalog$zone$alpha/describe", json={"vend_credentials": False}).json()["location"]
+    assert client.post("/v1/table/lance_catalog$zone$alpha/drop", json={}).status_code == 200, "the recoverable drop failed"
     emitted.clear()
 
-    assert client.post("/management/v1/table/zone$alpha/undrop", json={}).status_code == 200
+    assert client.post("/management/v1/table/lance_catalog$zone$alpha/undrop", json={}).status_code == 200
 
     registered = _registered(emitted)
-    assert list(registered) == ["zone$alpha"], f"the undrop announced {emitted}"
-    assert registered["zone$alpha"] == location, "the marker must carry the location the bytes are at"
+    assert list(registered) == ["lance_catalog$zone$alpha"], f"the undrop announced {emitted}"
+    assert registered["lance_catalog$zone$alpha"] == location, "the marker must carry the location the bytes are at"
 
 
 def test_a_namespace_undrop_announces_every_table_it_re_registers(client: TestClient, emitted: list[dict[str, Any]]) -> None:
-    assert client.post("/v1/namespace/zone/drop", json={"behavior": "Cascade"}).status_code == 200, "the recoverable cascade failed"
+    assert client.post("/v1/namespace/lance_catalog$zone/drop", json={"behavior": "Cascade"}).status_code == 200, "the recoverable cascade failed"
     emitted.clear()
 
-    assert client.post("/management/v1/namespace/zone/undrop", json={}).status_code == 200
+    assert client.post("/management/v1/namespace/lance_catalog$zone/undrop", json={}).status_code == 200
 
-    assert sorted(_registered(emitted)) == ["zone$alpha", "zone$beta"], f"the undrop announced {emitted}"
+    assert sorted(_registered(emitted)) == ["lance_catalog$zone$alpha", "lance_catalog$zone$beta"], f"the undrop announced {emitted}"

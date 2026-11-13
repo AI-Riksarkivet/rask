@@ -73,17 +73,19 @@ def test_a_dataset_named_as_a_table_the_catalog_does_not_hold_is_left_alone(
     for i in range(6):
         lance.write_dataset(pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())}), uri, mode="create" if i == 0 else "append")
 
-    result, answers = _execute(catalog=catalog, maintain_one=maintain_one, uri=uri, table_id="acme-bronze$ghost")
+    result, answers = _execute(catalog=catalog, maintain_one=maintain_one, uri=uri, table_id="lance_catalog$acme-bronze$ghost")
 
-    assert answers == [(404, 1)], f"the door did not answer NamespaceNotFound: {answers}"
+    # pylance's `dir` catalog answers TableNotFound for a table whose namespace has no row, once the root holds a
+    # `__manifest` (measured on pylance 13.0.0), and the estate's root always holds its warehouse's row.
+    assert answers == [(404, 4)], f"the door did not answer TableNotFound: {answers}"
     _assert_left_alone(result, uri, refused_added)
 
 
 def test_a_table_dropped_into_the_trash_after_planning_is_left_alone(
     catalog: TestClient, maintain_one: Callable[..., DatasetResult], refused_added: list[tuple[int, dict[str, Any] | None]]
 ) -> None:
-    table_id = "acme-bronze$events"
-    assert catalog.post("/v1/namespace/acme-bronze/create", json={}).status_code == 200
+    table_id = "lance_catalog$acme-bronze$events"
+    assert catalog.post("/v1/namespace/lance_catalog$acme-bronze/create", json={}).status_code == 200
     created = catalog.post(
         f"/v1/table/{table_id}/create",
         content=encode_arrow_stream(pa.table({"id": pa.array(range(10), pa.int64())})),

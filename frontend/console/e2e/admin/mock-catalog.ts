@@ -177,13 +177,14 @@ Bun.serve({
 			return json({ properties: {} });
 		}
 		if (url.pathname === '/v1/table') return json({ tables: ['db1$t'] });
-		// #86 the estate-wide bindings read the namespaces page loads alongside the table list. An
-		// unserved endpoint would leave the page in its bindings-unavailable state, which is a different
-		// assertion than the specs mean to make.
-		// EMPTY by default, deliberately: `ok` with no bindings keeps the degraded banner off (the
-		// point of serving it at all) while adding no row to fixtures that never mentioned one. A
-		// static `db1` here silently appended a phantom namespace to every other spec's world.
-		if (url.pathname === '/management/v1/warehouses/-/bindings') return json({ bindings: {} });
+		// The spec's ListNamespaces: the root's children are the warehouses, a warehouse's its
+		// namespaces. The warehouses and namespaces pages list them alongside the table list, and an
+		// unserved listing would leave them in their could-not-be-listed state, which is a different
+		// assertion than the specs mean to make. EMPTY by default, deliberately: adding no row to
+		// fixtures that never mentioned one. A spec that means warehouses or namespaces seeds them.
+		if (/^\/v1\/namespace\/[^/]+\/list$/.test(url.pathname) && req.method === 'GET') {
+			return json({ namespaces: [] });
+		}
 		// ── test control plane ──
 		if (url.pathname === '/__mock/seed' && req.method === 'POST') {
 			const body = (await req.json()) as { bearer: string; routes: Record<string, unknown> };

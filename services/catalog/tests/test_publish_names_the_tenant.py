@@ -1,18 +1,11 @@
 """`table_published` must name the tenant, because it is the only party that can.
 
-A consumer of the event needs a project to route the next tier's work and to stamp
-`rask_lance.project`, which is WATCH targeting's only key. With no project on the event it must derive
-one, and taking the first segment of the table id gives, for `acme-bronze$pages`, `acme-bronze`: the
-qualified NAMESPACE, not the project.
-
-No fix on the consumer's side can be sound. `project_namespace` joins with `-` and `CONTROL_ID_PATTERN` permits `-`
-inside a project id, so `acme-bronze` is genuinely ambiguous between project `acme` and project
-`acme-bronze` (`warehouses.project_for_namespace` says so, and `lineage_emit`'s `ProjectResolver` note
-says it again). The catalog is the only component holding the registry binding that answers it, and it
-already resolves exactly this for the lineage facet — through a cache, on the same request.
-
-So it stamps the answer instead of leaving every consumer to guess, and the two provenance records
-this one publication produces agree on the tenant.
+A consumer of the event needs a project to route the next tier's work and to stamp `rask_lance.project`, which is WATCH
+targeting's only key. A table's name begins with its warehouse ([[LH-593]]), and a warehouse is not its project: one
+project holds several warehouses, and `CONTROL_ID_PATTERN` permits `-` inside either id, so no string rule recovers the
+project from the name. The catalog holds the warehouse record that answers it, and already resolves exactly this for the
+lineage facet, so it stamps the answer instead of leaving every consumer to guess, and the two provenance records this
+one publication produces agree on the tenant.
 """
 
 from __future__ import annotations
@@ -39,8 +32,8 @@ class _Lineage:
         self._project = project
         self.asked: list[str] = []
 
-    async def project_for(self, top_ns: str) -> str | None:
-        self.asked.append(top_ns)
+    async def project_for(self, warehouse_id: str) -> str | None:
+        self.asked.append(warehouse_id)
         return self._project
 
 
@@ -50,7 +43,7 @@ class TestWhenTheTenantCannotBeEstablished:
         from catalog.api.v1.endpoints.publication import publication_extra
         from catalog.core.lineage_emit import _BaseLineageEmitter
 
-        async def _down(top_ns: str) -> str | None:
+        async def _down(warehouse_id: str) -> str | None:
             raise RuntimeError("registry unreachable")
 
         emitter = _BaseLineageEmitter()
@@ -62,61 +55,12 @@ class TestWhenTheTenantCannotBeEstablished:
         assert extra["to_version"] == 2
 
 
-class TestTheStampMustMATCHTheIdItIsStampedOn:
-    """A binding can answer for a namespace the id does not carry, and stamping that breaks the cascade.
+@pytest.mark.asyncio
+async def test_the_stamp_is_the_project_of_the_warehouse_the_name_begins_with() -> None:
+    from catalog.api.v1.endpoints.publication import publication_extra
 
-    [[LH-137]], owner ruling 2026-09-21 (fix (i)). `project_for_namespace` walks binding -> warehouse ->
-    project and does NO prefix check, by design — it is a registry read. So a TENANT-LESS lane
-    namespace such as `silver`, bound to a warehouse that belongs to a project, resolves to that
-    project and the catalog stamps it. A consumer that reads `project` verbatim and composes the next
-    tier as `project_namespace(project, dataset)` then targets `<project>-gold$catalog` where it should
-    target `gold$catalog`: a table nobody wrote, so every promotion out of that namespace fails.
+    lineage = _Lineage(project="acme")
 
-    THE GATE IS A VERIFICATION, NOT A DERIVATION, which is why it is sound where a string rule is not.
-    This module's own header records that `acme-bronze` cannot be DECOMPOSED into a project, because
-    `CONTROL_ID_PATTERN` permits `-` inside a project id. It can still be CHECKED against a project the
-    registry already answered: `project_namespace` joins with `-` and nothing else, so a
-    project-qualified namespace always starts with `f"{project}-"`. Asking "does this id carry that
-    tenant?" needs no parsing.
+    extra = await publication_extra(lineage, ["acme-eu", "bronze", "pages"], from_version=1, to_version=2, location="s3://b/t")
 
-    THE BINDING LOOKUP STAYS. Only the emit is gated, so the resolution a warehouse's own gate depends
-    on is untouched — the alternative considered and rejected (repairing estate config) would have left
-    the code able to do this again on any estate whose binding looks like this one.
-    """
-
-    @pytest.mark.asyncio
-    async def test_a_tenantless_lane_id_carries_NO_project(self) -> None:
-        """The defect: `silver` is bound to a project's warehouse but names no tenant itself."""
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        lineage = _Lineage(project="bind86")
-
-        extra = await publication_extra(lineage, ["silver", "features"], from_version=1, to_version=2, location="s3://b/t")
-
-        assert "project" not in extra, f"the catalog stamped {extra.get('project')!r} on a lane id that does not carry it — the next tier is composed from this"
-
-    @pytest.mark.asyncio
-    async def test_a_project_id_CONTAINING_a_dash_still_carries_it(self) -> None:
-        """The case no string rule can recover, and the reason this checks rather than parses.
-
-        `acme-eu-bronze` is ambiguous between project `acme` and project `acme-eu`; the registry says
-        `acme-eu`, and the prefix check confirms it without ever having to choose.
-        """
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        lineage = _Lineage(project="acme-eu")
-
-        extra = await publication_extra(lineage, ["acme-eu-bronze", "pages"], from_version=1, to_version=2, location="s3://b/t")
-
-        assert extra["project"] == "acme-eu"
-
-    @pytest.mark.asyncio
-    async def test_an_id_EQUAL_to_the_project_carries_no_project(self) -> None:
-        """`project_namespace` always joins, so a bare id equal to the project was never qualified."""
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        lineage = _Lineage(project="acme")
-
-        extra = await publication_extra(lineage, ["acme", "pages"], from_version=1, to_version=2, location="s3://b/t")
-
-        assert "project" not in extra
+    assert (extra["project"], lineage.asked) == ("acme", ["acme-eu"])

@@ -430,10 +430,11 @@ for i in $(seq 1 30); do
   sleep 1
 done
 door "$ALICE" POST /management/v1/warehouses "{\"id\":\"$WAREHOUSE\",\"project\":\"$PROJECT\"}" 200 201 409 || exit 1
-# The parent namespace the multibase suite creates under. A top-level namespace belongs to a
-# warehouse, and its creator owns it, so alice's child creates and table creates under it are authorized.
-door "$ALICE" POST "/management/v1/warehouses/$WAREHOUSE/namespaces" '{"namespace":"mbns","adopt_existing":true}' 200 201 409 || exit 1
-echo "   project $PROJECT > warehouse $WAREHOUSE > namespace mbns"
+# The parent namespace the multibase suite creates under, through the spec's own door. Its name's first segment is
+# the warehouse, so it lands in the warehouse's root and its creator owns it, so alice's child creates and table
+# creates under it are authorized. ExistOk keeps it on a re-run.
+door "$ALICE" POST "/v1/namespace/$WAREHOUSE\$mbns/create" '{"mode":"exist_ok"}' 200 || exit 1
+echo "   project $PROJECT > warehouse $WAREHOUSE > namespace $WAREHOUSE\$mbns"
 
 step "8/9 the outbox suite's Dapr app token"
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
@@ -463,7 +464,8 @@ export LANCE_E2E_FGA=http://localhost:8081
 # The store the tenant above was seeded in, so every suite that reads OpenFGA reads that one.
 export LANCE_E2E_FGA_STORE_ID="$SID"
 export LANCE_E2E_PROJECT="$PROJECT"
-# The suites' top-level namespaces arrive through this warehouse (`topology.create_top_level`, `outbox_probe`).
+# The warehouse the suites create their namespaces in: the first segment of each name (`topology.create_top_level`,
+# `outbox_probe`).
 export LANCE_E2E_WAREHOUSE="$WAREHOUSE"
 export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"

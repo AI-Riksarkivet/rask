@@ -14,7 +14,7 @@ recoverability was untested because nothing was capable of testing it.
 
 A LOGICAL BACKUP IS THE RIGHT SHAPE HERE, not a second PVC snapshot. The whole record set measured
 1,460-odd objects of a few hundred bytes each, and a volume snapshot restores a whole store — which is
-the wrong granularity for "somebody deleted the warehouse bindings". This restores the RECORDS.
+the wrong granularity for "somebody deleted the warehouse records". This restores the RECORDS.
 
 THE OUTBOXES ARE DELIBERATELY NOT IN THE SET, and that is the one judgement in this file worth
 reading. `_control_outbox/` and `_lineage_outbox/` are queues, not records: restoring them re-publishes

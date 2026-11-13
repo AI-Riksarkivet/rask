@@ -1,6 +1,6 @@
 """What a table fed: every table the edge list records a run writing from it, then from those (ADR 0158, [[LH-332]]).
 
-The edge list is lineage's ``provenance$edges``, a Lance table in the catalog's provenance namespace that lineage writes:
+The edge list is lineage's ``edges``, a Lance table in the catalog's provenance namespace (``lance_catalog$provenance``) that lineage writes:
 one row per run, input and output a successful run asserted, each table under its edge identity (a governed table's uuid,
 so a rename keeps its edges; an external source's namespace-qualified name; or the bare name of a governed table an outside
 producer's event named without a uuid).

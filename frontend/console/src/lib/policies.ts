@@ -66,16 +66,13 @@ const PolicyUnsetSchema = v.object({
 /** A policy describe's answer: the policy, or that none is set. */
 export const PolicyDescribeSchema = v.variant('set', [PolicyResponseSchema, PolicyUnsetSchema]);
 
-/** The project-scoped LIST. `incomplete`/`skipped_bindings` are not diagnostics: a namespace→warehouse
- *  binding the catalog could not read is a namespace whose policies it could not see, so a page that
- *  swallows them shows a short list as if it were the whole one. */
+/** The project-scoped LIST, with the SCOPE it was computed from: the project's warehouses and their
+ *  buckets. A namespace or table record is in scope when its name begins with one of the warehouses. */
 export const ProjectPoliciesSchema = v.object({
 	project: v.string(),
 	buckets: v.array(v.string()),
-	namespaces: v.array(v.string()),
+	warehouses: v.array(v.string()),
 	policies: v.array(PolicyResponseSchema),
-	incomplete: v.optional(v.boolean(), false),
-	skipped_bindings: v.optional(v.array(v.string()), []),
 });
 
 export const PolicyDeleteSchema = v.object({
@@ -88,7 +85,7 @@ export const PolicyDeleteSchema = v.object({
  *  survived validation rather than what the wire claimed. */
 export type Policy = v.InferOutput<typeof PolicyResponseSchema>;
 /** `ProjectPoliciesResponse` — every record governing data inside one project, plus the SCOPE it was
- *  computed from and whether that scope was complete. */
+ *  computed from. */
 export type ProjectPolicies = v.InferOutput<typeof ProjectPoliciesSchema>;
 export type ProjectPolicyDelete = v.InferOutput<typeof PolicyDeleteSchema>;
 

@@ -46,7 +46,9 @@ def _stub_create(calls: list[dict[str, Any]]) -> Any:
 
     def fake(*_a: Any, **k: Any) -> CreateTableResponse:
         calls.append(k)
-        location_claims.take(table_claims.claim_store(_settings()), "s3://x", "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=str(uuid4()))
+        location_claims.take(
+            table_claims.claim_store(_settings()), "s3://x", "lance_catalog$db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=str(uuid4())
+        )
         return CreateTableResponse(location="s3://x", version=1)
 
     return fake
@@ -57,7 +59,7 @@ def test_on_allowlist_data_base_threaded_through(client: TestClient, monkeypatch
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(dataplane, "create_table", _stub_create(calls))
     r = client.post(
-        "/v1/table/db$t/create?data_base=s3://ok-bucket",
+        "/v1/table/lance_catalog$db$t/create?data_base=s3://ok-bucket",
         content=_arrow(),
         headers={"content-type": ARROW_STREAM},
     )

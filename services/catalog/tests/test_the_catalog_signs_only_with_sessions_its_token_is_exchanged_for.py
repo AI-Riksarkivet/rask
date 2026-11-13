@@ -85,11 +85,8 @@ class _Rig:
     def with_warehouses(self) -> None:
         """Serve the warehouse doors, vending nothing: their scope probe asks for a session policy moto does not enforce."""
         from catalog.api.dependencies import get_vendor
-        from catalog.core.config import get_settings
         from catalog.core.vending import ModeBVendor
 
-        self._monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
-        get_settings.cache_clear()
         self.catalog.app.dependency_overrides[get_vendor] = ModeBVendor
 
 
@@ -147,11 +144,11 @@ def sessions(store_clock: None, encryption: None, two_stores: Any, tmp_path: Pat
 
 
 def _a_namespace_create(rig: _Rig) -> Callable[[], httpx.Response]:
-    return lambda: rig.catalog.post(f"/v1/namespace/ses{uuid.uuid4().hex[:10]}/create", json={})
+    return lambda: rig.catalog.post(f"/v1/namespace/lance_catalog$ses{uuid.uuid4().hex[:10]}/create", json={})
 
 
 def _a_table_create(rig: _Rig) -> Callable[[], httpx.Response]:
-    namespace = f"ses{uuid.uuid4().hex[:10]}"
+    namespace = f"lance_catalog$ses{uuid.uuid4().hex[:10]}"
     assert rig.catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
     return lambda: rig.catalog.post(f"/v1/table/{namespace}${uuid.uuid4().hex[:10]}/create", content=_ipc(ROWS), headers=ARROW)
 
@@ -195,8 +192,8 @@ def test_the_catalogs_session_is_exchanged_again_before_it_expires_without_a_res
 
 def test_a_vend_is_a_session_of_its_own_named_for_the_caller(sessions: _Rig) -> None:
     """What the session may reach is pinned per rung by `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py`."""
-    table = f"ses{uuid.uuid4().hex[:10]}$t"
-    assert sessions.catalog.post(f"/v1/namespace/{table.split('$')[0]}/create", json={}).status_code == 200
+    table = f"lance_catalog$ses{uuid.uuid4().hex[:10]}$t"
+    assert sessions.catalog.post(f"/v1/namespace/{table.rpartition('$')[0]}/create", json={}).status_code == 200
     assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
     from catalog.api.security import authenticate
 
@@ -234,8 +231,8 @@ def test_a_vend_may_use_the_configured_kms_key_and_no_other(sessions: _Rig, tier
     policy can only narrow the catalog's own, so the session names exactly the configured key and, below the writer
     rungs, only decryption ([[LH-262]]).
     """
-    table = f"ses{uuid.uuid4().hex[:10]}$t"
-    assert sessions.catalog.post(f"/v1/namespace/{table.split('$')[0]}/create", json={}).status_code == 200
+    table = f"lance_catalog$ses{uuid.uuid4().hex[:10]}$t"
+    assert sessions.catalog.post(f"/v1/namespace/{table.rpartition('$')[0]}/create", json={}).status_code == 200
     assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
 
     vended = sessions.catalog.post(f"/management/v1/table/{table}/credentials", params={"tier": tier})
@@ -258,8 +255,8 @@ def test_a_vend_whose_policy_sts_would_refuse_is_refused_naming_why(sessions: _R
     members, since a 5xx's detail is redacted ([[LH-262]]). The limit is lowered so an ordinary table's policy is past it."""
     from catalog.core import vending
 
-    table = f"ses{uuid.uuid4().hex[:10]}$t"
-    assert sessions.catalog.post(f"/v1/namespace/{table.split('$')[0]}/create", json={}).status_code == 200
+    table = f"lance_catalog$ses{uuid.uuid4().hex[:10]}$t"
+    assert sessions.catalog.post(f"/v1/namespace/{table.rpartition('$')[0]}/create", json={}).status_code == 200
     assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
     exchanged = len(sessions.sessions())
     monkeypatch.setattr(vending, "SESSION_POLICY_LIMIT", 100)

@@ -24,6 +24,7 @@ from starlette.middleware import Middleware
 from catalog.api.commit_reconcile import mount_commit_reconcile
 from catalog.api.control_relay import mount_control_relay
 from catalog.api.dapr import register_control_dapr
+from catalog.api.declaration_converge import mount_declaration_converge
 from catalog.api.erasure_release import mount_erasure_release
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
@@ -71,11 +72,13 @@ _PROVENANCE_RETRY_FIRST_SECONDS = 1.0
 _PROVENANCE_RETRY_MAX_SECONDS = 60.0
 
 
-async def _ensure_provenance_namespace(app: FastAPI) -> None:
-    """Keep the namespace lineage's feed and edge list live in, retrying until it holds (`services.provenance_namespace`).
+async def _ensure_estate_namespaces(app: FastAPI) -> None:
+    """Keep the estate's own warehouse row and the namespace lineage's feed and edge list live in, retrying until both hold.
 
-    Retried rather than tried once: lineage writes nothing until the namespace exists and grants it `writer`, and
-    the store or OpenFGA this needs may still be starting when the catalog is. Every step is idempotent.
+    The row first ([[LH-593]]): every name served from the estate's own root begins with the estate warehouse's id,
+    and the provenance namespace is one of them (`services.provenance_namespace`). Retried rather than tried once:
+    lineage writes nothing until the namespace exists and grants it `writer`, and the store or OpenFGA this needs may
+    still be starting when the catalog is. Every step is idempotent.
     """
     from catalog.services.provenance_namespace import ensure_provenance_namespace
 
@@ -83,6 +86,7 @@ async def _ensure_provenance_namespace(app: FastAPI) -> None:
     while True:
         try:
             namespace = await run_in_threadpool(app.state.connections.connection, app.state.settings)
+            await run_in_threadpool(warehouses.ensure_catalog_row, namespace, app.state.settings.estate_warehouse)
             await ensure_provenance_namespace(namespace, app.state.settings, getattr(app.state, "fga", None))
             return
         except asyncio.CancelledError:
@@ -156,6 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         or bool(settings.promotion_expiry_binding_name)
         or bool(settings.commit_reconcile_binding_name)
         or bool(settings.manifest_reclaim_binding_name)
+        or bool(settings.declaration_converge_binding_name)
     )
     # Q17-6 / §F2-2: the CODE default is anonymous and the chart flips it on, so a catalog started
     # any other way serves every route to anyone who can reach the port. Refused on the AMBIGUITY —
@@ -199,9 +204,13 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     app.state.store_session = store_session
     app.state.connections = NamespaceConnections()
     namespace = app.state.connections.connection(settings)  # fail fast if storage misconfigured
-    # #3-A warehouse routing cache (only used when warehouses_enabled): top-level-namespace → its physical
-    # root_uri (bindings are immutable, so cache-forever is safe).
-    app.state.warehouse_binding_cache = {}
+    # The estate's own warehouse row before the first request is served: every name on the estate's root begins with
+    # it, and the estate-namespaces loop below writes it only once its task first runs. A store that is still starting
+    # is that loop's to retry, and must not fail this boot.
+    try:
+        await run_in_threadpool(warehouses.ensure_catalog_row, namespace, settings.estate_warehouse)
+    except Exception as exc:  # noqa: BLE001 — retried by the loop below
+        log.warning("estate_warehouse_row_deferred", extra={"error": str(exc)})
     # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
     # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
     # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be
@@ -266,20 +275,10 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # key. Without it a notifier skips the watcher loop entirely and every catalog write in the
     # estate reaches its author and nobody else.
     #
-    # Resolved through the warehouse registry (binding → warehouse → project) because no string rule
-    # can do it: `CONTROL_ID_PATTERN` allows `-` inside a project id, so `acme-bronze` is ambiguous.
-    # Reads run in the threadpool (pyarrow's filesystem is blocking) and share the SAME positives-only
-    # binding cache the routing resolver uses, so a hot namespace costs one warehouse read, not two
-    # per write. Best-effort by construction — `project_for` swallows and degrades to `None`.
-    async def _resolve_project(top_ns: str) -> str | None:
-        cache: dict[str, dict[str, str]] = app.state.warehouse_binding_cache
-        cached = cache.get(top_ns, {}).get("project")
-        if cached:
-            return cached
-        project = await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, settings.storage_options(), top_ns)
-        if project:
-            cache.setdefault(top_ns, {})["project"] = project
-        return project
+    # A name's project is its warehouse's, one registry read in the threadpool (pyarrow's filesystem is
+    # blocking). Best-effort by construction: `project_for` swallows a failure and degrades to `None`.
+    async def _resolve_project(warehouse_id: str) -> str | None:
+        return await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), warehouse_id)
 
     signing = make_signing_holder(
         secrets_from_dapr=settings.secrets_from_dapr,
@@ -371,9 +370,10 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
     #     one-by-one past a duplicate), so replicas racing land the same tuples.
     loops.start("cascade-backfill", partial(_backfill_cascade_grants, app))
-    # The namespace lineage keeps its tables in, in the background for the backfill's reasons: lineage retries
-    # its tables until the namespace exists, so a slow OpenFGA or store must not delay this catalog's readiness.
-    loops.start("provenance-namespace", partial(_ensure_provenance_namespace, app))
+    # The estate's own warehouse row and the namespace lineage keeps its tables in, in the background for the
+    # backfill's reasons: lineage retries its tables until the namespace exists, so a slow OpenFGA or store must not
+    # delay this catalog's readiness. A name under the estate's warehouse is absent until the row is there.
+    loops.start("estate-namespaces", partial(_ensure_estate_namespaces, app))
     # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
     # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
     bus_watchdog = await start_bus_watchdog(loops)
@@ -461,6 +461,9 @@ mount_commit_reconcile(app, _settings.commit_reconcile_binding_name)
 # [[LH-251]]: reclaim each root's `__manifest` versions past their retention (POST /<binding name> at the pod root).
 # Mounted only when the chart names the binding, like the relay.
 mount_manifest_reclaim(app, _settings.manifest_reclaim_binding_name)
+# [[XC-213]]: converge the estate's projects, warehouses and service grants onto what git declares (POST /<binding
+# name> at the pod root). Mounted only when the chart names the binding, like the relay.
+mount_declaration_converge(app, _settings.declaration_converge_binding_name)
 # Every door that authenticates its caller does so from the request's headers before its body is read
 # (`lakehouse.admission`): a caller with no token is refused before a byte is buffered, and never takes a write seat.
 judge_before_the_body(app, gate=authenticate, judge=judge)

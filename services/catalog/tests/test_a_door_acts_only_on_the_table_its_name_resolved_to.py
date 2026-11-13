@@ -2,10 +2,10 @@
 
 The router authorizes a door on the uuid its name resolves to (ADR 0173 §8, [[LH-524]]) and the door acts on the location
 that resolution read (ADR 0173 §7). A door that called the backend by name again would act on whatever table the name
-names by then: bob, granted `owner` on alice's `db$t`, would read or change the table alice created under that name
+names by then: bob, granted `owner` on alice's `lance_catalog$db$t`, would read or change the table alice created under that name
 after dropping his, which grants him nothing.
 
-So the rival lands exactly there, on every door that reads or writes a table's data or metadata: alice drops `db$t` and
+So the rival lands exactly there, on every door that reads or writes a table's data or metadata: alice drops `lance_catalog$db$t` and
 creates it again once the router has authorized bob's request, and before the door acts. The door answers 409 code 14,
 and the table alice created is left as she made it. Two rivals leave a table at the location the door resolved, and each
 is driven on a door acting through a handle and on a native read. A recoverable drop keeps the dropped table's bytes and
@@ -41,8 +41,8 @@ _ARROW = {"Content-Type": ARROW_STREAM_MEDIA_TYPE}
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64()), "v": pa.array([10, 20], pa.int64())}))
 _RIVAL_ROWS = encode_arrow_stream(pa.table({"id": pa.array([9], pa.int64()), "v": pa.array([90], pa.int64())}))
 _QUERY = {"k": 10, "vector": {"single_vector": []}}
-_TABLE = "/v1/table/db$t"
-_MANAGED = "/management/v1/table/db$t"
+_TABLE = "/v1/table/lance_catalog$db$t"
+_MANAGED = "/management/v1/table/lance_catalog$db$t"
 
 #: Every door that reads or writes a table's data or metadata, as bob sends it: (method, path, keywords).
 _DOORS = [
@@ -102,7 +102,7 @@ _DOORS = [
 #: read, and a drop and a create landing as the door makes its native write, on one door making one.
 _RIVALS = {"recoverable-drop": {"insert", "query"}, "re-register": {"insert", "list-versions"}, "drop-at-the-native-write": {"drop-index"}}
 
-#: Where the estate registers `db$t` for the re-register rival, beneath the namespace root.
+#: Where the estate registers `lance_catalog$db$t` for the re-register rival, beneath the namespace root.
 _HELD = "held"
 
 #: The create door authorizes the parent namespace, and an Overwrite resolves the table it overwrites and asks `can_drop`
@@ -117,7 +117,7 @@ def _ok(catalog: Any, path: str, caller: str = "alice", status: int = 200, **kwa
 
 
 def _as_alice_made_it(catalog: Any) -> dict[str, Any]:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """What alice reads of the table `db$t` names: its version, schema and metadata, its tags, its branches and its rows."""
+    """What alice reads of the table `lance_catalog$db$t` names: its version, schema and metadata, its tags, its branches and its rows."""
     described = _ok(catalog, f"{_TABLE}/describe", json={"load_detailed_metadata": True, "vend_credentials": False})
     return {
         "described": {key: described.get(key) for key in ("version", "schema", "metadata", "location")},
@@ -129,13 +129,13 @@ def _as_alice_made_it(catalog: Any) -> dict[str, Any]:  # noqa: ANN401 — the c
 
 @pytest.fixture
 def estate(governed_catalog: Any, tmp_path: Path, rival: str) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """alice's `db$t`, holding the tag `t`, the branch `b` and the index `v_idx`, which bob holds `owner` on.
+    """alice's `lance_catalog$db$t`, holding the tag `t`, the branch `b` and the index `v_idx`, which bob holds `owner` on.
 
     The table is registered at `held` for the re-register rival, as a register cannot name the uuid directory a create
     lays its table out in, and created otherwise. The index is a bring-your-own build, committed with the table's own
     pylance, as the catalog builds none (ADR 0162).
     """
-    _ok(governed_catalog, "/v1/namespace/db/create", json={})
+    assert governed_catalog.create_in_the_estate("alice", "db").status_code == 200
     if rival == "re-register":
         location = str(tmp_path / _HELD)
         lance.write_dataset(pa.ipc.open_stream(_ROWS).read_all(), location, data_storage_version="2.2", enable_stable_row_ids=True)

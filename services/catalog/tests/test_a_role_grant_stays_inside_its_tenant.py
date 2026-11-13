@@ -14,15 +14,17 @@ would have broken every existing grant on the day the edge landed — which is h
 reverted rather than adopted — so the guard refuses only where the model carries the fact to refuse
 on. Both halves are asserted here, because the fail-open half is the one that would rot silently.
 
-A ROLE ONE PROJECT OWNS IS NEVER GRANTED ON AN OBJECT NO PROJECT OWNS ([[LH-572]]): an unbound namespace belongs to no
-tenant, so a grant there would reach it, and everything beneath it, for one project's assignees.
+A ROLE ONE PROJECT OWNS IS NEVER GRANTED ON AN OBJECT NO PROJECT OWNS ([[LH-572]]): a namespace of the estate's own
+warehouse belongs to no tenant, so a grant there would reach it, and everything beneath it, for one project's assignees.
+A namespace's tenant is its warehouse's, read from the warehouse its name begins with ([[LH-593]]).
 
 A ROLE IS NEVER GRANTED A RUNG THE MODEL HOLDS FOR USERS ALONE ([[LH-563]]). A decision rung (`decider`, `[user]`) names
 one account, so a grant of it to a role's assignees is a malformed request, refused 400 before the store is asked, as the
 store itself refuses the tuple; asked, the store's refusal would reach the caller as an outage.
 
 Each case is judged by its OUTCOME on the real model, on a store of this test's own ([[LH-235]]): alice creates
-`beta_bronze` through the door and grants the role a rung on it, and dave, the role's one assignee, then describes it.
+`house$bronze` (or `lance_catalog$bronze`) through the door and grants the role a rung on it, and dave, the role's one
+assignee, then describes it.
 A refused grant leaves dave refused; an admitted one lets him read.
 """
 
@@ -31,6 +33,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import lance_namespace
 import pytest
 
 from catalog.services import warehouses
@@ -39,8 +42,8 @@ from lakehouse.storage_options import StorageOptions
 
 #: Each target's grant door and the door dave reads it through: a namespace's describe, a warehouse's own self-view.
 DOORS = {
-    "namespace": ("/management/v1/namespace/beta_bronze/access/grant", "/v1/namespace/beta_bronze/describe"),
-    "warehouse": ("/management/v1/warehouse/wh/access/grant", "/management/v1/warehouse/wh/access/my-permissions"),
+    "namespace": ("/management/v1/namespace/{name}/access/grant", "/v1/namespace/{name}/describe"),
+    "warehouse": ("/management/v1/warehouse/house/access/grant", "/management/v1/warehouse/house/access/my-permissions"),
 }
 
 
@@ -50,7 +53,7 @@ DOORS = {
         pytest.param("namespace", "acme", "beta", "reader", 400, 403, ("acme", "beta"), id="a-role-owned-by-another-project-is-refused"),
         pytest.param("namespace", "beta", "beta", "reader", 200, 200, (), id="a-role-owned-by-the-same-project-is-granted"),
         pytest.param("namespace", None, "beta", "reader", 200, 200, (), id="an-estate-wide-role-carrying-no-project-is-granted"),
-        pytest.param("namespace", "acme", None, "reader", 400, 403, ("acme", "beta_bronze"), id="a-namespace-belonging-to-no-project-is-refused"),
+        pytest.param("namespace", "acme", None, "reader", 400, 403, ("acme", "lance_catalog"), id="a-namespace-belonging-to-no-project-is-refused"),
         # A warehouse's own record names its tenant ([[LH-555]]).
         pytest.param("warehouse", "acme", "beta", "reader", 400, 403, ("acme", "beta"), id="a-role-owned-by-another-project-is-refused-on-a-warehouse"),
         pytest.param("warehouse", "beta", "beta", "reader", 200, 200, (), id="a-role-owned-by-the-warehouses-project-is-granted"),
@@ -78,19 +81,24 @@ def test_a_role_is_granted_only_inside_its_own_tenant(
     named: tuple[str, ...],
 ) -> None:
     catalog, alice = governed_catalog, governed_catalog.bearer("alice")
+    name = "house$bronze" if tenant is not None else "lance_catalog$bronze"
     if tenant is not None:
-        warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "wh", "project": tenant, "bucket": tenant, "root_uri": str(tmp_path)})
+        root = tmp_path / "house"
+        warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "house", "project": tenant, "bucket": tenant, "root_uri": str(root)})
+        warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": str(root)}), "house")
+        catalog.store.write((catalog.person("alice"), "admin", f"project:{tenant}"), (f"project:{tenant}", "project", "warehouse:house"))
     if target == "namespace":
-        if tenant is not None:
-            warehouses.bind_namespace(str(tmp_path), StorageOptions(), "beta_bronze", "wh", str(tmp_path))
-        assert catalog.client.post("/v1/namespace/beta_bronze/create", json={}, headers=alice).status_code == 200
-    else:
-        catalog.store.write((catalog.person("alice"), "admin", f"project:{tenant}"), (f"project:{tenant}", "project", "warehouse:wh"))
+        created = (
+            catalog.client.post(f"/v1/namespace/{name}/create", json={}, headers=alice)
+            if tenant is not None
+            else catalog.create_in_the_estate("alice", "bronze")
+        )
+        assert created.status_code == 200, created.text
     catalog.store.write(
         (catalog.person("dave"), "assignee", "role:analyst"),
         *([(f"project:{role_project}", "project", "role:analyst")] if role_project is not None else []),
     )
-    grant_door, read_door = DOORS[target]
+    grant_door, read_door = (door.format(name=name) for door in DOORS[target])
 
     grant = catalog.client.post(grant_door, json={"user": "role:analyst#assignee", "relation": relation}, headers=alice)
 

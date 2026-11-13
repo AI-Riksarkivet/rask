@@ -80,12 +80,11 @@ def foreign_store() -> Iterator[_ForeignStore]:
 
 @pytest.fixture
 def catalog(tmp_path: Path, moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """The real catalog app with warehouses on, a local control root, and the moto server as the estate's store."""
+    """The real catalog app with a local control root, and the moto server as the estate's store."""
     (tmp_path / "default").mkdir()
     (tmp_path / "registry").mkdir()
     monkeypatch.setenv("LANCE_REST_IMPL", "dir")
     monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path / "default"))
-    monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     monkeypatch.setenv("LANCE_CONTROL_ROOT", _control(tmp_path))
     monkeypatch.setenv("LANCE_S3_ENDPOINT", moto_url)
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", _ESTATE_KEY_ID)
@@ -153,15 +152,14 @@ def test_create_refuses_an_endpoint_that_is_not_the_estates(
 @pytest.mark.parametrize(
     ("warehouse", "method", "path", "body"),
     [
-        pytest.param("far-open", "POST", "/v1/table/fns$t/describe", {}, id="open"),
-        pytest.param("far-vend", "POST", "/management/v1/table/fns$t/credentials", None, id="vend"),
+        pytest.param("far-open", "POST", "/v1/table/{warehouse}$fns$t/describe", {}, id="open"),
+        pytest.param("far-vend", "POST", "/management/v1/table/{warehouse}$fns$t/credentials", None, id="vend"),
         pytest.param("far-probe", "POST", "/management/v1/warehouses/{warehouse}/validate", None, id="vend-probe"),
         pytest.param("far-provision", "POST", "/management/v1/warehouses", {"id": "{warehouse}", "project": "acme"}, id="provision"),
         pytest.param("far-purge", "DELETE", "/management/v1/warehouses/{warehouse}?cascade=true&purge_bucket=true", None, id="purge"),
         pytest.param("far-cascade", "DELETE", "/management/v1/warehouses/{warehouse}?cascade=true", None, id="cascade"),
-        pytest.param("far-bind", "POST", "/management/v1/warehouses/{warehouse}/namespaces", {"namespace": "fresh"}, id="create-namespace"),
-        pytest.param("far-unbind", "DELETE", "/management/v1/warehouses/{warehouse}/namespaces/fns", None, id="unbind"),
-        pytest.param("far-list", "GET", "/v1/namespace/fns/table/list", None, id="table-list"),
+        pytest.param("far-create", "POST", "/v1/namespace/{warehouse}$fresh/create", {}, id="create-namespace"),
+        pytest.param("far-list", "GET", "/v1/namespace/{warehouse}$fns/table/list", None, id="table-list"),
     ],
 )
 def test_a_record_naming_another_store_is_refused_at_every_door(
@@ -189,7 +187,6 @@ def test_a_record_naming_another_store_is_refused_at_every_door(
             "endpoint": foreign_store.url,
         },
     )
-    warehouses.bind_namespace(control, StorageOptions(), "fns", warehouse, f"s3://{warehouse}")
     before = _estate_buckets(moto_url)
 
     response = catalog.request(

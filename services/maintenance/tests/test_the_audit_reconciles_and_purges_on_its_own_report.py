@@ -53,7 +53,6 @@ class _Reconciler:
         settings: MaintenanceSettings,
         grants: GrantCensusReader | None = None,
         *,
-        warehouses_enabled: bool,
         control_root: str | None = None,
         namespace_root: str | None = None,
         into_sources: list[Sources] | None = None,
@@ -65,7 +64,6 @@ class _Reconciler:
             {
                 "walk": walk,
                 "grants": grants,
-                "warehouses_enabled": warehouses_enabled,
                 "control_root": control_root,
                 "bucket_client": bucket_client,
             }
@@ -114,7 +112,7 @@ def test_the_audit_hands_the_reconciler_the_catalogs_grant_census(monkeypatch: p
     with a key the store has since replaced."""
     reconciler = _Reconciler()
     monkeypatch.setattr(audit, "reconcile", reconciler)
-    settings = _settings(warehouses_enabled=True)
+    settings = _settings()
 
     out = asyncio.run(_the_daily_scan(settings))
 
@@ -122,9 +120,7 @@ def test_the_audit_hands_the_reconciler_the_catalogs_grant_census(monkeypatch: p
     assert (out["total"], out["trash_purge"]["enabled"], out["trash_purge"]["ran"]) == (0, False, False)
     call = reconciler.calls[-1]
     assert call["grants"] is not None, "the scan handed the reconciler no grant census"
-    # `warehouses_enabled` mirrors a CATALOG setting and is passed IN, never inferred: a divergent one reports every
-    # namespace as unbound.
-    assert (call["bucket_client"], call["warehouses_enabled"], call["control_root"]) == (None, True, settings.resolved_control_root)
+    assert (call["bucket_client"], call["control_root"]) == (None, settings.resolved_control_root)
 
 
 @pytest.mark.parametrize(

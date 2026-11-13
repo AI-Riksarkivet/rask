@@ -29,7 +29,7 @@ from tests.integration.lineage_app import ensure_tables, live_catalog, run_event
 
 _ALICE = "dex~alice"
 _BOB = "dex~bob"
-_SOURCE = "acme-bronze$src"
+_SOURCE = "lance_catalog$acme-bronze$src"
 
 
 def _authored(author: str) -> dict[str, Any]:
@@ -42,13 +42,13 @@ def _complete(run_id: str, output: str, *, author: str = _ALICE, inputs: tuple[s
 
 def _store(url: str) -> ProvenanceStore:
     # Refusing a run another author bound, as a store built for an estate that authorizes does (`from_settings`).
-    store = ProvenanceStore(catalog_url=url, namespace=["provenance"], token=lambda: None, refuse_foreign_runs=True)
+    store = ProvenanceStore(catalog_url=url, namespace=["lance_catalog", "provenance"], token=lambda: None, refuse_foreign_runs=True)
     ensure_tables(store)
     return store
 
 
 def _reader(url: str, table: str) -> CatalogTableReader:
-    return CatalogTableReader(RestCatalogTransport(url), ["provenance", table])
+    return CatalogTableReader(RestCatalogTransport(url), ["lance_catalog", "provenance", table])
 
 
 def _versions(url: str) -> dict[str, int]:
@@ -79,12 +79,12 @@ def _edges_by_run(url: str) -> Counter[str]:
 def test_a_burst_lands_in_two_commits_per_table_each_row_once_and_a_run_extended_only_by_its_first_author(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fresh = [_complete(str(uuid.uuid4()), f"acme-silver$t{n}") for n in range(24)]
-    recorded = _complete(str(uuid.uuid4()), "acme-silver$recorded")
-    twice = _complete(str(uuid.uuid4()), "acme-silver$twice")
+    fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-silver$t{n}") for n in range(24)]
+    recorded = _complete(str(uuid.uuid4()), "lance_catalog$acme-silver$recorded")
+    twice = _complete(str(uuid.uuid4()), "lance_catalog$acme-silver$twice")
     shared = str(uuid.uuid4())
     started = run_event(shared, "START", "2026-10-23T10:00:00+00:00", outputs=[], facets=_authored(_ALICE))
-    finished = _complete(shared, "acme-silver$shared", author=_BOB)
+    finished = _complete(shared, "lance_catalog$acme-silver$shared", author=_BOB)
     # A redelivery of a recorded event, two deliveries of one event, and a run whose second event names another author.
     burst = [*fresh, recorded, twice, twice, started, finished]
 
@@ -110,14 +110,14 @@ def test_a_burst_lands_in_two_commits_per_table_each_row_once_and_a_run_extended
 
 
 def test_an_event_whose_edges_the_catalog_refuses_fails_alone_and_its_feed_row_never_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fresh = [_complete(str(uuid.uuid4()), f"acme-silver$t{n}") for n in range(12)]
+    fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-silver$t{n}") for n in range(12)]
     # 64 inputs to 64 outputs, lineage's bound on each (`lineage.models.MAX_DATASETS`): 4,096 edges, about 1 MB of rows
     # against a catalog whose body cap is 256 KiB, while the event itself weighs about 15 kB.
     wide = _complete(
         str(uuid.uuid4()),
-        "acme-silver$w0",
-        inputs=tuple(f"acme-bronze$i{n}" for n in range(64)),
-        outputs=[f"acme-silver$w{n}" for n in range(1, 64)],
+        "lance_catalog$acme-silver$w0",
+        inputs=tuple(f"lance_catalog$acme-bronze$i{n}" for n in range(64)),
+        outputs=[f"lance_catalog$acme-silver$w{n}" for n in range(1, 64)],
     )
     burst = [*fresh[:6], wide, *fresh[6:]]
 

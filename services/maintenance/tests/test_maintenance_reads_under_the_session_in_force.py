@@ -146,7 +146,7 @@ async def test_the_drift_report_lists_the_stores_buckets_under_the_services_sess
         session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds, loops=loops)
         assert session is not None, "a service projecting a token holds a session"
         try:
-            report = await reconcile(settings, warehouses_enabled=False, control_root=f"s3://{store.swept}", namespace_root=f"s3://{store.swept}", walk=False)
+            report = await reconcile(settings, control_root=f"s3://{store.swept}", namespace_root=f"s3://{store.swept}", walk=False)
         finally:
             await session.stop()
 

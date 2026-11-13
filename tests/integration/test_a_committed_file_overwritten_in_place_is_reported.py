@@ -60,7 +60,7 @@ from maintenance.services.table_pass import TableTask
 from tests.integration.maintenance_vend_doors import CATALOG_URL, MAINTAIN_TIER_DOOR, VENDED, described_by, maintain_tier_door
 
 
-_TABLE_ID: list[str] = ["db", "t"]
+_TABLE_ID: list[str] = ["lance_catalog", "db", "t"]
 _TABLE = "$".join(_TABLE_ID)
 _DATA_FILE = r"data/[^/]+\.lance"
 _MERGE = "merge_insert?on=id&when_not_matched_insert_all=true"
@@ -94,7 +94,7 @@ class _Estate:
         self.stock = lance_namespace.connect("rest", {"uri": str(client.base_url)})
         self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
-        assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
     def create(self, rows: pa.Table) -> str:
         """The table, through the create door; the location it answered."""

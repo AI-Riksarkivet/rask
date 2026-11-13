@@ -117,7 +117,7 @@ class _Estate:
         self.external_base = f"s3://{bucket}-corpus/media/pages/"
         self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
-        assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
     def create(self, table: str, rows: pa.Table, external_blob_base: str | None = None) -> str:
         """The create door, with the external blob base requested as a query parameter."""
@@ -215,7 +215,7 @@ class _Staged:
 
 
 def _plain(estate: _Estate, **write: Any) -> _Staged:  # noqa: ANN401 — write_fragments' own keyword arguments
-    table = f"db$t{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$db$t{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ROWS)
     written = lance.fragment.write_fragments(_STAGED, location, storage_options=estate.key.in_clear(), **write)
     return _Staged(estate, table, location, json.loads(json.dumps(written[0].to_json())))
@@ -223,7 +223,7 @@ def _plain(estate: _Estate, **write: Any) -> _Staged:  # noqa: ANN401 — write_
 
 def _bronze(estate: _Estate, *, external_base: str | None = None, nested: bool = False) -> _Staged:
     """A bronze table created with the external base, when one is named, and one managed-blob fragment staged under it."""
-    table = f"db$b{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$db$b{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _no_rows(nested=nested), external_base)
     units = [(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]
     written = _write(location, _blob_rows(units, nested=nested), estate.key.in_clear())
@@ -246,7 +246,7 @@ def _bronze_with_a_planted_base(estate: _Estate) -> _Staged:
 
 def _committed(estate: _Estate) -> _Staged:
     """A table whose first committed fragment's row 1 was then deleted, and that fragment's own file staged again."""
-    table = f"db$t{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$db$t{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ROWS)
     estate.open(location).delete("id = 1")
     held = estate.open(location).get_fragments()[0].metadata.to_json()
@@ -475,7 +475,7 @@ def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate
     (inline, packed, dedicated) and an external blob under that base, each written under ``data/`` and committed through the
     same door the forgeries are refused at, its blob fields beneath a Struct and a List ([[LH-539]]). A blob column at the
     top level takes the same checks, and the top-level forgeries above reach each of them before their refusal."""
-    table = f"db$b{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$db$b{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _no_rows(nested=True), estate.external_base)
     source = f"{estate.external_base}page-external.tif"
     estate.put_uri(source, b"external-page")
@@ -509,7 +509,7 @@ def test_a_writers_own_fragment_of_a_packed_struct_commits(estate: _Estate) -> N
             pa.field("q", pa.struct([pa.field("y", pa.float32()), pa.field("inner", inner, metadata=packed)])),
         ]
     )
-    table = f"db$p{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$db$p{uuid.uuid4().hex[:8]}"
     location = estate.create(table, schema.empty_table())
     rows = pa.Table.from_pylist(
         [{"id": i, "p": {"x": float(i), "label": f"l{i}"}, "q": {"y": float(i), "inner": {"a": i, "b": f"b{i}"}}} for i in (1, 2)], schema=schema
@@ -531,7 +531,7 @@ def test_a_writers_own_fragment_of_a_struct_a_2_0_file_packs_commits(estate: _Es
     rows = pa.Table.from_pylist([{"id": i, "p": {"x": float(i), "y": i}} for i in (1, 2)], schema=schema)
     location = f"s3://{estate.bucket}/legacy20"
     lance.write_dataset(rows.slice(0, 1), location, data_storage_version="2.0", enable_stable_row_ids=True, storage_options=estate.key.in_clear())
-    table = "db$legacy20"
+    table = "lance_catalog$db$legacy20"
     registered = estate.client.post(f"/v1/table/{quote(table, safe='$')}/register", json={"location": "legacy20"})
     assert registered.status_code == 200, registered.text
     staged = [

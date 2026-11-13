@@ -34,7 +34,7 @@ def catalog_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
-@pytest.mark.parametrize("path", ["/management/v1/table/db1$t/tasks"])
+@pytest.mark.parametrize("path", ["/management/v1/table/lance_catalog$db1$t/tasks"])
 @pytest.mark.usefixtures("catalog_env")
 def test_the_task_routes_are_still_authenticated(path: str) -> None:
     """The removal must not be the thing that opens the door: with the router's gate refusing, the

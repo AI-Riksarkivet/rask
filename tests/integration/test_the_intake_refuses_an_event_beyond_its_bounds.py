@@ -36,8 +36,8 @@ def test_an_event_beyond_the_intakes_bounds_is_refused_and_records_nothing(
         run,
         "COMPLETE",
         "2026-10-15T10:00:00+00:00",
-        outputs=[f"acme-gold$t{i}" for i in range(outputs)],
-        inputs=tuple(f"acme-silver$t{i}" for i in range(inputs)),
+        outputs=[f"lance_catalog$acme-gold$t{i}" for i in range(outputs)],
+        inputs=tuple(f"lance_catalog$acme-silver$t{i}" for i in range(inputs)),
         facets=note,
     )
     with (

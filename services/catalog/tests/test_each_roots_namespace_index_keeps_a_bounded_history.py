@@ -59,7 +59,8 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Catalog
 
     routes = list(app.router.routes)
     mount_manifest_reclaim(app, BINDING)
-    warehouses.put_warehouse(str(estate), StorageOptions(), {"id": "wh", "bucket": "wh", "project": "p", "root_uri": str(warehouse)})
+    warehouses.put_warehouse(str(estate), StorageOptions(), {"id": "tenant", "bucket": "tenant", "project": "p", "root_uri": str(warehouse)})
+    warehouses.ensure_catalog_row(connect("dir", {"root": str(warehouse)}), "tenant")
     with TestClient(app) as client:
         yield Catalog(client=client, estate=str(estate), warehouse=str(warehouse))
     app.router.routes[:] = routes
@@ -112,23 +113,23 @@ def _versions(root: str) -> list[int]:
 def test_the_reclaim_keeps_each_roots_history_bounded_and_the_catalog_reads_the_latest(catalog: Catalog) -> None:
     """Every root keeps only its retained versions, no retained version holds a dropped id, and a connection the
     catalog built before another writer moved its root on still lists what that writer made."""
-    assert catalog.client.post("/v1/namespace/kept/create", json={}).status_code == 200
+    assert catalog.client.post("/v1/namespace/lance_catalog$kept/create", json={}).status_code == 200
     replica = connect("dir", {"root": catalog.estate})
-    replica.create_namespace(CreateNamespaceRequest(id=["other"]))
-    replica.create_namespace(CreateNamespaceRequest(id=["gone"]))
-    replica.drop_namespace(DropNamespaceRequest(id=["gone"]))
+    replica.create_namespace(CreateNamespaceRequest(id=["lance_catalog", "other"]))
+    replica.create_namespace(CreateNamespaceRequest(id=["lance_catalog", "gone"]))
+    replica.drop_namespace(DropNamespaceRequest(id=["lance_catalog", "gone"]))
     tenant = connect("dir", {"root": catalog.warehouse})
     for name in ("w_kept", "w_gone"):
-        tenant.create_namespace(CreateNamespaceRequest(id=[name]))
-    tenant.drop_namespace(DropNamespaceRequest(id=["w_gone"]))
+        tenant.create_namespace(CreateNamespaceRequest(id=["tenant", name]))
+    tenant.drop_namespace(DropNamespaceRequest(id=["tenant", "w_gone"]))
 
     tick = catalog.client.post(f"/{BINDING}")
 
     assert tick.status_code == 200, tick.text
     assert {root: len(_versions(root)) for root in (catalog.estate, catalog.warehouse)} == {catalog.estate: 1, catalog.warehouse: 1}
-    assert [v for v in _versions(catalog.estate) if "gone" in _object_ids(catalog.estate, v)] == []
-    assert [v for v in _versions(catalog.warehouse) if "w_gone" in _object_ids(catalog.warehouse, v)] == []
-    listed = catalog.client.get("/v1/namespace/$/list")
+    assert [v for v in _versions(catalog.estate) if "lance_catalog$gone" in _object_ids(catalog.estate, v)] == []
+    assert [v for v in _versions(catalog.warehouse) if "tenant$w_gone" in _object_ids(catalog.warehouse, v)] == []
+    listed = catalog.client.get("/v1/namespace/lance_catalog/list")
     assert listed.status_code == 200, listed.text
     assert sorted(listed.json()["namespaces"]) == ["kept", "other"]
 
@@ -144,14 +145,14 @@ def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(catalog
     warehouses.put_warehouse(catalog.estate, StorageOptions(), {"id": "broken", "bucket": "broken", "project": "p", "root_uri": str(broken)})
     tenant = connect("dir", {"root": catalog.warehouse})
     for name in ("one", "two"):
-        tenant.create_namespace(CreateNamespaceRequest(id=[name]))
+        tenant.create_namespace(CreateNamespaceRequest(id=["tenant", name]))
 
     tick = catalog.client.post(f"/{BINDING}")
 
     assert tick.status_code == 200, tick.text
     assert (tick.json()["failed"], [done["root"] for done in tick.json()["reclaimed"]], failed_roots()) == (
         1,
-        [catalog.warehouse],
+        [catalog.estate, catalog.warehouse],
         {str(broken): 1},
     )
 
@@ -198,7 +199,7 @@ def test_the_namespace_index_is_written_without_indexes_of_its_own(catalog: Cata
     """The catalog's connections leave ``inline_optimization_enabled`` off: measured over moto at 100 and 1,000
     objects, the three spec indexes made a namespace create 16 store requests instead of 12 and a describe 6 instead
     of 3, since the unindexed index is one data file a read takes in one GET."""
-    assert catalog.client.post("/v1/namespace/one/create", json={}).status_code == 200
+    assert catalog.client.post("/v1/namespace/lance_catalog$one/create", json={}).status_code == 200
 
     indexes = lance.dataset(f"{catalog.estate}/__manifest").describe_indices()
 

@@ -55,7 +55,7 @@ def _ids(*ids: int) -> pa.Table:
 
 
 def _create(client: TestClient, base: str, rows: pa.Table) -> tuple[str, str]:
-    table = f"mb${uuid.uuid4().hex[:12]}"
+    table = f"lance_catalog$mb${uuid.uuid4().hex[:12]}"
     created = client.post(f"/v1/table/{table}/create?data_base={base}", content=_ipc(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     return table, str(created.json()["location"])
@@ -120,11 +120,11 @@ def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner, owner_location = _create(two_store_catalog, plain_base, _ids(1, 2))
-    thief = f"mb$thief{uuid.uuid4().hex[:8]}"
+    thief = f"lance_catalog$mb$thief{uuid.uuid4().hex[:8]}"
     if second_table == "registered-over-a-renamed-tables-directory":
         # A holder no longer named is taken over once its lease has run, so the rename must keep the directory's claim
         # its table's ([[LH-215]]). The lease is spent at once here.
-        renamed = two_store_catalog.post(f"/v1/table/{owner}/rename", json={"new_table_name": f"{owner.partition('$')[2]}r"})
+        renamed = two_store_catalog.post(f"/v1/table/{owner}/rename", json={"new_table_name": f"{owner.rpartition('$')[2]}r"})
         assert renamed.status_code == 200, renamed.text
         monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
     if second_table == "registered-under-a-dropped-tables-name-over-its-directory":

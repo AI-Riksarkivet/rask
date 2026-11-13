@@ -122,27 +122,27 @@ def _uuid(catalog: Any, kind: str, name: str) -> str:
 
 @pytest.fixture
 def named(governed_catalog: Any, tmp_path: Path) -> Any:
-    """alice's namespace ``db`` holding ``db$inner``, a table ``db$t`` the catalog made and renamed ``db$u``, and a table
-    ``db$reg`` registered at a location of its registrar's (``ext/reg``, which names no uuid). The raw door grants bob
-    ``reader`` on ``db$t`` by name, and grants and revokes carol the same by name."""
+    """alice's namespace ``lance_catalog$db`` holding ``lance_catalog$db$inner``, a table ``lance_catalog$db$t`` the catalog made and renamed ``lance_catalog$db$u``, and a table
+    ``lance_catalog$db$reg`` registered at a location of its registrar's (``ext/reg``, which names no uuid). The raw door grants bob
+    ``reader`` on ``lance_catalog$db$t`` by name, and grants and revokes carol the same by name."""
     catalog = governed_catalog
     catalog.store.write(ROOT_OWNS_THE_ESTATE)
-    _ok(catalog, "/v1/namespace/db/create", json={})
-    _ok(catalog, "/v1/namespace/db$inner/create", json={})
-    _ok(catalog, "/v1/table/db$t/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    _ok(catalog, "/v1/namespace/lance_catalog$db$inner/create", json={})
+    _ok(catalog, "/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
     lance.write_dataset(_ROWS, str(tmp_path / "ext" / "reg"), data_storage_version="2.2", enable_stable_row_ids=True)
-    _ok(catalog, "/v1/table/db$reg/register", json={"location": "ext/reg"})
+    _ok(catalog, "/v1/table/lance_catalog$db$reg/register", json={"location": "ext/reg"})
     for door, user in (("post", "bob"), ("post", "carol"), ("delete", "carol")):
-        grant = {"user": catalog.person(user), "relation": "reader", "object": "table:db$t"}
+        grant = {"user": catalog.person(user), "relation": "reader", "object": "table:lance_catalog$db$t"}
         answered = catalog.client.request(door.upper(), TUPLES, json=grant, headers=catalog.bearer("root"))
         assert answered.status_code == 200, answered.text
-    _ok(catalog, "/v1/table/db$t/rename", json={"new_table_name": "u"})
+    _ok(catalog, "/v1/table/lance_catalog$db$t/rename", json={"new_table_name": "u"})
     return catalog
 
 
 def test_the_browser_names_each_table_and_namespace_as_it_is_named_now_filters_by_name_and_revokes_a_tuple_as_answered(named: Any) -> None:
-    table, registered = f"table:{_uuid(named, 'table', 'db$u')}", f"table:{_uuid(named, 'table', 'db$reg')}"
-    namespace, inner = f"namespace:{_uuid(named, 'namespace', 'db')}", f"namespace:{_uuid(named, 'namespace', 'db$inner')}"
+    table, registered = f"table:{_uuid(named, 'table', 'lance_catalog$db$u')}", f"table:{_uuid(named, 'table', 'lance_catalog$db$reg')}"
+    namespace, inner = f"namespace:{_uuid(named, 'namespace', 'lance_catalog$db')}", f"namespace:{_uuid(named, 'namespace', 'lance_catalog$db$inner')}"
 
     page = named.client.get(TUPLES, headers=named.bearer("root"))
 
@@ -150,21 +150,21 @@ def test_the_browser_names_each_table_and_namespace_as_it_is_named_now_filters_b
     alice, bob = named.person("alice"), named.person("bob")
     assert {(t["user"], t["relation"], t["object"], t["name"]) for t in page.json()["tuples"]} == {
         (fga.user_object("dex~root"), "owner", "estate:rask", None),
-        (alice, "owner", namespace, "db"),
-        (_WAREHOUSE, "parent", namespace, "db"),
+        (alice, "owner", namespace, "lance_catalog$db"),
+        (_WAREHOUSE, "parent", namespace, "lance_catalog$db"),
         (namespace, "child", _WAREHOUSE, None),
-        (alice, "owner", inner, "db$inner"),
-        (namespace, "parent", inner, "db$inner"),
-        (inner, "child", namespace, "db"),
-        (alice, "owner", table, "db$u"),
-        (bob, "reader", table, "db$u"),
-        (namespace, "parent", table, "db$u"),
-        (table, "child", namespace, "db"),
-        (alice, "owner", registered, "db$reg"),
-        (namespace, "parent", registered, "db$reg"),
-        (registered, "child", namespace, "db"),
+        (alice, "owner", inner, "lance_catalog$db$inner"),
+        (namespace, "parent", inner, "lance_catalog$db$inner"),
+        (inner, "child", namespace, "lance_catalog$db"),
+        (alice, "owner", table, "lance_catalog$db$u"),
+        (bob, "reader", table, "lance_catalog$db$u"),
+        (namespace, "parent", table, "lance_catalog$db$u"),
+        (table, "child", namespace, "lance_catalog$db"),
+        (alice, "owner", registered, "lance_catalog$db$reg"),
+        (namespace, "parent", registered, "lance_catalog$db$reg"),
+        (registered, "child", namespace, "lance_catalog$db"),
     }
-    by_name = named.client.get(TUPLES, params={"object": "table:db$u"}, headers=named.bearer("root")).json()
+    by_name = named.client.get(TUPLES, params={"object": "table:lance_catalog$db$u"}, headers=named.bearer("root")).json()
     assert by_name == named.client.get(TUPLES, params={"object": table}, headers=named.bearer("root")).json()
     assert {t["user"] for t in by_name["tuples"]} == {alice, bob, namespace}
     # A tuple sent back to the delete door exactly as the browser answered it, its name beside its object, is revoked.

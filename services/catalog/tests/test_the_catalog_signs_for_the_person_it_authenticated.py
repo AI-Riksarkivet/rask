@@ -67,7 +67,7 @@ SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 LINEAGE_TOPIC = "lineage.events.v1"
 #: The namespace the catalog keeps lineage's tables in, as the chart names it (`services.lineage.provenanceNamespace`).
-PROVENANCE = "provenance"
+PROVENANCE = "lance_catalog$provenance"
 
 
 def _person(key: str) -> PersonPrincipal:
@@ -189,9 +189,9 @@ def boot(tmp_path: Path, control_outbox: str, two_stores: Any, monkeypatch: pyte
 
 
 def _write_a_table_and_a_row(client: TestClient) -> None:
-    assert client.post("/v1/namespace/db/create", json={}).status_code == 200
-    assert client.post("/v1/table/db$t/create", content=_rows(0), headers=ARROW_STREAM).status_code == 200
-    assert client.post("/v1/table/db$t/insert", content=_rows(), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/create", content=_rows(0), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/insert", content=_rows(), headers=ARROW_STREAM).status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -243,7 +243,7 @@ def _made_natively(root: Path, table: list[str]) -> None:
     way, except the provenance namespace, which the catalog makes itself at boot (`catalog.services.provenance_namespace`)
     and which is waited for rather than raced: the `dir` backend answers a concurrent create 409 code 14."""
     namespace = connect("dir", {"root": str(root)})
-    if table[:-1] == [PROVENANCE]:
+    if table[:-1] == PROVENANCE.split("$"):
         deadline = time.monotonic() + 30
         while True:
             try:
@@ -268,7 +268,7 @@ def _version(root: Path, table: list[str]) -> int | None:
 
     A root no write has reached holds no ``__manifest``, and the `dir` backend answers a read of a child namespace there
     NamespaceNotFoundError, so the table does not exist either. The catalog writes the warehouse root's index first from
-    a background boot task (its provenance namespace, `catalog.main._ensure_provenance_namespace`), so after a refused
+    a background boot task (its provenance namespace, `catalog.main._ensure_estate_namespaces`), so after a refused
     write the index may or may not exist yet when this reads.
     """
     try:
@@ -280,10 +280,17 @@ def _version(root: Path, table: list[str]) -> int | None:
 @pytest.mark.parametrize(
     ("method", "door", "table", "answer", "version"),
     [
-        pytest.param("POST", "/v1/namespace/fresh/create", ["fresh", "t"], (503, 17), None, id="a-namespace-it-would-announce"),
-        pytest.param("POST", "/v1/namespace/describe%3F/create", ["describe?", "t"], (503, 17), None, id="a-namespace-whose-name-holds-a-question-mark"),
-        pytest.param("POST", "/v1/table/db$t/insert", ["db", "t"], (503, 17), 1, id="an-insert-it-would-announce"),
-        pytest.param("POST", f"/v1/table/{PROVENANCE}$feed/insert", [PROVENANCE, "feed"], (200, None), 2, id="an-insert-it-never-announces"),
+        pytest.param("POST", "/v1/namespace/lance_catalog$fresh/create", ["lance_catalog", "fresh", "t"], (503, 17), None, id="a-namespace-it-would-announce"),
+        pytest.param(
+            "POST",
+            "/v1/namespace/lance_catalog$describe%3F/create",
+            ["lance_catalog", "describe?", "t"],
+            (503, 17),
+            None,
+            id="a-namespace-whose-name-holds-a-question-mark",
+        ),
+        pytest.param("POST", "/v1/table/lance_catalog$db$t/insert", ["lance_catalog", "db", "t"], (503, 17), 1, id="an-insert-it-would-announce"),
+        pytest.param("POST", f"/v1/table/{PROVENANCE}$feed/insert", [*PROVENANCE.split("$"), "feed"], (200, None), 2, id="an-insert-it-never-announces"),
         # A DELETE is a write whatever it names: a project named like a read action is not read as one.
         pytest.param("DELETE", "/management/v1/projects/list", ["list", "t"], (503, 17), None, id="a-delete-of-an-object-named-like-a-read"),
     ],

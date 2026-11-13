@@ -13,32 +13,35 @@ So this seeds the same estate through the doors a human uses, in the order the h
 
     POST /management/v1/projects                        the estate admin mints the tenant
     POST /management/v1/warehouses                      a project admin gives it a bucket
-    POST /management/v1/warehouses/{id}/namespaces      the ONLY door for a top-level namespace
-    POST /v1/table/{ns}${name}/declare       the tables inside those namespaces
+    POST /v1/namespace/{warehouse}${ns}/create          the namespaces inside that warehouse
+    POST /v1/table/{warehouse}${ns}${name}/declare      the tables inside those namespaces
     POST /management/v1/projects/{id}/roles             each project's roles
     PUT  /management/v1/projects/{id}/roles/{role}/assignees   who is in each role
     POST /management/v1/access/tuples                   the extra grants, LAST
 
 Every guard therefore runs: an unknown tenant 404s at the warehouse door naming ``POST /management/v1/projects``,
-a top-level namespace has no door that does not name a warehouse, and a table cannot be declared outside
-a namespace. **A state that cannot be reached through the UI cannot be seeded here either** — which is
-the whole point, and the reason the grants go last: a grant whose object is a create that FAILED is
-skipped rather than written, because writing it is precisely how a ghost is made.
+a namespace's name begins with the warehouse it lives in, and a table cannot be declared outside a namespace.
+**A state that cannot be reached through the UI cannot be seeded here either** — which is the whole point, and the
+reason the grants go last: a grant whose object is a create that FAILED is skipped rather than written, because
+writing it is precisely how a ghost is made.
 
 THE ESTATE MIRRORS THE FGA FIXTURES (``lakehouse/governed/auth/model.fga.yaml``), the same set
 ``fga_seed_demo.py`` loads and CI asserts against, so this is a replacement rather than a toy: three
 projects, three warehouses, the bronze/silver/gold cascade under acme, each project's admins as a role of
 that project, a validators persona,
 and the users that exercise the interesting cases (a writer who is NOT a validator, a validator who
-reaches gold only through a role, a tenant member who is not an admin). Two deliberate differences:
+reaches gold only through a role, a tenant member who is not an admin). Three deliberate differences:
 
-* **Ids are DNS-safe.** The fixtures write ``warehouse:acme_bucket``; the catalog validates warehouse,
-  bucket and namespace ids against ``^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$``, so an underscore cannot be
-  created through the API at all. Underscores become hyphens.
+* **A warehouse is named for its tenant and holds its bucket.** The fixtures write ``warehouse:acme_bucket``;
+  here the warehouse is ``acme`` over the bucket ``acme-bucket``, because a warehouse's id is the first segment
+  of every name inside it, and ids are DNS-safe (``^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$``), so an underscore
+  cannot be created through the API at all.
+* **A namespace is named inside its warehouse.** The fixtures' ``namespace:acme_gold`` is ``acme$gold`` here:
+  the namespace ``gold`` of the warehouse ``acme``.
 * **A table or namespace is named by its PATH and granted on its uuid.** The fixtures name
   ``table:acme_silver_features`` as a flat illustrative id; a table created through the real door is named
-  ``<namespace>$<name>``, and OpenFGA holds its grants on the uuid the catalog minted for it (``table:<uuid>``,
-  ADR 0173 §8). This file names objects by path, so git never holds a minted uuid, and each grant resolves its
+  ``<warehouse>$<namespace>$<name>``, and OpenFGA holds its grants on the uuid the catalog minted for it
+  (``table:<uuid>``, ADR 0173 §8). This file names objects by path, so git never holds a minted uuid, and each grant resolves its
   object through DescribeTable or DescribeNamespace when it is sent.
 * **A role is named ``role:<project>/<name>``** and held by the uuid its project's role door mints ([[LH-557]]):
   the fixtures' ``role:acme_admins`` is ``role:acme/admins`` here, and each call naming a role resolves it through
@@ -55,9 +58,7 @@ maps, so it still makes the graph worth reading and still names an identity prov
 
 Idempotent by construction: project, warehouse and tuple creates are idempotent server-side, and the two
 that are not (namespace, table) treat an already-exists 409 as convergence and SAY so. Re-running over a
-partial seed is the normal case. But a 409 is tolerated for what it MEANS, never for its status alone: the
-namespace door answers the same error class and code for "already here" and for the two binding guards
-refusing a takeover, so those wordings (``BINDING_REFUSALS``) stay failures.
+partial seed is the normal case.
 
 Usage (against a reachable catalog — ``kubectl port-forward svc/rask-catalog 2333:2333``)::
 
@@ -120,23 +121,6 @@ DEMO_IDP = "demo"
 #: ``POST /management/v1/warehouses`` is a cross-tenant id/bucket collision — the guard's whole purpose — and
 #: swallowing it as "already there" would hide exactly the takeover it just refused.
 CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", "already exists")})
-#: Phrases that turn a TOLERATED status back into a failure.
-#:
-#: ``POST /management/v1/warehouses/{id}/namespaces`` answers 409 for FOUR different things, all of them the SAME
-#: ``NamespaceAlreadyExistsError`` (spec code 2): the namespace is already here (convergence — the normal
-#: re-run), the name is already bound to ANOTHER warehouse, it already exists unbound in the default
-#: root, or — observed live 2026-08-23 — its BYTES are already at THIS warehouse's root while its binding
-#: was never written. That fourth state reads as convergence here and is not: routing falls through to
-#: the default root, so every table declare then answers ``NamespaceNotFoundError`` for a namespace whose
-#: create just said "already exists" (measured: the acme tiers converged and two tables failed). It is
-#: the bytes-first migration mid-flight, and ``--adopt-existing`` is the door for it — the catalog runs
-#: the binding + FGA trailer the state is missing, without relaxing either guard below.
-#: The MIDDLE two are the binding guards refusing a takeover, and swallowing them is the ghost this
-#: script exists to stop making at its worst: the run would then declare tables into a bucket it does not
-#: own and write ``namespace:<name>#validator`` onto another tenant's namespace, and report success. Same
-#: class and same code, so the guard's own wording is the only discriminator there is, and a change to
-#: that wording in the catalog has to reach this tuple in the same commit.
-BINDING_REFUSALS: tuple[str, ...] = ("already bound to another warehouse", "already exists in the default root")
 #: An FGA-backed door (``/management/v1/access``, a project's roles) answers 406 ``Unsupported`` when the stack runs
 #: auth-off (``lakehouse.ns_errors``): there is no tuple store to seed, which is a legitimate local configuration, not a
 #: failure. Loud, never silent — the estate is then unguarded. What hangs off a skipped step is skipped with it.
@@ -152,7 +136,7 @@ ROLE_CREATE: Mapping[int, tuple[str, str]] = MappingProxyType({**CONVERGED, **FG
 
 @dataclass(frozen=True, slots=True)
 class Namespace:
-    """One top-level namespace bound to a warehouse, and the tables declared inside it."""
+    """One namespace of a warehouse, by its name inside the warehouse, and the tables declared inside it."""
 
     name: str
     tables: tuple[str, ...] = ()
@@ -160,8 +144,8 @@ class Namespace:
 
 @dataclass(frozen=True, slots=True)
 class Warehouse:
-    """One warehouse = one S3 bucket. ``bucket`` defaults to the id server-side; ``serving="gold"``
-    marks the project's gold serving warehouse."""
+    """One warehouse = one S3 bucket, and the first segment of every name inside it. ``bucket`` defaults to the id
+    server-side; ``serving="gold"`` marks the project's gold serving warehouse."""
 
     id: str
     namespaces: tuple[Namespace, ...] = ()
@@ -191,7 +175,7 @@ class Project:
 class Grant:
     """One raw tuple written through ``POST /management/v1/access/tuples`` after the objects exist.
 
-    A grant on a TABLE names it by its id, its PATH (``<namespace>$<name>``), and is written on the uuid DescribeTable
+    A grant on a TABLE names it by its id, its PATH (``<warehouse>$<namespace>$<name>``), and is written on the uuid DescribeTable
     answers for that id (ADR 0173 §8), after the declare that makes it: a tuple written against an object that does not
     exist is the ghost this whole script is built to stop making.
     """
@@ -218,32 +202,34 @@ DEMO_ESTATE = Estate(
             roles=(Role(name="admins", assignees=("user:bob",)), Role(name="validators", assignees=("user:carol",))),
             warehouses=(
                 Warehouse(
-                    id="acme-bucket",
+                    id="acme",
+                    bucket="acme-bucket",
                     namespaces=(
                         # The medallion tiers the fixtures describe. bronze holds no table there, and
                         # holding none here too keeps the two readable as the same estate.
-                        Namespace(name="acme-bronze"),
+                        Namespace(name="bronze"),
                         # The table layer POSTs `/declare` with `parent=namespace:<ns>`, which is the link
                         # a warehouse rung needs to reach the table.
-                        Namespace(name="acme-silver", tables=("features",)),
-                        Namespace(name="acme-gold", tables=("catalog",)),
+                        Namespace(name="silver", tables=("features",)),
+                        Namespace(name="gold", tables=("catalog",)),
                     ),
                 ),
             ),
         ),
         # bob administers research too, through research's own role: a role is one project's. Its warehouse carries no
         # namespaces, exactly as the fixtures leave it.
-        Project(id="research", roles=(Role(name="admins", assignees=("user:bob",)),), warehouses=(Warehouse(id="research-bucket"),)),
+        Project(id="research", roles=(Role(name="admins", assignees=("user:bob",)),), warehouses=(Warehouse(id="research", bucket="research-bucket"),)),
         Project(
             id="beta",
             roles=(Role(name="admins", assignees=("user:frank",)),),
             warehouses=(
                 Warehouse(
-                    id="beta-bucket",
+                    id="beta",
+                    bucket="beta-bucket",
                     # The MANAGED-ACCESS scope (C4). The fixtures put it on its OWN warehouse on purpose:
-                    # the flag changes who may grant, so setting it on acme-bucket would silently rewrite
+                    # the flag changes who may grant, so setting it on acme would silently rewrite
                     # every grant-axis expectation over there.
-                    namespaces=(Namespace(name="beta-locked", tables=("records",)),),
+                    namespaces=(Namespace(name="locked", tables=("records",)),),
                 ),
             ),
         ),
@@ -254,46 +240,46 @@ DEMO_ESTATE = Estate(
         Grant("role:research/admins#assignee", "admin", "project:research"),
         Grant("role:beta/admins#assignee", "admin", "project:beta"),
         # dave: a plain WRITER on the bucket — writes any stage, but is NOT a validator.
-        Grant("user:dave", "writer", "warehouse:acme-bucket"),
+        Grant("user:dave", "writer", "warehouse:acme"),
         # NO READ GRANT FOR A CLIENT'S OWN SERVICE ACCOUNT, and its absence is the control (Q17-8 / §F2-2 F2-4).
         # A client that sends its own identity when there is no session makes it the ANONYMOUS principal —
         # granting it reader on a tenant's tiers is granting the public those tiers. A human reads a tenant's
         # lineage with their OWN bearer; if a surface needs to be public, grant this subject that surface
         # explicitly and it becomes visible in the model.
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
-        Grant("role:acme/validators#assignee", "validator", "namespace:acme-gold"),
-        Grant("user:carol", "reader", "warehouse:acme-bucket"),
+        Grant("role:acme/validators#assignee", "validator", "namespace:acme$gold"),
+        Grant("user:carol", "reader", "warehouse:acme"),
         # gina: a plain tenant member (not via acme's admins role): listed in the tenant and granted no data rung.
         Grant("user:gina", "member", "project:acme"),
         # ---- UPWARD VISIBILITY (C1) --------------------------------------------------------------
         # ivan holds ONE grant, on ONE table. The containers above it become VISIBLE — the breadcrumb
         # to his own data resolves instead of 403ing — while a SIBLING stage stays invisible. This is
         # the only persona whose object is a table.
-        Grant("user:ivan", "reader", "table:acme-gold$catalog"),
+        Grant("user:ivan", "reader", "table:acme$gold$catalog"),
         # ---- THE GRANT AXIS (C2) — administering access is not the same as holding it -------------
         # judy: grant authority on the bucket and NO data rung — the access-review persona that was
         # unexpressible while granting was welded to `owner`.
-        Grant("user:judy", "manage_grants", "warehouse:acme-bucket"),
+        Grant("user:judy", "manage_grants", "warehouse:acme"),
         # kevin: a DELEGATE on the silver stage — a writer who may hand on exactly what he holds, and
         # no more.
-        Grant("user:kevin", "writer", "namespace:acme-silver"),
-        Grant("user:kevin", "pass_grants", "namespace:acme-silver"),
+        Grant("user:kevin", "writer", "namespace:acme$silver"),
+        Grant("user:kevin", "pass_grants", "namespace:acme$silver"),
         # leo: holds the grant OPTION and no rung — the option is worthless alone, by construction.
-        Grant("user:leo", "pass_grants", "namespace:acme-silver"),
+        Grant("user:leo", "pass_grants", "namespace:acme$silver"),
         # ---- MANAGED ACCESS (C4) -----------------------------------------------------------------
         # The flag, written as the ONE canonical tuple the catalog stores it as (`_MANAGED_ACCESS_SUBJECT`
         # in the catalog's access endpoints). `user:*` is a TYPE RESTRICTION used as a switch, not a
         # public grant: no rule reads it as "everyone", only `managed_access_inheritance` reads it at
         # all. It has a real door of its own (`POST /management/v1/warehouses/{id}/managed-access/set`), but that
-        # door is gated on `can_set_managed_access` HELD ON THE BUCKET, which is a tenant's relation and
+        # door is gated on `can_set_managed_access` HELD ON THE WAREHOUSE, which is a tenant's relation and
         # not a seed's; the raw tuple editor is where every other grant here goes and it accepts the
         # flag as the directly-assignable relation it is.
-        Grant("user:*", "managed_access", "warehouse:beta-bucket"),
+        Grant("user:*", "managed_access", "warehouse:beta"),
         # mona OWNS the stage inside the managed scope — which would normally carry the right to grant,
         # and under the flag does not. She keeps every data power.
-        Grant("user:mona", "owner", "namespace:beta-locked"),
+        Grant("user:mona", "owner", "namespace:beta$locked"),
         # nora is the records manager: grant authority at the warehouse, which the flag centralizes on her.
-        Grant("user:nora", "manage_grants", "warehouse:beta-bucket"),
+        Grant("user:nora", "manage_grants", "warehouse:beta"),
     ),
 )
 
@@ -321,9 +307,6 @@ class Step:
     key: str | None = None
     parents: tuple[str, ...] = ()
     tolerate: Mapping[int, tuple[str, str]] = MappingProxyType({})
-    #: Phrases in the problem body that REVOKE ``tolerate`` for this response. A tolerated status is not a
-    #: tolerated refusal — see ``BINDING_REFUSALS``.
-    refuses: tuple[str, ...] = ()
 
 
 def remap_subject(subject: str, principals: Mapping[str, str]) -> str:
@@ -357,9 +340,14 @@ def _namespace_pairs(estate: Estate) -> list[tuple[Warehouse, Namespace]]:
     return [(warehouse, namespace) for _, warehouse in _warehouse_pairs(estate) for namespace in warehouse.namespaces]
 
 
-def _table_pairs(estate: Estate) -> list[tuple[Namespace, str]]:
-    """Every ``(namespace, table name)`` in the estate — the table layer, flattened."""
-    return [(namespace, table) for _, namespace in _namespace_pairs(estate) for table in namespace.tables]
+def _table_pairs(estate: Estate) -> list[tuple[Warehouse, Namespace, str]]:
+    """Every ``(warehouse, namespace, table name)`` in the estate — the table layer, flattened."""
+    return [(warehouse, namespace, table) for warehouse, namespace in _namespace_pairs(estate) for table in namespace.tables]
+
+
+def namespace_id(warehouse: Warehouse, namespace: Namespace) -> str:
+    """The namespace's id, ``<warehouse>$<namespace>``: the first segment of every name is its warehouse."""
+    return f"{warehouse.id}{CATALOG_DELIMITER}{namespace.name}"
 
 
 def _warehouse_body(project: Project, warehouse: Warehouse) -> dict[str, object]:
@@ -373,7 +361,7 @@ def _warehouse_body(project: Project, warehouse: Warehouse) -> dict[str, object]
     return body
 
 
-def plan(estate: Estate, principals: Mapping[str, str], *, adopt_existing: bool = False) -> list[Step]:
+def plan(estate: Estate, principals: Mapping[str, str]) -> list[Step]:
     """The estate description flattened into calls, LAYER BY LAYER: projects, warehouses, namespaces,
     tables, then grants.
 
@@ -407,35 +395,33 @@ def plan(estate: Estate, principals: Mapping[str, str], *, adopt_existing: bool 
     steps.extend(
         Step(
             layer="namespace",
-            label=f"namespace {namespace.name} (in {warehouse.id})",
+            label=f"namespace {namespace_id(warehouse, namespace)}",
             method="POST",
-            # The warehouse-scoped route is the ONLY door for a top-level namespace:
-            # /v1/namespace/{id}/create refuses one outright (it cannot name a warehouse to bind it to),
-            # so a namespace created there would have nowhere for its bytes to land.
-            path=f"/management/v1/warehouses/{warehouse.id}/namespaces",
-            body={"namespace": namespace.name, **({"adopt_existing": True} if adopt_existing else {})},
-            key=f"namespace:{namespace.name}",
+            # The spec's own door: the id's first segment names the warehouse, so the namespace lands in its root.
+            # The spec's default mode, Create, answers 409 for a namespace already there, which is convergence.
+            path=f"/v1/namespace/{namespace_id(warehouse, namespace)}/create",
+            body={"id": [warehouse.id, namespace.name]},
+            key=f"namespace:{namespace_id(warehouse, namespace)}",
             parents=(f"warehouse:{warehouse.id}",),
             tolerate=CONVERGED,
-            refuses=BINDING_REFUSALS,
         )
         for warehouse, namespace in _namespace_pairs(estate)
     )
     steps.extend(
         Step(
             layer="table",
-            label=f"table {namespace.name}{CATALOG_DELIMITER}{table}",
+            label=f"table {namespace_id(warehouse, namespace)}{CATALOG_DELIMITER}{table}",
             method="POST",
             # `declare` and not `create`: it reserves an EMPTY table over JSON and seeds the same
             # ownership + lineage a create does, where `create` wants an Arrow stream. A seed's job is
             # that the object exists and is governed, not that it holds rows.
-            path=f"/v1/table/{namespace.name}{CATALOG_DELIMITER}{table}/declare",
-            body={"id": [namespace.name, table]},
-            key=f"table:{namespace.name}{CATALOG_DELIMITER}{table}",
-            parents=(f"namespace:{namespace.name}",),
+            path=f"/v1/table/{namespace_id(warehouse, namespace)}{CATALOG_DELIMITER}{table}/declare",
+            body={"id": [warehouse.id, namespace.name, table]},
+            key=f"table:{namespace_id(warehouse, namespace)}{CATALOG_DELIMITER}{table}",
+            parents=(f"namespace:{namespace_id(warehouse, namespace)}",),
             tolerate=CONVERGED,
         )
-        for namespace, table in _table_pairs(estate)
+        for warehouse, namespace, table in _table_pairs(estate)
     )
     steps.extend(
         Step(
@@ -501,8 +487,8 @@ class Outcome:
 def problem(response: httpx.Response) -> str:
     """The refusal in the guard's OWN words — the RFC 9457 ``title``/``detail``/``code``, not a bare status.
 
-    A seed exists to make a refusal legible: "409" says nothing, "NamespaceAlreadyExistsError [code 2]:
-    namespace 'acme-gold' is already bound to another warehouse" says what to do next.
+    A seed exists to make a refusal legible: "403" says nothing, "PermissionDeniedError [code 15]:
+    can_create_namespace required on warehouse:acme" says what to do next.
     """
     try:
         body = response.json()
@@ -560,9 +546,7 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
             continue
         note = problem(response)
         tolerated = step.tolerate.get(response.status_code)
-        # A tolerated STATUS is not a tolerated REFUSAL. The catalog answers a takeover guard with the same
-        # error class and code as "it is already here", so the phrase — not the status — decides.
-        if tolerated is not None and not any(phrase in note for phrase in step.refuses):
+        if tolerated is not None:
             state, word = tolerated
             print(f"  =  {step.label}: {word} ({note})")
             outcomes.append(Outcome(step, state, note))
@@ -726,7 +710,7 @@ def summarize(http: httpx.Client, estate: Estate) -> list[str]:
         # nobody checked is indistinguishable from one that is there.
         for warehouse_spec in project.warehouses:
             for namespace in warehouse_spec.namespaces:
-                _summarize_namespace(http, namespace, absent=absent)
+                _summarize_namespace(http, warehouse_spec, namespace, absent=absent)
     return problems
 
 
@@ -750,19 +734,20 @@ def _summarize_roles(http: httpx.Client, project: Project, *, absent: Callable[[
             absent(f"role {role.name} is absent from project {project.id}'s roles")
 
 
-def _summarize_namespace(http: httpx.Client, namespace: Namespace, *, absent: Callable[[str], None]) -> None:
+def _summarize_namespace(http: httpx.Client, warehouse: Warehouse, namespace: Namespace, *, absent: Callable[[str], None]) -> None:
     """Print one namespace's tables as the catalog lists them, reporting every declared table that is not there."""
-    payload, note = _read(http, f"/v1/namespace/{namespace.name}/table/list")
+    ident = namespace_id(warehouse, namespace)
+    payload, note = _read(http, f"/v1/namespace/{ident}/table/list")
     if not isinstance(payload, dict):
-        absent(note or f"namespace {namespace.name} could not be listed")
+        absent(note or f"namespace {ident} could not be listed")
         return
     tables = [str(name) for name in _as_list(_as_record(payload).get("tables"))]
-    print(f"    namespace {namespace.name}: {', '.join(tables) or '(no tables)'}")
+    print(f"    namespace {ident}: {', '.join(tables) or '(no tables)'}")
     for table in namespace.tables:
         # `list_tables` answers with names relative to the namespace; the qualified form is accepted too
         # rather than depending on which one a given catalog build returns.
-        if table not in tables and f"{namespace.name}{CATALOG_DELIMITER}{table}" not in tables:
-            absent(f"table {table} is absent from namespace {namespace.name}")
+        if table not in tables and f"{ident}{CATALOG_DELIMITER}{table}" not in tables:
+            absent(f"table {table} is absent from namespace {ident}")
 
 
 def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | None = None) -> int:
@@ -775,15 +760,6 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     parser.add_argument(
         "--map", action="append", default=[], metavar="NAME=PRINCIPAL", help="override a demo identity's principal, <idp-id>~<user id> (repeatable)"
     )
-    parser.add_argument(
-        "--adopt-existing",
-        action="store_true",
-        help=(
-            "converge a namespace whose BYTES are already in this warehouse's bucket but whose binding was "
-            "never written (the bytes-first migration mid-flight). Off by default: adopting is the hazard "
-            "the binding guards exist for, and it never relaxes them."
-        ),
-    )
     args = parser.parse_args(argv)
 
     principals = dict(DEX_PRINCIPALS)
@@ -794,7 +770,7 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
             return 1
         principals[name] = principal
 
-    steps = plan(DEMO_ESTATE, principals, adopt_existing=args.adopt_existing)
+    steps = plan(DEMO_ESTATE, principals)
     print(f"  {len(steps)} steps against {args.catalog}")
     print(f"  identities mapped to their principal: {', '.join(sorted(principals))}")
     print(f"  bearer: {'yes' if args.token else 'NO — assuming an auth-off stack'}")

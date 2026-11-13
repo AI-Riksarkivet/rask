@@ -1,14 +1,12 @@
-"""The estate table listing must SEE bound namespaces the native root enumeration cannot.
+"""The estate table listing walks every warehouse, and one that cannot be read costs only its own tables.
 
-Measured live 2026-08-07: the shipped ``dir`` backend answers per-namespace ``list_tables`` fine, but
-``list_namespaces`` at the ROOT yields nothing — a namespace is a ``__manifest`` row — so `GET /v1/table`
-said 2 of 9 while media/silver/alpha/beta held registered tables. What makes the listing complete is the
-BINDINGS registry: `list_all_tables` lists each bound ``top_ns`` through its own warehouse-rooted
-connection and merges that with the root rows and the native walk.
+`GET /v1/table` carries no ``{id}`` to route by, so `list_all_tables` walks each warehouse a name may begin with (the
+estate's own and every registered one) through that warehouse's own directory catalog, from the warehouse's row down
+([[LH-593]]). A namespace that cannot be listed is left out of its warehouse's walk, and a warehouse that cannot be
+reached is left out of the listing: neither blanks the registry.
 
-DRIVEN THROUGH `list_all_tables`, the route handler, because every property here is a property of the
-MERGE of those three ingredients. A test of the walk alone cannot see a merge that drops the bound
-seeds, and that is the half the live defect was in.
+DRIVEN THROUGH `list_all_tables`, the route handler, over real warehouse records: the property is the merge of the
+per-warehouse walks, which a test of one walk alone cannot see.
 """
 
 from __future__ import annotations
@@ -24,69 +22,63 @@ from lance_namespace import LanceNamespace, ListNamespacesRequest, ListNamespace
 from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
+from catalog.services import warehouses
 from lakehouse.storage_options import StorageOptions
 from tests.unit.named_resolver import NamedResolver
 
 
 class _DirLike:
-    """One connection in the measured live shape: per-namespace ``list_tables`` answers, and the root's
-    ``list_namespaces`` names only ``children`` — nothing at all by default, as the ``dir`` backend does."""
+    """One warehouse's directory catalog: ``tables`` and ``children`` keyed by the parent's full name, and ``unreadable``
+    a namespace whose ``list_tables`` raises."""
 
-    def __init__(self, tree: dict[str, list[str]], *, root_rows: tuple[str, ...] = (), children: tuple[str, ...] = (), unreadable: str = "") -> None:
-        self._tree = tree
-        self._root_rows = root_rows
+    def __init__(self, tables: dict[str, list[str]], children: dict[str, list[str]], *, unreadable: str = "") -> None:
+        self._tables = tables
         self._children = children
         self._unreadable = unreadable
 
-    def list_all_tables(self, req: ListTablesRequest) -> ListTablesResponse:
-        del req
-        return ListTablesResponse(tables=list(self._root_rows))
-
     def list_namespaces(self, req: ListNamespacesRequest) -> ListNamespacesResponse:
-        return ListNamespacesResponse(namespaces=[] if req.id else list(self._children))
+        return ListNamespacesResponse(namespaces=list(self._children.get("$".join(req.id or []), [])))
 
     def list_tables(self, req: ListTablesRequest) -> ListTablesResponse:
         name = "$".join(req.id or [])
         if name == self._unreadable:
             raise RuntimeError(f"manifest unreadable: {name}")
-        return ListTablesResponse(tables=list(self._tree.get(name, [])))
+        return ListTablesResponse(tables=list(self._tables.get(name, [])))
 
 
-_ROOT_ROWS = ("bronze$pages", "transcripts_v2$annotations")
-_WAREHOUSE = {"media": ["chunks", "documents"], "silver": ["vasa-publish", "consensus-live"]}
+_ESTATE = _DirLike({"lance_catalog$bronze": ["pages"]}, {"lance_catalog": ["bronze"]})
+_MEDIA = {"media$bronze": ["chunks", "documents"], "media$silver": ["consensus"]}
+_MEDIA_CHILDREN = {"media": ["bronze", "silver"]}
 
 
 def _settings(tmp_path: object) -> Settings:
     return Settings.model_validate({"root": f"file://{tmp_path}", "registry_root": f"file://{tmp_path}", "s3_access_key_id": "x", "s3_secret_access_key": "x"})
 
 
-def _list(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: object,
-    *,
-    root: _DirLike,
-    bound: dict[str, _DirLike | Exception],
-) -> list[str]:
-    """`GET /v1/table` over a root connection and a bindings registry naming ``bound``.
+def _list(monkeypatch: pytest.MonkeyPatch, tmp_path: object, catalogs: dict[str, _DirLike | Exception]) -> list[str]:
+    """`GET /v1/table` over the estate's catalog and a registry holding a record for every other warehouse in ``catalogs``.
 
-    Each bound ``top_ns`` resolves to its own connection — or raises, for a warehouse that cannot be
-    reached — through the same seam the route uses, so the merge under test is the production one.
+    Each warehouse resolves to its own catalog, or raises for one that cannot be reached, through the seam the route
+    uses, so the merge under test is the production one.
     """
+    settings = _settings(tmp_path)
+    for warehouse_id in catalogs:
+        if warehouse_id != settings.estate_warehouse:
+            record = {"id": warehouse_id, "bucket": f"{warehouse_id}-bkt", "root_uri": f"s3://{warehouse_id}-bkt", "project": "acme", "created_at": "t"}
+            warehouses.put_warehouse(settings.registry_root, StorageOptions(), record)
 
-    async def _resolve(request: Request, settings: Settings, top_ns: str) -> LanceNamespace:
+    async def _resolve(request: Request, settings: Settings, warehouse_id: str) -> LanceNamespace:
         del request, settings
-        target = bound[top_ns]
+        target = catalogs[warehouse_id]
         if isinstance(target, Exception):
             raise target
         return cast(LanceNamespace, target)
 
-    monkeypatch.setattr(t_ep.warehouses, "list_bindings", lambda *_a, **_kw: [{"top_ns": top} for top in bound])
-    monkeypatch.setattr(t_ep, "namespace_for_top_ns", _resolve)
+    monkeypatch.setattr(t_ep, "namespace_for_warehouse", _resolve)
     response = asyncio.run(
         t_ep.list_all_tables(
             request=cast(Request, SimpleNamespace()),
-            ns=cast(LanceNamespace, root),
-            settings=_settings(tmp_path),
+            settings=settings,
             so=StorageOptions(),
             token=None,
             client=None,
@@ -97,31 +89,19 @@ def _list(
     return list(response.tables or [])
 
 
-def test_a_namespace_reachable_both_ways_is_reported_once(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
-    """A namespace the root CAN name and that is also bound reaches the merge twice — never two rows."""
-    root = _DirLike(_WAREHOUSE, children=("media",))
+def test_one_unreadable_namespace_does_not_blank_the_listing(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    """A namespace whose ``list_tables`` raises costs that namespace, not its warehouse's other tables."""
+    got = _list(monkeypatch, tmp_path, {"lance_catalog": _ESTATE, "media": _DirLike(_MEDIA, _MEDIA_CHILDREN, unreadable="media$silver")})
 
-    got = _list(monkeypatch, tmp_path, root=root, bound={"media": _DirLike(_WAREHOUSE)})
-
-    assert got.count("media$chunks") == 1, got
+    assert got == ["lance_catalog$bronze$pages", "media$bronze$chunks", "media$bronze$documents"]
 
 
-def test_one_unreadable_native_namespace_does_not_blank_the_listing(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
-    """A native child whose ``list_tables`` raises costs that namespace, not the registry page."""
-    root = _DirLike(_WAREHOUSE, root_rows=_ROOT_ROWS, children=("media", "silver"), unreadable="silver")
-
-    got = _list(monkeypatch, tmp_path, root=root, bound={})
-
-    assert got == sorted([*_ROOT_ROWS, "media$chunks", "media$documents"])
-
-
-def test_one_unreachable_bound_warehouse_does_not_blank_the_listing(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
-    """A bound seed that cannot be resolved costs that warehouse's tables, not every other tenant's."""
+def test_one_unreachable_warehouse_does_not_blank_the_listing(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
+    """A warehouse that cannot be reached costs that warehouse's tables, not every other tenant's."""
     got = _list(
         monkeypatch,
         tmp_path,
-        root=_DirLike({}, root_rows=_ROOT_ROWS),
-        bound={"media": _DirLike(_WAREHOUSE), "silver": RuntimeError("warehouse deactivated")},
+        {"lance_catalog": _ESTATE, "media": _DirLike(_MEDIA, _MEDIA_CHILDREN), "vault": RuntimeError("warehouse deactivated")},
     )
 
-    assert got == sorted([*_ROOT_ROWS, "media$chunks", "media$documents"])
+    assert got == ["lance_catalog$bronze$pages", "media$bronze$chunks", "media$bronze$documents", "media$silver$consensus"]

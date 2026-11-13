@@ -136,7 +136,7 @@ def reclaim(rustfs_store: ThrowawayStore) -> _Reclaim:
     control_root, table_uuid, other_uuid = f"s3://{control}", str(uuid.uuid4()), str(uuid.uuid4())
     past = datetime.now(UTC) - timedelta(days=2)
     # Released, as the catalog's release door leaves a record: the purge takes only released records (`purge.due_from`).
-    record = trash.make_record(f"ns${name}", uuid=table_uuid, location=location, dropped_by=None, grace_days=1, now=past)
+    record = trash.make_record(f"lance_catalog$ns${name}", uuid=table_uuid, location=location, dropped_by=None, grace_days=1, now=past)
     trash.put(control_root, own, {**record, trash.RELEASED_AT: (datetime.now(UTC) - timedelta(minutes=1)).isoformat()})
     for key in (
         record_key("_protection", "table", table_uuid),
@@ -156,7 +156,7 @@ def reclaim(rustfs_store: ThrowawayStore) -> _Reclaim:
         store=rustfs_store,
         control=control,
         data=data,
-        table=f"ns${name}",
+        table=f"lance_catalog$ns${name}",
         uuid=table_uuid,
         location=location,
         other_record=record_key("_protection", "table", other_uuid),

@@ -35,8 +35,8 @@ _ROWS = encode_arrow_stream(
     )
 )
 _QUERY = {"k": 10, "vector": {"single_vector": []}, "columns": {"column_names": ["id"]}}
-_TABLE = "/v1/table/db$t"
-_MANAGED = "/management/v1/table/db$t"
+_TABLE = "/v1/table/lance_catalog$db$t"
+_MANAGED = "/management/v1/table/lance_catalog$db$t"
 
 
 class _Expected(BaseModel):
@@ -230,7 +230,7 @@ def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_
 ) -> None:
     catalog = governed_catalog
     catalog.client.app.dependency_overrides[get_vendor] = _StsVendor
-    assert catalog.client.post("/v1/namespace/db/create", json={}, headers=catalog.bearer("alice")).status_code == 200
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
     configure_audit(enabled=True)
     trail.clear()
 

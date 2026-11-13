@@ -7,6 +7,8 @@ table, which ``model.fga.yaml`` pins rule by rule. Here the door is driven on th
 own ([[LH-235]]):
 
 - a writer cannot bring a table into a managed namespace, and an owner inside one cannot take a table out;
+- a rename keeps a table in its warehouse, whose root holds its bytes ([[LH-593]]): one into another warehouse is
+  refused 400 and changes nothing;
 - a rename that keeps its namespace asks on it what a create asks there;
 - however a rename into another namespace ends, the table inherits from the namespace it is named in, and is named a
   child of no other. Its parent edge moves while the rename holds the table's location claim, in one write and before
@@ -110,7 +112,9 @@ def _edges(child: str, parent: str) -> tuple[tuple[str, str, str], tuple[str, st
 
 def _move(catalog: Any, table: str, namespace: str, caller: str = "alice", *, name: str | None = None) -> Any:
     """Rename ``table`` into ``namespace``, under its own name unless ``name`` gives another."""
-    return _post(catalog, f"/v1/table/{table}/rename", caller, json={"new_namespace_id": [namespace], "new_table_name": name or table.rsplit("$", 1)[-1]})
+    return _post(
+        catalog, f"/v1/table/{table}/rename", caller, json={"new_namespace_id": namespace.split("$"), "new_table_name": name or table.rsplit("$", 1)[-1]}
+    )
 
 
 @pytest.fixture
@@ -118,19 +122,29 @@ def estate(governed_catalog: Any) -> Any:
     """alice's namespaces ``open`` and ``managed``, the second under managed access; bob writes in both, and erin reads
     ``open`` and dave ``managed``."""
     for namespace in ("open", "managed"):
-        _ok(governed_catalog, f"/v1/namespace/{namespace}/create", json={})
-        _ok(governed_catalog, f"/management/v1/namespace/{namespace}/access/grant", json={"user": "dex~bob", "relation": "writer"})
-    _ok(governed_catalog, "/management/v1/namespace/open/access/grant", json={"user": "dex~erin", "relation": "reader"})
-    _ok(governed_catalog, "/management/v1/namespace/managed/access/grant", json={"user": "dex~dave", "relation": "reader"})
-    _ok(governed_catalog, "/management/v1/namespace/managed/managed-access/set", json={"enabled": True})
+        assert governed_catalog.create_in_the_estate("alice", namespace).status_code == 200
+        _ok(governed_catalog, f"/management/v1/namespace/lance_catalog${namespace}/access/grant", json={"user": "dex~bob", "relation": "writer"})
+    _ok(governed_catalog, "/management/v1/namespace/lance_catalog$open/access/grant", json={"user": "dex~erin", "relation": "reader"})
+    _ok(governed_catalog, "/management/v1/namespace/lance_catalog$managed/access/grant", json={"user": "dex~dave", "relation": "reader"})
+    _ok(governed_catalog, "/management/v1/namespace/lance_catalog$managed/managed-access/set", json={"enabled": True})
     return governed_catalog
 
 
 @pytest.mark.parametrize(
     ("source", "destination", "refusal"),
     [
-        pytest.param("open", "managed", "can_accept_moved_table required on namespace:managed", id="a-writer-brings-no-table-into-a-managed-namespace"),
-        pytest.param("managed", "open", "can_move required on table:managed$t", id="an-owner-inside-a-managed-namespace-takes-no-table-out"),
+        pytest.param(
+            "lance_catalog$open",
+            "lance_catalog$managed",
+            "can_accept_moved_table required on namespace:lance_catalog$managed",
+            id="a-writer-brings-no-table-into-a-managed-namespace",
+        ),
+        pytest.param(
+            "lance_catalog$managed",
+            "lance_catalog$open",
+            "can_move required on table:lance_catalog$managed$t",
+            id="an-owner-inside-a-managed-namespace-takes-no-table-out",
+        ),
     ],
 )
 def test_a_move_across_a_managed_boundary_is_refused_to_a_mover_without_grant_authority(estate: Any, source: str, destination: str, refusal: str) -> None:
@@ -145,17 +159,32 @@ def test_a_move_across_a_managed_boundary_is_refused_to_a_mover_without_grant_au
 
 
 def test_a_rename_within_its_namespace_asks_what_a_create_asks_there(estate: Any) -> None:
-    _create_table(estate, "open$t", caller="bob")
-    _ok(estate, "/management/v1/namespace/open/access/revoke", json={"user": "dex~bob", "relation": "writer"})
+    _create_table(estate, "lance_catalog$open$t", caller="bob")
+    _ok(estate, "/management/v1/namespace/lance_catalog$open/access/revoke", json={"user": "dex~bob", "relation": "writer"})
 
-    refused = _post(estate, "/v1/table/open$t/rename", "bob", json={"new_table_name": "u"})
+    refused = _post(estate, "/v1/table/lance_catalog$open$t/rename", "bob", json={"new_table_name": "u"})
 
     assert (refused.status_code, refused.json()["code"], refused.json()["detail"]) == (
         403,
         ErrorCode.PERMISSION_DENIED.value,
-        "can_create_table required on namespace:open",
+        "can_create_table required on namespace:lance_catalog$open",
     ), refused.text
-    _ok(estate, "/v1/table/open$t/describe", "bob", json={})
+    _ok(estate, "/v1/table/lance_catalog$open$t/describe", "bob", json={})
+
+
+def test_a_rename_into_another_warehouse_is_refused_and_changes_nothing(estate: Any) -> None:
+    _create_table(estate, "lance_catalog$open$t")
+    held = estate.store.tuples()
+
+    refused = _move(estate, "lance_catalog$open$t", "acme-wh$open")
+
+    assert (refused.status_code, refused.headers["content-type"], refused.json()["code"]) == (
+        400,
+        "application/problem+json",
+        ErrorCode.INVALID_INPUT.value,
+    ), refused.text
+    assert estate.store.tuples() == held, "the refused rename wrote or removed a tuple"
+    _ok(estate, "/v1/table/lance_catalog$open$t/describe", json={})
 
 
 class _Scene(NamedTuple):
@@ -189,7 +218,7 @@ def _land_before(scene: _Scene, method: str, rival: Callable[[], object]) -> Non
 
 
 def _the_destination_is_dropped_as_the_name_is_registered(scene: _Scene) -> None:
-    _land_before(scene, "register_table", lambda: _ok(scene.estate, "/v1/namespace/managed/drop", json={}))
+    _land_before(scene, "register_table", lambda: _ok(scene.estate, "/v1/namespace/lance_catalog$managed/drop", json={}))
 
 
 def _the_backend_does_not_detach_the_source(scene: _Scene) -> None:
@@ -209,7 +238,7 @@ def _a_rival_rename_takes_the_claim_first(scene: _Scene, *, into: str) -> None:
         # Disarmed before the rival sends anything: its own rename hands the claim over through this too.
         if pending:
             pending.clear()
-            moved = _move(scene.estate, "open$t", into, name="u")
+            moved = _move(scene.estate, "lance_catalog$open$t", into, name="u")
             assert moved.status_code == 200, moved.text
         return hand_over(*args, **kwargs)
 
@@ -255,15 +284,15 @@ def _openfga_gives_no_answer_as_the_child_edge_is_taken_away(scene: _Scene) -> N
 
 
 def _a_rival_rename_lands_as_it_arrives(scene: _Scene) -> None:
-    _ok(scene.estate, "/v1/namespace/third/create", json={})
-    arriving, pending = (scene.table, "child", scene.space("managed")), [True]
+    assert scene.estate.create_in_the_estate("alice", "third").status_code == 200
+    arriving, pending = (scene.table, "child", scene.space("lance_catalog$managed")), [True]
 
     async def _rival_before_the_arrival(send: Callable[[], Any], body: Any) -> object:
         # The arrival's Write names the table a child of the namespace it entered. The rival lands before it, when the
         # name is registered and the rename still holds the claim; disarmed first, as its own rename writes through this.
         if pending and any((held.user, held.relation, held.object) == arriving for held in body.writes or ()):
             pending.clear()
-            await asyncio.to_thread(_move, scene.estate, "managed$t", "third")
+            await asyncio.to_thread(_move, scene.estate, "lance_catalog$managed$t", "lance_catalog$third")
         return await send()
 
     _answering(scene, _rival_before_the_arrival)
@@ -293,7 +322,7 @@ def _a_rename_into_managed_dies_as_it_reaches_the_backend(scene: _Scene) -> None
 
     scene.monkeypatch.setattr(dataplane, "rename_table", _until_it_dies)
     _land_before(scene, "deregister_table", _die)
-    died = _move(scene.estate, "open$t", "managed")
+    died = _move(scene.estate, "lance_catalog$open$t", "lance_catalog$managed")
     assert died.status_code == 503, died.text
 
 
@@ -304,7 +333,7 @@ def _an_earlier_rename_moved_the_parent_edge_and_went_no_further(scene: _Scene) 
 
 
 def _it_inherits_from_both_namespaces(scene: _Scene) -> None:
-    scene.estate.store.write(_edges(scene.table, scene.space("managed"))[0])
+    scene.estate.store.write(_edges(scene.table, scene.space("lance_catalog$managed"))[0])
 
 
 @pytest.mark.parametrize(
@@ -313,81 +342,81 @@ def _it_inherits_from_both_namespaces(scene: _Scene) -> None:
         pytest.param(
             _the_destination_is_dropped_as_the_name_is_registered,
             (404, ErrorCode.NAMESPACE_NOT_FOUND.value),
-            "open$t",
-            {"open"},
-            {"open"},
+            "lance_catalog$open$t",
+            {"lance_catalog$open"},
+            {"lance_catalog$open"},
             {"erin"},
             id="a-table-between-its-names-outlives-the-namespace-it-was-entering-and-its-edge-is-put-back",
         ),
         pytest.param(
             _the_backend_does_not_detach_the_source,
             (503, ErrorCode.SERVICE_UNAVAILABLE.value),
-            "open$t",
-            {"open"},
-            {"open"},
+            "lance_catalog$open$t",
+            {"lance_catalog$open"},
+            {"lance_catalog$open"},
             {"erin"},
             id="a-rename-whose-source-is-not-detached-puts-the-edge-back",
         ),
         pytest.param(
-            partial(_a_rival_rename_takes_the_claim_first, into="managed"),
+            partial(_a_rival_rename_takes_the_claim_first, into="lance_catalog$managed"),
             (409, ErrorCode.CONCURRENT_MODIFICATION.value),
-            "managed$u",
-            {"managed"},
-            {"managed"},
+            "lance_catalog$managed$u",
+            {"lance_catalog$managed"},
+            {"lance_catalog$managed"},
             {"dave"},
             id="the-rename-that-wins-the-claim-moves-the-edge-and-the-one-that-loses-it-leaves-it-there",
         ),
         pytest.param(
-            partial(_a_rival_rename_takes_the_claim_first, into="open"),
+            partial(_a_rival_rename_takes_the_claim_first, into="lance_catalog$open"),
             (409, ErrorCode.CONCURRENT_MODIFICATION.value),
-            "open$u",
-            {"open"},
-            {"open"},
+            "lance_catalog$open$u",
+            {"lance_catalog$open"},
+            {"lance_catalog$open"},
             {"erin"},
             id="a-rename-that-loses-the-claim-has-moved-no-edge",
         ),
         pytest.param(
             _the_answer_to_the_move_is_lost,
             (503, ErrorCode.SERVICE_UNAVAILABLE.value),
-            "open$t",
-            {"open"},
-            {"open"},
+            "lance_catalog$open$t",
+            {"lance_catalog$open"},
+            {"lance_catalog$open"},
             {"erin"},
             id="a-move-whose-answer-is-lost-is-put-back",
         ),
         pytest.param(
             _openfga_gives_no_answer_as_the_child_edge_is_taken_away,
             (503, ErrorCode.SERVICE_UNAVAILABLE.value),
-            "open$t",
-            {"open"},
-            {"open"},
+            "lance_catalog$open$t",
+            {"lance_catalog$open"},
+            {"lance_catalog$open"},
             {"erin"},
             id="a-move-that-openfga-stops-answering-part-way-is-put-back",
         ),
         pytest.param(
             _an_earlier_rename_moved_the_parent_edge_and_went_no_further,
             (200, None),
-            "managed$t",
-            {"managed"},
-            {"managed"},
+            "lance_catalog$managed$t",
+            {"lance_catalog$managed"},
+            {"lance_catalog$managed"},
             {"dave"},
             id="a-move-that-went-no-further-is-finished-by-asking-again",
         ),
         pytest.param(
             _it_inherits_from_both_namespaces,
             (200, None),
-            "managed$t",
-            {"managed"},
-            {"managed"},
+            "lance_catalog$managed$t",
+            {"lance_catalog$managed"},
+            {"lance_catalog$managed"},
             {"dave"},
             id="a-table-inheriting-from-both-namespaces-is-left-inheriting-from-the-one-it-enters",
         ),
         pytest.param(
             _a_rival_rename_lands_as_it_arrives,
             (200, None),
-            "managed$t",
-            {"managed"},
-            {"managed"},
+            "lance_catalog$managed$t",
+            {"lance_catalog$managed"},
+            {"lance_catalog$managed"},
             {"dave"},
             id="a-rival-rename-landed-as-it-arrives-moves-nothing",
         ),
@@ -406,11 +435,11 @@ def test_however_a_rename_into_another_namespace_ends_the_table_inherits_from_th
     from catalog.core.config import get_settings
     from catalog.services import table_claims
 
-    location = str(_create_table(estate, "open$t")["location"])
-    scene = _Scene(estate, monkeypatch, _object(estate, "table", "open$t"))
+    location = str(_create_table(estate, "lance_catalog$open$t")["location"])
+    scene = _Scene(estate, monkeypatch, _object(estate, "table", "lance_catalog$open$t"))
     found(scene)
 
-    answered = _move(estate, "open$t", "managed")
+    answered = _move(estate, "lance_catalog$open$t", "lance_catalog$managed")
 
     assert (answered.status_code, answered.json().get("code")) == answer, answered.text
     assert _object(estate, "table", named) == scene.table, f"the table is not the one named {named}"
@@ -431,7 +460,7 @@ def _a_rename_left_it_half_moved(scene: _Scene) -> set[tuple[str, str, str]]:
 def _it_inherits_from_nowhere(scene: _Scene) -> set[tuple[str, str, str]]:
     """The table's link to the namespace it is named in is gone, as a create that died before its seed leaves it: the
     link it lacks."""
-    link = set(_edges(scene.table, scene.space("open")))
+    link = set(_edges(scene.table, scene.space("lance_catalog$open")))
     scene.estate.store.delete(*link)
     return link
 
@@ -447,7 +476,7 @@ def _a_create_lands_first(scene: _Scene) -> set[tuple[str, str, str]]:
         # Disarmed before the winner sends anything: its own create declares through this too.
         if pending:
             pending.clear()
-            _create_table(scene.estate, "open$r")
+            _create_table(scene.estate, "lance_catalog$open$r")
         return declare(*args, **kwargs)
 
     scene.monkeypatch.setattr(dataplane, "declare_table", _declared_after_the_winner)
@@ -464,12 +493,12 @@ def _the_link_it_lacks(_scene: _Scene, lacking: set[tuple[str, str, str]]) -> se
 
 def _the_winners_own(scene: _Scene, _lacking: set[tuple[str, str, str]]) -> set[tuple[str, str, str]]:
     """What the create that won the race wrote, read once the door answered: alice owns ``open$r``, linked to ``open``."""
-    won = _object(scene.estate, "table", "open$r")
-    return {*_edges(won, scene.space("open")), ("user:dex~alice", "owner", won)}
+    won = _object(scene.estate, "table", "lance_catalog$open$r")
+    return {*_edges(won, scene.space("lance_catalog$open")), ("user:dex~alice", "owner", won)}
 
 
 _ARROW = {"content": _ROWS, "headers": {"Content-Type": ARROW_STREAM_MEDIA_TYPE}}
-_REGISTERED_AGAIN = ("/v1/table/open$t/register", {"json": {"location": "held"}}, (409, ErrorCode.TABLE_ALREADY_EXISTS.value))
+_REGISTERED_AGAIN = ("/v1/table/lance_catalog$open$t/register", {"json": {"location": "held"}}, (409, ErrorCode.TABLE_ALREADY_EXISTS.value))
 
 
 #: Each door that finds a table standing under the name it is asked for, and so brings none into being. A registration
@@ -484,7 +513,7 @@ _REGISTERED_AGAIN = ("/v1/table/open$t/register", {"json": {"location": "held"}}
         pytest.param("bob", *_REGISTERED_AGAIN, _it_inherits_from_nowhere, _nothing, id="a-registration-made-again-of-a-table-that-inherits-from-nowhere"),
         pytest.param(
             "bob",
-            "/v1/table/open$t/create?mode=exist_ok",
+            "/v1/table/lance_catalog$open$t/create?mode=exist_ok",
             _ARROW,
             (200, None),
             _it_inherits_from_nowhere,
@@ -493,7 +522,7 @@ _REGISTERED_AGAIN = ("/v1/table/open$t/register", {"json": {"location": "held"}}
         ),
         pytest.param(
             "bob",
-            "/v1/table/open$r/create?mode=exist_ok",
+            "/v1/table/lance_catalog$open$r/create?mode=exist_ok",
             _ARROW,
             (200, None),
             _a_create_lands_first,
@@ -502,7 +531,7 @@ _REGISTERED_AGAIN = ("/v1/table/open$t/register", {"json": {"location": "held"}}
         ),
         pytest.param(
             "alice",
-            "/v1/table/open$t/create?mode=overwrite",
+            "/v1/table/lance_catalog$open$t/create?mode=overwrite",
             _ARROW,
             (200, None),
             _a_rename_left_it_half_moved,
@@ -524,8 +553,8 @@ def test_a_door_that_finds_a_table_standing_grants_nothing_and_a_refused_registr
 ) -> None:
     # A registered table, since only a registered table's location can be registered again.
     lance.write_dataset(pa.ipc.open_stream(_ROWS).read_all(), str(tmp_path / "held"), data_storage_version="2.2", enable_stable_row_ids=True)
-    _ok(estate, "/v1/table/open$t/register", json={"location": "held"})
-    scene = _Scene(estate, monkeypatch, _object(estate, "table", "open$t"))
+    _ok(estate, "/v1/table/lance_catalog$open$t/register", json={"location": "held"})
+    scene = _Scene(estate, monkeypatch, _object(estate, "table", "lance_catalog$open$t"))
     lacking = found(scene)
     held = estate.store.tuples()
 
@@ -573,18 +602,18 @@ class _Rival(NamedTuple):
 
 
 def _rename_into_managed(estate: Any, name: str) -> tuple[int, int | None]:
-    answered = _move(estate, f"open${name}", "managed")
+    answered = _move(estate, f"lance_catalog$open${name}", "lance_catalog$managed")
     return answered.status_code, answered.json().get("code")
 
 
 def _drop_and_make_again(estate: Any, name: str) -> tuple[int, int | None]:
-    dropped = _post(estate, f"/v1/table/open${name}/drop", "alice", json={})
-    answered = _post(estate, f"/v1/table/open${name}/create", "alice", **_ARROW) if dropped.status_code == 200 else dropped
+    dropped = _post(estate, f"/v1/table/lance_catalog$open${name}/drop", "alice", json={})
+    answered = _post(estate, f"/v1/table/lance_catalog$open${name}/create", "alice", **_ARROW) if dropped.status_code == 200 else dropped
     return answered.status_code, answered.json().get("code")
 
 
-_RENAMED_OUT = _Rival(_rename_into_managed, "managed", the_listed_table=True)
-_MADE_AGAIN = _Rival(_drop_and_make_again, "open", the_listed_table=False)
+_RENAMED_OUT = _Rival(_rename_into_managed, "lance_catalog$managed", the_listed_table=True)
+_MADE_AGAIN = _Rival(_drop_and_make_again, "lance_catalog$open", the_listed_table=False)
 _DONE = (200, None)
 _REFUSED = (409, ErrorCode.CONCURRENT_MODIFICATION.value)
 
@@ -621,9 +650,9 @@ def test_a_cascade_removes_each_listed_table_under_its_fence_and_none_that_left_
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", trash_grace_days)
     get_settings.cache_clear()
     recoverable = trash_grace_days != "0"
-    stored = {name: Path(urlsplit(str(_create_table(estate, f"open${name}")["location"])).path) for name in ("a", "t")}
+    stored = {name: Path(urlsplit(str(_create_table(estate, f"lance_catalog$open${name}")["location"])).path) for name in ("a", "t")}
     assert all(path.exists() for path in stored.values()), "a table holds no object, so its removal would prove nothing"
-    listed = {name: _object(estate, "table", f"open${name}") for name in stored}
+    listed = {name: _object(estate, "table", f"lance_catalog$open${name}") for name in stored}
     held = {name: _naming(estate, obj) for name, obj in listed.items()}
     answered: dict[str, tuple[int, int | None]] = {}
 
@@ -633,14 +662,14 @@ def test_a_cascade_removes_each_listed_table_under_its_fence_and_none_that_left_
 
     lands(_Scene(estate, monkeypatch, listed["t"]), _act_on_both)
 
-    dropped = _post(estate, "/v1/namespace/open/drop", "alice", json={"behavior": "Cascade"})
+    dropped = _post(estate, "/v1/namespace/lance_catalog$open/drop", "alice", json={"behavior": "Cascade"})
 
     assert sorted(answered.values(), key=str) == answers, answered
     left = [name for name in listed if answered[name] == _DONE]
     taken = [name for name in listed if name not in left]
-    names = [f"{namespace}${name}" for namespace in ("open", "managed") for name in listed]
+    names = [f"{namespace}${name}" for namespace in ("lance_catalog$open", "lance_catalog$managed") for name in listed]
     standing = {name: _object(estate, "table", name) for name in names if _post(estate, f"/v1/table/{name}/describe", "alice", json={}).status_code == 200}
-    tasks = {name: estate.client.get(f"/management/v1/table/open${name}/tasks", headers=estate.bearer("alice")) for name in listed}
+    tasks = {name: estate.client.get(f"/management/v1/table/lance_catalog$open${name}/tasks", headers=estate.bearer("alice")) for name in listed}
     tracked = [name for name, answer in tasks.items() if answer.status_code == 200 and answer.json()]
     # A table the cascade was removing went with it: its row and bytes when it destroys, and its grants once the cascade
     # has finished; into the trash with its bytes and grants when it is recoverable. One the other request reached

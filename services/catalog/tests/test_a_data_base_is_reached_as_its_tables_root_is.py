@@ -65,7 +65,7 @@ def _rows(content: bytes) -> list[tuple[int, str]]:
 def test_every_door_serves_a_table_whose_fragments_sit_on_a_data_base(
     two_store_catalog: TestClient, second_base: str, door: str, body: dict[str, object] | None, expected: object
 ) -> None:
-    table = f"mb${uuid.uuid4().hex[:12]}"
+    table = f"lance_catalog$mb${uuid.uuid4().hex[:12]}"
     created = two_store_catalog.post(f"/v1/table/{table}/create?data_base={second_base}", content=_ipc(ROWS), headers=ARROW)
     assert created.status_code == 200, created.text
     replaced = two_store_catalog.post(f"/v1/table/{table}/create?mode=overwrite&data_base={second_base}", content=_ipc(REPLACED), headers=ARROW)

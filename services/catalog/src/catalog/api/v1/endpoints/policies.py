@@ -19,8 +19,8 @@ so — like the #17 model routes — these endpoints gate EXPLICITLY, on ``proje
 too rather than checking a phantom relation, which would 400 → fail-closed 503 for everyone).
 
 The #65 project-scoped LIST (``GET /management/v1/projects/{id}/policies``) is the tenant's VIEW of all three tiers
-at once. It names a table record as its table is named now and scopes each record by that name (top-level segment →
-namespace binding → warehouse → project).
+at once. It names a table record as its table is named now and scopes each record by that name (its first segment is
+its warehouse, whose record names its project, [[LH-593]]).
 """
 
 from __future__ import annotations
@@ -333,15 +333,14 @@ def _with_current_name(store: ClaimStore, record: dict[str, Any]) -> dict[str, A
     return None if name is None else {**record, "id": name}
 
 
-def _scoped_to_project(record: dict[str, Any], *, namespaces: frozenset[str], project: str) -> bool:
+def _scoped_to_project(record: dict[str, Any], *, warehouse_ids: frozenset[str], project: str) -> bool:
     """Whether one stored policy record governs data inside ``project``.
 
     A ``project`` record matches by ID and by nothing else — matching it on buckets would surface a rival
     tenant's project record the moment two registry entries contest a bucket (the state
     ``set_project_policy`` refuses at write time, and a read must not resurrect it).
 
-    A table/namespace record matches when the TOP-LEVEL segment of its object's name is a namespace bound to one
-    of the project's warehouses.
+    A table/namespace record matches when its object's name begins with one of the project's warehouses ([[LH-593]]).
     """
     kind = record.get("kind")
     if kind == "project":
@@ -349,7 +348,7 @@ def _scoped_to_project(record: dict[str, Any], *, namespaces: frozenset[str], pr
     if kind not in ("table", "namespace"):
         return False
     segments = parse_identifier(str(record.get("id") or ""))
-    return bool(segments) and segments[0] in namespaces
+    return bool(segments) and segments[0] in warehouse_ids
 
 
 @projects_router.get("/{id}/policies", response_model_exclude_none=True)
@@ -367,12 +366,7 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
     offboarding.
 
     Tolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning
-    by the registry primitives themselves. An unreadable BINDING is different and is reported —
-    ``read_bindings`` (not ``list_bindings``) so the skip list crosses the return boundary into
-    ``incomplete``/``skipped_bindings``. A binding you cannot read is a namespace you cannot see, and a
-    quietly short list would read as checked-and-clean. It still answers 200: this is a listing, not the
-    destructive door ``namespaces_bound_to`` guards, where one corrupt object correctly refuses the whole
-    operation.
+    by the registry primitives themselves.
     """
     project = _validated_project(id)
     await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
@@ -380,25 +374,13 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
     registered = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
     mine = [r for r in registered if r.get("project") == project]
     buckets = sorted({str(r["bucket"]) for r in mine if r.get("bucket")})
-    warehouse_ids = {str(r["id"]) for r in mine if r.get("id")}
-    bindings, skipped = await run_in_threadpool(warehouses.read_bindings, settings.registry_root, so)
-    namespaces = sorted({str(b["top_ns"]) for b in bindings if b.get("top_ns") and b.get("warehouse_id") in warehouse_ids})
+    warehouse_ids = sorted({str(r["id"]) for r in mine if r.get("id")})
     records = await run_in_threadpool(policies.list_policies, settings.registry_root, so)
     named = await run_in_threadpool(_named_now, settings, records)
-    scoped = [r for r in named if _scoped_to_project(r, namespaces=frozenset(namespaces), project=project)]
+    scoped = [r for r in named if _scoped_to_project(r, warehouse_ids=frozenset(warehouse_ids), project=project)]
     scoped.sort(key=lambda r: (str(r.get("kind")), str(r.get("id"))))
-    log.info(
-        "maintenance_policies_listed",
-        extra={"project": project, "policies": len(scoped), "buckets": len(buckets), "namespaces": len(namespaces), "skipped_bindings": len(skipped)},
-    )
-    return ProjectPoliciesResponse(
-        project=project,
-        buckets=buckets,
-        namespaces=namespaces,
-        policies=[_response(r) for r in scoped],
-        incomplete=bool(skipped),
-        skipped_bindings=sorted(skipped),
-    )
+    log.info("maintenance_policies_listed", extra={"project": project, "policies": len(scoped), "buckets": len(buckets), "warehouses": len(warehouse_ids)})
+    return ProjectPoliciesResponse(project=project, buckets=buckets, warehouses=warehouse_ids, policies=[_response(r) for r in scoped])
 
 
 # The v1 aggregator includes one ``router`` per module — the four policy routers are stitched here.

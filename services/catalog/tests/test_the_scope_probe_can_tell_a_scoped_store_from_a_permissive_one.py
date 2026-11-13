@@ -305,7 +305,7 @@ class TestTheDoorGatesBeforeItWrites:
     def _settings() -> Any:
         from catalog.core.config import Settings
 
-        return Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_WAREHOUSES_ENABLED=True)
+        return Settings(s3_access_key_id="k", s3_secret_access_key="s")
 
     @pytest.mark.anyio
     async def test_a_DENIED_caller_gets_the_same_answer_as_a_missing_warehouse(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,23 +329,6 @@ class TestTheDoorGatesBeforeItWrites:
 
         assert str(denied.value) == str(missing.value), "a denial must not be distinguishable from a missing warehouse"
         assert not probed, "the probe wrote to a tenant bucket before the gate answered"
-
-    @pytest.mark.anyio
-    async def test_the_door_is_501_when_warehouses_are_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`_require_enabled` runs FIRST, so a deployment with no warehouses never reaches the registry
-        read — and the spec-correct answer is Unsupported, not a 404 about an id that cannot exist."""
-        from lance_namespace import UnsupportedOperationError
-
-        from catalog.core.config import Settings
-
-        read: list[str] = []
-        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: read.append("read") or None)
-        off = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_WAREHOUSES_ENABLED=False)
-
-        with pytest.raises(UnsupportedOperationError):
-            await endpoint.validate_warehouse_credentials("wh", off, _token(), None, _Vendor(credentials=None))
-
-        assert not read
 
     @pytest.mark.anyio
     async def test_a_PERMITTED_caller_probes_the_warehouses_OWN_root(self, monkeypatch: pytest.MonkeyPatch) -> None:

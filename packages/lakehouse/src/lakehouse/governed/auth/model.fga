@@ -225,7 +225,7 @@ type estate
         # MAINTENANCE'S RECLAIM OF THE TRASH ([[XC-084]]). Maintenance holds no write of its own on the store, so the
         # catalog vends it a session for one trash record at a time (`POST /management/v1/trash/{kind}/{uuid}/credentials`),
         # judged on the record. Estate-wide because the trash is: a record keeps its object's location, and a warehouse
-        # rung would find a record's warehouse only through a binding its drop may have outlived. `[user]` alone and
+        # rung would find a record's warehouse only through a warehouse record its delete may have removed. `[user]` alone and
         # reached from no tier, like the decision roles: the holder is the one maintenance identity, whose role the
         # chart's bootstrap hook writes (`lance.fgaEstateRoles`).
         define reclaimer: [user]

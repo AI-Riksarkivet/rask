@@ -33,7 +33,7 @@ from tests.loopback import free_port
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-_NAMESPACE = "acme-silver"
+_NAMESPACE = "lance_catalog$acme-silver"
 _TABLE = f"{_NAMESPACE}$pages"
 
 
@@ -51,7 +51,9 @@ def _through_the_create_door(catalog_url: str, rows: pa.Table) -> None:
 
 def _through_a_stock_client(catalog_url: str, rows: pa.Table) -> None:
     stock = lance_namespace.connect("rest", {"uri": catalog_url})
-    lance.write_dataset(rows, namespace_client=stock, table_id=[_NAMESPACE, "pages"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(
+        rows, namespace_client=stock, table_id=[*_NAMESPACE.split("$"), "pages"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True
+    )
 
 
 DOORS: dict[str, Callable[[str, pa.Table], None]] = {"create": _through_the_create_door, "version/create": _through_a_stock_client}

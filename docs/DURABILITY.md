@@ -20,7 +20,7 @@ no-op for data.
 ### 2. Durable data — must persist + be backed up
 | Store | Holds | Persistence | Lifecycle |
 |-------|-------|-------------|-----------|
-| **Object store (S3)** | the **lakehouse** (Lance datasets), lineage's provenance tables (the commit feed and edge list, in the catalog's `provenance` namespace), the lineage outbox, trash and the registries | the RustFS fixture's PVC in development; the platform's S3 in production | the permanent data asset — lives for months/years |
+| **Object store (S3)** | the **lakehouse** (Lance datasets), lineage's provenance tables (the commit feed and edge list, in the catalog's `lance_catalog$provenance` namespace), the lineage outbox, trash and the registries | the RustFS fixture's PVC in development; the platform's S3 in production | the permanent data asset — lives for months/years |
 | **Apache AGE / Postgres** | OpenFGA's authz store | PVC (`volumeClaimTemplates`) | grows with history; permanent |
 | **NATS JetStream** | the catalog→lineage event buffer | PVC (`fileStore`) | transient (replay window); survives restart so no event is lost across a roll |
 | **Secret store** | secrets | none in the chart ([[XC-149]]): the platform's Vault or OpenBao in production (tier 3); the dev OpenBao fixture is in memory and its seed writes it again | permanent, the platform's |

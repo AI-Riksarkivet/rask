@@ -26,8 +26,8 @@ from lakehouse.governed.store_credential import S3KeyPair
 
 def test_mode_b_returns_server_mediated(client: TestClient, claim_described: Callable[[str], str]) -> None:
     # The lifespan builds a ModeBVendor by default → vend() returns None → no direct credential.
-    claim_described("db$t")
-    resp = client.post("/management/v1/table/db$t/credentials")
+    claim_described("lance_catalog$db$t")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials")
     assert resp.status_code == 200
     body = resp.json()
     assert body["mode"] == "server_mediated"
@@ -35,7 +35,7 @@ def test_mode_b_returns_server_mediated(client: TestClient, claim_described: Cal
 
 
 def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
-    claim_described("db$t")
+    claim_described("lance_catalog$db$t")
     captured: dict[str, object] = {}
 
     class _FakeVendor:
@@ -55,7 +55,7 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
             return VendedSession(key_pair=key_pair, endpoint=None, region="us-east-1", expires_at_millis=123456)
 
     client.app.dependency_overrides[get_vendor] = lambda: _FakeVendor()
-    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=write")
     assert resp.status_code == 200
     body = resp.json()
     assert body["mode"] == "direct"
@@ -68,7 +68,7 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
 def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, claim_described: Callable[[str], str]) -> None:
     """The token the store refused is the catalog's own, so the caller is told to retry (503, code 17), never to sign
     in again: a 401 would send an authorized caller into a re-login loop that cannot succeed."""
-    claim_described("db$t")
+    claim_described("lance_catalog$db$t")
 
     class _RefusedVendor:
         def vend(
@@ -85,7 +85,7 @@ def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, c
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "token verification failed"}}, "AssumeRoleWithWebIdentity")
 
     client.app.dependency_overrides[get_vendor] = lambda: _RefusedVendor()
-    resp = client.post("/management/v1/table/db$t/credentials")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials")
 
     assert (resp.status_code, resp.headers["content-type"]) == (503, "application/problem+json"), resp.text
     assert resp.json()["code"] == 17, resp.text
@@ -104,7 +104,7 @@ def test_a_vend_whose_store_does_not_answer_the_open_is_refused_unavailable(
     monkeypatch.setenv("LANCE_S3_ENDPOINT", f"http://127.0.0.1:{port}")
     get_settings.cache_clear()
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-catalog/db$t")
-    claim_described("db$t")
+    claim_described("lance_catalog$db$t")
     asked: list[str] = []
 
     class _RecordingVendor:
@@ -125,11 +125,11 @@ def test_a_vend_whose_store_does_not_answer_the_open_is_refused_unavailable(
             )
 
     client.app.dependency_overrides[get_vendor] = lambda: _RecordingVendor()
-    resp = client.post("/management/v1/table/db$t/credentials")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials")
 
     assert (resp.status_code, resp.headers["content-type"], resp.json().get("code")) == (503, "application/problem+json", 17), resp.text
     assert asked == []
 
 
 def test_invalid_tier_is_rejected(client: TestClient) -> None:
-    assert client.post("/management/v1/table/db$t/credentials?tier=admin").status_code == 422
+    assert client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=admin").status_code == 422

@@ -67,8 +67,8 @@ def _rows(metadata: dict[bytes, bytes] | None = None) -> pa.Table:
 def tier(real_ns_client: TestClient) -> tuple[TestClient, str]:
     """`m$t` created through the catalog, with the platform's own `lineage.dataset_id` written the way
     the cascade writes it: by pylance, not through a door."""
-    assert real_ns_client.post("/v1/namespace/m/create", json={}).status_code == 200
-    created = real_ns_client.post("/v1/table/m$t/create?mode=create", content=_ipc(_rows()), headers=ARROW)
+    assert real_ns_client.post("/v1/namespace/lance_catalog$m/create", json={}).status_code == 200
+    created = real_ns_client.post("/v1/table/lance_catalog$m$t/create?mode=create", content=_ipc(_rows()), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     lance.dataset(location).update_schema_metadata({k.decode(): v.decode() for k, v in DECLARED.items()})
@@ -77,36 +77,36 @@ def tier(real_ns_client: TestClient) -> tuple[TestClient, str]:
 
 #: (door, body) for each write a writer must not be able to make. A `create` row writes a NEW table.
 CASES: dict[str, tuple[str, Any]] = {
-    "set lineage.* on the native route": ("/v1/table/m$t/schema_metadata/update", {"lineage.dataset_id": "victim$payroll"}),
-    "null lineage.* on the dataplane route": ("/v1/table/m$t/schema_metadata/update", {"lineage.dataset_id": None}),
+    "set lineage.* on the native route": ("/v1/table/lance_catalog$m$t/schema_metadata/update", {"lineage.dataset_id": "lance_catalog$victim$payroll"}),
+    "null lineage.* on the dataplane route": ("/v1/table/lance_catalog$m$t/schema_metadata/update", {"lineage.dataset_id": None}),
     "set rask.* through the spec envelope": (
-        "/v1/table/m$t/schema_metadata/update",
+        "/v1/table/lance_catalog$m$t/schema_metadata/update",
         {"id": ["m", "t"], "metadata": {"rask.blob.external_base": "s3://other/"}},
     ),
     "lineage.* in a create payload": ("create", _rows({b"lineage.dataset_id": b"victim$payroll"})),
     "rask.* in a create payload": ("create", _rows({b"rask.blob.external_base": b"s3://other/"})),
-    "lineage.* in create properties": ("create?properties=" + json.dumps({"lineage.dataset_id": "victim$payroll"}), _rows()),
+    "lineage.* in create properties": ("create?properties=" + json.dumps({"lineage.dataset_id": "lance_catalog$victim$payroll"}), _rows()),
     # [[LH-519]] The catalog mints a table's uuid and answers it as `rask.uuid`; no door takes one from a caller.
-    "rask.* in declare properties": ("/v1/table/m$u/declare", {"properties": {"rask.uuid": FORGED_UUID}}),
-    "rask.* in register properties": ("/v1/table/m$u/register", {"location": "elsewhere", "properties": {"rask.uuid": FORGED_UUID}}),
-    "lineage.* in an insert overwrite payload": ("/v1/table/m$t/insert?mode=overwrite", _rows({b"lineage.dataset_id": b"victim$payroll"})),
+    "rask.* in declare properties": ("/v1/table/lance_catalog$m$u/declare", {"properties": {"rask.uuid": FORGED_UUID}}),
+    "rask.* in register properties": ("/v1/table/lance_catalog$m$u/register", {"location": "elsewhere", "properties": {"rask.uuid": FORGED_UUID}}),
+    "lineage.* in an insert overwrite payload": ("/v1/table/lance_catalog$m$t/insert?mode=overwrite", _rows({b"lineage.dataset_id": b"victim$payroll"})),
     # [[LH-242]] A create overwrite of an existing table is a new version of it, so it keeps the provenance columns.
-    "a create overwrite without the primary key": ("/v1/table/m$t/create?mode=overwrite", _rows().drop_columns(["id"])),
+    "a create overwrite without the primary key": ("/v1/table/lance_catalog$m$t/create?mode=overwrite", _rows().drop_columns(["id"])),
     "a create overwrite re-typing source_rowid": (
-        "/v1/table/m$t/create?mode=overwrite",
+        "/v1/table/lance_catalog$m$t/create?mode=overwrite",
         _rows().set_column(4, pa.field("source_rowid", pa.int64()), pa.array([0, 1], pa.int64())),
     ),
-    "drop the primary key": ("/v1/table/m$t/drop_columns", {"columns": ["id"]}),
-    "drop a struct holding a key field": ("/v1/table/m$t/drop_columns", {"columns": ["st"]}),
-    "drop a nested key field": ("/v1/table/m$t/drop_columns", {"columns": ["st.k"]}),
-    "drop source_rowid": ("/v1/table/m$t/drop_columns", {"columns": ["source_rowid"]}),
-    "rename the primary key": ("/v1/table/m$t/alter_columns", {"alterations": [{"path": "id", "rename": "id2"}]}),
-    "rename a struct holding a key field": ("/v1/table/m$t/alter_columns", {"alterations": [{"path": "st", "rename": "st2"}]}),
-    "rename source_rowid": ("/v1/table/m$t/alter_columns", {"alterations": [{"path": "source_rowid", "rename": "parent"}]}),
-    "re-type the primary key to its own type": ("/v1/table/m$t/alter_columns", {"alterations": [{"path": "id", "data_type": {"type": "int64"}}]}),
-    "re-type a nested key field": ("/v1/table/m$t/alter_columns", {"alterations": [{"path": "st.k", "data_type": {"type": "int64"}}]}),
-    "re-type source_rowid": ("/v1/table/m$t/alter_columns", {"alterations": [{"path": "source_rowid", "data_type": {"type": "int64"}}]}),
-    "make the primary key nullable": ("/v1/table/m$t/alter_columns", {"alterations": [{"path": "id", "nullable": True}]}),
+    "drop the primary key": ("/v1/table/lance_catalog$m$t/drop_columns", {"columns": ["id"]}),
+    "drop a struct holding a key field": ("/v1/table/lance_catalog$m$t/drop_columns", {"columns": ["st"]}),
+    "drop a nested key field": ("/v1/table/lance_catalog$m$t/drop_columns", {"columns": ["st.k"]}),
+    "drop source_rowid": ("/v1/table/lance_catalog$m$t/drop_columns", {"columns": ["source_rowid"]}),
+    "rename the primary key": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "id", "rename": "id2"}]}),
+    "rename a struct holding a key field": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "st", "rename": "st2"}]}),
+    "rename source_rowid": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "source_rowid", "rename": "parent"}]}),
+    "re-type the primary key to its own type": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "id", "data_type": {"type": "int64"}}]}),
+    "re-type a nested key field": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "st.k", "data_type": {"type": "int64"}}]}),
+    "re-type source_rowid": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "source_rowid", "data_type": {"type": "int64"}}]}),
+    "make the primary key nullable": ("/v1/table/lance_catalog$m$t/alter_columns", {"alterations": [{"path": "id", "nullable": True}]}),
 }
 
 
@@ -117,7 +117,7 @@ def test_a_writer_cannot_rewrite_a_tables_provenance(tier: tuple[TestClient, str
     before = lance.dataset(location)
 
     if door.startswith("create"):
-        response = client.post(f"/v1/table/m$u/{door}", content=_ipc(body), headers=ARROW)
+        response = client.post(f"/v1/table/lance_catalog$m$u/{door}", content=_ipc(body), headers=ARROW)
     elif isinstance(body, pa.Table):
         response = client.post(door, content=_ipc(body), headers=ARROW)
     else:
@@ -128,7 +128,7 @@ def test_a_writer_cannot_rewrite_a_tables_provenance(tier: tuple[TestClient, str
     after = lance.dataset(location)
     assert after.version == before.version, f"{case}: refused, but the table still moved to v{after.version}"
     assert after.schema.equals(before.schema, check_metadata=True), f"{case}: refused, but the schema changed"
-    assert client.post("/v1/table/m$u/exists", json={}).status_code == 404, f"{case}: a refused create still landed a table"
+    assert client.post("/v1/table/lance_catalog$m$u/exists", json={}).status_code == 404, f"{case}: a refused create still landed a table"
 
 
 def _ref(location: str, branch: str | None) -> lance.LanceDataset:
@@ -155,14 +155,14 @@ def test_an_overwrite_keeps_the_tables_provenance(tier: tuple[TestClient, str], 
     client, location = tier
     query = "mode=overwrite"
     if branch:
-        assert client.post("/v1/table/m$t/branches/create", json={"name": branch}).status_code == 200
+        assert client.post("/v1/table/lance_catalog$m$t/branches/create", json={"name": branch}).status_code == 200
         query += f"&branch={branch}"
     payload = pa.Table.from_arrays(_rows().columns, schema=pa.schema([f.remove_metadata() for f in SCHEMA]))
     if loose:
         payload = payload.set_column(0, pa.field("id", pa.float64(), nullable=False), pa.array([1.0, 2.0]))
     before = _ref(location, branch).schema
 
-    response = client.post(f"/v1/table/m$t/{door}?{query}", content=_ipc(payload), headers=ARROW)
+    response = client.post(f"/v1/table/lance_catalog$m$t/{door}?{query}", content=_ipc(payload), headers=ARROW)
 
     assert response.status_code == 200, response.text
     after = _ref(location, branch)

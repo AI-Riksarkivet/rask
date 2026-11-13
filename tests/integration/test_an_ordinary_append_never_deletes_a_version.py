@@ -33,7 +33,7 @@ from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-TABLE = "lh245$t"
+TABLE = "lance_catalog$lh245$t"
 _SCHEMA = pa.schema([("id", pa.int64())])
 #: What an armed table carries: ``interval`` arms the hook, and ``older_than=0s`` with ``retain_versions=1``
 #: lets one commit delete every older version (measured on 12.0.0).
@@ -60,7 +60,7 @@ def _append(client: TestClient, marker: int) -> None:
 def test_door_commits_on_an_armed_table_keep_every_version(
     real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: Literal["insert", "erasure", "maintenance/disarm"]
 ) -> None:
-    assert real_ns_client.post("/v1/namespace/lh245/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$lh245/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=_ipc(_rows(1)), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])

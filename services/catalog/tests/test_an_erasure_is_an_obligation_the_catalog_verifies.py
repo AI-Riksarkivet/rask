@@ -32,6 +32,7 @@ from catalog.api.security import authenticate
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
+from catalog.services import warehouses
 from catalog.services.dataplane import create_table, read_arrow_body
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_registry import BaseRegistry
@@ -46,7 +47,7 @@ from lakehouse.storage_options import StorageOptions
 
 _SUBJECT = "alice"
 _PREDICATE = f"pii = '{_SUBJECT}'"
-_TABLE_ID = ["db", "subjects"]
+_TABLE_ID = ["lance_catalog", "db", "subjects"]
 
 
 class _Clock:
@@ -79,6 +80,7 @@ def _create(ns: LanceNamespace, root: str, table_id: list[str]) -> None:
 
 def _subjects(root: Path) -> LanceNamespace:
     ns = lance_namespace.connect("dir", {"root": str(root)})
+    warehouses.ensure_catalog_row(ns, _TABLE_ID[0])
     ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
     _create(ns, str(root), _TABLE_ID)
     return ns
@@ -114,14 +116,14 @@ def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: _Control
         yield client
 
 
-def _record(client: TestClient, table: str = "db$subjects") -> dict[str, Any]:
+def _record(client: TestClient, table: str = "lance_catalog$db$subjects") -> dict[str, Any]:
     response = client.post(f"/management/v1/table/{table}/erasure", json={"predicate": _PREDICATE})
     assert response.status_code == 202, response.text
     return response.json()
 
 
 def _verify(client: TestClient, obligation_id: str, predicate: str = _PREDICATE) -> Any:  # noqa: ANN401 — an httpx.Response
-    return client.post(f"/management/v1/table/db$subjects/erasure/{obligation_id}/verify", json={"predicate": predicate})
+    return client.post(f"/management/v1/table/lance_catalog$db$subjects/erasure/{obligation_id}/verify", json={"predicate": predicate})
 
 
 def _view(client: TestClient, obligation_id: str) -> dict[str, Any]:
@@ -186,8 +188,8 @@ def _another_predicate(client: TestClient, ns: LanceNamespace, erasure_job: Any)
 def _another_tables(client: TestClient, ns: LanceNamespace, erasure_job: Any) -> tuple[str, _Refused]:  # noqa: ANN401 — conftest.ErasureJob
     """An obligation is verified on the table it was recorded on, whatever table the caller may maintain."""
     root = open_by_name(ns, StorageOptions(), _TABLE_ID).uri.rsplit("/", 1)[0]  # the root `subjects` was declared under
-    _create(ns, root, ["db", "others"])
-    obligation = _record(client, "db$others")["obligation_id"]
+    _create(ns, root, ["lance_catalog", "db", "others"])
+    obligation = _record(client, "lance_catalog$db$others")["obligation_id"]
     return obligation, lambda: _verify(client, obligation)
 
 
@@ -257,13 +259,13 @@ def test_an_obligation_following_one_the_catalog_never_recorded_is_refused_and_n
     requester reads this table as followed, so the door refuses it before it disarms or records anything."""
     ns = _subjects(tmp_path / "data")
     with _catalog(ns, tmp_path / "control", _Clock()) as client:
-        response = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE, "follows": "0" * 32})
+        response = client.post("/management/v1/table/lance_catalog$db$subjects/erasure", json={"predicate": _PREDICATE, "follows": "0" * 32})
         listed = client.get("/management/v1/erasures").json()["obligations"]
 
     assert (response.status_code, response.json()["code"], listed) == (400, 13, []), response.text
 
 
-_PROVENANCE = "provenance"
+_PROVENANCE = "lance_catalog$provenance"
 
 
 @pytest.fixture
@@ -280,7 +282,7 @@ def _record_edge(root: Path, source: str, derived: str) -> None:
     deadline = time.monotonic() + 30
     while True:
         try:
-            ns.describe_namespace(DescribeNamespaceRequest(id=[_PROVENANCE]))
+            ns.describe_namespace(DescribeNamespaceRequest(id=_PROVENANCE.split("$")))
             break
         except NamespaceNotFoundError:
             if time.monotonic() > deadline:
@@ -290,32 +292,35 @@ def _record_edge(root: Path, source: str, derived: str) -> None:
         {
             "in_table": [source],
             "out_table": [derived],
-            "out_name": ["db$derived"],
+            "out_name": ["lance_catalog$db$derived"],
             "received_at": pa.array([datetime.now(UTC)], pa.timestamp("us", tz="UTC")),
         }
     )
     registry = BaseRegistry(control_root=str(root), storage_options={})
-    create_table(ns, StorageOptions(), [_PROVENANCE, EDGES], edge, root=str(root), mode="create", registry=registry, holder=f"{_PROVENANCE}${EDGES}")
+    create_table(
+        ns, StorageOptions(), [*_PROVENANCE.split("$"), EDGES], edge, root=str(root), mode="create", registry=registry, holder=f"{_PROVENANCE}${EDGES}"
+    )
 
 
 @pytest.fixture
 def derived_estate(keeps_provenance: None, governed_catalog: Any, tmp_path: Path) -> tuple[Any, str, str]:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """alice's ``db$source`` and ``db$derived``, the second recorded on the edge list as written from the first, and her
-    obligation on the first; bob maintains ``db$source`` and holds nothing on ``db$derived``. Answers the catalog, the
-    obligation's id and ``db$derived``'s uuid."""
+    """alice's ``lance_catalog$db$source`` and ``lance_catalog$db$derived``, the second recorded on the edge list as written from the first, and her
+    obligation on the first; bob maintains ``lance_catalog$db$source`` and holds nothing on ``lance_catalog$db$derived``. Answers the catalog, the
+    obligation's id and ``lance_catalog$db$derived``'s uuid."""
     alice, client = governed_catalog.bearer("alice"), governed_catalog.client
-    assert client.post("/v1/namespace/db/create", json={}, headers=alice).status_code == 200
+    assert governed_catalog.create_in_the_estate("alice", "db").status_code == 200
     rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
     for table in ("source", "derived"):
-        created = client.post(f"/v1/table/db${table}/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        created = client.post(f"/v1/table/lance_catalog$db${table}/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert created.status_code == 200, created.text
-    granted = client.post("/management/v1/table/db$source/access/grant", json={"user": "dex~bob", "relation": "maintainer"}, headers=alice)
+    granted = client.post("/management/v1/table/lance_catalog$db$source/access/grant", json={"user": "dex~bob", "relation": "maintainer"}, headers=alice)
     assert granted.status_code == 200, granted.text
     uuid_of = {
-        table: client.post(f"/v1/table/db${table}/describe", json={}, headers=alice).json()["properties"]["rask.uuid"] for table in ("source", "derived")
+        table: client.post(f"/v1/table/lance_catalog$db${table}/describe", json={}, headers=alice).json()["properties"]["rask.uuid"]
+        for table in ("source", "derived")
     }
     _record_edge(tmp_path, uuid_of["source"], uuid_of["derived"])
-    recorded = client.post("/management/v1/table/db$source/erasure", json={"predicate": "id = 99"}, headers=alice)
+    recorded = client.post("/management/v1/table/lance_catalog$db$source/erasure", json={"predicate": "id = 99"}, headers=alice)
     assert recorded.status_code == 202, recorded.text
     return governed_catalog, recorded.json()["obligation_id"], uuid_of["derived"]
 
@@ -326,7 +331,9 @@ def _derived(surfaces: list[dict[str, Any]]) -> set[tuple[str, str]]:
 
 def _verified(catalog: Any, obligation: str, reader: str) -> set[tuple[str, str]]:  # noqa: ANN401 — the conftest's GovernedCatalog
     """The derived surfaces the verification shows ``reader``, in its report and in the obligation it answers."""
-    answer = catalog.client.post(f"/management/v1/table/db$source/erasure/{obligation}/verify", json={"predicate": "id = 99"}, headers=catalog.bearer(reader))
+    answer = catalog.client.post(
+        f"/management/v1/table/lance_catalog$db$source/erasure/{obligation}/verify", json={"predicate": "id = 99"}, headers=catalog.bearer(reader)
+    )
     assert answer.status_code == 200, answer.text
     return _derived([*answer.json()["report"]["surfaces"], *answer.json()["obligation"]["open_surfaces"]])
 

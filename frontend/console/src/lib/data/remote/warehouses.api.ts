@@ -3,7 +3,8 @@ import * as v from 'valibot';
 import type { ApiResult } from '#lib/api/client.ts';
 import type { CreateWarehouseBody, WarehouseRecord } from '../catalog';
 
-import { catalogJSON, parsed } from '#lib/doors.ts';
+import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
+import { childId, DELIMITER } from '#lib/api/identifiers.ts';
 // Transport: the console's catalog door, `#lib/doors`.
 // The warehouse + project registry, declared with `query`/`command` and answering the shared
 // `ApiResult` union. The catalog's project-admin gate is enforced against a REAL user: these run in the
@@ -23,6 +24,8 @@ const WarehouseSchema = v.object({
 	created_at: v.optional(v.nullable(v.string())),
 	serving: v.optional(v.nullable(v.string())),
 	status: v.optional(v.nullable(v.string())),
+	/** `"git"` for a warehouse git declares, whose lifecycle its doors refuse (XC-213); absent otherwise. */
+	managed_by: v.optional(v.picklist(['git', 'self'])),
 	delete_profile: v.optional(
 		v.nullable(
 			v.object({
@@ -60,32 +63,38 @@ export const fetchWarehouse = query(v.string(), async (id): Promise<ApiResult<Wa
 	parsed(await catalogJSON(`/management/v1/warehouses/${enc(id)}`), WarehouseSchema),
 );
 
-/** `EstateBindingsResponse` — `{namespace: warehouse_id}` for the whole estate, in ONE catalog read.
- *  Replaces the 1+N fan-out the namespaces page used to do (fetchWarehouses, then one
- *  fetchWarehouseNamespaces per warehouse) — and each of those legs re-read EVERY binding in the
- *  estate server-side before filtering, so the union cost O(warehouses × bindings) to compute
- *  something `list_bindings` produces in a single pass. */
-const EstateBindingsSchema = v.object({ bindings: v.record(v.string(), v.string()) });
+/** The spec's ListNamespaces answer: the child NAMES under the listed id, not their ids. */
+const ChildNamesSchema = v.object({ namespaces: v.array(v.string()) });
 
-export const fetchEstateBindings = query(
-	async (): Promise<ApiResult<{ bindings: Record<string, string> }>> =>
-		parsed(await catalogJSON('/management/v1/warehouses/-/bindings'), EstateBindingsSchema),
+/** The warehouses the caller may see, as the catalog's ROOT listing answers them (`GET
+ *  /v1/namespace/$/list`, every page): each registered warehouse the caller holds `can_get_metadata`
+ *  on, and the estate's own warehouse, which holds the lakehouse's own namespaces (`provenance`), has
+ *  no registry record and belongs to no project. The registry (`fetchWarehouses`) lists the registered
+ *  ones only, on the same relation, so a warehouse this answers and the registry does not is the
+ *  estate's own. */
+export const fetchServedWarehouses = query(async (): Promise<ApiResult<{ namespaces: string[] }>> =>
+	parsed(
+		// The root's id is the bare delimiter.
+		await catalogListing(`/v1/namespace/${enc(DELIMITER)}/list`, 'namespaces'),
+		ChildNamesSchema,
+	),
 );
 
-/** `WarehouseNamespacesResponse` — the spec's ListNamespaces shape (`{"namespaces": [...]}`). */
-const WarehouseNamespacesSchema = v.object({ namespaces: v.array(v.string()) });
-
-/** The namespaces BOUND to one warehouse, from the REGISTRY — the same source the delete door
- *  consults (#66). This is the FACT the warehouse page renders; any table-derived view is at best an
- *  enrichment on top of it, because an empty namespace holds zero tables and is exactly what the
- *  delete door will refuse on. */
+/** The namespaces directly under one warehouse, as ids (`<warehouse>$<name>`): the spec's
+ *  ListNamespaces on the warehouse's own name, every page, each item judged on the caller's grants.
+ *  The same listing a warehouse delete reads for what it still holds, so an empty namespace is listed
+ *  here as it is refused there. */
 export const fetchWarehouseNamespaces = query(
 	v.string(),
-	async (id): Promise<ApiResult<{ namespaces: string[] }>> =>
-		parsed(
-			await catalogJSON(`/management/v1/warehouses/${enc(id)}/namespaces`),
-			WarehouseNamespacesSchema,
-		),
+	async (id): Promise<ApiResult<{ namespaces: string[] }>> => {
+		const result = parsed(
+			await catalogListing(`/v1/namespace/${enc(id)}/list`, 'namespaces'),
+			ChildNamesSchema,
+		);
+		return result.ok
+			? { ok: true, data: { namespaces: result.data.namespaces.map((name) => childId(id, name)) } }
+			: result;
+	},
 );
 
 // This module reads no project: `/projects` is the estate's project list and `/projects/<p>` one
@@ -158,9 +167,9 @@ export const setWarehouseActive = command(
  *
  *  Three SEPARATE opt-ins that never share a default, sent only when the caller actually asked:
  *
- *  - `cascade` drops the namespaces bound to the warehouse. Without it a non-empty warehouse refuses
- *    409 with a detail that NAMES them — the only authoritative statement of what a cascade would take
- *    (there is no bindings read API), which is why `WarehouseDeleteDialog` reads it out of the refusal.
+ *  - `cascade` drops the namespaces under the warehouse. Without it a non-empty warehouse refuses 409
+ *    with a detail that NAMES them — what this cascade would take, at the moment it was refused —
+ *    which is why `WarehouseDeleteDialog` reads it out of the refusal.
  *  - `purgeBucket` is the ONLY thing that removes bytes, and it is irreversible. A catalog record is
  *    recoverable and a customer's bucket is not, so the dialog gates it behind typing the bucket name.
  *  - `force` overrides the `protected` flag and NOTHING else. The FGA gate has already run, identically,
@@ -207,19 +216,19 @@ export const deleteWarehouse = command(
 	},
 );
 
-/** Bind a namespace to a warehouse (bucket-per-warehouse tenancy). The response is not rendered —
- *  the banner reports the outcome — so it is passed through unparsed. The registry read refreshes
- *  rather than nothing at all: an explicit single-flight refresh keeps SvelteKit from falling back to
- *  invalidating every query on the page. */
-export const bindWarehouseNamespace = command(
-	({ id, namespace }) => `Bind namespace ${namespace} to warehouse ${id}`,
-	v.object({ id: v.string(), namespace: v.string() }),
-	async ({ id, namespace }): Promise<ApiResult<unknown>> => {
-		const result = await catalogJSON(`/management/v1/warehouses/${enc(id)}/namespaces`, {
+/** Create a namespace directly under a warehouse: the spec's CreateNamespace on
+ *  `<warehouse>$<name>`, mode `Create`, so a name that is already there is refused (409) rather than
+ *  kept. The catalog judges it on the warehouse (`can_create_namespace`) and seeds its owner. On
+ *  success the warehouse's listing refreshes in the same flight. */
+export const createWarehouseNamespace = command(
+	({ warehouse, name }) => `Create namespace ${name} in warehouse ${warehouse}`,
+	v.object({ warehouse: v.string(), name: v.string() }),
+	async ({ warehouse, name }): Promise<ApiResult<unknown>> => {
+		const result = await catalogJSON(`/v1/namespace/${enc(childId(warehouse, name))}/create`, {
 			method: 'POST',
-			body: JSON.stringify({ namespace }),
+			body: JSON.stringify({ mode: 'Create' }),
 		});
-		if (result.ok) void fetchWarehouses().refresh();
+		if (result.ok) void fetchWarehouseNamespaces(warehouse).refresh();
 		return result;
 	},
 );

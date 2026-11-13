@@ -2818,8 +2818,6 @@
               "warehouse_created",
               "warehouse_activated",
               "warehouse_deactivated",
-              "warehouse_bound",
-              "warehouse_unbound",
               "warehouse_deleted",
               "warehouse_protected",
               "warehouse_unprotected",
@@ -4486,39 +4484,6 @@
           }
         },
         "title": "CreateTableVersionResponse",
-        "type": "object"
-      },
-      "CreateWarehouseNamespaceRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "adopt_existing": {
-            "default": false,
-            "title": "Adopt Existing",
-            "type": "boolean"
-          },
-          "namespace": {
-            "title": "Namespace",
-            "type": "string"
-          },
-          "properties": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Properties"
-          }
-        },
-        "required": [
-          "namespace"
-        ],
-        "title": "CreateWarehouseNamespaceRequest",
         "type": "object"
       },
       "CreateWarehouseRequest": {
@@ -6987,23 +6952,6 @@
           "predicate"
         ],
         "title": "ErasureVerifyRequest",
-        "type": "object"
-      },
-      "EstateBindingsResponse": {
-        "description": "Every namespace\u2192warehouse binding the caller can see, in ONE read (#86).\n\nThe per-warehouse sibling answers for one id; a page listing the estate's namespaces was\ncalling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the\nestate before filtering in Python \u2014 O(warehouses \u00d7 bindings) for a union the underlying\n``list_bindings`` already produces in a single pass.",
-        "properties": {
-          "bindings": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Bindings",
-            "type": "object"
-          }
-        },
-        "required": [
-          "bindings"
-        ],
-        "title": "EstateBindingsResponse",
         "type": "object"
       },
       "EventsResponse": {
@@ -9949,25 +9897,13 @@
         "type": "object"
       },
       "ProjectPoliciesResponse": {
-        "description": "Every maintenance policy record governing data inside ONE project (#65) \u2014 the tenant-scoped VIEW.\n\n``set``/``describe``/``delete`` answer for a single object each; nothing could ever enumerate what is\nactually in force across a tenant, so a project admin could not tell which of their namespaces or\ntables carries a retention override without already knowing its id. This is that read.\n\n``buckets`` and ``namespaces`` are the SCOPE the listing was computed from \u2014 the project's warehouse\nbuckets and the top-level namespaces bound to those warehouses \u2014 reported so a surprising list can be\nexplained without a second call.\n\n``incomplete`` / ``skipped_bindings`` are load-bearing, not diagnostics. The namespace half of the\nscope is derived from the namespace\u2192warehouse bindings, so a binding record that cannot be read is a\nnamespace whose policies cannot be seen: a silently-narrowed list would read as \"checked and clean\",\nwhich is the ``unbound_namespaces`` bug class. The listing still answers 200 (it is a read, not a\ndestructive door \u2014 see ``warehouses.namespaces_bound_to`` for the opposite posture) and SAYS it may\nbe short.\n\n**Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record\nshadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not\nwhat governs any one dataset \u2014 a surface that renders them as an effective, merged policy is lying.",
+        "description": "Every maintenance policy record governing data inside ONE project (#65) \u2014 the tenant-scoped VIEW.\n\n``set``/``describe``/``delete`` answer for a single object each; nothing could ever enumerate what is\nactually in force across a tenant, so a project admin could not tell which of their namespaces or\ntables carries a retention override without already knowing its id. This is that read.\n\n``buckets`` and ``warehouses`` are the SCOPE the listing was computed from \u2014 the project's warehouses and\ntheir buckets \u2014 reported so a surprising list can be explained without a second call. A table or namespace\nrecord is in scope when its name begins with one of those warehouses.\n\n**Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record\nshadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not\nwhat governs any one dataset \u2014 a surface that renders them as an effective, merged policy is lying.",
         "properties": {
           "buckets": {
             "items": {
               "type": "string"
             },
             "title": "Buckets",
-            "type": "array"
-          },
-          "incomplete": {
-            "default": false,
-            "title": "Incomplete",
-            "type": "boolean"
-          },
-          "namespaces": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Namespaces",
             "type": "array"
           },
           "policies": {
@@ -9981,18 +9917,18 @@
             "title": "Project",
             "type": "string"
           },
-          "skipped_bindings": {
+          "warehouses": {
             "items": {
               "type": "string"
             },
-            "title": "Skipped Bindings",
+            "title": "Warehouses",
             "type": "array"
           }
         },
         "required": [
           "project",
           "buckets",
-          "namespaces",
+          "warehouses",
           "policies"
         ],
         "title": "ProjectPoliciesResponse",
@@ -10007,6 +9943,15 @@
             },
             "title": "Admins",
             "type": "array"
+          },
+          "managed_by": {
+            "default": "self",
+            "enum": [
+              "git",
+              "self"
+            ],
+            "title": "Managed By",
+            "type": "string"
           },
           "project": {
             "title": "Project",
@@ -12150,30 +12095,6 @@
         "title": "TupleCondition",
         "type": "object"
       },
-      "UnbindWarehouseNamespaceResponse": {
-        "description": "What the unbind actually did \u2014 the binding, and whether any replica was still caching it.\n\n`evicted` is reported rather than assumed because the binding cache is positive-and-forever: the\nregistry record going away is only half the repair, and an operator who cannot see the other half\nhas no way to tell a completed unbind from one the running estate never heard about.",
-        "properties": {
-          "namespace": {
-            "title": "Namespace",
-            "type": "string"
-          },
-          "unbound": {
-            "title": "Unbound",
-            "type": "boolean"
-          },
-          "warehouse_id": {
-            "title": "Warehouse Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "warehouse_id",
-          "namespace",
-          "unbound"
-        ],
-        "title": "UnbindWarehouseNamespaceResponse",
-        "type": "object"
-      },
       "UpdateFieldMetadataEntry": {
         "description": "UpdateFieldMetadataEntry",
         "properties": {
@@ -12699,23 +12620,6 @@
         "title": "VersionRange",
         "type": "object"
       },
-      "WarehouseNamespacesResponse": {
-        "description": "The namespaces BOUND to one warehouse \u2014 the registry's answer, same shape as the spec's\nListNamespaces (``{\"namespaces\": [...]}``) so a spec client parses it unchanged.",
-        "properties": {
-          "namespaces": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Namespaces",
-            "type": "array"
-          }
-        },
-        "required": [
-          "namespaces"
-        ],
-        "title": "WarehouseNamespacesResponse",
-        "type": "object"
-      },
       "WarehouseResponse": {
         "properties": {
           "bucket": {
@@ -12767,6 +12671,15 @@
           },
           "id": {
             "title": "Id",
+            "type": "string"
+          },
+          "managed_by": {
+            "default": "self",
+            "enum": [
+              "git",
+              "self"
+            ],
+            "title": "Managed By",
             "type": "string"
           },
           "primary": {
@@ -13205,7 +13118,7 @@
     },
     "/management/v1/access/principals/{principal}": {
       "delete": {
-        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nholding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything\nis revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the\nstore-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;\nwhat was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed\nbefore the revoke and sent once the deletion is recorded, so a door failing after the record still announces it\n([[LH-576]]). ``revoked`` counts the tuples this call removed.",
+        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nholding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything\nis revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the\nstore-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;\nwhat was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_the_chart_grants`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed\nbefore the revoke and sent once the deletion is recorded, so a door failing after the record still announces it\n([[LH-576]]). ``revoked`` counts the tuples this call removed.",
         "operationId": "delete_principal_management_v1_access_principals__principal__delete",
         "parameters": [
           {
@@ -16883,7 +16796,7 @@
     },
     "/management/v1/projects/{id}/policies": {
       "get": {
-        "description": "Every maintenance policy governing data inside this project (#65) \u2014 the tenant-scoped VIEW.\n\nAdmin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio\nalready set that bar, and a second (estate-observer) door for the same information would split the\ntier \u2014 a tenant admin could then be shown one of their records and denied the list of all of them.\n\nALL warehouse statuses count, not just active ones. ``set_project_policy`` filters to active because\nit is WRITING coverage (a policy over a bucket that no live warehouse serves could never match); this\nREADS coverage, and a deactivated warehouse's data \u2014 plus any policy still governing it \u2014 remains the\ntenant's. Narrowing here would hide exactly the retention record an operator is looking for while\noffboarding.\n\nTolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning\nby the registry primitives themselves. An unreadable BINDING is different and is reported \u2014\n``read_bindings`` (not ``list_bindings``) so the skip list crosses the return boundary into\n``incomplete``/``skipped_bindings``. A binding you cannot read is a namespace you cannot see, and a\nquietly short list would read as checked-and-clean. It still answers 200: this is a listing, not the\ndestructive door ``namespaces_bound_to`` guards, where one corrupt object correctly refuses the whole\noperation.",
+        "description": "Every maintenance policy governing data inside this project (#65) \u2014 the tenant-scoped VIEW.\n\nAdmin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio\nalready set that bar, and a second (estate-observer) door for the same information would split the\ntier \u2014 a tenant admin could then be shown one of their records and denied the list of all of them.\n\nALL warehouse statuses count, not just active ones. ``set_project_policy`` filters to active because\nit is WRITING coverage (a policy over a bucket that no live warehouse serves could never match); this\nREADS coverage, and a deactivated warehouse's data \u2014 plus any policy still governing it \u2014 remains the\ntenant's. Narrowing here would hide exactly the retention record an operator is looking for while\noffboarding.\n\nTolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning\nby the registry primitives themselves.",
         "operationId": "list_project_policies_management_v1_projects__id__policies_get",
         "parameters": [
           {
@@ -20974,7 +20887,7 @@
         ]
       },
       "post": {
-        "description": "Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.\n\nOrder (fail-closed): the project must EXIST (``require_project_exists`` \u2014 404 naming\n``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so\nit runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the\nbucket (idempotent), probe its store, write the registry record, and grant the caller ``owner`` on\n``warehouse:<id>`` with its ``project`` edge. The probe refuses a store that ignores credential scope or a\nconditional put (400) and one it cannot reach (503), so no such warehouse becomes routable ([[LH-481]]). A re-run with the same id is idempotent (bucket + record overwrite-safe).\n\nThe estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at\n``POST /management/v1/projects``, which seeds the project's admin \u2014 so by the time this runs the project has\nadmins of its own and one door is enough.",
+        "description": "Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.\n\nOrder (fail-closed): the request's shape (400), then the project must EXIST (``require_project_exists`` \u2014 404 naming\n``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so\nit runs before authz), THEN authorize ``can_create_warehouse`` on the project, then :func:`establish_warehouse`\nmakes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is, and the catalog converges\nit. A re-run with the same id is idempotent (bucket + record overwrite-safe).",
         "operationId": "create_warehouse_management_v1_warehouses_post",
         "parameters": [
           {
@@ -21039,66 +20952,9 @@
         ]
       }
     },
-    "/management/v1/warehouses/-/bindings": {
-      "get": {
-        "description": "Every binding the caller may see, from ONE ``list_bindings`` pass (#86).\n\n``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/\u2026`` and\n``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's\nwarehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires \u22653 chars with alphanumeric ends),\nwhich makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route\nin the estate and it is our own convention, borrowed from GitLab \u2014 the Lance spec's own root\nplaceholder is the delimiter, which is not available here.\n\nGoverned exactly like the warehouse listing it complements: with FGA on, filtered to the\nwarehouses the caller can ``can_get_metadata`` \u2014 a binding names a namespace AND the tenant\nbucket it lives in, so leaking one leaks another tenant's shape.",
-        "operationId": "list_estate_bindings_management_v1_warehouses___bindings_get",
-        "parameters": [
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EstateBindingsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Estate Bindings",
-        "tags": [
-          "warehouse"
-        ]
-      }
-    },
     "/management/v1/warehouses/{warehouse_id}": {
       "delete": {
-        "description": "Delete a warehouse: its bindings, its tuples and its registry record \u2014 and its BUCKET only if asked.\n\nGated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the\nwarehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own\nadmin bar rather than a rung someone could hold on this one warehouse.\n\nOrder, and every step is load-bearing:\n\n1. The record must exist (404), read by :func:`administered_warehouse`.\n2. **Authorize first**, in that same dependency. The gate runs before the protection and emptiness checks, so an unauthorized\n   caller never learns whether the warehouse is protected or what it holds \u2014 a 409 listing another\n   tenant's namespace names is a disclosure a 403 must beat to.\n3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the\n   PROTECTION ONLY \u2014 step 2 has already run, identically, with or without it.\n4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not\n   say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with\n   everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to\n   its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless\n   ``force=true``, and that refusal changes nothing.\n5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,\n   policy, claim and base record, its trash record last. The bindings select it, so it goes while they still\n   stand, and a re-issue after a failure here selects the same records. Then the cascade removes each bound\n   namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before\n   the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the\n   namespaces dropped deepest first, and only then what each object held ended, its records before its grants\n   (``fga_deps.end_removed_subtree``), the binding last.\n   ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a\n   namespace Restrict whatever ``behavior`` says (measured: ``behavior=\"Cascade\"`` is ignored, not\n   refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not\n   yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,\n   so re-issuing the call finishes it.\n6. Tuples on ``warehouse:<id>``, then the bucket's purge and claim (step 7), then the registry record last: the\n   record is what this door is addressed by, so a failure before it leaves the warehouse for the re-issue.\n7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,\n   so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a\n   purge that would take bytes this warehouse does not solely own \u2014 a bucket a same-project sibling\n   still claims, or reserved platform storage \u2014 refuses BEFORE the cascade\n   (:func:`_require_bucket_purgeable`). A purge then releases the bucket's claim\n   (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping\n   the bytes keeps the claim, so no other project adopts what the bucket still holds.\n\nThe routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings\nPOSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the\ncache would keep routing that namespace into a warehouse that no longer exists.",
+        "description": "Delete a warehouse: its namespaces (on ``?cascade=true``), its trash, its tuples and its registry record \u2014 and\nits BUCKET only if asked.\n\nGated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the\nwarehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own\nadmin bar rather than a rung someone could hold on this one warehouse.\n\nOrder, and every step is load-bearing:\n\n1. The record must exist (404), read by :func:`administered_warehouse`.\n2. **Authorize first**, in that same dependency. The gate runs before the protection and emptiness checks, so an unauthorized\n   caller never learns whether the warehouse is protected or what it holds \u2014 a 409 listing another\n   tenant's namespace names is a disclosure a 403 must beat to.\n3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the\n   PROTECTION ONLY \u2014 step 2 has already run, identically, with or without it.\n4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not\n   say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with\n   everything in them. Before anything is removed, every namespace's subtree is enumerated and held to\n   its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless\n   ``force=true``, and that refusal changes nothing.\n5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,\n   policy, claim and base record, its trash record last. A record is the warehouse's when its name begins with the\n   warehouse's id, so a re-issue after a failure here selects the same records. Then the cascade removes each\n   namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before\n   the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the\n   namespaces dropped deepest first, and only then what each object held ended, its records before its grants\n   (``fga_deps.end_removed_subtree``), and the warehouse's own row in its catalog last.\n   ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a\n   namespace Restrict whatever ``behavior`` says (measured: ``behavior=\"Cascade\"`` is ignored, not\n   refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not\n   yet removed with every grant it had, and every step tolerates what an earlier attempt already removed,\n   so re-issuing the call finishes it.\n6. Tuples on ``warehouse:<id>``, then the bucket's purge and claim (step 7), then the registry record last: the\n   record is what this door is addressed by, so a failure before it leaves the warehouse for the re-issue.\n7. **Bytes only on ``?purge_bucket=true``.** A catalog entry is recoverable, a customer's bucket is not,\n   so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a\n   purge that would take bytes this warehouse does not solely own \u2014 a bucket a same-project sibling\n   still claims, or reserved platform storage \u2014 refuses BEFORE the cascade\n   (:func:`_require_bucket_purgeable`). A purge then releases the bucket's claim\n   (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping\n   the bytes keeps the claim, so no other project adopts what the bucket still holds.\n\nRouting reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse\nreaches its bucket.",
         "operationId": "delete_warehouse_management_v1_warehouses__warehouse_id__delete",
         "parameters": [
           {
@@ -21258,7 +21114,7 @@
     },
     "/management/v1/warehouses/{warehouse_id}/activate": {
       "post": {
-        "description": "Reactivate a quarantined warehouse (#3-A lifecycle) \u2014 restores routing to its bound namespaces.\nAdmin-gated on the warehouse's project. Idempotent.",
+        "description": "Reactivate a quarantined warehouse (#3-A lifecycle) \u2014 restores routing to the names beneath it.\nAdmin-gated on the warehouse's project. Idempotent.",
         "operationId": "activate_warehouse_management_v1_warehouses__warehouse_id__activate_post",
         "parameters": [
           {
@@ -21324,7 +21180,7 @@
     },
     "/management/v1/warehouses/{warehouse_id}/deactivate": {
       "post": {
-        "description": "Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on its bound namespaces\n(403), so no new tables are created and existing ones are suspended \u2014 the tenant-offboarding first step.\nAdmin-gated on the warehouse's project. Idempotent (re-deactivating is a no-op).",
+        "description": "Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on a name beneath it\n(403), so no new tables are created and existing ones are suspended \u2014 the tenant-offboarding first step.\nAdmin-gated on the warehouse's project. Idempotent (re-deactivating is a no-op).",
         "operationId": "deactivate_warehouse_management_v1_warehouses__warehouse_id__deactivate_post",
         "parameters": [
           {
@@ -21383,221 +21239,6 @@
           }
         ],
         "summary": "Deactivate Warehouse",
-        "tags": [
-          "warehouse"
-        ]
-      }
-    },
-    "/management/v1/warehouses/{warehouse_id}/namespaces": {
-      "get": {
-        "description": "The namespaces bound to this warehouse, read from the REGISTRY \u2014 the same source the delete\ndoor consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse\npage used to derive its namespace list by grouping the table registry, which made an EMPTY\nnamespace structurally invisible \u2014 the page said \"no namespaces\" while the delete door refused\n409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);\na missing warehouse is the same 404 as everywhere else.",
-        "operationId": "list_warehouse_namespaces_management_v1_warehouses__warehouse_id__namespaces_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WarehouseNamespacesResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Warehouse Namespaces",
-        "tags": [
-          "warehouse"
-        ]
-      },
-      "post": {
-        "description": "Create a top-level namespace INSIDE this warehouse's bucket and bind it, so all its tables route\nthere (#3-A physical isolation). Gated on ``can_create_namespace`` (writer) on ``warehouse:<id>``.\n\nThe namespace is created via the warehouse's bucket-rooted connection (not the default), the binding is\npersisted + cached (so subsequent table ops resolve without a registry read), and FGA is seeded with the\nnamespace's ``parent`` edge pointing at the warehouse \u2014 so the owner's grant cascades into the tables.",
-        "operationId": "create_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateWarehouseNamespaceRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreateNamespaceResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Create Warehouse Namespace",
-        "tags": [
-          "warehouse"
-        ]
-      }
-    },
-    "/management/v1/warehouses/{warehouse_id}/namespaces/{top_ns}": {
-      "delete": {
-        "description": "Detach a top-level namespace from its warehouse WITHOUT dropping either.\n\nTHE REPAIR A BINDING NEEDS WHEN IT OUTLIVES WHAT IT POINTED AT. A binding is a routing record \u2014\n`top_ns -> warehouse_id -> root_uri` \u2014 and until this door existed the only way to remove one was\n`POST /v1/namespace/{id}/drop`, which destroys the namespace and its tables to reach a JSON file.\nThree such records were found stranded on this estate (\u00a7 Q15-1), naming warehouses that hold no\nbytes, and the repair was blocked on having no non-destructive door.\n\nTHE ORDER IS `delete_warehouse`'s, scaled to one binding, and every step carries its reason:\n\n1. the warehouse record must exist (404);\n2. **authorize first** on ``project#can_administer`` \u2014 detaching a namespace's storage routing is a\n   tenant-level act, the same reasoning that put the warehouse delete on the tenant's admin bar\n   rather than a rung someone holds on this one warehouse. A denial collapses to the same 404 the\n   missing warehouse gets (the NO EXISTENCE ORACLE class rule, audit #4), so nobody probes ids here\n   that the louder doors protect;\n3. the binding must name THIS warehouse (404 otherwise) \u2014 a tenant may not unbind a namespace\n   through a warehouse id that does not hold it;\n4. **emptiness**: a namespace still holding tables refuses 409 NAMING them. Unbinding a live\n   namespace does not delete a byte and is still the worst outcome available \u2014 every table in it\n   becomes unresolvable, because routing no longer knows which bucket holds it. Silent\n   unreachability beats a loud refusal for nobody;\n5. remove the record, then broadcast ``warehouse_unbound`` so every replica evicts. The binding\n   cache is positive-and-forever, so without the broadcast the registry says unbound while running\n   pods keep routing \u2014 the repair would report success and change nothing.",
-        "operationId": "unbind_warehouse_namespace_management_v1_warehouses__warehouse_id__namespaces__top_ns__delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "warehouse_id",
-            "required": true,
-            "schema": {
-              "title": "Warehouse Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "top_ns",
-            "required": true,
-            "schema": {
-              "title": "Top Ns",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UnbindWarehouseNamespaceResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Unbind Warehouse Namespace",
         "tags": [
           "warehouse"
         ]
@@ -23093,7 +22734,7 @@
     },
     "/v1/table": {
       "get": {
-        "description": "List every table in the namespace via ``list_all_tables``; when FGA is on,\nfilter the result down to the tables the caller can ``can_read_data``.\n``include_declared=false`` lists only the tables that hold a committed version, each judged by its own storage\n(:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).\n\nPagination is applied to the FINAL merged result, never to the native root call: the response is\nroot tables + bound seeds + the namespace walk, so a native-level ``limit`` would truncate only\nthe first ingredient and silently DROP tables from every page (#141 \u2014 the endpoint advertised\npagination and ignored it). The merged list is sorted and deduped, so the cursor is keyset-style:\n``page_token`` = the last name of the page, stateless and stable across pages. The walk itself\nstill costs the full estate server-side per call \u2014 acceptable at admin frequency, and honest now.",
+        "description": "List every table of every warehouse; when FGA is on, only those the caller can ``can_read_data``.\n\n``include_declared=false`` lists only the tables that hold a committed version, each judged by its own storage\n(:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).\n\nPagination is applied to the merged, sorted result, never to a native call, whose ``limit`` would truncate one\nwarehouse's walk and drop tables from every page. The cursor is keyset-style: ``page_token`` is the last name of\nthe page, stateless and stable across pages. The walk costs the full estate server-side per call, acceptable at\nadmin frequency.",
         "operationId": "list_all_tables_v1_table_get",
         "parameters": [
           {

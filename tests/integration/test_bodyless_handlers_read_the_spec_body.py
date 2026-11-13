@@ -59,12 +59,12 @@ def _sent(mock: MagicMock) -> Any:
 
 def test_describe_namespace_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_namespace.return_value = DescribeNamespaceResponse()
-    resp = client.post("/v1/namespace/db/describe", json={"id": ["other"]})
+    resp = client.post("/v1/namespace/lance_catalog$db/describe", json={"id": ["other"]})
     assert resp.status_code == 400, f"a body id contradicting the path must be 400 (spec duality): {resp.status_code}"
 
 
 def test_namespace_exists_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock) -> None:
-    assert client.post("/v1/namespace/db/exists", json={"id": ["other"]}).status_code == 400
+    assert client.post("/v1/namespace/lance_catalog$db/exists", json={"id": ["other"]}).status_code == 400
 
 
 def test_describe_transaction_reconciles_a_body_id(client: TestClient, fake_ns: MagicMock) -> None:
@@ -83,7 +83,7 @@ def test_describe_transaction_refuses_a_contradicting_body_id(client: TestClient
 
 def test_table_exists_honours_a_body_version(client: TestClient, fake_ns: MagicMock) -> None:
     """`TableExistsRequest.version` asks whether the table exists AT a version."""
-    client.post("/v1/table/db$t/exists", json={"version": 3})
+    client.post("/v1/table/lance_catalog$db$t/exists", json={"version": 3})
     assert _sent(fake_ns.table_exists).version == 3, "the body's version was dropped, so the answer is about the latest version"
 
 
@@ -98,13 +98,13 @@ def test_table_exists_honours_a_body_version(client: TestClient, fake_ns: MagicM
 )
 def test_list_table_indices_honours_body_paging(client: TestClient, fake_ns: MagicMock, asked: int, paged_at: int) -> None:
     fake_ns.list_table_indices.return_value = ListTableIndicesResponse(indexes=[])
-    assert client.post("/v1/table/db$t/index/list", json={"limit": asked, "page_token": "p2"}).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/index/list", json={"limit": asked, "page_token": "p2"}).status_code == 200
     sent = _sent(fake_ns.list_table_indices)
     assert (sent.limit, sent.page_token) == (paged_at, "p2"), "the body's paging did not reach the backend as the door pages"
 
 
 def test_list_table_indices_refuses_a_body_limit_of_zero(client: TestClient, fake_ns: MagicMock) -> None:
-    resp = client.post("/v1/table/db$t/index/list", json={"limit": 0})
+    resp = client.post("/v1/table/lance_catalog$db$t/index/list", json={"limit": 0})
     assert (resp.status_code, resp.json()["code"]) == (400, 13), resp.text
     fake_ns.list_table_indices.assert_not_called()
 
@@ -112,13 +112,13 @@ def test_list_table_indices_refuses_a_body_limit_of_zero(client: TestClient, fak
 def test_list_table_indices_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:
     """THE REOPENED HOLE. The 501 refusal was wired to the query channel only."""
     fake_ns.list_table_indices.return_value = ListTableIndicesResponse(indexes=[])
-    resp = client.post("/v1/table/db$t/index/list", json={"branch": "work"})
+    resp = client.post("/v1/table/lance_catalog$db$t/index/list", json={"branch": "work"})
     assert resp.status_code == 406, f"a branch in the BODY was answered {resp.status_code} from main; the query-channel refusal never fired"
 
 
 def test_index_stats_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_table_index_stats.return_value = DescribeTableIndexStatsResponse(num_indexed_rows=0, num_unindexed_rows=0)
-    resp = client.post("/v1/table/db$t/index/i1/stats", json={"branch": "work"})
+    resp = client.post("/v1/table/lance_catalog$db$t/index/i1/stats", json={"branch": "work"})
     assert resp.status_code == 406, f"{resp.status_code}: {resp.text[:160]}"
 
 
@@ -134,13 +134,13 @@ def test_drop_table_index_drops_the_index_its_PATH_names(real_ns_client: TestCli
     authorize in the path, so a handler reading it from the body would be routable and ungovernable. The drop commits
     with the door's stamp ([[LH-497]]).
     """
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-    created = real_ns_client.post("/v1/table/db$t/create", content=_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW)
+    assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+    created = real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW)
     assert created.status_code == 200, created.text
-    location = real_ns_client.post("/v1/table/db$t/describe", json={}).json()["location"]
+    location = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]
     lance.dataset(location).create_scalar_index("id", "BTREE", name="id_idx")
 
-    resp = real_ns_client.post("/v1/table/db$t/index/id_idx/drop", json={})
+    resp = real_ns_client.post("/v1/table/lance_catalog$db$t/index/id_idx/drop", json={})
 
     assert resp.status_code == 200, f"{resp.status_code}: {resp.text[:200]}"
     dropped = lance.dataset(location)
@@ -164,7 +164,7 @@ def test_drop_table_index_refuses_a_body_branch(client: TestClient, fake_ns: Mag
     guard was wired per-door, so a door nobody tested is a door whose guard nobody checked."""
     fake_ns.drop_table_index.return_value = DropTableIndexResponse()
 
-    resp = client.post("/v1/table/db$t/index/vec_idx/drop", json={"branch": "work"})
+    resp = client.post("/v1/table/lance_catalog$db$t/index/vec_idx/drop", json={"branch": "work"})
 
     assert resp.status_code == 406, f"a branch in the BODY was answered {resp.status_code}; the refusal never fired"
 
@@ -176,25 +176,30 @@ def test_get_table_stats_refuses_a_body_branch(client: TestClient, fake_ns: Magi
         num_indices=0,
         fragment_stats=FragmentStats(num_fragments=0, num_small_fragments=0, lengths=FragmentSummary(min=0, max=0, mean=0, p25=0, p50=0, p75=0, p99=0)),
     )
-    resp = client.post("/v1/table/db$t/stats", json={"branch": "work"})
+    resp = client.post("/v1/table/lance_catalog$db$t/stats", json={"branch": "work"})
     assert resp.status_code == 406, f"{resp.status_code}: {resp.text[:160]}"
 
 
 @pytest.mark.parametrize(
     ("path", "body", "backend"),
     [
-        pytest.param("/v1/table/db$t/deregister", {"id": ["db", "other"]}, "deregister_table", id="deregister"),
+        pytest.param("/v1/table/lance_catalog$db$t/deregister", {"id": ["db", "other"]}, "deregister_table", id="deregister"),
         # The ENVELOPE form of the schema-metadata update carries the id beside the map, so it is reconciled
         # like every {id} route. Only the envelope is: a flat body IS the map, and an "id" key in it is data.
         # The door writes it through a handle at its location, so no backend op stands to be called.
         pytest.param(
-            "/v1/table/db1$users/schema_metadata/update", {"id": ["db1", "other"], "metadata": {"owner": "alice"}}, None, id="schema-metadata-envelope"
+            "/v1/table/lance_catalog$db1$users/schema_metadata/update",
+            {"id": ["db1", "other"], "metadata": {"owner": "alice"}},
+            None,
+            id="schema-metadata-envelope",
         ),
         # The index doors carry the index's name in the path as well as the body (`DropTableIndexRequest.index_name`).
-        pytest.param("/v1/table/db$t/index/vec_idx/drop", {"id": ["db", "other"]}, None, id="drop-index"),
-        pytest.param("/v1/table/db$t/index/vec_idx/drop", {"index_name": "other_idx"}, None, id="drop-index-naming-another-index"),
-        pytest.param("/v1/table/db$t/index/vec_idx/stats", {"index_name": "other_idx"}, "describe_table_index_stats", id="index-stats-naming-another-index"),
-        pytest.param("/v1/table/db$t/create_index", {"id": ["db", "other"], "column": "v", "index_type": "BTREE"}, None, id="create-index"),
+        pytest.param("/v1/table/lance_catalog$db$t/index/vec_idx/drop", {"id": ["db", "other"]}, None, id="drop-index"),
+        pytest.param("/v1/table/lance_catalog$db$t/index/vec_idx/drop", {"index_name": "other_idx"}, None, id="drop-index-naming-another-index"),
+        pytest.param(
+            "/v1/table/lance_catalog$db$t/index/vec_idx/stats", {"index_name": "other_idx"}, "describe_table_index_stats", id="index-stats-naming-another-index"
+        ),
+        pytest.param("/v1/table/lance_catalog$db$t/create_index", {"id": ["db", "other"], "column": "v", "index_type": "BTREE"}, None, id="create-index"),
     ],
 )
 def test_a_table_door_refuses_a_body_contradicting_its_path(
@@ -213,7 +218,7 @@ def test_a_table_door_refuses_a_body_contradicting_its_path(
 @pytest.mark.parametrize(
     ("path", "query", "attr", "value"),
     [
-        ("/v1/table/db$t/index/list", {"limit": 2}, "limit", 2),
+        ("/v1/table/lance_catalog$db$t/index/list", {"limit": 2}, "limit", 2),
     ],
 )
 def test_the_query_alias_still_works(client: TestClient, fake_ns: MagicMock, path: str, query: dict[str, Any], attr: str, value: Any) -> None:

@@ -5,8 +5,8 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `apiVersion: batch/v1`
 
-The CONTROL ROOT's scheduled backup ([[LH-110]]) — the registry holding every project, warehouse,
-namespace binding and bucket claim. Lose it and the Lance data survives while nothing can route to
+The CONTROL ROOT's scheduled backup ([[LH-110]]) — the registry holding every project, warehouse and bucket
+claim. Lose it and the Lance data survives while nothing can route to
 it, which is the one loss the lakehouse cannot reconstruct from storage.
 
 `scripts/control_root_backup.py` already shipped backup/verify/restore/prune and

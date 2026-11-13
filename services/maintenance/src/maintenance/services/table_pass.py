@@ -727,28 +727,29 @@ async def emit_pass_lineage(emitter: MaintenanceEmitter, results: list[DatasetRe
             log.warning(f"maintenance_{lane}_emit_error", extra={"table": result.table_id, "error": str(exc)})
 
 
-def governs(location: str, *, top_namespace: str, settings: MaintenanceSettings, options: StorageOptions) -> bool | None:
-    """Whether the table at ``location``, under the top-level namespace ``top_namespace``, is one maintenance governs: in
-    its namespace's warehouse while that warehouse is active, or, for a namespace bound to no warehouse, in a configured
-    bucket (#81); ``None`` when the warehouse cannot be read, which decides nothing.
+def governs(location: str, *, warehouse: str, settings: MaintenanceSettings, options: StorageOptions) -> bool | None:
+    """Whether the table at ``location``, in warehouse ``warehouse`` (its name's first segment), is one maintenance
+    governs: in a registered warehouse while that warehouse is active, or, in the estate's own warehouse, in a configured
+    bucket (#81); ``None`` when the warehouse's record cannot be read, which decides nothing and the pass retries.
 
     A deactivated warehouse's tables are not governed: deactivate is offboarding step one, and maintenance must not be the
-    one process still rewriting a quarantined tenant's data. So a bound namespace is judged by its warehouse's status
-    FIRST, its bucket configured or not: a configured bucket answers only for a namespace no warehouse holds, whose tables
-    are on the default root. The warehouse is the namespace's, read through its binding by key, so what the pass costs is
-    the table's, never the registry's; and two warehouses one project backs with one bucket (the work and gold pair) are
-    each judged by their own status. A location outside S3 is the control root's own.
+    one process still rewriting a quarantined tenant's data. So a registered warehouse is judged by its status, its
+    bucket configured or not: a configured bucket answers only for the estate's own warehouse, which has no record. A
+    first segment naming neither the estate's warehouse nor a record is no warehouse the catalog serves, so its table is
+    left alone and rechecked. The record is read by the warehouse's id, so what the pass costs is the table's, never the
+    registry's; and two warehouses one project backs with one bucket (the work and gold pair) are each judged by their
+    own status. A location outside S3 is the control root's own.
     """
     if not on_s3(location):
         return True
+    if warehouse == settings.estate_warehouse:
+        return location.removeprefix("s3://").split("/", 1)[0] in settings.sweep_buckets
     try:
-        warehouse = warehouse_records.namespace_warehouse(settings.resolved_control_root, options, top_namespace)
+        record = warehouse_records.warehouse_record(settings.resolved_control_root, options, warehouse)
     except (OSError, ValueError) as exc:
-        log.warning("maintenance_warehouse_unreadable", extra={"location": location, "namespace": top_namespace, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        log.warning("maintenance_warehouse_unreadable", extra={"location": location, "warehouse": warehouse, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return None
-    if warehouse is not None:
-        return not warehouse_records.is_deactivated(warehouse)
-    return location.removeprefix("s3://").split("/", 1)[0] in settings.sweep_buckets
+    return record is not None and not warehouse_records.is_deactivated(record)
 
 
 def read_for(location: str, held: location_claims.LocationClaim, settings: MaintenanceSettings, *, now: datetime) -> PassReadings | None:
@@ -849,7 +850,7 @@ def run_table_pass(task: TableTask, settings: MaintenanceSettings, *, now: datet
         log.info("maintenance_task_table_trashed", extra={"uuid": task.uuid, "table": held.table})
         delete_due(settings.resolved_control_root, options, task.uuid)
         return PassOutcome(ended="trashed")
-    if (governed := governs(task.location, top_namespace=held.segments[0], settings=settings, options=options)) is not True:
+    if (governed := governs(task.location, warehouse=held.segments[0], settings=settings, options=options)) is not True:
         if governed is None:
             return PassOutcome(next_due=now + timedelta(seconds=settings.retry_seconds))
         log.warning("maintenance_task_outside_the_estate", extra={"uuid": task.uuid, "location": task.location})

@@ -43,7 +43,6 @@ def _run(tmp_path: Path) -> mod.ReconcileReport:
         mod.reconcile(
             settings,
             None,
-            warehouses_enabled=False,
             control_root=f"file://{tmp_path / 'control'}",
             namespace_root=f"file://{tmp_path / 'data'}",
             bucket_client=_NoBuckets(),

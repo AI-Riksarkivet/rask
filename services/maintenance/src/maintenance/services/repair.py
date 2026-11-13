@@ -16,7 +16,7 @@ cascade [[LH-148]] fixed at source — a producer already closed, leaving a back
 WHAT IT REFUSES, BY NAME RATHER THAN BY OMISSION. `ungoverned_tables` is the INVERSE shape and the
 reason this module has a refusal list at all: a real table, real bytes, no tuples. A pass that
 "repaired drift" by acting on it would delete live data to close an authorization gap — the single
-worst thing a cleaner can do. `unbound_namespaces` and `unreferenced_projects` are real records, and
+worst thing a cleaner can do. `unreachable_namespaces` and `unreferenced_projects` are real records, and
 `orphan_buckets`/`orphaned_trash` are bytes whose deletion needs storage evidence this
 pass does not gather. Each is REFUSED with a reason rather than silently skipped, so a reader can see
 the pass considered it and declined, which is what distinguishes a bounded tool from an unfinished one.
@@ -105,11 +105,10 @@ _REFUSED: dict[str, str] = {
     "absent_datasets": "a catalog RECORD whose location holds no bytes — the fix is a catalog write and it is a decision: the bytes may be restorable, and the record is the only thing that still says where they belonged",
     "unregistered_datasets": "a REAL dataset on storage that no catalog record names — the resolution is REGISTRATION, never deletion; deleting it would destroy live rows to close a bookkeeping gap",
     "ungoverned_tables": "a REAL table carrying no tuples — deleting it would destroy live data to close an authorization gap; it needs a grant, not a revoke",
-    "unbound_namespaces": "a real top-level namespace missing a warehouse BINDING record — it needs binding, and the data under it is live",
+    "unreachable_namespaces": "a real top-level namespace row on a root that does not serve its warehouse — the data under it is live and the resolution is a decision about where it belongs",
     "unreferenced_projects": "a real project record holding no tuples — it needs an admin grant, which is a decision a person makes (see `rebuild.py`)",
     "orphan_buckets": "storage nothing claims — deleting bytes needs a listing, a floor and an age this pass does not gather",
     "orphaned_trash": "a trash record naming an unmaintained root — it is the only remaining POINTER to those bytes, so dropping it strands them silently",
-    "dangling_bindings": "a binding record pointing at a missing warehouse — a registry write, not an authz one",
 }
 
 

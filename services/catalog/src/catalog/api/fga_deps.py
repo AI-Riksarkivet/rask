@@ -15,9 +15,8 @@ The op -> ``can_*`` mapping below is the ONLY policy logic in the app; the privi
   move       -> can_move on the table / can_accept_moved_table on the namespace it enters (grant authority)
   undeclared -> refused for every caller                 (no rung is a default)
 
-Create-on-parent: creating a child authorizes the parent (the child has no id yet); a
-top-level child gates on the DEFAULT WAREHOUSE only when ``fga_lock_root_create`` is set,
-else it is open self-serve. Batch routes read the (Starlette-cached) body and check each
+Create-on-parent: creating a child authorizes the parent (the child has no id yet), which for a
+namespace directly in a warehouse is the warehouse. Batch routes read the (Starlette-cached) body and check each
 named table. Fail-closed twice over: an unwired client raises 503 here, and
 ``fga.check``/``fga.batch_check`` raise 503 on an OpenFGA outage rather than allowing.
 
@@ -549,30 +548,23 @@ def _action_relation(fga_type: str, suffix: str) -> str:
     raise _undeclared_door(fga_type, suffix)
 
 
-def _create_parent_rung(resource: str, id_segments: list[str], settings: Settings) -> tier_policy.Rung | None:
-    """The ``can_create_*`` rung a create-on-parent op asks on the child's parent, or ``None`` to allow.
+#: The rung a create asks on its parent, named after the child it creates; a table's for every other resource.
+_CREATE_RELATIONS: Final = {"namespace": "can_create_namespace", "materialized_view": "can_create_materialized_view"}
 
-    Nested child -> its parent namespace, by name (its uuid is what the grants are held by). Top-level child -> the
-    default WAREHOUSE object only when ``fga_lock_root_create`` is set; otherwise ``None`` (open self-serve top-level
-    create — preserves the default behaviour). The relation is named after the child being created
-    (``can_create_namespace`` / ``can_create_materialized_view`` / ``can_create_table``), all of which reduce to the
-    writer rung on the parent namespace.
 
-    ``fga_default_warehouse_object``, never ``fga_root_object`` ([[LH-055]]): the three relations above
-    are defined on ``warehouse`` and on ``namespace``, and on no other type. This lock defaults ON for a
-    real deployment (``LANCE_FGA_LOCK_ROOT_CREATE`` = ``rask.isRealDeployment``) and OFF for local k3s,
-    so checking them against a non-warehouse root would fail top-level creation in production and pass
-    every local run — the failure mode with no local reproduction.
+def _create_parent_rung(resource: str, id_segments: list[str]) -> tier_policy.Rung | None:
+    """The ``can_create_*`` rung a create-on-parent op asks on the child's parent, by name.
+
+    The parent is the namespace above the child, whose uuid the grants are held by, or the warehouse for a namespace
+    directly in one ([[LH-593]]): the resolver answers a one-segment name as ``warehouse:<id>``. The relation is named
+    after the child being created (``can_create_namespace`` / ``can_create_materialized_view`` / ``can_create_table``),
+    each of which is the writer rung on a namespace and on a warehouse alike. ``None`` for an id with no parent, which
+    the shape rung has already refused.
     """
-    relation = {
-        "namespace": "can_create_namespace",
-        "materialized_view": "can_create_materialized_view",
-    }.get(resource, "can_create_table")
-    if len(id_segments) > 1:
-        return tier_policy.Rung(relation=relation, on=tier_policy.Named(kind="namespace", segments=tuple(id_segments[:-1])))
-    if settings.fga_lock_root_create:
-        return tier_policy.Rung(relation=relation, on=settings.fga_default_warehouse_object)
-    return None
+    if len(id_segments) < 2:
+        return None
+    relation = _CREATE_RELATIONS.get(resource, "can_create_table")
+    return tier_policy.Rung(relation=relation, on=tier_policy.Named(kind="namespace", segments=tuple(id_segments[:-1])))
 
 
 async def _require(client: OpenFgaClient, *, user: str, relation: str, obj: str, label: str | None = None) -> None:
@@ -1011,7 +1003,7 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Re
     rungs: set[tier_policy.Rung] = set()
     for kind, segments in _batch_ids(body):
         if kind == "declare_table":  # creating a table -> can_create_table on its parent
-            if (parent := _create_parent_rung("table", segments, settings)) is not None:
+            if (parent := _create_parent_rung("table", segments)) is not None:
                 rungs.add(parent)
         elif kind in _BATCH_OWNER_OPS:  # destructive -> owner tier (no writer back-door)
             rungs.add(_rung(_BATCH_OWNER_OPS[kind], "table", segments))
@@ -1090,7 +1082,7 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
     obj = _object(fga_type, segments)
     run = run_context.from_headers(request.headers) if suffix in tier_policy.STAMPING_DOORS else None
     if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
-        return tier_policy.Write(op=suffix, obj=obj, rung=_create_parent_rung(resource, segments, settings), table=tuple(segments), run=run)
+        return tier_policy.Write(op=suffix, obj=obj, rung=_create_parent_rung(resource, segments), table=tuple(segments), run=run)
     if suffix == "credentials":
         # A vend is a read at its default tier and a WRITE at a writing one: the credential is how a
         # direct-to-storage writer writes, so it is judged on the rung its tier opens.
@@ -1247,10 +1239,10 @@ async def _judge(
     """Hand ``write`` to the tier judge, with the rung asked through :func:`_require_rung` when FGA is on."""
     check = _rung_check(settings, token, injected, resolver)
     # Imported HERE rather than at module scope: `dependencies` imports this module for its guards.
-    from catalog.api.dependencies import namespace_for_top_ns
+    from catalog.api.dependencies import namespace_for_warehouse
 
-    async def namespace(top_ns: str) -> LanceNamespace:
-        return await namespace_for_top_ns(request, settings, top_ns)
+    async def namespace(warehouse_id: str) -> LanceNamespace:
+        return await namespace_for_warehouse(request, settings, warehouse_id)
 
     await tier_policy.judge(
         write,
@@ -1346,7 +1338,7 @@ async def spec_vend_tier(
     if settings.maintenance_read_only:
         return "read"
 
-    async def namespace(_top_ns: str) -> LanceNamespace:
+    async def namespace(_warehouse_id: str) -> LanceNamespace:
         return ns
 
     write = tier_policy.Write(op=door, obj=_object("table", list(segments)), rung=None, table=tuple(segments))
@@ -1391,6 +1383,44 @@ async def require_request_names(request: Request, delimiter: DelimiterQuery = No
         if not segments:
             raise InvalidInputError("an object is given a name: an empty identifier names the root namespace, which no door makes")
         require_names(segments)
+    _require_a_name_inside_a_warehouse(request)
+
+
+#: What a namespace door serves on a warehouse's own name, a namespace id of one segment: its reads.
+_WAREHOUSE_NAME_SUFFIXES: Final = frozenset({"list", "table/list", "describe", "exists", "access/my-permissions"})
+
+
+def _require_a_name_inside_a_warehouse(request: Request) -> None:
+    """Refuse a path id whose shape no warehouse holds ([[LH-593]], ADR 0206).
+
+    A name's first segment is its warehouse. So a namespace id of one segment names a warehouse, which is made, changed
+    and deleted at its own doors and only read here, and a table or view lies in a namespace of a warehouse, three
+    segments at least.
+
+    Raises:
+        InvalidInputError: The id is a warehouse's on a door that does not read one, or a table's or view's with no
+            namespace above it.
+    """
+    path: str = request.scope["path"]
+    object_id = request.path_params.get("id")
+    resource = _resource_for(path)
+    if object_id is None or resource not in ("namespace", "table", "materialized_view"):
+        return
+    segments = parse_identifier(object_id)
+    if not segments:
+        return
+    if resource != "namespace":
+        if len(segments) < 3:
+            raise InvalidInputError(
+                f"{resource.replace('_', ' ')} '{fga.canonical_object_id(segments)}' is not inside a namespace of a warehouse: "
+                f"name it <warehouse>{CATALOG_DELIMITER}<namespace>{CATALOG_DELIMITER}<name>"
+            )
+        return
+    if len(segments) == 1 and _suffix(path, resource, object_id) not in _WAREHOUSE_NAME_SUFFIXES:
+        raise InvalidInputError(
+            f"'{segments[0]}' names a warehouse, which is created, changed and deleted at /management/v1/warehouses. "
+            f"A namespace is named <warehouse>{CATALOG_DELIMITER}<namespace>."
+        )
 
 
 async def _identifiers_given(request: Request) -> list[list[str]]:
@@ -1413,12 +1443,30 @@ async def _identifiers_given(request: Request) -> list[list[str]]:
 
 
 async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-    """Enforce the caller's permission for this route: the tier judge decides every write door, with FGA on
+    """Enforce the caller's permission for this route, then the quarantine of the warehouse its ``{id}`` begins with.
+
+    In that order: a deactivated warehouse suspends every operation beneath it, and that it is deactivated is told
+    only to a caller the route would otherwise have admitted. One holding nothing on it is answered as for a name in
+    any warehouse, standing or not ([[LH-593]]).
+
+    Raises:
+        PermissionDeniedError: The caller may not act here, or may and the warehouse is deactivated.
+    """
+    await _decide(request, settings, token, injected, resolver)
+    object_id = request.path_params.get("id")
+    # A classification's id is a label, in no warehouse.
+    if object_id is None or _resource_for(request.scope["path"]) in (None, "classification"):
+        return
+    if segments := parse_identifier(object_id):
+        await resolver.require_active_warehouse(segments[0])
+
+
+async def _decide(request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> None:
+    """The caller's permission for this route: the tier judge decides every write door, with FGA on
     or off, and OpenFGA every other door (a no-op when FGA is off).
 
     A table or namespace is asked about as the object its name resolves to, ``table:<uuid>`` or ``namespace:<uuid>``
-    (ADR 0173 §8, [[LH-524]]), through ``resolver``, which the door then reads the same resolution from. ``resolver``
-    is the last parameter so an unauthenticated caller is refused before any name is resolved.
+    (ADR 0173 §8, [[LH-524]]), through ``resolver``, which the door then reads the same resolution from.
     """
     if (write := await _write_door(request, settings)) is not None:
         await _judge(request, settings, token, injected, resolver, write)
@@ -1455,7 +1503,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
 
     # Create-on-parent: child does not exist yet → authorize the parent.
     if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
-        if (parent := _create_parent_rung(resource, segments, settings)) is not None:  # None => open top-level create (authn already enforced)
+        if (parent := _create_parent_rung(resource, segments)) is not None:
             await _require_rung(client, resolver, user=token.subject, rung=parent)
         return
 
@@ -1577,9 +1625,10 @@ async def _refused_read_as_absent(
     EVERY ANCESTOR THAT STANDS IS ASKED, not only the nearest. A hidden namespace between the name and a namespace the
     caller sees must not end the walk, or a name probed beneath it would answer 403 where one beneath an absent
     namespace answers 404. A cascade leaves a child whose parent went with it ([[LH-536]]); its standing ancestors are
-    read the same way. A top-level name has no ancestor to read, and is never asked of its warehouse: upward visibility
-    (``can_get_metadata from child``) makes a reader of one namespace a reader of its warehouse, so a warehouse's readers
-    would learn which of every tenant's names exist from 403 against 404. What a RECOVERABLE drop leaves is answered by
+    read the same way. A name's first segment is its warehouse ([[LH-593]]), an ancestor of every name and asked as any
+    other: upward visibility (``can_get_metadata from child``) makes a reader of one namespace a reader of its warehouse,
+    and such a reader is answered the absence for every name in the warehouse alike, hidden or absent, so the answer
+    tells nothing about which of them exist. What a RECOVERABLE drop leaves is answered by
     its trash: the drop keeps its objects' grants for the undrop, so a caller holding ``can_get_metadata`` on an object
     trashed at the name or an ancestor's, whatever stands there now, already sees it through the trash doors and is
     answered the absence rather than a refusal that hides it (:func:`_trashed_at_or_above`). A trash it cannot read leaves
@@ -1793,9 +1842,9 @@ def require_parent(resource: str, segments: list[str]) -> None:
     every client SDK dispatches on the numeric ``code`` — a status outside the spec's mapping is one
     no generated client understands. The DETAIL does the teaching: it names the rule and the fix.
 
-    Namespaces are deliberately NOT rejected here. A top-level namespace legitimately parents to the
-    catalog's warehouse root, and until a warehouse can be NAMED in the identifier (see the module
-    note below) rejecting one would refuse the only shape the API can currently express.
+    Namespaces are not judged here: a namespace's parent is its warehouse or a namespace whenever it has a name to be
+    created under, and a name of one segment, a warehouse's own, is refused before any door by
+    :func:`_require_a_name_inside_a_warehouse`, which also refuses a table with no namespace between it and its warehouse.
     """
     if resource != "table":
         return
@@ -1844,8 +1893,8 @@ async def require_parent_exists(ns: LanceNamespace, resource: str, segments: lis
         parent_id = fga.canonical_object_id(parent)
         raise NamespaceNotFoundError(
             f"cannot create '{ident}': its parent namespace '{parent_id}' does not exist. "
-            f"Create it first (POST /v1/namespace/{parent_id}/create, or the warehouse-scoped door "
-            "for a top-level namespace) — a table whose namespace is absent is invisible to every "
+            f"Create it first (POST /v1/namespace/{parent_id}/create, or POST /management/v1/warehouses "
+            "for a warehouse) — a table whose namespace is absent is invisible to every "
             "cascade and to every parent-scoped grant."
         ) from exc
 
@@ -1885,43 +1934,6 @@ def require_namespace_depth(segments: list[str]) -> None:
             f"{MAX_NAMESPACE_DEPTH - 1}. Deeper trees exceed what the authorization model can resolve, "
             f"which takes metadata reads down for the whole warehouse rather than denying just this one."
         )
-
-
-def require_warehouse_scoped(segments: list[str], *, warehouses_enabled: bool) -> None:
-    """Refuse a TOP-LEVEL namespace created outside a warehouse.
-
-    A namespace is logical separation INSIDE a tenant, so it has to live in one:
-    ``project > warehouse > namespace > table``. The warehouse-scoped door
-    (``POST /management/v1/warehouses/{warehouse_id}/namespaces``) binds the new namespace to a real bucket, and
-    every table beneath it then lands in that tenant's storage — physically isolated from every other
-    tenant's.
-
-    This generic door could not. It created the namespace UNBOUND, and the resolver fell back to the
-    shared default root: the namespace worked, tables under it worked, and the data quietly went to
-    the wrong bucket — a multi-tenancy hole that no error ever reported. That fallback existed for
-    backward compatibility, which is exactly what this refusal gives up on purpose.
-
-    NESTED namespaces are untouched: their parent is the namespace above them, so they inherit that
-    one's warehouse binding. Only the top-level rung has a warehouse to name.
-
-    NO-OP WHEN WAREHOUSES ARE DISABLED, and that is not a loophole. With ``warehouses_enabled`` off
-    there are no warehouses to belong to — the deployment is single-bucket by configuration, the
-    default root is the only correct destination, and demanding a warehouse would be a rule no caller
-    could satisfy. The rule binds exactly where it is meaningful: a multi-tenant deployment.
-    """
-    if not warehouses_enabled:
-        return
-    if len(segments) > 1:
-        return
-    ident = fga.canonical_object_id(segments)
-    raise InvalidInputError(
-        f"top-level namespace '{ident}' must belong to a warehouse. A namespace is logical "
-        f"separation inside a tenant (project > warehouse > namespace > table), and an unbound "
-        f"namespace resolves to the shared default bucket instead of the tenant's own. "
-        f"Create it through its warehouse — POST /management/v1/warehouses/{{warehouse_id}}/namespaces with "
-        f"name '{ident}' — or nest it under an existing namespace "
-        f"('<parent>{CATALOG_DELIMITER}{ident}')."
-    )
 
 
 def require_not_protected(record: dict[str, str], *, kind: str, obj_id: str, force: bool) -> None:
@@ -2065,26 +2077,26 @@ def project_admin_for(token: Caller | None, named: str | None) -> str | None:
 async def seed_project_admin(
     client: OpenFgaClient | None,
     settings: Settings,
-    token: Caller | None,
+    actor: str | None,
     *,
     project: str,
     admin: str | None,
 ) -> bool:
     """Grant ``admin`` (from :func:`project_admin_for`) on the new ``project:<id>`` — the tuple that makes
-    a tenant self-sustaining (every later warehouse/namespace/table grant cascades from it). The caller
-    is recorded as the actor.
+    a tenant self-sustaining (every later warehouse/namespace/table grant cascades from it). ``actor``,
+    the caller or the declaration, is recorded as its writer.
 
     Written by ``POST /management/v1/projects`` in the same operation as the registry record, which is the whole
     point of Decision 1: existence and permission are minted together and cannot drift. Idempotent —
     ``write_tuples`` swallows duplicate writes on a create retry. Returns True when the tuple was
     actually written, so the caller audits a grant that really happened (never one an FGA-off stack
     silently skipped)."""
-    if not (settings.fga_enabled and token is not None and client is not None and admin is not None):
+    if not (settings.fga_enabled and actor is not None and client is not None and admin is not None):
         return False
     await fga.write_tuples(  # noqa: TID251
         client,
         [fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=f"project:{project}")],
-        actor=token.subject,
+        actor=actor,
         origin="project_create",
     )
     return True
@@ -2102,11 +2114,13 @@ def owned_object(resource: str, uuid: str) -> str:
 
 
 async def parent_object_of(resolver: Resolver, settings: Settings, resource: str, segments: list[str]) -> str | None:
-    """The object a just-created child's ``parent`` edge names: its parent namespace's uuid object, the default warehouse
-    for a top-level namespace, or ``None`` for a top-level table (``table.parent`` accepts only a namespace).
+    """The object a just-created child's ``parent`` edge names: the object its parent's name is governed as
+    (:meth:`Resolver.object`), ``warehouse:<id>`` for a name directly in a warehouse and the parent namespace's uuid
+    object below it ([[LH-593]]).
 
-    ``fga_default_warehouse_object``, never ``fga_root_object``: the model types ``namespace#parent`` as ``[warehouse,
-    namespace]``, and every rung the namespace inherits ``from parent`` has to be defined on the parent's type.
+    A name of one segment has no parent to name. No door creates one (:func:`_require_a_name_inside_a_warehouse`), and
+    it is answered the estate's warehouse object for a namespace and ``None`` for a table (``table.parent`` accepts only
+    a namespace), which :func:`require_parent` refuses.
 
     Raises:
         NamespaceNotFoundError: The parent namespace is gone; the create door checked it existed before its write.
@@ -2128,7 +2142,6 @@ async def seed_ownership(
     resource: str,
     segments: list[str],
     uuid: str,
-    parent_object: str | None = None,
 ) -> None:
     """Grant the creator ``owner`` + the ``parent`` edge on a just-created object, ``table:<uuid>`` or ``namespace:<uuid>``.
 
@@ -2142,11 +2155,7 @@ async def seed_ownership(
 
     No-op when FGA is off, the request is unauthenticated, or the client is unwired — so
     create endpoints call it unconditionally with one line. This is the ONE place the
-    post-create seed policy lives.
-
-    ``parent_object`` overrides the derived parent (:func:`parent_object_of`) for the one door whose hierarchy is not
-    positional: a warehouse-scoped namespace hangs off ``warehouse:<id>``, not off the shared catalog root its
-    segments would imply.
+    post-create seed policy lives. The ``parent`` edge names :func:`parent_object_of`.
     """
     if not (settings.fga_enabled and token is not None and client is not None):
         return
@@ -2171,7 +2180,7 @@ async def seed_ownership(
         obj=owned_object(resource, uuid),
         actor=token.subject,
         origin="create",
-        parent_object=parent_object or await parent_object_of(resolver, settings, resource, segments),
+        parent_object=await parent_object_of(resolver, settings, resource, segments),
     )
 
 
@@ -2210,19 +2219,16 @@ async def link_an_unlinked_table(
         await fga.link_to_parent(client, obj=obj, parent=parent, actor=token.subject, origin="create")  # noqa: TID251
 
 
-#: Object types whose tenant resolves through the binding registry (namespace -> warehouse -> project).
-#: A `project:` object IS its own tenant and a `warehouse:` one carries a direct tuple, so neither needs
-#: the registry; they are left out rather than guessed at.
-_TENANT_RESOLVES_BY_NAMESPACE = frozenset({"namespace", "table", "materialized_view"})
-#: The types a role's grant is held inside its tenant on: those above, a warehouse, whose own record names its project,
-#: and a project, which is its own tenant ([[LH-557]]: a role made a project's admin or member is that project's).
-_TENANT_HELD = _TENANT_RESOLVES_BY_NAMESPACE | {"warehouse", "project"}
+#: The types a role's grant is held inside its tenant on ([[LH-557]]): a namespace, table or view, whose tenant is its
+#: name's warehouse's project ([[LH-593]]); a warehouse, whose own record names its project; and a project, which is its
+#: own tenant (a role made a project's admin or member is that project's).
+_TENANT_HELD = frozenset({"namespace", "table", "materialized_view", "warehouse", "project"})
 
 
 async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, *, fga_type: str, segments: list[str], settings: Settings) -> None:
     """Refuse granting a role from one tenant a rung on another tenant's object: a namespace's, a table's or a view's
-    tenant through its top-level namespace's binding, a warehouse's from its own record ([[LH-555]]), a project's its
-    own id, and a role's the project its own edge names ([[LH-557]]).
+    tenant is the project of the warehouse its name begins with ([[LH-593]]), a warehouse's is named by its own record
+    ([[LH-555]]), a project's is its own id, and a role's the project its own edge names ([[LH-557]]).
 
     A role name is estate-global unless the model says otherwise, so `role:analyst#assignee` minted in
     one project could be granted on any other project's namespace and every layer below would honour
@@ -2235,9 +2241,9 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
     tenant is unknown — would break every existing grant on the day the edge landed, which is how a
     security control gets reverted rather than adopted.
 
-    A SCOPED ROLE IS REFUSED ON AN OBJECT NO PROJECT OWNS ([[LH-572]]): an unbound namespace, a namespace under
-    warehouses switched off, and a warehouse with no record belong to no tenant, so a grant there would reach the object,
-    and everything beneath it, for one project's assignees. A registry read that fails raises as what it is, never as an
+    A SCOPED ROLE IS REFUSED ON AN OBJECT NO PROJECT OWNS ([[LH-572]]): the estate's own warehouse, a warehouse with no
+    record and every name in either belong to no tenant, so a grant there would reach the object, and everything beneath
+    it, for one project's assignees. A registry read that fails raises as what it is, never as an
     object with no tenant.
 
     InvalidInput (13 -> 400), matching the bad-rung refusal above and lance-ns's own vocabulary: the
@@ -2261,34 +2267,28 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
 
 
 def _tenant_of(settings: Settings, fga_type: str, first_segment: str) -> str | None:
-    """The project an object of ``fga_type`` belongs to, from its id's ``first_segment``: a project's own id, a
-    warehouse's own id, or the top-level namespace a namespace, table or view is under. ``None`` when the registry names
-    none."""
+    """The project an object of ``fga_type`` belongs to, from its id's ``first_segment``: a project's own id, else the
+    project of the warehouse it names, which is a warehouse's own id and the first segment of every name in one
+    ([[LH-593]]). ``None`` when the registry names none."""
     if fga_type == "project":
         return first_segment
-    if fga_type == "warehouse":
-        record = warehouses.get_warehouse(settings.registry_root, settings.storage_options(), first_segment)
-        project = record.get("project") if record is not None else None
-        return project or None
-    return warehouses.project_for_namespace(settings.registry_root, settings.storage_options(), first_segment)
+    return warehouses.project_of(settings.registry_root, settings.storage_options(), first_segment)
 
 
-async def require_grants_may_follow(client: OpenFgaClient | None, settings: Settings, *, obj: str, source: list[str], destination: list[str]) -> None:
-    """Refuse a rename whose grants the grant door would refuse on ``destination`` ([[LH-215]]).
+def require_rename_within_its_warehouse(source: list[str], destination: list[str]) -> None:
+    """Refuse a rename whose destination is not a table name in the source's own warehouse ([[LH-593]]).
 
-    A table's grants are held by its uuid (``obj``) and stay on it through a rename, so a rename into another tenant's
-    namespace takes every grant along. Each is held to the grant door's own rule (:func:`refuse_a_cross_tenant_role_grant`):
-    a role one tenant owns is not granted a rung on another tenant's object by renaming the object across. Asked BEFORE
-    the native rename, so a refusal leaves the table where it was. A destination under the same top-level namespace has
-    the source's tenant, and nothing is read; so does FGA off. With FGA on, an unwired client is the 503
-    :func:`require_wired` answers, never a rename whose grants nobody read ([[LH-237]]).
+    A rename moves a pointer inside one directory catalog and never bytes, and a table's bytes lie in its warehouse's
+    root, so no rename carries a table to another warehouse. It follows that a rename never crosses tenants.
+
+    Raises:
+        InvalidInputError: ``destination`` names another warehouse, or no namespace of one.
     """
-    if not settings.fga_enabled or source[:1] == destination[:1]:
-        return
-    wired = require_wired(client)
-    for held in await fga.read_object_tuples(wired, obj):
-        if held.user and held.relation != "parent":
-            await refuse_a_cross_tenant_role_grant(wired, held.user, fga_type="table", segments=destination, settings=settings)
+    if len(destination) < 3 or destination[0] != source[0]:
+        raise InvalidInputError(
+            f"table '{fga.canonical_object_id(source)}' cannot be renamed to '{fga.canonical_object_id(destination)}': a rename keeps a "
+            f"table in its warehouse, so the new name is {source[0]}{CATALOG_DELIMITER}<namespace>{CATALOG_DELIMITER}<table>"
+        )
 
 
 async def _parents_of(authz: Authorization, obj: str) -> list[str]:
@@ -2612,7 +2612,6 @@ async def seed_ownership_or_compensate(
     segments: list[str],
     uuid: str,
     undo: Callable[[], Awaitable[None]] | None,
-    parent_object: str | None = None,
 ) -> None:
     """:func:`seed_ownership`, but UNDO the native create when the grant fails (diff2 F3).
 
@@ -2643,7 +2642,7 @@ async def seed_ownership_or_compensate(
     what the caller is told.
     """
     try:
-        await seed_ownership(client, settings, token, resolver, resource=resource, segments=segments, uuid=uuid, parent_object=parent_object)
+        await seed_ownership(client, settings, token, resolver, resource=resource, segments=segments, uuid=uuid)
     except Exception:
         if undo is not None:
             await compensate_create(client, settings, token, resource=resource, segments=segments, uuid=uuid, undo=undo, reason="grant_failed")
@@ -2776,7 +2775,7 @@ async def require_rename_destination(
     """
     if (authz := authorization(settings, client, token)) is None:
         return
-    if (parent := _create_parent_rung("table", destination, settings)) is None:  # an open top-level create (authn already enforced)
+    if (parent := _create_parent_rung("table", destination)) is None:
         return
     if _moves_namespace(source, destination):
         parent = tier_policy.Rung(relation=_ACCEPT_MOVED_TABLE_RELATION, on=parent.on)

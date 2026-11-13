@@ -63,7 +63,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | autoscaling.scaleDownStabilizationSeconds | int | `300` | HPA scale-down stabilization window in seconds; stops a spiky service oscillating. |
 | autoscaling.targetCPUUtilizationPercentage | int | `70` | HPA target CPU as a percentage of the pod's CPU request (not its limit). |
 | backups.controlRoot.dest | string | `""` | S3 URI the control-root backup is copied to. Empty writes `_backups/control/` inside the control root itself, which does not survive losing the bucket. |
-| backups.controlRoot.enabled | bool | `false` | Schedule a CronJob that backs up the control root (project, warehouse, binding and bucket-claim registries). Off by default. |
+| backups.controlRoot.enabled | bool | `false` | Schedule a CronJob that backs up the control root (project, warehouse and bucket-claim registries). Off by default. |
 | backups.controlRoot.keep | int | `14` | Number of newest control-root backups kept after each successful copy; 0 keeps every run. |
 | backups.controlRoot.schedule | string | `"0 1 * * *"` | Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump). |
 | backups.pgDump.enabled | bool | `false` | Schedule a CronJob that pg_dumps the OpenFGA database (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. It signs with a session its own ServiceAccount's token is exchanged for, and pg_dump reads its password from a PGPASSFILE. Off by default. |
@@ -83,6 +83,11 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.controlOutbox.bindingName | string | `"catalog-control-relay-cron"` | Name of the control relay's Dapr cron Component; also the catalog's LANCE_CONTROL_RELAY_BINDING_NAME and the route it serves. Must stay one string. |
 | catalog.controlOutbox.enabled | bool | `true` | Stage control events in a durable S3 outbox and run the relay cron that drains it; carries `table_published` to its subscribers. Requires `controlEmit`. |
 | catalog.controlOutbox.schedule | string | `"@every 60s"` | Dapr cron schedule of the control outbox relay; bounds how long a control event stays undelivered after a bus outage. |
+| catalog.declarationConverge.bindingName | string | `"catalog-declaration-converge-cron"` | Name of the declaration-converge Dapr cron Component; also the catalog's LANCE_DECLARATION_CONVERGE_BINDING_NAME and the route it serves. |
+| catalog.declarationConverge.schedule | string | `"@every 60s"` | Dapr cron schedule on which the catalog converges the estate onto `catalog.declared`; lateness only delays a declared change. |
+| catalog.declared.grants | list | `[]` | Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:<id>` or `warehouse:<id>`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:<namespace>:<name>`). The catalog revokes a grant removed from here, and only one it wrote from here. |
+| catalog.declared.projects | list | `[{"id":"default"}]` | Projects git declares, each `{id, admins, protected}`: `admins` lists people's principals (`<idp-id>~<user id>`), and a project naming none is administered by `auth.bootstrapAdmin` when that is set; `protected` arms its deletion protection. The default declares one project, so a one-team install never creates one. |
+| catalog.declared.warehouses | list | `[]` | Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it. The id is the first segment of every name in the warehouse. |
 | catalog.erasure.bindingName | string | `"catalog-erasure-release-cron"` | Name of the erasure-release Dapr cron Component; also the catalog's LANCE_ERASURE_RELEASE_BINDING_NAME and the route it serves. |
 | catalog.erasure.deadlineDays | int | `30` | Days after an erasure obligation is recorded that it is due; an obligation still open past it is shown overdue (LANCE_ERASURE_DEADLINE_DAYS). Required. |
 | catalog.erasure.releaseGraceDays | int | `7` | Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required. |
@@ -97,7 +102,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.promotion.schedule | string | `"@every 60s"` | Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time. |
 | catalog.requestDeadlineSeconds | int | `300` | Seconds a catalog request may run before its caller is answered 503 (code 17) while it runs on to its end (LANCE_REQUEST_DEADLINE_SECONDS). |
 | catalog.trashGraceDays | float | `7` | Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
-| catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `objectStore.bucket`. |
 | console.enabled | bool | `true` | Render the console: its Deployment, Service, `/config.json` ConfigMap, ServiceAccount and, with `route.enabled`, its `/` HTTPRoute. |
 | console.oidc.clientId | string | `"rask-console"` | The IdP's public client the console signs in with (PKCE, no secret); the development Dex declares `rask-console` (deploy/fixtures/dex `console`). |
 | console.oidc.scopes | list | `["openid","profile","email","groups"]` | Scopes the console asks for; `federated:id` and the lakehouse's audience scope are always added. |
@@ -277,7 +281,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.catalog.daprAppId | string | `"catalog"` | Dapr app-id of the catalog; also names its pubsub components and durable consumers. |
 | services.catalog.module | string | `"catalog.main:app"` | uvicorn import path the catalog Deployment runs (templates/services.yaml). |
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
-| services.catalog.replicas | int | `1` | Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. Not rendered while autoscaling.enabled: the HPA owns the count. |
+| services.catalog.replicas | int | `1` | Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count. |
 | services.lineage.daprAppId | string | `"lineage"` | Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron. |
 | services.lineage.deliveriesInFlight | int | `64` | How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `maxAckPending`). |
 | services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a consumer's outage it survives. 0 is unbounded. |
@@ -290,7 +294,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs (templates/services.yaml). |
 | services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<objectStore.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
-| services.lineage.provenanceNamespace | string | `"provenance"` | Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`). |
+| services.lineage.provenanceNamespace | string | `"lance_catalog$provenance"` | Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`): `lance_catalog$<namespace>`, a namespace of the estate's own warehouse; the render refuses any other. |
 | services.lineage.provenanceRetainVersions | int | `20` | Versions maintenance keeps of each provenance table: the namespace's keep-last-N policy, written by the catalog at boot (`LANCE_PROVENANCE_RETAIN_VERSIONS`). Null declares none. |
 | services.lineage.relay.bindingName | string | `"lineage-relay-cron"` | Name of the relay cron binding; the sidecar POSTs to /<bindingName>. |
 | services.lineage.relay.enabled | bool | `true` | Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled. |

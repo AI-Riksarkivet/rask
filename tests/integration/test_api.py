@@ -42,22 +42,22 @@ ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 def test_schema_metadata_flat_map_keeps_keys_named_like_envelope_fields(real_ns_client: TestClient) -> None:
     # CONTRACT (audit 2026-07-15): a FLAT body IS the metadata map — a user key literally named "id"
     # (or identity/context) is data, and must land on the table, never be eaten as an envelope field.
-    _ensure_namespace(real_ns_client, "db1")
-    assert real_ns_client.post("/v1/table/db1$users/create", content=_ONE_ROW, headers=ARROW_STREAM).status_code == 200
+    _ensure_namespace(real_ns_client, "lance_catalog$db1")
+    assert real_ns_client.post("/v1/table/lance_catalog$db1$users/create", content=_ONE_ROW, headers=ARROW_STREAM).status_code == 200
 
-    resp = real_ns_client.post("/v1/table/db1$users/schema_metadata/update", json={"id": "row-key", "owner": "alice"})
+    resp = real_ns_client.post("/v1/table/lance_catalog$db1$users/schema_metadata/update", json={"id": "row-key", "owner": "alice"})
 
     assert resp.status_code == 200, resp.text
-    location = real_ns_client.post("/v1/table/db1$users/describe", json={}).json()["location"]
+    location = real_ns_client.post("/v1/table/lance_catalog$db1$users/describe", json={}).json()["location"]
     assert {key: lance.dataset(location).schema.metadata[key.encode()].decode() for key in ("id", "owner")} == {"id": "row-key", "owner": "alice"}
 
 
 def test_create_namespace_routes_with_body_and_id(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.create_namespace.return_value = CreateNamespaceResponse(properties={"team": "ml"})
-    resp = client.post("/v1/namespace/parent$child/create", json={"properties": {"team": "ml"}})
+    resp = client.post("/v1/namespace/lance_catalog$parent$child/create", json={"properties": {"team": "ml"}})
     assert resp.status_code == 200
     req = fake_ns.create_namespace.call_args.args[0]
-    assert req.id == ["parent", "child"]
+    assert req.id == ["lance_catalog", "parent", "child"]
     # Beside the uuid the door mints for the namespace ([[LH-519]]).
     assert {key: value for key, value in req.properties.items() if key != "rask.uuid"} == {"team": "ml"}
     assert resp.json() == {"properties": {"team": "ml"}}  # our serialization
@@ -80,15 +80,15 @@ def _ensure_namespace(client: TestClient, name: str) -> None:
 
 
 def test_create_table_passes_arrow_bytes_through(real_ns_client: TestClient) -> None:
-    _ensure_namespace(real_ns_client, "db")
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
     # The raw Arrow-IPC body is written verbatim as the new table's first version. Driven against a REAL
     # dir namespace (a MagicMock can no longer stand in — the create does a real 2.2 write), so this now
     # proves the ACTUAL round-trip: the rows land, not merely that bytes reached a mocked method.
     body = _arrow_ipc(pa.table({"id": [1, 2, 3]}))
-    resp = real_ns_client.post("/v1/table/db$t/create?mode=overwrite", content=body, headers=ARROW_STREAM)
+    resp = real_ns_client.post("/v1/table/lance_catalog$db$t/create?mode=overwrite", content=body, headers=ARROW_STREAM)
     assert resp.status_code == 200
 
-    described = real_ns_client.post("/v1/table/db$t/describe", json={"load_detailed_metadata": True})
+    described = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={"load_detailed_metadata": True})
     assert described.status_code == 200
     ds = lance.dataset(described.json()["location"])
     assert ds.count_rows() == 3
@@ -141,9 +141,9 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         return CreateTableResponse(location=fake_ns.describe_table.return_value.location, version=1)
 
     monkeypatch.setattr("catalog.services.dataplane.create_table", _stub)
-    claim_described("media$clips")  # the table the overwrite replaces, which the double describes as existing
+    claim_described("lance_catalog$media$clips")  # the table the overwrite replaces, which the double describes as existing
     resp = client.post(
-        "/v1/table/media$clips/create?mode=overwrite",
+        "/v1/table/lance_catalog$media$clips/create?mode=overwrite",
         content=_arrow_ipc(pa.table({"id": [1]})),
         headers=ARROW_STREAM,
     )
@@ -156,7 +156,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         "the create must be told where its base record lives"
     )
     assert seen == {
-        "segments": ["media", "clips"],
+        "segments": ["lance_catalog", "media", "clips"],
         "root": get_settings().root,
         "mode": "overwrite",
         "allow_external_blobs": False,
@@ -174,11 +174,11 @@ def test_merge_insert_reads_its_query_params_as_the_spec_states_them(real_ns_cli
     field alone matches ``(3, 3)``, whose filter holds; the filter alone updates only the rows it holds true for, and a
     source row matching nothing is not inserted unless asked.
     """
-    _ensure_namespace(real_ns_client, "db")
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
     target = _arrow_ipc(
         pa.table({"id": pa.array([1, 2, 3], pa.int64()), "rev": pa.array([1, 2, 3], pa.int64()), "score": pa.array([0.9, 0.1, 0.9]), "label": ["a", "b", "c"]})
     )
-    assert real_ns_client.post("/v1/table/db$t/create", content=target, headers=ARROW_STREAM).status_code == 200
+    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=target, headers=ARROW_STREAM).status_code == 200
     source = _arrow_ipc(
         pa.table(
             {
@@ -191,14 +191,14 @@ def test_merge_insert_reads_its_query_params_as_the_spec_states_them(real_ns_cli
     )
 
     resp = real_ns_client.post(
-        "/v1/table/db$t/merge_insert?on=id&on=rev&when_matched_update_all_filt=target.score > 0.5&use_index=true",
+        "/v1/table/lance_catalog$db$t/merge_insert?on=id&on=rev&when_matched_update_all_filt=target.score > 0.5&use_index=true",
         content=source,
         headers=ARROW_STREAM,
     )
 
     assert resp.status_code == 200, resp.text
     assert (resp.json()["num_updated_rows"], resp.json()["num_inserted_rows"]) == (1, 0)
-    location = real_ns_client.post("/v1/table/db$t/describe", json={}).json()["location"]
+    location = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]
     assert sorted(lance.dataset(location).to_table(columns=["id", "rev", "label"]).to_pylist(), key=lambda row: (row["id"], row["rev"])) == [
         {"id": 1, "rev": 1, "label": "A"},
         {"id": 2, "rev": 2, "label": "b"},
@@ -210,7 +210,7 @@ def test_list_table_versions_maps_descending_and_branch(client: TestClient, fake
     fake_ns.list_table_versions.return_value = ListTableVersionsResponse(versions=[])
     # The door opens the named branch before the native call ([[LH-406]]); the table here has it.
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset_unchecked", lambda *a, **k: MagicMock())
-    client.post("/v1/table/db$t/version/list?descending=true&branch=exp")
+    client.post("/v1/table/lance_catalog$db$t/version/list?descending=true&branch=exp")
     req = fake_ns.list_table_versions.call_args.args[0]
     assert req.descending is True
     assert req.branch == "exp"
@@ -227,7 +227,7 @@ def test_exists_returns_200_with_no_body(client: TestClient, fake_ns: MagicMock)
     because the two live in different modules and only one was ever measured."""
     fake_ns.table_exists.return_value = None
     fake_ns.namespace_exists.return_value = None
-    for door in ("/v1/table/db$t/exists", "/v1/namespace/db/exists"):
+    for door in ("/v1/table/lance_catalog$db$t/exists", "/v1/namespace/lance_catalog$db/exists"):
         resp = client.post(door)
         assert resp.status_code == 200, door
         assert resp.content == b"", (door, resp.headers.get("content-type"), resp.content)
@@ -239,7 +239,7 @@ def test_exists_returns_200_with_no_body(client: TestClient, fake_ns: MagicMock)
 def test_domain_conflict_maps_to_409(client: TestClient, fake_ns: MagicMock) -> None:
     # A declaration records its row through RegisterTable ([[LH-520]]), which answers a taken name so.
     fake_ns.register_table.side_effect = TableAlreadyExistsError("exists")
-    assert client.post("/v1/table/db$t/declare", json={}).status_code == 409
+    assert client.post("/v1/table/lance_catalog$db$t/declare", json={}).status_code == 409
 
 
 def test_backend_stub_message_maps_to_unsupported(client: TestClient, fake_ns: MagicMock) -> None:
@@ -247,7 +247,7 @@ def test_backend_stub_message_maps_to_unsupported(client: TestClient, fake_ns: M
     # "unsupported"), not a 500. rename_table is now implemented in-process (#5b), so register_table — a
     # still-native-delegated op — stands in for a genuinely-unwired backend op.
     fake_ns.register_table.side_effect = RuntimeError("register_table not implemented")
-    resp = client.post("/v1/table/db$t/register", json={"location": "db-t"})
+    resp = client.post("/v1/table/lance_catalog$db$t/register", json={"location": "db-t"})
     assert (
         resp.status_code == 406
     )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
@@ -259,22 +259,22 @@ def test_list_branches_routes_to_dataset_branches(client: TestClient, monkeypatc
     dataset = MagicMock()
     dataset.branches.list.return_value = {"exp": {"parent_branch": None, "parent_version": 2, "create_at": 1, "manifest_size": 9}}
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset_unchecked", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/db1$users/branches/list")
+    resp = client.post("/v1/table/lance_catalog$db1$users/branches/list")
     assert resp.status_code == 200
     assert resp.json()["branches"]["exp"]["parentVersion"] == 2  # serialized with the spec's camelCase alias
 
 
 def test_create_branch_maps_from_version_to_int_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
+    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
     dataset = MagicMock()
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/db$t/branches/create", json={"name": "exp", "from_version": 3})
+    resp = client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "exp", "from_version": 3})
     assert resp.status_code == 200
     dataset.create_branch.assert_called_once_with("exp", 3)  # fromVersion → int reference
 
 
 def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
+    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
     dataset = MagicMock()
     # The double must NAME the source branch, because the door now reads the branch list to establish
     # it: pylance renders a missing source branch and a missing source version with the same
@@ -284,16 +284,16 @@ def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient,
     # reached at all.
     dataset.branches.list.return_value = {"exp": {"parent_version": 2}}
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/db$t/branches/create", json={"name": "x", "from_branch": "exp", "from_version": 2})
+    resp = client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "x", "from_branch": "exp", "from_version": 2})
     assert resp.status_code == 200
     dataset.create_branch.assert_called_once_with("x", ("exp", 2))  # (branch, version) reference
 
 
 def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
+    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
     dataset = MagicMock()
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/db$t/branches/create", json={"name": "exp"})
+    resp = client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "exp"})
     assert resp.status_code == 200
     dataset.create_branch.assert_called_once_with("exp", None)  # neither → latest of main
 
@@ -359,7 +359,7 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", _readback)
     captured = _capture_measured_emit(monkeypatch)
 
-    resp = client.post("/v1/table/db$t/add_columns", json={"new_columns": [{"name": "x", "expression": "1"}]})
+    resp = client.post("/v1/table/lance_catalog$db$t/add_columns", json={"new_columns": [{"name": "x", "expression": "1"}]})
     assert resp.status_code == 200
     assert seen["pin"] == 4  # the read-back opened the dataset AT the version the response reported
     assert seen["branch"] is None  # no branch on the request → the read-back stays on main
@@ -369,12 +369,12 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
 
 
 def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_client: TestClient, monkeypatch) -> None:
-    _ensure_namespace(real_ns_client, "db")
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
     # ExistOk KEEPS an existing table (nothing written, response.version = the existing version): the
     # payload's schema may then belong to a table that was never created — the true schema must be read back
     # PINNED at that version, never parsed from the payload. Now driven for real: the table genuinely exists.
     body = _arrow_ipc(pa.table({"id": [1]}))
-    assert real_ns_client.post("/v1/table/db$t/create", content=body, headers=ARROW_STREAM).status_code == 200
+    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=body, headers=ARROW_STREAM).status_code == 200
 
     seen: dict[str, object] = {}
 
@@ -389,7 +389,7 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
     monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", _readback)
     monkeypatch.setattr("catalog.services.dataplane.payload_schema_fields", _payload_bomb)
 
-    resp = real_ns_client.post("/v1/table/db$t/create?mode=exist_ok", content=body, headers=ARROW_STREAM)
+    resp = real_ns_client.post("/v1/table/lance_catalog$db$t/create?mode=exist_ok", content=body, headers=ARROW_STREAM)
     assert resp.status_code == 200
     assert "pin" in seen  # the readback path was taken (not the payload path)
     assert seen["pin"] == 1  # schema read back pinned at the EXISTING (freshly-created) table's version
@@ -412,9 +412,9 @@ def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake
 
     monkeypatch.setattr("catalog.api.announcing.emit_write_event", _emit)
     monkeypatch.setattr("catalog.api.fga_deps.revoke_ownership", _revoke)
-    claim_described("db$t")
+    claim_described("lance_catalog$db$t")
 
-    resp = client.post("/v1/table/db$t/deregister")
+    resp = client.post("/v1/table/lance_catalog$db$t/deregister")
     assert resp.status_code == 200
     assert order == ["emit", "revoke"]  # marker first, while the caller's grant still authorizes ingest
 
@@ -431,7 +431,7 @@ def test_register_emits_the_resolved_location_not_the_relative_one(client: TestC
     _judge_as_single_version(monkeypatch)
     captured = _capture_emit(monkeypatch)
 
-    resp = client.post("/v1/table/db$t/register", json={"location": "t.lance"})
+    resp = client.post("/v1/table/lance_catalog$db$t/register", json={"location": "t.lance"})
     assert resp.status_code == 200
     assert captured["source_uri"] == "s3://bucket/9f_db$t", "the marker must carry a URI the sweep can open"
 
@@ -440,10 +440,10 @@ def test_declare_emits_versionless_marker(client: TestClient, fake_ns: MagicMock
     # The declaration answers the location the backend describes once its row is recorded ([[LH-520]]), claimed
     # under the uuid the declaration's grants are seeded on.
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/t")
-    claim_described("db$t")
+    claim_described("lance_catalog$db$t")
     captured = _capture_emit(monkeypatch)
 
-    resp = client.post("/v1/table/db$t/declare", json={})
+    resp = client.post("/v1/table/lance_catalog$db$t/declare", json={})
     assert resp.status_code == 200
     assert captured["operation"] == "declare_table"
     assert captured["version"] is None  # reserved, no data yet
@@ -456,16 +456,16 @@ def test_declare_emits_versionless_marker(client: TestClient, fake_ns: MagicMock
 
 def test_describe_version_marshals_request_to_a_dict(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_table_version.return_value = DescribeTableVersionResponse(version=TableVersion(version=2, manifest_path="_versions/2.manifest"))
-    resp = client.post("/v1/table/db$t/version/describe?version=2")
+    resp = client.post("/v1/table/lance_catalog$db$t/version/describe?version=2")
     assert resp.status_code == 200
     assert resp.json()["version"]["version"] == 2
     arg = fake_ns.describe_table_version.call_args.args[0]
-    assert isinstance(arg, dict) and arg["id"] == ["db", "t"] and arg["version"] == 2  # a dict, not the model
+    assert isinstance(arg, dict) and arg["id"] == ["lance_catalog", "db", "t"] and arg["version"] == 2  # a dict, not the model
 
 
 def test_describe_version_missing_maps_to_404(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_table_version.side_effect = TableVersionNotFoundError("version 99 not found")
-    resp = client.post("/v1/table/db$t/version/describe?version=99")
+    resp = client.post("/v1/table/lance_catalog$db$t/version/describe?version=99")
     assert resp.status_code == 404
 
 
@@ -478,7 +478,7 @@ def test_request_validation_on_a_SPEC_route_maps_to_400_problem_json(client: Tes
     two ways, and a generated Lance client dispatches on the CODE.
     """
     # UpdateTableRequest requires `updates`; an empty body fails validation.
-    resp = client.post("/v1/table/db$t/update", json={})
+    resp = client.post("/v1/table/lance_catalog$db$t/update", json={})
     assert resp.status_code == 400
     assert resp.headers["content-type"].startswith("application/problem+json")
     assert resp.json()["title"] == "Validation Error"
@@ -488,13 +488,13 @@ def test_request_validation_on_a_SPEC_route_maps_to_400_problem_json(client: Tes
 
 
 def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("db$t")  # the table a ref is made on, whose location's claim records its uuid
+    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
     # A branch-scoped tag must pass (branch, version) — a bare int would resolve against main, tagging the
     # WRONG version. (Was silently dropping `branch`.)
     dataset = MagicMock()
     dataset.branches.list.return_value = {"dev": {}}  # a tag is made on a branch the table has ([[LH-406]])
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/db$t/tags/create", json={"tag": "rc", "version": 5, "branch": "dev"})
+    resp = client.post("/v1/table/lance_catalog$db$t/tags/create", json={"tag": "rc", "version": 5, "branch": "dev"})
     assert resp.status_code == 200
     dataset.tags.create.assert_called_once_with("rc", ("dev", 5))
 
@@ -502,19 +502,19 @@ def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, 
 def test_alter_columns_converts_json_arrow_type_to_pyarrow(real_ns_client: TestClient) -> None:
     # A re-type carries `data_type` as a JsonArrowDataType dict; it must reach pylance as a real pa.DataType,
     # not the JSON dict (which would 500 at the Rust boundary). float32→float16 is the documented vector case.
-    _ensure_namespace(real_ns_client, "db")
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
     body = _arrow_ipc(pa.table({"id": pa.array([1, 2], pa.int64()), "embedding": pa.array([0.5, 1.5], pa.float32())}))
-    assert real_ns_client.post("/v1/table/db$t/create", content=body, headers=ARROW_STREAM).status_code == 200
-    resp = real_ns_client.post("/v1/table/db$t/alter_columns", json={"alterations": [{"path": "embedding", "data_type": {"type": "float16"}}]})
+    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=body, headers=ARROW_STREAM).status_code == 200
+    resp = real_ns_client.post("/v1/table/lance_catalog$db$t/alter_columns", json={"alterations": [{"path": "embedding", "data_type": {"type": "float16"}}]})
     assert resp.status_code == 200, resp.text
-    location = real_ns_client.post("/v1/table/db$t/describe", json={}).json()["location"]
+    location = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]
     assert lance.dataset(location).schema.field("embedding").type == pa.float16()
 
 
 def test_alter_columns_unsupported_type_is_400_not_500(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: MagicMock())
     resp = client.post(
-        "/v1/table/db$t/alter_columns",
+        "/v1/table/lance_catalog$db$t/alter_columns",
         json={"alterations": [{"path": "c", "data_type": {"type": "some_exotic_type"}}]},
     )
     assert resp.status_code == 400  # clear InvalidInput, not a silent Rust-boundary 500
@@ -522,7 +522,7 @@ def test_alter_columns_unsupported_type_is_400_not_500(client: TestClient, monke
 
 def test_update_with_empty_updates_is_400(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: MagicMock())
-    resp = client.post("/v1/table/db$t/update", json={"updates": []})
+    resp = client.post("/v1/table/lance_catalog$db$t/update", json={"updates": []})
     assert resp.status_code == 400
     assert resp.json()["code"] == 13  # InvalidInput
 
@@ -531,18 +531,18 @@ def test_maintenance_policy_crud_round_trips(client: TestClient, fake_ns: MagicM
     # CONTRACT (#50, ADR 0173 §8): set keys the record by the uuid the table's location claim records and persists it;
     # describe returns the record; delete is idempotent, and describe then answers that none is set ([[LH-589]]).
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
-    users = claim_described("db1$users")
-    set_resp = client.post("/management/v1/table/db1$users/policy/set", json={"retention_days": 7, "compact_interval_hours": 12})
+    users = claim_described("lance_catalog$db1$users")
+    set_resp = client.post("/management/v1/table/lance_catalog$db1$users/policy/set", json={"retention_days": 7, "compact_interval_hours": 12})
     assert set_resp.status_code == 200, set_resp.text
     body = set_resp.json()
     assert body["uuid"] == users and body["retention_days"] == 7
 
-    desc = client.post("/management/v1/table/db1$users/policy/describe")
+    desc = client.post("/management/v1/table/lance_catalog$db1$users/policy/describe")
     assert (desc.status_code, desc.json()["compact_interval_hours"], desc.json()["set"]) == (200, 12, True)
 
-    assert client.post("/management/v1/table/db1$users/policy/delete").status_code == 200
-    unset = client.post("/management/v1/table/db1$users/policy/describe")
-    assert (unset.status_code, unset.json()) == (200, {"kind": "table", "id": "db1$users", "uuid": users, "set": False})
+    assert client.post("/management/v1/table/lance_catalog$db1$users/policy/delete").status_code == 200
+    unset = client.post("/management/v1/table/lance_catalog$db1$users/policy/describe")
+    assert (unset.status_code, unset.json()) == (200, {"kind": "table", "id": "lance_catalog$db1$users", "uuid": users, "set": False})
 
 
 @pytest.mark.parametrize(
@@ -561,7 +561,7 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
     from catalog.core.config import get_settings
     from lakehouse import maintenance_policies
 
-    assert client.post("/management/v1/namespace/gold/policy/set", json={"retain_versions": 5}).status_code == 200
+    assert client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"retain_versions": 5}).status_code == 200
     real_record = policy_doors._record  # noqa: SLF001 — the merge, where another request's write is landed in between
     landed: list[str] = []
 
@@ -578,9 +578,9 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
 
     monkeypatch.setattr(policy_doors, "_record", _another_request_lands)
 
-    answer = client.post("/management/v1/namespace/gold/policy/set", json={"compact_enabled": False})
+    answer = client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"compact_enabled": False})
 
-    described = client.post("/management/v1/namespace/gold/policy/describe").json()
+    described = client.post("/management/v1/namespace/lance_catalog$gold/policy/describe").json()
     assert answer.status_code == 200, answer.text
     assert {field: described.get(field) for field in kept} == kept, described
     assert described.get("retain_versions") == (5 if meanwhile == "set" else None), described
@@ -589,25 +589,25 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
 def test_namespace_policy_describe_answers_the_policy_its_set_door_wrote(client: TestClient, fake_ns: MagicMock) -> None:
     # [[LH-589]]: the namespace door reads the record its set door keyed by the namespace's uuid, and says it is set.
     uuid = fake_ns.describe_namespace.return_value.properties[UUID_PROPERTY]
-    assert client.post("/management/v1/namespace/gold/policy/set", json={"retain_versions": 5}).status_code == 200
+    assert client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"retain_versions": 5}).status_code == 200
 
-    described = client.post("/management/v1/namespace/gold/policy/describe")
+    described = client.post("/management/v1/namespace/lance_catalog$gold/policy/describe")
 
     # The defaults a first set writes are kept on the record, so they are part of what it reads back.
     kept = {"retain_versions": 5, "compact_enabled": True, "cleanup_enabled": True, "optimize_indices_enabled": True}
-    assert (described.status_code, described.json()) == (200, {"kind": "namespace", "id": "gold", "uuid": uuid, **kept, "set": True})
+    assert (described.status_code, described.json()) == (200, {"kind": "namespace", "id": "lance_catalog$gold", "uuid": uuid, **kept, "set": True})
 
 
 def test_a_field_a_rask_door_does_not_define_is_refused_and_nothing_is_written(client: TestClient, fake_ns: MagicMock) -> None:
     # [[LH-576]] E10e: every body of rask's own doors refuses a field it does not define (`schemas.RequestBody`), so a
     # misspelled bound is refused by name rather than read as absent and answered as if it had been understood.
     del fake_ns
-    refused = client.post("/management/v1/namespace/gold/policy/set", json={"retain_versions": 5, "retention_day": 7})
+    refused = client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"retain_versions": 5, "retention_day": 7})
 
     assert refused.status_code == 422, refused.text
     assert refused.json()["code"] == 13
     assert [(error["field"], error["type"]) for error in refused.json()["errors"]] == [("body.retention_day", "extra_forbidden")]
-    described = client.post("/management/v1/namespace/gold/policy/describe")
+    described = client.post("/management/v1/namespace/lance_catalog$gold/policy/describe")
     assert (described.status_code, described.json()["set"]) == (200, False), "a refused set wrote a policy"
 
 
@@ -728,10 +728,10 @@ def test_project_policy_rejects_a_malformed_project_id(client: TestClient, tmp_p
 
 # --- GET /management/v1/projects/{id}/policies — the #65 project-scoped VIEW -------------------------- #
 #
-# Real stores throughout (a local-FS control root through pyarrow.fs): real warehouse records, real
-# namespace bindings, real policy records written by the same `put_policy` the catalog uses. The one
-# thing these must prove is that scoping is BINDING-derived and not bucket-derived, because
-# `set_namespace_policy` stores the DEFAULT root on every record (see the policies.py module docstring).
+# Real stores throughout (a local-FS control root through pyarrow.fs): real warehouse records and real policy records
+# written by the same `put_policy` the catalog uses. The one thing these must prove is that scoping is derived from the
+# warehouse a name begins with ([[LH-593]]) and not from a bucket, because `set_namespace_policy` stores the DEFAULT
+# root on every record (see the policies.py module docstring).
 
 
 def _list_policies_for(client: TestClient, project: str) -> dict[str, Any]:
@@ -745,8 +745,8 @@ def _list_policies_for(client: TestClient, project: str) -> dict[str, Any]:
 
 def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestClient, tmp_path: object) -> None:
     # CONTRACT (#65): a tenant's policy view carries the tenant's records and NOTHING else, each table's under the
-    # name the table holds now ([[LH-523]]). Two warehouses, each binding one namespace, two table policies — the
-    # rival's record must never cross, and acme's table, renamed since its policy was set, is listed as `db$u`.
+    # name the table holds now ([[LH-523]]). Two warehouses, a table policy in each — the rival's record must never
+    # cross, and acme's table, renamed since its policy was set, is listed as `wh-a$db$u`.
     from catalog.core.config import get_settings
     from catalog.services import table_claims
     from catalog.services import warehouses as wh_svc
@@ -758,22 +758,20 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     so = s.storage_options()
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-z", "bucket": "other-wh", "project": "other", "status": "active"})
-    wh_svc.bind_namespace(s.registry_root, so, "db", "wh-a", "s3://acme-wh")
-    wh_svc.bind_namespace(s.registry_root, so, "rival", "wh-z", "s3://other-wh")
     renamed, location = str(uuid4()), f"s3://acme-wh/{uuid4()}"
     # The rename handed the table's claim, and the uuid it records, to the table's new name.
-    location_claims.take(table_claims.claim_store(s), location, "db$u", ["db", "u"], is_gone=lambda _claim: False, uuid=renamed)
-    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "db$t", "uuid": renamed, "location": location, "retention_days": 7})
-    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "rival$t", "uuid": str(uuid4()), "retention_days": 1})
+    location_claims.take(table_claims.claim_store(s), location, "wh-a$db$u", ["wh-a", "db", "u"], is_gone=lambda _claim: False, uuid=renamed)
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "wh-a$db$t", "uuid": renamed, "location": location, "retention_days": 7})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "wh-z$rival$t", "uuid": str(uuid4()), "retention_days": 1})
 
     body = _list_policies_for(client, "acme")
-    assert [p["id"] for p in body["policies"]] == ["db$u"]
-    assert body["buckets"] == ["acme-wh"] and body["incomplete"] is False
+    assert [p["id"] for p in body["policies"]] == ["wh-a$db$u"]
+    assert (body["buckets"], body["warehouses"]) == (["acme-wh"], ["wh-a"])
 
 
-def test_project_policies_list_finds_a_warehouse_bound_namespace_policy(client: TestClient, tmp_path: object) -> None:
+def test_project_policies_list_finds_a_namespace_policy_by_its_warehouse(client: TestClient, tmp_path: object) -> None:
     # THE decisive one: a namespace's record names no bucket, only the namespace, so the listing finds it
-    # through the BINDING of the namespace it names.
+    # through the warehouse its name begins with.
     from catalog.core.config import get_settings
     from catalog.services import warehouses as wh_svc
     from lakehouse import maintenance_policies as pol_svc
@@ -782,13 +780,12 @@ def test_project_policies_list_finds_a_warehouse_bound_namespace_policy(client: 
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
-    wh_svc.bind_namespace(s.registry_root, so, "gold", "wh-a", "s3://acme-wh")
     # What set_namespace_policy writes: keyed by the namespace's uuid, with the name it had kept under `id`.
-    pol_svc.put_policy(s.registry_root, so, {"kind": "namespace", "id": "gold", "uuid": str(uuid4()), "retention_days": 30})
+    pol_svc.put_policy(s.registry_root, so, {"kind": "namespace", "id": "wh-a$gold", "uuid": str(uuid4()), "retention_days": 30})
 
     body = _list_policies_for(client, "acme")
-    assert [p["id"] for p in body["policies"]] == ["gold"]
-    assert body["namespaces"] == ["gold"]  # the scope the listing was computed from, reported
+    assert [p["id"] for p in body["policies"]] == ["wh-a$gold"]
+    assert body["warehouses"] == ["wh-a"]  # the scope the listing was computed from, reported
 
 
 def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: TestClient, tmp_path: object) -> None:
@@ -806,13 +803,12 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     client.app.dependency_overrides[get_settings] = lambda: s
     so = s.storage_options()
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-old", "bucket": "acme-old", "project": "acme", "status": "deactivated"})
-    wh_svc.bind_namespace(s.registry_root, so, "arch", "wh-old", "s3://acme-old")
     table_uuid, location = str(uuid4()), f"s3://acme-old/{uuid4()}"
-    location_claims.take(table_claims.claim_store(s), location, "arch$t", ["arch", "t"], is_gone=lambda _claim: False, uuid=table_uuid)
-    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "arch$t", "uuid": table_uuid, "location": location, "compact_enabled": False})
+    location_claims.take(table_claims.claim_store(s), location, "wh-old$arch$t", ["wh-old", "arch", "t"], is_gone=lambda _claim: False, uuid=table_uuid)
+    pol_svc.put_policy(s.registry_root, so, {"kind": "table", "id": "wh-old$arch$t", "uuid": table_uuid, "location": location, "compact_enabled": False})
 
     body = _list_policies_for(client, "acme")
-    assert [p["id"] for p in body["policies"]] == ["arch$t"]
+    assert [p["id"] for p in body["policies"]] == ["wh-old$arch$t"]
     assert body["buckets"] == ["acme-old"]
 
 
@@ -835,27 +831,6 @@ def test_project_policies_list_returns_only_its_own_project_record(client: TestC
     assert [(p["kind"], p["id"]) for p in body["policies"]] == [("project", "acme")]
 
 
-def test_project_policies_list_reports_an_unreadable_binding_instead_of_narrowing(client: TestClient, tmp_path: object) -> None:
-    # A binding you cannot read is a namespace you cannot see. The listing still answers 200 (it is a read,
-    # not the destructive door `namespaces_bound_to` guards) but SAYS it may be short — a silently
-    # narrowed list would read as checked-and-clean, the `unbound_namespaces` bug class.
-    from pathlib import Path
-
-    from catalog.core.config import get_settings
-    from catalog.services import warehouses as wh_svc
-
-    s = _project_policy_settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
-    wh_svc.put_warehouse(s.registry_root, s.storage_options(), {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
-    bindings = Path(str(tmp_path)) / "_warehouses" / "bindings"
-    bindings.mkdir(parents=True, exist_ok=True)
-    (bindings / "zzz.json").write_text("{truncated")
-
-    body = _list_policies_for(client, "acme")
-    assert body["incomplete"] is True
-    assert [str(p).endswith("zzz.json") for p in body["skipped_bindings"]] == [True]
-
-
 # The listing's own 403 lives with the other three project-policy gates, in `test_authz.py`
 # (`test_project_policies_list_requires_project_admin`) — one file owns the authz contract, and a
 # fourth door asserted somewhere else is how a tier splits without anyone noticing.
@@ -864,7 +839,7 @@ def test_project_policies_list_reports_an_unreadable_binding_instead_of_narrowin
 def test_access_list_is_unsupported_without_fga(client: TestClient) -> None:
     # CONTRACT (#51): an auth-off stack has no grants to review — answer Unsupported honestly instead
     # of an empty grant list that would read as "nobody has access".
-    resp = client.post("/management/v1/table/db1$users/access/list")
+    resp = client.post("/management/v1/table/lance_catalog$db1$users/access/list")
     # 406 since Q3 (2026-09-02) — the spec's status for Unsupported. The detail now survives too: it is
     # a 4xx, so the 5xx redaction that used to mask it no longer applies, and the caller is told which
     # capability is off rather than only that something is.
@@ -873,14 +848,16 @@ def test_access_list_is_unsupported_without_fga(client: TestClient) -> None:
 
 def test_maintenance_policy_rejects_an_empty_policy(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
-    users = claim_described("db1$users")
-    resp = client.post("/management/v1/table/db1$users/policy/set", json={})
+    users = claim_described("lance_catalog$db1$users")
+    resp = client.post("/management/v1/table/lance_catalog$db1$users/policy/set", json={})
     assert resp.status_code == 422  # a body that sets nothing changes nothing — the validator refuses
-    unset = client.post("/management/v1/table/db1$users/policy/describe")
-    assert (unset.status_code, unset.json()) == (200, {"kind": "table", "id": "db1$users", "uuid": users, "set": False}), "a refused set wrote a policy"
+    unset = client.post("/management/v1/table/lance_catalog$db1$users/policy/describe")
+    assert (unset.status_code, unset.json()) == (200, {"kind": "table", "id": "lance_catalog$db1$users", "uuid": users, "set": False}), (
+        "a refused set wrote a policy"
+    )
     # But an EXPLICIT compact_enabled=true is meaningful (a table-level re-enable under a disabled
     # namespace policy — the table's own record shadows the namespace record), so it must be accepted.
-    resp = client.post("/management/v1/table/db1$users/policy/set", json={"compact_enabled": True})
+    resp = client.post("/management/v1/table/lance_catalog$db1$users/policy/set", json={"compact_enabled": True})
     assert resp.status_code == 200, resp.text
     # The client fixture's registry root is a fixed local path — delete so no record leaks across tests.
-    assert client.post("/management/v1/table/db1$users/policy/delete").status_code == 200
+    assert client.post("/management/v1/table/lance_catalog$db1$users/policy/delete").status_code == 200

@@ -8,7 +8,7 @@ import { MOCK_CATALOG } from './ports';
 //  * the plain delete goes first and its 409 is shown VERBATIM, because the catalog writes that sentence
 //    to name the fix;
 //  * `cascade` is offered only AFTER that refusal, and lists exactly the namespaces the refusal named
-//    (there is no bindings read API — that sentence is the only authoritative source);
+//    (what the cascade would take at the moment it was refused);
 //  * `purge_bucket` — the only irreversible step in the estate's UI — stays inert until the bucket name
 //    is typed, and DISARMS again the moment the typed name stops matching;
 //  * `force` appears only when the refusal says the warehouse is protected.
@@ -32,7 +32,7 @@ const WAREHOUSE = {
 
 /** The catalog's emptiness refusal, verbatim (endpoints/warehouses.py) — it NAMES what blocks the delete. */
 const BOUND_DETAIL =
-	"warehouse 'acme-wh' still holds 2 namespace(s): bronze, silver. " +
+	"warehouse 'acme-wh' still holds 2 namespace(s): acme-wh$bronze, acme-wh$silver. " +
 	'Drop them first, or pass ?cascade=true to drop exactly those with the warehouse.';
 
 /** The protection refusal, verbatim (fga_deps.require_not_protected) — same 409, different lock. */
@@ -103,8 +103,8 @@ test('the plain delete goes first, its 409 is verbatim, and only then is cascade
 	const cascade = dialog.getByRole('checkbox', { name: /cascade/i });
 	await expect(cascade).toBeVisible();
 	await expect(cascade).toHaveAttribute('aria-checked', 'false');
-	await expect(dialog.getByTestId('cascade-namespaces')).toHaveText(/bronze/);
-	await expect(dialog.getByTestId('cascade-namespaces')).toHaveText(/silver/);
+	await expect(dialog.getByTestId('cascade-namespaces')).toHaveText(/acme-wh\$bronze/);
+	await expect(dialog.getByTestId('cascade-namespaces')).toHaveText(/acme-wh\$silver/);
 
 	// The request carried NO flags — the plain delete really was tried first.
 	expect(await deletePaths(page)).toEqual(['/management/v1/warehouses/acme-wh']);
@@ -118,7 +118,7 @@ test('the cascade delete sends exactly ?cascade=true and the toast reports the R
 		'DELETE /management/v1/warehouses/acme-wh?cascade=true': {
 			id: 'acme-wh',
 			bucket: 'acme-bucket',
-			namespaces_dropped: ['bronze', 'silver'],
+			namespaces_dropped: ['acme-wh$bronze', 'acme-wh$silver'],
 			tuples_revoked: 7,
 			bucket_purged: false,
 			objects_purged: 0,
@@ -136,7 +136,7 @@ test('the cascade delete sends exactly ?cascade=true and the toast reports the R
 	// was KEPT, which is what `bucket_purged: false` states.
 	await expect(
 		page.getByText(
-			'Deleted warehouse acme-wh: dropped 2 namespaces (bronze, silver); revoked 7 tuples; bucket acme-bucket kept.',
+			'Deleted warehouse acme-wh: dropped 2 namespaces (acme-wh$bronze, acme-wh$silver); revoked 7 tuples; bucket acme-bucket kept.',
 		),
 	).toBeVisible();
 
@@ -330,4 +330,31 @@ test('no opt-in survives a close: the next open starts from the plain delete aga
 	await expect(reopened.getByLabel('Type the bucket name to confirm the purge')).toHaveValue('');
 	await expect(reopened.getByRole('checkbox', { name: /purge/i })).toBeDisabled();
 	await expect(reopened.getByRole('button', { name: /^Delete/ })).toHaveText('Delete warehouse');
+});
+
+test('a warehouse git declares says so, and offers no lifecycle control its doors refuse', async ({
+	page,
+}) => {
+	// The catalog answers 403 for a deactivate, activate or delete of a warehouse git declares (XC-213),
+	// so the page keeps the controls on screen, disabled, each described by the marker that says why —
+	// and the estate's own warehouse, which the root listing names and the registry does not, is listed
+	// with no control at all.
+	await seed(page, {
+		'GET /management/v1/warehouses': [{ ...WAREHOUSE, managed_by: 'git' }],
+		'GET /v1/namespace/%24/list': { namespaces: ['acme-wh', 'lance_catalog'] },
+	});
+	await page.goto('/catalog/warehouses');
+
+	const marker = page.locator('#git-acme-wh');
+	await expect(marker).toContainText('Declared in git');
+	for (const name of ['Delete warehouse acme-wh', 'deactivate']) {
+		const control = page.getByRole('button', { name, exact: true });
+		await expect(control).toBeDisabled();
+		await expect(control).toHaveAttribute('aria-describedby', 'git-acme-wh');
+	}
+
+	const estateRow = page.locator('tbody tr', { hasText: 'lance_catalog' });
+	await expect(estateRow).toContainText('the estate’s own');
+	await expect(estateRow.getByRole('button', { name: /delete|deactivate/i })).toHaveCount(0);
+	expect(await deletePaths(page)).toEqual([]);
 });

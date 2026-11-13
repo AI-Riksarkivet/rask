@@ -5,7 +5,8 @@
 #   1. warehouse registry records (+ their physical buckets) for throwaway tenants (e2e-wh-*, …),
 #   2. OpenFGA tuples referencing those removed warehouses/projects (owner grants, project parents,
 #      the tenant-seed `warehouse:<id> parent namespace:…` links),
-#   3. test namespaces/tables in the catalog ROOT bucket (ctlverify*/e2e*/cd*/pol*/sec*/fmt* prefixes).
+#   3. test namespaces' tables in the catalog ROOT bucket: the estate warehouse's namespaces named with a debris stem
+#      (`lance_catalog$ctlverify*`, `lance_catalog$e2e*`, … — every name's first segment is its warehouse).
 #
 # DRY-RUN BY DEFAULT: every step ENUMERATES AND PRINTS what it would delete; nothing is touched until
 # you pass --apply. The keep-list (below) is honored in every step — the default keeps the acme set
@@ -24,8 +25,10 @@ set -euo pipefail
 KEEP_PROJECTS="${KEEP_PROJECTS:-acme}"
 # Extra warehouse ids to keep regardless of their project (space-separated), e.g. "mb-a mb-b".
 KEEP_WAREHOUSES="${KEEP_WAREHOUSES:-}"
-# Top-level namespace/table prefixes in the catalog ROOT bucket that are test debris (glob stems).
+# Stems of the estate warehouse's namespaces that are test debris (the segment after `lance_catalog$`).
 DEBRIS_PREFIXES="${DEBRIS_PREFIXES:-ctlverify e2e cd pol sec fmt}"
+# The estate's own warehouse: the first segment of every name its root serves (the catalog's RASK_FGA_DEFAULT_WAREHOUSE_OBJECT).
+ESTATE_WAREHOUSE="${ESTATE_WAREHOUSE:-lance_catalog}"
 
 # ── endpoints (the e2e_stack.sh port-forward defaults) ───────────────────────────────────────────────
 S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:9900}"
@@ -51,7 +54,7 @@ echo "== demo_reset ($MODE) — keep projects: [$KEEP_PROJECTS] extra warehouses
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# ── 1) warehouse registry: keep the acme set, remove the rest (records + bindings + buckets) ─────────
+# ── 1) warehouse registry: keep the acme set, remove the rest (records + buckets) ─────────────────────
 echo
 echo "== 1) warehouse registry + buckets (s3=$S3_ENDPOINT bucket=$ROOT_BUCKET) =="
 MODE="$MODE" TMP="$TMP" S3_ENDPOINT="$S3_ENDPOINT" S3_ACCESS_KEY="$S3_ACCESS_KEY" \
@@ -97,10 +100,10 @@ def list_keys(bucket: str, prefix: str = "") -> list[str]:
             return keys
 
 
-# Read every registry record (the catalog's _warehouses/<id>.json shape).
+# Read every registry record (the catalog's _warehouses/<id>.json shape: a direct child, never a bucket claim beneath).
 records: list[dict] = []
 for key in list_keys(root_bucket, "_warehouses/"):
-    if not key.endswith(".json") or key.startswith("_warehouses/bindings/"):
+    if not key.endswith(".json") or key.count("/") != 1:
         continue
     try:
         records.append(json.loads(s3.get_object(Bucket=root_bucket, Key=key)["Body"].read()))
@@ -122,17 +125,7 @@ for r in remove:
 if not remove:
     print("   ✓ no debris warehouses — registry is clean")
 
-# Bindings pointing at removed warehouses go with them.
 removed_ids = {r.get("id") for r in remove}
-stale_bindings: list[str] = []
-for key in list_keys(root_bucket, "_warehouses/bindings/"):
-    try:
-        binding = json.loads(s3.get_object(Bucket=root_bucket, Key=key)["Body"].read())
-    except Exception:  # noqa: BLE001
-        continue
-    if binding.get("warehouse_id") in removed_ids:
-        stale_bindings.append(key)
-        print(f"   ✗ remove binding {key} → warehouse {binding.get('warehouse_id')!r}")
 
 # The projects that lose their LAST warehouse are fully removed tenants — their FGA tuples go too.
 kept_projects_effective = {r.get("project") for r in keep}
@@ -164,11 +157,8 @@ if apply:
                 print(f"   ✓ deleted bucket {bucket!r} ({len(keys)} objects)")
         s3.delete_object(Bucket=root_bucket, Key=f"_warehouses/{r['id']}.json")
         print(f"   ✓ deleted record _warehouses/{r['id']}.json")
-    for key in stale_bindings:
-        s3.delete_object(Bucket=root_bucket, Key=key)
-        print(f"   ✓ deleted {key}")
 else:
-    print(f"   (dry-run: {len(remove)} records, {len(stale_bindings)} bindings would be deleted)")
+    print(f"   (dry-run: {len(remove)} records would be deleted)")
 PYEOF
 
 # ── 2) FGA tuples referencing the removed warehouses/projects ────────────────────────────────────────
@@ -230,11 +220,11 @@ for t in json.load(sys.stdin).get('tuples', []):
   fi
 fi
 
-# ── 3) test namespaces/tables in the catalog ROOT bucket ─────────────────────────────────────────────
+# ── 3) test namespaces' tables in the catalog ROOT bucket ────────────────────────────────────────────
 echo
-echo "== 3) test namespaces/tables in the root bucket (prefixes: $DEBRIS_PREFIXES) =="
+echo "== 3) test namespaces' tables in the root bucket ($ESTATE_WAREHOUSE\$<stem>, stems: $DEBRIS_PREFIXES) =="
 MODE="$MODE" S3_ENDPOINT="$S3_ENDPOINT" S3_ACCESS_KEY="$S3_ACCESS_KEY" S3_SECRET_KEY="$S3_SECRET_KEY" \
-ROOT_BUCKET="$ROOT_BUCKET" DEBRIS_PREFIXES="$DEBRIS_PREFIXES" \
+ROOT_BUCKET="$ROOT_BUCKET" DEBRIS_PREFIXES="$DEBRIS_PREFIXES" ESTATE_WAREHOUSE="$ESTATE_WAREHOUSE" \
 uv run --no-sync python - <<'PYEOF'
 import os
 
@@ -244,6 +234,7 @@ mode = os.environ["MODE"]
 apply = mode == "apply"
 root_bucket = os.environ["ROOT_BUCKET"]
 stems = tuple(os.environ["DEBRIS_PREFIXES"].split())
+estate = os.environ["ESTATE_WAREHOUSE"]
 
 s3 = boto3.client(
     "s3",
@@ -253,8 +244,11 @@ s3 = boto3.client(
     region_name="us-east-1",
 )
 
-# TOP-LEVEL entries only (delimiter listing): a debris stem must match the first path segment, so
-# `medallion/`, `_warehouses/`, `models/` and the demo tenant's data can never be swept by accident.
+# TOP-LEVEL entries only (delimiter listing). A table in a child namespace has the directory `<hash>_<object_id>`
+# (lance_docs/ns_catalog/catalog/dir/index.md § Manifest Table Directory), and every table the catalog serves is in
+# one, its object id beginning with the estate warehouse. So a debris stem must match the namespace segment right
+# after it: `_warehouses/`, `__manifest/`, the demo tenant's data and a root-level `<table>.lance` directory, which
+# the same section names for a table in no namespace and no door makes, are never swept.
 top: set[str] = set()
 token = None
 while True:
@@ -268,7 +262,14 @@ while True:
     if not token:
         break
 
-debris = sorted(e for e in top if e.split("/", 1)[0].startswith(stems))
+def namespace_of(entry: str) -> str:
+    """The namespace segment after the estate warehouse in a table directory `<hash>_<estate>$<ns>$...`, else ''."""
+    _, _, object_id = entry.split("/", 1)[0].partition("_")
+    segments = object_id.split("$")
+    return segments[1] if len(segments) > 2 and segments[0] == estate else ""
+
+
+debris = sorted(e for e in top if namespace_of(e).startswith(stems))
 if not debris:
     print("   ✓ no test namespaces/tables in the root bucket")
 for entry in debris:

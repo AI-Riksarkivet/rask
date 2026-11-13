@@ -56,7 +56,6 @@ async def drop_grace_days(settings: Settings, segments: list[str]) -> float:
             settings.storage_options(),
             segments,
             estate=settings.trash_grace_days,
-            warehouses_enabled=settings.warehouses_enabled,
         )
     )
 

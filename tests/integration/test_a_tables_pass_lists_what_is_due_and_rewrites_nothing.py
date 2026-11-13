@@ -55,8 +55,12 @@ ROOT = f"s3://{BUCKET}"
 #: The directory a table the catalog makes lives in: its uuid, which names nothing a parser could read.
 LOCATION = "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
 URI = f"{ROOT}/{LOCATION}"
-TABLE = "db$t"
-#: The uuid the catalog minted for the namespace `db`, in its `__manifest` row.
+#: The estate's own warehouse, the first segment of every name in its root.
+WAREHOUSE = "lance_catalog"
+TABLE = f"{WAREHOUSE}$db$t"
+#: The uuid the catalog minted for the warehouse's own row in its root's `__manifest`.
+WAREHOUSE_UUID = "5c4b3a29-1807-4f6e-9d5c-4b3a29180716"
+#: The uuid the catalog minted for the namespace `lance_catalog$db`, in its `__manifest` row.
 NAMESPACE_UUID = "3f2e1d0c-4b5a-4968-8776-a5b4c3d2e1f0"
 #: A second table the catalog made, with a branch, which discovery lists as a dataset of its own.
 BRANCHED_UUID = "7a1f0e2d-3c4b-4a59-8e6f-b7c8d9e0f1a2"
@@ -82,8 +86,8 @@ def moto_url() -> Iterator[str]:
 
 @pytest.fixture
 def estate(moto_url: str) -> Iterator[StorageOptions]:
-    """Four small fragments in four versions registered as `db$t`, under its own policy keeping two versions, and `db$b`
-    with a branch, under the bucket's project policy keeping one. The bucket is emptied after the test, since moto's
+    """Four small fragments in four versions registered as `lance_catalog$db$t`, under its own policy keeping two
+    versions, and `lance_catalog$db$b` with a branch, under the bucket's project policy keeping one. The bucket is emptied after the test, since moto's
     backend outlives each server in the process."""
     options = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
     for uri, versions in ((URI, 4), (BRANCHED, 1)):
@@ -94,12 +98,13 @@ def estate(moto_url: str) -> Iterator[StorageOptions]:
             )
     lance.dataset(BRANCHED, storage_options=options.in_clear()).create_branch("work")
     namespace = connect("dir", {"root": ROOT, **{f"storage.{key}": value for key, value in options.in_clear().items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={"rask.uuid": NAMESPACE_UUID}))
-    namespace.register_table(RegisterTableRequest(id=["db", "t"], location=LOCATION))
+    namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE], properties={"rask.uuid": WAREHOUSE_UUID}))
+    namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE, "db"], properties={"rask.uuid": NAMESPACE_UUID}))
+    namespace.register_table(RegisterTableRequest(id=[WAREHOUSE, "db", "t"], location=LOCATION))
     claims = location_claims.ClaimStore(control_root=ROOT, storage_options=options)
-    location_claims.take(claims, URI, TABLE, ["db", "t"], is_gone=lambda _claim: False, uuid=LOCATION)
-    namespace.register_table(RegisterTableRequest(id=["db", "b"], location=BRANCHED_UUID))
-    location_claims.take(claims, BRANCHED, "db$b", ["db", "b"], is_gone=lambda _claim: False, uuid=BRANCHED_UUID)
+    location_claims.take(claims, URI, TABLE, [WAREHOUSE, "db", "t"], is_gone=lambda _claim: False, uuid=LOCATION)
+    namespace.register_table(RegisterTableRequest(id=[WAREHOUSE, "db", "b"], location=BRANCHED_UUID))
+    location_claims.take(claims, BRANCHED, f"{WAREHOUSE}$db$b", [WAREHOUSE, "db", "b"], is_gone=lambda _claim: False, uuid=BRANCHED_UUID)
     policy = {"kind": "table", "id": TABLE, "uuid": LOCATION, "compact_enabled": True, "retain_versions": 2, "target_rows_per_fragment": 1000}
     maintenance_policies.put_policy(ROOT, options, policy)
     maintenance_policies.put_policy(ROOT, options, {"kind": "project", "id": "acme", "buckets": [BUCKET], "retain_versions": 1})
@@ -230,7 +235,10 @@ def test_a_branch_is_passed_through_its_tables_row(estate: StorageOptions, maint
     with _vends_for([], estate.in_clear()):
         outcome = run_table_pass(TableTask(uuid=BRANCHED_UUID, location=BRANCHED), get_settings())
 
-    assert [(result.uri, result.table_id, result.refused) for result in outcome.results] == [(BRANCHED, "db$b", None), (BRANCH, "db$b", None)]
+    assert [(result.uri, result.table_id, result.refused) for result in outcome.results] == [
+        (BRANCHED, "lance_catalog$db$b", None),
+        (BRANCH, "lance_catalog$db$b", None),
+    ]
 
 
 def test_a_declared_table_waits_for_its_first_commit_and_asks_no_vend(estate: StorageOptions, maintenance: TestClient) -> None:
@@ -238,7 +246,7 @@ def test_a_declared_table_waits_for_its_first_commit_and_asks_no_vend(estate: St
     nothing more and asks for no credential, and waits for the recheck, since the first commit's event queues its pass."""
     declared = f"{ROOT}/{DECLARED_UUID}"
     claims = location_claims.ClaimStore(control_root=ROOT, storage_options=estate)
-    location_claims.take(claims, declared, "db$declared", ["db", "declared"], is_gone=lambda _claim: False, uuid=DECLARED_UUID)
+    location_claims.take(claims, declared, f"{WAREHOUSE}$db$declared", [WAREHOUSE, "db", "declared"], is_gone=lambda _claim: False, uuid=DECLARED_UUID)
     asked: list[str] = []
     before = datetime.now(UTC)
 
@@ -251,7 +259,7 @@ def test_a_declared_table_waits_for_its_first_commit_and_asks_no_vend(estate: St
 
 
 def test_a_table_its_claim_no_longer_names_gets_no_pass_and_its_due_record_goes(estate: StorageOptions, maintenance: TestClient) -> None:
-    write_due(ROOT, estate, _due("db$dropped", DROPPED_UUID))
+    write_due(ROOT, estate, _due(f"{WAREHOUSE}$db$dropped", DROPPED_UUID))
 
     outcome = run_table_pass(TableTask(uuid=DROPPED_UUID, location=f"{ROOT}/{DROPPED_UUID}"), get_settings())
 

@@ -14,7 +14,7 @@ import pytest
 import requests
 from credentials import Credential, credential
 from liveness import skip_unless_live
-from topology import assert_parent_exists, create_top_level
+from topology import create_namespace
 
 from lakehouse.naming import CATALOG_DELIMITER
 
@@ -28,9 +28,7 @@ TOKEN = credential(Credential.TOKEN)
 AUTH = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
 
-#: A HYPHEN, not an underscore. With warehouses enabled the top-level namespace has to arrive through
-#: ``POST /management/v1/warehouses/{id}/namespaces``, which validates the name as bucket-safe
-#: (``^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\Z``); ``e2e_ns`` is refused 400 there.
+#: The suite's namespace in the suites' warehouse (`topology.WAREHOUSE`).
 NS = "e2e-ns"
 
 pytestmark = pytest.mark.e2e
@@ -64,13 +62,12 @@ def base() -> str:
 
 @pytest.fixture
 def namespace(base: str) -> str:
-    """The suite's top-level namespace, through whichever door THIS estate admits.
+    """The suite's namespace, `<warehouse>$e2e-ns`, through the spec's create door.
 
-    Function-scoped and idempotent (``adopt_existing``): the lifecycle test drops it at the end, so
-    each test re-establishes it rather than depending on the order the two ran in.
+    Function-scoped and idempotent (a 409 keeps the namespace): the lifecycle test drops it at the end, so each test
+    re-establishes it rather than depending on the order the tests ran in.
     """
-    assert_parent_exists(create_top_level(base, NS, AUTH), NS)
-    return NS
+    return create_namespace(base, NS, AUTH)
 
 
 def test_full_lifecycle(base: str, namespace: str) -> None:

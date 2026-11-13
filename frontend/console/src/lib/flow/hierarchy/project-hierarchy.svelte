@@ -12,7 +12,8 @@
 	 *  richer record (with `status`, `serving`, …) passes without an adapter. */
 	export type HierarchyWarehouse = { id: string; bucket: string };
 
-	/** The warehouse→namespace rung. The catalog's `GET /management/v1/warehouses/{id}/namespaces` shape. */
+	/** The warehouse→namespace rung: the namespaces directly under a warehouse, as ids
+	 *  (`<warehouse>$<name>`), from the spec's ListNamespaces on the warehouse's own name. */
 	export type FetchHierarchyNamespaces = (
 		warehouseId: string,
 	) => Promise<HierarchyResult<{ namespaces: string[] }>>;
@@ -67,10 +68,11 @@
 	// The tree is fetched rung by rung and drawn HONESTLY: each namespace draws at most `maxTables`
 	// tables and then says "+k more" as its own node — a capped view that looks complete is how a
 	// hierarchy lies. A rung whose read failed renders an "unreadable" node rather than disappearing
-	// (a binding you cannot read is a namespace you cannot see — the estate's own listing rule).
+	// (a listing you cannot read hides namespaces you cannot see — the estate's own listing rule).
 	import type { Edge, Node, NodeTypes } from '@xyflow/svelte';
 	import { StaticFlow } from '#lib/flow/index.ts';
 	import HierarchyNode, { type HierarchyData } from './hierarchy-node.svelte';
+	import { leafSegment } from '#lib/api/identifiers.ts';
 
 	let {
 		project,
@@ -209,7 +211,8 @@
 						edges.push({ id: `${nid}-more`, source: nid, target: `${nid}:more` });
 					}
 				}
-				nsXs.push(node(nid, ns, 2, centre(tableXs), link('namespace', ns, ns)));
+				// Drawn under its warehouse, so the label is its own name; the link keeps the whole id.
+				nsXs.push(node(nid, leafSegment(ns), 2, centre(tableXs), link('namespace', ns, ns)));
 				edges.push({ id: `${wid}-${ns}`, source: wid, target: nid });
 			}
 			if (namespaces === null) {

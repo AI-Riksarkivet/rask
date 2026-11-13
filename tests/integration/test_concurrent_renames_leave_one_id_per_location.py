@@ -51,19 +51,19 @@ def _ipc(table: pa.Table) -> bytes:
 @pytest.mark.parametrize("same_destination", [pytest.param(False, id="distinct-destinations"), pytest.param(True, id="one-destination")])
 def test_concurrent_renames_of_one_table_leave_one_live_id_on_its_location(real_ns_client: TestClient, same_destination: bool) -> None:
     client = real_ns_client
-    assert client.post("/v1/namespace/ns1/create", json={}).status_code == 200
-    created = client.post("/v1/table/ns1$first/create?mode=create", content=_ipc(pa.table({"id": [1, 2, 3]})), headers=ARROW)
+    assert client.post("/v1/namespace/lance_catalog$ns1/create", json={}).status_code == 200
+    created = client.post("/v1/table/lance_catalog$ns1$first/create?mode=create", content=_ipc(pa.table({"id": [1, 2, 3]})), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     # Renamed once before the race, so the renames below start from the claim a finished rename leaves: handed to the
     # name the table has, and free of that rename's fence, or none of them could take it.
-    assert client.post("/v1/table/ns1$first/rename", json={"new_table_name": "src"}).status_code == 200
+    assert client.post("/v1/table/lance_catalog$ns1$first/rename", json={"new_table_name": "src"}).status_code == 200
     barrier = threading.Barrier(RENAMES)
     answers: dict[int, tuple[int, dict[str, object]]] = {}
 
     def _rename(i: int) -> None:
         barrier.wait()
-        response = client.post("/v1/table/ns1$src/rename", json={"new_table_name": "d0" if same_destination else f"d{i}"})
+        response = client.post("/v1/table/lance_catalog$ns1$src/rename", json={"new_table_name": "d0" if same_destination else f"d{i}"})
         answers[i] = (response.status_code, response.json())
 
     threads = [threading.Thread(target=_rename, args=(i,)) for i in range(RENAMES)]
@@ -74,7 +74,7 @@ def test_concurrent_renames_of_one_table_leave_one_live_id_on_its_location(real_
 
     resolving = {}
     for name in ["first", "src", *(f"d{i}" for i in range(RENAMES))]:
-        described = client.post(f"/v1/table/ns1${name}/describe", json={})
+        described = client.post(f"/v1/table/lance_catalog$ns1${name}/describe", json={})
         if described.status_code == 200:
             resolving[name] = described.json()["location"]
     statuses = sorted(status for status, _ in answers.values())
@@ -88,8 +88,8 @@ def test_concurrent_renames_of_one_table_leave_one_live_id_on_its_location(real_
     assert {body.get("code") for body in losers} <= refusals, losers
     # A loser learns that the source moved, never the name another request moved it to ([[LH-436]]).
     assert {body.get("detail") for body in losers} <= {
-        "cannot rename ns1$src: its location is held by another table, by a concurrent rename or registration; describe it and retry",
-        "table already exists: ns1.d0",
+        "cannot rename lance_catalog$ns1$src: its location is held by another table, by a concurrent rename or registration; describe it and retry",
+        "table already exists: lance_catalog.ns1.d0",
     }, losers
 
 
@@ -134,8 +134,8 @@ def test_a_door_racing_a_rename_acts_only_on_the_table_it_resolved(
     client = real_ns_client
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", trash_grace_days)
     get_settings.cache_clear()
-    assert client.post("/v1/namespace/ns1/create", json={}).status_code == 200
-    created = client.post("/v1/table/ns1$src/create?mode=create", content=_ipc(pa.table({"id": [1, 2, 3]})), headers=ARROW)
+    assert client.post("/v1/namespace/lance_catalog$ns1/create", json={}).status_code == 200
+    created = client.post("/v1/table/lance_catalog$ns1$src/create?mode=create", content=_ipc(pa.table({"id": [1, 2, 3]})), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     pending = [True]
@@ -146,10 +146,10 @@ def test_a_door_racing_a_rename_acts_only_on_the_table_it_resolved(
         if not pending:
             return
         pending.clear()
-        moved = client.post("/v1/table/ns1$src/rename", json={"new_table_name": "moved"})
+        moved = client.post("/v1/table/lance_catalog$ns1$src/rename", json={"new_table_name": "moved"})
         rival.append(moved.status_code)
         if moved.status_code == 200:
-            again = client.post("/v1/table/ns1$src/create?mode=create", content=_ipc(pa.table({"id": [9]})), headers=ARROW)
+            again = client.post("/v1/table/lance_catalog$ns1$src/create?mode=create", content=_ipc(pa.table({"id": [9]})), headers=ARROW)
             rival.append(again.status_code)
 
     if rival_lands == "as-the-door-acts":
@@ -167,11 +167,11 @@ def test_a_door_racing_a_rename_acts_only_on_the_table_it_resolved(
 
         monkeypatch.setattr(records, "read_json_at", _read_then_race)
 
-    answered = client.post(f"/v1/table/ns1$src/{door}", json={})
+    answered = client.post(f"/v1/table/lance_catalog$ns1$src/{door}", json={})
 
     resolving = {}
     for name in ("src", "moved"):
-        described = client.post(f"/v1/table/ns1${name}/describe", json={})
+        described = client.post(f"/v1/table/lance_catalog$ns1${name}/describe", json={})
         if described.status_code == 200:
             resolving[name] = described.json()["location"]
     if rival_lands == "as-the-door-acts":
@@ -251,16 +251,16 @@ def test_a_register_of_a_renames_destination_landed_inside_the_rename_takes_noth
     from catalog.main import app
 
     client = real_ns_client
-    assert client.post("/v1/namespace/ns1/create", json={}).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$ns1/create", json={}).status_code == 200
     lance.write_dataset(pa.table({"id": [1, 2, 3]}), str(tmp_path / _HELD), data_storage_version="2.2", enable_stable_row_ids=True)
-    registered = client.post("/v1/table/ns1$src/register", json={"location": _HELD})
+    registered = client.post("/v1/table/lance_catalog$ns1$src/register", json={"location": _HELD})
     assert registered.status_code == 200, registered.text
-    described = client.post("/v1/table/ns1$src/describe", json={}).json()
+    described = client.post("/v1/table/lance_catalog$ns1$src/describe", json={}).json()
     location, table_uuid = described["location"], described["properties"]["rask.uuid"]
     rival: list[tuple[int, object]] = []
 
     def _register_the_destination() -> None:
-        answered = client.post("/v1/table/ns1$dst/register", json={"location": _HELD})
+        answered = client.post("/v1/table/lance_catalog$ns1$dst/register", json={"location": _HELD})
         rival.append((answered.status_code, answered.json().get("code")))
 
     registering = threading.Thread(target=_register_the_destination)
@@ -282,13 +282,13 @@ def test_a_register_of_a_renames_destination_landed_inside_the_rename_takes_noth
     racing = _RivalBefore(cast(LanceNamespace, attached), rival_lands, _land_the_registration)
     app.dependency_overrides[get_namespace] = lambda: racing
 
-    renamed = client.post("/v1/table/ns1$src/rename", json={"new_table_name": "dst"})
+    renamed = client.post("/v1/table/lance_catalog$ns1$src/rename", json={"new_table_name": "dst"})
 
     attached.release.set()
     registering.join(_WAIT_SECONDS)
     resolving = {}
     for name in ("src", "dst"):
-        found = client.post(f"/v1/table/ns1${name}/describe", json={})
+        found = client.post(f"/v1/table/lance_catalog$ns1${name}/describe", json={})
         if found.status_code == 200:
             resolving[name] = (found.json()["location"], found.json()["properties"]["rask.uuid"])
     # The registrant gains nothing: the one table at the location is the one that was there, under the uuid it had, so

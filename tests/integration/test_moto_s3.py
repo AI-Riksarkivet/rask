@@ -96,24 +96,24 @@ def moto_client_recoverable(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_catalog_roundtrip_on_moto_s3(moto_client: TestClient) -> None:
-    assert moto_client.post("/v1/namespace/m1/create", json={}).status_code == 200
+    assert moto_client.post("/v1/namespace/lance_catalog$m1/create", json={}).status_code == 200
 
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "name": ["a", "b", "c"]})
-    created = moto_client.post("/v1/table/m1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = moto_client.post("/v1/table/lance_catalog$m1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     assert created.json()["location"].startswith(f"s3://{BUCKET}/")
 
     assert (
         moto_client.post(
-            "/v1/table/m1$t/insert?mode=append",
+            "/v1/table/lance_catalog$m1$t/insert?mode=append",
             content=_ipc(pa.table({"id": pa.array([4], pa.int64()), "name": ["d"]})),
             headers=ARROW,
         ).status_code
         == 200
     )
-    assert int(moto_client.post("/v1/table/m1$t/count_rows", json={}).text) == 4
+    assert int(moto_client.post("/v1/table/lance_catalog$m1$t/count_rows", json={}).text) == 4
 
-    query = moto_client.post("/v1/table/m1$t/query", json={"k": 10, "filter": "id >= 2", "vector": {}})
+    query = moto_client.post("/v1/table/lance_catalog$m1$t/query", json={"k": 10, "filter": "id >= 2", "vector": {}})
     assert query.headers["content-type"].startswith("application/vnd.apache.arrow.file")
     assert ipc.open_file(pa.BufferReader(query.content)).read_all().num_rows == 3
 
@@ -158,15 +158,15 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
     rows = pa.table({"id": pa.array([1], pa.int64())})
     # The parent lands BEFORE the outage: namespace create seeds ownership too, so creating it under
     # the patch would fail the setup rather than the behaviour under test.
-    assert moto_client.post("/v1/namespace/comp/create", json={}).status_code == 200
+    assert moto_client.post("/v1/namespace/lance_catalog$comp/create", json={}).status_code == 200
     with pytest.MonkeyPatch.context() as mp:  # dedicated context — never the fixture's instance
         mp.setattr(data_ep.fga_deps, "seed_ownership", failing_seed)
-        failed = moto_client.post("/v1/table/comp$t/create", content=_ipc(rows), headers=ARROW)
+        failed = moto_client.post("/v1/table/lance_catalog$comp$t/create", content=_ipc(rows), headers=ARROW)
     assert failed.status_code == 503, failed.text  # the grant failure surfaces (compensation ran)
     # the compensation deleted the half-created table…
-    assert moto_client.post("/v1/table/comp$t/describe", json={}).status_code == 404
+    assert moto_client.post("/v1/table/lance_catalog$comp$t/describe", json={}).status_code == 404
     # …so, with FGA "recovered", the plain retry succeeds
-    retried = _create(moto_client, "comp$t", rows)
+    retried = _create(moto_client, "lance_catalog$comp$t", rows)
     assert retried.status_code == 200, retried.text
 
 
@@ -179,19 +179,19 @@ def test_create_existok_never_compensates_away_a_kept_table(moto_client: TestCli
     import catalog.api.v1.endpoints.data as data_ep
 
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    assert _create(moto_client, "keep$t", rows).status_code == 200
+    assert _create(moto_client, "lance_catalog$keep$t", rows).status_code == 200
 
     async def failing_link(*_a: object, **_kw: object) -> None:
         raise ServiceUnavailableError("fga down mid-create")
 
     with pytest.MonkeyPatch.context() as mp:  # dedicated context — never the fixture's instance
         mp.setattr(data_ep.fga_deps, "link_an_unlinked_table", failing_link)
-        failed = _create(moto_client, "keep$t", rows, "?mode=exist_ok")
+        failed = _create(moto_client, "lance_catalog$keep$t", rows, "?mode=exist_ok")
     assert failed.status_code == 503, failed.text
     # the pre-existing table SURVIVED the failed ExistOk…
-    assert int(moto_client.post("/v1/table/keep$t/count_rows", json={}).text) == 2
+    assert int(moto_client.post("/v1/table/lance_catalog$keep$t/count_rows", json={}).text) == 2
     # …and the ExistOk retry heals (the link is tried again against the kept table).
-    healed = _create(moto_client, "keep$t", rows, "?mode=exist_ok")
+    healed = _create(moto_client, "lance_catalog$keep$t", rows, "?mode=exist_ok")
     assert healed.status_code == 200, healed.text
 
 
@@ -246,15 +246,15 @@ def test_declare_converges_after_a_failed_grant(moto_client: TestClient) -> None
     could not see, could not drop and could not re-declare (native `TableAlreadyExists`) — reserving
     the id against everyone, permanently. The undo is unconditionally safe here: a declared table
     holds no data, so nothing can be destroyed by removing it."""
-    assert moto_client.post("/v1/namespace/f3d/create", json={}).status_code == 200
+    assert moto_client.post("/v1/namespace/lance_catalog$f3d/create", json={}).status_code == 200
     with pytest.MonkeyPatch.context() as mp:
         _failing_seed_ctx(mp)
-        failed = moto_client.post("/v1/table/f3d$t/declare", json={})
+        failed = moto_client.post("/v1/table/lance_catalog$f3d$t/declare", json={})
     assert failed.status_code == 503, failed.text
     # GONE, not stranded — so the id is free…
-    assert moto_client.post("/v1/table/f3d$t/describe", json={}).status_code == 404
+    assert moto_client.post("/v1/table/lance_catalog$f3d$t/describe", json={}).status_code == 404
     # …and the plain retry converges with FGA recovered.
-    assert moto_client.post("/v1/table/f3d$t/declare", json={}).status_code == 200
+    assert moto_client.post("/v1/table/lance_catalog$f3d$t/declare", json={}).status_code == 200
 
 
 def test_namespace_create_converges_after_a_failed_grant(moto_client: TestClient) -> None:
@@ -262,10 +262,10 @@ def test_namespace_create_converges_after_a_failed_grant(moto_client: TestClient
     create under it inherits the missing parent edge."""
     with pytest.MonkeyPatch.context() as mp:
         _failing_seed_ctx(mp)
-        failed = moto_client.post("/v1/namespace/f3ns/create", json={})
+        failed = moto_client.post("/v1/namespace/lance_catalog$f3ns/create", json={})
     assert failed.status_code == 503, failed.text
-    assert moto_client.post("/v1/namespace/f3ns/describe", json={}).status_code == 404
-    assert moto_client.post("/v1/namespace/f3ns/create", json={}).status_code == 200
+    assert moto_client.post("/v1/namespace/lance_catalog$f3ns/describe", json={}).status_code == 404
+    assert moto_client.post("/v1/namespace/lance_catalog$f3ns/create", json={}).status_code == 200
 
 
 def test_undrop_restores_the_table_under_its_uuid_and_grants_the_undropper_nothing(moto_client_recoverable: TestClient) -> None:
@@ -287,21 +287,21 @@ def test_undrop_restores_the_table_under_its_uuid_and_grants_the_undropper_nothi
     import catalog.api.fga_deps as fga_deps_mod
 
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert moto_client_recoverable.post("/v1/namespace/f3u/create", json={}).status_code == 200
-    assert _create(moto_client_recoverable, "f3u$t", rows).status_code == 200
-    minted = _uuid(moto_client_recoverable, "f3u$t")
-    assert moto_client_recoverable.post("/v1/table/f3u$t/drop", json={}).status_code == 200
+    assert moto_client_recoverable.post("/v1/namespace/lance_catalog$f3u/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "lance_catalog$f3u$t", rows).status_code == 200
+    minted = _uuid(moto_client_recoverable, "lance_catalog$f3u$t")
+    assert moto_client_recoverable.post("/v1/table/lance_catalog$f3u$t/drop", json={}).status_code == 200
 
     seeded: list[object] = []
     with pytest.MonkeyPatch.context() as mp:
         for name in ("seed_ownership", "seed_ownership_or_compensate"):
             mp.setattr(fga_deps_mod, name, lambda *a, **kw: seeded.append(kw or a))  # noqa: ARG005
-        recovered = moto_client_recoverable.post("/management/v1/table/f3u$t/undrop", json={})
+        recovered = moto_client_recoverable.post("/management/v1/table/lance_catalog$f3u$t/undrop", json={})
 
     assert recovered.status_code == 200, recovered.text
     assert seeded == [], "undrop granted ownership to the caller — it is a restore, not a claim"
-    assert int(moto_client_recoverable.post("/v1/table/f3u$t/count_rows", json={}).text) == 1
-    assert _uuid(moto_client_recoverable, "f3u$t") == minted, "the undropped table answers another uuid"
+    assert int(moto_client_recoverable.post("/v1/table/lance_catalog$f3u$t/count_rows", json={}).text) == 1
+    assert _uuid(moto_client_recoverable, "lance_catalog$f3u$t") == minted, "the undropped table answers another uuid"
 
 
 def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_recoverable: TestClient) -> None:
@@ -324,9 +324,9 @@ def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_rec
     import catalog.api.v1.endpoints.tables as tables_mod
 
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert moto_client_recoverable.post("/v1/namespace/f3c/create", json={}).status_code == 200
-    assert _create(moto_client_recoverable, "f3c$t", rows).status_code == 200
-    assert moto_client_recoverable.post("/v1/table/f3c$t/drop", json={}).status_code == 200
+    assert moto_client_recoverable.post("/v1/namespace/lance_catalog$f3c/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "lance_catalog$f3c$t", rows).status_code == 200
+    assert moto_client_recoverable.post("/v1/table/lance_catalog$f3c$t/drop", json={}).status_code == 200
 
     # The crash: the table is re-registered, then the process dies before the record is cleared.
     # `pytest.raises` rather than a 500 assertion — TestClient re-raises server exceptions by
@@ -338,17 +338,17 @@ def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_rec
 
         mp.setattr(tables_mod.trash, "clear", _die)
         with pytest.raises(OSError, match="killed before the record was cleared"):
-            moto_client_recoverable.post("/management/v1/table/f3c$t/undrop", json={})
+            moto_client_recoverable.post("/management/v1/table/lance_catalog$f3c$t/undrop", json={})
 
     # The residue: the table is LIVE and its trash record still stands, so the sweep would exclude it
     # from maintenance indefinitely (F6(d)) — which is why the retry has to converge, not 409.
-    assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
-    assert moto_client_recoverable.get("/management/v1/table/f3c$t/tasks").json() != []
+    assert int(moto_client_recoverable.post("/v1/table/lance_catalog$f3c$t/count_rows", json={}).text) == 1
+    assert moto_client_recoverable.get("/management/v1/table/lance_catalog$f3c$t/tasks").json() != []
 
-    retried = moto_client_recoverable.post("/management/v1/table/f3c$t/undrop", json={})
+    retried = moto_client_recoverable.post("/management/v1/table/lance_catalog$f3c$t/undrop", json={})
     assert retried.status_code == 200, retried.text
-    assert moto_client_recoverable.get("/management/v1/table/f3c$t/tasks").json() == [], "the record was never cleared"
-    assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
+    assert moto_client_recoverable.get("/management/v1/table/lance_catalog$f3c$t/tasks").json() == [], "the record was never cleared"
+    assert int(moto_client_recoverable.post("/v1/table/lance_catalog$f3c$t/count_rows", json={}).text) == 1
 
 
 def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: TestClient, moto_endpoint: str) -> None:
@@ -360,21 +360,21 @@ def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: Test
     lives in a uuid directory, which no registration may name ([[LH-520]]). The table registered over them is a new
     one, under a new uuid ([[LH-519]], ADR 0173 §2)."""
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-    assert moto_client.post("/v1/namespace/f3r/create", json={}).status_code == 200
+    assert moto_client.post("/v1/namespace/lance_catalog$f3r/create", json={}).status_code == 200
     relative = f"f3r-outside/{uuid.uuid4().hex[:8]}"
     options = lance_storage_options(moto_endpoint, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
     lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
 
     with pytest.MonkeyPatch.context() as mp:
         _failing_seed_ctx(mp)
-        failed = moto_client.post("/v1/table/f3r$copy/register", json={"location": relative})
+        failed = moto_client.post("/v1/table/lance_catalog$f3r$copy/register", json={"location": relative})
     assert failed.status_code == 503, failed.text
     # The catalog object this request made is gone…
-    assert moto_client.post("/v1/table/f3r$copy/describe", json={}).status_code == 404
+    assert moto_client.post("/v1/table/lance_catalog$f3r$copy/describe", json={}).status_code == 404
     # …and the retry converges…
-    assert moto_client.post("/v1/table/f3r$copy/register", json={"location": relative}).status_code == 200
+    assert moto_client.post("/v1/table/lance_catalog$f3r$copy/register", json={"location": relative}).status_code == 200
     # …onto bytes the undo did NOT delete: the three rows are still there.
-    assert int(moto_client.post("/v1/table/f3r$copy/count_rows", json={}).text) == 3
+    assert int(moto_client.post("/v1/table/lance_catalog$f3r$copy/count_rows", json={}).text) == 3
 
 
 # --------------------------------------------------------------------------- #
@@ -389,38 +389,38 @@ def test_describe_at_tag_resolves_via_the_catalog(moto_client: TestClient) -> No
     gets rather than described as main at that number, unknown tag 404s (never silently the latest),
     tag+version 400s (spec: mutually exclusive)."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert _create(moto_client, "dtag$t", rows).status_code == 200
+    assert _create(moto_client, "lance_catalog$dtag$t", rows).status_code == 200
     assert (
         moto_client.post(
-            "/v1/table/dtag$t/insert?mode=append",
+            "/v1/table/lance_catalog$dtag$t/insert?mode=append",
             content=_ipc(pa.table({"id": pa.array([2], pa.int64())})),
             headers=ARROW,
         ).status_code
         == 200
     )  # → v2 on disk; v1 is history
-    assert moto_client.post("/v1/table/dtag$t/tags/create", json={"tag": "stable", "version": 1}).status_code == 200
+    assert moto_client.post("/v1/table/lance_catalog$dtag$t/tags/create", json={"tag": "stable", "version": 1}).status_code == 200
     # work@2 holds [1, 3] where main@2 holds [1, 2]: branch histories are numbered independently
     # (`lance_docs/lance/guide/tags_and_branches.md` § Branches), so `keep`'s number alone names main's snapshot.
-    assert moto_client.post("/v1/table/dtag$t/branches/create", json={"name": "work", "from_version": 1}).status_code == 200
+    assert moto_client.post("/v1/table/lance_catalog$dtag$t/branches/create", json={"name": "work", "from_version": 1}).status_code == 200
     on_work = _ipc(pa.table({"id": pa.array([3], pa.int64())}))
-    assert moto_client.post("/v1/table/dtag$t/insert?branch=work", content=on_work, headers=ARROW).status_code == 200
-    assert moto_client.post("/v1/table/dtag$t/tags/create", json={"tag": "keep", "version": 2, "branch": "work"}).status_code == 200
+    assert moto_client.post("/v1/table/lance_catalog$dtag$t/insert?branch=work", content=on_work, headers=ARROW).status_code == 200
+    assert moto_client.post("/v1/table/lance_catalog$dtag$t/tags/create", json={"tag": "keep", "version": 2, "branch": "work"}).status_code == 200
 
-    tagged = moto_client.post("/v1/table/dtag$t/describe?tag=stable&load_detailed_metadata=true", json={})
+    tagged = moto_client.post("/v1/table/lance_catalog$dtag$t/describe?tag=stable&load_detailed_metadata=true", json={})
     assert tagged.status_code == 200, tagged.text
     assert tagged.json()["version"] == 1  # the TAGGED version, not the latest
-    latest = moto_client.post("/v1/table/dtag$t/describe?load_detailed_metadata=true", json={})
+    latest = moto_client.post("/v1/table/lance_catalog$dtag$t/describe?load_detailed_metadata=true", json={})
     assert latest.json()["version"] == 2  # untagged describe unchanged
 
     # The response has no field to name a branch, so a described work@2 would read as main@2 to its caller.
-    on_branch = moto_client.post("/v1/table/dtag$t/describe?tag=keep&load_detailed_metadata=true", json={})
+    on_branch = moto_client.post("/v1/table/lance_catalog$dtag$t/describe?tag=keep&load_detailed_metadata=true", json={})
     assert on_branch.status_code == 406, on_branch.text
     assert on_branch.json()["code"] == 0
     assert "tag 'keep' names version 2 of branch 'work'" in on_branch.json()["detail"]
 
-    missing = moto_client.post("/v1/table/dtag$t/describe?tag=nope", json={})
+    missing = moto_client.post("/v1/table/lance_catalog$dtag$t/describe?tag=nope", json={})
     assert missing.status_code == 404, missing.text  # unknown tag is an ERROR, never silently latest
-    both = moto_client.post("/v1/table/dtag$t/describe?tag=stable&version=2", json={})
+    both = moto_client.post("/v1/table/lance_catalog$dtag$t/describe?tag=stable&version=2", json={})
     assert both.status_code == 400, both.text  # spec 0.9: tag and version are mutually exclusive
 
 
@@ -430,26 +430,26 @@ def test_describe_honours_a_version_pin_sent_in_the_spec_body(moto_client: TestC
     with the latest version. The mock-namespace tests assert what we hand the backend; this one asserts the
     version that actually comes back off disk."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert _create(moto_client, "dbody$t", rows).status_code == 200
+    assert _create(moto_client, "lance_catalog$dbody$t", rows).status_code == 200
     assert (
         moto_client.post(
-            "/v1/table/dbody$t/insert?mode=append",
+            "/v1/table/lance_catalog$dbody$t/insert?mode=append",
             content=_ipc(pa.table({"id": pa.array([2], pa.int64())})),
             headers=ARROW,
         ).status_code
         == 200
     )  # → v2 on disk; v1 is history
-    assert moto_client.post("/v1/table/dbody$t/tags/create", json={"tag": "stable", "version": 1}).status_code == 200
+    assert moto_client.post("/v1/table/lance_catalog$dbody$t/tags/create", json={"tag": "stable", "version": 1}).status_code == 200
 
-    pinned = moto_client.post("/v1/table/dbody$t/describe", json={"version": 1, "load_detailed_metadata": True})
+    pinned = moto_client.post("/v1/table/lance_catalog$dbody$t/describe", json={"version": 1, "load_detailed_metadata": True})
     assert pinned.status_code == 200, pinned.text
     assert pinned.json()["version"] == 1  # the PINNED version, not the latest
 
-    tagged = moto_client.post("/v1/table/dbody$t/describe", json={"tag": "stable", "load_detailed_metadata": True})
+    tagged = moto_client.post("/v1/table/lance_catalog$dbody$t/describe", json={"tag": "stable", "load_detailed_metadata": True})
     assert tagged.status_code == 200, tagged.text
     assert tagged.json()["version"] == 1  # a body tag resolves exactly like the query tag
 
-    latest = moto_client.post("/v1/table/dbody$t/describe", json={"load_detailed_metadata": True})
+    latest = moto_client.post("/v1/table/lance_catalog$dbody$t/describe", json={"load_detailed_metadata": True})
     assert latest.json()["version"] == 2  # an unpinned body still answers latest
 
 
@@ -461,9 +461,9 @@ def test_describe_honours_a_version_pin_sent_in_the_spec_body(moto_client: TestC
 @pytest.mark.parametrize(
     ("door", "post"),
     [
-        ("arrow-create", lambda c: c.post("/v1/table/ghostns$t9/create", content=_ipc(pa.table({"id": [1]})), headers=ARROW)),
-        ("declare", lambda c: c.post("/v1/table/ghostns$t9/declare", json={"schema": {"fields": []}})),
-        ("register", lambda c: c.post("/v1/table/ghostns$t9/register", json={"location": "nope.lance"})),
+        ("arrow-create", lambda c: c.post("/v1/table/lance_catalog$ghostns$t9/create", content=_ipc(pa.table({"id": [1]})), headers=ARROW)),
+        ("declare", lambda c: c.post("/v1/table/lance_catalog$ghostns$t9/declare", json={"schema": {"fields": []}})),
+        ("register", lambda c: c.post("/v1/table/lance_catalog$ghostns$t9/register", json={"location": "nope.lance"})),
     ],
 )
 def test_no_create_door_admits_a_table_whose_NAMESPACE_does_not_exist(moto_client: TestClient, door: str, post: Any) -> None:
@@ -476,19 +476,19 @@ def test_no_create_door_admits_a_table_whose_NAMESPACE_does_not_exist(moto_clien
     assert refused.status_code == 404, f"{door} admitted a parentless table: {refused.text}"
     assert "ghostns" in refused.text, f"{door}'s refusal does not name the missing namespace"
     # …and nothing was written: the table is not there to describe, nor listed under the ghost.
-    assert moto_client.post("/v1/table/ghostns$t9/describe", json={}).status_code == 404
+    assert moto_client.post("/v1/table/lance_catalog$ghostns$t9/describe", json={}).status_code == 404
 
 
 def test_the_rename_DESTINATION_must_have_a_real_namespace_too(moto_client: TestClient) -> None:
     """Rename is a create at the destination — moving a table into a namespace that does not exist
     orphans it exactly as creating it there would."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert _create(moto_client, "rn$t", rows).status_code == 200
+    assert _create(moto_client, "lance_catalog$rn$t", rows).status_code == 200
 
-    moved = moto_client.post("/v1/table/rn$t/rename", json={"new_table_name": "t", "new_namespace_id": ["ghostdest"]})
+    moved = moto_client.post("/v1/table/lance_catalog$rn$t/rename", json={"new_table_name": "t", "new_namespace_id": ["lance_catalog", "ghostdest"]})
     assert moved.status_code == 404, moved.text
     assert "ghostdest" in moved.text
-    assert moto_client.post("/v1/table/rn$t/describe", json={}).status_code == 200, "the source was lost"
+    assert moto_client.post("/v1/table/lance_catalog$rn$t/describe", json={}).status_code == 200, "the source was lost"
 
 
 # --------------------------------------------------------------------------- #
@@ -501,11 +501,11 @@ def test_a_destructive_drop_frees_the_id_for_a_new_table_under_a_new_uuid(moto_c
     its name succeeds. The table created there is a new one, so the catalog mints it a new uuid
     ([[LH-519]], ADR 0173 §2)."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert _create(moto_client, "nobleed$t", rows).status_code == 200
-    dropped = _uuid(moto_client, "nobleed$t")
-    assert moto_client.post("/v1/table/nobleed$t/drop", json={}).status_code == 200
-    assert _create(moto_client, "nobleed$t", rows).status_code == 200
-    assert _uuid(moto_client, "nobleed$t") != dropped, "the re-created table answers the dropped table's uuid"
+    assert _create(moto_client, "lance_catalog$nobleed$t", rows).status_code == 200
+    dropped = _uuid(moto_client, "lance_catalog$nobleed$t")
+    assert moto_client.post("/v1/table/lance_catalog$nobleed$t/drop", json={}).status_code == 200
+    assert _create(moto_client, "lance_catalog$nobleed$t", rows).status_code == 200
+    assert _uuid(moto_client, "lance_catalog$nobleed$t") != dropped, "the re-created table answers the dropped table's uuid"
 
 
 def _objects_under(moto_endpoint: str, key: str) -> list[str]:
@@ -536,7 +536,7 @@ def test_a_destructive_drop_leaves_no_byte_of_the_table_at_its_location(
     declared table holds only its reservation marker. Each drop answers 200 and leaves nothing under the location, as
     stored or as spelled."""
     prefix = uuid.uuid4().hex[:8]
-    namespace = f"lh532{prefix}"
+    namespace = f"lance_catalog$lh532{prefix}"
     assert moto_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
     if shape == "declared":
         made = moto_client.post(f"/v1/table/{namespace}$t/declare", json={})
@@ -586,7 +586,7 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     from lakehouse import stored_objects, trash
 
     prefix = uuid.uuid4().hex[:8]
-    namespace = f"lh532r{prefix}"
+    namespace = f"lance_catalog$lh532r{prefix}"
     assert moto_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
     relative = f"{prefix}-residue/held"
     options = lance_storage_options(moto_endpoint, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
@@ -667,29 +667,29 @@ def test_an_expired_drop_does_not_undrop_while_its_bytes_await_the_purge(moto_cl
     """Past the deadline, before the purge, the bytes are there and the undrop is refused 409 naming the deadline, and
     the table stays dropped."""
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    assert moto_client_recoverable.post("/v1/namespace/exp/create", json={}).status_code == 200
-    assert _create(moto_client_recoverable, "exp$t", rows).status_code == 200
-    dropped = _uuid(moto_client_recoverable, "exp$t")
-    assert moto_client_recoverable.post("/v1/table/exp$t/drop", json={}).status_code == 200
+    assert moto_client_recoverable.post("/v1/namespace/lance_catalog$exp/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "lance_catalog$exp$t", rows).status_code == 200
+    dropped = _uuid(moto_client_recoverable, "lance_catalog$exp$t")
+    assert moto_client_recoverable.post("/v1/table/lance_catalog$exp$t/drop", json={}).status_code == 200
 
     _expire_trash_record(moto_endpoint, dropped)
 
-    tasks = moto_client_recoverable.get("/management/v1/table/exp$t/tasks").json()
+    tasks = moto_client_recoverable.get("/management/v1/table/lance_catalog$exp$t/tasks").json()
     assert tasks and tasks[0]["expired"] is True
-    undropped = moto_client_recoverable.post("/management/v1/table/exp$t/undrop", json={})
+    undropped = moto_client_recoverable.post("/management/v1/table/lance_catalog$exp$t/undrop", json={})
     assert undropped.status_code == 409, undropped.text
     assert "grace period ended" in undropped.json()["detail"], undropped.text
-    assert moto_client_recoverable.post("/v1/table/exp$t/describe", json={}).status_code == 404
+    assert moto_client_recoverable.post("/v1/table/lance_catalog$exp$t/describe", json={}).status_code == 404
 
 
 def test_a_live_deadline_is_not_reported_as_expired(moto_client_recoverable: TestClient) -> None:
     """The flag must distinguish 'you have a week' from 'go now', or it is noise."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert moto_client_recoverable.post("/v1/namespace/live/create", json={}).status_code == 200
-    assert _create(moto_client_recoverable, "live$t", rows).status_code == 200
-    assert moto_client_recoverable.post("/v1/table/live$t/drop", json={}).status_code == 200
+    assert moto_client_recoverable.post("/v1/namespace/lance_catalog$live/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "lance_catalog$live$t", rows).status_code == 200
+    assert moto_client_recoverable.post("/v1/table/lance_catalog$live$t/drop", json={}).status_code == 200
 
-    tasks = moto_client_recoverable.get("/management/v1/table/live$t/tasks").json()
+    tasks = moto_client_recoverable.get("/management/v1/table/lance_catalog$live$t/tasks").json()
     assert tasks and tasks[0]["expired"] is False
     assert tasks[0]["expires_at"]
 
@@ -712,8 +712,8 @@ def test_a_crash_mid_drop_leaves_the_table_recoverable_not_unreachable(moto_clie
     import catalog.api.v1.endpoints.tables as tables_mod
 
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    assert moto_client_recoverable.post("/v1/namespace/f6a/create", json={}).status_code == 200
-    assert _create(moto_client_recoverable, "f6a$t", rows).status_code == 200
+    assert moto_client_recoverable.post("/v1/namespace/lance_catalog$f6a/create", json={}).status_code == 200
+    assert _create(moto_client_recoverable, "lance_catalog$f6a$t", rows).status_code == 200
 
     # The kill lands on `trash.put`, NOT on the deregister, and that choice is the whole test. Under
     # the OLD order the put ran SECOND — after a successful deregister — so killing it is exactly the
@@ -732,14 +732,14 @@ def test_a_crash_mid_drop_leaves_the_table_recoverable_not_unreachable(moto_clie
 
         mp.setattr(tables_mod.trash, "put", _die_once)
         with pytest.raises(OSError, match="killed at the trash write"):
-            moto_client_recoverable.post("/v1/table/f6a$t/drop", json={})
+            moto_client_recoverable.post("/v1/table/lance_catalog$f6a$t/drop", json={})
 
     # THE POINT: the table is still LIVE and still readable — nothing was stranded.
-    assert int(moto_client_recoverable.post("/v1/table/f6a$t/count_rows", json={}).text) == 1
+    assert int(moto_client_recoverable.post("/v1/table/lance_catalog$f6a$t/count_rows", json={}).text) == 1
     # …and the caller can simply finish the drop. Under the old order this retry was impossible:
     # `describe_table` would have 404'd on an already-detached table.
-    retried = moto_client_recoverable.post("/v1/table/f6a$t/drop", json={})
+    retried = moto_client_recoverable.post("/v1/table/lance_catalog$f6a$t/drop", json={})
     assert retried.status_code == 200, retried.text
     # Recoverable, as a graced drop promises.
-    assert moto_client_recoverable.post("/management/v1/table/f6a$t/undrop", json={}).status_code == 200
-    assert int(moto_client_recoverable.post("/v1/table/f6a$t/count_rows", json={}).text) == 1
+    assert moto_client_recoverable.post("/management/v1/table/lance_catalog$f6a$t/undrop", json={}).status_code == 200
+    assert int(moto_client_recoverable.post("/v1/table/lance_catalog$f6a$t/count_rows", json={}).text) == 1

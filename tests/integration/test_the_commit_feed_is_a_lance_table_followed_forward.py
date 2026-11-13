@@ -1,6 +1,6 @@
 """The commit feed is a Lance table the catalog governs, and a follower reads it FORWARD (LH-468, ADR 0158).
 
-Lineage keeps no database: every event it admits is a row of `provenance$events`, written through the
+Lineage keeps no database: every event it admits is a row of `lance_catalog$provenance$events`, written through the
 catalog's own `merge_insert` door and read back through its `query` door, and `GET /events?since=` pages that
 table oldest first. Driven over real sockets against the real catalog app on a real `dir` namespace, because
 the claim is that lineage's store IS the catalog: a live uvicorn catalog announcing each commit over HTTP to
@@ -53,8 +53,8 @@ _PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 
 #: The tables the pipeline may see. `acme-silver$hidden` and `globex-silver$orders` are someone else's.
-_VISIBLE = ("acme-silver$pages", "acme-gold$catalog", "acme-gold$index")
-_TABLES = (*_VISIBLE, "acme-silver$hidden", "globex-silver$orders")
+_VISIBLE = ("lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog", "lance_catalog$acme-gold$index")
+_TABLES = (*_VISIBLE, "lance_catalog$acme-silver$hidden", "lance_catalog$globex-silver$orders")
 
 
 def _rows(start: int, stop: int) -> bytes:
@@ -89,7 +89,7 @@ def _operation(event: dict[str, Any]) -> str:
 
 def _compact_the_feed(catalog_url: str) -> None:
     """Compact ``provenance$events`` as a bring-your-own job does, through the catalog's doors with Lance's own protocol."""
-    feed = lance.dataset(namespace_client=lance_namespace.connect("rest", {"uri": catalog_url}), table_id=["provenance", "events"])
+    feed = lance.dataset(namespace_client=lance_namespace.connect("rest", {"uri": catalog_url}), table_id=["lance_catalog", "provenance", "events"])
     plan = Compaction.plan(feed, {"target_rows_per_fragment": 1024})
     Compaction.commit(feed, [task.execute(feed) for task in plan.tasks])
 
@@ -103,10 +103,10 @@ def test_each_catalog_commit_is_followed_forward_once_and_in_commit_order(tmp_pa
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
         httpx.Client(base_url=lineage_url, timeout=60) as lineage,
     ):
-        assert catalog.post("/v1/namespace/acme-silver/create", json={}).status_code == 200
-        created = catalog.post("/v1/table/acme-silver$pages/create", content=_rows(0, 3), headers=_ARROW)
+        assert catalog.post("/v1/namespace/lance_catalog$acme-silver/create", json={}).status_code == 200
+        created = catalog.post("/v1/table/lance_catalog$acme-silver$pages/create", content=_rows(0, 3), headers=_ARROW)
         assert created.status_code == 200, created.text
-        inserted = catalog.post("/v1/table/acme-silver$pages/insert", content=_rows(3, 5), headers=_ARROW)
+        inserted = catalog.post("/v1/table/lance_catalog$acme-silver$pages/insert", content=_rows(3, 5), headers=_ARROW)
         assert inserted.status_code == 200, inserted.text
         # What the outbox relay sends when it recovers an event whose publish was never acknowledged.
         redelivered = lineage.post("/api/v1/lineage", json=_follow(lineage)[-1]["event"])
@@ -118,12 +118,12 @@ def test_each_catalog_commit_is_followed_forward_once_and_in_commit_order(tmp_pa
         ahead = lineage.get("/events", params={"since": 121_000}).json()
 
     assert [(row["outputs"], _operation(row["event"])) for row in seen] == [
-        (["acme-silver$pages"], "create_table"),
-        (["acme-silver$pages"], "insert"),
+        (["lance_catalog$acme-silver$pages"], "create_table"),
+        (["lance_catalog$acme-silver$pages"], "insert"),
         # The feed's own compaction is announced as any table's commit is, once per commit, and recording it is a row
         # write the catalog keeps to itself, so the feed ends there.
-        (["provenance$events"], "compact_table"),
-        (["provenance$events"], "compact_table"),
+        (["lance_catalog$provenance$events"], "compact_table"),
+        (["lance_catalog$provenance$events"], "compact_table"),
     ]
     seqs = [row["seq"] for row in seen]
     assert seqs == sorted(set(seqs)), seqs
@@ -138,13 +138,13 @@ def _declared(catalog_url: str, tables: tuple[str, ...]) -> dict[str, DatasetUui
         def minted(kind: str, name: str) -> str:
             return str(catalog.post(f"/v1/{kind}/{name}/describe", json={}).json()["properties"]["rask.uuid"])
 
-        namespaces = list(dict.fromkeys(table.split("$")[0] for table in tables))
+        namespaces = list(dict.fromkeys(table.rsplit("$", 1)[0] for table in tables))
         for namespace in namespaces:
             assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         for table in tables:
             assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
         namespace_uuid = {namespace: minted("namespace", namespace) for namespace in namespaces}
-        return {table: DatasetUuids(table_uuid=minted("table", table), namespace_uuid=namespace_uuid[table.split("$")[0]]) for table in tables}
+        return {table: DatasetUuids(table_uuid=minted("table", table), namespace_uuid=namespace_uuid[table.rsplit("$", 1)[0]]) for table in tables}
 
 
 def _stamped(event: dict[str, Any], uuid_of: Mapping[str, DatasetUuids]) -> dict[str, Any]:
@@ -161,12 +161,20 @@ def _stamped(event: dict[str, Any], uuid_of: Mapping[str, DatasetUuids]) -> dict
 def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Lineage's router behind its real authentication-then-FGA gate, over a feed the store wrote to the catalog."""
     feed = [
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:01+00:00", outputs=["acme-silver$pages"]),
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:02+00:00", outputs=["acme-silver$hidden"]),
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:03+00:00", outputs=["acme-gold$catalog"], inputs=("acme-silver$pages",)),
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:04+00:00", outputs=["globex-silver$orders"]),
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:05+00:00", outputs=["acme-gold$index"]),
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:06+00:00", outputs=["acme-gold$catalog"], inputs=("acme-silver$hidden",)),
+        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:01+00:00", outputs=["lance_catalog$acme-silver$pages"]),
+        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:02+00:00", outputs=["lance_catalog$acme-silver$hidden"]),
+        run_event(
+            str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:03+00:00", outputs=["lance_catalog$acme-gold$catalog"], inputs=("lance_catalog$acme-silver$pages",)
+        ),
+        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:04+00:00", outputs=["lance_catalog$globex-silver$orders"]),
+        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:05+00:00", outputs=["lance_catalog$acme-gold$index"]),
+        run_event(
+            str(uuid.uuid4()),
+            "COMPLETE",
+            "2026-10-15T10:00:06+00:00",
+            outputs=["lance_catalog$acme-gold$catalog"],
+            inputs=("lance_catalog$acme-silver$hidden",),
+        ),
     ]
     with live_catalog(tmp_path / "catalog", monkeypatch) as url:
         uuid_of = _declared(url, _TABLES)
@@ -187,10 +195,20 @@ def test_a_table_or_namespace_filter_narrows_the_feed_and_hidden_events_stay_hid
         return [row["outputs"] for row in rows]
 
     caller = {SUBJECT_HEADER: _PIPELINE}
-    assert outputs(_follow(governed_feed, caller)) == [["acme-silver$pages"], ["acme-gold$catalog"], ["acme-gold$index"]]
-    assert outputs(_follow(governed_feed, caller, table="acme-silver$pages")) == [["acme-silver$pages"], ["acme-gold$catalog"]]
-    assert outputs(_follow(governed_feed, caller, namespace="acme-gold")) == [["acme-gold$catalog"], ["acme-gold$index"]]
-    assert _follow(governed_feed, caller, table="acme-silver$hidden") == []
+    assert outputs(_follow(governed_feed, caller)) == [
+        ["lance_catalog$acme-silver$pages"],
+        ["lance_catalog$acme-gold$catalog"],
+        ["lance_catalog$acme-gold$index"],
+    ]
+    assert outputs(_follow(governed_feed, caller, table="lance_catalog$acme-silver$pages")) == [
+        ["lance_catalog$acme-silver$pages"],
+        ["lance_catalog$acme-gold$catalog"],
+    ]
+    assert outputs(_follow(governed_feed, caller, namespace="lance_catalog$acme-gold")) == [
+        ["lance_catalog$acme-gold$catalog"],
+        ["lance_catalog$acme-gold$index"],
+    ]
+    assert _follow(governed_feed, caller, table="lance_catalog$acme-silver$hidden") == []
 
 
 def _recorded(store: ProvenanceStore, events: list[dict[str, Any]]) -> None:
@@ -239,10 +257,10 @@ def test_a_page_costs_the_same_whatever_the_feeds_length(tmp_path: Path, monkeyp
     and forward from one, under the governance filter ([[LH-590]])."""
 
     def visible(at: str) -> dict[str, Any]:
-        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["acme-silver$pages"])
+        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["lance_catalog$acme-silver$pages"])
 
     def hidden(at: str) -> dict[str, Any]:
-        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["globex-silver$orders"])
+        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["lance_catalog$globex-silver$orders"])
 
     with live_catalog(tmp_path / "catalog", monkeypatch) as url:
         uuid_of = _declared(url, _TABLES)
@@ -302,14 +320,20 @@ def test_every_cursor_pages_the_rows_a_pruned_feed_with_holes_holds(tmp_path: Pa
     """Every page answers the rows, in the order, its cursor selects: newest first, older than ``after`` and forward from
     ``since``, over a feed a prune cut and deletes left holes in, whatever order the store answers a query in."""
     with live_catalog(tmp_path / "catalog", monkeypatch) as url:
-        store = ProvenanceStore(catalog_url=url, namespace=["provenance"], token=lambda: None, refuse_foreign_runs=False)
+        store = ProvenanceStore(catalog_url=url, namespace=["lance_catalog", "provenance"], token=lambda: None, refuse_foreign_runs=False)
         ensure_tables(store)
         for burst in range(3):
             _recorded(
-                store, [run_event(str(uuid.uuid4()), "COMPLETE", f"2026-10-15T1{burst}:00:{n:02d}+00:00", outputs=["acme-silver$pages"]) for n in range(8)]
+                store,
+                [
+                    run_event(str(uuid.uuid4()), "COMPLETE", f"2026-10-15T1{burst}:00:{n:02d}+00:00", outputs=["lance_catalog$acme-silver$pages"])
+                    for n in range(8)
+                ],
             )
-        RestCatalogWriteTransport(url, ["provenance", FEED]).delete("_rowid < 3 OR _rowid = 4 OR (_rowid >= 10 AND _rowid <= 15) OR _rowid = 20")
-        held = CatalogTableReader(RestCatalogTransport(url), ["provenance", FEED]).to_table(columns=["received_at"], with_row_id=True)
+        RestCatalogWriteTransport(url, ["lance_catalog", "provenance", FEED]).delete(
+            "_rowid < 3 OR _rowid = 4 OR (_rowid >= 10 AND _rowid <= 15) OR _rowid = 20"
+        )
+        held = CatalogTableReader(RestCatalogTransport(url), ["lance_catalog", "provenance", FEED]).to_table(columns=["received_at"], with_row_id=True)
         seqs = sorted(int(row_id) + 1 for row_id in held.column("_rowid").to_pylist())
         if newest_first:
             monkeypatch.setattr(RestCatalogTransport, "query", _newest_first(RestCatalogTransport.query))

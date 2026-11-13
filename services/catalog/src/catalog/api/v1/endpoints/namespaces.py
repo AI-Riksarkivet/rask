@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncIterator
 from contextlib import suppress
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Request, Response
+from fastapi import APIRouter, Header, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -33,9 +33,7 @@ from lance_namespace import (
     NamespaceExistsRequest,
     NamespaceNotEmptyError,
     NamespaceNotFoundError,
-    PermissionDeniedError,
     RegisterTableRequest,
-    ServiceUnavailableError,
     TableAlreadyExistsError,
     TableNotFoundError,
 )
@@ -54,7 +52,6 @@ from catalog.api.dependencies import (
     SettingsDep,
     StorageOptionsDep,
     TrashedUuidQuery,
-    namespace_for_root,
 )
 from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
@@ -70,7 +67,6 @@ from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_eve
 # them drift apart again the moment one is tuned.
 from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
-from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves
@@ -170,17 +166,6 @@ async def create_namespace(
     # it — the closed-vocabulary rule `modes.py` states for every mode this catalog reads.
     create_mode = CreateMode.parse(body.mode if body else None)
     segments = parse_identifier(id)
-    # A top-level namespace needs a warehouse to live in. This door cannot name one, so a NEW top-level
-    # namespace is refused here and the caller is sent to the warehouse-scoped route; checked BEFORE the
-    # native create, so a refusal leaves nothing half-made. Nested namespaces inherit their parent's
-    # binding and pass. An Overwrite or an ExistOk of a top-level id that already has a binding passes too
-    # ([[LH-416]]): the namespace it keeps or creates is where the binding routes it (`NamespaceDep` resolves
-    # through it) and hangs off that binding's warehouse, so it belongs to a warehouse as the bound one does.
-    binding: dict[str, str] | None = None
-    if create_mode in (CreateMode.OVERWRITE, CreateMode.EXIST_OK) and settings.warehouses_enabled and len(segments) == 1:
-        binding = await run_in_threadpool(warehouses.binding_for_namespace, settings.registry_root, settings.storage_options(), segments[0])
-    if binding is None:
-        fga_deps.require_warehouse_scoped(segments, warehouses_enabled=settings.warehouses_enabled)
     # And it must not nest deeper than the authz model can resolve. Both read walkers have capped depth
     # for a while; nothing capped CREATION, so the estate could be driven into a shape where
     # Check(can_get_metadata, warehouse:X) errors instead of answering — taking browsing down for the
@@ -237,8 +222,6 @@ async def create_namespace(
             segments=segments,
             uuid=minted,
             undo=_undo_create,
-            # A bound top-level namespace hangs off its warehouse, as the warehouse door seeds it.
-            parent_object=f"warehouse:{binding['warehouse_id']}" if binding is not None else None,
         )
         await emit_control(
             control,
@@ -325,19 +308,15 @@ async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req:
         return CreateNamespaceResponse(properties=getattr(described, "properties", None)), True
 
 
-async def _forget_namespace(
-    settings: Settings, client: OpenFgaClient | None, token: Caller | None, segments: list[str], *, namespace_uuid: str | None, unbind: bool
-) -> None:
-    """Remove what a dropped namespace leaves behind: the warehouse binding (``unbind``, top-level only), the records
-    kept under its uuid when the caller read one before the drop, and its FGA tuples, with those of every child an
-    earlier attempt removed, which its `child` edges still name (``fga_deps.end_removed_subtree``).
+async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, token: Caller | None, *, namespace_uuid: str | None) -> None:
+    """Remove what a dropped namespace leaves behind: the records kept under its uuid when the caller read one before
+    the drop, and its FGA tuples, with those of every child an earlier attempt removed, which its `child` edges still
+    name (``fga_deps.end_removed_subtree``).
 
     Each step is idempotent — an absent record or tuple is already the post-condition — so a retry over a
     half-finished drop converges. A grant or record left behind governs nothing, since no other namespace holds the
     uuid it is keyed by ([[LH-524]]).
     """
-    if unbind and len(segments) == 1:
-        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
     async for _ in fga_deps.end_removed_subtree(client, settings, root_uuid=namespace_uuid, removed=[], token=token):
         pass
 
@@ -368,11 +347,7 @@ async def _judge_tier_declaration(
     replaced = await tier_policy.declared_on(ns, segments) if overwrite else None
     if declared is None and replaced is None:
         return
-    project = (
-        await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, settings.storage_options(), segments[0])
-        if settings.warehouses_enabled
-        else None
-    )
+    project = await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), segments[0])
     await fga_deps.require_tier_authority(client, settings, token, project=project)
     inherited = await tier_policy.tier_of(ns, segments[:-1])
     if declared is not None and inherited is not None and inherited != declared:
@@ -397,8 +372,7 @@ async def _create_or_replace_empty_namespace(
 
     The drop clears the bar ``POST /v1/namespace/{id}/drop`` does: ``can_delete`` on the namespace (the
     router already checked create-on-parent) and its deletion protection. The old namespace's tuples,
-    protection and policy go with it, so the creator is seeded on a clean id; its binding stays, because
-    the new namespace lives where the old one did.
+    protection and policy go with it, so the creator is seeded on a clean id.
 
     Catching rather than pre-checking, as in :func:`create_or_keep_namespace`: a create that wins needs no
     drop, and a concurrent create between the drop and the re-create answers the ordinary 409.
@@ -420,35 +394,8 @@ async def _create_or_replace_empty_namespace(
         )
     # A table landing between the listing and this drop is refused by the backend's own Restrict check.
     await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
-    await _forget_namespace(settings, client, token, segments, namespace_uuid=replaced.uuid, unbind=False)
+    await _forget_namespace(settings, client, token, namespace_uuid=replaced.uuid)
     return await run_in_threadpool(native.call, ns, "create_namespace", req)
-
-
-def _merge_bound_top_namespaces(names: list[str], bound: Iterable[Mapping[str, str]]) -> list[str]:
-    """A ROOT listing's names plus the warehouse-bound top-level namespaces the default backend cannot see.
-
-    SORTED AND DEDUPED because the caller's cursor is keyset over this list: an unsorted merge would make
-    ``page_token`` skip or repeat rows, and a namespace reachable both ways — bound AND present in the
-    default root — must be one row, not two.
-
-    A record with no ``top_ns`` is skipped rather than trusted: the registry is object-store JSON written
-    by another service, and an empty name in a listing is one a client will try to resolve.
-    """
-    return sorted({*names, *(top for record in bound if (top := record.get("top_ns")))})
-
-
-async def _bound_top_namespaces(settings: Settings) -> list[Mapping[str, str]]:
-    """The bindings registry, or NOTHING when it cannot be read.
-
-    Tolerant for the reason ``GET /v1/table`` is tolerant per seed: the registry lives in object storage
-    and an unreachable bucket must narrow this listing to the default root's answer, never turn a
-    discovery call into a 500. The narrowing is the same one every caller already gets today.
-    """
-    try:
-        return list(await run_in_threadpool(warehouses.list_bindings, settings.registry_root, settings.storage_options()))
-    except Exception:
-        log.warning("namespace_root_bindings_unreadable", extra={"registry_root": settings.registry_root}, exc_info=True)
-        return []
 
 
 @router.get("/{id}/list", response_model_exclude_none=True)
@@ -486,21 +433,13 @@ async def list_namespaces(
     filter removed.
     """
     segments = parse_identifier(id)
-    response, names = await _drain_namespaces(ns, segments)
-    # THE ROOT ONLY, and the condition is the whole point. The root id has no top segment to route by,
-    # so `get_namespace` hands this route the DEFAULT namespace and the drain above asks that one
-    # backend — while a warehouse-enabled estate keeps each tenant's namespaces in that tenant's own
-    # bucket. The bindings registry already names exactly the missing children, because the root's
-    # children ARE top-level namespaces and a binding names one.
-    #
-    # It is also the source that keeps this answer in step with the routes that serve it: `get_namespace`
-    # routes an id by its binding, so a namespace sitting in a warehouse bucket with no binding is
-    # reachable by no id route, and naming it here would advertise a listing the estate cannot serve.
-    #
-    # A binding merged below is NOT exempt from the per-item filter — it goes into `names` before it,
-    # because a bound namespace's name is as disclosive as a sibling's.
-    if not segments and settings.warehouses_enabled:
-        names = _merge_bound_top_namespaces(names, await _bound_top_namespaces(settings))
+    # THE ROOT'S CHILDREN ARE THE WAREHOUSES ([[LH-593]]): the estate's own and each registered one. Each is judged
+    # below like any other item, on `can_get_metadata`, so a caller is shown exactly the warehouses they may see.
+    if segments:
+        response, names = await _drain_namespaces(ns, segments)
+    else:
+        response = ListNamespacesResponse(namespaces=[])
+        names = await run_in_threadpool(partial(warehouses.served_ids, settings.registry_root, settings.storage_options(), estate=settings.estate_warehouse))
 
     if (authz := fga_deps.authorization(settings, client, token)) is not None:
         response.namespaces, response.page_token = await fga_deps.authorized_page(
@@ -592,14 +531,6 @@ async def _trash_subtree(
         )
         if trashed:
             detached.append(item)
-    # The ROOT's binding, read BEFORE anything is dropped — after the unbind below it is unreadable,
-    # and after the purge it is gone for good. `None` for a nested namespace (bindings are keyed by
-    # top-level segment) and for an unbound one (single-bucket estates have no binding at all).
-    binding: dict[str, str] | None = None
-    if len(segments) == 1:
-        live = await run_in_threadpool(warehouses.binding_for_namespace, settings.registry_root, so, segments[0])
-        if live:
-            binding = {"warehouse_id": str(live["warehouse_id"]), "root_uri": str(live["root_uri"])}
     for child in [*child_namespaces, segments]:
         # Read before the drop removes the `__manifest` row that is their only copy.
         described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=child))
@@ -613,27 +544,9 @@ async def _trash_subtree(
             kind="namespace",
             namespace_uuid=parent_of(child),
             cascade=cascade,
-            # Only the ROOT carries it — `child is segments` is identity on the same list object, and
-            # the root is the last iteration by construction.
-            binding=binding if child is segments else None,
             properties=described.properties,
         )
         await run_in_threadpool(trash.put, settings.registry_root, so, record)
-    # UNBIND LAST, and only once the root's record — carrying the binding — is durably written
-    # (diff2 F6 leg c). Order is the whole safety argument:
-    #
-    #   * before the loop, a mid-loop crash would leave the surviving children unroutable, because
-    #     `NamespaceDep` resolves through this very binding;
-    #   * after the record, a crash between the two leaves a binding whose namespace is gone — which
-    #     is exactly the old leak, but now bounded by one retry instead of forever, and `undrop`
-    #     re-binds to the same values so it converges either way.
-    #
-    # The alternative shape — keep the binding and have the PURGE remove it — was rejected: it puts a
-    # registry write in the reclaimer (which owns no write path to it and may not import the
-    # catalog's), and it needs a reconciler category that would fire on every legitimately-trashed
-    # subtree for its whole grace window, blocking `report_is_clean` and with it the purge itself.
-    if binding is not None:
-        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, segments[0])
     return detached
 
 
@@ -716,8 +629,7 @@ async def _destroy_subtree(
     deepest-first so each is empty when its own drop runs, then the cascaded root. Not atomic, and
     deliberately so: a mid-loop failure leaves a SMALLER subtree that the same call can finish on a
     retry, which is strictly better than the all-or-nothing native call it replaces (that one simply
-    refused). An already-absent child is tolerated — drift, not an error, exactly as the warehouse
-    cascade treats a binding that outlived its namespace.
+    refused). An already-absent child is tolerated: drift, not an error.
 
     Each destroyed table's base record goes with its bytes ([[LH-279]]): left behind, it would sanction its bases for
     the next table registered there. Its location claim goes too ([[LH-204]]), or the location stays held for the
@@ -886,29 +798,6 @@ async def _require_descendants_unprotected(settings: Settings, descendants: list
         fga_deps.require_not_protected(record or {}, kind=item.kind, obj_id=fga.canonical_object_id(item.segments), force=False)
 
 
-async def _skip_absent_namespace(settings: Settings, client: OpenFgaClient | None, token: Caller | None, segments: list[str]) -> DropNamespaceResponse:
-    """``mode=Skip`` on a namespace that is not there: succeed, after finishing the trailer a previous drop left.
-
-    Skip is the retry lever, and the retry it exists for is a drop that removed the namespace and failed
-    before its trailer ran. Answering success without the trailer would leave that drop's binding on the id
-    for the next namespace created there to route through, so the trailer runs here: every step is
-    idempotent, and on an id that never existed each one finds nothing. The namespace's records and grants are
-    keyed by a uuid nothing here can read any more, and they govern no other namespace.
-
-    Not while the trash holds a namespace dropped under the name: its binding moved onto its record for the undrop (#96),
-    and its grants are held by its uuid, so a namespace created at the name meanwhile inherits nothing ([[LH-525]]).
-
-    The answer is 200 with a DropNamespaceResponse body, not the 204 the mode's prose names: spec.yaml's
-    DropNamespace operation declares only 200, and pylance 12.0.0's RestNamespace refuses a 204 ("Failed
-    to parse response: EOF while parsing a value", measured 2026-10-05). Nothing was dropped by this call,
-    so nothing is announced on the control stream.
-    """
-    canonical = fga.canonical_object_id(segments)
-    if not await run_in_threadpool(trash.named, settings.registry_root, settings.storage_options(), canonical, kind="namespace"):
-        await _forget_namespace(settings, client, token, segments, namespace_uuid=None, unbind=True)
-    return DropNamespaceResponse()
-
-
 @router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_namespace(
     id: str,
@@ -968,7 +857,7 @@ async def drop_namespace(
     except NamespaceNotFoundError:
         if drop_mode is not DropMode.SKIP:
             raise
-        return await _skip_absent_namespace(settings, client, token, segments)
+        return DropNamespaceResponse()
     await fga_deps.require_namespace_unprotected(settings, dropped, force=force)
     descendants: list[fga_deps.GovernedObject] = []
     # Enumerated whenever a CASCADE is asked for — not only when FGA is on, as it used to be. A cascade
@@ -985,7 +874,7 @@ async def drop_namespace(
         except NamespaceNotFoundError:
             if drop_mode is not DropMode.SKIP:
                 raise
-            return await _skip_absent_namespace(settings, client, token, segments)
+            return DropNamespaceResponse()
         # Protection is a property of the SUBTREE, so it is checked against every id about to die, and
         # the refusal NAMES the protected descendant — "something in here is protected" is not an
         # answer anyone can act on. `force` turns this lock exactly as it does at the named rung.
@@ -1063,7 +952,7 @@ async def drop_namespace(
             except NamespaceNotFoundError:
                 if drop_mode is not DropMode.SKIP:
                     raise
-                return await _skip_absent_namespace(settings, client, token, segments)
+                return DropNamespaceResponse()
         removed = [item for item in descendants if item.kind == "namespace" or tuple(item.segments) in removed_tables]
         # The record dies with the object — a reused id must not inherit protection nobody set on it. A recoverable cascade
         # clears its namespace's here, and its DESCENDANTS' only under force=true (an unforced cascade already proved none
@@ -1073,14 +962,6 @@ async def drop_namespace(
         if recoverable and force:
             for item in removed:
                 await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), item.kind, item.uuid)
-        # The warehouse BINDING dies with a destroyed top-level namespace. `unbind_namespace` existed and
-        # only the warehouse-delete door called it, so every direct drop of a top-level namespace leaked
-        # its binding record — and the UI derives its namespace list from bindings, so the dropped
-        # namespace kept LISTING forever, indistinguishable from a live empty one (seen on the deployed
-        # estate: `casc9` survived its own successful cascade). Kept on a RECOVERABLE drop, exactly as the
-        # grants are: undrop rebuilds the subtree and the binding must still be there to route it.
-        if not recoverable and len(segments) == 1:
-            await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), segments[0])
         # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DETACHED, exactly as the single-table door does (a `drop_table`
         # event per table); a destroyed subtree announced each table as it went. A follower of the feed learns a table
         # is gone only from these events ([[LH-144]]), so a table nothing records stays indistinguishable from a live
@@ -1128,7 +1009,6 @@ async def namespace_tasks(
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_namespace(
     id: str,
-    request: Request,
     ns: NamespaceDep,
     root: NamespaceRootDep,
     settings: SettingsDep,
@@ -1188,57 +1068,6 @@ async def undrop_namespace(
     # Before anything is rebuilt: a residue record's table was destroyed, not trashed ([[LH-532]]).
     for t_rec in table_records:
         trash_doors.require_restorable(t_rec, name=str(t_rec.get("id") or ""))
-    # RE-BIND FIRST, and re-resolve the connection from the restored root (diff2 F6 leg c).
-    #
-    # The drop unbound this top-level namespace, so `NamespaceDep` — which resolves BEFORE this
-    # handler body runs — has already fallen back to the estate's default root. Rebuilding through it
-    # would re-create the whole subtree in the WRONG BUCKET: a silent tenant-isolation break, not an
-    # error. So the binding is restored from the record and the connection re-derived from it.
-    #
-    # `bind_namespace` is write-once at the store: identical `{warehouse_id, root_uri}` is idempotent
-    # (the retry path), a DIFFERENT binding raises `NamespaceAlreadyExistsError` (409). That refusal
-    # is correct and deliberate — if the id was re-bound to another warehouse during the grace window,
-    # routing this subtree there would hand one tenant another's bucket, and failing loudly is the
-    # only safe answer. A record with no `binding` (a nested undrop, an unbound estate, or a record
-    # written before this landed) keeps the dependency's connection untouched.
-    bound = record.get("binding") or None
-    if bound:
-        warehouse_id = str(bound["warehouse_id"])
-        # THE DEACTIVATION GATE, and it is not optional: every caller of `namespace_for_root` pairs it
-        # with one, or a quarantined warehouse's bucket stays reachable through that caller.
-        # `get_namespace` gates every ordinary request this way; re-deriving the connection here steps
-        # around that dependency, so the check has to come with it.
-        #
-        # Deactivation is offboarding step one, so recovering a subtree INTO a quarantined warehouse is
-        # precisely what it exists to stop. Fail-closed on both failure kinds, symmetric with
-        # `dependencies.py`: an unreadable registry is 503, and a MISSING warehouse record (clean
-        # `None`) is not-active → 403, never silently allowed.
-        # THE WHOLE RECORD, for the reason `dependencies._resolve_warehouse_root` reads it: the undrop
-        # also needs the warehouse's own `endpoint` ([[LH-067]]), and it is the same single GET. Opening
-        # the estate's store instead would recover the subtree into a different object store from the
-        # one its tables live in.
-        try:
-            warehouse = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
-        except Exception as exc:
-            log.warning("warehouse_status_lookup_failed", extra={"top_ns": segments[0], "warehouse_id": warehouse_id, "error": str(exc)})
-            raise ServiceUnavailableError(f"warehouse status lookup failed for {warehouse_id!r}") from exc
-        if warehouse is None or (warehouse.get("status") or "active") != "active":
-            raise PermissionDeniedError(
-                f"warehouse {warehouse_id!r} is deactivated (quarantined); namespace {segments[0]!r} cannot be recovered into it until it is reactivated"
-            )
-        # [[LH-205]] Before the binding is written, so a record naming another store refuses the undrop
-        # whole instead of leaving a binding behind for the connection builder to refuse.
-        require_estate_store(warehouse.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
-        await run_in_threadpool(
-            warehouses.bind_namespace,
-            settings.registry_root,
-            so,
-            segments[0],
-            warehouse_id,
-            str(bound["root_uri"]),
-        )
-        ns = await namespace_for_root(request, settings, str(bound["root_uri"]), endpoint=warehouse.get("endpoint") or None)
-        root = str(bound["root_uri"])
     response = CreateNamespaceResponse()
     for n_rec in namespace_records:
         n_id = str(n_rec["id"])

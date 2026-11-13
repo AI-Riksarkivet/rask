@@ -33,22 +33,22 @@ def _ipc(table: pa.Table) -> bytes:
 
 def _seed(client: TestClient) -> None:
     """create → delete → update, so the log has one row of each interesting shape."""
-    assert client.post("/v1/namespace/h1/create", json={}).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$h1/create", json={}).status_code == 200
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
-    created = client.post("/v1/table/h1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = client.post("/v1/table/lance_catalog$h1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
     assert created.status_code == 200, created.text
-    deleted = client.post("/v1/table/h1$t/delete", json={"predicate": "id = 2"})
+    deleted = client.post("/v1/table/lance_catalog$h1$t/delete", json={"predicate": "id = 2"})
     assert deleted.status_code == 200, deleted.text
-    updated = client.post("/v1/table/h1$t/update", json={"updates": [["v", "'Z'"]], "predicate": "id = 3"})
+    updated = client.post("/v1/table/lance_catalog$h1$t/update", json={"updates": [["v", "'Z'"]], "predicate": "id = 3"})
     assert updated.status_code == 200, updated.text
 
 
 def test_history_reports_what_changed_per_version(real_ns_client: TestClient) -> None:
     _seed(real_ns_client)
-    r = real_ns_client.get("/management/v1/table/h1$t/history")
+    r = real_ns_client.get("/management/v1/table/lance_catalog$h1$t/history")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["table"] == "h1$t"
+    assert body["table"] == "lance_catalog$h1$t"
     rows = body["versions"]
 
     # Newest first — a log reads backwards, and a UI should not have to re-sort it.
@@ -80,12 +80,12 @@ def test_history_reports_what_changed_per_version(real_ns_client: TestClient) ->
 def test_history_limit_bounds_the_transaction_reads(real_ns_client: TestClient) -> None:
     """`limit` exists so a table with many versions cannot turn one UI page into N object-store reads."""
     _seed(real_ns_client)
-    rows = real_ns_client.get("/management/v1/table/h1$t/history?limit=2").json()["versions"]
+    rows = real_ns_client.get("/management/v1/table/lance_catalog$h1$t/history?limit=2").json()["versions"]
     assert [row["version"] for row in rows] == [3, 2], rows  # the NEWEST 2, not the first 2
 
 
 def test_history_of_a_missing_table_is_not_a_500(real_ns_client: TestClient) -> None:
-    r = real_ns_client.get("/management/v1/table/h1$nope/history")
+    r = real_ns_client.get("/management/v1/table/lance_catalog$h1$nope/history")
     assert r.status_code in (400, 404), r.text
 
 
@@ -105,19 +105,19 @@ def test_history_reports_restore_index_and_column_changes(real_ns_client: TestCl
     _seed(real_ns_client)  # v1 create, v2 delete, v3 update
 
     added = real_ns_client.post(
-        "/v1/table/h1$t/add_columns",
+        "/v1/table/lance_catalog$h1$t/add_columns",
         json={"new_columns": [{"name": "double_id", "expression": "id * 2"}]},
     )
     assert added.status_code == 200, added.text
-    dropped = real_ns_client.post("/v1/table/h1$t/drop_columns", json={"columns": ["double_id"]})
+    dropped = real_ns_client.post("/v1/table/lance_catalog$h1$t/drop_columns", json={"columns": ["double_id"]})
     assert dropped.status_code == 200, dropped.text
     # The catalog builds no index (ADR 0162); an owner's own pylance does.
-    location = real_ns_client.post("/v1/table/h1$t/describe", json={}).json()["table_uri"]
+    location = real_ns_client.post("/v1/table/lance_catalog$h1$t/describe", json={}).json()["table_uri"]
     lance.dataset(location).create_scalar_index("id", index_type="BTREE")
-    restored = real_ns_client.post("/v1/table/h1$t/restore", json={"version": 1})
+    restored = real_ns_client.post("/v1/table/lance_catalog$h1$t/restore", json={"version": 1})
     assert restored.status_code == 200, restored.text
 
-    rows = real_ns_client.get("/management/v1/table/h1$t/history?limit=50").json()["versions"]
+    rows = real_ns_client.get("/management/v1/table/lance_catalog$h1$t/history?limit=50").json()["versions"]
     by_op: dict[str, dict[str, object]] = {}
     for row in rows:
         by_op.setdefault(str(row.get("operation")), row)

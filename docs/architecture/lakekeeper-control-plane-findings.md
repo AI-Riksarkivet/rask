@@ -1,5 +1,9 @@
 # Lakekeeper's control plane and security, read for what rask can learn
 
+> **2026-11-13:** [ADR 0206](../adr/0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md) changed the rask this record read: a warehouse is the first segment of every name, so the
+> namespace bindings and their cache are gone (LH-593, `services/catalog/src/catalog/api/dependencies.py`), and the
+> catalog converges what git declares (XC-213, `services/catalog/src/catalog/api/declaration_converge.py`).
+
 > Research note. Lakekeeper is the reference, never the stack: every proposal below is stated on rask's own stack
 > (Lance and lance-namespace, OpenFGA, Dex, Kubernetes ServiceAccounts, Dapr on NATS JetStream, Helm under Argo CD), and
 > none adopts Lakekeeper's code, Iceberg, or a Postgres catalog database. Every Lakekeeper claim cites

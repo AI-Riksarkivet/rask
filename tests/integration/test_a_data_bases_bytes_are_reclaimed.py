@@ -87,7 +87,7 @@ class _Estate:
         self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         self.registry = base_registry.BaseRegistry(control_root=self.root, storage_options=self.key)
-        assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
     def create(self, table: str, rows: pa.Table, *, mode: str | None = None) -> str:
         """``table`` written through the create door with its fragments on the data base; the location it answered."""
@@ -135,10 +135,14 @@ class _Estate:
 
     def maintained(self, table: str, location: str, *, now: datetime) -> DatasetResult:
         """Maintenance's own pass on the table at ``location``, every version but the current one reclaimable, as of ``now``."""
-        described = self.client.post("/v1/namespace/db/describe", json={})
-        assert described.status_code == 200, described.text
+        # The uuid of each row above the table, the warehouse's own among them, as its `__manifest` row holds it.
+        described = {name: self.client.post(f"/v1/namespace/{name}/describe", json={}) for name in ("lance_catalog", "lance_catalog$db")}
+        assert [answer.status_code for answer in described.values()] == [200, 200], [answer.text for answer in described.values()]
         settings = self.maintenance(min_versions_to_expire=1, catalog_url=CATALOG_URL)
-        ids = TableIds(by_location={normalise(location): table}, namespace_uuids={"db": str(described.json()["properties"][UUID_PROPERTY])})
+        ids = TableIds(
+            by_location={normalise(location): table},
+            namespace_uuids={name: str(answer.json()["properties"][UUID_PROPERTY]) for name, answer in described.items()},
+        )
         readings = table_pass.PassReadings(
             table_ids=ids,
             context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
@@ -183,7 +187,7 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     [pytest.param(0, True, id="a-file-younger-than-the-age-is-kept"), pytest.param(8, False, id="a-file-past-the-age-is-reclaimed")],
 )
 def test_the_expiry_pass_reclaims_a_base_file_nothing_references(estate: _Estate, days: int, superseded_kept: bool, caplog: pytest.LogCaptureFixture) -> None:
-    table = f"db$t{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$db$t{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ids(0, 3))
     directory = estate.directory(location)
     branched = estate.files(directory)
@@ -237,7 +241,7 @@ def _expired(estate: _Estate, table: str) -> None:
     ],
 )
 def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate: _Estate, claim: str, caplog: pytest.LogCaptureFixture) -> None:
-    table = f"db$p{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$db$p{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ids(0, 3))
     estate.create(table, _ids(3, 6), mode="overwrite")
     directory = estate.directory(location)
@@ -278,7 +282,7 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
 
 
 def test_the_purge_leaves_a_directory_no_claim_names_its_table_on_and_still_purges_the_table(estate: _Estate) -> None:
-    table = f"db$q{uuid.uuid4().hex[:8]}"
+    table = f"lance_catalog$db$q{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ids(0, 3))
     root_prefix = f"{location.removeprefix(f'{estate.root}/')}/"
     # The record as a create wrote it before [[LH-252]]: the approved base itself, which no claim gives the table.
@@ -307,7 +311,7 @@ def test_the_purge_leaves_a_directory_no_claim_names_its_table_on_and_still_purg
 
 
 class _Warehoused(_Estate):
-    """The catalog with warehouses on: a project, a warehouse with its own bucket and a bound namespace, the data base beside."""
+    """A project, a warehouse with its own bucket and a namespace in it, the data base beside."""
 
     def __init__(self, url: str, client: TestClient, bucket: str, second: str) -> None:
         self.url = url
@@ -320,11 +324,12 @@ class _Warehoused(_Estate):
         self.s3 = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         self.registry = base_registry.BaseRegistry(control_root=self.root, storage_options=self.key)
         suffix = uuid.uuid4().hex[:8]
-        self.warehouse, self.namespace = f"wh{suffix}", f"ns{suffix}"
+        self.warehouse = f"wh{suffix}"
+        self.namespace = f"{self.warehouse}$ns{suffix}"
         assert client.post("/management/v1/projects", json={"id": f"p{suffix}"}).status_code == 200
         assert client.post("/management/v1/warehouses", json={"id": self.warehouse, "project": f"p{suffix}"}).status_code == 200
-        bound = client.post(f"/management/v1/warehouses/{self.warehouse}/namespaces", json={"namespace": self.namespace})
-        assert bound.status_code == 200, bound.text
+        made = client.post(f"/v1/namespace/{self.namespace}/create", json={})
+        assert made.status_code == 200, made.text
 
 
 @pytest.fixture
@@ -342,7 +347,6 @@ def warehoused(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Ware
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_MULTIBASE_DATA_BASES": f"s3://{second}/data",
-        "LANCE_WAREHOUSES_ENABLED": "true",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "LANCE_TRASH_GRACE_DAYS": "1",
     }.items():

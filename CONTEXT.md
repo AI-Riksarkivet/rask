@@ -52,6 +52,20 @@ A client that tells people about the lakehouse's events, targeting each from the
 `can_be_notified` check. The lakehouse runs none.
 _Avoid_: inbox, notification service
 
+**Declaration**:
+What git declares of the estate's tenants, in the product chart's `catalog.declared` values: projects with their admins,
+warehouses, and grants on a project or warehouse to principals that are not people. The catalog converges the estate
+onto it on a tick, making what is missing and correcting what drifted through the same functions its doors call
+(ADR 0206). Namespaces, tables and people's other grants are never declared.
+_Avoid_: manifest, desired state, custom resource
+
+**Managed by git**:
+A declared project or warehouse, marked `managed_by: git` on its record: its doors refuse a change to what git declares
+of it (its status, deletion protection, delete profile and existence), so it changes only in git. Removed from the
+declaration, it is released to its doors with its data kept; a declared grant removed from it is revoked, and only one
+the declaration wrote.
+_Avoid_: locked, read-only, operator-owned
+
 **Engine**:
 The user's bring-your-own compute and orchestrator, which runs their pipeline and writes into the lakehouse through
 the catalog's namespace doors like any client; the lakehouse never calls it and knows nothing of how it runs.
@@ -59,9 +73,22 @@ _Avoid_: Ray, compute plane, cluster
 
 ### Catalog
 
+**Project**:
+The tenant: the people-and-policy scope above warehouses, holding its admins, members, roles and quality gate. A
+project holds any number of warehouses, and a default project, `default`, is declared at install (ADR 0206).
+_Avoid_: tenant (as a type name), organisation, workspace, realm
+
+**Warehouse**:
+The storage-and-naming scope inside a project: one bucket and the one directory catalog at its root, whose id is the
+first segment of every name in it. The estate's own warehouse, `lance_catalog`, is served from the catalog's own root,
+has no registry record and belongs to no project; it holds the lakehouse's `provenance` namespace.
+_Avoid_: bucket (for the warehouse), catalog, binding
+
 **Name**:
-The path of segments a client uses to reach a table or namespace, which the Lance spec calls its `id`: `["bronze",
-"räksmörgås"]`, written `bronze$räksmörgås`. A rename changes it. Two names are the same name only when they are equal
+The path of segments a client uses to reach a table or namespace, which the Lance spec calls its `id`: `["acme",
+"bronze", "räksmörgås"]`, written `acme$bronze$räksmörgås`. Its first segment is its warehouse, so names are unique per
+warehouse and two warehouses may hold the same names; a one-segment name is the warehouse itself, a namespace has at
+least two segments and a table at least three. A rename changes it and keeps its warehouse. Two names are the same name only when they are equal
 exactly, case included, and a name not in Unicode NFC is refused rather than rewritten. Each segment is 1 to 255
 characters holding no `$`, `+`, `/` or control character and no leading or trailing whitespace; a bare `+` in a
 request's path reads as a space.

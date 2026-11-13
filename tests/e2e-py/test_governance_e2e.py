@@ -42,7 +42,7 @@ from lance_namespace import ErrorCode
 from liveness import skip_unless_live
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 from refusals import assert_refused, described, namespace_uuid
-from topology import OUTSIDER, WAREHOUSE, assert_parent_exists, create_top_level
+from topology import OUTSIDER, create_namespace, namespace_id
 
 from lakehouse.governed import fga
 from lakehouse.governed.principal import is_principal
@@ -134,20 +134,16 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     outsider = _token(OUTSIDER)
     ah = {"Authorization": f"Bearer {alice}"}
     bh = {"Authorization": f"Bearer {outsider}"}
-    ns = f"gov{os.getpid()}"
-    # 2-level ids (namespace$table) — the real medallion pattern; the table's parent is the created
-    # namespace `ns`, so create-on-parent is authorized (a 3-level id would need the intermediate namespace
-    # created first, which an enforcing stack correctly requires).
+    ns = namespace_id(f"gov{os.getpid()}")
+    # Each table's parent is the created namespace `<warehouse>$gov<pid>`, so create-on-parent is authorized (a deeper
+    # id would need the intermediate namespace created first, which an enforcing stack correctly requires).
     bronze, silver = f"{ns}$bronze", f"{ns}$silver"
 
     # 1. anon -> 401 (OIDC enforced)
     assert requests.post(f"{server}/v1/namespace/{ns}/create", json={}, timeout=10).status_code == 401
 
     # 2. alice creates namespace + bronze table -> 200 (app seeds owner; catalog emits create-lineage).
-    # Through whichever door this estate admits: with warehouses on, the root door answers 400
-    # `must belong to a warehouse` — a TOPOLOGY refusal — and this suite read that as a governance
-    # failure.
-    assert_parent_exists(create_top_level(server, ns, ah), ns)
+    create_namespace(server, f"gov{os.getpid()}", ah)
     try:
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
         create = requests.post(f"{server}/v1/table/{bronze}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30)
@@ -178,7 +174,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
                 status=403,
                 code=ErrorCode.PERMISSION_DENIED,
                 unchanged=lambda: (described(server, bronze, ah), tuples_on(table_object)),
-                foreign={alice_sub, standing["location"], standing["properties"]["rask.uuid"], ns_uuid, WAREHOUSE},
+                foreign={alice_sub, standing["location"], standing["properties"]["rask.uuid"], ns_uuid},
             )
 
         # 5. lineage recorded alice as the VERIFIED author of bronze's create (emission is async -> poll).
@@ -228,8 +224,8 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
         bare = sorted(user for user in users if user != fga.USER_WILDCARD and not is_principal(fga.subject_of(user.removeprefix("user:"))))
         assert not bare, f"the store holds subjects that name no identity provider: {bare}"
     finally:
-        # The flow runs against live estates too: its tables go with their bytes, so the session's teardown can unbind
-        # their namespace (`topology.unbind_created`).
+        # The flow runs against live estates too: its tables go with their bytes, so the session's teardown can drop
+        # their namespace (`topology.drop_created`).
         for table in (bronze, silver):
             requests.post(f"{server}/v1/table/{table}/drop", headers=ah, params={"purge": "true"}, json={}, timeout=30)
 
@@ -250,9 +246,8 @@ def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple
     server, _ = stack
     alice, outsider = _token("alice@example.com"), _token(OUTSIDER)
     ah, bh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {outsider}"}
-    ns = f"mv{os.getpid()}"
+    ns = create_namespace(server, f"mv{os.getpid()}", ah)
     source, dest = f"{ns}$src", f"{ns}$dst"
-    assert_parent_exists(create_top_level(server, ns, ah), ns)
     try:
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
         assert requests.post(f"{server}/v1/table/{source}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30).status_code == 200
@@ -289,18 +284,17 @@ def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple
                 again["properties"]["rask.uuid"],
                 first["properties"]["rask.uuid"],
                 namespace_uuid(server, ns, ah),
-                WAREHOUSE,
             },
         )
     finally:
-        # The leg runs against live estates too; what it made goes, protection and all, so its namespace can be unbound.
+        # The leg runs against live estates too; what it made goes, protection and all, so its namespace can be dropped.
         for table in (source, dest):
             requests.post(f"{server}/v1/table/{table}/drop", headers=ah, params={"force": "true", "purge": "true"}, json={}, timeout=30)
 
 
 def _rename_into(server: str, table: str, namespace: str, headers: dict[str, str]) -> requests.Response:
     """Rename ``table`` into ``namespace`` under its own name, as ``headers``' bearer."""
-    body = {"new_namespace_id": [namespace], "new_table_name": table.rsplit("$", 1)[-1]}
+    body = {"new_namespace_id": namespace.split("$"), "new_table_name": table.rsplit("$", 1)[-1]}
     return requests.post(f"{server}/v1/table/{table}/rename", headers=headers, json=body, timeout=30)
 
 
@@ -312,11 +306,9 @@ def test_a_rename_across_a_managed_boundary_needs_grant_authority_and_moves_the_
     server, _ = stack
     alice, mover = _token("alice@example.com"), _token(OUTSIDER)
     ah, mh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {mover}"}
-    free, managed = f"mvf{os.getpid()}", f"mvm{os.getpid()}"
+    free, managed = (create_namespace(server, name, ah) for name in (f"mvf{os.getpid()}", f"mvm{os.getpid()}"))
     brought, taken, moved = f"{free}$brought", f"{managed}$taken", f"{free}$moved"
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-    for namespace in (free, managed):
-        assert_parent_exists(create_top_level(server, namespace, ah), namespace)
     try:
         for namespace in (free, managed):
             granted = requests.post(
@@ -338,7 +330,7 @@ def test_a_rename_across_a_managed_boundary_needs_grant_authority_and_moves_the_
                 status=403,
                 code=ErrorCode.PERMISSION_DENIED,
                 unchanged=lambda held=held: tuples_on(fga.table_object(held["properties"]["rask.uuid"])),
-                foreign={_sub(alice), held["location"], held["properties"]["rask.uuid"], *namespaces.values(), WAREHOUSE},
+                foreign={_sub(alice), held["location"], held["properties"]["rask.uuid"], *namespaces.values()},
             )
             assert refused.json()["detail"] == refusal, f"{table} was refused on another rung: {refused.text}"
             assert described(server, table, ah)["location"] == held["location"], f"the refused rename moved {table}"
@@ -354,7 +346,7 @@ def test_a_rename_across_a_managed_boundary_needs_grant_authority_and_moves_the_
         assert named_by == {entered}, f"the moved table is named a child of {named_by}, not of the namespace it is in alone"
     finally:
         # The leg runs against live estates too, so what it made goes: its tables, then its namespaces with their
-        # grants and bindings. The session's teardown would only unbind a namespace and leave its row and its tuples.
+        # grants.
         for table in (brought, taken, moved, f"{managed}$moved"):
             requests.post(f"{server}/v1/table/{table}/drop", headers=ah, params={"force": "true", "purge": "true"}, json={}, timeout=30)
         for namespace in (free, managed):

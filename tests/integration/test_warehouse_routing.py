@@ -1,18 +1,12 @@
-"""#3-A REAL routing coverage (P2.2) — drives the actual warehouse-aware resolver, no fake namespace.
+"""The routing a request's first segment decides ([[LH-593]], ADR 0206): a real app, real directory catalogs, the resolver not overridden.
 
-The other warehouse tests (``test_warehouses.py``) exercise the admin CONTROL plane (create/list/get) and
-reuse the shared ``client`` fixture, which overrides ``get_namespace`` with a MagicMock. That leaves the most
-load-bearing #3-A path — ``get_namespace → _resolve_warehouse_root → warehouses.warehouse_for_namespace``,
-the routing that sends a bound namespace's tables to its physically-isolated bucket — with ZERO non-faked
-coverage. These tests build a REAL app (real dir namespaces, real local-FS registry, resolver NOT overridden)
-so the routing is proven, not assumed: a table created under a bound namespace physically lands in the
-warehouse's root and is ABSENT from the default root.
+A warehouse is the first segment of every identifier, so ``wh-a$bronze$clips`` is served from warehouse ``wh-a``'s own
+root and its own directory catalog. The control-plane doors (create, list, get) are ``test_warehouses.py``'s.
 """
 
 from __future__ import annotations
 
 import io
-import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -42,25 +36,21 @@ def _arrow(table: pa.Table) -> bytes:
 
 @pytest.fixture
 def routing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, Path, Path, Path]]:
-    """A REAL app: warehouses on, a real default-root dir namespace, a local-FS registry, and — crucially —
-    ``get_namespace`` NOT overridden, so the warehouse resolver actually runs. Yields (client, default_root,
-    warehouse_root, registry)."""
+    """A real app over a real estate root and a local control root. Yields (client, estate_root, warehouse_root, registry)."""
     yield from _routing_app(tmp_path, monkeypatch)
 
 
 def _routing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env: str) -> Iterator[tuple[TestClient, Path, Path, Path]]:
-    """The fixture body, shared so a variant can set extra env (see ``routing_recoverable``) without
-    copying the whole app build — a second copy would drift from this one the first time either moved. ``env`` is set
-    after the defaults, so a variant may move the control root."""
-    default_root = tmp_path / "default"
+    """The fixture body, shared so a variant sets extra env without a second app build. ``env`` is set after the
+    defaults, so a variant may move the control root."""
+    estate_root = tmp_path / "default"
     warehouse_root = tmp_path / "wh-bucket"
     registry = tmp_path / "registry"
-    for d in (default_root, warehouse_root, registry):
+    for d in (estate_root, warehouse_root, registry):
         d.mkdir()
 
     monkeypatch.setenv("LANCE_REST_IMPL", "dir")
-    monkeypatch.setenv("LANCE_REST_ROOT", str(default_root))
-    monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
+    monkeypatch.setenv("LANCE_REST_ROOT", str(estate_root))
     monkeypatch.setenv("LANCE_CONTROL_ROOT", f"file://{registry}")
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "x")
@@ -73,29 +63,28 @@ def _routing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env: str) ->
     from catalog.main import app
 
     with TestClient(app) as client:
-        yield client, default_root, warehouse_root, registry
+        yield client, estate_root, warehouse_root, registry
     get_settings.cache_clear()
 
 
 def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-a", control: str | None = None, options: StorageOptions | None = None) -> None:
-    """Register a warehouse whose root is a LOCAL dir (not s3://) so the resolver can open it in-process,
-    and pre-create its top-level namespace, mirroring what create_warehouse_namespace does on a real stack. The records
-    go to ``registry``, or to the control root ``control`` read with ``options``."""
+    """Register warehouse ``wid`` on a LOCAL root the resolver opens in-process, with its own row in that root's catalog
+    and a namespace ``bronze`` beneath it, as the create door leaves a warehouse and CreateNamespace a namespace. The
+    record goes to ``registry``, or to the control root ``control`` read with ``options``."""
     control = control or f"file://{registry}"
     options = options or StorageOptions()
     wh_svc.put_warehouse(control, options, {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
-    # The tenant namespace lives IN the warehouse bucket — create it there, then bind.
     wh_ns = connect("dir", {"root": str(warehouse_root)})
-    wh_ns.create_namespace(CreateNamespaceRequest(id=["tenantns"], properties=with_minted_uuid(None)))
-    wh_svc.bind_namespace(control, options, "tenantns", wid, str(warehouse_root))
+    wh_ns.create_namespace(CreateNamespaceRequest(id=[wid], properties=with_minted_uuid(None)))
+    wh_ns.create_namespace(CreateNamespaceRequest(id=[wid, "bronze"], properties=with_minted_uuid(None)))
 
 
 def _created(client: TestClient) -> int:
-    return client.post("/v1/table/tenantns$clips/create", content=_arrow(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM).status_code
+    return client.post("/v1/table/wh-a$bronze$clips/create", content=_arrow(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM).status_code
 
 
 def _declared(client: TestClient) -> int:
-    return client.post("/v1/table/tenantns$clips/declare", json={}).status_code
+    return client.post("/v1/table/wh-a$bronze$clips/declare", json={}).status_code
 
 
 def _directories(root: Path) -> list[str]:
@@ -109,29 +98,51 @@ def test_a_table_the_catalog_makes_lives_in_its_warehouse_root_under_its_uuid(
 ) -> None:
     """[[LH-520]] A table the catalog creates or declares lives at ``<warehouse root>/<table uuid>`` (ADR 0173 §5).
 
-    Through the real resolver, which routes the bound namespace's tables to the warehouse's root and never to the
-    shared default root. The directory is the uuid the table's describe answers and nothing else: no part of the
-    table's name reaches the store.
+    Through the real resolver, which routes the identifier's first segment to that warehouse's root and never to the
+    estate's own. The directory is the uuid the table's describe answers and nothing else: no part of the table's name
+    reaches the store.
     """
-    client, default_root, warehouse_root, registry = routing
+    client, estate_root, warehouse_root, registry = routing
     _register_warehouse(registry, warehouse_root)
     assert make(client) == 200
 
-    described = client.post("/v1/table/tenantns$clips/describe", json={})
+    described = client.post("/v1/table/wh-a$bronze$clips/describe", json={})
 
     assert described.status_code == 200, described.text
     table_uuid = described.json()["properties"]["rask.uuid"]
     assert Path(described.json()["location"].removeprefix("file://")) == warehouse_root / table_uuid, described.json()
-    assert (_directories(warehouse_root), _directories(default_root)) == ([table_uuid], [])
+    assert (_directories(warehouse_root), _directories(estate_root)) == ([table_uuid], [])
+
+
+def test_two_warehouses_each_hold_the_same_names_and_no_binding_is_recorded(routing: tuple[TestClient, Path, Path, Path]) -> None:
+    """[[LH-593]] A name belongs to its warehouse: ``wh-a$bronze$t`` and ``wh-b$bronze$t`` are two tables in two roots,
+    and nothing on the control root binds a name to a warehouse."""
+    client, _estate_root, warehouse_root, registry = routing
+    other_root = registry.parent / "wh-b-bucket"
+    other_root.mkdir()
+    _register_warehouse(registry, warehouse_root)
+    _register_warehouse(registry, other_root, wid="wh-b")
+    for warehouse, rows in (("wh-a", [1]), ("wh-b", [1, 2])):
+        made = client.post(f"/v1/table/{warehouse}$bronze$t/create", content=_arrow(pa.table({"id": rows})), headers=ARROW_STREAM)
+        assert made.status_code == 200, made.text
+
+    described = {warehouse: client.post(f"/v1/table/{warehouse}$bronze$t/describe", json={}).json() for warehouse in ("wh-a", "wh-b")}
+
+    held = {
+        warehouse: (Path(answer["location"].removeprefix("file://")).parent, lance.dataset(answer["location"]).count_rows())
+        for warehouse, answer in described.items()
+    }
+    assert held == {"wh-a": (warehouse_root, 1), "wh-b": (other_root, 2)}
+    assert sorted(path.name for path in (registry / "_warehouses").iterdir()) == ["wh-a.json", "wh-b.json"]
 
 
 def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient, Path, Path, Path]) -> None:
-    client, _default_root, warehouse_root, registry = routing
+    client, _estate_root, warehouse_root, registry = routing
     _register_warehouse(registry, warehouse_root)
 
     def _create(name: str) -> int:
         return client.post(
-            f"/v1/table/tenantns${name}/create?mode=overwrite",
+            f"/v1/table/wh-a$bronze${name}/create?mode=overwrite",
             content=_arrow(pa.table({"id": [1]})),
             headers=ARROW_STREAM,
         ).status_code
@@ -139,57 +150,22 @@ def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient
     # Active → a create routes and succeeds.
     assert _create("t_before") == 200
 
-    # Deactivate → the resolver quarantines EVERY op on the bound namespace (403), so no new table lands.
+    # Deactivate → the resolver quarantines EVERY op under the warehouse (403), so no new table lands.
     d = client.post("/management/v1/warehouses/wh-a/deactivate")
     assert d.status_code == 200, d.text
     assert d.json()["status"] == "deactivated"
     blocked = client.post(
-        "/v1/table/tenantns$t_during/create?mode=overwrite",
+        "/v1/table/wh-a$bronze$t_during/create?mode=overwrite",
         content=_arrow(pa.table({"id": [1]})),
         headers=ARROW_STREAM,
     )
     assert blocked.status_code == 403, blocked.text
     assert "deactivated" in blocked.text.lower()
 
-    # Activate → routing is restored; a create succeeds again (status is read live, no stale cache).
+    # Activate → routing is restored; a create succeeds again (status is read live).
     a = client.post("/management/v1/warehouses/wh-a/activate")
     assert a.status_code == 200 and a.json()["status"] == "active"
     assert _create("t_after") == 200
-
-
-def test_binding_collides_with_existing_default_namespace_409(
-    routing: tuple[TestClient, Path, Path, Path],
-) -> None:
-    client, _default_root, warehouse_root, registry = routing
-    # A warehouse exists, but the name we will try to bind ALREADY exists unbound in the default root.
-    wh_svc.put_warehouse(
-        f"file://{registry}",
-        StorageOptions(),
-        {"id": "wh-a", "bucket": "wh-a", "root_uri": str(warehouse_root), "project": "acme"},
-    )
-    # A LEGACY unbound namespace in the default root. Created through the app's OWN native connection
-    # rather than the HTTP door, because that door is gone: a top-level namespace must now be created
-    # inside a warehouse (`require_warehouse_scoped`). The collision is still reachable — every
-    # namespace made before that rule landed is exactly this shape — so the guard below must hold.
-    # Going through the native API (not mkdir) is what makes the namespace VISIBLE to the existence
-    # probe the guard uses; a bare directory is not a namespace to it.
-    from lance_namespace import CreateNamespaceRequest
-
-    from catalog.services import native
-
-    native.call(client.app.state.connections.connection(client.app.state.settings), "create_namespace", CreateNamespaceRequest(id=["shared"]))
-
-    # Binding "shared" to the warehouse would route shared$* to the warehouse bucket and ORPHAN the
-    # default-root tables — the collision guard must reject it with 409.
-    r = client.post("/management/v1/warehouses/wh-a/namespaces", json={"namespace": "shared"})
-    assert r.status_code == 409, r.text
-    assert "orphan" in r.text.lower()
-
-
-# --------------------------------------------------------------------------- #
-# diff2 F6 leg (c) — the warehouse binding must not outlive its namespace, and
-# undrop must route the recovered subtree back to the SAME bucket.
-# --------------------------------------------------------------------------- #
 
 
 @pytest.fixture
@@ -199,159 +175,34 @@ def routing_recoverable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iter
     yield from _routing_app(tmp_path, monkeypatch)
 
 
-def test_a_recoverable_cascade_unbinds_and_undrop_rebinds_the_same_warehouse(
-    routing_recoverable: tuple[TestClient, Path, Path, Path],
-) -> None:
-    """THE ACCEPTANCE CRITERION for F6 leg (c), and its point is the SECOND half.
-
-    The binding used to be KEPT on a recoverable drop so undrop could still route — which meant it
-    outlived the namespace, and when the grace window expired the purge reclaimed the bytes and left
-    the binding standing forever. Nothing could see it either: the reconciler's `dangling_bindings`
-    detects a binding whose WAREHOUSE record is missing, and the warehouse is still there.
-
-    So the drop now unbinds, and the root trash record carries `{warehouse_id, root_uri}` as the only
-    surviving copy. The half that makes that safe rather than merely tidy is the undrop: `NamespaceDep`
-    resolves BEFORE the handler body, so with the binding gone it has already fallen back to the
-    estate's DEFAULT root — and rebuilding through it would silently re-create the whole subtree in the
-    shared bucket. That is a tenant-isolation break, not an error, so it is asserted physically.
-    """
-    from lakehouse import trash
-
-    client, default_root, warehouse_root, registry = routing_recoverable
-    control = f"file://{registry}"
+def test_an_undropped_namespace_is_rebuilt_in_its_own_warehouse(routing_recoverable: tuple[TestClient, Path, Path, Path]) -> None:
+    """A recoverable cascade's undrop rebuilds the subtree in the warehouse its name routes to, never in the estate's
+    own root: rebuilding there would be a tenant-isolation break with no error, so it is asserted physically."""
+    client, estate_root, warehouse_root, registry = routing_recoverable
     _register_warehouse(registry, warehouse_root)
-
-    created = client.post(
-        "/v1/table/tenantns$clips/create?mode=overwrite",
-        content=_arrow(pa.table({"id": [1, 2, 3]})),
-        headers=ARROW_STREAM,
-    )
+    created = client.post("/v1/table/wh-a$bronze$clips/create?mode=overwrite", content=_arrow(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM)
     assert created.status_code == 200, created.text
-    assert str(warehouse_root) in created.json()["location"]
-
-    dropped = client.post("/v1/namespace/tenantns/drop", json={"behavior": "cascade"})
+    dropped = client.post("/v1/namespace/wh-a$bronze/drop", json={"behavior": "cascade"})
     assert dropped.status_code == 200, dropped.text
 
-    # NO LEAK: the binding is gone the moment the namespace is.
-    assert wh_svc.binding_for_namespace(control, StorageOptions(), "tenantns") is None, "the drop left the warehouse binding behind"
-    # …and the root record is the only place it now lives.
-    filed = trash.named(control, StorageOptions(), "tenantns", kind="namespace")
-    assert len(filed) == 1, f"one recoverable drop is filed for the root: {filed}"
-    assert filed[0].get("binding") == {"warehouse_id": "wh-a", "root_uri": str(warehouse_root)}
+    recovered = client.post("/management/v1/namespace/wh-a$bronze/undrop", json={})
 
-    # COLD CACHE, and without this the test is vacuous. `_resolve_warehouse_root` caches bindings
-    # POSITIVELY AND FOREVER (#46), so inside one process `NamespaceDep` keeps resolving `tenantns` to
-    # the warehouse root from a stale entry even after the unbind — which masks the whole reason the
-    # undrop has to re-resolve. Clearing it is what a second replica, or this one after a restart,
-    # actually sees. (Caught by the mutation pass: removing the re-resolve left the suite green.)
-    client.app.state.warehouse_binding_cache.clear()
-
-    recovered = client.post("/management/v1/namespace/tenantns/undrop", json={})
     assert recovered.status_code == 200, recovered.text
-
-    # The binding is restored…
-    assert wh_svc.binding_for_namespace(control, StorageOptions(), "tenantns") == {
-        "top_ns": "tenantns",
-        "warehouse_id": "wh-a",
-        "root_uri": str(warehouse_root),
-    }
-    # …and the recovered table is physically back in the WAREHOUSE bucket, not the shared default one.
-    described = client.post("/v1/table/tenantns$clips/describe", json={})
+    described = client.post("/v1/table/wh-a$bronze$clips/describe", json={})
     assert described.status_code == 200, described.text
     location = described.json()["location"]
-    assert str(warehouse_root) in location, f"the recovered table did not route back to its warehouse: {location}"
-    assert str(default_root) not in location, f"undrop rebuilt the subtree in the SHARED root: {location}"
-    assert lance.dataset(location).count_rows() == 3
+    assert (str(warehouse_root) in location, _directories(estate_root), lance.dataset(location).count_rows()) == (True, [], 3), location
 
 
-def test_undrop_refuses_when_the_id_was_bound_elsewhere_during_the_grace_window(
-    routing_recoverable: tuple[TestClient, Path, Path, Path],
-) -> None:
-    """Re-binding is write-once at the store, and that refusal is load-bearing.
-
-    If `tenantns` was re-bound to a DIFFERENT warehouse while the drop sat in the trash, restoring the
-    recorded binding would hand this subtree someone else's bucket. `bind_namespace` refuses a
-    conflicting binding (409) and undrop must surface that rather than route anywhere — failing loudly
-    is the only safe answer, because the alternative is a silent cross-tenant write.
-    """
-    client, _default_root, warehouse_root, registry = routing_recoverable
-    control = f"file://{registry}"
-    _register_warehouse(registry, warehouse_root)
-    assert client.post("/v1/namespace/tenantns/drop", json={"behavior": "cascade"}).status_code == 200
-
-    # Somebody else claims the freed name against another warehouse.
-    other = registry.parent / "wh-other"
-    other.mkdir(exist_ok=True)
-    wh_svc.put_warehouse(control, StorageOptions(), {"id": "wh-b", "bucket": "wh-b", "root_uri": str(other), "project": "rival"})
-    wh_svc.bind_namespace(control, StorageOptions(), "tenantns", "wh-b", str(other))
-
-    refused = client.post("/management/v1/namespace/tenantns/undrop", json={})
-    assert refused.status_code == 409, refused.text
-    # And the rival's binding is untouched — the refusal changed nothing.
-    assert wh_svc.binding_for_namespace(control, StorageOptions(), "tenantns") == {
-        "top_ns": "tenantns",
-        "warehouse_id": "wh-b",
-        "root_uri": str(other),
-    }
-
-
-# --------------------------------------------------------------------------- #
-# diff2 F10 item 3 — a TTL floor under the forever-positive binding cache
-# --------------------------------------------------------------------------- #
-
-
-def test_a_stale_binding_cache_entry_expires_instead_of_lasting_until_restart(
-    routing: tuple[TestClient, Path, Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The cache is POSITIVE-FOREVER, and #46's broadcast eviction is best-effort.
-
-    A binding is immutable, so caching a resolved one forever is sound — until one of the three
-    mutations that break that premise happens and the control event announcing it is dropped. A
-    broadcast its retries cannot deliver is parked on the dead-letter topic and never read back, so a
-    lost event leaves an entry nothing will ever evict, and the consequence lasts for the life of the PROCESS.
-
-    Live warehouse-status reads mean the stale entry cannot route at a deleted bucket (the finding's
-    own text corrects that), so what the TTL bounds is the rest: persistent 403s on a since-re-bound
-    namespace, and wrong-bucket routing under warehouse-id reuse.
-
-    Asserted through the resolver rather than the dict, so it is the ROUTING that recovers, not just
-    a key that disappeared.
-    """
-    from catalog.api import dependencies as deps
-
-    client, _default_root, warehouse_root, registry = routing
-    _register_warehouse(registry, warehouse_root)
-
-    # Warm the cache through a real request.
-    assert client.post("/v1/namespace/tenantns/describe", json={}).status_code in (200, 404)
-    cache = client.app.state.warehouse_binding_cache
-    assert "tenantns" in cache, "the resolver did not cache the binding — this test proves nothing"
-
-    # A mutation lands whose control event is LOST: the binding is rewritten behind the replica's back.
-    other = registry.parent / "wh-moved"
-    other.mkdir(exist_ok=True)
-    wh_svc.unbind_namespace(f"file://{registry}", StorageOptions(), "tenantns")
-    wh_svc.put_warehouse(f"file://{registry}", StorageOptions(), {"id": "wh-m", "bucket": "wh-m", "root_uri": str(other), "project": "acme"})
-    wh_svc.bind_namespace(f"file://{registry}", StorageOptions(), "tenantns", "wh-m", str(other))
-
-    # Without a TTL the replica keeps the old entry forever. Advance past the window.
-    real_monotonic = time.monotonic
-    monkeypatch.setattr(deps.time, "monotonic", lambda: real_monotonic() + 10_000)
-
-    resolved = client.app.state.warehouse_binding_cache
-    assert deps._fresh_cached_binding(resolved, "tenantns", 300.0) is None, "the stale entry outlived its TTL"
-    assert "tenantns" not in resolved, "the expired entry was not evicted"
-
-
-def test_a_table_registered_under_a_bound_namespace_is_then_described(routing: tuple[TestClient, Path, Path, Path]) -> None:
+def test_a_table_registered_in_a_warehouse_is_then_described(routing: tuple[TestClient, Path, Path, Path]) -> None:
     """[[LH-463]] `RegisterTable` answers for the table it registered: describe and list find it afterwards."""
-    client, _default_root, warehouse_root, registry = routing
+    client, _estate_root, warehouse_root, registry = routing
     _register_warehouse(registry, warehouse_root)
-    registered = client.post("/v1/table/tenantns$events/register", json={"location": "medallion/bronze"})
+    registered = client.post("/v1/table/wh-a$bronze$events/register", json={"location": "medallion/bronze"})
 
     assert registered.status_code == 200, registered.text
-    described = client.post("/v1/table/tenantns$events/describe", json={})
-    listed = client.get("/v1/namespace/tenantns/table/list")
+    described = client.post("/v1/table/wh-a$bronze$events/describe", json={})
+    listed = client.get("/v1/namespace/wh-a$bronze/table/list")
     assert (described.status_code, listed.json().get("tables")) == (200, ["events"]), (described.text, listed.text)
 
 
@@ -379,20 +230,38 @@ def routing_on_a_store(
 def test_a_listing_reads_its_warehouse_record_once(
     routing_on_a_store: tuple[TestClient, Path, Path, Path], registry_store: store_requests.CountedStore
 ) -> None:
-    """[[LH-576]] E10h: a request resolves its top namespace's warehouse once, so a listing judging each of its tables
-    through that namespace reads the warehouse's record once, where it read it once per listed table. Counted on the
+    """[[LH-576]] E10h: a request resolves its warehouse once, so a listing judging each of its tables
+    through that warehouse reads the warehouse's record once, where it read it once per listed table. Counted on the
     wire in front of the control root's store; the record is still read on every request, so a deactivation is in force
     from the next one."""
     from catalog.core.config import get_settings
 
-    client, _default_root, warehouse_root, registry = routing_on_a_store
+    client, _estate_root, warehouse_root, registry = routing_on_a_store
     _register_warehouse(registry, warehouse_root, control="s3://registry", options=get_settings().storage_options())
     for name in ("a", "b", "c", "d"):
-        assert client.post(f"/v1/table/tenantns${name}/create", content=_arrow(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+        assert client.post(f"/v1/table/wh-a$bronze${name}/create", content=_arrow(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
     registry_store.taken()
 
-    listed = client.get("/v1/namespace/tenantns/table/list", params={"include_declared": "false"})
+    listed = client.get("/v1/namespace/wh-a$bronze/table/list", params={"include_declared": "false"})
 
     assert (listed.status_code, listed.json()["tables"]) == (200, ["a", "b", "c", "d"]), listed.text
     record_reads = [request for request in registry_store.taken() if request.method == "GET" and request.path.endswith("/wh-a.json")]
     assert len(record_reads) == 1, f"the listing read its warehouse record {len(record_reads)} times"
+
+
+def test_a_name_whose_first_segment_is_no_warehouse_reaches_nothing_the_estate_root_holds(routing: tuple[TestClient, Path, Path, Path]) -> None:
+    """A first segment naming no warehouse is served from no catalog at all. The estate's own root may hold a row under
+    that segment (a namespace made before names began with a warehouse, or planted past the doors), and a name routed
+    there would reach it and every table beneath it."""
+    client, estate_root, _warehouse_root, _registry = routing
+    estate = connect("dir", {"root": str(estate_root)})
+    estate.create_namespace(CreateNamespaceRequest(id=["stray"], properties=with_minted_uuid(None)))
+    estate.create_namespace(CreateNamespaceRequest(id=["stray", "sales"], properties=with_minted_uuid(None)))
+
+    answers = (
+        client.post("/v1/namespace/stray$sales/describe", json={}),
+        client.get("/v1/namespace/stray/list"),
+        client.post("/v1/table/stray$sales$t/declare", json={}),
+    )
+
+    assert [(answer.status_code, answer.json()["code"]) for answer in answers] == [(404, 1), (404, 1), (404, 1)], [a.text for a in answers]

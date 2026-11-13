@@ -38,7 +38,7 @@
 	import { declareTable, fetchTables } from './remote/catalog.api';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
-	import { filterVerdict, projectOfTable } from './project-filter.ts';
+	import { filterVerdict, projectOf } from './project-filter.ts';
 	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOfTable, type StageInfo } from './stage';
@@ -66,8 +66,8 @@
 		frame?: 'page' | 'panel';
 	} = $props();
 
-	// Each row's project, from the warehouses and the bindings; the filter narrows the rows this caller
-	// was given, a view and never a boundary.
+	// Each row's project, its warehouse's (the first segment of its id); the filter narrows the rows
+	// this caller was given, a view and never a boundary.
 	const projects = new ProjectIndexRead();
 
 	const unauthorized = $derived(tables === null && lastStatus === 401);
@@ -249,7 +249,7 @@
 			id,
 			namespace: namespaceOfTable(id),
 			stage: stageOfTable(id),
-			project: projects.index ? projectOfTable(projects.index, id) : null,
+			project: projects.index ? projectOf(projects.index, id) : null,
 		}));
 		return all;
 	});
@@ -414,7 +414,7 @@
 				<input
 					class="mono"
 					bind:value={declNs}
-					placeholder="namespace"
+					placeholder="namespace — warehouse$name"
 					aria-label="Namespace"
 					onkeydown={closeDeclareOnEscape}
 					{@attach focusOnOpen}

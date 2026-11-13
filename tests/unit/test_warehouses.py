@@ -15,9 +15,10 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import boto3
+import lance_namespace
 import pytest
 from botocore.exceptions import ClientError
-from lance_namespace import InternalError, InvalidInputError, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
+from lance_namespace import InternalError, InvalidInputError, LanceNamespace, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 from unfiled_announcer import unfiled
@@ -138,7 +139,7 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
     asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
-    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN, project="acme", admin="dex~alice"))
+    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
     model = {t["type"]: set(t.get("relations") or {}) for t in fga_module.load_model()["type_definitions"]}
@@ -230,10 +231,26 @@ class _FakeStore:
         monkeypatch.setattr(fga_module, "list_users", self.list_users)
 
 
+class _BucketCatalogs:
+    """The catalog's connections, answering each warehouse bucket's root with a directory catalog on local disk, so the
+    create door gives the warehouse its own row there without reaching a store."""
+
+    def __init__(self, base: Path) -> None:
+        self._base = base
+
+    def connection(self, _settings: Settings, *, root: str | None = None, endpoint: str | None = None, plane: str = "metadata") -> LanceNamespace:
+        assert root is not None and root.startswith("s3://"), f"the create opened {root!r}, not its bucket"
+        return lance_namespace.connect("dir", {"root": str(self._base / root.removeprefix("s3://"))})
+
+
+def _request(settings: Settings) -> Any:
+    """A stand-in request carrying the one piece of app state the create touches: the catalog's connections."""
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(connections=_BucketCatalogs(Path(settings.registry_root.removeprefix("file://"))))))
+
+
 def _governed_settings(tmp_path: Any) -> Settings:
     return Settings.model_validate(
         {
-            "warehouses_enabled": True,
             "control_root": _root(tmp_path),
             "fga_enabled": True,
             "oidc_enabled": True,
@@ -252,6 +269,7 @@ def _create_as(settings: Settings, sub: str, body: Any) -> Any:
 
     return asyncio.run(
         wh_ep.create_warehouse(
+            request=_request(settings),
             settings=settings,
             token=_caller(sub),
             client=MagicMock(),
@@ -378,51 +396,37 @@ def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, m
 
 
 def _bare_request() -> Any:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(warehouse_binding_cache={})), state=SimpleNamespace())
+    return SimpleNamespace(state=SimpleNamespace())
 
 
-def test_binding_lookup_fails_closed_on_read_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    # F4: a registry READ ERROR (not a legitimately-unbound namespace) must fail CLOSED (503) — never fall
-    # through to the default shared bucket, which would create/read a maybe-bound tenant's table in the wrong
-    # bucket from a transient fault.
-    def boom(*_a: object, **_k: object) -> dict[str, str] | None:
-        raise OSError("s3 down")
-
-    monkeypatch.setattr(warehouses, "binding_for_namespace", boom)
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
+def test_a_first_segment_no_record_names_is_served_from_the_estate_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A name under no warehouse is read in the estate's own catalog, where it is absent: the caller is answered as for
+    # any absent name, and learns nothing about which warehouses exist.
+    monkeypatch.setattr(warehouses, "get_warehouse", lambda *_a, **_k: None)
+    assert asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "wh-a")) is None
 
 
-def test_resolver_refuses_when_warehouse_record_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The fail-closed "missing warehouse record → refuse" branch: a bound namespace whose warehouse record
-    # has vanished must 403, NOT silently route to the orphaned bucket.
-    monkeypatch.setattr(
-        warehouses,
-        "binding_for_namespace",
-        lambda *_a, **_k: {"warehouse_id": "wh-a", "root_uri": "s3://bkt-a"},
-    )
-    # The resolver reads the WHOLE record ([[LH-067]] needs its `endpoint` too, at the same one GET), so a
-    # vanished record is a `get_warehouse` returning None.
-    monkeypatch.setattr(warehouses, "get_warehouse", lambda *_a, **_k: None)  # record gone
-    with pytest.raises(PermissionDeniedError):
-        asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
-
-
-def test_resolver_fails_closed_503_on_status_read_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    # AUDIT #3/#5: a TRANSIENT registry error during the LIVE status read must 503 (fail-closed), symmetric
-    # with the binding read — NOT propagate as an unhandled 500 (or, worse, fall through to routing).
-    monkeypatch.setattr(
-        warehouses,
-        "binding_for_namespace",
-        lambda *_a, **_k: {"warehouse_id": "wh-a", "root_uri": "s3://bkt-a"},
-    )
+@pytest.mark.parametrize(
+    ("failure", "refusal"),
+    [
+        pytest.param(
+            OSError("AWS Error NETWORK_CONNECTION during GetObject operation: curlCode: 28, Timeout was reached"), ServiceUnavailableError, id="outage"
+        ),
+        pytest.param(ValueError("Expecting value: line 1 column 1 (char 0)"), InternalError, id="unreadable-record"),
+    ],
+)
+def test_a_warehouse_record_that_cannot_be_read_is_never_read_as_no_warehouse(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception, refusal: type[Exception]
+) -> None:
+    """Read as "no such warehouse", either failure would serve a tenant's name from the estate's root. A store that did
+    not answer is the retryable 503; a record that is there and cannot be read is a 500, which no retry mends."""
 
     def boom(*_a: object, **_k: object) -> dict[str, str] | None:
-        raise OSError("registry blip")
+        raise failure
 
     monkeypatch.setattr(warehouses, "get_warehouse", boom)
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
+    with pytest.raises(refusal):
+        asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "wh-a"))
 
 
 # --------------------------------------------------------------------------- #
@@ -464,7 +468,6 @@ def test_reserved_bucket_set_defaults_collapse_to_the_root_bucket() -> None:
 def _serving_settings(tmp_path: Any) -> Settings:
     return Settings.model_validate(
         {
-            "warehouses_enabled": True,
             "control_root": _root(tmp_path),
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
@@ -486,6 +489,7 @@ def _create(settings: Settings, body: Any) -> Any:
     )
     return asyncio.run(
         wh_ep.create_warehouse(
+            request=_request(settings),
             settings=settings,
             token=None,  # FGA off → the admin gate + seed are no-ops (unit scope is the record contract)
             client=None,
@@ -544,31 +548,10 @@ def test_recreate_without_serving_does_not_demote_gold(tmp_path: Any, monkeypatc
     assert rec is not None and rec["serving"] == "gold"
 
 
-def test_an_unreadable_binding_refuses_rather_than_reporting_an_empty_warehouse(tmp_path: Any) -> None:
-    """A binding object the catalog cannot parse must FAIL CLOSED, not vanish from the count.
-
-    `list_warehouses`-style tolerance is right for a LISTING and catastrophic for a DELETE: the
-    unreadable object is the only thing that says which warehouse it binds, so skipping it turns
-    "this warehouse holds nothing" into a guess — and `DELETE ?purge_bucket=true` acts on that guess
-    by destroying the tables of a namespace nobody could enumerate.
-    """
-    root, so = _root(tmp_path), StorageOptions()
-    warehouses.bind_namespace(root, so, "bronze", "wh-a", "s3://bkt-a")
-    assert warehouses.namespaces_bound_to(root, so, "wh-a") == ["bronze"]
-
-    (tmp_path / "_warehouses" / "bindings" / "silver.json").write_text("{ this is not json")
-    with pytest.raises(InternalError) as exc:
-        warehouses.namespaces_bound_to(root, so, "wh-a")
-    # The refusal names the unreadable object — an operator cannot fix what the error will not identify.
-    assert "silver.json" in str(exc.value)
-    # …and the tolerant listing still serves, because a broken binding must not black out enumeration.
-    assert [b["top_ns"] for b in warehouses.list_bindings(root, so)] == ["bronze"]
-
-
-def test_a_binding_the_store_does_not_serve_is_an_outage_never_a_record_to_skip() -> None:
+def test_a_warehouse_record_the_store_does_not_serve_is_an_outage_never_a_record_to_skip() -> None:
     """A record the store did not answer says nothing about the record, so the reader raises the outage (503, code 17),
     tolerant listing or strict, where it skips one that is there and cannot be read as one ([[LH-572]]): skipped, it
-    would read as a corrupt record no retry mends. Over a real S3 server, whose GET of the binding answers 503."""
+    would read as a corrupt record no retry mends. Over a real S3 server, whose GET of the record answers 503."""
     server = ThreadedMotoServer(port=0)
     server.start()
     try:
@@ -578,11 +561,11 @@ def test_a_binding_the_store_does_not_serve_is_an_outage_never_a_record_to_skip(
         boto3.client("s3", endpoint_url=moto, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
         with counted(moto) as store:
             so = lance_storage_options(store.url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
-            warehouses.bind_namespace(f"s3://{bucket}", so, "bronze", "wh-a", "s3://bkt-a")
+            warehouses.put_warehouse(f"s3://{bucket}", so, {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"})
             with (
-                store.answering_unavailable(lambda request: request.method == "GET" and request.path.endswith("/bindings/bronze.json")),
+                store.answering_unavailable(lambda request: request.method == "GET" and request.path.endswith("/_warehouses/wh-a.json")),
                 pytest.raises(ServiceUnavailableError, match="did not answer"),
             ):
-                warehouses.list_bindings(f"s3://{bucket}", so)
+                warehouses.list_warehouses(f"s3://{bucket}", so)
     finally:
         server.stop()

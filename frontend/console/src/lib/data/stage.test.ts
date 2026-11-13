@@ -14,9 +14,7 @@
  * an object that is not its parent.
  *
  * The grammar itself lives in `#lib/api/identifiers.ts` and is covered by its own tests; this
- * file covers only the medallion-stage derivation built on top of it. The delimiter is a constant, not
- * a config read: `chart/templates/services.yaml` sets `LANCE_NS_DELIMITER` to a LITERAL `"$"` with no
- * values.yaml knob, so changing it is a repo edit that ships in the same commit as this constant.
+ * file covers only the medallion-stage derivation built on top of it.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -51,7 +49,7 @@ describe('namespaceOfTable', () => {
 
 describe('stageOfTable', () => {
 	it('still resolves the flat case it always handled', () => {
-		expect(stageOfTable('bronze$pages')).toEqual({ stage: 'bronze', project: null });
+		expect(stageOfTable('bronze$pages')).toEqual({ stage: 'bronze' });
 	});
 
 	it('is null when the namespace encodes no stage — a derived hint, never a catalog fact', () => {
@@ -63,9 +61,9 @@ describe('stageOfTable', () => {
 		// character class, so a nested id matched nothing and the badge silently vanished — while the
 		// same namespace one rung up showed `silver`. The stage belongs to the namespace the data sits IN;
 		// the ancestors above it are tenancy, not tier.
-		expect(stageOf('acme-silver')).toEqual({ stage: 'silver', project: 'acme' });
-		expect(stageOf('acme$acme-silver')).toEqual({ stage: 'silver', project: 'acme' });
-		expect(stageOfTable('acme$acme-silver$features')).toEqual({ stage: 'silver', project: 'acme' });
+		expect(stageOf('acme-silver')).toEqual({ stage: 'silver' });
+		expect(stageOf('acme-wh$acme-silver')).toEqual({ stage: 'silver' });
+		expect(stageOfTable('acme-wh$acme-silver$features')).toEqual({ stage: 'silver' });
 	});
 
 	it('still returns null when the LEAF encodes no stage — the ancestors must not supply one', () => {

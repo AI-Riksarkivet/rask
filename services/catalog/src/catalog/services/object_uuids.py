@@ -40,8 +40,13 @@ class UnidentifiedObjectError(InternalError):
 
 
 def namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | None:
-    """The uuid of the namespace ``segments`` names, or ``None`` for the root, a namespace that is gone, or a failed read."""
-    if not segments:
+    """The uuid of the namespace ``segments`` names, or ``None`` for the root, a warehouse's own name, a namespace that is
+    gone, or a failed read.
+
+    A one-segment name is a warehouse ([[LH-593]]), governed as ``warehouse:<id>``: the uuid its row in its own catalog
+    carries names no object an event's reader could look up, so an event names none for it.
+    """
+    if len(segments) < 2:
         return None
     try:
         described = native.call(ns, "describe_namespace", DescribeNamespaceRequest(id=segments))

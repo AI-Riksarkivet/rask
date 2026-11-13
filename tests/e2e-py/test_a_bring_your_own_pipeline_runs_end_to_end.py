@@ -62,7 +62,7 @@ def test_the_write_tier_credential_cannot_forge_the_published_tag(byo_tenant: Te
     """The pipeline owns its table, so `DescribeTable` vends it the write tier. That credential reads the table's
     prefix and puts under `data/`, and the store refuses its PUT of `_refs/tags/published.json`: only the catalog
     moves a tag."""
-    table_id = [byo_tenant.bronze, "forge"]
+    table_id = [*byo_tenant.bronze.split("$"), "forge"]
     stock = byo_tenant.pipeline.namespace()
     lance.write_dataset(
         scenario.rows_of(range(2)), namespace_client=stock, table_id=table_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True

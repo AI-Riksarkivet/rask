@@ -39,7 +39,7 @@ from lakehouse.governed.principal import MACHINE_IDPS, require_idp_id
 
 #: The names the 2026-08-30 hard rename deleted. Kept as a REFUSAL list, never as an alias list: an
 #: operator who upgrades without re-templating must be stopped at boot, not silently unauthenticated.
-#: Service-specific FGA knobs (`LANCE_FGA_LOCK_ROOT_CREATE`, `LINEAGE_FGA_OBJECT_TYPE`) are
+#: Service-specific FGA knobs (`LINEAGE_FGA_OBJECT_TYPE`) are
 #: absent on purpose — each is declared once already and keeps its owning service's namespace.
 RETIRED_AUTH_ENV_NAMES: tuple[str, ...] = tuple(
     f"{prefix}_{suffix}"
@@ -93,23 +93,25 @@ class FgaSettings:
     #: The estate's default WAREHOUSE — a structural coordinate, and deliberately NOT the one above.
     #:
     #: [[LH-055]]'s port moves the estate privileges onto `type estate`, and the single setting was
-    #: answering two unrelated questions. This one answers "which warehouse does a namespace with no
-    #: warehouse of its own live in": `fga.parent_object` writes the `parent`/`child` edge to it, and
-    #: `_create_parent_check` gates top-level creation on `can_create_namespace` there when
-    #: `fga_lock_root_create` is set. Both require a `warehouse:`, and MEASURED on the live store
-    #: 2026-09-22 it is load-bearing: `warehouse:lance_catalog` carries 7 `child` edges (bronze,
-    #: silver, gold, bronze-media, silver-media, models, lakehouse) and 10 principal grants, which is
-    #: the cascade every medallion write depends on.
+    #: answering two unrelated questions. This one names the warehouse the estate's own root serves: its id
+    #: is the first segment of every name on that root ([[LH-593]], :attr:`estate_warehouse`), the parent
+    #: of every namespace directly beneath it, and where `can_create_namespace` is asked for one. MEASURED
+    #: on the live store 2026-09-22 it is load-bearing: `warehouse:lance_catalog` carries 7 `child` edges
+    #: and 10 principal grants, which is the cascade every medallion write depends on.
     #:
-    #: THREE THINGS BREAK IF THESE TWO EVER COLLAPSE BACK INTO ONE, each measured rather than argued:
+    #: THINGS BREAK IF THESE TWO EVER COLLAPSE BACK INTO ONE, each measured rather than argued:
     #: `namespace#parent` is typed `[warehouse, namespace]` and every `… from parent` rung it inherits
     #: must exist on the parent's type, so an `estate:` parent is a model error and a lost cascade;
-    #: `can_create_namespace` is not an estate relation, and `LANCE_FGA_LOCK_ROOT_CREATE` defaults to
-    #: TRUE on a real deployment, so top-level creation would fail in production and nowhere else;
-    #: and maintenance's reconcile excludes the platform's own warehouse from the ghost report by
-    #: matching the root's TYPE, so a non-warehouse root reports the default warehouse as a ghost on
-    #: every tick.
+    #: `can_create_namespace` is not an estate relation, so a create beneath the estate's own warehouse
+    #: would be refused; and maintenance's reconcile excludes the platform's own warehouse from the ghost
+    #: report by matching the root's TYPE, so a non-warehouse root reports the default warehouse as a
+    #: ghost on every tick.
     fga_default_warehouse_object: str = Field(default="warehouse:lance_catalog", alias="RASK_FGA_DEFAULT_WAREHOUSE_OBJECT")
+
+    @property
+    def estate_warehouse(self) -> str:
+        """The id of the estate's own warehouse: the first segment of every name served from the estate's own root."""
+        return self.fga_default_warehouse_object.partition(":")[2]
 
     @model_validator(mode="before")
     @classmethod

@@ -188,12 +188,14 @@ the action names it reads must survive a member it does not know, since the lake
    doing its job, and your human is gone. Carrying the human's sub through your own call graph is the only fix.
 3. **No `rask_lance.project` disables WATCH silently.** The catalog resolves the tenant in the emitter itself, in
    `_BaseLineageEmitter.emit_write` (`catalog/core/lineage_emit.py`), the one method every catalog event passes, through
-   `project_for` on the FIRST segment of the table's namespace, the only rung the registry binds, at any depth
-   ([[LH-573]]); no caller passes a project. Two
+   `project_for` on the table's warehouse, the first segment of its name (`identifiers.warehouse_of`), whose registry
+   record names its project (`warehouses.project_of`, one read, at any depth; [[LH-573]], [[LH-593]]); no caller passes a
+   project. Two
    properties of that are the reusable part: resolve the tenant ONCE at the choke point, and **omit rather than
    sanitize** a project that fails `is_safe_project` — a project-less run reaches its author and no watchers, while a
    coerced one could reach the WRONG tenant's watchers, which is disclosure rather than a miss. The residue:
-   `project_for` is best-effort, so a write whose top segment is not registry-bound reaches zero watchers, silently; one
+   `project_for` is best-effort, so a write in the estate's own warehouse (`lance_catalog`, which has no record and
+   belongs to no project) reaches zero watchers, silently; one
    whose resolution failed reaches zero watchers too, and the cause is logged at WARNING (`lineage_project_unresolved`).
 4. **A non-personal principal is not an address.** `user:*` (managed access) is a statement about everyone and
    addresses no one. A userset (`team:acme#member`) on the control lane is expanded to the persons it holds, and names

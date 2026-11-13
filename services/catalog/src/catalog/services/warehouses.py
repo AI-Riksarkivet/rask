@@ -1,31 +1,34 @@
-"""Warehouse registry + runtime bucket provisioning (#3-A) — the admin control plane.
+"""The warehouse registry and its bucket provisioning: the admin control plane.
 
-A *warehouse* = one physical S3 bucket owned by a project (the FGA model's catalog-root type,
-``lakehouse/governed/auth/model.fga``: "A warehouse = exactly one S3 bucket, owned by one project"). Today
-the catalog is single-bucket (one ``LANCE_REST_ROOT``); this makes a warehouse a **runtime-provisioned,
-physically isolated bucket**, so a table created under warehouse A lands in bucket-a and is ABSENT from
-bucket-b — physical multi-tenancy, provisioned through an admin API rather than a bucket list fixed in the
-chart's values.
+A warehouse is one S3 bucket owned by one project (``lakehouse/governed/auth/model.fga``), holding its own directory
+catalog, and its id is the first segment of every name beneath it ([[LH-593]], ADR 0206): a table created as
+``acme$bronze$t`` lands in warehouse ``acme``'s bucket and is absent from every other.
 
-Stateless-over-object-store, the same shape as ``lakehouse/outbox.py``: the registry IS a set of JSON
-objects under ``<control_root>/_warehouses/`` — there is no DB to add. A warehouse record lives at
-``_warehouses/<id>.json``; a namespace→warehouse binding at ``_warehouses/bindings/<top_ns>.json`` (so any
-op on a bound namespace can resolve its physical root). Bucket creation uses boto3 ``create_bucket``, idempotent:
-an existing bucket the catalog owns is a no-op. All IO here is blocking; callers threadpool it.
+The registry is a set of JSON objects under ``<control_root>/_warehouses/``, one ``<id>.json`` per warehouse; there is
+no database. Bucket creation uses boto3 ``create_bucket``, idempotent: an existing bucket the catalog owns is a no-op.
+All IO here is blocking; callers threadpool it.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from contextlib import suppress
 from typing import Any
 
 import pyarrow.fs as pafs
-from lance_namespace import InternalError, NamespaceAlreadyExistsError
+from lance_namespace import (
+    CreateNamespaceRequest,
+    DescribeNamespaceRequest,
+    InternalError,
+    LanceNamespace,
+    NamespaceAlreadyExistsError,
+    NamespaceNotFoundError,
+)
 
-from catalog.core.identifiers import top_namespace
+from catalog.core.identifiers import warehouse_of, with_minted_uuid
+from catalog.services import native
 from catalog.services.control_records import (
-    BindingRecord,
     BucketClaimRecord,
     DeleteMode,
     ProtectionChange,
@@ -33,11 +36,12 @@ from catalog.services.control_records import (
     read_json,
     validated,
     validated_or_refuse,
+    with_manager,
     with_protection,
     write_json,
 )
 from lakehouse import control_prefixes, trash
-from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.record_store import delete_record
@@ -48,9 +52,7 @@ from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_cli
 log = logging.getLogger(__name__)
 
 _REGISTRY_PREFIX = control_prefixes.WAREHOUSES
-_BINDINGS_PREFIX = f"{_REGISTRY_PREFIX}/bindings"
-#: Where a bucket's owning project is recorded, write-once. Beside the bindings because it is the same
-#: kind of fact — an immutable routing claim the store arbitrates rather than a mutable record.
+#: Where a bucket's owning project is recorded, write-once: an immutable claim the store arbitrates
 _BUCKET_CLAIMS_PREFIX = f"{_REGISTRY_PREFIX}/bucket-claims"
 
 
@@ -62,7 +64,7 @@ TRASH_GRACE_DAYS = "trash_grace_days"
 def grace_days(record: dict[str, str] | None, *, estate: float) -> float:
     """The days a drop under the warehouse ``record`` stays recoverable, 0 for a destroying drop.
 
-    A warehouse that names no profile, and a namespace bound to none, takes the estate's grace period.
+    A warehouse that names no profile, and the estate's own warehouse, which has no record, take the estate's grace period.
     """
     mode = (record or {}).get(DELETE_MODE)
     if mode is None or mode == DeleteMode.ESTATE:
@@ -72,19 +74,16 @@ def grace_days(record: dict[str, str] | None, *, estate: float) -> float:
     return float((record or {})[TRASH_GRACE_DAYS])
 
 
-def grace_days_under(control_root: str, storage_options: StorageOptions, segments: list[str], *, estate: float, warehouses_enabled: bool) -> float:
+def grace_days_under(control_root: str, storage_options: StorageOptions, segments: list[str], *, estate: float) -> float:
     """The days a drop of the object ``segments`` names stays recoverable: its warehouse's profile, read now.
 
-    The warehouse is the one its top-level namespace is bound to; an estate with no warehouses, and an object bound to
-    none, takes ``estate``. Read at the drop and stamped on the trash record, so a profile changed later shortens no
-    window already open.
+    The warehouse is the name's first segment ([[LH-593]]); the estate's own warehouse, which has no record, takes
+    ``estate``. Read at the drop and stamped on the trash record, so a profile changed later shortens no window
+    already open.
     """
-    if not warehouses_enabled or not segments:
+    if not segments or not CONTROL_ID_RE.fullmatch(segments[0]):
         return estate
-    binding = binding_for_namespace(control_root, storage_options, segments[0])
-    if binding is None:
-        return estate
-    return grace_days(get_warehouse(control_root, storage_options, str(binding["warehouse_id"])), estate=estate)
+    return grace_days(get_warehouse(control_root, storage_options, segments[0]), estate=estate)
 
 
 def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
@@ -193,6 +192,18 @@ def set_warehouse_protection(
         return None
 
 
+def set_warehouse_manager(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, manager: str | None) -> dict[str, str] | None:
+    """Record who owns warehouse ``warehouse_id``'s declaration ([[XC-213]]): ``git``, or its own doors for ``None``.
+
+    Conditional on the record's ETag, every other field as it stands at the write. ``None`` is answered when the
+    record is gone.
+    """
+    try:
+        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), lambda record: with_manager(record, manager))
+    except RecordMissingError:
+        return None
+
+
 def upsert_warehouse(
     control_root: str,
     storage_options: StorageOptions,
@@ -292,13 +303,43 @@ def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_
 
 def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
     """``(readable warehouse records, paths that are there and could NOT be read as one)``, unordered. An absent prefix
-    yields ``([], [])``; a read the store did not answer raises (:func:`_read_registry`).
+    yields ``([], [])``.
 
-    The skipped paths are returned, as :func:`read_bindings` returns its own, because the callers need opposite things
-    from one tolerance: a listing survives one bad object, while a decision that no record names something (the last
-    warehouse of a project, another claim on a bucket) is a guess while one cannot be read ([[LH-572]]).
+    The skipped paths are returned because the callers need opposite things from one tolerance: a listing survives one
+    bad object, while a decision that no record names something (the last warehouse of a project, another claim on a
+    bucket) is a guess while one cannot be read ([[LH-572]]).
+
+    Validated against the DECLARED shape, not eyeballed with ``.get()`` truthiness: a record whose ``bucket`` is a list is
+    present, non-empty and structurally useless, so it is skipped and named rather than read as live, logged under
+    ``warehouse_record_unreadable`` or ``warehouse_record_malformed``. A record deleted since the listing named it is no
+    record. A read the store did not answer raises, tolerant caller or strict: one skipped as unreadable would read as a
+    corrupt record, which no retry mends ([[LH-572]]).
+
+    Raises:
+        ServiceUnavailableError: The store did not answer a record's read.
     """
-    return _read_registry(control_root, storage_options, prefix=_REGISTRY_PREFIX, model=WarehouseRecord, event="warehouse_record")
+    fs, base = fs_and_base(control_root, storage_options)
+    out: list[dict[str, str]] = []
+    skipped: list[str] = []
+    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_REGISTRY_PREFIX}", allow_not_found=True)):
+        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
+            continue
+        try:
+            with fs.open_input_stream(info.path) as stream:
+                record = json.loads(stream.readall().decode("utf-8"))
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            if reads_as_store_outage(exc):
+                raise store_refusal(exc, reading=f"reading {info.path}", so="the registry cannot be read") from exc
+            log.warning("warehouse_record_unreadable", extra={"path": info.path, "error": str(exc)})
+            skipped.append(info.path)
+            continue
+        if (valid := validated(record, WarehouseRecord, event="warehouse_record_malformed", path=info.path)) is not None:
+            out.append(valid)
+        else:
+            skipped.append(info.path)
+    return out, skipped
 
 
 def list_warehouses(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
@@ -339,7 +380,7 @@ def bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: 
     """Who owns ``bucket``, or ``None`` when nobody has claimed it.
 
     ``None`` rather than an exception so a caller can distinguish "unclaimed" from "claimed by someone"
-    without control flow, the same shape `warehouse_for_namespace` answers with.
+    without control flow, the same shape :func:`get_warehouse` answers with.
     """
     key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
     record = read_json(control_root, storage_options, key)
@@ -358,7 +399,7 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
     cross-tenant takeover the scan was added to prevent: a project policy set through the second
     warehouse governs, and can destroy version history in, the first project's data.
 
-    So the STORE picks the winner, exactly as `bind_namespace` does for a namespace binding: a
+    So the STORE picks the winner, exactly as :func:`create_warehouse_record` does for a warehouse id: a
     conditional create (`If-None-Match: *` on S3, `O_CREAT|O_EXCL` locally) whose loser surfaces as
     `RecordExistsError` instead of last-writer-wins.
 
@@ -401,83 +442,19 @@ def release_bucket_claim(control_root: str, storage_options: StorageOptions, *, 
     return delete_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
 
 
-def bind_namespace(control_root: str, storage_options: StorageOptions, top_ns: str, warehouse_id: str, root_uri: str) -> None:
-    """Record that top-level namespace ``top_ns`` physically lives in ``warehouse_id`` (root ``root_uri``).
+def project_of(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> str | None:
+    """The tenant owning warehouse ``warehouse_id``, or ``None`` for the estate's own warehouse or an id no record holds.
 
-    A binding is immutable (a namespace's warehouse never changes), so a resolver may cache it forever —
-    which is exactly why the write is WRITE-ONCE AT THE STORE (F1): the endpoint's pre-check reads then
-    decides, and two concurrent binds of one ``top_ns`` both used to pass it, the overwrite re-routing
-    tenant A's tables at tenant B's bucket with the forever-positive caches pinning the damage. Now the
-    second create is refused by the store regardless of what its caller read. Same-binding re-runs stay
-    idempotent (the partial-failure retry path: binding written, a later step failed, caller retries);
-    a DIFFERENT binding raises ``NamespaceAlreadyExistsError`` (code 2 → 409).
+    A name's project is its first segment's warehouse's ([[LH-593]]): one registry read. Its consumers are the tier
+    declaration's admin, the quality gate, a role grant's tenant, and lineage's ``rask_lance.project`` facet, where
+    ``None`` costs an event its watchers and never its author.
+
+    Raises:
+        ServiceUnavailableError: The record is there and is not a warehouse's.
+        ValueError: The record is there and is not JSON.
+        OSError: The store failed the read.
     """
-    payload = {"top_ns": top_ns, "warehouse_id": warehouse_id, "root_uri": root_uri}
-    key = f"{_BINDINGS_PREFIX}/{top_ns}.json"
-    try:
-        create_json(control_root, storage_options, key, payload)
-    except RecordExistsError:
-        existing = read_json(control_root, storage_options, key)
-        # VALIDATED, like every other singular read of this registry. The comparison below decides
-        # whether this is our own earlier write retried, and on a record it cannot parse the comparison
-        # merely fails — which refused the bind (correct) while calling it a conflict with another
-        # warehouse (false). An operator sent to find that competing tenant is looking for something
-        # that does not exist. `validated_or_refuse` answers the true condition instead.
-        parsed = validated_or_refuse(existing, BindingRecord, event="binding_record_malformed", path=key) if existing is not None else None
-        if parsed is not None and parsed.get("warehouse_id") == warehouse_id and parsed.get("root_uri") == root_uri:
-            return  # the retry converging on its own earlier write
-        raise NamespaceAlreadyExistsError(f"namespace {top_ns!r} is already bound to another warehouse") from None
-
-
-def warehouse_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> str | None:
-    """The physical ``root_uri`` for top-level namespace ``top_ns``, or ``None`` when unbound (→ default
-    root). This is the routing lookup on the request hot path; callers cache the (immutable) result.
-
-    A MALFORMED RECORD REFUSES RATHER THAN READING AS UNBOUND, and this is the reader where that matters
-    most: ``None`` here means "route at the default root", so a binding nobody can parse would send a
-    tenant's writes to the wrong bucket, silently, with the registry still naming the right one."""
-    key = f"{_BINDINGS_PREFIX}/{top_ns}.json"
-    record = read_json(control_root, storage_options, key)
-    if record is None:
-        return None
-    return validated_or_refuse(record, BindingRecord, event="binding_record_malformed", path=key).get("root_uri")
-
-
-def binding_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> dict[str, str] | None:
-    """The FULL binding record (``{top_ns, warehouse_id, root_uri}``) for a top-level namespace, or ``None``
-    when unbound. The resolver needs ``warehouse_id`` (not just ``root_uri``) to check the warehouse's
-    lifecycle status; the binding itself is immutable, so the record is safe to cache.
-
-    Refuses a malformed record for the same reason as its `root_uri` sibling: the destructive doors read
-    through here (warehouse delete, the unbind door), and a record they cannot parse must not arrive as
-    "no binding"."""
-    key = f"{_BINDINGS_PREFIX}/{top_ns}.json"
-    record = read_json(control_root, storage_options, key)
-    return validated_or_refuse(record, BindingRecord, event="binding_record_malformed", path=key) if record is not None else None
-
-
-def project_for_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> str | None:
-    """The TENANT owning top-level namespace ``top_ns``, or ``None`` when it cannot be established.
-
-    Two registry reads — the binding names the warehouse, the warehouse names the project — composed
-    HERE because both halves already live in this module and a caller assembling them itself would be
-    the third place that knows the shape.
-
-    **Why this is not a string split.** A project-qualified name joins with ``-``
-    (``("acme", "bronze")`` → ``"acme-bronze"``), but ``CONTROL_ID_PATTERN`` permits ``-`` INSIDE a project
-    id — so ``acme-bronze`` is genuinely ambiguous between project ``acme`` and project ``acme-bronze``,
-    and a namespace a user named freely follows no convention at all. The binding is the only sound
-    answer, and guessing wrong would attribute a write to the wrong tenant.
-
-    Its consumer is lineage's ``rask_lance.project`` facet, which is WATCH targeting's only key — see
-    ``catalog/core/lineage_emit.py``. ``None`` is a legitimate answer (an unbound namespace, a
-    single-tenant estate) and costs the event its watchers, never its author.
-    """
-    binding = binding_for_namespace(control_root, storage_options, top_ns)
-    if not binding:
-        return None
-    warehouse_id = binding.get("warehouse_id")
-    if not warehouse_id:
+    if not CONTROL_ID_RE.fullmatch(warehouse_id):
         return None
     record = get_warehouse(control_root, storage_options, warehouse_id)
     project = record.get("project") if record else None
@@ -487,8 +464,7 @@ def project_for_namespace(control_root: str, storage_options: StorageOptions, to
 def warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> str | None:
     """A warehouse's lifecycle status: ``"active"`` / ``"deactivated"``. Returns ``"active"`` when the field
     is ABSENT (backward compat — records written before the lifecycle feature have no status and are live),
-    and ``None`` only when the warehouse record does not exist. Read LIVE on the routing path (status is
-    mutable, so unlike ``root_uri`` it must never be cached)."""
+    and ``None`` only when the warehouse record does not exist. Read live, never cached: status is mutable."""
     record = get_warehouse(control_root, storage_options, warehouse_id)
     if record is None:
         return None
@@ -528,161 +504,13 @@ def set_warehouse_status(control_root: str, storage_options: StorageOptions, war
 # --------------------------------------------------------------------------- #
 
 
-def read_bindings(control_root: str, storage_options: StorageOptions) -> tuple[list[dict[str, str]], list[str]]:
-    """``(readable bindings, paths that could NOT be read)``. An absent prefix yields ``([], [])``.
-
-    The skipped paths are RETURNED, not merely logged, because the two callers need opposite things
-    from the same tolerance and a plain list cannot serve both:
-
-    * a LISTING wants to survive one bad object (the :func:`list_warehouses` posture);
-    * the DELETE door must fail closed on one. A binding it cannot read is a namespace it cannot
-      see, so an unreadable object turns "this warehouse is empty" into a guess — and with
-      ``?purge_bucket=true`` that guess destroys the tables of a namespace nobody could enumerate.
-
-    An earlier version of this function only logged the skip and its own docstring claimed the delete
-    path "treats a skip as serious". It could not: nothing crossed the return boundary to treat.
-    """
-    return _read_registry(control_root, storage_options, prefix=_BINDINGS_PREFIX, model=BindingRecord, event="binding_record")
-
-
-def _read_registry(
-    control_root: str, storage_options: StorageOptions, *, prefix: str, model: type[WarehouseRecord] | type[BindingRecord], event: str
-) -> tuple[list[dict[str, str]], list[str]]:
-    """Every record directly under ``prefix`` that reads as ``model``, and the path of each that is there and does not,
-    logged under ``<event>_unreadable`` or ``<event>_malformed``.
-
-    Validated against the DECLARED shape, not eyeballed with ``.get()`` truthiness: a record whose ``bucket`` is a list is
-    present, non-empty and structurally useless, so it is skipped and named rather than read as live. A record deleted
-    since the listing named it is no record. A read the store did not answer raises, tolerant caller or strict: one
-    skipped as unreadable would read as a corrupt record, which no retry mends ([[LH-572]]).
-
-    Raises:
-        ServiceUnavailableError: The store did not answer a record's read.
-    """
-    fs, base = fs_and_base(control_root, storage_options)
-    out: list[dict[str, str]] = []
-    skipped: list[str] = []
-    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{prefix}", allow_not_found=True)):
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
-        try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
-        except FileNotFoundError:
-            continue
-        except Exception as exc:
-            if reads_as_store_outage(exc):
-                raise store_refusal(exc, reading=f"reading {info.path}", so="the registry cannot be read") from exc
-            log.warning(f"{event}_unreadable", extra={"path": info.path, "error": str(exc)})
-            skipped.append(info.path)
-            continue
-        if (valid := validated(record, model, event=f"{event}_malformed", path=info.path)) is not None:
-            out.append(valid)
-        else:
-            skipped.append(info.path)
-    return out, skipped
-
-
-def list_bindings(control_root: str, storage_options: StorageOptions) -> list[dict[str, str]]:
-    """Every READABLE namespace→warehouse binding (unordered), skipping what it cannot parse.
-
-    The tolerant half of :func:`read_bindings`, for callers that only enumerate. Anything that makes
-    a DESTRUCTIVE decision must use ``read_bindings`` and refuse on a non-empty skip list.
-    """
-    return read_bindings(control_root, storage_options)[0]
-
-
-def namespaces_bound_to(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[str]:
-    """The top-level namespaces physically living in ``warehouse_id``, sorted.
-
-    The warehouse's *contents* for lifecycle purposes: non-empty ⇒ the delete refuses 409 and names
-    them; ``?cascade=true`` drops them bottom-up in this order.
-
-    Raises ``InternalError`` if ANY binding object is there and cannot be read as one — including ones
-    belonging to other warehouses. That looks over-broad and is deliberate: the unreadable object's own
-    content is what says which warehouse it binds, so "it probably wasn't this one's" is precisely the
-    assumption that cannot be made. Refusing is recoverable; a wrong emptiness answer is not. A read the
-    store did not answer raises ``ServiceUnavailableError`` (:func:`_read_registry`).
-    """
-    bindings, skipped = read_bindings(control_root, storage_options)
-    if skipped:
-        raise InternalError(
-            f"{len(skipped)} namespace binding record(s) cannot be read as one ({', '.join(sorted(skipped))}), so this "
-            f"warehouse's contents cannot be determined. Refusing rather than reporting a possibly-empty warehouse."
-        )
-    return sorted(str(b["top_ns"]) for b in bindings if b.get("warehouse_id") == warehouse_id)
-
-
-def unbind_namespace(control_root: str, storage_options: StorageOptions, top_ns: str) -> None:
-    """Remove a namespace→warehouse binding. Idempotent — an absent binding is a no-op, so the
-    partial-failure retry path (binding removed, a later step failed, caller retries) converges."""
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        fs.delete_file(f"{base}/{_BINDINGS_PREFIX}/{top_ns}.json")
-    except FileNotFoundError:
-        return
-
-
-def evict_stale_bindings(cache: dict[str, dict[str, str]], *, action: str, object_id: str, object_name: str | None, extra: dict[str, Any]) -> list[str]:
-    """Evict every binding-cache entry a control event just invalidated; return the evicted keys (#46).
-
-    The cache's premise — a binding is immutable, cache positives forever — is broken by exactly
-    four mutations, and each replica hears about all of them on the broadcast control-event
-    subscription (no queueGroup: every replica, including the publisher, receives every event):
-
-    - ``warehouse_deleted``: the event's ``namespaces_dropped`` names every namespace the cascade dropped,
-      the unbound top-level ones among them (a nested id matches no cache key), and a warehouse-id SCAN
-      backs it up — a partial delete (the door's Decision-3 path) can unbind more than the event managed
-      to record, and a stale entry here routes a tenant's table at a deleted (possibly purged) bucket.
-    - ``warehouse_bound``: a top-level namespace was just bound. The only way this replica holds a
-      cached entry for it is a re-bind after a delete it never processed — evict so the next request
-      reads the authoritative record.
-    - ``warehouse_unbound``: a namespace was DETACHED from its warehouse without being dropped — the
-      repair for a binding that outlived what it pointed at. Nothing else in this list covers it: the
-      namespace still exists, so no ``namespace_dropped`` fires, and the warehouse still exists, so no
-      ``warehouse_deleted`` does either. Without this branch the unbind is a no-op on every replica
-      already holding the entry, which is the worst shape available — the registry says unbound and the
-      running estate keeps routing.
-    - ``namespace_dropped``: the cache is keyed by TOP-LEVEL namespace name, so evict the first segment of the name
-      the event carries (``object_name``; ``object_id`` names its uuid, [[LH-524]]). Dropping a nested namespace
-      does not move its warehouse.
-
-    Deactivation needs no entry here: warehouse STATUS is read live on every request by design.
-    Mutates ``cache`` in place — it is the live ``app.state.warehouse_binding_cache`` dict; per-key
-    ``pop`` keeps concurrent resolvers safe (dict ops are atomic under the GIL; a racing resolver
-    re-reads the registry, which is the correct outcome).
-    """
-    evicted: list[str] = []
-
-    def _pop(key: str) -> None:
-        if cache.pop(key, None) is not None:
-            evicted.append(key)
-
-    if action == "warehouse_deleted":
-        warehouse_id = object_id.removeprefix("warehouse:")
-        dropped = extra.get("namespaces_dropped")
-        for top_ns in dropped if isinstance(dropped, list) else []:
-            _pop(str(top_ns))
-        for top_ns in [k for k, b in cache.items() if b.get("warehouse_id") == warehouse_id]:
-            _pop(top_ns)
-    elif action in {"warehouse_bound", "warehouse_unbound"}:
-        namespace = extra.get("namespace")
-        if isinstance(namespace, str) and namespace:
-            _pop(namespace)
-    elif action == "namespace_dropped" and object_name:
-        top_ns = top_namespace(object_name)
-        if top_ns:
-            _pop(top_ns)
-    return evicted
-
-
 def record_key(warehouse_id: str) -> str:
     """Where warehouse ``warehouse_id``'s record lives on the control root."""
-    return f"{_REGISTRY_PREFIX}/{warehouse_id}.json"
+    return _warehouse_key(warehouse_id)
 
 
 def delete_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> None:
-    """Remove the registry record. Idempotent for the same retry reason as :func:`unbind_namespace`.
+    """Remove the registry record. Idempotent: an absent record is a no-op, so a retried delete converges.
 
     Deleting the RECORD is not deleting the BUCKET: the bytes survive unless the caller explicitly
     asked to purge them (Decision 3 — a catalog entry is recoverable, a customer's bucket is not, and
@@ -691,12 +519,12 @@ def delete_warehouse_record(control_root: str, storage_options: StorageOptions, 
     """
     fs, base = fs_and_base(control_root, storage_options)
     try:
-        fs.delete_file(f"{base}/{_REGISTRY_PREFIX}/{warehouse_id}.json")
+        fs.delete_file(f"{base}/{_warehouse_key(warehouse_id)}")
     except FileNotFoundError:
         return
 
 
-def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, bucket: str) -> list[dict[str, Any]]:
+def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[dict[str, Any]]:
     """The trash records a delete of ``warehouse_id`` ends, each child's before its parent's.
 
     THE TRASH GOES WITH THE WAREHOUSE. A recoverable drop keeps a record, the object's grants, its policy and its
@@ -705,41 +533,20 @@ def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse
     `outside the maintained estate`, across 45 warehouses deleted with their trash left behind, and on 2026-10-15 the
     grants such records kept were the reconciler's 17 `ghost_tables`.
 
-    A record is this warehouse's when its top-level namespace is bound to it, or is a trashed namespace whose recorded
-    binding names it, or when its bytes sit in this bucket and its namespace belongs to no other warehouse. The last
-    clause keeps a table whose namespace was dropped after it (nothing else names it), and its condition spares a
-    sibling's: one project may back two warehouses with one bucket, and a record under the other's namespace is the
-    other's to end. Read before anything changes, from :func:`read_bindings`, which reports a binding it cannot read:
-    that binding could name this warehouse or another, so the selection refuses rather than guessing.
+    A record is this warehouse's when the name it was dropped under begins with the warehouse's id ([[LH-593]]): a
+    sibling warehouse on the same bucket holds its own names, so its records are never among them.
 
     Raises:
-        ServiceUnavailableError: The store did not answer a read of a binding record or of the trash.
-        InternalError: A binding record or a trash record is there and cannot be read as one.
+        ServiceUnavailableError: The store did not answer a read of the trash.
+        InternalError: A trash record is there and cannot be read as one.
     """
-    bindings, skipped = read_bindings(control_root, storage_options)
-    if skipped:
-        raise InternalError(
-            f"{len(skipped)} namespace binding record(s) cannot be read as one ({', '.join(sorted(skipped))}), so this "
-            f"warehouse's trash cannot be told from another's. Refusing rather than ending a record that may not be its own."
-        )
     try:
         records = trash.every_record(control_root, storage_options)
     except (OSError, ValueError) as exc:
         # A record that cannot be read may be this warehouse's own, which the delete would leave holding its grants and
         # claim for a warehouse that no longer exists ([[LH-572]]).
         raise store_refusal(exc, reading="reading the trash", so="this warehouse's own trash cannot be determined") from exc
-    here = {str(b["top_ns"]) for b in bindings if b.get("warehouse_id") == warehouse_id}
-    elsewhere = {str(b["top_ns"]) for b in bindings if b.get("warehouse_id") != warehouse_id}
-    for record in records:
-        binding = record.get("binding")
-        if record.get("kind") == "namespace" and isinstance(binding, dict):
-            (here if binding.get("warehouse_id") == warehouse_id else elsewhere).add(str(record.get("id") or ""))
-    in_bucket = f"s3://{bucket}/"
-
-    def top(record: dict[str, Any]) -> str:
-        return top_namespace(str(record.get("id") or ""))
-
-    owned = [r for r in records if top(r) not in elsewhere and (top(r) in here or str(r.get("location") or "").startswith(in_bucket))]
+    owned = [r for r in records if warehouse_of(str(r.get("id") or "")) == warehouse_id]
     return sorted(owned, key=lambda r: (r.get("kind") == "namespace", -len(str(r.get("id") or "").split(CATALOG_DELIMITER))))
 
 
@@ -772,3 +579,27 @@ def purge_bucket(bucket: str, storage_options: StorageOptions) -> int:
         log.info("warehouse_bucket_already_absent", extra={"bucket": bucket})
     log.info("warehouse_bucket_purged", extra={"bucket": bucket, "objects": removed})
     return removed
+
+
+def served_ids(control_root: str, storage_options: StorageOptions, *, estate: str) -> list[str]:
+    """Every warehouse a name may begin with, the estate's own among the registered ones, sorted: the order a
+    paged listing's cursor walks.
+
+    Tolerant, for a listing: a record that cannot be read as one is left out (:func:`list_warehouses`).
+    """
+    return sorted({estate, *(str(record["id"]) for record in list_warehouses(control_root, storage_options))})
+
+
+def ensure_catalog_row(ns: LanceNamespace, warehouse_id: str) -> None:
+    """Give warehouse ``warehouse_id`` its own row in its directory catalog ``ns``, keeping one that is there.
+
+    Every name beneath a warehouse begins with its id ([[LH-593]]), and the directory catalog refuses a namespace whose
+    parent has no row. The row carries a uuid as every namespace's does, so no reader of the index meets a row without
+    one. Read before it is written: a row that stands costs one read and commits no version of the catalog's index.
+    """
+    try:
+        native.call(ns, "describe_namespace", DescribeNamespaceRequest(id=[warehouse_id]))
+    except NamespaceNotFoundError:
+        # Lost to another replica making the same row, it is there all the same.
+        with suppress(NamespaceAlreadyExistsError):
+            native.call(ns, "create_namespace", CreateNamespaceRequest(id=[warehouse_id], properties=with_minted_uuid(None)))

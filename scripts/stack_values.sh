@@ -24,7 +24,6 @@ HELM_SET=(
   # The dex fixture's issuer at its default, the in-cluster one: the lanes reach it as `rask-dex`, as every door does.
   --set-string auth.oidc.issuer=http://rask-dex:5556/dex
   --set-string "auth.bootstrapAdmin=$ADMIN_PRINCIPAL"
-  --set catalog.warehouses.enabled=true
   --set-json "catalog.multibase.dataBases=[\"$BASE_A\",\"$BASE_B\"]"
   --set services.lineage.outbox.enabled=true
   --set services.lineage.relay.enabled=true

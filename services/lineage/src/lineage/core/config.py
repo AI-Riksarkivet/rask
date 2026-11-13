@@ -71,7 +71,7 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     catalog_identity_token_file: str = Field(default="", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
     #: The namespace the catalog keeps for provenance (its `LANCE_PROVENANCE_NAMESPACE`), where this service
     #: creates its tables. The two must name the same namespace.
-    provenance_namespace: str = Field(default="provenance", alias="LINEAGE_PROVENANCE_NAMESPACE")
+    provenance_namespace: str = Field(default="lance_catalog$provenance", alias="LINEAGE_PROVENANCE_NAMESPACE")
     #: The dataset namespace the catalog names its tables under (its `LANCE_LINEAGE_DATASET_NAMESPACE`, [[LH-553]]): a
     #: dataset under it is one of this estate's tables, and one under another catalog's is another estate's, which this
     #: service records as an outside source. The chart renders both from `rask.lineageDatasetNamespace`.

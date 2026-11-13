@@ -1,6 +1,6 @@
 """Conditional-create on the control-root registries.
 
-The registry's id-minting writes (`_projects/<id>.json`, `_warehouses/<id>.json`, bindings) were
+The registry's id-minting writes (`_projects/<id>.json`, `_warehouses/<id>.json`) were
 plain overwrites, so every guard in front of them was check-then-act: two concurrent creates of one
 warehouse id under different projects both read "absent" and the last writer won — on exactly the
 tenant-isolation guards (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" CAT-CORE-05, same defect class). The store
@@ -22,7 +22,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
-from lance_namespace import NamespaceAlreadyExistsError
 
 import lakehouse.storage as storage
 from catalog.services import warehouses
@@ -95,7 +94,7 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
 
 
 # --------------------------------------------------------------------------- #
-# the doors: warehouse-id mint + binding write-once through the seam
+# the doors: the warehouse-id mint through the seam
 # --------------------------------------------------------------------------- #
 
 
@@ -107,23 +106,3 @@ def test_create_warehouse_record_second_mint_refused(tmp_path: Any) -> None:
     winner = warehouses.get_warehouse(root, so, "wh-a")
     assert winner is not None, "the refused second mint must leave the FIRST record standing, not delete it"
     assert winner["project"] == "acme"
-
-
-def test_bind_namespace_is_write_once(tmp_path: Any) -> None:
-    # A check-then-act guard (endpoint reads, then service overwrites) lets a concurrent bind of one
-    # top_ns to two warehouses re-route tenant A's tables to tenant B's bucket, so the service refuses
-    # the second bind at the store, whatever the caller read.
-    root, so = _root(tmp_path), StorageOptions()
-    warehouses.bind_namespace(root, so, "team_ns", "wh-a", "s3://bkt-a")
-    with pytest.raises(NamespaceAlreadyExistsError):
-        warehouses.bind_namespace(root, so, "team_ns", "wh-b", "s3://bkt-b")
-    assert warehouses.warehouse_for_namespace(root, so, "team_ns") == "s3://bkt-a"  # winner intact
-
-
-def test_bind_namespace_same_binding_is_idempotent(tmp_path: Any) -> None:
-    # The partial-failure retry path (binding written, a later step failed, caller retries) must
-    # converge — same (warehouse_id, root_uri) re-bind is a no-op, not a 409.
-    root, so = _root(tmp_path), StorageOptions()
-    warehouses.bind_namespace(root, so, "team_ns", "wh-a", "s3://bkt-a")
-    warehouses.bind_namespace(root, so, "team_ns", "wh-a", "s3://bkt-a")  # no raise
-    assert warehouses.warehouse_for_namespace(root, so, "team_ns") == "s3://bkt-a"

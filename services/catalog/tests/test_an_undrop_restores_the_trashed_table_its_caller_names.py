@@ -27,10 +27,10 @@ def _ok(catalog: Any, path: str, caller: str = "alice", **kwargs: Any) -> Any:  
 
 
 def _create(catalog: Any, rows: int) -> str:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """``db$t`` created with ``rows`` rows; the uuid the catalog minted for it."""
+    """``lance_catalog$db$t`` created with ``rows`` rows; the uuid the catalog minted for it."""
     body = encode_arrow_stream(pa.table({"id": pa.array(range(rows), pa.int64())}))
-    _ok(catalog, "/v1/table/db$t/create", content=body, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
-    return str(_ok(catalog, "/v1/table/db$t/describe", json={}).json()["properties"]["rask.uuid"])
+    _ok(catalog, "/v1/table/lance_catalog$db$t/create", content=body, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    return str(_ok(catalog, "/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"]["rask.uuid"])
 
 
 @pytest.fixture
@@ -41,44 +41,44 @@ def recoverable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def estate(recoverable: None, governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """alice's namespace ``db``."""
-    _ok(governed_catalog, "/v1/namespace/db/create", json={})
+    """alice's namespace ``lance_catalog$db``."""
+    assert governed_catalog.create_in_the_estate("alice", "db").status_code == 200
     return governed_catalog
 
 
 def test_an_undrop_of_a_name_two_dropped_tables_held_asks_which_and_restores_the_one_named(estate: Any) -> None:  # noqa: ANN401
     first = _create(estate, rows=2)
-    _ok(estate, "/management/v1/table/db$t/access/grant", json={"user": "dex~bob", "relation": "reader"})
-    dropped = _ok(estate, "/v1/table/db$t/drop", json={})
+    _ok(estate, "/management/v1/table/lance_catalog$db$t/access/grant", json={"user": "dex~bob", "relation": "reader"})
+    dropped = _ok(estate, "/v1/table/lance_catalog$db$t/drop", json={})
     second = _create(estate, rows=3)
-    tracked = _ok(estate, f"/v1/transaction/db$t${first}/describe", json={}).json()
-    _ok(estate, "/v1/table/db$t/drop", json={})
+    tracked = _ok(estate, f"/v1/transaction/lance_catalog$db$t${first}/describe", json={}).json()
+    _ok(estate, "/v1/table/lance_catalog$db$t/drop", json={})
 
-    asked = estate.client.post("/management/v1/table/db$t/undrop", headers=estate.bearer("alice"))
-    restored = _ok(estate, f"/management/v1/table/db$t/undrop?uuid={first}")
+    asked = estate.client.post("/management/v1/table/lance_catalog$db$t/undrop", headers=estate.bearer("alice"))
+    restored = _ok(estate, f"/management/v1/table/lance_catalog$db$t/undrop?uuid={first}")
 
-    assert dropped.json().get("transaction_id") == f"db$t${first}", f"the drop did not name the deletion it queued: {dropped.text}"
+    assert dropped.json().get("transaction_id") == f"lance_catalog$db$t${first}", f"the drop did not name the deletion it queued: {dropped.text}"
     assert tracked["status"] == "Queued", f"the queued deletion did not describe as queued while another table held the name: {tracked}"
     assert (asked.status_code, first in asked.text, second in asked.text) == (409, True, True), asked.text
     assert restored.status_code == 200
-    assert _ok(estate, "/v1/table/db$t/describe", json={}).json()["properties"]["rask.uuid"] == first
-    assert int(_ok(estate, "/v1/table/db$t/count_rows", json={}).text) == 2
-    assert estate.client.post("/v1/table/db$t/describe", json={}, headers=estate.bearer("bob")).status_code == 200, "the grant did not come back"
+    assert _ok(estate, "/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"]["rask.uuid"] == first
+    assert int(_ok(estate, "/v1/table/lance_catalog$db$t/count_rows", json={}).text) == 2
+    assert estate.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=estate.bearer("bob")).status_code == 200, "the grant did not come back"
 
 
 @pytest.mark.parametrize("held", ["the-table's-name", "its-namespace's-name"])
 def test_an_undrop_while_another_object_holds_its_name_or_its_namespaces_is_refused(estate: Any, held: str) -> None:  # noqa: ANN401
     table = _create(estate, rows=2)
     if held == "the-table's-name":
-        _ok(estate, "/v1/table/db$t/drop", json={})
+        _ok(estate, "/v1/table/lance_catalog$db$t/drop", json={})
         _create(estate, rows=3)
     else:
-        cascaded = _ok(estate, "/v1/namespace/db/drop", json={"behavior": "Cascade"})
-        assert cascaded.json().get("transaction_id") == [f"db$t${table}"], f"the cascade did not name the deletion it queued: {cascaded.text}"
-        _ok(estate, "/v1/namespace/db/create", json={})
+        cascaded = _ok(estate, "/v1/namespace/lance_catalog$db/drop", json={"behavior": "Cascade"})
+        assert cascaded.json().get("transaction_id") == [f"lance_catalog$db$t${table}"], f"the cascade did not name the deletion it queued: {cascaded.text}"
+        assert estate.create_in_the_estate("alice", "db").status_code == 200
     standing = estate.store.tuples()
 
-    refused = estate.client.post("/management/v1/table/db$t/undrop", headers=estate.bearer("alice"))
+    refused = estate.client.post("/management/v1/table/lance_catalog$db$t/undrop", headers=estate.bearer("alice"))
 
     assert refused.status_code == 409, refused.text
     assert estate.store.tuples() == standing, "a refused undrop changed a grant"

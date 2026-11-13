@@ -51,7 +51,6 @@ _GHOST_UUID = "5d2f8c1e-4b7a-4e9d-8c3f-0a1b2c3d4e5f"
 
 class _Settings:
     fga_enabled = False
-    warehouses_enabled = False
     trash_grace_days = 0
     registry_root = "file:///tmp/does-not-matter"
 

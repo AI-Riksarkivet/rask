@@ -6,7 +6,7 @@ with review on, so a version whose row count moves past the band is not publishe
 listed on `GET /management/v1/promotions`, and a validator approves it (`published` moves to the held version)
 or rejects it (main is restored to the published version). A sweep expires a hold nobody answered.
 
-On the real catalog app over real pylance with OIDC, FGA and warehouses on, the OpenFGA store an in-memory
+On the real catalog app over real pylance with OIDC and FGA on, in a registered warehouse, the OpenFGA store an in-memory
 double that allows exactly the grants each test names, so who may decide is part of every claim.
 """
 
@@ -45,14 +45,15 @@ AUTH = {"Authorization": "Bearer t"}
 ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
 WAREHOUSE = "acme-bucket"
 PROJECT = "acme"
-NAMESPACE = "acme-silver"
+NAMESPACE = f"{WAREHOUSE}$acme-silver"
+BRONZE = f"{WAREHOUSE}$acme-bronze"
 TABLE = f"{NAMESPACE}$orders"
 #: The run a silver write names (ADR 0156 C2): an input the writer may read, at a version.
 RUN = {
     "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
     "x-rask-job-namespace": "pipelines",
     "x-rask-job": "nightly",
-    "x-rask-inputs": json.dumps([{"table": ["acme-bronze", "orders"], "version": 1}]),
+    "x-rask-inputs": json.dumps([{"table": [WAREHOUSE, "acme-bronze", "orders"], "version": 1}]),
 }
 #: What the validator holds on the table, beside the writer rungs alice holds.
 WRITER = ("can_write_data", "can_update_tag", "can_get_metadata", "can_read_data")
@@ -67,7 +68,7 @@ def _ipc(ids: range) -> bytes:
 
 
 class Estate:
-    """Project ``acme``'s silver table ``acme-silver$orders``, written and published by alice."""
+    """Project ``acme``'s silver table ``acme-bucket$acme-silver$orders``, written and published by alice."""
 
     def __init__(self, client: TestClient, grants: Grants, root: str) -> None:
         self.client = client
@@ -131,7 +132,6 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Estate]:
     settings = Settings.model_validate(
         {
             "root": root,
-            "warehouses_enabled": True,
             "oidc_enabled": True,
             "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
@@ -151,18 +151,17 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Estate]:
         root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
     )
     grants.grant("alice", ("can_create_namespace", f"warehouse:{WAREHOUSE}"), ("can_administer", f"project:{PROJECT}"))
+    warehouses.ensure_catalog_row(client.app.dependency_overrides[get_namespace](), WAREHOUSE)
     act_as(client, "alice")
-    declared = client.post(
-        f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": NAMESPACE, "properties": {"rask.tier": "silver"}}, headers=AUTH
-    )
+    declared = client.post(f"/v1/namespace/{NAMESPACE}/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH)
     assert declared.status_code == 200, declared.text
     estate = Estate(client, grants, root)
     # The run's input, which the create names and alice reads.
-    bronze = client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "acme-bronze"}, headers=AUTH)
+    bronze = client.post(f"/v1/namespace/{BRONZE}/create", json={}, headers=AUTH)
     assert bronze.status_code == 200, bronze.text
-    grants.grant("alice", ("can_create_table", estate.obj("namespace", NAMESPACE)), ("can_create_table", estate.obj("namespace", "acme-bronze")))
-    assert client.post("/v1/table/acme-bronze$orders/create?mode=create", content=_ipc(range(4)), headers=ARROW).status_code == 200
-    grants.grant("alice", ("can_read_data", estate.obj("table", "acme-bronze$orders")))
+    grants.grant("alice", ("can_create_table", estate.obj("namespace", NAMESPACE)), ("can_create_table", estate.obj("namespace", BRONZE)))
+    assert client.post(f"/v1/table/{BRONZE}$orders/create?mode=create", content=_ipc(range(4)), headers=ARROW).status_code == 200
+    grants.grant("alice", ("can_read_data", estate.obj("table", f"{BRONZE}$orders")))
     estate.declare_gate(review=False)
     created = client.post(f"/v1/table/{TABLE}/create?mode=create", content=_ipc(range(4)), headers={**ARROW, **RUN})
     assert created.status_code == 200, created.text
@@ -201,15 +200,15 @@ def test_a_publish_under_a_gate_that_cannot_be_read_is_refused(estate: Estate) -
 @pytest.fixture
 def lineage(estate: Estate, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Every lineage event the catalog posts, as the lineage service receives it, its tenant resolved from the
-    warehouse binding as the app's own emitter resolves it."""
+    warehouse a name begins with, as the app's own emitter resolves it."""
     posted: list[dict[str, Any]] = []
 
     def _receive(request: httpx.Request) -> httpx.Response:
         posted.append(json.loads(request.content))
         return httpx.Response(200)
 
-    async def _project(top_ns: str) -> str | None:
-        return warehouses.project_for_namespace(estate.root, StorageOptions(), top_ns)
+    async def _project(warehouse_id: str) -> str | None:
+        return warehouses.project_of(estate.root, StorageOptions(), warehouse_id)
 
     emitter = make_emitter(
         enabled=True,

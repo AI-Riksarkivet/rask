@@ -50,9 +50,9 @@ def tenant() -> Iterator[Tenant]:
 
 def test_a_table_registered_at_a_nested_location_is_judged_and_destroyed_by_its_own_storage(tenant: Tenant) -> None:
     admin, client = tenant.admin, tenant.admin.namespace()
-    held, moved = [tenant.bronze, "held"], [tenant.bronze, "moved"]
+    held, moved = [*tenant.bronze.split("$"), "held"], [*tenant.bronze.split("$"), "moved"]
     bucket = ok(admin.http.get(f"{CATALOG}/management/v1/warehouses/{tenant.project}"))["bucket"]
-    location = f"{tenant.bronze}-outside/held"
+    location = "bronze-outside/held"
     lance.write_dataset(
         pa.table({"id": pa.array([1, 2], pa.int64())}),
         f"s3://{bucket}/{location}",
@@ -64,7 +64,7 @@ def test_a_table_registered_at_a_nested_location_is_judged_and_destroyed_by_its_
     tenant.tables.append(CATALOG_DELIMITER.join(held))
 
     # It is among the tables that hold storage, and described as holding a version.
-    assert client.list_tables(ln.ListTablesRequest(id=[tenant.bronze], include_declared=False)).tables == ["held"]
+    assert client.list_tables(ln.ListTablesRequest(id=tenant.bronze.split("$"), include_declared=False)).tables == ["held"]
     described = client.describe_table(ln.DescribeTableRequest(id=held, check_declared=True))
     assert described.is_only_declared is False
 

@@ -57,25 +57,25 @@ else:
     sql = "id IN (" + ",".join(str(i) for i in range(int(sys.argv[4]))) + ")"
 query = {"k": 10, "filter": sql, "vector": {}}
 with TestClient(app) as client:
-    assert client.post("/v1/namespace/db/create", json={}).status_code == 200
-    created = client.post("/v1/table/db$t/create?mode=create", content=arrow(rows), headers={"content-type": "application/vnd.apache.arrow.stream"})
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+    created = client.post("/v1/table/lance_catalog$db$t/create?mode=create", content=arrow(rows), headers={"content-type": "application/vnd.apache.arrow.stream"})
     assert created.status_code == 200, created.text
     if door == "query":
-        resp = client.post("/v1/table/db$t/query", json=query)
+        resp = client.post("/v1/table/lance_catalog$db$t/query", json=query)
     elif door == "count_rows":
-        resp = client.post("/v1/table/db$t/count_rows", json={"predicate": sql})
+        resp = client.post("/v1/table/lance_catalog$db$t/count_rows", json={"predicate": sql})
     elif door == "explain_plan":
-        resp = client.post("/v1/table/db$t/explain_plan", json={"query": query})
+        resp = client.post("/v1/table/lance_catalog$db$t/explain_plan", json={"query": query})
     elif door == "analyze_plan":
-        resp = client.post("/v1/table/db$t/analyze_plan", json=query)
+        resp = client.post("/v1/table/lance_catalog$db$t/analyze_plan", json=query)
     elif door == "update":
-        resp = client.post("/v1/table/db$t/update", json={"updates": [["v", "'x'"]], "predicate": sql})
+        resp = client.post("/v1/table/lance_catalog$db$t/update", json={"updates": [["v", "'x'"]], "predicate": sql})
     elif door == "delete":
-        resp = client.post("/v1/table/db$t/delete", json={"predicate": sql})
+        resp = client.post("/v1/table/lance_catalog$db$t/delete", json={"predicate": sql})
     elif door in ("merge_insert", "merge_insert_by_source"):
         filters = {"when_matched_update_all": "true", "when_matched_update_all_filt": sql} if door == "merge_insert" else {"when_not_matched_by_source_delete": "true", "when_not_matched_by_source_delete_filt": sql}
         resp = client.post(
-            "/v1/table/db$t/merge_insert",
+            "/v1/table/lance_catalog$db$t/merge_insert",
             params={"on": "id", **filters},
             content=arrow(rows),
             headers={"content-type": "application/vnd.apache.arrow.stream"},
@@ -121,12 +121,14 @@ def test_an_update_EXPRESSION_is_bounded_like_its_predicate(real_ns_client: Test
     sink = io.BytesIO()
     with ipc.new_stream(sink, rows.schema) as writer:
         writer.write_table(rows)
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-    created = real_ns_client.post("/v1/table/db$t/create?mode=create", content=sink.getvalue(), headers={"content-type": "application/vnd.apache.arrow.stream"})
+    assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+    created = real_ns_client.post(
+        "/v1/table/lance_catalog$db$t/create?mode=create", content=sink.getvalue(), headers={"content-type": "application/vnd.apache.arrow.stream"}
+    )
     assert created.status_code == 200, created.text
 
     chain = " OR ".join(f"id = {i}" for i in range(1_002))
-    resp = real_ns_client.post("/v1/table/db$t/update", json={"updates": [["v", f"CASE WHEN {chain} THEN 'x' ELSE v END"]]})
+    resp = real_ns_client.post("/v1/table/lance_catalog$db$t/update", json={"updates": [["v", f"CASE WHEN {chain} THEN 'x' ELSE v END"]]})
 
     assert (resp.status_code, resp.json()["code"]) == (400, 13), resp.text
     assert "updates joins 1001 conditions" in resp.json()["detail"]

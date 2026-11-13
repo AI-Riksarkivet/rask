@@ -56,7 +56,7 @@ def live_catalog(root: Path, monkeypatch: pytest.MonkeyPatch, **env: str) -> Gen
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "RASK_OIDC_ENABLED": "false",
         "RASK_FGA_ENABLED": "false",
-        "LANCE_PROVENANCE_NAMESPACE": "provenance",
+        "LANCE_PROVENANCE_NAMESPACE": "lance_catalog$provenance",
         **env,
     }.items():
         monkeypatch.setenv(key, value)

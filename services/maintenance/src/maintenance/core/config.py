@@ -214,6 +214,11 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
         return list(dict.fromkeys([self.s3_bucket, *[b for b in extras if b]]))
 
     @property
+    def estate_warehouse(self) -> str:
+        """The id of the estate's own warehouse: the first segment of every name served from the estate's own root."""
+        return self.estate_warehouse_object.partition(":")[2]
+
+    @property
     def platform_buckets(self) -> list[str]:
         """Buckets `orphan_buckets` must never report: the swept set plus the declared platform ones.
 
@@ -389,10 +394,10 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: and the catalog's base record, so an unset value here turns every table's blob base into a record
     #: read and, for a table with no record, a finding that protects nothing.
     external_blob_bases: str = Field(default="", validation_alias="LANCE_EXTERNAL_BLOB_BASES")
-    # Warehouses are a catalog FEATURE FLAG: with them off the deployment is single-bucket by
-    # configuration and an unbound namespace is CORRECT, not drift — so the reconciler skips that
-    # category rather than reporting every namespace. Must match the catalog's setting.
-    warehouses_enabled: bool = Field(default=False, alias="MAINTENANCE_WAREHOUSES_ENABLED")
+    #: The estate's own warehouse, under the name the catalog reads it by (``RASK_FGA_DEFAULT_WAREHOUSE_OBJECT``,
+    #: ``warehouse:<id>``): its id is the first segment of every name on the estate's own root, which has no registry
+    #: record ([[LH-593]]). A table under it is maintained when its bucket is a configured one.
+    estate_warehouse_object: str = Field(default="warehouse:lance_catalog", validation_alias="RASK_FGA_DEFAULT_WAREHOUSE_OBJECT")
 
     # --- Secret consumption from the Dapr secret store (OpenBao) — symmetric with catalog + lineage.
     # When on, this service's signing key is read from the store, and its object-store identity is its ServiceAccount

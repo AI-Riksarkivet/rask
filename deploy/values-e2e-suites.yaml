@@ -28,3 +28,27 @@ objectStore:
             - "arn:aws:s3:::lance-catalog/__cas_stress/*"
             - "arn:aws:s3:::*/*-outside/*"
             - "arn:aws:s3:::*/unstable_*"
+
+# The tenants the live suites read back as declared in git (XC-213, ADR 0206;
+# tests/e2e-py/test_the_estate_is_what_git_declares.py): two projects, a warehouse in each and one grant to a principal
+# that is not a person, which the catalog converges with no call to any door. A list replaces the chart's own, so the
+# chart's default project is repeated here. The grant's principal is the suites' own ServiceAccount above, in the
+# namespace and under the release name every such release uses (`default`, `rask`); it reads the one warehouse.
+catalog:
+  declared:
+    projects:
+      - id: default
+      - id: declared-one
+      - id: declared-two
+    warehouses:
+      - id: declared-one
+        project: declared-one
+      - id: declared-two
+        project: declared-two
+        delete_profile:
+          mode: soft
+          grace_days: 1
+    grants:
+      - object: warehouse:declared-one
+        relation: reader
+        principal: kubernetes~system:serviceaccount:default:rask-e2e-suites

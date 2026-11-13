@@ -1,8 +1,10 @@
 <script lang="ts">
 	// `/warehouses` — the #3-A control plane (#52 UI): provisioned warehouses (bucket-per-warehouse
-	// physical tenancy), activate/deactivate lifecycle, namespace binding, and provisioning. Reads
-	// are session-forwarded; writes are project-admin gated by the catalog (can_create_warehouse /
-	// can_administer) — a non-admin sees the denial banner, never a silent no-op.
+	// physical tenancy), the activate/deactivate lifecycle, and provisioning. Reads are
+	// session-forwarded; writes are project-admin gated by the catalog (can_create_warehouse /
+	// can_administer) — a non-admin sees the denial banner, never a silent no-op. A warehouse git
+	// declares offers no lifecycle control (its doors refuse them), and the estate's own warehouse,
+	// which has no registry record, is listed with none at all.
 	import {
 		createSvelteTable,
 		DataTable,
@@ -17,17 +19,17 @@
 		type SortingState,
 		sortableHeader,
 	} from '@rask/ui/data-table';
-	import { Select } from '@rask/ui/select';
 	import { RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import type { Warehouse, WarehouseRecord } from './catalog';
 	import {
-		bindWarehouseNamespace,
 		createWarehouse,
+		fetchServedWarehouses,
 		fetchWarehouses,
 		setWarehouseActive,
 	} from './remote/warehouses.api';
+	import DeclaredInGit, { declaredInGit, DECLARED_IN_GIT_REASON } from './DeclaredInGit.svelte';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
 	import { VisibleProjects } from './project-index.svelte.ts';
@@ -37,16 +39,17 @@
 	import { controlTick, liveRead } from '#lib/live/tick.svelte.ts';
 	import { missingFieldsHint } from '#lib/form-hint.ts';
 
+	/** A registered warehouse, or the estate's own (`estate`): one the root listing answers and the
+	 *  registry does not, which holds the lakehouse's own namespaces and belongs to no project. */
+	type Row = WarehouseRecord & { estate?: boolean };
+
 	let warehouses = $state<WarehouseRecord[] | null>(null);
+	let estateIds = $state<string[]>([]);
 	let lastStatus = $state(0);
 	let settled = $state(false);
 	let busy = $state(false);
 	let banner = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
 	let draft = $state({ id: '', project: '', bucket: '' });
-	let bindDraft = $state<{ warehouse: string; namespace: string }>({
-		warehouse: '',
-		namespace: '',
-	});
 
 	const provisionHint = $derived(
 		missingFieldsHint('Provisioning', [
@@ -54,19 +57,6 @@
 			['a project', draft.project],
 		]),
 	);
-	const bindHint = $derived(
-		missingFieldsHint('Binding', [
-			['a warehouse', bindDraft.warehouse],
-			['a namespace', bindDraft.namespace],
-		]),
-	);
-
-	/** "New namespace" on the namespaces page links here: the field it means takes the focus. */
-	function focusWhenLinked(input: HTMLInputElement): void {
-		if (page.url.hash !== '#bind-namespace') return;
-		input.scrollIntoView({ block: 'center' });
-		input.focus();
-	}
 
 	const unauthorized = $derived(warehouses === null && lastStatus === 401);
 	const offline = $derived(warehouses === null && settled && lastStatus !== 401);
@@ -78,18 +68,26 @@
 	}
 
 	async function load(): Promise<void> {
-		const [res] = await Promise.all([fetchWarehouses(), visible.load()]);
+		const [res, served] = await Promise.all([
+			fetchWarehouses(),
+			fetchServedWarehouses(),
+			visible.load(),
+		]);
 		settled = true;
 		if (res.ok) {
 			warehouses = res.data;
 			lastStatus = 200;
+			// Only against a registry that answered: against a failed one every served warehouse would
+			// read as the estate's own.
+			const registered = new Set(res.data.map((w) => w.id));
+			estateIds = served.ok ? served.data.namespaces.filter((id) => !registered.has(id)) : [];
 		} else {
 			lastStatus = res.status;
 		}
 	}
 
 	// The CONTROL cursor, not the lineage one, and this is the surface that shows why the distinction is
-	// real: provisioning a warehouse, binding a namespace or deactivating a bucket writes no dataset and
+	// real: provisioning or deactivating a warehouse writes no dataset and
 	// therefore emits no lineage event — the lineage cursor would never move for any of it. Warehouse
 	// lifecycle is a catalog control-plane change, so that is the feed that reports it.
 	//
@@ -104,8 +102,12 @@
 			banner = { tone: 'fail', text: 'Sign in — warehouse admin is a per-user action.' };
 		else if (status === 403 || status === 404)
 			// The lifecycle ops hide existence from non-admins (a denied deactivate is a 404, not a 403),
-			// so both map to the same admin-required message.
-			banner = { tone: 'fail', text: 'Denied: warehouse admin needs the project-admin rung.' };
+			// so both map to the same admin-required message; the catalog's own words follow, as a 403
+			// for a git-declared warehouse names git.
+			banner = {
+				tone: 'fail',
+				text: `Denied: warehouse admin needs the project-admin rung. ${detail}`.trim(),
+			};
 		else banner = { tone: 'fail', text: detail };
 	}
 
@@ -156,8 +158,8 @@
 	// Goal cond 8: a row click opens the full-record drawer; a click on the link or a lifecycle button
 	// is that control's (the data table leaves a click on a control to the control).
 	let drawerOpen = $state(false);
-	let drawerRow = $state<WarehouseRecord | null>(null);
-	function openDrawer(row: WarehouseRecord): void {
+	let drawerRow = $state<Row | null>(null);
+	function openDrawer(row: Row): void {
 		drawerRow = row;
 		drawerOpen = true;
 	}
@@ -174,7 +176,7 @@
 		deleteOpen = true;
 	}
 
-	const columns: ColumnDef<WarehouseRecord>[] = [
+	const columns: ColumnDef<Row>[] = [
 		{
 			id: 'id',
 			accessorKey: 'id',
@@ -185,17 +187,19 @@
 			id: 'project',
 			accessorKey: 'project',
 			header: sortableHeader('project'),
+			cell: ({ row }) => renderSnippet(projectCell, row.original),
 			meta: { cellClass: 'font-mono' },
 		},
 		{
 			id: 'bucket',
 			accessorKey: 'bucket',
 			header: sortableHeader('bucket'),
+			cell: ({ row }) => renderSnippet(bucketCell, row.original),
 			meta: { cellClass: 'font-mono' },
 		},
 		{
 			id: 'status',
-			accessorFn: (w) => statusOf(w),
+			accessorFn: (w) => (w.estate ? '' : statusOf(w)),
 			header: sortableHeader('status'),
 			cell: ({ row }) => renderSnippet(statusCell, row.original),
 			meta: { headerClass: 'w-28' },
@@ -222,11 +226,19 @@
 	const verdict = $derived(
 		filterVerdict({ filter: projectFilter, index: null, visible: visible.state, rowProjects }),
 	);
-	const shown = $derived(
-		projectFilter
-			? (warehouses ?? []).filter((w) => w.project === projectFilter)
-			: (warehouses ?? []),
-	);
+	// The estate's own warehouse is listed with every project and under none, so a project filter
+	// leaves it out.
+	const shown = $derived.by((): Row[] => {
+		const estate: Row[] = estateIds.map((id) => ({
+			id,
+			project: '',
+			bucket: '',
+			root_uri: '',
+			estate: true,
+		}));
+		const all: Row[] = [...(warehouses ?? []), ...estate];
+		return projectFilter ? all.filter((w) => w.project === projectFilter) : all;
+	});
 
 	const whTable = createSvelteTable({
 		get data() {
@@ -252,52 +264,60 @@
 		getFilteredRowModel: getFilteredRowModel(),
 		getPaginationRowModel: getPaginationRowModel(),
 	});
-
-	async function bind(): Promise<void> {
-		if (busy || !bindDraft.warehouse || !bindDraft.namespace.trim()) return;
-		busy = true;
-		banner = null;
-		try {
-			const res = await bindWarehouseNamespace({
-				id: bindDraft.warehouse,
-				namespace: bindDraft.namespace.trim(),
-			});
-			if (res.ok) {
-				banner = {
-					tone: 'ok',
-					text: `namespace ${bindDraft.namespace} bound to ${bindDraft.warehouse}`,
-				};
-				bindDraft = { warehouse: '', namespace: '' };
-			} else {
-				fail(res.status, res.detail);
-			}
-		} finally {
-			busy = false;
-		}
-	}
 </script>
 
-{#snippet idCell(w: Warehouse)}
-	<a
-		class="whlink mono"
-		href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(w.id) })}>{w.id}</a
-	>
+{#snippet idCell(w: Row)}
+	<span class="idcell">
+		<a
+			class="whlink mono"
+			href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(w.id) })}>{w.id}</a
+		>
+		{#if w.estate}
+			<span class="mut">the estate’s own</span>
+		{:else if declaredInGit(w)}
+			<DeclaredInGit id={`git-${w.id}`} />
+		{/if}
+	</span>
 {/snippet}
-{#snippet statusCell(w: Warehouse)}
-	<span class="chip mono" class:off={statusOf(w) !== 'active'}>{statusOf(w)}</span>
+{#snippet projectCell(w: Row)}
+	{#if w.estate}<span class="mut">—</span>{:else}{w.project}{/if}
 {/snippet}
-{#snippet actionsCell(w: WarehouseRecord)}
-	<button class="btn ghost" disabled={busy} onclick={() => toggleActive(w)}>
-		{statusOf(w) === 'active' ? 'deactivate' : 'activate'}
-	</button>
-	<button
-		class="btn ghost destroy"
-		disabled={busy}
-		aria-label={`Delete warehouse ${w.id}`}
-		onclick={() => openDelete(w)}
-	>
-		delete
-	</button>
+{#snippet bucketCell(w: Row)}
+	{#if w.estate}<span class="mut">—</span>{:else}{w.bucket}{/if}
+{/snippet}
+{#snippet statusCell(w: Row)}
+	{#if w.estate}
+		<span class="mut">—</span>
+	{:else}
+		<span class="chip mono" class:off={statusOf(w) !== 'active'}>{statusOf(w)}</span>
+	{/if}
+{/snippet}
+{#snippet actionsCell(w: Row)}
+	<!-- The estate's own warehouse has no registry record, so no lifecycle door answers for it. A
+	     git-declared one keeps its controls on screen, disabled, with the reason as their description:
+	     its doors answer 403, and offering what will be refused is the defect. -->
+	{#if !w.estate}
+		{@const git = declaredInGit(w)}
+		<button
+			class="btn ghost"
+			disabled={busy || git}
+			title={git ? DECLARED_IN_GIT_REASON : undefined}
+			aria-describedby={git ? `git-${w.id}` : undefined}
+			onclick={() => toggleActive(w)}
+		>
+			{statusOf(w) === 'active' ? 'deactivate' : 'activate'}
+		</button>
+		<button
+			class="btn ghost destroy"
+			disabled={busy || git}
+			title={git ? DECLARED_IN_GIT_REASON : undefined}
+			aria-describedby={git ? `git-${w.id}` : undefined}
+			aria-label={`Delete warehouse ${w.id}`}
+			onclick={() => openDelete(w)}
+		>
+			delete
+		</button>
+	{/if}
 {/snippet}
 
 <div class="page">
@@ -392,58 +412,30 @@
 			</form>
 			{#if provisionHint}<p class="mut" id="provision-hint">{provisionHint}</p>{/if}
 		</section>
-
-		<section id="bind-namespace">
-			<h2>Bind namespace</h2>
-			<form
-				class="row"
-				onsubmit={(e) => {
-					e.preventDefault();
-					bind();
-				}}
-			>
-				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
-					Warehouse
-					<Select
-						bind:value={bindDraft.warehouse}
-						ariaLabel="Warehouse"
-						placeholder="warehouse…"
-						options={(warehouses ?? []).map((w) => ({ value: w.id, label: w.id }))}
-					/>
-				</label>
-				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
-					Namespace
-					<input
-						class="mono"
-						bind:value={bindDraft.namespace}
-						placeholder="top-level namespace"
-						{@attach focusWhenLinked}
-					/>
-				</label>
-				<button
-					class="btn"
-					type="submit"
-					disabled={busy || bindHint !== null}
-					aria-describedby={bindHint ? 'bind-hint' : undefined}
-				>
-					Bind
-				</button>
-			</form>
-			{#if bindHint}<p class="mut" id="bind-hint">{bindHint}</p>{/if}
-			<p class="mut">
-				Binding routes a top-level namespace's tables to the warehouse's bucket (immutable once
-				set).
-			</p>
-		</section>
 	{/if}
 </div>
 
 <RowDrawer
 	bind:open={drawerOpen}
 	title={drawerRow?.id ?? ''}
-	description="The full warehouse registry record."
+	description={drawerRow?.estate
+		? 'The estate’s own warehouse: no registry record.'
+		: 'The full warehouse registry record.'}
 >
-	{#if drawerRow}
+	{#if drawerRow?.estate}
+		<p class="mut">
+			The estate’s own warehouse holds the lakehouse’s own namespaces (its provenance). It belongs
+			to no project and has no registry record, so it has no bucket, status or lifecycle to show
+			here, and it cannot be deactivated or deleted.
+		</p>
+		<div class="jumps">
+			<a
+				class="jbtn"
+				href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(drawerRow.id) })}
+				>Open detail</a
+			>
+		</div>
+	{:else if drawerRow}
 		<dl class="rec">
 			<dt>warehouse id</dt>
 			<dd class="mono">{drawerRow.id}</dd>
@@ -480,6 +472,10 @@
 			</dd>
 			<dt>created</dt>
 			<dd class="mono">{drawerRow.created_at ?? '—'}</dd>
+			{#if declaredInGit(drawerRow)}
+				<dt>managed by</dt>
+				<dd><DeclaredInGit /></dd>
+			{/if}
 		</dl>
 		<div class="jumps">
 			<a
@@ -596,6 +592,11 @@
 		align-items: center;
 		gap: 8px;
 		margin-bottom: 10px;
+	}
+	.idcell {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
 	}
 	.whlink {
 		color: var(--ink);

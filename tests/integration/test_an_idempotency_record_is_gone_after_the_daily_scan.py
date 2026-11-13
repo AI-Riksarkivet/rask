@@ -37,11 +37,11 @@ def _records(both: TwoServices) -> list[str]:
 
 
 def test_a_record_past_its_lifetime_is_gone_after_the_daily_scan(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    env = {"LANCE_WAREHOUSES_ENABLED": "false", "MAINTENANCE_WAREHOUSES_ENABLED": "false", "MAINTENANCE_CATALOG_URL": CATALOG_URL}
+    env = {"MAINTENANCE_CATALOG_URL": CATALOG_URL}
     with catalog_and_maintenance(moto_url, monkeypatch, env=env) as both:
-        assert both.catalog.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert both.catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         created = both.catalog.post(
-            "/v1/table/db$t/create",
+            "/v1/table/lance_catalog$db$t/create",
             content=encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())})),
             headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE, "Idempotency-Key": KEY},
         )

@@ -1,23 +1,21 @@
-"""Admin control-plane endpoints: warehouse provisioning + warehouse-scoped namespaces (#3-A).
+"""Admin control-plane endpoints: warehouse provisioning, lifecycle, protection and deletion (#3-A).
 
-A *warehouse* = one physically separate S3 bucket owned by a project (the FGA model's catalog-root type).
-These routes are the **control plane** the catalog lacked: an authorized project-admin provisions a bucket
-at RUNTIME (not from a bucket list fixed in the chart's values) and creates namespaces bound to it, so tables under those
-namespaces land in that warehouse's bucket — physically isolated from every other tenant's. Physical
-multi-tenancy: one project may hold many warehouses, and a table's bytes live in the bucket its
-namespace is bound to, never in a neighbour's.
+A *warehouse* = one physically separate S3 bucket owned by a project (the FGA model's catalog-root type), holding its
+own directory catalog. These routes are the **control plane**: an authorized project-admin provisions a bucket at
+RUNTIME (not from a bucket list fixed in the chart's values), and its id is the first segment of every name beneath it
+([[LH-593]], ADR 0206), so a table named ``<warehouse>$<namespace>$<table>`` lands in that warehouse's bucket —
+physically isolated from every other tenant's. Physical multi-tenancy: one project may hold many warehouses, and a
+table's bytes live in the bucket its name's warehouse owns, never in a neighbour's.
 
 Authorization is DELIBERATELY stronger than the data plane: warehouse-create gates on the project's
 `can_create_warehouse` (= admin) — the model action that until now was defined but never enforced — not the
 writer-tier create-on-parent that guards tables/namespaces. There is exactly ONE door and no exception:
 the project must already EXIST (`require_project_exists`, a 404 naming `POST /management/v1/projects`), and that
-route is where a tenant and its first admin are minted together (`open_hierarchy_lifecycle.md` Decision 1).
-An estate-admin bootstrap exception used to live here, because a not-yet-existing project had no tuples
-and its first warehouse was otherwise uncreatable; it is gone, and with it the path by which creating a
-warehouse could grant its creator tenant admin.
+route is where a tenant and its first admin are minted together (`open_hierarchy_lifecycle.md` Decision 1), so
+creating a warehouse never grants its creator tenant admin.
 
 DELETE is the mirror image (Decision 3): bottom-up, gated on the PROJECT's `can_administer` because
-destroying a tenant's storage is a tenant-level act, refusing 409 while any namespace is bound. `cascade`,
+destroying a tenant's storage is a tenant-level act, refusing 409 while the warehouse holds any namespace. `cascade`,
 bucket `purge_bucket` and `force` are three SEPARATE opt-ins that never share a default — see
 `delete_warehouse`.
 """
@@ -30,72 +28,59 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
-    CreateNamespaceRequest,
-    CreateNamespaceResponse,
     DeregisterTableRequest,
     DescribeTableRequest,
     DescribeTableResponse,
     DropNamespaceRequest,
-    InternalError,
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
     LanceNamespaceError,
-    ListTablesRequest,
     NamespaceAlreadyExistsError,
-    NamespaceExistsRequest,
     NamespaceNotEmptyError,
     NamespaceNotFoundError,
     PermissionDeniedError,
     ServiceUnavailableError,
     TableNotFoundError,
-    UnsupportedOperationError,
 )
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api import fga_deps
 from catalog.api.announcing import AnnouncerDep
+from catalog.api.declared import DECLARATION, Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
     ObjectUuidsDep,
-    ResolverDep,
     SettingsDep,
     VendorDep,
-    estate_namespace,
     namespace_for_root,
 )
 from catalog.api.pagination import ListLimit
 from catalog.api.security import Caller, CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespaces_api
-from catalog.core import tier_policy
 from catalog.core.config import Settings
-from catalog.core.formats import reject_unsupported_properties
-from catalog.core.identifiers import parse_identifier, with_minted_uuid
+from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import DEREGISTER_TABLE
 from catalog.core.store_endpoint import names_the_estate_store, require_estate_store
 from catalog.core.vending import CredentialVendor, role_session_name
 from catalog.schemas import (
-    CreateWarehouseNamespaceRequest,
     CreateWarehouseRequest,
     DeleteProfile,
     DeleteWarehouseResponse,
-    EstateBindingsResponse,
     ProtectionResponse,
     SetProtectionRequest,
     TrashListing,
-    UnbindWarehouseNamespaceResponse,
-    WarehouseNamespacesResponse,
     WarehouseResponse,
 )
-from catalog.services import clone_endings, dataplane, native, object_uuids, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, RecordGone
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
@@ -126,13 +111,7 @@ router = APIRouter(prefix="/management/v1/warehouses", tags=["warehouse"])
 # refused by one door and accepted by another).
 _ID_RE = CONTROL_ID_RE
 
-
-def _require_enabled(settings: Settings) -> None:
-    # A DOMAIN error, not a raw HTTPException: this module was the only endpoint module bypassing the
-    # RFC 9457 problem+json handler, so its errors came back shaped differently from every other route in
-    # the API (audit 2026-07-14). UnsupportedOperationError maps to the spec's 406.
-    if not settings.warehouses_enabled:
-        raise UnsupportedOperationError("warehouses are disabled (set LANCE_WAREHOUSES_ENABLED)")
+type WarehouseStatus = Literal["active", "deactivated"]
 
 
 def _validate_id(value: str, *, what: str) -> str:
@@ -151,21 +130,9 @@ def _delete_profile_fields(profile: DeleteProfile | None) -> dict[str, str]:
     return {warehouses.DELETE_MODE: profile.mode.value, warehouses.TRASH_GRACE_DAYS: str(profile.grace_days)}
 
 
-def _namespace_exists_in_default(ns: LanceNamespace, segments: list[str]) -> bool:
-    """True if the top-level namespace already exists in ``ns``'s root (the default/shared root).
-
-    Uses the native ``namespace_exists``: a clean return means it exists; ``NamespaceNotFoundError`` means it
-    does not. Any OTHER error PROPAGATES — a registry/backend fault must not be read as 'absent' and let a
-    hijacking bind through. Blocking IO; callers threadpool it."""
-    try:
-        native.call(ns, "namespace_exists", NamespaceExistsRequest(id=segments))
-        return True
-    except NamespaceNotFoundError:
-        return False
-
-
 @router.post("", response_model_exclude_none=True)
 async def create_warehouse(
+    request: Request,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -175,61 +142,149 @@ async def create_warehouse(
 ) -> WarehouseResponse:
     """Provision a warehouse: create its physical bucket + register it + seed FGA. Admin-gated.
 
-    Order (fail-closed): the project must EXIST (``require_project_exists`` — 404 naming
+    Order (fail-closed): the request's shape (400), then the project must EXIST (``require_project_exists`` — 404 naming
     ``POST /management/v1/projects`` as the fix; existence is the registry's answer, identical for every caller, so
-    it runs before authz), THEN authorize ``can_create_warehouse`` on the project, THEN provision the
-    bucket (idempotent), probe its store, write the registry record, and grant the caller ``owner`` on
-    ``warehouse:<id>`` with its ``project`` edge. The probe refuses a store that ignores credential scope or a
-    conditional put (400) and one it cannot reach (503), so no such warehouse becomes routable ([[LH-481]]). A re-run with the same id is idempotent (bucket + record overwrite-safe).
+    it runs before authz), THEN authorize ``can_create_warehouse`` on the project, then :func:`establish_warehouse`
+    makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is, and the catalog converges
+    it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
+    """
+    ids = validated_ids(settings, body)
+    _warehouse_id, project, _bucket = ids
+    await fga_deps.require_project_exists(settings, project)
+    await fga_deps.require_can_create_warehouse(client, settings, token, project=project)
+    # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
+    if body.protected is not None:
+        await _require_project_admin(client, settings, token, project=project)
+    record = await establish_warehouse(request, settings, body, ids, client=client, control=control, vendor=vendor, author=author_of(token), owner=token)
+    return WarehouseResponse.model_validate(record)
 
-    The estate-admin bootstrap exception is GONE (Decision 1): tenants are minted explicitly at
-    ``POST /management/v1/projects``, which seeds the project's admin — so by the time this runs the project has
-    admins of its own and one door is enough."""
-    _require_enabled(settings)
+
+#: A create's warehouse id, project and bucket, each judged a control id (:func:`validated_ids`).
+type WarehouseIds = tuple[str, str, str]
+
+
+def validated_ids(settings: Settings, body: CreateWarehouseRequest) -> WarehouseIds:
+    """The warehouse id, project and bucket ``body`` names, each a control id.
+
+    Raises:
+        InvalidInputError: An id is malformed, the id is the estate's own warehouse, the serving class is unknown, or
+            the endpoint is not the estate's object store ([[LH-205]]): another store needs a credential the catalog
+            resolves and consumes on every open, provision and vend, and no door consumes one, so admitting it would
+            have the estate's own key signed toward a host the caller chose.
+    """
     warehouse_id = _validate_id(body.id, what="warehouse id")
     project = _validate_id(body.project, what="project id")
     bucket = _validate_id(body.bucket or body.id, what="bucket name")
-    # Serving designation (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers"): only the one class the resolver knows is
-    # accepted — an unknown value would mint a record neither project_root nor project_gold_root ever
-    # matches (an unroutable warehouse), so it is rejected up front like a malformed id.
+    if warehouse_id == settings.estate_warehouse:
+        raise InvalidInputError(f"warehouse id {warehouse_id!r} is the estate's own warehouse; choose another")
+    # Only the one serving class the estate defines: an unknown value would record a class no reader of the record knows.
     if body.serving is not None and body.serving != "gold":
         raise InvalidInputError(f"invalid serving {body.serving!r}: only 'gold' is supported")
-    # [[LH-205]] Another store needs a credential the catalog resolves and consumes on every open,
-    # provision and vend, and no door consumes one: the request has no `credential_ref` and nothing
-    # reads the record's. Admitting the endpoint would have the estate's own key signed toward a host
-    # this caller chose, so it is refused here, before the bucket is claimed or provisioned.
     if not names_the_estate_store(body.endpoint, estate=settings.s3_endpoint):
         raise InvalidInputError(
             f"endpoint {body.endpoint!r} is not the estate's object store. A warehouse in another store needs a credential "
             "reference the catalog consumes on every open, provision and vend, and none is consumed yet, so the catalog "
             "would sign with the estate's own key toward that host. Omit `endpoint` to use the estate's store."
         )
+    return warehouse_id, project, bucket
 
+
+async def establish_warehouse(
+    request: Request,
+    settings: Settings,
+    body: CreateWarehouseRequest,
+    ids: WarehouseIds,
+    *,
+    client: OpenFgaClient | None,
+    control: ControlEmitter,
+    vendor: CredentialVendor,
+    author: Author | None,
+    owner: Caller | None,
+) -> dict[str, str]:
+    """Make the warehouse ``body`` names, or converge the one that stands onto it; the record as written.
+
+    What the create door does once its caller is authorized, and what the catalog does for a warehouse git declares
+    ([[XC-213]]): claim and provision the bucket (idempotent), probe its store, write the registry record, give the
+    warehouse its row in its own catalog, seed its grants and announce it. The probe refuses a store that ignores
+    credential scope or a conditional put (400) and one it cannot reach (503), so no such warehouse becomes routable
+    ([[LH-481]]). ``ids`` are ``body``'s (:func:`validated_ids`), in a project its caller found in the registry.
+    ``owner`` is the caller granted ``owner`` on it, none for a declared warehouse, whose project's admins own it
+    through the project.
+
+    Raises:
+        NamespaceAlreadyExistsError: The id or the bucket belongs to another project.
+        PermissionDeniedError: Git declares the warehouse and ``author`` is not the declaration.
+        InvalidInputError: The bucket is reserved, or its store failed the probe.
+        ServiceUnavailableError: The store or its STS could not be probed.
+    """
+    warehouse_id, project, bucket = ids
+    existing = await _claim_the_bucket(settings, body, ids, author=author, owner=owner)
+    root_uri = f"s3://{bucket}"
+    await run_in_threadpool(warehouses.provision_bucket, bucket, settings.storage_options())
+    await _require_a_conforming_store(settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
+    actor = author.actor if author is not None else None
+    protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    record = _record_for(body, existing, warehouse_id=warehouse_id, project=project, bucket=bucket, protection=protection)
+    replaced, record = await _write_record(settings, body, record, existing=existing, protection=protection)
+    # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
+    # catalog refuses a namespace whose parent has no row (measured on pylance 13.0.0). After the record, which makes
+    # the root the warehouse's, and idempotent, so a re-POST converges a create that failed here.
+    ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
+    await run_in_threadpool(warehouses.ensure_catalog_row, ns_conn, warehouse_id)
+    if owner is not None:
+        await fga_deps.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project)
+    elif author is not None:
+        await fga_deps.converge_cascade_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject)
+    log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
+    await emit_control(
+        control,
+        action="warehouse_created",
+        object_type="warehouse",
+        object_id=f"warehouse:{warehouse_id}",
+        actor=actor,
+        extra={"bucket": bucket, "project": project},
+    )
+    if replaced.get("protected") != record.get("protected"):
+        await _announce_protection(control, warehouse_id, actor, protected=record.get("protected") == "true")
+    return record
+
+
+async def _claim_the_bucket(
+    settings: Settings, body: CreateWarehouseRequest, ids: WarehouseIds, *, author: Author | None, owner: Caller | None
+) -> dict[str, str] | None:
+    """Refuse a create that would take another project's warehouse id or bucket, or that anyone but the declaration
+    makes over a warehouse git declares, then claim the bucket for the project.
+
+    Returns:
+        The warehouse's registry record as it stood before the claim, ``None`` for a new warehouse.
+
+    Raises:
+        NamespaceAlreadyExistsError: The id or the bucket belongs to another project.
+        PermissionDeniedError: Git declares the warehouse and ``author`` is not the declaration.
+        InvalidInputError: The bucket is reserved platform storage, or a re-POST naming no endpoint keeps a record that
+            names another store.
+    """
+    warehouse_id, project, bucket = ids
     so = settings.storage_options()
-    # The project must exist — layer-3 invariant, from the PROJECT REGISTRY (Decision 1), checked before
-    # the gate because the answer is identical for every caller and a 404 tells an authorized admin the
-    # actual fix (create the tenant) where a 403 would mislead. The warehouse listing is still read here
-    # for the bucket-claim guard below.
-    await fga_deps.require_project_exists(settings, project)
     records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
-    await fga_deps.require_can_create_warehouse(client, settings, token, project=project)
-    # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
-    if body.protected is not None:
-        await _require_project_admin(client, settings, token, project=project)
-
     # Cross-tenant takeover guard: `can_create_warehouse` gates on the caller-named `project`, so an admin of
     # ANY project could otherwise re-POST an EXISTING warehouse id under their own project — the seed ADDS
     # `warehouse:<id> project project:<theirs>` alongside the original owner's tuples, making their project's
     # admins owners of the victim's warehouse + every table under it (routing still points at the same
     # bucket → full cross-tenant disclosure). Reject a collision with a warehouse owned by another project.
-    # A same-project re-create stays idempotent (the partial-failure retry path below relies on it).
+    # A same-project re-create stays idempotent (the partial-failure retry path relies on it).
     existing = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
     if existing is not None and existing.get("project") != project:
         raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project")
+    # Only the declaration changes a warehouse git declares ([[XC-213]]): a door's create is refused whoever makes it,
+    # a stack that authenticates nobody included. Judged on the read the guard above made, so the create reads its
+    # record once.
+    if author is not DECLARATION:
+        refuse_what_git_declares(existing, obj=f"warehouse:{warehouse_id}", token=owner)
     # [[LH-205]] A re-POST that names no endpoint carries the live one forward, and `provision_bucket`
-    # below always reaches the ESTATE's store. For a record naming another store that would create its
+    # always reaches the ESTATE's store. For a record naming another store that would create its
     # bucket in the wrong store and keep the record pointing at the foreign one, so the re-POST is
-    # refused unless it re-points the warehouse itself (an explicit endpoint, judged above).
+    # refused unless it re-points the warehouse itself (an explicit endpoint, judged by `validated_ids`).
     if existing is not None and body.endpoint is None:
         require_estate_store(existing.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
@@ -250,8 +305,8 @@ async def create_warehouse(
         raise NamespaceAlreadyExistsError(f"bucket {bucket!r} is already registered to another project's warehouse")
 
     # [[LH-053]] AND THE SCAN ABOVE IS NOT ENOUGH, which is why both are here rather than one replacing
-    # the other. `records` was listed before the gate, the provision below is a network round trip, and
-    # the record write is further down still — so two concurrent creates naming one bucket under
+    # the other. `records` was listed before the claim, the provision is a network round trip, and
+    # the record write comes after it — so two concurrent creates naming one bucket under
     # different projects each scan a listing taken before the other existed, both pass, and both write.
     # The claim is WRITE-ONCE AT THE STORE (`If-None-Match: *`), so the loser is refused regardless of
     # what its caller read. It is taken BEFORE `provision_bucket`: provisioning an existing bucket is a
@@ -261,21 +316,29 @@ async def create_warehouse(
     # The scan stays because it answers a different question cheaply and with a listing already in hand;
     # this arbitrates the one case it structurally cannot see.
     await run_in_threadpool(partial(warehouses.claim_bucket, settings.registry_root, so, bucket=bucket, project=project, warehouse_id=warehouse_id))
+    return existing
 
-    root_uri = f"s3://{bucket}"
-    await run_in_threadpool(warehouses.provision_bucket, bucket, so)
-    # [[LH-481]] THE STORE IS PROVED BEFORE THE RECORD MAKES IT ROUTABLE (ADR 0089). Every Lance commit rests on
-    # the store refusing a second conditional put, and every vended credential on it honouring the session
-    # policy; a store that accepts either and ignores it fails silently, with a 200 on every write. The probe
-    # `POST …/validate` runs is run here too, so such a warehouse is refused rather than found later by a
-    # client. A `skip` (this deployment vends no direct credentials) proves nothing and refuses nothing. The
-    # bucket claim above stays: it names this project and id, so the same create retried converges.
-    #
-    # TWO ANSWERS, because the two failures need different things from the caller. A store that broke a
-    # guarantee is the request's problem, 400, and retrying changes nothing. A probe that could not reach the
-    # store or its STS learned nothing about it, 503, and the retry is the right move; a GitOps re-POST of a
-    # live warehouse must not read a store blip as a verdict on its store.
-    creator = role_session_name(token.subject if token is not None else ANONYMOUS_SUBJECT)
+
+async def _require_a_conforming_store(settings: Settings, vendor: CredentialVendor, root_uri: str, *, warehouse_id: str, author: Author | None) -> None:
+    """Probe the store under ``root_uri`` before the record makes it routable ([[LH-481]], ADR 0089).
+
+    Every Lance commit rests on the store refusing a second conditional put, and every vended credential on it
+    honouring the session policy; a store that accepts either and ignores it fails silently, with a 200 on every write.
+    The probe `POST …/validate` runs is run here too, so such a warehouse is refused rather than found later by a
+    client. A `skip` (this deployment vends no direct credentials) proves nothing and refuses nothing. The bucket claim
+    stays: it names this project and id, so the same create retried converges.
+
+    TWO ANSWERS, because the two failures need different things from the caller. A store that broke a guarantee is
+    the request's problem, 400, and retrying changes nothing. A probe that could not reach the store or its STS learned
+    nothing about it, 503, and the retry is the right move; a GitOps re-POST of a live warehouse must not read a store
+    blip as a verdict on its store.
+
+    Raises:
+        InvalidInputError: The store failed a conformance check.
+        ServiceUnavailableError: The store or its STS could not be probed.
+    """
+    bucket = split_s3_uri(root_uri)[0]
+    creator = role_session_name(author.subject if author is not None else ANONYMOUS_SUBJECT)
     probe = partial(_run_scope_probe, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=creator)
     report = summarize_probe(await run_in_threadpool(probe))
     failed = [c.name for c in report.checks if c.outcome == "fail"]
@@ -289,10 +352,22 @@ async def create_warehouse(
     if failed:
         log.warning("warehouse_store_unprobed", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": failed})
         raise ServiceUnavailableError(f"warehouse {warehouse_id!r} was not registered: its object store could not be probed ({', '.join(failed)}); retry")
+
+
+def _record_for(
+    body: CreateWarehouseRequest,
+    existing: dict[str, str] | None,
+    *,
+    warehouse_id: str,
+    project: str,
+    bucket: str,
+    protection: ProtectionChange | None,
+) -> dict[str, str]:
+    """The registry record ``body`` asks for, carrying forward from ``existing`` what a re-create does not own."""
     record = {
         "id": warehouse_id,
         "bucket": bucket,
-        "root_uri": root_uri,
+        "root_uri": f"s3://{bucket}",
         "project": project,
         # Idempotent re-create must NOT resurrect a DEACTIVATED warehouse nor reset created_at (audit #1): a
         # GitOps reconcile / partial-failure retry re-POSTing an existing id would otherwise silently lift a
@@ -301,9 +376,9 @@ async def create_warehouse(
         "status": existing.get("status", "active") if existing is not None else "active",
         "created_at": (existing.get("created_at") if existing is not None else None) or datetime.now(UTC).isoformat(),
         # [[LH-067]] Which object store this bucket is reached at, and only the estate's passes the
-        # judgement above ([[LH-205]]). CALLER-OWNED, so unlike the arm-never-disarm fields a re-POST
+        # judgement in `validated_ids` ([[LH-205]]). CALLER-OWNED, so unlike the arm-never-disarm fields a re-POST
         # may correct it: a record naming another store is re-pointed at the estate with an explicit
-        # empty string, which `_resolve_warehouse_root` reads as None. Omitted from the request means
+        # empty string, which `_read_warehouse_root` reads as None. Omitted from the request means
         # "unchanged": the key is absent, so `_CALLER_OWNED`'s merge carries the live value forward.
         **({"endpoint": body.endpoint} if body.endpoint is not None else {}),
         # What a drop under this warehouse does (ADR 0146), CALLER-OWNED like the endpoint: named, it replaces the
@@ -312,9 +387,8 @@ async def create_warehouse(
     }
     # Serving carries FORWARD on an idempotent re-create (same rationale as status above): a GitOps
     # reconcile re-POSTing the gold warehouse WITHOUT the serving field must not silently demote it to a
-    # work warehouse — a gold writer resolving the tenant's root would quietly fall back to the work root while the record
-    # still looks fine. The field stays ABSENT (not null) on work warehouses, matching the resolver's
-    # "absent = work" contract and keeping pre-serving records byte-identical.
+    # work warehouse. The field stays ABSENT (not null) on work warehouses: absent means work, and records
+    # written without a serving class stay byte-identical.
     serving = body.serving or (existing.get("serving") if existing is not None else None)
     if serving:
         record["serving"] = serving
@@ -322,22 +396,34 @@ async def create_warehouse(
     # a request naming neither leaves it as it stands. A new warehouse's record takes it here; a re-create's merge takes
     # it inside the conditional write (`upsert_warehouse`), against the record as it stands, since a re-POST that lost
     # the flag it never named would disarm the delete door's only safety catch with no error and no audit signal.
-    actor = f"user:{token.subject}" if token is not None else None
-    protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
     if protection is not None:
         record = with_protection(record, protection)
     # A new warehouse's record takes the primary marker the request names, as the string `"true"` a re-create's merge
-    # writes and `warehouse_registry._is_primary` reads ([[LH-548]]); a re-create takes it inside the merge
-    # (`upsert_warehouse`), where a request naming nothing carries the live marker forward.
+    # writes; a re-create takes it inside the merge (`upsert_warehouse`), where a request naming nothing carries the live
+    # marker forward.
     if body.primary:
         record["primary"] = "true"
+    return record
 
-    # BOTH re-create paths go through the CONDITIONAL upsert (diff2 F4). They used to end in an
-    # unconditional `put_warehouse` of a record assembled from a read taken at the top of this handler —
-    # before the guards above and before `provision_bucket`, a network round trip. A deactivate landing
-    # anywhere in that window was overwritten by the status this request carried forward, lifting a
-    # quarantine with no `/activate` and no audit signal. The merge now happens inside the write,
-    # against the record as it actually stands, so a concurrent lifecycle change survives.
+
+async def _write_record(
+    settings: Settings, body: CreateWarehouseRequest, record: dict[str, str], *, existing: dict[str, str] | None, protection: ProtectionChange | None
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Mint ``record``, or merge it into the record that stands; the record the write replaced (empty for a mint) and
+    the record it wrote, so the protection this write changed is announced and no other.
+
+    Raises:
+        NamespaceAlreadyExistsError: The record moved to another project mid-request.
+        ConcurrentModificationError: The write raced a concurrent delete; retry.
+    """
+    so = settings.storage_options()
+    warehouse_id = record["id"]
+
+    # BOTH re-create paths go through the CONDITIONAL upsert (diff2 F4), never an unconditional put of a record
+    # assembled from a read taken before the guards and before `provision_bucket`, a network round trip: a deactivate
+    # landing anywhere in that window would be overwritten by the status this request carried forward, lifting a
+    # quarantine with no `/activate` and no audit signal. The merge happens inside the write, against the record as it
+    # actually stands, so a concurrent lifecycle change survives.
     async def _converge() -> tuple[dict[str, str], dict[str, str]]:
         try:
             return await run_in_threadpool(
@@ -352,47 +438,30 @@ async def create_warehouse(
                 )
             )
         except warehouses.WarehouseProjectConflict:
-            # The pre-flight guard above already refuses this for the ordinary case; reaching it here
+            # The pre-flight guard (`_claim_the_bucket`) already refuses this for the ordinary case; reaching it here
             # means the record moved projects mid-request, and the answer is the same either way.
             raise NamespaceAlreadyExistsError(f"warehouse {warehouse_id!r} is already registered to another project") from None
         except RecordMissingError:
             # Raced a concurrent delete: retryable, never a blind re-create — code 14 → 409 so the
-            # caller retries into a clean create. (Previously only the lost-mint-race branch noticed
-            # this; the sequential path would have re-created the record the operator just deleted.)
+            # caller retries into a clean create, on the sequential path as on the lost mint race.
             raise ConcurrentModificationError(f"warehouse {warehouse_id!r} write raced a concurrent delete; retry") from None
 
-    # The record the write replaced, empty for a mint, so the protection this write changed is announced and no other.
-    replaced: dict[str, str] = {}
-    if existing is None:
-        # The id-MINT is conditional (F1): the takeover guard above read the registry BEFORE deciding,
-        # and a rival create landing between that read and this write used to win silently — the store
-        # now refuses the second create, whatever the guard saw.
-        try:
-            await run_in_threadpool(warehouses.create_warehouse_record, settings.registry_root, so, record)
-        except RecordExistsError:
-            replaced, record = await _converge()  # lost the mint race — converge on the WINNER, conditionally
-    else:
-        replaced, record = await _converge()
-    await fga_deps.seed_warehouse(client, settings, token, warehouse_id=warehouse_id, project=project)
-    log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
-    await emit_control(
-        control,
-        action="warehouse_created",
-        object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
-        actor=actor,
-        extra={"bucket": bucket, "project": project},
-    )
-    if replaced.get("protected") != record.get("protected"):
-        await _announce_protection(control, warehouse_id, actor, protected=record.get("protected") == "true")
-    return WarehouseResponse.model_validate(record)
+    if existing is not None:
+        return await _converge()
+    # The id-MINT is conditional (F1): the takeover guard read the registry BEFORE deciding, and a rival create landing
+    # between that read and this write must not win silently, so the store refuses the second create, whatever the
+    # guard saw.
+    try:
+        await run_in_threadpool(warehouses.create_warehouse_record, settings.registry_root, so, record)
+    except RecordExistsError:
+        return await _converge()  # lost the mint race — converge on the WINNER, conditionally
+    return {}, record
 
 
 @router.get("", response_model_exclude_none=True)
 async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[WarehouseResponse]:
     """Every warehouse the caller can read. Governed like the metadata feeds: with FGA on, filtered to the
     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names)."""
-    _require_enabled(settings)
     records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
     if (authz := fga_deps.authorization(settings, client, token)) is not None:
         # The listing's own candidates, batch-checked ([[LH-223]]): never what the caller reaches across the estate,
@@ -405,94 +474,11 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
 @router.get("/{warehouse_id}", response_model_exclude_none=True)
 async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseResponse:
     """One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage)."""
-    _require_enabled(settings)
     await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     return WarehouseResponse.model_validate(record)
-
-
-@router.get("/-/bindings", response_model_exclude_none=True)
-async def list_estate_bindings(
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
-) -> EstateBindingsResponse:
-    """Every binding the caller may see, from ONE ``list_bindings`` pass (#86).
-
-    ``/-/`` rather than a bare ``/bindings``: the sibling routes are ``/{warehouse_id}/…`` and
-    ``bindings`` is a VALID warehouse id, so a literal segment there would shadow a real tenant's
-    warehouse. ``-`` can never be an id (``CONTROL_ID_RE`` requires ≥3 chars with alphanumeric ends),
-    which makes the collision impossible rather than merely unlikely. This is the FIRST ``/-/`` route
-    in the estate and it is our own convention, borrowed from GitLab — the Lance spec's own root
-    placeholder is the delimiter, which is not available here.
-
-    Governed exactly like the warehouse listing it complements: with FGA on, filtered to the
-    warehouses the caller can ``can_get_metadata`` — a binding names a namespace AND the tenant
-    bucket it lives in, so leaking one leaks another tenant's shape.
-    """
-    _require_enabled(settings)
-    # `read_bindings`, NOT the tolerant `list_bindings`: the per-warehouse sibling refuses on any binding
-    # it could not parse, and answering the estate question with the opposite tolerance would put an
-    # invisible bound namespace back — a 200 with one silently missing, which the frontend's
-    # read-failed channel cannot see because nothing failed. One corrupt object degrades LOUDLY here,
-    # exactly as it does one route over.
-    records, skipped = await run_in_threadpool(warehouses.read_bindings, settings.registry_root, settings.storage_options())
-    if skipped:
-        raise InternalError(
-            f"{len(skipped)} namespace binding(s) cannot be read as one (e.g. {skipped[0]}) — refusing to "
-            f"report a partial estate, because a binding you cannot read is a namespace you cannot see."
-        )
-    if (authz := fga_deps.authorization(settings, client, token)) is not None:
-        # The listing's own candidates, batch-checked ([[LH-223]]).
-        objects = sorted({f"warehouse:{r.get('warehouse_id')}" for r in records})
-        allowed = await authz.batch_check("can_get_metadata", objects)
-        records = [r for r in records if allowed.get(f"warehouse:{r.get('warehouse_id')}")]
-    return EstateBindingsResponse(bindings={str(r["top_ns"]): str(r["warehouse_id"]) for r in records})
-
-
-@router.get("/{warehouse_id}/namespaces", response_model_exclude_none=True)
-async def list_warehouse_namespaces(
-    warehouse_id: str,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
-    resolver: ResolverDep,
-) -> WarehouseNamespacesResponse:
-    """The namespaces bound to this warehouse, read from the REGISTRY — the same source the delete
-    door consults. This read exists so no surface has to INFER the answer: the lakehouse warehouse
-    page used to derive its namespace list by grouping the table registry, which made an EMPTY
-    namespace structurally invisible — the page said "no namespaces" while the delete door refused
-    409 naming one (observed live, #66). Reader-gated like the record itself (``can_get_metadata``);
-    a missing warehouse is the same 404 as everywhere else."""
-    _require_enabled(settings)
-    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
-    so = settings.storage_options()
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
-    if record is None:
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    bound = await run_in_threadpool(warehouses.namespaces_bound_to, settings.registry_root, so, warehouse_id)
-    # PER-ITEM, because the route's gate does not imply its contents. `can_get_metadata` on a container
-    # is `reader or can_get_metadata from child`, so holding `reader` on ONE namespace under this
-    # warehouse opens this route — and the unfiltered answer then named every SIBLING namespace bound
-    # to it. The same split `list_tables` and `list_namespaces` already carry, and the same one
-    # `estate_bindings` a few lines above applies to its own records: the ROUTE may open on the
-    # container, each ITEM is checked on itself.
-    #
-    # A namespace name discloses how a tenant organises data, which is why the answer is FILTERED
-    # rather than refused — refusing would break the breadcrumb the widened relation exists to serve.
-    if (authz := fga_deps.authorization(settings, client, token)) is not None:
-        bound, _ = await fga_deps.authorized_page(
-            authz,
-            resolver,
-            relation="can_get_metadata",
-            kind="namespace",
-            candidates=[(name, [name]) for name in sorted(bound)],
-            page_token=None,
-            limit=None,
-        )
-    return WarehouseNamespacesResponse(namespaces=bound)
 
 
 @router.get("/{warehouse_id}/trash", response_model_exclude_none=True)
@@ -519,13 +505,12 @@ async def list_warehouse_trash(
     warehouse's drops on a shared bucket are never listed. They sort by name and then uuid, the key the opaque page token
     resumes after (``trash_doors.listing_key``, `lance_docs/ns_catalog/spec.yaml` PageToken).
     """
-    _require_enabled(settings)
     await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
     so = settings.storage_options()
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    owned = await run_in_threadpool(partial(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id, bucket=str(record["bucket"])))
+    owned = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
     beneath = f"{namespace}{CATALOG_DELIMITER}" if namespace else ""
     candidates = sorted(
         ((trash_doors.listing_key(r), r) for r in owned if trash.object_uuid(r) and str(r.get("id") or "").startswith(beneath)), key=lambda c: c[0]
@@ -547,10 +532,12 @@ async def list_warehouse_trash(
 
 async def _set_warehouse_status(
     warehouse_id: str,
-    status: str,
+    status: WarehouseStatus,
+    *,
     settings: Settings,
     token: Caller | None,
     client: OpenFgaClient | None,
+    control: ControlEmitter,
 ) -> WarehouseResponse:
     """Shared deactivate/activate: admin-gate on the warehouse's OWN project, flip ``status``, persist.
 
@@ -560,7 +547,6 @@ async def _set_warehouse_status(
     gets the SAME 404 as a missing warehouse — the not-found and permission-denied outcomes are made
     indistinguishable so an unauthorized user cannot probe which warehouse ids exist. Status is read LIVE by
     the resolver, so no cache invalidation is needed — the very next routed request sees the new status."""
-    _require_enabled(settings)
     so = settings.storage_options()
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
     if record is None:
@@ -571,11 +557,35 @@ async def _set_warehouse_status(
         # Collapse denied → not-found so existence is not disclosed to a non-admin (audit #4). A legitimate
         # admin of the warehouse's own project still passes; anyone else sees exactly a missing-warehouse 404.
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
-    updated = await run_in_threadpool(warehouses.set_warehouse_status, settings.registry_root, so, warehouse_id, status)
-    if updated is None:  # raced away between the read and the write — treat as gone
+    refuse_what_git_declares(record, obj=f"warehouse:{warehouse_id}", token=token)
+    updated = await change_warehouse_status(settings, control, warehouse_id, status=status, actor=f"user:{token.subject}" if token else None)
+    return WarehouseResponse.model_validate(updated)
+
+
+async def change_warehouse_status(
+    settings: Settings, control: ControlEmitter, warehouse_id: str, *, status: WarehouseStatus, actor: str | None
+) -> dict[str, str]:
+    """Deactivate or activate warehouse ``warehouse_id`` and announce it; the record as written.
+
+    What both status doors do once their caller is authorized, and what the catalog does for a warehouse whose status
+    drifted from what git declares ([[XC-213]]).
+
+    Raises:
+        TableNotFoundError: The warehouse's record is gone.
+    """
+    updated = await run_in_threadpool(warehouses.set_warehouse_status, settings.registry_root, settings.storage_options(), warehouse_id, status)
+    if updated is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     log.info("warehouse_status_changed", extra={"warehouse": warehouse_id, "status": status})
-    return WarehouseResponse.model_validate(updated)
+    await emit_control(
+        control,
+        action="warehouse_deactivated" if status == "deactivated" else "warehouse_activated",
+        object_type="warehouse",
+        object_id=f"warehouse:{warehouse_id}",
+        actor=actor,
+        extra={},
+    )
+    return updated
 
 
 @router.post("/{warehouse_id}/deactivate", response_model_exclude_none=True)
@@ -586,19 +596,10 @@ async def deactivate_warehouse(
     client: FgaClientDep,
     control: ControlEmitterDep,
 ) -> WarehouseResponse:
-    """Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on its bound namespaces
+    """Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on a name beneath it
     (403), so no new tables are created and existing ones are suspended — the tenant-offboarding first step.
     Admin-gated on the warehouse's project. Idempotent (re-deactivating is a no-op)."""
-    result = await _set_warehouse_status(warehouse_id, "deactivated", settings, token, client)
-    await emit_control(
-        control,
-        action="warehouse_deactivated",
-        object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.subject}" if token else None,
-        extra={},
-    )
-    return result
+    return await _set_warehouse_status(warehouse_id, "deactivated", settings=settings, token=token, client=client, control=control)
 
 
 @router.post("/{warehouse_id}/activate", response_model_exclude_none=True)
@@ -609,18 +610,9 @@ async def activate_warehouse(
     client: FgaClientDep,
     control: ControlEmitterDep,
 ) -> WarehouseResponse:
-    """Reactivate a quarantined warehouse (#3-A lifecycle) — restores routing to its bound namespaces.
+    """Reactivate a quarantined warehouse (#3-A lifecycle) — restores routing to the names beneath it.
     Admin-gated on the warehouse's project. Idempotent."""
-    result = await _set_warehouse_status(warehouse_id, "active", settings, token, client)
-    await emit_control(
-        control,
-        action="warehouse_activated",
-        object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.subject}" if token else None,
-        extra={},
-    )
-    return result
+    return await _set_warehouse_status(warehouse_id, "active", settings=settings, token=token, client=client, control=control)
 
 
 async def _require_project_admin(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str) -> None:
@@ -646,11 +638,9 @@ async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token
         The warehouse's registry record.
 
     Raises:
-        UnsupportedOperationError: Warehouses are disabled.
         InvalidInputError: The id is not a warehouse id.
         TableNotFoundError: The warehouse is absent, or its caller does not administer its project.
     """
-    _require_enabled(settings)
     _validate_id(warehouse_id, what="warehouse id")
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
     if record is None:
@@ -665,11 +655,27 @@ async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token
 AdministeredWarehouseDep = Annotated[dict[str, str], Depends(administered_warehouse)]
 
 
+def warehouse_its_doors_manage(warehouse_id: str, record: AdministeredWarehouseDep, token: CurrentToken) -> dict[str, str]:
+    """The record of a warehouse the caller administers and git does not declare ([[XC-213]]).
+
+    The gate of a door that changes what a declaration owns, asked after the caller's own authorization so only a
+    caller who could otherwise make the change learns that git owns it.
+
+    Raises:
+        PermissionDeniedError: Git declares the warehouse.
+    """
+    refuse_what_git_declares(record, obj=f"warehouse:{warehouse_id}", token=token)
+    return record
+
+
+DoorManagedWarehouseDep = Annotated[dict[str, str], Depends(warehouse_its_doors_manage)]
+
+
 @router.post("/{warehouse_id}/protection", response_model_exclude_none=True)
 async def set_warehouse_protection(
     warehouse_id: str,
     body: SetProtectionRequest,
-    record: AdministeredWarehouseDep,
+    record: DoorManagedWarehouseDep,
     settings: SettingsDep,
     token: CurrentToken,
     control: ControlEmitterDep,
@@ -701,14 +707,26 @@ async def set_warehouse_protection(
     """
     actor = f"user:{token.subject}" if token is not None else None
     change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
-    protect = partial(
-        warehouses.set_warehouse_protection, settings.registry_root, settings.storage_options(), warehouse_id, project=record["project"], change=change
-    )
+    await protect_warehouse(settings, control, warehouse_id, project=record["project"], change=change, actor=actor)
+    return ProtectionResponse(id=warehouse_id, protected=body.protected)
+
+
+async def protect_warehouse(
+    settings: Settings, control: ControlEmitter, warehouse_id: str, *, project: str, change: ProtectionChange, actor: str | None
+) -> None:
+    """Arm or clear ``project``'s warehouse ``warehouse_id``'s deletion protection and announce it.
+
+    What the protection door does once its caller is authorized, and what the catalog does for a warehouse whose
+    protection drifted from what git declares ([[XC-213]]).
+
+    Raises:
+        TableNotFoundError: No such warehouse of ``project``.
+    """
+    protect = partial(warehouses.set_warehouse_protection, settings.registry_root, settings.storage_options(), warehouse_id, project=project, change=change)
     if await run_in_threadpool(protect) is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    log.info("warehouse_protection_set", extra={"warehouse": warehouse_id, "protected": body.protected})
-    await _announce_protection(control, warehouse_id, actor, protected=body.protected)
-    return ProtectionResponse(id=warehouse_id, protected=body.protected)
+    log.info("warehouse_protection_set", extra={"warehouse": warehouse_id, "protected": change.protected})
+    await _announce_protection(control, warehouse_id, actor, protected=change.protected)
 
 
 async def _announce_protection(control: ControlEmitter, warehouse_id: str, actor: str | None, *, protected: bool) -> None:
@@ -723,262 +741,30 @@ async def _announce_protection(control: ControlEmitter, warehouse_id: str, actor
     )
 
 
-@router.post("/{warehouse_id}/namespaces", response_model_exclude_none=True)
-async def create_warehouse_namespace(
-    warehouse_id: str,
-    request: Request,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
-    control: ControlEmitterDep,
-    resolver: ResolverDep,
-    body: CreateWarehouseNamespaceRequest,
-) -> CreateNamespaceResponse:
-    """Create a top-level namespace INSIDE this warehouse's bucket and bind it, so all its tables route
-    there (#3-A physical isolation). Gated on ``can_create_namespace`` (writer) on ``warehouse:<id>``.
-
-    The namespace is created via the warehouse's bucket-rooted connection (not the default), the binding is
-    persisted + cached (so subsequent table ops resolve without a registry read), and FGA is seeded with the
-    namespace's ``parent`` edge pointing at the warehouse — so the owner's grant cascades into the tables."""
-    _require_enabled(settings)
-    ns_name = _validate_id(body.namespace, what="namespace name")
-    reject_unsupported_properties(body.properties)
-    declared = tier_policy.declared_tier(body.properties)
-    if body.properties and body.adopt_existing:
-        raise InvalidInputError("adopt_existing keeps the namespace's own properties, so properties cannot be set on the same call")
-    await fga_deps.require_relation(client, settings, token, relation="can_create_namespace", obj=f"warehouse:{warehouse_id}")
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
-    if record is None:
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    if declared is not None:
-        await fga_deps.require_tier_authority(client, settings, token, project=record["project"])
-    # Deactivation gate (audit #2/#6): this handler resolves the bucket connection DIRECTLY from
-    # record["root_uri"] via namespace_for_root — it never routes through get_namespace, so the resolver's
-    # deactivation quarantine does NOT cover it. Without this check a principal still holding
-    # can_create_namespace could provision a namespace + seed fresh FGA grants inside a QUARANTINED bucket (a
-    # persistence foothold that survives a naive offboarding). Mirror the resolver's gate here.
-    if (record.get("status") or "active") != "active":
-        raise PermissionDeniedError(f"warehouse {warehouse_id!r} is deactivated (quarantined); cannot create namespaces in it")
-    root_uri = record["root_uri"]
-
-    # Binding is WRITE-ONCE: reject re-binding a top-level namespace already bound to a DIFFERENT warehouse.
-    # Without this, tenant B could bind tenant A's namespace name → the binding object is overwritten, A's
-    # existing tables become unreachable (routing sends the id to B's bucket where they don't exist) and A's
-    # new writes physically land in B's bucket; positive-cached-forever routing makes replicas disagree.
-    existing_binding = await run_in_threadpool(warehouses.warehouse_for_namespace, settings.registry_root, settings.storage_options(), ns_name)
-    if existing_binding is not None and existing_binding != root_uri:
-        raise NamespaceAlreadyExistsError(f"namespace {ns_name!r} is already bound to another warehouse")
-
-    # One segment: the control-id rule admits no delimiter.
-    segments = [ns_name]
-    # Collision guard (#3-A): a top-level namespace NAME that already exists UNBOUND in the DEFAULT root must
-    # not be bound to a warehouse. Binding routes every future <name>$* op to this warehouse's bucket, so the
-    # default-root namespace's tables become unreachable via the API (orphaned) — and the positive routing
-    # cache makes it permanent. The write-once guard above only catches names bound to ANOTHER warehouse;
-    # this is the other half of the same hazard. The operator must pick a fresh name or migrate first.
-    default_ns = await estate_namespace(request, settings)
-    if await run_in_threadpool(_namespace_exists_in_default, default_ns, segments):
-        raise NamespaceAlreadyExistsError(
-            f"namespace {ns_name!r} already exists in the default root; binding it to a warehouse would "
-            "orphan its tables — choose a fresh name or migrate the tables first"
-        )
-
-    # AT THE WAREHOUSE'S OWN ENDPOINT ([[LH-067]]). This door never routes through `get_namespace`,
-    # so the resolver that threads the record's endpoint does not run here — creating the namespace
-    # at the estate's store instead would put it in a different object store from every table
-    # later written to it.
-    ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
-    # [[LH-519]] A uuid for the namespace this request creates (ADR 0173 §2, §6); an adopted namespace keeps its own.
-    req = CreateNamespaceRequest(id=segments, properties=with_minted_uuid(body.properties))
-    adopted = False
-    try:
-        response: CreateNamespaceResponse = await run_in_threadpool(native.call, ns_conn, "create_namespace", req)
-    except NamespaceAlreadyExistsError:
-        # The namespace already exists AT THIS WAREHOUSE'S ROOT. With `adopt_existing` that is the
-        # bytes-first migration converging (the #54 flow: copy the datasets into the bucket, THEN
-        # bind) — the binding + FGA trailer below is exactly what it still needs. Without the flag
-        # it stays a refusal: silently adopting would let a typo'd create inherit a stranger's data.
-        # Both hazard guards above ran either way; this branch never relaxes them.
-        if not body.adopt_existing:
-            raise
-        log.info("adopting existing namespace %s at warehouse %s (bytes-first migration)", ns_name, warehouse_id)
-        response = CreateNamespaceResponse()
-        adopted = True
-    # Persist + cache the binding BEFORE returning, so the very next table-create routes to this bucket.
-    await run_in_threadpool(
-        warehouses.bind_namespace,
-        settings.registry_root,
-        settings.storage_options(),
-        ns_name,
-        warehouse_id,
-        root_uri,
-    )
-    request.app.state.warehouse_binding_cache[ns_name] = {"warehouse_id": warehouse_id, "root_uri": root_uri}
-
-    async def _undo_create() -> None:
-        # Drop the namespace this request made, and drop the binding with it — a binding pointing at
-        # a namespace that no longer exists is drift the reconciler would later report as a mystery.
-        # The cache entry goes too, or this replica keeps routing a name it just deleted.
-        await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=segments))
-        await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, settings.storage_options(), ns_name)
-        request.app.state.warehouse_binding_cache.pop(ns_name, None)
-
-    # Seed FGA: owner on the namespace + parent edge to the WAREHOUSE (not the shared root), so the
-    # concentric cascade project → warehouse → namespace → table reaches the tables created here.
-    #
-    # This is F3's third partial-failure state (diff2), and the LAST of the three to be closed. A
-    # failed grant left the namespace natively created, bound, and owned by nobody; the plain retry
-    # 409'd at native `NamespaceAlreadyExists`, so the only converging path was passing
-    # `adopt_existing=true` — a bytes-first MIGRATION flag doing undocumented double duty as a repair
-    # for a fault the caller did not cause and could not diagnose. Now the failure cleans up after
-    # itself and an ordinary retry works.
-    #
-    # `undo=None` WHEN ADOPTED, and this is the same distinction the Arrow create door draws with
-    # `_compensation_allowed`: an adopted namespace holds datasets that existed before this request
-    # and were copied in by a migration. Dropping those to repair a missing tuple would turn a
-    # transient FGA blip into the loss of the very data the migration was moving.
-    await fga_deps.seed_ownership_or_compensate(
-        client,
-        settings,
-        token,
-        resolver,
-        resource="namespace",
-        segments=segments,
-        uuid=await run_in_threadpool(object_uuids.require_namespace_uuid, ns_conn, segments),
-        parent_object=f"warehouse:{warehouse_id}",
-        undo=None if adopted else _undo_create,
-    )
-    log.info("warehouse_namespace_created", extra={"warehouse": warehouse_id, "namespace": ns_name})
-    await emit_control(
-        control,
-        action="warehouse_bound",
-        object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.subject}" if token else None,
-        extra={"namespace": ns_name},
-    )
-    return response
-
-
-@router.delete("/{warehouse_id}/namespaces/{top_ns}", response_model_exclude_none=True)
-async def unbind_warehouse_namespace(
-    warehouse_id: str,
-    top_ns: str,
-    request: Request,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
-    control: ControlEmitterDep,
-) -> UnbindWarehouseNamespaceResponse:
-    """Detach a top-level namespace from its warehouse WITHOUT dropping either.
-
-    THE REPAIR A BINDING NEEDS WHEN IT OUTLIVES WHAT IT POINTED AT. A binding is a routing record —
-    `top_ns -> warehouse_id -> root_uri` — and until this door existed the only way to remove one was
-    `POST /v1/namespace/{id}/drop`, which destroys the namespace and its tables to reach a JSON file.
-    Three such records were found stranded on this estate (§ Q15-1), naming warehouses that hold no
-    bytes, and the repair was blocked on having no non-destructive door.
-
-    THE ORDER IS `delete_warehouse`'s, scaled to one binding, and every step carries its reason:
-
-    1. the warehouse record must exist (404);
-    2. **authorize first** on ``project#can_administer`` — detaching a namespace's storage routing is a
-       tenant-level act, the same reasoning that put the warehouse delete on the tenant's admin bar
-       rather than a rung someone holds on this one warehouse. A denial collapses to the same 404 the
-       missing warehouse gets (the NO EXISTENCE ORACLE class rule, audit #4), so nobody probes ids here
-       that the louder doors protect;
-    3. the binding must name THIS warehouse (404 otherwise) — a tenant may not unbind a namespace
-       through a warehouse id that does not hold it;
-    4. **emptiness**: a namespace still holding tables refuses 409 NAMING them. Unbinding a live
-       namespace does not delete a byte and is still the worst outcome available — every table in it
-       becomes unresolvable, because routing no longer knows which bucket holds it. Silent
-       unreachability beats a loud refusal for nobody;
-    5. remove the record, then broadcast ``warehouse_unbound`` so every replica evicts. The binding
-       cache is positive-and-forever, so without the broadcast the registry says unbound while running
-       pods keep routing — the repair would report success and change nothing.
-    """
-    _require_enabled(settings)
-    so = settings.storage_options()
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
-    if record is None:
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    try:
-        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{record['project']}")
-    except PermissionDeniedError as exc:
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
-
-    # DEACTIVATION GATE, mirroring `create_warehouse_namespace`: this handler resolves the bucket
-    # connection directly from the binding's `root_uri` and never routes through `get_namespace`, so the
-    # resolver's quarantine does not cover it (audit #2/#6). A quarantined warehouse is a
-    # tenant mid-offboarding: unbinding it there would let a principal who still holds the rung dismantle
-    # the routing the quarantine froze, and the offboarding path is the warehouse delete's cascade.
-    if (record.get("status") or "active") != "active":
-        raise PermissionDeniedError(f"warehouse {warehouse_id!r} is deactivated (quarantined); unbind through the warehouse delete instead")
-
-    binding = await run_in_threadpool(warehouses.binding_for_namespace, settings.registry_root, so, top_ns)
-    if binding is None or binding.get("warehouse_id") != warehouse_id:
-        raise TableNotFoundError(f"namespace {top_ns!r} is not bound to warehouse {warehouse_id!r}")
-
-    # The record's endpoint, so the emptiness probe reads the store the warehouse names and a record
-    # naming another store is refused at the builder ([[LH-205]]) rather than probed at the estate's.
-    ns = await namespace_for_root(request, settings, str(binding["root_uri"]), endpoint=record.get("endpoint") or None)
-    tables = await run_in_threadpool(_tables_in_namespace, ns, top_ns)
-    if tables:
-        raise NamespaceNotEmptyError(
-            f"namespace '{top_ns}' still holds {len(tables)} table(s): {', '.join(tables)}. "
-            f"Unbinding it would leave them unresolvable — drop or move them first."
-        )
-
-    await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, top_ns)
-    log.info("warehouse_namespace_unbound", extra={"warehouse": warehouse_id, "namespace": top_ns})
-    await emit_control(
-        control,
-        action="warehouse_unbound",
-        object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
-        actor=f"user:{token.subject}" if token else None,
-        extra={"namespace": top_ns},
-    )
-    return UnbindWarehouseNamespaceResponse(warehouse_id=warehouse_id, namespace=top_ns, unbound=True)
-
-
-#: Page ceiling for the unbind's emptiness probe. Matches the drop path's own cap for the same reason —
-#: a listing is bounded work, and an unbounded loop on a pathological namespace turns a safety check
-#: into the outage it was protecting against.
-_MAX_LIST_PAGES = 100
-
-
-def _tables_in_namespace(ns: LanceNamespace, top_ns: str) -> list[str]:
-    """Every table directly under ``top_ns``, paged to the same ceiling the drop path uses.
-
-    A TRUNCATED enumeration must not read as empty: the unbind's whole safety argument is "nothing is
-    left to strand", and a page cap that silently drops the tail turns that into a guess. So a listing
-    that runs out of pages reports what it saw plus a marker, which the caller refuses on.
-    """
-    found: list[str] = []
-    page: str | None = None
-    for _ in range(_MAX_LIST_PAGES):
-        listed = native.call(ns, "list_tables", ListTablesRequest(id=[top_ns], include_declared=True, page_token=page))
-        found.extend(listed.tables or [])
-        page = listed.page_token or None
-        if not page:
-            return found
-    log.warning("unbind_table_listing_truncated", extra={"namespace": top_ns})
-    found.append("… (listing truncated; refusing rather than guessing)")
-    return found
-
-
 # --------------------------------------------------------------------------- #
 # Deletion (`open_hierarchy_lifecycle.md` Decision 3): bottom-up, and a container refuses while full.
 # --------------------------------------------------------------------------- #
 
 
-class _BoundSubtree(BaseModel):
-    """A namespace bound to the warehouse and what the catalog lists under it, enumerated before the cascade changes anything."""
+async def _namespaces_in(ns: LanceNamespace, warehouse_id: str) -> list[str]:
+    """The namespaces directly under warehouse ``warehouse_id``'s own name, as sorted ids: its contents for a delete.
+
+    A warehouse whose row is gone holds none: a half-finished earlier delete dropped it last.
+    """
+    try:
+        _response, names = await namespaces_api._drain_namespaces(ns, [warehouse_id])  # noqa: SLF001 — one paged listing, deliberately
+    except NamespaceNotFoundError:
+        return []
+    return [fga.canonical_object_id([warehouse_id, name]) for name in sorted(names)]
+
+
+class _NamespaceSubtree(BaseModel):
+    """A namespace directly in the warehouse and what the catalog lists under it, enumerated before the cascade changes anything."""
 
     model_config = ConfigDict(frozen=True)
 
     segments: list[str]
-    #: The bound namespace's uuid, ``None`` when the backend no longer has it.
+    #: The namespace's uuid, ``None`` when the backend no longer has it.
     uuid: str | None
     descendants: list[fga_deps.GovernedObject]
 
@@ -988,41 +774,42 @@ class _BoundSubtree(BaseModel):
 
     @property
     def namespaces(self) -> list[list[str]]:
-        """Every namespace in the subtree, deepest first and the bound one last, so each is empty when its own drop runs."""
+        """Every namespace in the subtree, deepest first and its own last, so each is empty when its own drop runs."""
         nested = sorted((item.segments for item in self.descendants if item.kind == "namespace"), key=len, reverse=True)
         return [*nested, self.segments]
 
     @property
     def guarded(self) -> list[fga_deps.GovernedObject]:
-        """Every object in the subtree whose protection the cascade is held to: its descendants and the bound namespace."""
+        """Every object in the subtree whose protection the cascade is held to: its descendants and the namespace itself."""
         own = [fga_deps.GovernedObject(kind="namespace", segments=self.segments, uuid=self.uuid)] if self.uuid is not None else []
         return [*self.descendants, *own]
 
 
-async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, bound: list[str], *, force: bool) -> list[_BoundSubtree]:
-    """Every bound namespace with its subtree, enumerated and held to its protection before anything is removed.
+async def _cascade_subtrees(ns: LanceNamespace, settings: Settings, held: list[str], *, force: bool) -> list[_NamespaceSubtree]:
+    """Every namespace ``held`` directly in the warehouse with its subtree, enumerated and held to its protection before
+    anything is removed.
 
     ALL OF THEM FIRST, so a refusal changes nothing: a protected table in the last namespace must not be found
     after the first namespace is gone. The walker and the protection pre-flight are the namespace door's, so a
     cascade through either door enumerates and refuses alike, and ``force`` turns the subtree's locks exactly as it
     turns the warehouse's.
 
-    A bound namespace the backend does not have is drift, not an error: the binding outlived it (a half-finished
-    earlier delete), and its empty subtree lets the cascade remove the binding the catalog still owns. The `dir`
-    backend lists such a namespace as empty while the root holds a ``__manifest`` and refuses the listing
-    ``NamespaceNotFound`` while it holds none (measured on pylance 13.0.0), so both read as an empty subtree.
+    A namespace the backend no longer has is drift, not an error: it went between the listing and this walk (a
+    concurrent drop), and its empty subtree lets the cascade still end what the catalog keeps for it. The `dir` backend lists such a namespace as empty while the root holds a ``__manifest`` and
+    refuses the listing ``NamespaceNotFound`` while it holds none (measured on pylance 13.0.0), so both read as an empty
+    subtree.
     """
-    subtrees: list[_BoundSubtree] = []
-    for top_ns in bound:
-        segments = parse_identifier(top_ns)
+    subtrees: list[_NamespaceSubtree] = []
+    for name in held:
+        segments = parse_identifier(name)
         try:
             namespace = await fga_deps.identify(ns, settings, "namespace", segments)
             listed = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
         except NamespaceNotFoundError:
-            subtrees.append(_BoundSubtree(segments=segments, uuid=None, descendants=[]))
+            subtrees.append(_NamespaceSubtree(segments=segments, uuid=None, descendants=[]))
             continue
         descendants = await namespaces_api._identify(ns, settings, listed)  # noqa: SLF001 — one walker, deliberately
-        subtrees.append(_BoundSubtree(segments=segments, uuid=namespace.uuid, descendants=descendants))
+        subtrees.append(_NamespaceSubtree(segments=segments, uuid=namespace.uuid, descendants=descendants))
     doomed = [item for subtree in subtrees for item in subtree.guarded]
     await namespaces_api._require_descendants_unprotected(settings, doomed, force=force)  # noqa: SLF001 — one protection pre-flight, deliberately
     return subtrees
@@ -1110,7 +897,9 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     return True
 
 
-async def _require_no_outside_clones(ns: LanceNamespace | None, settings: Settings, *, subtrees: list[_BoundSubtree], trashed: list[dict[str, Any]]) -> None:
+async def _require_no_outside_clones(
+    ns: LanceNamespace | None, settings: Settings, *, subtrees: list[_NamespaceSubtree], trashed: list[dict[str, Any]]
+) -> None:
     """Refuse a ``?purge_bucket=true`` that would destroy a table a registered clone outside the warehouse reads, before
     anything changes (ADR 0198 §1): the purge empties the bucket, so a source's bytes go whatever its clones' tags say.
 
@@ -1204,7 +993,7 @@ def _a_refusal(exc: BaseException) -> bool:
 @router.delete("/{warehouse_id}")
 async def delete_warehouse(
     warehouse_id: str,
-    record: AdministeredWarehouseDep,
+    record: DoorManagedWarehouseDep,
     request: Request,
     settings: SettingsDep,
     token: CurrentToken,
@@ -1215,7 +1004,8 @@ async def delete_warehouse(
     purge_bucket: bool = False,
     force: bool = False,
 ) -> DeleteWarehouseResponse:
-    """Delete a warehouse: its bindings, its tuples and its registry record — and its BUCKET only if asked.
+    """Delete a warehouse: its namespaces (on ``?cascade=true``), its trash, its tuples and its registry record — and
+    its BUCKET only if asked.
 
     Gated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the
     warehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own
@@ -1231,16 +1021,16 @@ async def delete_warehouse(
        PROTECTION ONLY — step 2 has already run, identically, with or without it.
     4. Emptiness: a warehouse still holding namespaces refuses 409 **naming them**; a refusal that does not
        say what blocks it just moves the search to the user. ``?cascade=true`` removes exactly those, with
-       everything in them. Before anything is removed, every bound namespace's subtree is enumerated and held to
+       everything in them. Before anything is removed, every namespace's subtree is enumerated and held to
        its protection (:func:`_cascade_subtrees`): a protected namespace or table refuses 409 naming it unless
        ``force=true``, and that refusal changes nothing.
     5. The warehouse's own trash is ended first (``warehouses.trash_owned_by``): each trashed object's kept grants,
-       policy, claim and base record, its trash record last. The bindings select it, so it goes while they still
-       stand, and a re-issue after a failure here selects the same records. Then the cascade removes each bound
+       policy, claim and base record, its trash record last. A record is the warehouse's when its name begins with the
+       warehouse's id, so a re-issue after a failure here selects the same records. Then the cascade removes each
        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
        the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
-       (``fga_deps.end_removed_subtree``), the binding last.
+       (``fga_deps.end_removed_subtree``), and the warehouse's own row in its catalog last.
        ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
        namespace Restrict whatever ``behavior`` says (measured: ``behavior="Cascade"`` is ignored, not
        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
@@ -1256,9 +1046,8 @@ async def delete_warehouse(
        (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping
        the bytes keeps the claim, so no other project adopts what the bucket still holds.
 
-    The routing cache is evicted for every dropped namespace: ``_resolve_warehouse_root`` caches bindings
-    POSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the
-    cache would keep routing that namespace into a warehouse that no longer exists.
+    Routing reads the warehouse's record on every request, so once the record is gone no name beneath the warehouse
+    reaches its bucket.
     """
     so = settings.storage_options()
     project = record["project"]
@@ -1266,10 +1055,13 @@ async def delete_warehouse(
     # state, so it runs strictly after the gate above.
     fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)
 
-    bound = await run_in_threadpool(warehouses.namespaces_bound_to, settings.registry_root, so, warehouse_id)
-    if bound and not cascade:
+    # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
+    in_estate_store = names_the_estate_store(record.get("endpoint"), estate=settings.s3_endpoint)
+    ns_conn = await namespace_for_root(request, settings, record["root_uri"], endpoint=record.get("endpoint") or None) if in_estate_store else None
+    held = await _namespaces_in(ns_conn, warehouse_id) if ns_conn is not None else []
+    if held and not cascade:
         raise NamespaceNotEmptyError(
-            f"warehouse '{warehouse_id}' still holds {len(bound)} namespace(s): {', '.join(bound)}. "
+            f"warehouse '{warehouse_id}' still holds {len(held)} namespace(s): {', '.join(held)}. "
             f"Drop them first, or pass ?cascade=true to drop exactly those with the warehouse."
         )
 
@@ -1284,18 +1076,17 @@ async def delete_warehouse(
 
     # [[LH-205]] The cascade opens the warehouse's store and the purge empties a bucket through the
     # ESTATE's client, so for a record naming another store the one would sign toward that host with the
-    # estate's key and the other would delete the estate's same-named bucket. Refused here, before the
-    # first step lands, so the caller gets the refusal and not a partial-delete report. A plain delete
-    # touches no store and stays open: it is how such a record is retired.
-    if bound or purge_bucket:
+    # estate's key and the other would delete the estate's same-named bucket. Asked for, either is refused here,
+    # before the first step lands, so the caller gets the refusal and not a report of a cascade that listed
+    # nothing. A plain delete touches no store and stays open: it is how such a record is retired.
+    if cascade or purge_bucket:
         require_estate_store(record.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
     # this warehouse's namespaces and report a clean delete having removed nothing.
-    ns_conn = await namespace_for_root(request, settings, record["root_uri"], endpoint=record.get("endpoint") or None) if bound else None
-    subtrees = await _cascade_subtrees(ns_conn, settings, bound, force=force) if ns_conn is not None else []
-    # The warehouse's own trash, which the bindings select: it is ended before the cascade below removes them.
-    trashed = await run_in_threadpool(partial(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id, bucket=bucket))
+    subtrees = await _cascade_subtrees(ns_conn, settings, held, force=force) if ns_conn is not None else []
+    # The warehouse's own trash: the records whose names begin with its id.
+    trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
     if purge_bucket:
         await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
     # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
@@ -1365,15 +1156,15 @@ async def delete_warehouse(
                         try:
                             await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=namespace))
                         except NamespaceNotFoundError:
-                            # Drift, or an earlier attempt's work: the binding outlived what it pointed at, and refusing
-                            # here would leave a binding nobody can delete, so the catalog's own records still go.
+                            # Drift, or an earlier attempt's work: the namespace went before its turn, and refusing
+                            # here would leave records and grants nobody can end, so the catalog's own records still go.
                             log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
                         namespaces_dropped.append(fga.canonical_object_id(namespace))
                     async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
                         revoked += count
-                    top_ns = subtree.segments[0]
-                    await run_in_threadpool(warehouses.unbind_namespace, settings.registry_root, so, top_ns)
-                    request.app.state.warehouse_binding_cache.pop(top_ns, None)
+                # The warehouse's own row last, once every namespace beneath it is gone.
+                with suppress(NamespaceNotFoundError):
+                    await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=[warehouse_id]))
             # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
             # is ended from there before the warehouse's own grants go.
             ended = {fga.namespace_object(subtree.uuid) for subtree in subtrees if subtree.uuid is not None}
@@ -1502,7 +1293,6 @@ async def validate_warehouse_credentials(
     Reports every check even after one fails (see :func:`summarize_probe`) — an over-permissive store
     and an unreachable one need different answers, and a first-failure exit cannot tell them apart.
     """
-    _require_enabled(settings)
     so = settings.storage_options()
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
     if record is None:

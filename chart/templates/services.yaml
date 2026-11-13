@@ -2,9 +2,6 @@
 {{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}
 {{- fail "catalog.controlEmit=true requires dapr.enabled=true: the /control-events broadcast ingest publishes + receives via the Dapr sidecar and is authenticated by the sidecar-injected APP_API_TOKEN — without it the catalog fails closed at boot. Enable dapr.enabled, or set catalog.controlEmit=false." }}
 {{- end }}
-{{- if and (gt (int (include "lance.replicaBounds" (list . .Values.services.catalog) | fromJson).max) 1) (not .Values.catalog.controlEmit) }}
-{{- fail "a catalog that may run more than one replica (services.catalog.replicas > 1, or autoscaling.enabled with autoscaling.maxReplicas > 1) requires catalog.controlEmit=true: the warehouse-binding cache is invalidated across replicas by the broadcast control-event subscription (#46) — without it a second replica keeps routing dropped namespaces at deleted warehouses' buckets. Enable catalog.controlEmit, or run one replica." }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -72,7 +69,6 @@ spec:
             - { name: LANCE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.catalog.requestDeadlineSeconds | quote }} }
             - { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int | quote }} }
             - { name: LANCE_TRASH_GRACE_DAYS, value: {{ hasKey .Values.catalog "trashGraceDays" | ternary .Values.catalog.trashGraceDays 7 | quote }} }
-            - { name: LANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
 
             {{- $reserved := list }}
             {{- range $ns, $bkt := .Values.medallion.buckets }}{{- $reserved = append $reserved $bkt }}{{- end }}
@@ -112,7 +108,7 @@ spec:
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
             {{- end }}
-            - { name: LANCE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }
+            - { name: LANCE_PROVENANCE_NAMESPACE, value: {{ include "lance.provenanceNamespace" $root | quote }} }
             {{- with .Values.services.lineage.provenanceRetainVersions }}
             - { name: LANCE_PROVENANCE_RETAIN_VERSIONS, value: {{ . | quote }} }
             {{- end }}
@@ -136,6 +132,8 @@ spec:
             - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
             - { name: LANCE_PROMOTION_EXPIRY_BINDING_NAME, value: {{ .Values.catalog.promotion.bindingName | quote }} }
             - { name: LANCE_COMMIT_RECONCILE_BINDING_NAME, value: {{ .Values.catalog.commitReconcile.bindingName | quote }} }
+            - { name: LANCE_DECLARATION_FILE, value: "/etc/rask/declaration/declaration.json" }
+            - { name: LANCE_DECLARATION_CONVERGE_BINDING_NAME, value: {{ required "catalog.declarationConverge.bindingName is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.declarationConverge.bindingName | quote }} }
             - { name: LANCE_MANIFEST_RECLAIM_BINDING_NAME, value: {{ required "catalog.manifestReclaim.bindingName is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.bindingName | quote }} }
             - { name: LANCE_COMMIT_RECONCILE_GRACE_SECONDS, value: {{ required "catalog.commitReconcile.graceSeconds is required" .Values.catalog.commitReconcile.graceSeconds | quote }} }
             {{- $horizon := required "catalog.commitReconcile.horizonSeconds is required" .Values.catalog.commitReconcile.horizonSeconds | int }}
@@ -165,18 +163,21 @@ spec:
             - { name: LANCE_PROVENANCE_WRITERS, value: {{ toJson (list (include "lance.saSubject" (list $root "lineage"))) | quote }} }
             - { name: LANCE_OWN_ACCOUNTS, value: {{ include "lance.ownAccounts" $root | quote }} }
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
-            - { name: LANCE_FGA_LOCK_ROOT_CREATE, value: {{ hasKey .Values.auth "lockRootCreate" | ternary .Values.auth.lockRootCreate (include "rask.isRealDeployment" . | eq "true") | quote }} }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "catalog") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+            - { name: declaration, mountPath: /etc/rask/declaration, readOnly: true }
             {{- include "lance.saVerifier" (list $root "mounts" "catalog") | nindent 12 }}
             {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
             {{- include "lance.identityTokens" (list "mounts" (include "lance.objectStoreAudience" .)) | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.services.catalog.daprAppId "volumes") | nindent 8 }}
+        - name: declaration
+          configMap:
+            name: {{ include "lance.fullname" . }}-catalog-declaration
         {{- include "lance.saVerifier" (list $root "volumes" "catalog") | nindent 8 }}
         {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
         {{- include "lance.identityTokens" (list "volumes" (include "lance.objectStoreAudience" .)) | nindent 8 }}
@@ -256,7 +257,7 @@ spec:
             {{- end }}
             - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: RASK_CATALOG_IDENTITY_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
-            - { name: LINEAGE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }
+            - { name: LINEAGE_PROVENANCE_NAMESPACE, value: {{ include "lance.provenanceNamespace" $root | quote }} }
             - { name: LINEAGE_CATALOG_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
             - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
             - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }

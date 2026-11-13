@@ -116,7 +116,8 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   prerequisite** (XC-183), and this repository deploys none: a client's release reaches rask by reference, and what
   the lakehouse must admit for it (a bus user in `nats.auth.users`, store reads in `openbao.externalReaders`, a store
   peer in `networkPolicy.objectStoreExtraFrom`) comes from the client's own repository with `-f`. A client's roles
-  on the catalog are no value at all: they are grants to its own identity made at the catalog's access doors ([[LH-563]]). Every client lives outside this repository
+  on the catalog are grants to its own identity: made at the catalog's access doors ([[LH-563]]), or, on a project or
+  warehouse, declared in `catalog.declared.grants` from the client's own values (§ 5). Every client lives outside this repository
   (XC-192) and are recovered from git history (`64ef118a9`) as each moves to its own repository. A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
@@ -185,6 +186,22 @@ provisioned by its operator and attested by `signing.provisioned`).
 - The release stores image tags. A chart apply after a `kubectl set image` roll **reverts the roll**
   unless the tag is pinned on the command: `--set image.tags.lance-rest-catalog=<tag>`.
 - Every helm call goes through `scripts/helm.sh`.
+- **The estate's tenants are chart values too** ([[XC-213]], ADR 0206). `catalog.declared` (`projects`, `warehouses`,
+  `grants` to principals that are not people; the default declares the project `default`, administered by
+  `auth.bootstrapAdmin` when it names no admin) renders to the ConfigMap `<release>-catalog-declaration`
+  (`templates/catalog-declaration.yaml`, key `declaration.json`, built by `lance.declaration` in `_helpers.tpl`). The
+  catalog mounts it as a VOLUME at `/etc/rask/declaration` (`LANCE_DECLARATION_FILE`), never through env, so a changed
+  declaration reaches the running pod with no roll (the kubelet refreshes the file), and the
+  `catalog-declaration-converge-cron` tick (`catalog.declarationConverge`, `@every 60s`) converges the estate onto it.
+  Read a declared change back on the catalog (`managed_by: "git"` on the project or warehouse read, the
+  `declaration_converged` log line), not on the Deployment's revision: none moves. `docs/OPERATORS.md` § 2 is the
+  procedure. Pinned by `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`.
+- **`services.lineage.provenanceNamespace` must name a namespace of the estate's own warehouse**
+  (`lance_catalog$<namespace>`, default `lance_catalog$provenance`): `lance.provenanceNamespace` fails the render on
+  any other, and the catalog refuses to boot on one. The first segment of every name is its warehouse ([[LH-593]]).
+  There is no `catalog.warehouses` value and no `auth.lockRootCreate`: every namespace is created inside a warehouse,
+  and nothing reads either key (the schema refuses unknown keys only at the root, so a stale overlay setting one renders
+  silently).
 
 ## 6. Adopted — the generic baseline that fits
 

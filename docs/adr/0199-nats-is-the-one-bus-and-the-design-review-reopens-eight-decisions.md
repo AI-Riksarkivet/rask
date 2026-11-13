@@ -1,5 +1,7 @@
 # 0199. NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09)
 
+**Amended 2026-11-13** by [ADR 0206](0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md): the open question whether projects, warehouses and grants become resources declared in git, and the direction for ADR 0192, are answered by the catalog converging what the chart declares (XC-213); the operator comes later and adds a status per object.
+
 **Status:** accepted as a record of what is decided and what is reopened; no code has changed under it. Source: the owner,
 2026-11-09, during a read-only audit of `packages/lakehouse` and `services/` against the `writing-python` and `fastapi`
 references and of the architecture against the four facts: "ALSO adr WE HAVE CAN BE WRONG AND BE UPDATED FOR BEING MORE

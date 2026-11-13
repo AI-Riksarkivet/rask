@@ -11,7 +11,7 @@ THE GUARD IS NOT WRONG, IT IS UNARBITRATED — that distinction is why the fix i
 than a better scan. No read-then-check can close this; the store has to pick the winner. The estate
 already answers exactly this shape for its id-minting creates: a conditional PUT (`If-None-Match: *`
 on S3, `O_CREAT|O_EXCL` locally) whose loser surfaces as `RecordExistsError` rather than
-last-writer-wins, which is how `bind_namespace` arbitrates a namespace binding.
+last-writer-wins, which is how `create_warehouse_record` arbitrates a warehouse id.
 
 A SAME-PROJECT RE-CREATE MUST STAY IDEMPOTENT. `create_warehouse`'s partial-failure retry path relies
 on re-POSTing an existing id, so a claim already held by the caller's own project is a pass, not a

@@ -73,7 +73,7 @@ services:
     port: 2333
     # -- Dapr app-id of the catalog; also names its pubsub components and durable consumers.
     daprAppId: catalog
-    # -- Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. Not rendered while autoscaling.enabled: the HPA owns the count.
+    # -- Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.
     replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
   lineage:
     # -- uvicorn import path the lineage Deployment runs (templates/services.yaml).
@@ -105,8 +105,8 @@ services:
     # catalog creates the namespace at boot, protects it, grants lineage `writer` on it, and never announces a
     # write under it (each of those rows records an announcement). Rendered into both services, so the two
     # cannot name different namespaces.
-    # -- Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`).
-    provenanceNamespace: provenance
+    # -- Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`): `lance_catalog$<namespace>`, a namespace of the estate's own warehouse; the render refuses any other.
+    provenanceNamespace: lance_catalog$provenance
     # Each recorded event is a commit, so every provenance table gains a version and a fragment per event, and Lance
     # lists a table's `_versions/` on every open ([[LH-529]]). The catalog writes this keep-last-N maintenance policy on
     # the namespace at boot, and maintenance's expiry reclaims down to it; no lineage read holds a version longer than
@@ -627,13 +627,6 @@ catalog:
   # the knob as if it worked. 0 restores the old destroy-immediately behaviour.
   # -- (float) Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.
   trashGraceDays: 7 # @schema type: number; minimum: 0; maximum: 365
-  # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /management/v1/warehouses provisions a
-  # physically separate bucket per warehouse and binds top-level namespaces to it, so a
-  # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
-  # unbound namespace always routes to the shared objectStore.bucket, so single-tenant flows are untouched.
-  warehouses:
-    # -- Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `objectStore.bucket`.
-    enabled: true
   # #3-B Lance multi-base DATA distribution: the ALLOWLIST of bucket URIs a single table's fragments may be
   # spread across (?data_base=s3://... per create, round-robin write, fan-out read — the Uber pattern). A
   # per-request base MUST be on this list (a caller can never target an arbitrary bucket). Empty = feature
@@ -749,6 +742,28 @@ catalog:
     # it was announced; the render refuses a horizon at or past the retention.
     # -- Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays.
     horizonSeconds: 86400
+  # XC-213 (ADR 0206): the tenants git declares. The chart renders these three lists into a ConfigMap the catalog mounts,
+  # and the catalog converges the estate onto it on the declarationConverge tick: it makes what is missing, corrects
+  # what drifted, and marks each declared project and warehouse `managed_by: git`, after which its doors refuse a change
+  # to what is declared here. Removed from the list, a project or warehouse keeps its data and is its doors' again; a
+  # removed grant is revoked. People's grants, namespaces and tables are never declared: they stay with their doors.
+  declared:
+    # -- Projects git declares, each `{id, admins, protected}`: `admins` lists people's principals (`<idp-id>~<user id>`), and a project naming none is administered by `auth.bootstrapAdmin` when that is set; `protected` arms its deletion protection. The default declares one project, so a one-team install never creates one.
+    projects:
+      - id: default
+    # -- Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it. The id is the first segment of every name in the warehouse.
+    warehouses: []
+    # -- Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:<id>` or `warehouse:<id>`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:<namespace>:<name>`). The catalog revokes a grant removed from here, and only one it wrote from here.
+    grants: []
+  declarationConverge:
+    # ONE STRING, as for controlOutbox: the Component (in dapr-component.yaml), the app's
+    # LANCE_DECLARATION_CONVERGE_BINDING_NAME and the route at the catalog's pod root.
+    # -- Name of the declaration-converge Dapr cron Component; also the catalog's LANCE_DECLARATION_CONVERGE_BINDING_NAME and the route it serves.
+    bindingName: catalog-declaration-converge-cron
+    # A tick that finds the estate as declared costs one registry read per declared object and one tuple read per
+    # object granted on, so it runs often enough that a change to the declaration lands within a minute or two.
+    # -- Dapr cron schedule on which the catalog converges the estate onto `catalog.declared`; lateness only delays a declared change.
+    schedule: "@every 60s"
   # LH-251: every namespace operation writes the `dir` backend's namespace index (`<root>/__manifest`) again as a new
   # version, and the backend reclaims none of them; this cron removes each root's versions older than retainSeconds.
   manifestReclaim:
@@ -1089,12 +1104,12 @@ backups:
     schedule: "0 2 * * *" # daily 02:00
     # -- Number of newest daily pg dumps kept; older ones are pruned on each run.
     keep: 7 # retention: prune all but the newest N daily dumps each run, so the backups don't grow unbounded
-  # THE CONTROL ROOT — the registry that holds every project, warehouse, binding and bucket claim. Lose
+  # THE CONTROL ROOT — the registry that holds every project, warehouse and bucket claim. Lose
   # it and the Lance data survives while nothing can route to it. `scripts/control_root_backup.py`
   # ships backup/verify/restore/prune and `docs/runbooks/RUNBOOK-restore.md` documents the drill; this
   # is the scheduled lane, which is what was missing.
   controlRoot:
-    # -- Schedule a CronJob that backs up the control root (project, warehouse, binding and bucket-claim registries). Off by default.
+    # -- Schedule a CronJob that backs up the control root (project, warehouse and bucket-claim registries). Off by default.
     enabled: false
     # -- Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump).
     schedule: "0 1 * * *" # daily 01:00, ahead of the pg dump so the two do not contend for the store

@@ -207,20 +207,18 @@ test("the tables panel's project filter narrows the panel and keeps the reader o
 			{ id: 'globex-wh', project: 'globex', bucket: 'g', root_uri: 's3://g', status: 'active' },
 		]),
 	);
-	await page.route('**/api/catalog/management/v1/warehouses/-/bindings', (route) =>
-		json(route, { bindings: { db1: 'acme-wh', db2: 'globex-wh' } }),
-	);
 	await answerReads(page);
+	// Each table's project is its warehouse's, the first segment of its id.
 	await page.route('**/api/catalog/v1/table', (route) =>
-		json(route, { tables: ['db1$t', 'db2$u'] }),
+		json(route, { tables: ['acme-wh$db1$t', 'globex-wh$db2$u'] }),
 	);
 	await page.goto('/workbench');
-	await expect(page.getByRole('link', { name: 'db2$u' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'globex-wh$db2$u' })).toBeVisible();
 
 	await page.getByLabel('Project filter').click();
 	await page.getByRole('option', { name: 'acme' }).click();
-	await expect(page.getByRole('link', { name: 'db1$t' })).toBeVisible();
-	await expect(page.getByRole('link', { name: 'db2$u' })).toHaveCount(0);
+	await expect(page.getByRole('link', { name: 'acme-wh$db1$t' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'globex-wh$db2$u' })).toHaveCount(0);
 	await expect(page).toHaveURL(/\/workbench$/);
 });
 

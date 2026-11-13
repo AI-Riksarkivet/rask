@@ -90,7 +90,7 @@ def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     # Every name holds an object (``NamedResolver``): the claim here is which rung opens a tier, not how a name resolves.
     # The door acts on the table its double describes, whose location's claim records the uuid the checks were asked on.
     claims = table_claims.claim_store(governed_settings)
-    location_claims.take(claims, location, "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=uuid_of("table", ["db", "t"]))
+    location_claims.take(claims, location, "lance_catalog$db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=uuid_of("table", ["db", "t"]))
     app.dependency_overrides[get_resolver] = lambda: NamedResolver()
     app.dependency_overrides[get_resolved_table] = lambda: table_claims.resolve(fake_ns, claims, ["db", "t"])
     app.dependency_overrides[get_namespace] = lambda: fake_ns
@@ -156,7 +156,7 @@ def test_the_maintenance_identity_gets_the_maintain_tier_credential(governed: tu
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_maintain", "can_vend_maintain"})
 
-    resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=maintain")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["mode"] == "direct"
@@ -179,7 +179,7 @@ def test_only_the_maintenance_identity_obtains_the_maintain_tier(
     client, checked = governed
     _grant(monkeypatch, checked, allow=held)
 
-    resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=maintain")
 
     assert resp.status_code == 403, resp.text
     assert checked == ["can_vend_maintain"]
@@ -190,7 +190,7 @@ def test_a_maintainer_cannot_obtain_the_write_tier(governed: tuple[TestClient, l
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_maintain"})
 
-    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=write")
 
     assert resp.status_code == 403, resp.text
     assert checked == ["can_write_data"]
@@ -201,7 +201,7 @@ def test_the_READ_tier_never_consults_either_rung(governed: tuple[TestClient, li
     client, checked = governed
     _grant(monkeypatch, checked, allow=set())
 
-    resp = client.post("/management/v1/table/db$t/credentials")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials")
 
     assert resp.status_code == 200, resp.text
     assert checked == []
@@ -228,7 +228,7 @@ def test_a_maintainer_REACHES_the_vend_route_at_all(governed: tuple[TestClient, 
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_maintain", "can_vend_maintain"}, router_grants=set())
 
-    resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=maintain")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["mode"] == "direct"
@@ -239,7 +239,7 @@ def test_holding_NEITHER_router_rung_is_still_refused_at_the_route(governed: tup
     client, checked = governed
     _grant(monkeypatch, checked, allow=set(), router_grants=set())
 
-    resp = client.post("/management/v1/table/db$t/credentials?tier=maintain")
+    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=maintain")
 
     assert resp.status_code == 403, resp.text
 
@@ -254,6 +254,6 @@ def test_can_maintain_opens_NOTHING_ELSE_on_the_table(governed: tuple[TestClient
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_maintain"}, router_grants=set())
 
-    resp = client.post("/v1/table/db$t/query", json={})
+    resp = client.post("/v1/table/lance_catalog$db$t/query", json={})
 
     assert resp.status_code == 403, f"can_maintain must not open a data read: {resp.status_code} {resp.text[:200]}"

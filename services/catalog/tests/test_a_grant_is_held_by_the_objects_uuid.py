@@ -41,31 +41,31 @@ def _uuid(catalog: Any, kind: str, name: str) -> str:  # noqa: ANN401 — the co
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """alice's namespace ``db`` holding ``db$t``, which bob is granted ``reader`` on through the grant door."""
-    _ok(governed_catalog, "/v1/namespace/db/create", json={})
-    _create_table(governed_catalog, "db$t")
-    _ok(governed_catalog, "/management/v1/table/db$t/access/grant", json={"user": "dex~bob", "relation": "reader"})
+    """alice's namespace ``lance_catalog$db`` holding ``lance_catalog$db$t``, which bob is granted ``reader`` on through the grant door."""
+    assert governed_catalog.create_in_the_estate("alice", "db").status_code == 200
+    _create_table(governed_catalog, "lance_catalog$db$t")
+    _ok(governed_catalog, "/management/v1/table/lance_catalog$db$t/access/grant", json={"user": "dex~bob", "relation": "reader"})
     return governed_catalog
 
 
 def test_a_reader_keeps_a_renamed_table_and_holds_nothing_on_one_created_again_under_its_name(estate: Any) -> None:  # noqa: ANN401
     held = estate.store.tuples()
 
-    _ok(estate, "/v1/table/db$t/rename", json={"new_table_name": "u"})
+    _ok(estate, "/v1/table/lance_catalog$db$t/rename", json={"new_table_name": "u"})
 
     assert estate.store.tuples() == held, "the rename wrote or removed a tuple"
-    assert estate.client.post("/v1/table/db$u/describe", json={}, headers=estate.bearer("bob")).status_code == 200, "bob lost the renamed table"
-    _ok(estate, "/v1/table/db$u/drop", json={})
-    _create_table(estate, "db$u")
-    refused = estate.client.post("/v1/table/db$u/describe", json={}, headers=estate.bearer("bob"))
+    assert estate.client.post("/v1/table/lance_catalog$db$u/describe", json={}, headers=estate.bearer("bob")).status_code == 200, "bob lost the renamed table"
+    _ok(estate, "/v1/table/lance_catalog$db$u/drop", json={})
+    _create_table(estate, "lance_catalog$db$u")
+    refused = estate.client.post("/v1/table/lance_catalog$db$u/describe", json={}, headers=estate.bearer("bob"))
     assert refused.status_code == 403, f"bob reads a table created under the name he was granted: {refused.text}"
 
 
 def test_every_tuple_a_create_writes_names_the_objects_uuid(estate: Any) -> None:  # noqa: ANN401
-    _ok(estate, "/v1/namespace/db$inner/create", json={})
-    _ok(estate, "/v1/table/db$inner$declared/declare", json={})
-    namespace, inner = _uuid(estate, "namespace", "db"), _uuid(estate, "namespace", "db$inner")
-    table, declared = _uuid(estate, "table", "db$t"), _uuid(estate, "table", "db$inner$declared")
+    _ok(estate, "/v1/namespace/lance_catalog$db$inner/create", json={})
+    _ok(estate, "/v1/table/lance_catalog$db$inner$declared/declare", json={})
+    namespace, inner = _uuid(estate, "namespace", "lance_catalog$db"), _uuid(estate, "namespace", "lance_catalog$db$inner")
+    table, declared = _uuid(estate, "table", "lance_catalog$db$t"), _uuid(estate, "table", "lance_catalog$db$inner$declared")
     alice = estate.person("alice")
 
     assert estate.store.tuples() == {
@@ -86,7 +86,7 @@ def test_every_tuple_a_create_writes_names_the_objects_uuid(estate: Any) -> None
 
 
 def test_a_table_whose_name_holds_a_space_is_created_and_described(estate: Any) -> None:  # noqa: ANN401
-    _create_table(estate, "db$sp ace")
+    _create_table(estate, "lance_catalog$db$sp ace")
 
-    described = _ok(estate, "/v1/table/db$sp ace/describe", json={})
+    described = _ok(estate, "/v1/table/lance_catalog$db$sp ace/describe", json={})
     assert (estate.person("alice"), "owner", f"table:{described['properties']['rask.uuid']}") in estate.store.tuples()

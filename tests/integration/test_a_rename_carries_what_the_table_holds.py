@@ -27,7 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings
-from catalog.services import promotions, warehouses
+from catalog.services import promotions
 from lakehouse import location_claims, maintenance_due, object_records
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.maintenance_due import CompactionDue, DueRecord
@@ -57,7 +57,7 @@ def governed(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Ite
     store = TupleStore()
     monkeypatch.setattr(app.state, "fga", store)
     real_ns_client.headers["Authorization"] = "Bearer t"
-    _create(real_ns_client, "db$src", namespace=True)
+    _create(real_ns_client, "lance_catalog$db$src", namespace=True)
     yield store
 
 
@@ -69,7 +69,7 @@ def _ok(client: TestClient, path: str, **kwargs: Any) -> dict[str, Any]:  # noqa
 
 def _create(client: TestClient, table: str, *, namespace: bool = False) -> None:
     if namespace:
-        _ok(client, f"/v1/namespace/{table.split('$')[0]}/create", json={})
+        _ok(client, f"/v1/namespace/{table.rsplit('$', 1)[0]}/create", json={})
     _ok(client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
 
 
@@ -98,18 +98,18 @@ def _listed(client: TestClient, path: str, field: str) -> list[str]:
 
 
 def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(real_ns_client: TestClient, governed: TupleStore, tmp_path: Path) -> None:
-    _ok(real_ns_client, "/management/v1/table/db$src/protection", json={"protected": True})
-    _ok(real_ns_client, "/management/v1/table/db$src/policy/set", json={"retention_days": 7})
-    minted, location = _described(real_ns_client, "db$src")
+    _ok(real_ns_client, "/management/v1/table/lance_catalog$db$src/protection", json={"protected": True})
+    _ok(real_ns_client, "/management/v1/table/lance_catalog$db$src/policy/set", json={"retention_days": 7})
+    minted, location = _described(real_ns_client, "lance_catalog$db$src")
     records = _record_keys(tmp_path)
 
-    _ok(real_ns_client, "/v1/table/db$src/rename", params={"force": "true"}, json={"new_table_name": "dst"})
+    _ok(real_ns_client, "/v1/table/lance_catalog$db$src/rename", params={"force": "true"}, json={"new_table_name": "dst"})
 
     assert _record_keys(tmp_path) == records, "the rename wrote or removed a record"
-    assert _described(real_ns_client, "db$dst")[0] == minted, "the renamed table answers another uuid"
-    assert _protected(real_ns_client, "db$dst"), "the renamed table arrived unprotected"
-    assert _ok(real_ns_client, "/management/v1/table/db$dst/policy/describe")["retention_days"] == 7
-    gone = real_ns_client.post("/management/v1/table/db$src/policy/describe")
+    assert _described(real_ns_client, "lance_catalog$db$dst")[0] == minted, "the renamed table answers another uuid"
+    assert _protected(real_ns_client, "lance_catalog$db$dst"), "the renamed table arrived unprotected"
+    assert _ok(real_ns_client, "/management/v1/table/lance_catalog$db$dst/policy/describe")["retention_days"] == 7
+    gone = real_ns_client.post("/management/v1/table/lance_catalog$db$src/policy/describe")
     assert (gone.status_code, gone.json()["code"]) == (404, 4), "the name the rename left answers a policy read as a table"
     settings = MaintenanceSettings.model_validate({"MAINTENANCE_POLICY_ROOT": str(tmp_path), "MAINTENANCE_CONTROL_ROOT": str(tmp_path)})
     claims = location_claims.ClaimStore(control_root=str(tmp_path))
@@ -117,8 +117,10 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
     assert held is not None, "no claim holds the renamed table's location"
     readings = read_for(location, held, settings, now=datetime.now(UTC))
     assert readings is not None, "maintenance cannot read what a pass on the renamed table reads"
-    owners = policy_owners(readings.table_ids, "db$dst", claims=claims)
+    owners = policy_owners(readings.table_ids, "lance_catalog$db$dst", claims=claims)
     assert owners is not None, "maintenance reads no uuid for the renamed table"
+    namespace = _ok(real_ns_client, "/v1/namespace/lance_catalog$db/describe")["properties"]["rask.uuid"]
+    assert owners.namespace_uuids == [namespace], "a policy above the table is looked for under something other than its namespaces"
     plan = resolve_plan(location, context=readings.context, owners=owners)
     assert (plan.policy or {}).get("uuid") == minted, f"maintenance resolves another policy for the renamed table: {plan.policy}"
     assert plan.older_than == timedelta(days=7)
@@ -127,10 +129,10 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
 @pytest.mark.usefixtures("governed")
 def test_a_hold_a_due_record_and_an_erasure_obligation_are_listed_under_the_tables_new_name(real_ns_client: TestClient, tmp_path: Path) -> None:
     root = str(tmp_path)
-    minted, location = _described(real_ns_client, "db$src")
+    minted, location = _described(real_ns_client, "lance_catalog$db$src")
     now = datetime.now(UTC)
     held = promotions.Hold(
-        table="db$src",
+        table="lance_catalog$db$src",
         uuid=minted,
         location=location,
         version=1,
@@ -142,48 +144,48 @@ def test_a_hold_a_due_record_and_an_erasure_obligation_are_listed_under_the_tabl
     )
     promotions.open_hold(root, StorageOptions(), held)
     due = DueRecord(
-        table="db$src", uuid=minted, location=location, version=1, compaction=CompactionDue(fragments=4, candidate_fragments=4, tasks=1), evaluated_at=now
+        table="lance_catalog$db$src",
+        uuid=minted,
+        location=location,
+        version=1,
+        compaction=CompactionDue(fragments=4, candidate_fragments=4, tasks=1),
+        evaluated_at=now,
     )
     maintenance_due.write_due(root, StorageOptions(), due)
-    recorded = real_ns_client.post("/management/v1/table/db$src/erasure", json={"predicate": "id = 1", "retain_days": 0})
+    recorded = real_ns_client.post("/management/v1/table/lance_catalog$db$src/erasure", json={"predicate": "id = 1", "retain_days": 0})
     assert recorded.status_code == 202, recorded.text
 
-    _ok(real_ns_client, "/v1/table/db$src/rename", json={"new_table_name": "dst"})
+    _ok(real_ns_client, "/v1/table/lance_catalog$db$src/rename", json={"new_table_name": "dst"})
 
-    assert _listed(real_ns_client, "/management/v1/promotions", "holds") == ["db$dst"]
-    assert _listed(real_ns_client, "/management/v1/maintenance/due", "tables") == ["db$dst"]
-    assert _listed(real_ns_client, "/management/v1/erasures", "obligations") == ["db$dst"]
+    assert _listed(real_ns_client, "/management/v1/promotions", "holds") == ["lance_catalog$db$dst"]
+    assert _listed(real_ns_client, "/management/v1/maintenance/due", "tables") == ["lance_catalog$db$dst"]
+    assert _listed(real_ns_client, "/management/v1/erasures", "obligations") == ["lance_catalog$db$dst"]
 
 
 @pytest.mark.usefixtures("governed")
 def test_a_table_created_under_a_dropped_name_inherits_none_of_the_old_tables_records(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Even when the drop's own ending of the old table's records is lost: no record names the new table's uuid."""
-    _ok(real_ns_client, "/management/v1/table/db$src/protection", json={"protected": True})
-    _ok(real_ns_client, "/management/v1/table/db$src/policy/set", json={"retention_days": 7})
+    _ok(real_ns_client, "/management/v1/table/lance_catalog$db$src/protection", json={"protected": True})
+    _ok(real_ns_client, "/management/v1/table/lance_catalog$db$src/policy/set", json={"retention_days": 7})
     monkeypatch.setattr(object_records, "end_object_records", lambda *_args, **_kwargs: [])
-    _ok(real_ns_client, "/v1/table/db$src/drop", params={"force": "true"}, json={})
+    _ok(real_ns_client, "/v1/table/lance_catalog$db$src/drop", params={"force": "true"}, json={})
 
-    _create(real_ns_client, "db$src")
+    _create(real_ns_client, "lance_catalog$db$src")
 
-    assert not _protected(real_ns_client, "db$src"), "the new table was born protected by the dropped one's record"
-    unset = real_ns_client.post("/management/v1/table/db$src/policy/describe")
-    expected = {"kind": "table", "id": "db$src", "uuid": _described(real_ns_client, "db$src")[0], "set": False}
+    assert not _protected(real_ns_client, "lance_catalog$db$src"), "the new table was born protected by the dropped one's record"
+    unset = real_ns_client.post("/management/v1/table/lance_catalog$db$src/policy/describe")
+    expected = {"kind": "table", "id": "lance_catalog$db$src", "uuid": _described(real_ns_client, "lance_catalog$db$src")[0], "set": False}
     assert (unset.status_code, unset.json()) == (200, expected), "the new table inherited the dropped one's policy"
 
 
-def test_a_rename_into_another_tenant_refuses_to_carry_a_role_the_grant_door_would_refuse(
-    real_ns_client: TestClient, governed: TupleStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A grant stays on the table's uuid and so follows it, so it is held to the grant door's tenant rule ([[LH-062]]):
-    acme's role on a table renamed into beta's namespace is refused before anything moves."""
-    tenants = {"db": "acme", "other": "beta"}
-    monkeypatch.setattr(warehouses, "project_for_namespace", lambda _root, _so, top: tenants.get(top))
-    _ok(real_ns_client, "/v1/namespace/other/create", json={})
-    table = f"table:{_described(real_ns_client, 'db$src')[0]}"
+def test_a_rename_into_another_warehouse_is_refused_before_anything_moves(real_ns_client: TestClient, governed: TupleStore) -> None:
+    """A grant stays on the table's uuid and so follows it, and a tenant is a warehouse's project ([[LH-593]]): a rename
+    keeps a table in its own warehouse, whose root holds its bytes, so a destination in another warehouse is refused
+    InvalidInput (13) and no role of one tenant is carried into another's."""
+    table = f"table:{_described(real_ns_client, 'lance_catalog$db$src')[0]}"
     governed.tuples |= {("project:acme", "project", "role:analyst"), ("role:analyst#assignee", "reader", table)}
 
-    refused = real_ns_client.post("/v1/table/db$src/rename", json={"new_table_name": "dst", "new_namespace_id": ["other"]})
+    refused = real_ns_client.post("/v1/table/lance_catalog$db$src/rename", json={"new_table_name": "dst", "new_namespace_id": ["wh-beta", "other"]})
 
-    assert refused.status_code == 400, refused.text
-    assert "acme" in refused.json()["detail"] and "beta" in refused.json()["detail"], refused.text
-    assert real_ns_client.post("/v1/table/db$src/describe", json={}).status_code == 200, "the refused rename moved the table"
+    assert (refused.status_code, refused.headers["content-type"], refused.json()["code"]) == (400, "application/problem+json", 13), refused.text
+    assert real_ns_client.post("/v1/table/lance_catalog$db$src/describe", json={}).status_code == 200, "the refused rename moved the table"

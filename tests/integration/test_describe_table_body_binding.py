@@ -60,7 +60,7 @@ def _version_exists(monkeypatch: pytest.MonkeyPatch) -> None:
 def vendor(client: TestClient, claim_described: Callable[[str], str]) -> Iterator[MagicMock]:
     """A vendor answering one credential, for the real table the double describes, whose location's claim records its uuid,
     as a credential is scoped by it (ADR 0173 §6)."""
-    claim_described("db$t")
+    claim_described("lance_catalog$db$t")
     vend = MagicMock()
     vend.vend.return_value = _VEND
     client.app.dependency_overrides[get_vendor] = lambda: vend
@@ -97,7 +97,7 @@ def test_a_body_flag_is_honoured(
     from catalog.core import namespace
 
     monkeypatch.setattr(tables, "open_resolved_dataset_unchecked", namespace.open_resolved_dataset_unchecked)
-    resp = client.post("/v1/table/db$t/describe", json={flag: True, "vend_credentials": False})
+    resp = client.post("/v1/table/lance_catalog$db$t/describe", json={flag: True, "vend_credentials": False})
 
     assert resp.status_code == 200, resp.text
     assert {key: resp.json().get(key) for key in answered} == answered
@@ -106,7 +106,7 @@ def test_a_body_flag_is_honoured(
 
 def test_the_query_form_still_works(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
     # rask's own callers (lakehouse's catalog.remote.ts, the e2e suites) send query params and no body.
-    resp = client.post("/v1/table/db$t/describe?vend_credentials=true&version=3&with_table_uri=true")
+    resp = client.post("/v1/table/lance_catalog$db$t/describe?vend_credentials=true&version=3&with_table_uri=true")
     assert resp.status_code == 200, resp.text
     assert resp.json()["storage_options"] == _VENDED_OPTIONS
     sent = _sent(fake_ns)
@@ -116,26 +116,26 @@ def test_the_query_form_still_works(client: TestClient, fake_ns: MagicMock, vend
 def test_an_absent_body_field_does_not_clobber_its_query_value(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
     # A body carrying only `version` must not reset `with_table_uri`/`check_declared` to the model's
     # False defaults — presence in the JSON is what decides, not the parsed model's value.
-    resp = client.post("/v1/table/db$t/describe?with_table_uri=true", json={"version": 2})
+    resp = client.post("/v1/table/lance_catalog$db$t/describe?with_table_uri=true", json={"version": 2})
     assert resp.status_code == 200, resp.text
     sent = _sent(fake_ns)
     assert (sent.version, sent.with_table_uri) == (2, True)
 
 
 def test_the_body_wins_where_both_are_sent(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
-    resp = client.post("/v1/table/db$t/describe?version=9&vend_credentials=false", json={"version": 4, "vend_credentials": True})
+    resp = client.post("/v1/table/lance_catalog$db$t/describe?version=9&vend_credentials=false", json={"version": 4, "vend_credentials": True})
     assert resp.status_code == 200, resp.text
     assert _sent(fake_ns).version == 4
     assert resp.json()["storage_options"] == _VENDED_OPTIONS
 
 
 def test_a_body_tag_and_a_query_version_still_conflict(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
-    resp = client.post("/v1/table/db$t/describe?version=2", json={"tag": "stable"})
+    resp = client.post("/v1/table/lance_catalog$db$t/describe?version=2", json={"tag": "stable"})
     assert resp.status_code == 400, resp.text
 
 
 def test_a_matching_body_id_is_accepted(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
-    resp = client.post("/v1/table/db$t/describe", json={"id": ["db", "t"]})
+    resp = client.post("/v1/table/lance_catalog$db$t/describe", json={"id": ["lance_catalog", "db", "t"]})
     assert resp.status_code == 200, resp.text
 
 
@@ -152,7 +152,7 @@ def test_a_non_main_branch_is_refused_rather_than_answered_off_main(client: Test
     # `:2425` defines 13 as "Malformed request or invalid parameters". A well-formed branch name this
     # backend does not serve is the first. Clients dispatch on these codes, so one door disagreeing with
     # fifteen about what KIND of thing happened was a contract defect. The refusal itself is unchanged.
-    resp = client.post("/v1/table/db$t/describe", json={"branch": "dev"})
+    resp = client.post("/v1/table/lance_catalog$db$t/describe", json={"branch": "dev"})
     assert resp.status_code == 406, resp.text
     assert resp.json()["code"] == 0, resp.text
     assert "branch" in resp.text

@@ -1,7 +1,6 @@
 """Read/write ONE JSON document on the control root — the primitive under every catalog registry.
 
-The warehouse registry, the namespace→warehouse bindings and the project registry are all the same
-shape: one JSON object per record, at a plain (unhashed) key under the control root, no DB. The two
+The warehouse registry and the project registry are the same shape: one JSON object per record, at a plain (unhashed) key under the control root, no DB. The two
 IO halves lived as ``warehouses._read_json`` / ``warehouses._write_json``, and the project registry
 imported both across the module boundary (CAT-CORE-14) — which made "private" a lie and welded the two
 registries together over a helper that is about neither of them.
@@ -112,13 +111,6 @@ class WarehouseRecord(_Record):
         return self
 
 
-class BindingRecord(_Record):
-    """A top-level namespace physically bound to one warehouse."""
-
-    top_ns: str = Field(min_length=1)
-    warehouse_id: str = Field(min_length=1)
-
-
 class BucketClaimRecord(_Record):
     """Which PROJECT owns a bucket, written once so the store arbitrates rival claims.
 
@@ -159,6 +151,18 @@ class ProtectionChange(BaseModel):
     by: str
 
 
+#: The record field naming who owns a project's or warehouse's declaration, and its one value ([[XC-213]], ADR 0206):
+#: absent, its doors do.
+MANAGED_BY = "managed_by"
+GIT = "git"
+
+
+def with_manager(record: dict[str, str], manager: str | None) -> dict[str, str]:
+    """``record`` as managed by ``manager``, or by its own doors for ``None``, which carries no such field."""
+    unmanaged = {key: value for key, value in record.items() if key != MANAGED_BY}
+    return unmanaged if manager is None else {**unmanaged, MANAGED_BY: manager}
+
+
 def with_protection(record: dict[str, str], change: ProtectionChange) -> dict[str, str]:
     """Apply ``change`` to a warehouse or project record.
 
@@ -191,13 +195,12 @@ def validated_or_refuse(record: object, model: type[_Record], *, event: str, pat
     means ABSENT, and the caller acts on that.
 
     THE CONSEQUENCE IS NOT SYMMETRIC BETWEEN CALLERS, which is why this raises rather than leaving each
-    one to decide. For `get_warehouse` an absent answer is a 404 and fail-closed. For
-    `warehouse_for_namespace` it is "unbound" — and an unbound namespace routes at the DEFAULT root, so
-    a binding nobody can parse would silently send a tenant's writes to the wrong bucket.
+    one to decide. For a warehouse's own doors an absent `get_warehouse` is a 404 and fail-closed. For the
+    router it is "no such warehouse" ([[LH-593]]), and a name whose warehouse is absent is answered as absent,
+    so a record nobody can parse would silently answer every one of a tenant's names as not there.
 
-    `ServiceUnavailableError` and not a new type: it is what `read_bindings`' delete-path caller already
-    raises for the same condition (*"N namespace binding(s) could not be read … refusing to"*), so one
-    unreadable record answers the same way whichever door reached it.
+    `ServiceUnavailableError` and not a new type, so one unreadable record answers the same way whichever
+    door reached it.
     """
     try:
         return model.model_validate(record).model_dump(mode="json", exclude_unset=True)

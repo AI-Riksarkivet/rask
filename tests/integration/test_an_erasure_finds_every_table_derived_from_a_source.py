@@ -72,7 +72,7 @@ def _run(label: str, *inputs: str) -> dict[str, str]:
 
 def _declared(catalog: httpx.Client, *tables: str) -> dict[str, str]:
     """Declare each of ``tables`` (and its namespace) in the catalog, and answer the uuid the catalog minted for each."""
-    for namespace in dict.fromkeys(table.split("$")[0] for table in tables):
+    for namespace in dict.fromkeys(table.rsplit("$", 1)[0] for table in tables):
         assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
     for table in tables:
         assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
@@ -98,33 +98,33 @@ def test_a_walk_from_a_source_reaches_every_table_built_from_it_and_nothing_an_o
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
         httpx.Client(base_url=lineage_url, timeout=60) as lineage,
     ):
-        for namespace in ("acme-bronze", "acme-silver", "acme-gold"):
+        for namespace in ("lance_catalog$acme-bronze", "lance_catalog$acme-silver", "lance_catalog$acme-gold"):
             assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         for table, headers in (
-            ("acme-bronze$events", _ARROW),
-            ("acme-silver$pages", _run("silver-1", "acme-bronze$events")),
-            ("acme-gold$catalog", _run("gold-1", "acme-silver$pages")),
-            ("acme-silver$other", _run("other-1")),
+            ("lance_catalog$acme-bronze$events", _ARROW),
+            ("lance_catalog$acme-silver$pages", _run("silver-1", "lance_catalog$acme-bronze$events")),
+            ("lance_catalog$acme-gold$catalog", _run("gold-1", "lance_catalog$acme-silver$pages")),
+            ("lance_catalog$acme-silver$other", _run("other-1")),
         ):
             created = catalog.post(f"/v1/table/{table}/create", content=_rows(), headers=headers)
             assert created.status_code == 200, created.text
-        outside = run_event("7f1d6c1e-0000-4000-8000-000000000501", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=["acme-silver$borrowed"])
-        outside["inputs"] = [{"namespace": "s3://elsewhere", "name": "acme-bronze$events"}]
+        outside = run_event("7f1d6c1e-0000-4000-8000-000000000501", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=["lance_catalog$acme-silver$borrowed"])
+        outside["inputs"] = [{"namespace": "s3://elsewhere", "name": "lance_catalog$acme-bronze$events"}]
         assert lineage.post("/api/v1/lineage", json=outside).status_code == 201
 
-        answer = lineage.get("/tables/acme-bronze$events/derived")
+        answer = lineage.get("/tables/lance_catalog$acme-bronze$events/derived")
         uuid_of = {
             name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"]
-            for name in ("acme-bronze$events", "acme-silver$pages", "acme-gold$catalog")
+            for name in ("lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog")
         }
 
     assert answer.status_code == 200, answer.text
     assert answer.json() == {
-        "table": "acme-bronze$events",
-        "uuid": uuid_of["acme-bronze$events"],
+        "table": "lance_catalog$acme-bronze$events",
+        "uuid": uuid_of["lance_catalog$acme-bronze$events"],
         "derived": [
-            {"table": "acme-silver$pages", "uuid": uuid_of["acme-silver$pages"], "depth": 1},
-            {"table": "acme-gold$catalog", "uuid": uuid_of["acme-gold$catalog"], "depth": 2},
+            {"table": "lance_catalog$acme-silver$pages", "uuid": uuid_of["lance_catalog$acme-silver$pages"], "depth": 1},
+            {"table": "lance_catalog$acme-gold$catalog", "uuid": uuid_of["lance_catalog$acme-gold$catalog"], "depth": 2},
         ],
         "complete": True,
     }
@@ -146,18 +146,18 @@ def _gold_holds_none(catalog: httpx.Client, obligations: dict[str, str]) -> None
 
 def _gold_follows_silvers(catalog: httpx.Client, obligations: dict[str, str]) -> None:
     """Gold's obligation follows silver's, which follows bronze's: gold was derived from bronze through silver."""
-    _obligation(catalog, "acme-gold$catalog", follows=obligations["acme-silver$pages"])
+    _obligation(catalog, "lance_catalog$acme-gold$catalog", follows=obligations["lance_catalog$acme-silver$pages"])
 
 
 def _gold_is_dropped(catalog: httpx.Client, obligations: dict[str, str]) -> None:
     """Gold is dropped with its bytes, so nothing of it is left to hold the subject or an obligation."""
-    dropped = catalog.post("/v1/table/acme-gold$catalog/drop", json={})
+    dropped = catalog.post("/v1/table/lance_catalog$acme-gold$catalog/drop", json={})
     assert dropped.status_code == 200, dropped.text
 
 
 def _gold_is_deregistered(catalog: httpx.Client, obligations: dict[str, str]) -> None:
     """Gold is deregistered: no obligation can be recorded on it any more, and its bytes stay where they were."""
-    deregistered = catalog.post("/v1/table/acme-gold$catalog/deregister", json={})
+    deregistered = catalog.post("/v1/table/lance_catalog$acme-gold$catalog/deregister", json={})
     assert deregistered.status_code == 200, deregistered.text
 
 
@@ -180,50 +180,51 @@ def test_an_erasure_is_held_until_every_table_derived_from_its_source_has_an_obl
         live_lineage(catalog_url, monkeypatch, port=port),
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
     ):
-        for namespace in ("acme-bronze", "acme-silver", "acme-gold"):
+        for namespace in ("lance_catalog$acme-bronze", "lance_catalog$acme-silver", "lance_catalog$acme-gold"):
             assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         for table, headers in (
-            ("acme-bronze$events", _ARROW),
-            ("acme-silver$pages", _run("silver-1", "acme-bronze$events")),
-            ("acme-gold$catalog", _run("gold-1", "acme-silver$pages")),
+            ("lance_catalog$acme-bronze$events", _ARROW),
+            ("lance_catalog$acme-silver$pages", _run("silver-1", "lance_catalog$acme-bronze$events")),
+            ("lance_catalog$acme-gold$catalog", _run("gold-1", "lance_catalog$acme-silver$pages")),
         ):
             created = catalog.post(f"/v1/table/{table}/create", content=_rows(), headers=headers)
             assert created.status_code == 200, created.text
         uuid_of = {
-            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"] for name in ("acme-silver$pages", "acme-gold$catalog")
+            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"]
+            for name in ("lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog")
         }
-        source = _obligation(catalog, "acme-bronze$events")
-        obligations = {"acme-silver$pages": _obligation(catalog, "acme-silver$pages", follows=source)}
+        source = _obligation(catalog, "lance_catalog$acme-bronze$events")
+        obligations = {"lance_catalog$acme-silver$pages": _obligation(catalog, "lance_catalog$acme-silver$pages", follows=source)}
         arrange(catalog, obligations)
 
-        verified = catalog.post(f"/management/v1/table/acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
+        verified = catalog.post(f"/management/v1/table/lance_catalog$acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
 
     assert verified.status_code == 200, verified.text
     report, obligation = verified.json()["report"], verified.json()["obligation"]
     derived = [(surface["surface"], surface["outcome"]) for surface in report["surfaces"] if surface["surface"].startswith("derived")]
-    assert derived == [(f"derived:{uuid_of['acme-silver$pages']}", "followed"), (f"derived:{uuid_of['acme-gold$catalog']}", gold)]
-    still_open = [f"derived:{uuid_of['acme-gold$catalog']}"] if state == "open" else []
+    assert derived == [(f"derived:{uuid_of['lance_catalog$acme-silver$pages']}", "followed"), (f"derived:{uuid_of['lance_catalog$acme-gold$catalog']}", gold)]
+    still_open = [f"derived:{uuid_of['lance_catalog$acme-gold$catalog']}"] if state == "open" else []
     assert ([surface["surface"] for surface in obligation["open_surfaces"]], obligation["state"]) == (still_open, state)
 
 
 def _silver_created(catalog: httpx.Client, url: str) -> None:
-    created = catalog.post("/v1/table/acme-silver$pages/create", content=_rows(), headers=_run("silver-1", "acme-bronze$events"))
+    created = catalog.post("/v1/table/lance_catalog$acme-silver$pages/create", content=_rows(), headers=_run("silver-1", "lance_catalog$acme-bronze$events"))
     assert created.status_code == 200, created.text
 
 
 def _silver_inserted(catalog: httpx.Client, url: str) -> None:
-    assert catalog.post("/v1/table/acme-silver$pages/create", content=_rows(), headers=_ARROW).status_code == 200
-    inserted = catalog.post("/v1/table/acme-silver$pages/insert", content=_rows(), headers=_run("silver-1", "acme-bronze$events"))
+    assert catalog.post("/v1/table/lance_catalog$acme-silver$pages/create", content=_rows(), headers=_ARROW).status_code == 200
+    inserted = catalog.post("/v1/table/lance_catalog$acme-silver$pages/insert", content=_rows(), headers=_run("silver-1", "lance_catalog$acme-bronze$events"))
     assert inserted.status_code == 200, inserted.text
 
 
 def _silver_merged(catalog: httpx.Client, url: str) -> None:
-    assert catalog.post("/v1/table/acme-silver$pages/create", content=_rows(), headers=_ARROW).status_code == 200
+    assert catalog.post("/v1/table/lance_catalog$acme-silver$pages/create", content=_rows(), headers=_ARROW).status_code == 200
     merged = catalog.post(
-        "/v1/table/acme-silver$pages/merge_insert",
+        "/v1/table/lance_catalog$acme-silver$pages/merge_insert",
         params={"on": "id", "when_matched_update_all": "true", "when_not_matched_insert_all": "true"},
         content=_rows(),
-        headers=_run("silver-1", "acme-bronze$events"),
+        headers=_run("silver-1", "lance_catalog$acme-bronze$events"),
     )
     assert merged.status_code == 200, merged.text
 
@@ -231,12 +232,12 @@ def _silver_merged(catalog: httpx.Client, url: str) -> None:
 def _silver_appended_by_a_stock_client(catalog: httpx.Client, url: str) -> None:
     """Stock pylance on the catalog's namespace doors, committing through ``version/create`` with its run in the
     transaction properties (ADR 0157)."""
-    assert catalog.post("/v1/table/acme-silver$pages/create", content=_rows(), headers=_ARROW).status_code == 200
-    inputs = json.dumps([{"table": ["acme-bronze", "events"], "version": 1}])
+    assert catalog.post("/v1/table/lance_catalog$acme-silver$pages/create", content=_rows(), headers=_ARROW).status_code == 200
+    inputs = json.dumps([{"table": ["lance_catalog", "acme-bronze", "events"], "version": 1}])
     lance.write_dataset(
         pa.table({"id": pa.array([7], pa.int64())}),
         namespace_client=lance_namespace.connect("rest", {"uri": url}),
-        table_id=["acme-silver", "pages"],
+        table_id=["lance_catalog", "acme-silver", "pages"],
         mode="append",
         transaction_properties={
             "rask.run_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
@@ -263,14 +264,14 @@ def test_a_table_written_from_the_source_while_lineage_is_down_holds_the_erasure
     what the catalog recorded when silver's write declared bronze, and the obligation stays open."""
     down = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{free_port()}/api/v1/lineage"}
     with live_catalog(tmp_path / "catalog", monkeypatch, **down) as catalog_url, httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-        for namespace in ("acme-bronze", "acme-silver"):
+        for namespace in ("lance_catalog$acme-bronze", "lance_catalog$acme-silver"):
             assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
-        assert catalog.post("/v1/table/acme-bronze$events/create", content=_rows(), headers=_ARROW).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$acme-bronze$events/create", content=_rows(), headers=_ARROW).status_code == 200
         write(catalog, catalog_url)
-        silver = catalog.post("/v1/table/acme-silver$pages/describe", json={}).json()["properties"]["rask.uuid"]
-        source = _obligation(catalog, "acme-bronze$events")
+        silver = catalog.post("/v1/table/lance_catalog$acme-silver$pages/describe", json={}).json()["properties"]["rask.uuid"]
+        source = _obligation(catalog, "lance_catalog$acme-bronze$events")
 
-        verified = catalog.post(f"/management/v1/table/acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
+        verified = catalog.post(f"/management/v1/table/lance_catalog$acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
 
     assert verified.status_code == 200, verified.text
     report, obligation = verified.json()["report"], verified.json()["obligation"]
@@ -311,22 +312,26 @@ def test_a_table_lineage_records_after_the_release_from_a_run_before_it_is_liste
         # Mounted as the chart's binding name mounts it at boot (`main.py`), on a copy of the routes the test gives back.
         monkeypatch.setattr(app.router, "routes", list(app.router.routes))
         commit_reconcile.mount_commit_reconcile(app, _TICK)
-        assert catalog.post("/v1/namespace/acme-bronze/create", json={}).status_code == 200
-        assert catalog.post("/v1/table/acme-bronze$events/create", content=_rows(), headers=_ARROW).status_code == 200
-        uuid_of = {"acme-bronze$events": catalog.post("/v1/table/acme-bronze$events/describe", json={}).json()["properties"]["rask.uuid"]}
-        uuid_of |= _declared(catalog, "acme-silver$late")
-        source = _obligation(catalog, "acme-bronze$events")
-        released = catalog.post(f"/management/v1/table/acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
+        assert catalog.post("/v1/namespace/lance_catalog$acme-bronze/create", json={}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$acme-bronze$events/create", content=_rows(), headers=_ARROW).status_code == 200
+        uuid_of = {
+            "lance_catalog$acme-bronze$events": catalog.post("/v1/table/lance_catalog$acme-bronze$events/describe", json={}).json()["properties"]["rask.uuid"]
+        }
+        uuid_of |= _declared(catalog, "lance_catalog$acme-silver$late")
+        source = _obligation(catalog, "lance_catalog$acme-bronze$events")
+        released = catalog.post(f"/management/v1/table/lance_catalog$acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
         assert released.json()["obligation"]["state"] == "released", released.text
         run_at = datetime.fromisoformat(released.json()["obligation"]["released_at"]) - timedelta(minutes=1)
-        outside = run_event(str(uuid.uuid4()), "COMPLETE", run_at.isoformat(), outputs=["acme-silver$late"], inputs=("acme-bronze$events",))
+        outside = run_event(
+            str(uuid.uuid4()), "COMPLETE", run_at.isoformat(), outputs=["lance_catalog$acme-silver$late"], inputs=("lance_catalog$acme-bronze$events",)
+        )
         assert lineage.post("/api/v1/lineage", json=_stamped(outside, uuid_of)).status_code == 201
 
         ticks = [catalog.post(f"/{_TICK}").json()["late_derived"] for _ in range(2)]
         listed = catalog.get("/management/v1/erasures").json()["obligations"]
 
     assert (ticks, counted.added) == ([1, 0], [1])
-    assert [(o["obligation_id"], o["late_derived"]) for o in listed] == [(source, [uuid_of["acme-silver$late"]])]
+    assert [(o["obligation_id"], o["late_derived"]) for o in listed] == [(source, [uuid_of["lance_catalog$acme-silver$late"]])]
 
 
 def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,23 +339,37 @@ def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Pa
 
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
         with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-            uuid_of = _declared(catalog, "acme-bronze$events", "acme-silver$pages", "acme-gold$catalog")
-        granted = {("dex~eraser", "can_get_metadata", f"table:{uuid_of[name]}") for name in ("acme-bronze$events", "acme-silver$pages")}
+            uuid_of = _declared(catalog, "lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog")
+        granted = {
+            ("dex~eraser", "can_get_metadata", f"table:{uuid_of[name]}") for name in ("lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages")
+        }
         chain = [
-            run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:01+00:00", outputs=["acme-silver$pages"], inputs=("acme-bronze$events",)),
-            run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:02+00:00", outputs=["acme-gold$catalog"], inputs=("acme-silver$pages",)),
+            run_event(
+                str(uuid.uuid4()),
+                "COMPLETE",
+                "2026-10-15T10:00:01+00:00",
+                outputs=["lance_catalog$acme-silver$pages"],
+                inputs=("lance_catalog$acme-bronze$events",),
+            ),
+            run_event(
+                str(uuid.uuid4()),
+                "COMPLETE",
+                "2026-10-15T10:00:02+00:00",
+                outputs=["lance_catalog$acme-gold$catalog"],
+                inputs=("lance_catalog$acme-silver$pages",),
+            ),
         ]
         with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
             for event in chain:
                 asyncio.run(lineage.app.state.provenance.record(parse_event(_stamped(event, uuid_of))))
 
-            answer = lineage.get("/tables/acme-bronze$events/derived", headers={SUBJECT_HEADER: "dex~eraser"})
+            answer = lineage.get("/tables/lance_catalog$acme-bronze$events/derived", headers={SUBJECT_HEADER: "dex~eraser"})
 
     assert answer.status_code == 200, answer.text
     assert answer.json() == {
-        "table": "acme-bronze$events",
-        "uuid": uuid_of["acme-bronze$events"],
-        "derived": [{"table": "acme-silver$pages", "uuid": uuid_of["acme-silver$pages"], "depth": 1}],
+        "table": "lance_catalog$acme-bronze$events",
+        "uuid": uuid_of["lance_catalog$acme-bronze$events"],
+        "derived": [{"table": "lance_catalog$acme-silver$pages", "uuid": uuid_of["lance_catalog$acme-silver$pages"], "depth": 1}],
         "complete": False,
     }
 
@@ -362,35 +381,41 @@ def test_a_renamed_source_answers_what_it_fed_under_both_names(tmp_path: Path, m
     announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
     with live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url, httpx.Client(base_url=catalog_url, timeout=60) as catalog:
         with live_lineage(catalog_url, monkeypatch, port=port):
-            for namespace in ("acme-bronze", "acme-silver"):
+            for namespace in ("lance_catalog$acme-bronze", "lance_catalog$acme-silver"):
                 assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
-            assert catalog.post("/v1/table/acme-bronze$t/create", content=_rows(), headers=_ARROW).status_code == 200
-            assert catalog.post("/v1/table/acme-silver$x/create", content=_rows(), headers=_run("x-1", "acme-bronze$t")).status_code == 200
-            assert catalog.post("/v1/table/acme-bronze$t/rename", json={"new_table_name": "u"}).status_code == 200
-            assert catalog.post("/v1/table/acme-silver$y/create", content=_rows(), headers=_run("y-1", "acme-bronze$u")).status_code == 200
+            assert catalog.post("/v1/table/lance_catalog$acme-bronze$t/create", content=_rows(), headers=_ARROW).status_code == 200
+            assert (
+                catalog.post("/v1/table/lance_catalog$acme-silver$x/create", content=_rows(), headers=_run("x-1", "lance_catalog$acme-bronze$t")).status_code
+                == 200
+            )
+            assert catalog.post("/v1/table/lance_catalog$acme-bronze$t/rename", json={"new_table_name": "u"}).status_code == 200
+            assert (
+                catalog.post("/v1/table/lance_catalog$acme-silver$y/create", content=_rows(), headers=_run("y-1", "lance_catalog$acme-bronze$u")).status_code
+                == 200
+            )
         uuid_of = {
             name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"]
-            for name in ("acme-bronze$u", "acme-silver$x", "acme-silver$y")
+            for name in ("lance_catalog$acme-bronze$u", "lance_catalog$acme-silver$x", "lance_catalog$acme-silver$y")
         }
         granted = {("dex~owner", "can_get_metadata", f"table:{table_uuid}") for table_uuid in uuid_of.values()}
         with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
-            derived = lineage.get("/tables/acme-bronze$u/derived", headers={SUBJECT_HEADER: "dex~owner"})
-            scoped = lineage.get("/events", params={"table": "acme-bronze$u", "since": 0}, headers={SUBJECT_HEADER: "dex~owner"})
+            derived = lineage.get("/tables/lance_catalog$acme-bronze$u/derived", headers={SUBJECT_HEADER: "dex~owner"})
+            scoped = lineage.get("/events", params={"table": "lance_catalog$acme-bronze$u", "since": 0}, headers={SUBJECT_HEADER: "dex~owner"})
 
     assert derived.status_code == 200, derived.text
     assert derived.json() == {
-        "table": "acme-bronze$u",
-        "uuid": uuid_of["acme-bronze$u"],
+        "table": "lance_catalog$acme-bronze$u",
+        "uuid": uuid_of["lance_catalog$acme-bronze$u"],
         "derived": [
-            {"table": "acme-silver$x", "uuid": uuid_of["acme-silver$x"], "depth": 1},
-            {"table": "acme-silver$y", "uuid": uuid_of["acme-silver$y"], "depth": 1},
+            {"table": "lance_catalog$acme-silver$x", "uuid": uuid_of["lance_catalog$acme-silver$x"], "depth": 1},
+            {"table": "lance_catalog$acme-silver$y", "uuid": uuid_of["lance_catalog$acme-silver$y"], "depth": 1},
         ],
         "complete": True,
     }
     assert scoped.status_code == 200, scoped.text
-    silver = [row for row in scoped.json()["events"] if row["outputs"][0].startswith("acme-silver$")]
+    silver = [row for row in scoped.json()["events"] if row["outputs"][0].startswith("lance_catalog$acme-silver$")]
     writes = {(tuple(row["inputs"]), tuple(row["outputs"])) for row in silver}
     assert writes == {
-        (("acme-bronze$t",), ("acme-silver$x",)),
-        (("acme-bronze$u",), ("acme-silver$y",)),
+        (("lance_catalog$acme-bronze$t",), ("lance_catalog$acme-silver$x",)),
+        (("lance_catalog$acme-bronze$u",), ("lance_catalog$acme-silver$y",)),
     }, scoped.json()["events"]

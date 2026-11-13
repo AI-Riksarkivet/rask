@@ -17,12 +17,13 @@ const (
 )
 
 // The identity the lanes' lineage service presents to the catalog, and the namespace the catalog keeps for
-// provenance (ADR 0158). In the chart lineage presents its projected service-account token; these lanes run no
-// Kubernetes, so the lane's own Dex mints lineage a token for a user that exists for that purpose alone, and the
-// catalog lists that user's subject in `LANCE_PROVENANCE_WRITERS` exactly as the chart lists the account's.
+// provenance (ADR 0158), a namespace of the estate's own warehouse `lance_catalog`. In the chart lineage presents its
+// projected service-account token; these lanes run no Kubernetes, so the lane's own Dex mints lineage a token for a user
+// that exists for that purpose alone, and the catalog lists that user's subject in `LANCE_PROVENANCE_WRITERS` exactly as
+// the chart lists the account's.
 const (
 	lineageIdentity     = "lineage@rask.internal"
-	provenanceNamespace = "provenance"
+	provenanceNamespace = "lance_catalog$provenance"
 	lineageTokenPath    = "/var/run/rask/catalog-token"
 	// laneConnectors is the catalog's `RASK_OIDC_CONNECTORS` in these lanes ([[LH-063]]): the lane Dex's one connector,
 	// its password database `local`, is the idp id `laneIDP`, as the chart maps the development Dex's.
@@ -351,6 +352,10 @@ for i in $(seq 1 90); do
   sleep 2
 done
 echo "lineage-api never became ready"; exit 1`}).
+		// The estate's first owner, which the chart's bootstrap hook seeds on a release and nothing seeds here: a
+		// namespace is created by a caller holding can_create_namespace on its warehouse, the estate's own included.
+		// After the wait above, since the store exists once the catalog has booted.
+		WithExec([]string{"sh", "-c", "uv run --no-sync python scripts/lane_estate_owner.py " + laneIDP + "~alice"}).
 		// The suite and the demo sign in as `rask-web`, a confidential client in `.docker/dex.config.yaml` as in the Dex
 		// fixture, with its secret: the suite's `dex-secret` credential and the demo's `DEX_CLIENT_SECRET` both default to
 		// the dev Dex's `lance-catalog-secret`, so neither is set here. Dagger's `WithEnvVariable(name, "")` leaves a

@@ -9,8 +9,9 @@ release's own accounts (``LANCE_OWN_ACCOUNTS``). A grant or a hold made at a doo
 job granted ``reader`` and ``maintainer`` at the namespace's access door keeps them, and an account outside the release
 granted ``writer`` there keeps it.
 
-The boot step is ``ensure_provenance_namespace``, the function the catalog's lifespan runs, driven on a real ``dir``
-namespace and a real OpenFGA store; the policy is read as maintenance reads it, off the control root.
+The boot step is the estate warehouse's row and then ``ensure_provenance_namespace``, as the catalog's lifespan runs them,
+driven on a real ``dir`` namespace and a real OpenFGA store; the policy is read as maintenance reads it, off the control
+root.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import pytest
 from lance_namespace import DescribeNamespaceRequest, LanceNamespace, connect
 
 from catalog.core.config import Settings, get_settings
+from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse import maintenance_policies
 from lakehouse.governed import fga
@@ -57,7 +59,7 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **declared: str) 
         "LANCE_CONTROL_ROOT": str(tmp_path / "control"),
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
-        "LANCE_PROVENANCE_NAMESPACE": "provenance",
+        "LANCE_PROVENANCE_NAMESPACE": "lance_catalog$provenance",
         "LANCE_PROVENANCE_WRITERS": f'["{_LINEAGE}"]',
         "LANCE_OWN_ACCOUNTS": f'["{_LINEAGE}", "{_RETIRED}"]',
         **declared,
@@ -74,13 +76,14 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **declared: str) 
 def _booted(settings: Settings, store: Any) -> tuple[LanceNamespace, str]:  # noqa: ANN401 — the root conftest's OpenFgaStore
     """Run the boot step against ``store``; answer the namespace connection and the provenance namespace's uuid."""
     ns = connect("dir", {"root": settings.root})
+    warehouses.ensure_catalog_row(ns, settings.estate_warehouse)
 
     async def boot() -> None:
         async with fga.make_client(store.url, store.store_id, store.model_id, token_file=None) as client:
             await ensure_provenance_namespace(ns, settings, client)
 
     asyncio.run(boot())
-    properties = ns.describe_namespace(DescribeNamespaceRequest(id=["provenance"])).properties or {}
+    properties = ns.describe_namespace(DescribeNamespaceRequest(id=["lance_catalog", "provenance"])).properties or {}
     return ns, properties["rask.uuid"]
 
 

@@ -1163,7 +1163,9 @@ class _StoreEvents:
         self._loops: list[asyncio.Task[None]] = []
 
     def claim(self, table: str, *, readable: bool) -> None:
-        location_claims.take(self.claims, f"s3://b/{table}", f"db${table}", ["db", table], is_gone=lambda _claim: False, uuid=table)
+        location_claims.take(
+            self.claims, f"s3://b/{table}", f"lance_catalog$db${table}", ["lance_catalog", "db", table], is_gone=lambda _claim: False, uuid=table
+        )
         if not readable:
             key = self.control / location_claims.claim_key(f"s3://b/{table}")
             key.unlink()
@@ -1171,7 +1173,9 @@ class _StoreEvents:
 
     def make_readable(self, table: str) -> None:
         (self.control / location_claims.claim_key(f"s3://b/{table}")).rmdir()
-        location_claims.take(self.claims, f"s3://b/{table}", f"db${table}", ["db", table], is_gone=lambda _claim: False, uuid=table)
+        location_claims.take(
+            self.claims, f"s3://b/{table}", f"lance_catalog$db${table}", ["lance_catalog", "db", table], is_gone=lambda _claim: False, uuid=table
+        )
 
     async def deliver(self, body: bytes) -> None:
         queue = await self.fleet.lane("store-events")

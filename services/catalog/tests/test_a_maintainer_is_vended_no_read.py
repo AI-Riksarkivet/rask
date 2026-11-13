@@ -11,8 +11,8 @@ The disarm and the floor raise are maintenance's two commits, which the catalog 
 on the maintainer rung (``can_maintain``), since the maintain tier puts nothing of a table: a writer, who may change the
 table's rows, may not make them.
 
-Every decision is the real model's, on a store of this test's own: alice owns ``db`` and ``db$t`` and grants bob
-``maintainer`` on ``db$t`` through its own door. The vendor records every call, since a credential minted and then
+Every decision is the real model's, on a store of this test's own: alice owns ``lance_catalog$db`` and ``lance_catalog$db$t`` and grants bob
+``maintainer`` on ``lance_catalog$db$t`` through its own door. The vendor records every call, since a credential minted and then
 discarded is still a grant at the store.
 """
 
@@ -48,16 +48,16 @@ class _Vendor:
 
 @pytest.fixture
 def maintained(governed_catalog: Any) -> Iterator[tuple[Any, _Vendor]]:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """alice's ``db$t``, bob a maintainer on it and nothing else, and the recording vendor."""
+    """alice's ``lance_catalog$db$t``, bob a maintainer on it and nothing else, and the recording vendor."""
     catalog = governed_catalog
     vendor = _Vendor()
     catalog.client.app.dependency_overrides[get_vendor] = lambda: vendor
     alice = catalog.bearer("alice")
-    assert catalog.client.post("/v1/namespace/db/create", json={}, headers=alice).status_code == 200
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
     rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
-    created = catalog.client.post("/v1/table/db$t/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    created = catalog.client.post("/v1/table/lance_catalog$db$t/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert created.status_code == 200, created.text
-    granted = catalog.client.post("/management/v1/table/db$t/access/grant", json={"user": "dex~bob", "relation": "maintainer"}, headers=alice)
+    granted = catalog.client.post("/management/v1/table/lance_catalog$db$t/access/grant", json={"user": "dex~bob", "relation": "maintainer"}, headers=alice)
     assert granted.status_code == 200, granted.text
     yield catalog, vendor
     catalog.client.app.dependency_overrides.pop(get_vendor, None)
@@ -66,7 +66,7 @@ def maintained(governed_catalog: Any) -> Iterator[tuple[Any, _Vendor]]:  # noqa:
 def test_a_maintainer_holding_no_reader_grant_is_refused_a_read_vend(maintained: tuple[Any, _Vendor]) -> None:
     catalog, vendor = maintained
 
-    refused = catalog.client.post("/management/v1/table/db$t/credentials", headers=catalog.bearer("bob"))
+    refused = catalog.client.post("/management/v1/table/lance_catalog$db$t/credentials", headers=catalog.bearer("bob"))
 
     assert (refused.status_code, refused.json().get("code")) == (403, PERMISSION_DENIED), refused.text
     assert vendor.calls == []
@@ -74,12 +74,14 @@ def test_a_maintainer_holding_no_reader_grant_is_refused_a_read_vend(maintained:
 
 def test_the_maintainer_doors_answer_a_maintainer_and_refuse_a_writer(maintained: tuple[Any, _Vendor]) -> None:
     catalog, _ = maintained
-    granted = catalog.client.post("/management/v1/table/db$t/access/grant", json={"user": "dex~carol", "relation": "writer"}, headers=catalog.bearer("alice"))
+    granted = catalog.client.post(
+        "/management/v1/table/lance_catalog$db$t/access/grant", json={"user": "dex~carol", "relation": "writer"}, headers=catalog.bearer("alice")
+    )
     assert granted.status_code == 200, granted.text
     doors = {"maintenance/disarm": None, "maintenance/floor": {"dry_run": True}}
 
     answered = {
-        (who, door): catalog.client.post(f"/management/v1/table/db$t/{door}", json=body, headers=catalog.bearer(who)).status_code
+        (who, door): catalog.client.post(f"/management/v1/table/lance_catalog$db$t/{door}", json=body, headers=catalog.bearer(who)).status_code
         for who in ("bob", "carol")
         for door, body in doors.items()
     }

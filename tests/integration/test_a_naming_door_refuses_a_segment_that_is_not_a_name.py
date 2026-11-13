@@ -33,8 +33,8 @@ ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
 @pytest.fixture
 def wc(real_ns_client: TestClient) -> TestClient:
     """The namespace `wc` holding the one table `wc$src`, which a rename moves."""
-    assert real_ns_client.post("/v1/namespace/wc/create", json={}).status_code == 200
-    created = real_ns_client.post("/v1/table/wc$src/create", content=ROWS, headers=ARROW)
+    assert real_ns_client.post("/v1/namespace/lance_catalog$wc/create", json={}).status_code == 200
+    created = real_ns_client.post("/v1/table/lance_catalog$wc$src/create", content=ROWS, headers=ARROW)
     assert created.status_code == 200, created.text
     return real_ns_client
 
@@ -49,22 +49,30 @@ def _send(client: TestClient, door: str, body: dict[str, Any] | None) -> Any:  #
 @pytest.mark.parametrize(
     ("door", "body", "named"),
     [
-        pytest.param("/v1/table/wc$e%CC%81/create", None, "Unicode NFC", id="create-a-name-not-in-nfc"),
-        pytest.param("/v1/table/wc$t%01/declare", None, "control character", id="declare-a-control-character"),
-        pytest.param("/v1/table/wc$$t/register", {"location": "elsewhere"}, "at least one character", id="register-an-empty-segment"),
-        pytest.param(f"/v1/namespace/wc${'n' * 256}/create", None, "at most 255 characters", id="namespace-create-256-characters"),
-        pytest.param("/v1/namespace/wc$a%2Bb/create", None, "'+'", id="namespace-create-a-literal-plus"),
+        pytest.param("/v1/table/lance_catalog$wc$e%CC%81/create", None, "Unicode NFC", id="create-a-name-not-in-nfc"),
+        pytest.param("/v1/table/lance_catalog$wc$t%01/declare", None, "control character", id="declare-a-control-character"),
+        pytest.param("/v1/table/lance_catalog$wc$$t/register", {"location": "elsewhere"}, "at least one character", id="register-an-empty-segment"),
+        pytest.param(f"/v1/namespace/lance_catalog$wc${'n' * 256}/create", None, "at most 255 characters", id="namespace-create-256-characters"),
+        pytest.param("/v1/namespace/lance_catalog$wc$a%2Bb/create", None, "'+'", id="namespace-create-a-literal-plus"),
         pytest.param("/v1/materialized_view/wc$mv%20/create", None, "whitespace", id="view-create-trailing-whitespace"),
-        pytest.param("/v1/table/wc$a%2Fb/create", None, "'/'", id="create-an-encoded-slash"),
-        pytest.param("/v1/table/wc$src/rename", {"new_table_name": "a$b"}, "'$'", id="rename-the-delimiter-in-the-name"),
-        pytest.param("/v1/table/wc$src/rename", {"new_table_name": "a/b"}, "'/'", id="rename-a-slash-in-the-name"),
+        pytest.param("/v1/table/lance_catalog$wc$a%2Fb/create", None, "'/'", id="create-an-encoded-slash"),
+        pytest.param("/v1/table/lance_catalog$wc$src/rename", {"new_table_name": "a$b"}, "'$'", id="rename-the-delimiter-in-the-name"),
+        pytest.param("/v1/table/lance_catalog$wc$src/rename", {"new_table_name": "a/b"}, "'/'", id="rename-a-slash-in-the-name"),
         pytest.param(
-            "/v1/table/wc$src/rename", {"new_namespace_id": [" wc"], "new_table_name": "b"}, "whitespace", id="rename-into-a-namespace-that-is-not-a-name"
+            "/v1/table/lance_catalog$wc$src/rename",
+            {"new_namespace_id": ["lance_catalog", " wc"], "new_table_name": "b"},
+            "whitespace",
+            id="rename-into-a-namespace-that-is-not-a-name",
         ),
         pytest.param(
-            "/v1/table/batch-commit", {"operations": [{"declare_table": {"id": ["wc", ""]}}]}, "at least one character", id="batch-commit-an-empty-id"
+            "/v1/table/batch-commit",
+            {"operations": [{"declare_table": {"id": ["lance_catalog", "wc", ""]}}]},
+            "at least one character",
+            id="batch-commit-an-empty-id",
         ),
-        pytest.param("/v1/table/version/batch-create", {"entries": [{"id": ["wc", "t\u0085"]}]}, "control character", id="batch-create-a-c1-control"),
+        pytest.param(
+            "/v1/table/version/batch-create", {"entries": [{"id": ["lance_catalog", "wc", "t\u0085"]}]}, "control character", id="batch-create-a-c1-control"
+        ),
     ],
 )
 def test_a_naming_door_refuses_a_segment_that_is_not_a_name(wc: TestClient, door: str, body: dict[str, Any] | None, named: str) -> None:
@@ -73,8 +81,8 @@ def test_a_naming_door_refuses_a_segment_that_is_not_a_name(wc: TestClient, door
     assert (refused.status_code, refused.headers["content-type"]) == (400, "application/problem+json"), refused.text
     assert refused.json()["code"] == INVALID_INPUT, refused.text
     assert named in refused.json()["detail"], refused.text
-    assert wc.get("/v1/namespace/wc/table/list").json()["tables"] == ["src"], "a refused request made or moved a table"
-    assert wc.get("/v1/namespace/wc/list").json()["namespaces"] == [], "a refused request made a namespace"
+    assert wc.get("/v1/namespace/lance_catalog$wc/table/list").json()["tables"] == ["src"], "a refused request made or moved a table"
+    assert wc.get("/v1/namespace/lance_catalog$wc/list").json()["namespaces"] == [], "a refused request made a namespace"
 
 
 @pytest.mark.parametrize(
@@ -87,9 +95,9 @@ def test_a_naming_door_refuses_a_segment_that_is_not_a_name(wc: TestClient, door
 )
 def test_a_name_holds_any_other_character(wc: TestClient, name: str) -> None:
     """The other side of the rule: what no name reaches makes any name, up to the length bound."""
-    path = f"/v1/table/wc${name.replace(' ', '%20').replace('?', '%3F')}"
+    path = f"/v1/table/lance_catalog$wc${name.replace(' ', '%20').replace('?', '%3F')}"
 
     declared = wc.post(f"{path}/declare", json={})
 
     assert declared.status_code == 200, declared.text
-    assert name in wc.get("/v1/namespace/wc/table/list", params={"include_declared": "true"}).json()["tables"]
+    assert name in wc.get("/v1/namespace/lance_catalog$wc/table/list", params={"include_declared": "true"}).json()["tables"]

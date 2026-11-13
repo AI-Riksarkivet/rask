@@ -76,14 +76,14 @@ TENANT_RUN = {
         },
     },
     "job": {"namespace": "ingest", "name": "acme-load", "facets": {"sql": {"query": "SELECT * FROM acme_raw"}}},
-    "inputs": [{"namespace": "acme-silver", "name": "acme-silver$pages"}],
+    "inputs": [{"namespace": "acme", "name": "acme$silver$pages"}],
     "outputs": [
         {
-            "namespace": "acme-gold",
-            "name": "acme-gold$catalog",
+            "namespace": "acme",
+            "name": "acme$gold$catalog",
             "facets": {
                 "rask_lance": {"tableUuid": TENANT_UUID},
-                "columnLineage": {"fields": {"title": {"inputFields": [{"namespace": "globex-gold", "name": "globex-gold$secret", "field": "title"}]}}},
+                "columnLineage": {"fields": {"title": {"inputFields": [{"namespace": "globex", "name": "globex$gold$secret", "field": "title"}]}}},
             },
         }
     ],
@@ -95,7 +95,7 @@ DEFAULT_RUN = {
     "eventTime": "2026-10-05T07:00:00+00:00",
     "producer": "https://rask.invalid/pipeline",
     "run": {"runId": "run-default", "facets": {"rask_author": {"name": "dex~bob", "sub": "dex~bob"}}},
-    "outputs": [{"namespace": "gold", "name": "gold$catalog", "facets": {"rask_lance": {"tableUuid": DEFAULT_UUID}}}],
+    "outputs": [{"namespace": "lance_catalog", "name": "lance_catalog$gold$catalog", "facets": {"rask_lance": {"tableUuid": DEFAULT_UUID}}}],
 }
 
 
@@ -165,8 +165,8 @@ def lineage(monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
     app.state.decider = OpenFgaDecider(cast(OpenFgaClient, _OpenFga()))
     app.state.provenance = _Feed(
         [
-            EventRecord(seq=2, outputs=["acme-gold$catalog"], inputs=["acme-silver$pages"], event=TENANT_RUN),
-            EventRecord(seq=1, outputs=["gold$catalog"], inputs=[], event=DEFAULT_RUN),
+            EventRecord(seq=2, outputs=["acme$gold$catalog"], inputs=["acme$silver$pages"], event=TENANT_RUN),
+            EventRecord(seq=1, outputs=["lance_catalog$gold$catalog"], inputs=[], event=DEFAULT_RUN),
         ]
     )
     yield app
@@ -195,7 +195,7 @@ def test_an_event_reader_is_served_every_warehouses_runs_cut_to_what_targeting_r
                     "rask_lance": {"operation": "insert", "project": "acme", "runId": "ingest-7"},
                 },
             },
-            "outputs": [{"namespace": "acme-gold", "name": "acme-gold$catalog", "facets": {"rask_lance": {"tableUuid": TENANT_UUID}}}],
+            "outputs": [{"namespace": "acme", "name": "acme$gold$catalog", "facets": {"rask_lance": {"tableUuid": TENANT_UUID}}}],
         },
     }
 
@@ -215,16 +215,18 @@ def test_an_outside_producers_run_is_recorded_by_its_tables_uuid_not_the_one_it_
         **DEFAULT_RUN,
         "eventType": "COMPLETE",
         "job": {"namespace": "pipeline", "name": "nightly"},
-        "outputs": [{"namespace": "gold", "name": "gold$catalog", "facets": {"rask_lance": {"tableUuid": forged, "namespaceUuid": forged}}}],
+        "outputs": [
+            {"namespace": "lance_catalog", "name": "lance_catalog$gold$catalog", "facets": {"rask_lance": {"tableUuid": forged, "namespaceUuid": forged}}}
+        ],
     }
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, live_lineage(catalog_url, monkeypatch) as lineage_url:
         with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-            assert catalog.post("/v1/namespace/gold/create", json={}).status_code == 200
-            assert catalog.post("/v1/table/gold$catalog/declare", json={}).status_code == 200
-            table_uuid = catalog.post("/v1/table/gold$catalog/describe", json={}).json()["properties"]["rask.uuid"]
-            namespace_uuid = catalog.post("/v1/namespace/gold/describe", json={}).json()["properties"]["rask.uuid"]
+            assert catalog.post("/v1/namespace/lance_catalog$gold/create", json={}).status_code == 200
+            assert catalog.post("/v1/table/lance_catalog$gold$catalog/declare", json={}).status_code == 200
+            table_uuid = catalog.post("/v1/table/lance_catalog$gold$catalog/describe", json={}).json()["properties"]["rask.uuid"]
+            namespace_uuid = catalog.post("/v1/namespace/lance_catalog$gold/describe", json={}).json()["properties"]["rask.uuid"]
         with httpx.Client(base_url=lineage_url, timeout=60) as lineage:
             assert lineage.post("/api/v1/lineage", json=event).status_code == 201
-            recorded = lineage.get("/events", params={"table": "gold$catalog"}).json()["events"]
+            recorded = lineage.get("/events", params={"table": "lance_catalog$gold$catalog"}).json()["events"]
 
     assert [(row["table_uuids"], row["namespace_uuids"]) for row in recorded] == [([table_uuid], [namespace_uuid])], recorded

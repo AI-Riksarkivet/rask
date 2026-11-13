@@ -5,7 +5,7 @@ or clear it would disarm a safety that guards a destruction they could never per
 each ask `can_set_protection`, a computed userset over `owner`.
 
 Against the catalog as deployed, a loopback Dex signing callers in and a real OpenFGA deciding on a store of the test's
-own ([[LH-235]]): alice makes `db` and `db$t` through their doors, so she owns both, and grants bob `writer` on `db`, the
+own ([[LH-235]]): alice makes `lance_catalog$db` and `lance_catalog$db$t` through their doors, so she owns both, and grants bob `writer` on `lance_catalog$db`, the
 rung that writes the table's rows.
 """
 
@@ -25,13 +25,13 @@ PERMISSION_DENIED = 15
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the catalog conftest's GovernedCatalog
-    """alice's `db` and `db$t`, with bob a writer on `db`."""
+    """alice's `lance_catalog$db` and `lance_catalog$db$t`, with bob a writer on `lance_catalog$db`."""
     catalog, alice = governed_catalog, governed_catalog.bearer("alice")
-    assert catalog.client.post("/v1/namespace/db/create", json={}, headers=alice).status_code == 200
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
     rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
-    created = catalog.client.post("/v1/table/db$t/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    created = catalog.client.post("/v1/table/lance_catalog$db$t/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert created.status_code == 200, created.text
-    granted = catalog.client.post("/management/v1/namespace/db/access/grant", json={"user": "dex~bob", "relation": "writer"}, headers=alice)
+    granted = catalog.client.post("/management/v1/namespace/lance_catalog$db/access/grant", json={"user": "dex~bob", "relation": "writer"}, headers=alice)
     assert granted.status_code == 200, granted.text
     return catalog
 
@@ -39,8 +39,8 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the catalog confte
 @pytest.mark.parametrize(
     "door",
     [
-        pytest.param("/management/v1/table/db$t/protection", id="the-table"),
-        pytest.param("/management/v1/namespace/db/protection", id="the-namespace"),
+        pytest.param("/management/v1/table/lance_catalog$db$t/protection", id="the-table"),
+        pytest.param("/management/v1/namespace/lance_catalog$db/protection", id="the-namespace"),
     ],
 )
 def test_a_writer_is_refused_arming_protection(estate: Any, door: str) -> None:  # noqa: ANN401

@@ -27,6 +27,7 @@ from catalog.services.control_records import (
     read_json,
     validated,
     validated_or_refuse,
+    with_manager,
     with_protection,
     write_json,
 )
@@ -121,6 +122,18 @@ def set_project_protection(control_root: str, storage_options: StorageOptions, p
     """
     try:
         return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", lambda record: with_protection(record, change))
+    except RecordMissingError:
+        return None
+
+
+def set_project_manager(control_root: str, storage_options: StorageOptions, project_id: str, *, manager: str | None) -> dict[str, str] | None:
+    """Record who owns project ``project_id``'s declaration ([[XC-213]]): ``git``, or its own doors for ``None``.
+
+    Conditional on the record's ETag, every other field as it stands at the write. ``None`` is answered when the
+    record is gone.
+    """
+    try:
+        return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", lambda record: with_manager(record, manager))
     except RecordMissingError:
         return None
 

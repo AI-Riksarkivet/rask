@@ -34,8 +34,8 @@ The drills, and what each outage must look like while it lasts:
    history: every acknowledged commit landed once, a commit whose answer the kill lost landed at most once, and no run
    landed twice.
 
-THE DRILL TABLES live in a namespace the module makes in the shared tenant's warehouse, under a name that does not carry
-the tenant's project id, as criterion 2's matrix does, so criteria 1 and 4 read only what the scenario made. The pipeline
+THE DRILL TABLES live in a namespace the module makes in the shared tenant's warehouse, beside the scenario's bronze and
+silver rather than in them, as criterion 2's matrix does, so criteria 1 and 4 read only what the scenario made. The pipeline
 holds `writer` there and owns each table it makes. Every commit names a run whose input is the namespace's source table
 at version 1, so every version has an edge to hold the edge list to.
 
@@ -122,8 +122,8 @@ class Drills:
     def __init__(self, tenant: Tenant) -> None:
         self.tenant = tenant
         self.pipeline = tenant.pipeline
-        self.namespace = f"c5-{uuid.uuid4().hex[:8]}"
-        self.source = [self.namespace, "src"]
+        self.namespace = f"{tenant.project}$c5-{uuid.uuid4().hex[:8]}"
+        self.source = [*self.namespace.split("$"), "src"]
         self.commits: list[Commit] = []
         self.unanswered: list[NamedRun] = []
         self._lock = threading.Lock()
@@ -131,8 +131,7 @@ class Drills:
     def build(self) -> None:
         """Make the namespace, grant the pipeline `writer` on it, and have the pipeline make the source table."""
         admin = self.tenant.admin
-        body = {"namespace": self.namespace, "properties": {"rask.tier": "bronze"}}
-        scenario.ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{self.tenant.project}/namespaces", json=body, timeout=60))
+        scenario.ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.namespace}/create", json={"properties": {"rask.tier": "bronze"}}, timeout=60))
         self.grant(self.pipeline.principal, "writer")
         self._commit(self.source, range(4), NamedRun(job="c5-source"), mode="create")
 
@@ -147,7 +146,7 @@ class Drills:
 
     def make(self, name: str) -> list[str]:
         """A table the pipeline makes in the namespace with a stock client, its first commit naming a run."""
-        table = [self.namespace, name]
+        table = [*self.namespace.split("$"), name]
         self._commit(table, range(4), self.run(table), mode="create")
         return table
 

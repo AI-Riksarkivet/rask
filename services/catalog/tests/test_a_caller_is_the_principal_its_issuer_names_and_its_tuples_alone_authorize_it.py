@@ -42,9 +42,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest
-from openfga_sdk.client.models import ClientCheckRequest, ClientWriteRequest
+from openfga_sdk.client.models import ClientBatchCheckItem, ClientBatchCheckRequest, ClientCheckRequest, ClientWriteRequest
 from openfga_sdk.exceptions import ValidationException
 
+from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.naming import UUID_PROPERTY
 
@@ -72,8 +73,19 @@ class _CheckResponse:
         self.allowed = allowed
 
 
+class _BatchItem:
+    def __init__(self, request: ClientBatchCheckItem, allowed: bool) -> None:
+        self.request, self.allowed, self.error = request, allowed, None
+
+
+class _BatchCheckResponse:
+    def __init__(self, result: list[_BatchItem]) -> None:
+        self.result = result
+
+
 class _OpenFga:
-    """OpenFGA's Check over a tuple set, and its Write recorded, refusing a user id that is not one user, as the store does.
+    """OpenFGA's Check and BatchCheck over a tuple set, and its Write recorded, refusing a user id that is not one user, as
+    the store does.
 
     A second `:` is malformed (measured 2026-10-14); a `#` reads as a userset of `user`, a type that defines no relation.
     """
@@ -88,6 +100,14 @@ class _OpenFga:
         self.asked.append(body.user)
         _refuse_a_user_that_is_not_one(body.user)
         return _CheckResponse((body.user, body.object) in self.tuples)
+
+    async def batch_check(self, body: ClientBatchCheckRequest, options: object = None) -> _BatchCheckResponse:
+        """Asked by a refused read, about the namespace's warehouse: whether its caller sees above the name ([[LH-593]])."""
+        del options
+        for item in body.checks:
+            self.asked.append(item.user)
+            _refuse_a_user_that_is_not_one(item.user)
+        return _BatchCheckResponse([_BatchItem(item, (item.user, item.object) in self.tuples) for item in body.checks])
 
     async def write(self, body: ClientWriteRequest, options: object = None) -> None:
         del options
@@ -126,7 +146,9 @@ def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.
         monkeypatch.setenv(key, value)
     # The namespace the request reads, holding the uuid the catalog mints for one: the object its grants are held by.
     db = f"namespace:{uuid.uuid4()}"
-    connect("dir", {"root": str(tmp_path)}).create_namespace(CreateNamespaceRequest(id=["db"], properties={UUID_PROPERTY: db.removeprefix("namespace:")}))
+    estate = connect("dir", {"root": str(tmp_path)})
+    warehouses.ensure_catalog_row(estate, "lance_catalog")
+    estate.create_namespace(CreateNamespaceRequest(id=["lance_catalog", "db"], properties={UUID_PROPERTY: db.removeprefix("namespace:")}))
 
     from catalog.core.config import Settings, get_settings
 
@@ -173,7 +195,7 @@ def _another_clusters_token(issuer: Any, directory: Any) -> str:
 
 
 def _describe(client: TestClient, token: str) -> httpx.Response:
-    return client.post("/v1/namespace/db/describe", json={}, headers={"Authorization": f"Bearer {token}"})
+    return client.post("/v1/namespace/lance_catalog$db/describe", json={}, headers={"Authorization": f"Bearer {token}"})
 
 
 @pytest.mark.parametrize(
@@ -268,7 +290,9 @@ def test_a_dex_client_is_a_machine_so_a_table_it_creates_is_owned_by_its_project
     }[caller]()
     rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
 
-    created = client.post("/v1/table/db$t/create", content=rows, headers={"Authorization": f"Bearer {token}", "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    created = client.post(
+        "/v1/table/lance_catalog$db$t/create", content=rows, headers={"Authorization": f"Bearer {token}", "Content-Type": ARROW_STREAM_MEDIA_TYPE}
+    )
 
     assert created.status_code == 200, created.text
     owners = [user for user, relation, obj in openfga.written if relation == "owner" and obj.startswith("table:")]

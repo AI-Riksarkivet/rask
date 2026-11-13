@@ -204,7 +204,7 @@ def off_cluster_catalog_url(store: _Store, monkeypatch: pytest.MonkeyPatch) -> I
 
 
 def test_a_stock_client_opens_a_table_on_the_vended_credential_and_not_its_environment(store: _Store, catalog_url: str) -> None:
-    namespace = f"db{uuid.uuid4().hex[:8]}"
+    namespace = f"lance_catalog$db{uuid.uuid4().hex[:8]}"
     with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
         assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64())}))
@@ -218,7 +218,7 @@ def test_a_stock_client_opens_a_table_on_the_vended_credential_and_not_its_envir
         lance.dataset(location, storage_options=own).count_rows()
 
     stock = lance_namespace.connect("rest", {"uri": catalog_url})
-    dataset = lance.dataset(namespace_client=stock, table_id=[namespace, "t"], storage_options=own)
+    dataset = lance.dataset(namespace_client=stock, table_id=[*namespace.split("$"), "t"], storage_options=own)
 
     assert dataset.count_rows() == 3
 
@@ -227,16 +227,18 @@ def test_a_stock_client_off_the_cluster_creates_and_appends_through_the_endpoint
     """The table is named `sp ace`, which pylance's Rust client sends as `sp+ace` ([[LH-526]], ADR 0173 §4): it creates,
     appends to and reads the table the name names, the one another client finds sending the space as `%20`. Both reach
     the catalog under its public prefix, which the catalog strips from the bytes as sent."""
-    namespace = f"db{uuid.uuid4().hex[:8]}"
+    namespace = f"lance_catalog$db{uuid.uuid4().hex[:8]}"
     with httpx.Client(base_url=off_cluster_catalog_url, timeout=60) as catalog:
         assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
 
     stock = lance_namespace.connect("rest", {"uri": off_cluster_catalog_url})
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    lance.write_dataset(rows, namespace_client=stock, table_id=[namespace, "sp ace"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
-    lance.write_dataset(pa.table({"id": pa.array([3], pa.int64())}), namespace_client=stock, table_id=[namespace, "sp ace"], mode="append")
+    lance.write_dataset(
+        rows, namespace_client=stock, table_id=[*namespace.split("$"), "sp ace"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True
+    )
+    lance.write_dataset(pa.table({"id": pa.array([3], pa.int64())}), namespace_client=stock, table_id=[*namespace.split("$"), "sp ace"], mode="append")
 
-    assert lance.dataset(namespace_client=stock, table_id=[namespace, "sp ace"]).to_table().column("id").to_pylist() == [1, 2, 3]
+    assert lance.dataset(namespace_client=stock, table_id=[*namespace.split("$"), "sp ace"]).to_table().column("id").to_pylist() == [1, 2, 3]
     # [[LH-520]] Its first commit landed where DeclareTable placed it: the root, under the uuid the catalog minted.
     with httpx.Client(base_url=off_cluster_catalog_url, timeout=60) as catalog:
         described = catalog.post(f"/v1/table/{namespace}$sp%20ace/describe", json={"vend_credentials": False}).json()
@@ -314,7 +316,7 @@ def test_every_vend_reaches_the_keys_the_store_keeps_for_the_table(
     with its exchange is judged by moto's IAM evaluator against the keys the store holds for the table. That RustFS enforces
     it is the live read-back's claim.
     """
-    namespace = f"db{uuid.uuid4().hex[:8]}"
+    namespace = f"lance_catalog$db{uuid.uuid4().hex[:8]}"
     path = quote(f"{namespace}${name}", safe="$")
     with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
         assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
@@ -323,8 +325,10 @@ def test_every_vend_reaches_the_keys_the_store_keeps_for_the_table(
     issued = len(sts_backends[_ACCOUNT]["aws"].assumed_roles)
 
     stock = lance_namespace.connect("rest", {"uri": catalog_url})
-    lance.write_dataset(_rows(4), namespace_client=stock, table_id=[namespace, name], mode="append", storage_options=_refused_key(store))
-    read = lance.dataset(namespace_client=stock, table_id=[namespace, name], storage_options=_refused_key(store)).to_table().column("id").to_pylist()
+    lance.write_dataset(_rows(4), namespace_client=stock, table_id=[*namespace.split("$"), name], mode="append", storage_options=_refused_key(store))
+    read = (
+        lance.dataset(namespace_client=stock, table_id=[*namespace.split("$"), name], storage_options=_refused_key(store)).to_table().column("id").to_pylist()
+    )
 
     assert sorted(read) == [1, 2, 3, 4]
     vended = [json.loads(role.policy) for role in sts_backends[_ACCOUNT]["aws"].assumed_roles[issued:] if role.policy and role.session_name != "catalog"]

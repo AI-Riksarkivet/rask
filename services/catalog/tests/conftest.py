@@ -206,7 +206,7 @@ def two_store_catalog(two_stores: TwoStores, tmp_path: Path, monkeypatch: pytest
     from catalog.main import app
 
     with TestClient(app) as client:
-        assert client.post("/v1/namespace/mb/create", json={}).status_code in {200, 409}
+        assert client.post("/v1/namespace/lance_catalog$mb/create", json={}).status_code in {200, 409}
         yield client
     app.dependency_overrides.clear()
     get_settings.cache_clear()
@@ -278,6 +278,8 @@ class GovernedCatalog:
 
     #: The Dex connector the lane's people sign in through, and the idp id the deployment maps it to.
     CONNECTOR, IDP = "local", "dex"
+    #: The estate's own warehouse, which every name served from the catalog's own root begins with ([[LH-593]]).
+    ESTATE = "warehouse:lance_catalog"
 
     def __init__(self, client: TestClient, store: Any, dex_issuer: Any) -> None:  # noqa: ANN401 — root conftest's OpenFgaStore and DexIssuer
         self.client = client
@@ -291,6 +293,20 @@ class GovernedCatalog:
     def bearer(self, user_id: str) -> dict[str, str]:
         """The headers of a request the person ``user_id`` signs in for."""
         return {"Authorization": f"Bearer {self._dex.mint(user_id, connector=self.CONNECTOR, audience='lance-catalog')}"}
+
+    def create_in_the_estate(self, user_id: str, name: str) -> Any:  # noqa: ANN401 — the door's httpx response
+        """Create namespace ``lance_catalog$<name>`` as ``user_id``, who holds ``writer`` on the estate's warehouse for that create alone.
+
+        A namespace directly in a warehouse is created on the warehouse's ``can_create_namespace`` ([[LH-593]]), which
+        the chart's bootstrap hook seeds on the estate's warehouse. The grant is withdrawn once the door answers, because
+        a warehouse rung reaches every namespace beneath it and would hand the creator every other test principal's.
+        """
+        grant = (self.person(user_id), "writer", self.ESTATE)
+        self.store.write(grant)
+        try:
+            return self.client.post(f"/v1/namespace/{self.ESTATE.partition(':')[2]}${name}/create", json={}, headers=self.bearer(user_id))
+        finally:
+            self.store.delete(grant)
 
 
 @pytest.fixture

@@ -116,7 +116,7 @@ def _objects_holding(identity: Identity, table_id: list[str], needle: bytes) -> 
 
 def test_a_job_rewrites_every_surface_and_the_catalog_releases_what_it_verifies(tenant: Tenant) -> None:
     admin, job = tenant.admin, tenant.job
-    table_id = [tenant.bronze, "people"]
+    table_id = [*tenant.bronze.split("$"), "people"]
     table = "$".join(table_id)
     owner = admin.namespace()
     lance.write_dataset(

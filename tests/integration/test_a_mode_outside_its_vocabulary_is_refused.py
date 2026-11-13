@@ -102,28 +102,28 @@ def _rows_on(client: TestClient, table_id: str, branch: str | None = None) -> in
 @pytest.mark.parametrize("mode", ["Overwrit"])
 def test_a_create_mode_outside_the_vocabulary_creates_no_table(real_ns_client: TestClient, mode: str) -> None:
     """On a free id the fold to `Create` was a 200 and a table nobody asked for."""
-    _namespace(real_ns_client, "db")
+    _namespace(real_ns_client, "lance_catalog$db")
 
-    _refused(real_ns_client.post(f"/v1/table/db$t/create?mode={mode}", content=_rows(), headers=ARROW_STREAM), mode)
+    _refused(real_ns_client.post(f"/v1/table/lance_catalog$db$t/create?mode={mode}", content=_rows(), headers=ARROW_STREAM), mode)
 
-    assert not _exists(real_ns_client, "table", "db$t"), "a refused create must leave no table behind"
+    assert not _exists(real_ns_client, "table", "lance_catalog$db$t"), "a refused create must leave no table behind"
 
 
 def test_a_create_mode_outside_the_vocabulary_is_refused_on_a_taken_id_too(real_ns_client: TestClient) -> None:
     """The refusal is about the request's shape, so it cannot depend on whether the id is taken. On a
     taken id the fold answered 409, which tells the caller the name collides when the mode was the fault."""
-    _namespace(real_ns_client, "db")
-    _table(real_ns_client, "db$t")
+    _namespace(real_ns_client, "lance_catalog$db")
+    _table(real_ns_client, "lance_catalog$db$t")
 
-    _refused(real_ns_client.post("/v1/table/db$t/create?mode=Overwrit", content=_rows(7), headers=ARROW_STREAM), "Overwrit")
+    _refused(real_ns_client.post("/v1/table/lance_catalog$db$t/create?mode=Overwrit", content=_rows(7), headers=ARROW_STREAM), "Overwrit")
 
-    assert _rows_on(real_ns_client, "db$t") == 3, "a refused create must leave the existing table's data alone"
+    assert _rows_on(real_ns_client, "lance_catalog$db$t") == 3, "a refused create must leave the existing table's data alone"
 
 
 def test_a_namespace_create_mode_outside_the_vocabulary_creates_no_namespace(real_ns_client: TestClient) -> None:
-    _refused(real_ns_client.post("/v1/namespace/db/create", json={"mode": "ExistsOk"}), "ExistsOk")
+    _refused(real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={"mode": "ExistsOk"}), "ExistsOk")
 
-    assert not _exists(real_ns_client, "namespace", "db"), "a refused create must leave no namespace behind"
+    assert not _exists(real_ns_client, "namespace", "lance_catalog$db"), "a refused create must leave no namespace behind"
 
 
 @pytest.mark.parametrize(
@@ -136,11 +136,11 @@ def test_a_namespace_create_mode_outside_the_vocabulary_creates_no_namespace(rea
 def test_a_drop_field_outside_its_vocabulary_drops_nothing(real_ns_client: TestClient, body: dict[str, str], value: str) -> None:
     """Both of the drop's fields are closed. `PURGE` is the live case: `purge` is a QUERY parameter, and a
     caller who spelled it as the body's `mode` got a recoverable drop reported as success."""
-    _namespace(real_ns_client, "db")
+    _namespace(real_ns_client, "lance_catalog$db")
 
-    _refused(real_ns_client.post("/v1/namespace/db/drop", json=body), value)
+    _refused(real_ns_client.post("/v1/namespace/lance_catalog$db/drop", json=body), value)
 
-    assert _exists(real_ns_client, "namespace", "db"), "a refused drop must leave the namespace in place"
+    assert _exists(real_ns_client, "namespace", "lance_catalog$db"), "a refused drop must leave the namespace in place"
 
 
 @pytest.mark.parametrize(("mode", "status", "code"), [("ExistOk", 400, INVALID_INPUT), ("Overwrite", 406, UNSUPPORTED)])
@@ -149,15 +149,15 @@ def test_a_register_mode_the_door_refuses_attaches_nothing(real_ns_client: TestC
     caller reusing it here is the likeliest way to reach the parse's refusal (400, code 13). `Overwrite` is one
     of the two, and this door declines it as the spec's Unsupported (406, code 0, which RegisterTable lists):
     replacing a registration would detach bytes the catalog does not own from the table that points at them."""
-    _namespace(real_ns_client, "db")
+    _namespace(real_ns_client, "lance_catalog$db")
     lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}), str(tmp_path / "ext"), data_storage_version="2.2", enable_stable_row_ids=True)
 
-    response = real_ns_client.post("/v1/table/db$r/register", json={"location": "ext", "mode": mode})
+    response = real_ns_client.post("/v1/table/lance_catalog$db$r/register", json={"location": "ext", "mode": mode})
 
     assert (response.status_code, response.json().get("code")) == (status, code), response.text
     assert mode in str(response.json().get("detail")), response.text
 
-    assert not _exists(real_ns_client, "table", "db$r"), "a refused register must attach nothing"
+    assert not _exists(real_ns_client, "table", "lance_catalog$db$r"), "a refused register must attach nothing"
 
 
 @pytest.mark.parametrize("branch", [None, "work"], ids=["main", "branch"])
@@ -165,29 +165,29 @@ def test_a_register_mode_the_door_refuses_attaches_nothing(real_ns_client: TestC
 def test_an_insert_mode_outside_the_vocabulary_is_refused_on_both_arms(real_ns_client: TestClient, mode: str, branch: str | None) -> None:
     """The two arms of `insert` reach two different parsers, so the door parses the mode before either.
     `create` is worth its own case: it is in pylance's write-mode vocabulary but not in the spec's."""
-    _namespace(real_ns_client, "db")
-    _table(real_ns_client, "db$t")
+    _namespace(real_ns_client, "lance_catalog$db")
+    _table(real_ns_client, "lance_catalog$db$t")
     if branch is not None:
-        made = real_ns_client.post("/v1/table/db$t/branches/create", json={"name": branch})
+        made = real_ns_client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": branch})
         assert made.status_code == 200, made.text
     query = f"&branch={branch}" if branch else ""
 
-    _refused(real_ns_client.post(f"/v1/table/db$t/insert?mode={mode}{query}", content=_rows(5), headers=ARROW_STREAM), mode)
+    _refused(real_ns_client.post(f"/v1/table/lance_catalog$db$t/insert?mode={mode}{query}", content=_rows(5), headers=ARROW_STREAM), mode)
 
-    assert _rows_on(real_ns_client, "db$t", branch) == 3, "a refused insert must write no rows"
+    assert _rows_on(real_ns_client, "lance_catalog$db$t", branch) == 3, "a refused insert must write no rows"
 
 
 @pytest.mark.parametrize(
     ("path", "value"),
     [
-        pytest.param("/v1/table/ghost$t/create?mode=Overwrit", "Overwrit", id="create-under-a-missing-namespace"),
-        pytest.param("/v1/table/db$ghost/insert?mode=Appnd", "Appnd", id="insert-into-a-missing-table"),
+        pytest.param("/v1/table/lance_catalog$ghost$t/create?mode=Overwrit", "Overwrit", id="create-under-a-missing-namespace"),
+        pytest.param("/v1/table/lance_catalog$db$ghost/insert?mode=Appnd", "Appnd", id="insert-into-a-missing-table"),
     ],
 )
 def test_the_refusal_is_a_shape_answer_ahead_of_every_lookup(real_ns_client: TestClient, path: str, value: str) -> None:
     """Parsed before the door reads anything, so a malformed mode is reported as malformed whatever the
     id resolves to — not as the 404 a lookup would answer first."""
-    _namespace(real_ns_client, "db")
+    _namespace(real_ns_client, "lance_catalog$db")
 
     _refused(real_ns_client.post(path, content=_rows(), headers=ARROW_STREAM), value)
 

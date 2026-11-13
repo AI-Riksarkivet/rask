@@ -69,7 +69,7 @@ class _Estate:
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         #: The uuid each table's maintenance policy is kept under, as the policy door answered it (ADR 0173 §8).
         self.policy_uuids: dict[str, str] = {}
-        assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
     def door(self, table: str, action: str, **body: object) -> str:
         answer = self.client.post(f"/v1/table/{quote(table, safe='$')}/{action}", json=body)
@@ -155,7 +155,7 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
 @pytest.mark.parametrize("door", ["table", "namespace"])
 @pytest.mark.parametrize("made", [pytest.param(True, id="catalog-made"), pytest.param(False, id="registered")])
 def test_a_dropped_table_answers_its_reads_after_its_undrop(estate: _Estate, made: bool, door: str) -> None:
-    table = "db$räksmörgås"
+    table = "lance_catalog$db$räksmörgås"
     if made:
         estate.made(table)
     else:
@@ -164,8 +164,8 @@ def test_a_dropped_table_answers_its_reads_after_its_undrop(estate: _Estate, mad
         estate.door(table, "drop")
         undropped = estate.client.post(f"/management/v1/table/{quote(table, safe='$')}/undrop")
     else:
-        assert estate.client.post("/v1/namespace/db/drop", json={"behavior": "Cascade"}).status_code == 200
-        undropped = estate.client.post("/management/v1/namespace/db/undrop")
+        assert estate.client.post("/v1/namespace/lance_catalog$db/drop", json={"behavior": "Cascade"}).status_code == 200
+        undropped = estate.client.post("/management/v1/namespace/lance_catalog$db/undrop")
     assert undropped.status_code == 200, undropped.text
 
     assert estate.reads(table) == (3, 3)
@@ -173,7 +173,7 @@ def test_a_dropped_table_answers_its_reads_after_its_undrop(estate: _Estate, mad
 
 @pytest.mark.parametrize("name", _NAMES)
 def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_location(estate: _Estate, name: str) -> None:
-    table = f"db${name}"
+    table = f"lance_catalog$db${name}"
     held = estate.dropped_with_a_branch(table, name)
     dropped = estate.recorded(table)
     location = str(dropped["location"])
@@ -232,7 +232,7 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
 
 @pytest.mark.parametrize("name", _NAMES)
 def test_the_tombstone_probe_counts_every_object_a_record_still_names(estate: _Estate, name: str) -> None:
-    table = f"db${name}"
+    table = f"lance_catalog$db${name}"
     held = estate.dropped_with_a_branch(table, name)
 
     counted = objects_held(estate.recorded_location(table), estate.key)
@@ -241,7 +241,7 @@ def test_the_tombstone_probe_counts_every_object_a_record_still_names(estate: _E
 
 
 def test_the_compaction_gate_finds_a_dataset_rooted_at_a_base_in_the_catalogs_spelling(estate: _Estate) -> None:
-    location = estate.registered("db$räksmörgås", "räksmörgås")
+    location = estate.registered("lance_catalog$db$räksmörgås", "räksmörgås")
     assert "%C3%A4" in location, f"precondition: the catalog answers the location percent-encoded: {location}"
 
     rooted = dataset_root_probe(f"{estate.root}/a1b2c3d4_db$silver", estate.key)(location)

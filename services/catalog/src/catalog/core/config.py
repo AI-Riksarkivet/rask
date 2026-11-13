@@ -20,6 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.signature_doors import SignatureDoorSettings
@@ -302,7 +303,8 @@ class CatalogLineageSettings(BaseSettings):
     #: The namespace this catalog keeps for provenance (ADR 0158): lineage's commit feed and edge list are tables
     #: in it, governed like any other. The catalog creates it at boot, protects it, and never announces a write
     #: under it on lineage, because lineage records every announcement as a row of those tables. Empty, the code
-    #: default, keeps no such namespace; the chart names one whenever it deploys lineage.
+    #: default, keeps no such namespace; the chart names one whenever it deploys lineage. It lies in the estate's own
+    #: warehouse (``lance_catalog$provenance``), whose root is this catalog's own.
     provenance_namespace: str = Field(default="", alias="LANCE_PROVENANCE_NAMESPACE")
     #: The principals that write the provenance namespace: lineage's service-account principal
     #: (`kubernetes~system:serviceaccount:<ns>:<sa>`). Each is granted `writer` on the namespace at boot, which
@@ -385,6 +387,18 @@ class CatalogMaintenanceSettings(BaseSettings):
     erasure_cleanup_window_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_CLEANUP_WINDOW_DAYS")
 
 
+class CatalogDeclarationSettings(BaseSettings):
+    """What git declares of the estate's tenants, and the tick that converges the estate onto it ([[XC-213]], ADR 0206)."""
+
+    #: The file holding the declaration: the projects, warehouses and service grants the chart renders from its
+    #: values into a ConfigMap this catalog mounts (`catalog/services/declaration.py`). Empty = nothing is declared,
+    #: and every tenant is made at its doors.
+    declaration_file: str = Field(default="", alias="LANCE_DECLARATION_FILE")
+    #: The cron binding that converges the estate onto that declaration (`catalog/api/declaration_converge.py`). One
+    #: string with the Component's name and the served path, as for the erasure release. Empty = no converge route.
+    declaration_converge_binding_name: str = Field(default="", alias="LANCE_DECLARATION_CONVERGE_BINDING_NAME")
+
+
 class CatalogVendingSettings(BaseSettings):
     """Credential vending: which mode, and how long a vended credential lives.
 
@@ -433,11 +447,6 @@ class CatalogAuthzSettings(BaseSettings):
     #:
     #: EMPTY BY DEFAULT, on the same terms: an estate declaring nothing keeps exactly today's tuples.
     fga_maintainers: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_FGA_MAINTAINERS")
-    # When False (default), any authenticated caller may create a TOP-LEVEL namespace/
-    # table and becomes its owner (the "users create their own workspaces" model). When
-    # True, top-level creation also requires can_create_* on fga_root_object — an admin-gated
-    # root that must be seeded to bootstrap. Nested creation always gates on the parent.
-    fga_lock_root_create: bool = Field(default=False, alias="LANCE_FGA_LOCK_ROOT_CREATE")
 
 
 class Settings(
@@ -450,6 +459,7 @@ class Settings(
     CatalogDaprSettings,
     CatalogLineageSettings,
     CatalogMaintenanceSettings,
+    CatalogDeclarationSettings,
     CatalogVendingSettings,
     CatalogAuthzSettings,
     BaseSettings,
@@ -523,13 +533,6 @@ class Settings(
         """The approved multi-base data-distribution base URIs (parsed from the comma-separated allowlist)."""
         return [b.strip() for b in self.multibase_data_bases.split(",") if b.strip()]
 
-    # #3-A per-warehouse physical multi-tenancy (admin control plane). When enabled, an admin API
-    # (POST /management/v1/warehouses) provisions a physically separate S3 bucket per warehouse and binds top-level
-    # namespaces to it, so a table under a bound namespace lands in that warehouse's bucket (not the shared
-    # `root`). Default OFF: the request path is unchanged (no binding lookups) for single-bucket deployments;
-    # the chart turns it on for the catalog. Additive + backward-compatible — an unbound namespace always
-    # routes to the default `root`. The warehouse REGISTRY (records + bindings) lives under `control_root`.
-    warehouses_enabled: bool = Field(default=False, alias="LANCE_WAREHOUSES_ENABLED")
     # #75 drop→undrop grace: how long a dropped table stays recoverable in `_trash/`. Stamped onto the
     # record AT DROP TIME (never read at expiry), so shortening this can't retroactively destroy a
     # window a user is still inside.
@@ -550,7 +553,7 @@ class Settings(
 
     @property
     def registry_root(self) -> str:
-        """Where warehouse records + namespace bindings live (defaults to the catalog `root` bucket)."""
+        """Where the control records live, the warehouse registry among them (defaults to the catalog `root` bucket)."""
         return self.control_root or self.root
 
     @property
@@ -577,16 +580,6 @@ class Settings(
     # set false to silence the stream. The events only carry a real subject when OIDC is on.
     audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
 
-    # diff2 F10 item 3 — the FLOOR under #46's broadcast eviction of the warehouse-binding cache.
-    # That cache is positive-forever (a binding is immutable), and the broadcast that invalidates it
-    # on the three mutations which break that premise rides a pub/sub subscription with no
-    # dead-lettering: a dropped event leaves an entry nothing will ever evict. Live status reads mean
-    # a stale entry cannot route at a deleted bucket, so the residual is persistent 403s on a
-    # since-re-bound namespace until restart, plus wrong-bucket routing under warehouse-id reuse — a
-    # TTL bounds all of it to a window instead of the process lifetime. Minutes, because this is a
-    # backstop for a lost event and not a consistency mechanism; 0 disables it.
-    warehouse_binding_cache_ttl_seconds: float = Field(default=300.0, alias="LANCE_WAREHOUSE_BINDING_CACHE_TTL_SECONDS")
-
     # Max request-body size (bytes) accepted on any route. The Arrow-IPC write endpoints buffer the whole
     # body in memory, so an unbounded POST (e.g. a multi-GB media blob pushed through the catalog instead of
     # the direct storage/vending path) OOMs the worker. The body-limit middleware rejects oversized bodies
@@ -610,6 +603,16 @@ class Settings(
     #: a new request. At least an hour, far above a claim's lease and the request deadline, so no record a door may still
     #: be acting on goes.
     idempotency_lifetime_seconds: int = Field(default=86_400, ge=3_600, alias="LANCE_IDEMPOTENCY_LIFETIME_SECONDS")
+
+    @model_validator(mode="after")
+    def _validate_provenance_namespace(self) -> Self:
+        """The provenance namespace is served from the estate's own root, so its name begins with the estate's warehouse."""
+        inside = f"{self.estate_warehouse}{CATALOG_DELIMITER}"
+        if self.provenance_namespace and not (self.provenance_namespace.startswith(inside) and len(self.provenance_namespace) > len(inside)):
+            raise ValueError(
+                f"LANCE_PROVENANCE_NAMESPACE={self.provenance_namespace!r} is not a namespace of the estate's own warehouse: name it {inside}<namespace>"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_lineage(self) -> Self:

@@ -24,7 +24,7 @@ A governed table is read with a credential the catalog vends for that table, so 
 (`lance_docs/ns_catalog/spec.yaml`, `DescribeTable`):
 
 ```bash
-curl -s -X POST "$CATALOG/v1/table/<project>-silver\$features/describe" \
+curl -s -X POST "$CATALOG/v1/table/<warehouse>\$silver\$features/describe" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"vend_credentials": true}'
 # → {"location": "s3://…", "storage_options": {…}, …}

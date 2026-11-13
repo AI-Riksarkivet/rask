@@ -36,7 +36,7 @@ from lance_namespace import CountTableRowsResponse, ListTableTagsResponse
 
 def test_count_rows_is_reachable_by_GET(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=3)
-    resp = client.get("/v1/table/db$t/count_rows")
+    resp = client.get("/v1/table/lance_catalog$db$t/count_rows")
     assert resp.status_code == 200, f"the bundled client sends GET; got {resp.status_code} {resp.text[:120]}"
     assert resp.json() == 3
 
@@ -47,7 +47,7 @@ def test_tags_list_is_reachable_by_GET(client: TestClient, monkeypatch: pytest.M
     from catalog.api.v1.endpoints import tags as tags_module
 
     monkeypatch.setattr(tags_module.dataplane, "list_tags", lambda *a, **k: ListTableTagsResponse(tags={}))
-    resp = client.get("/v1/table/db$t/tags/list")
+    resp = client.get("/v1/table/lance_catalog$db$t/tags/list")
     assert resp.status_code == 200, f"{resp.status_code} {resp.text[:120]}"
 
 
@@ -56,4 +56,4 @@ def test_tags_list_is_reachable_by_POST(client: TestClient, monkeypatch: pytest.
     from catalog.api.v1.endpoints import tags as tags_module
 
     monkeypatch.setattr(tags_module.dataplane, "list_tags", lambda *a, **k: ListTableTagsResponse(tags={}))
-    assert client.post("/v1/table/db$t/tags/list", json={}).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/tags/list", json={}).status_code == 200

@@ -1,30 +1,21 @@
-"""The lakehouse control-plane kernel drain — SKG-08, SKG-11.
+"""The lakehouse control-plane kernel drain — SKG-08.
 
-Two findings against `lakehouse`, both about a seam written more than once:
+A finding against `lakehouse` about a seam written more than once:
 
 * **SKG-08** — four hand-rolled object-store record registries (`protection`, `maintenance_policies`,
   `trash`, `warehouse_records`) each carrying their own byte-identical hashed-key helper and their own
   list-with-broad-except body. The copies had already DRIFTED: `get_policy` grew no `isinstance(loaded,
   dict)` guard while both its twins have one, so a malformed policy record propagates into
   `resolve_policy` as whatever JSON happened to be on disk.
-* **SKG-11** — the warehouse resolver's positive cache is a module-level `dict` with no bound and no
-  eviction: an expired entry is only ever overwritten by a lookup of that same key, so a long-lived
-  process accumulates one entry per (control root, project, serving class) it has ever resolved and
-  frees none of them.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from pathlib import Path
 
-import pytest
-
-from lakehouse import warehouse_registry
 from lakehouse.maintenance_policies import get_policy, put_policy
 from lakehouse.storage_options import StorageOptions
-from lakehouse.warehouse_registry import clear_cache, project_root
 
 
 _TABLE_UUID = "7c0e2f4a-5b1d-4e8f-9a3c-2d6b8e1f0a47"
@@ -56,54 +47,3 @@ def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:
     assert record_key("_protection", "table", _TABLE_UUID) == "_protection/table-9f9a37202eeb7dc7cabba84b.json"
     assert record_key("_policies", "namespace", _NAMESPACE_UUID) == "_policies/namespace-3c0b296fe7c2d32e9edd2812.json"
     assert record_key("_trash", "table", "db$t") == "_trash/table-f74c29b36c7f71a511912ddc.json"
-
-
-# --------------------------------------------------------------------------------------------------
-# SKG-11 — the warehouse resolver's cache is bounded and evicts
-# --------------------------------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _fresh_cache() -> Iterator[None]:
-    clear_cache()
-    yield
-    clear_cache()
-
-
-#: The ceiling the resolver cache must hold to. Named here because the test is the contract: an
-#: unbounded per-process dict keyed on caller-supplied strings is the finding.
-_EXPECTED_CEILING = 512
-
-
-def _control_root_with_warehouse(root: Path, name: str) -> str:
-    """One control root holding exactly one active warehouse for project ``acme``.
-
-    DISTINCT CONTROL ROOTS rather than distinct projects: the cache key is
-    ``(control_root, project, serving)``, so this grows the cache by one entry per call while keeping
-    every registry listing a single file — the growth is what is under test, not the listing cost.
-    """
-    registry = root / name / "_warehouses"
-    registry.mkdir(parents=True, exist_ok=True)
-    record = {"id": "wh1", "bucket": f"{name}-bucket", "project": "acme", "root_uri": f"s3://{name}-wh", "status": "active"}
-    (registry / "wh1.json").write_text(json.dumps(record))
-    return str(root / name)
-
-
-def test_the_warehouse_resolution_cache_is_bounded(tmp_path: Path) -> None:
-    """One entry per (control root, project, serving) ever resolved, retained forever, no ceiling."""
-    for index in range(_EXPECTED_CEILING + 40):
-        control_root = _control_root_with_warehouse(tmp_path, f"root{index}")
-        assert project_root(control_root, StorageOptions(), "acme", ttl_seconds=300) == f"s3://root{index}-wh"
-
-    held = len(warehouse_registry._cache)
-    assert held <= _EXPECTED_CEILING, f"the resolver cache grew to {held} entries with no ceiling"
-
-
-def test_an_expired_entry_is_not_retained(tmp_path: Path) -> None:
-    """A non-positive TTL is documented as "re-read the registry on every call" — it still cached."""
-    for index in range(20):
-        control_root = _control_root_with_warehouse(tmp_path, f"ghost{index}")
-        assert project_root(control_root, StorageOptions(), "acme", ttl_seconds=0.0) == f"s3://ghost{index}-wh"
-
-    held = len(warehouse_registry._cache)
-    assert held == 0, f"{held} entries that expire the instant they are written are still resident"

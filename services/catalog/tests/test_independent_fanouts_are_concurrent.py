@@ -2,8 +2,8 @@
 
 Three loops awaited a round trip per item with nothing between them that made the order matter:
 
-* ``list_all_tables`` listed each BOUND warehouse's seed namespace one at a time — an estate with N
-  bound tenants paid N sequential ``list_tables`` calls on the registry page every browser render;
+* ``list_all_tables`` walks each warehouse's own directory catalog — an estate with N warehouses walked one at a
+  time pays N sequential walks on the registry page every browser render;
 * ``_trash_subtree`` described every descendant table one at a time before filing any trash record;
 * ``_require_descendants_unprotected`` read one protection record per descendant, sequentially, as the
   PRE-FLIGHT of a cascade — so the guard's cost scaled with the subtree it is protecting.
@@ -134,28 +134,22 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
     assert calls.count("deregister_table") == 8, "every descendant must still be detached"
 
 
-# ── the estate table listing's bound-warehouse seeds ──────────────────────────────────────────────
+# ── the estate table listing's per-warehouse walks ──────────────────────────────────────────────
 
 
-def test_the_estate_listing_lists_every_bound_seed_concurrently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_estate_listing_walks_every_warehouse_concurrently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tracker = _Tracker()
-    bound = [{"top_ns": f"ns{i}", "warehouse_id": "wh", "root_uri": "s3://bkt"} for i in range(8)]
-    monkeypatch.setattr(t_ep.warehouses, "list_bindings", lambda *_a, **_kw: bound)
+    monkeypatch.setattr(t_ep.warehouses, "served_ids", lambda *_a, **_kw: [f"wh{i}x" for i in range(8)])
 
-    def native_call(_ns: Any, op: str, _req: Any) -> Any:
-        if op == "list_tables":
-            return _slow(tracker, SimpleNamespace(tables=["t"]))()
-        return SimpleNamespace(tables=[], page_token=None, context=None)
+    async def _connection(*_a: Any, **_kw: Any) -> object:
+        return object()
 
-    monkeypatch.setattr(t_ep.native, "call", native_call)
-    monkeypatch.setattr(t_ep, "_collect_tables", lambda *_a, **_kw: [])
-    connections = SimpleNamespace(connection=lambda *_a, **_kw: object())
-    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(connections=connections))))
+    monkeypatch.setattr(t_ep, "namespace_for_warehouse", _connection)
+    monkeypatch.setattr(t_ep, "_collect_tables", _slow(tracker, []))
 
     asyncio.run(
         t_ep.list_all_tables(
-            request=request,
-            ns=cast("LanceNamespace", object()),
+            request=cast("Any", SimpleNamespace()),
             settings=_settings(tmp_path),
             so=StorageOptions(),
             token=None,
@@ -166,5 +160,5 @@ def test_the_estate_listing_lists_every_bound_seed_concurrently(tmp_path: Path, 
         )
     )
 
-    assert tracker.total == 8, f"only {tracker.total} seed listings for 8 bound namespaces"
-    assert tracker.peak > 1, "the estate listing walks its bound warehouses one at a time"
+    assert tracker.total == 8, f"only {tracker.total} walks for 8 warehouses"
+    assert tracker.peak > 1, "the estate listing walks its warehouses one at a time"

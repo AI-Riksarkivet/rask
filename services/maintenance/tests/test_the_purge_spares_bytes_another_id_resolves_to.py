@@ -41,19 +41,20 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
     data = tmp_path / "data"
     control_root = f"file://{tmp_path / 'control'}"
     ns = connect("dir", {"root": str(data)})
-    ns.create_namespace(CreateNamespaceRequest(id=["team"]))
+    ns.create_namespace(CreateNamespaceRequest(id=["lance_catalog"]))
+    ns.create_namespace(CreateNamespaceRequest(id=["lance_catalog", "team"]))
     sink = io.BytesIO()
     with pa.ipc.new_stream(sink, pa.schema([("a", pa.int64())])) as writer:
         writer.write_table(pa.table({"a": [1, 2, 3]}))
-    ns.create_table(CreateTableRequest(id=["team", "orders"]), sink.getvalue())
-    location = str(ns.describe_table(DescribeTableRequest(id=["team", "orders"])).location)
-    ns.deregister_table(DeregisterTableRequest(id=["team", "orders"]))
+    ns.create_table(CreateTableRequest(id=["lance_catalog", "team", "orders"]), sink.getvalue())
+    location = str(ns.describe_table(DescribeTableRequest(id=["lance_catalog", "team", "orders"])).location)
+    ns.deregister_table(DeregisterTableRequest(id=["lance_catalog", "team", "orders"]))
     record = trash.make_record(
-        "team$orders", uuid=str(uuid4()), location=location, dropped_by="user:alice", grace_days=7, now=datetime.now(UTC) - timedelta(days=30)
+        "lance_catalog$team$orders", uuid=str(uuid4()), location=location, dropped_by="user:alice", grace_days=7, now=datetime.now(UTC) - timedelta(days=30)
     )
     # Released, as the catalog's release door leaves a record the purge may act on.
     trash.put(control_root, StorageOptions(), {**record, trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=1)).isoformat()})
-    ns.register_table(RegisterTableRequest(id=["team", "renamed"], location=location.rstrip("/").rsplit("/", 1)[-1]))
+    ns.register_table(RegisterTableRequest(id=["lance_catalog", "team", "renamed"], location=location.rstrip("/").rsplit("/", 1)[-1]))
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
         counts=dict.fromkeys(CATEGORIES, 0),
@@ -68,37 +69,39 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
         door.post(url__regex=rf"^{CATALOG}/management/v1/trash/table/[^/]+/refusals").mock(return_value=httpx.Response(200, json={"attempts": 1}))
         out = asyncio.run(purge_expired_trash(settings, report=report, control_root=control_root, data_roots={f"file://{data}"}))
 
-    assert out.purged == [], f"the purge deleted bytes table team$renamed resolves to: {out.purged}"
-    assert [(refused.id, "still registered" in refused.reason) for refused in out.refused] == [("team$orders", True)], out.refused
+    assert out.purged == [], f"the purge deleted bytes table lance_catalog$team$renamed resolves to: {out.purged}"
+    assert [(refused.id, "still registered" in refused.reason) for refused in out.refused] == [("lance_catalog$team$orders", True)], out.refused
     assert Path(location.removeprefix("file://"), "_versions").is_dir()
-    assert [record["id"] for record in trash.named(control_root, StorageOptions(), "team$orders")] == ["team$orders"]
+    assert [record["id"] for record in trash.named(control_root, StorageOptions(), "lance_catalog$team$orders")] == ["lance_catalog$team$orders"]
 
 
 @pytest.mark.parametrize(
     ("door", "params", "body"),
     [
-        pytest.param("/v1/table/other$alias/drop", {"purge": "true"}, None, id="table-drop"),
-        pytest.param("/v1/namespace/other/drop", {"purge": "true"}, {"behavior": "Cascade"}, id="namespace-cascade"),
+        pytest.param("/v1/table/lance_catalog$other$alias/drop", {"purge": "true"}, None, id="table-drop"),
+        pytest.param("/v1/namespace/lance_catalog$other/drop", {"purge": "true"}, {"behavior": "Cascade"}, id="namespace-cascade"),
     ],
 )
 def test_a_destructive_drop_of_an_alias_spares_the_bytes_the_claim_holder_resolves_to(
     catalog: TestClient, tmp_path: Path, door: str, params: dict[str, str], body: dict[str, str] | None
 ) -> None:
     for name in ("team", "other"):
-        assert catalog.post(f"/v1/namespace/{name}/create", json={}).status_code == 200
+        assert catalog.post(f"/v1/namespace/lance_catalog${name}/create", json={}).status_code == 200
     sink = io.BytesIO()
     with pa.ipc.new_stream(sink, pa.schema([("a", pa.int64())])) as writer:
         writer.write_table(pa.table({"a": [1, 2, 3]}))
-    created = catalog.post("/v1/table/team$src/create?mode=create", content=sink.getvalue(), headers={"content-type": "application/vnd.apache.arrow.stream"})
+    created = catalog.post(
+        "/v1/table/lance_catalog$team$src/create?mode=create", content=sink.getvalue(), headers={"content-type": "application/vnd.apache.arrow.stream"}
+    )
     assert created.status_code == 200, created.text
-    assert catalog.post("/v1/table/team$src/rename", json={"new_table_name": "dst"}).status_code == 200
-    location = str(catalog.post("/v1/table/team$dst/describe", json={}).json()["location"])
+    assert catalog.post("/v1/table/lance_catalog$team$src/rename", json={"new_table_name": "dst"}).status_code == 200
+    location = str(catalog.post("/v1/table/lance_catalog$team$dst/describe", json={}).json()["location"])
     connect("dir", {"root": str(tmp_path / "catalog")}).register_table(
-        RegisterTableRequest(id=["other", "alias"], location=location.rstrip("/").rsplit("/", 1)[-1])
+        RegisterTableRequest(id=["lance_catalog", "other", "alias"], location=location.rstrip("/").rsplit("/", 1)[-1])
     )
 
     refused = catalog.post(door, params=params, json=body)
 
     assert refused.status_code == 409, refused.text
-    assert Path(location.removeprefix("file://"), "_versions").is_dir(), "the drop destroyed bytes team$dst resolves to"
-    assert catalog.post("/v1/table/team$dst/describe", json={}).status_code == 200
+    assert Path(location.removeprefix("file://"), "_versions").is_dir(), "the drop destroyed bytes lance_catalog$team$dst resolves to"
+    assert catalog.post("/v1/table/lance_catalog$team$dst/describe", json={}).status_code == 200

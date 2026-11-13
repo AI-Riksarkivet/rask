@@ -35,6 +35,7 @@ import requests
 from credentials import Credential, credential
 from liveness import skip_unless_live
 from principals import DEX_CLIENT, DEX_SCOPE
+from topology import namespace_id
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
@@ -121,31 +122,12 @@ def _gt_promql_sum(query: str) -> float:
     return sum(float(s["value"][1]) for s in r.json()["data"]["result"])
 
 
-#: The warehouse this suite's namespace is bound to, when the estate has warehouses. Empty targets the
-#: shared-root door, correct only where `catalog.warehouses.enabled` is off.
-WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
-
-
 def _create_table(table_id: str, namespace: str, auth: dict[str, str], trace_id: str) -> None:
     """Create a namespace + table via the catalog — the action that emits a lineage event over Dapr — the table's create
     carried in the trace `trace_id` names (a W3C `traceparent`, which the services' instrumentation continues)."""
     requests.post(f"{CATALOG}/v1/table/{table_id}/drop", headers=auth, timeout=30)
     requests.post(f"{CATALOG}/v1/namespace/{namespace}/drop", headers=auth, timeout=30)
-    # A top-level namespace has exactly ONE door on a warehouses-enabled catalog: it must be bound to a
-    # warehouse, or its tables land in the shared default bucket instead of the tenant's own
-    # (`fga_deps.require_warehouse_scoped`). `POST /v1/namespace/{id}/create` is the pre-warehouses
-    # door and answers 400 there — which raised inside this module-scoped fixture's SETUP, so every
-    # test in the file reported as an ERROR rather than a failure, a category easy to read as "the
-    # suite produced nothing".
-    if WAREHOUSE:
-        created = requests.post(
-            f"{CATALOG}/management/v1/warehouses/{WAREHOUSE}/namespaces",
-            json={"namespace": namespace, "adopt_existing": True},
-            headers=auth,
-            timeout=30,
-        )
-    else:
-        created = requests.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={}, headers=auth, timeout=30)
+    created = requests.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={}, headers=auth, timeout=30)
     assert created.status_code == 200, created.text
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
     sink = pa.BufferOutputStream()
@@ -177,8 +159,8 @@ def pipeline_run() -> Iterator[dict[str, Any]]:
 
     auth = _auth_headers()
     token = uuid.uuid4().hex[:8]
-    namespace = f"obsns{token}"
-    table_id = f"{namespace}${namespace}tbl"  # catalog id == lineage Dataset == OpenFGA object id
+    namespace = namespace_id(f"obsns{token}")
+    table_id = f"{namespace}$obsns{token}tbl"  # catalog id == lineage Dataset
     metric_query = 'sum(lineage_events_processed_total{lance_lineage_outcome="ingested"})'
     before = _gt_promql_sum(metric_query)
 

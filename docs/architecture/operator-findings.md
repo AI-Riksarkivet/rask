@@ -1,5 +1,10 @@
 # Operators: what Lakekeeper's and Polaris's own, and what rask's should
 
+> **2026-11-13:** [ADR 0206](../adr/0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md) decided this record's question: the catalog converges the projects, warehouses and service
+> grants git declares (XC-213: the chart's `catalog.declared`, `services/catalog/src/catalog/api/declaration_converge.py`),
+> and the operator comes later and adds a status per object. A warehouse is the first segment of every name, so the
+> binding level this record reads is gone (LH-593, `services/catalog/src/catalog/api/dependencies.py`).
+
 > Research note. Lakekeeper and Polaris are references, never the stack: every proposal is stated on rask's own stack
 > (Lance and lance-namespace, OpenFGA, Dex, Kubernetes ServiceAccounts, NATS JetStream, one Helm chart under Argo CD).
 > Sources, each cloned and read 2026-11-10:

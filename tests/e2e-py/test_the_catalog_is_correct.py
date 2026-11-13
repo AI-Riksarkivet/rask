@@ -21,8 +21,8 @@ governance. This module holds both halves on the deployed catalog, through the c
    answers a cell it must not, and that cell goes red. A refused cell answers its code, leaves what the door could
    change as it was, and names nothing the caller did not send.
 3. A caller who clears a door's gate still meets the rules rask's hierarchy and the closed rows LH-037, LH-203,
-   LH-204, LH-205, LH-208 and LH-209 made: no table outside a namespace and no top-level namespace outside its
-   warehouse, a namespace Overwrite only over an empty namespace, a branch only in its own directory, one holder per
+   LH-204, LH-205, LH-208 and LH-209 made: no table outside a namespace of a warehouse and no warehouse made at a
+   namespace door, a namespace Overwrite only over an empty namespace, a branch only in its own directory, one holder per
    dataset location, no warehouse in another object store, no writer's hand on the platform's `rask.*` provenance, and
    an external blob base only inside an approved one. Each answers its spec code, or the request's success, and leaves
    what it acts on as it was.
@@ -36,9 +36,9 @@ project's doors ask for a rung on the warehouse or the project, which no matrix 
 principal's refusal, and the tenant-B admin's own warehouse, which that admin makes, shows its refusals here are not
 those of a caller who can do nothing.
 
-THE MATRIX NAMESPACE lives in the shared tenant's warehouse (`byo_scenario.Tenant`), under a name that does not carry
-the tenant's project id, so the scenario's tables, and the events criteria 1 and 4 capture by project, stay exactly
-what the scenario made. The warehouse's cascade removes it with the tenant.
+THE MATRIX NAMESPACE lives in the shared tenant's warehouse (`byo_scenario.Tenant`), beside the scenario's bronze and
+silver rather than in them, so the scenario's tables, and the events criteria 1 and 4 capture by those namespaces, stay
+exactly what the scenario made. The warehouse's cascade removes it with the tenant.
 
 THE MATRIX LABEL is a classification label of the scene's own. A label is estate vocabulary, which no tenant's cascade
 reaches, so the scene removes the label's tuples when the module ends. The estate admin names its curator through the
@@ -59,7 +59,6 @@ addresses set, or the e2e-stack lane, which runs it on every push.
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import time
 import uuid
@@ -215,20 +214,22 @@ class Scene:
         self.clients = {role: caller.namespace() for role, caller in callers.items()}
         self.owner = self.clients[Role.OWNER]
         self.suffix = uuid.uuid4().hex[:8]
-        self.namespace = f"c2-{self.suffix}"
-        self.table = [self.namespace, "t"]
-        self.schema = [self.namespace, "schema"]
-        self.keep = [self.namespace, "keep"]
-        self.txn = [self.namespace, "txn"]
+        #: The matrix namespace in the tenant's warehouse, as segments and as the id a door's path names.
+        self.path = [tenant.project, f"c2-{self.suffix}"]
+        self.namespace = "$".join(self.path)
+        self.table = [*self.path, "t"]
+        self.schema = [*self.path, "schema"]
+        self.keep = [*self.path, "keep"]
+        self.txn = [*self.path, "txn"]
         #: A child namespace holding a table, and an empty one: what LH-037's Overwrite refuses and replaces.
-        self.full = [self.namespace, "full"]
-        self.empty = [self.namespace, "empty"]
+        self.full = [*self.path, "full"]
+        self.empty = [*self.path, "empty"]
         #: A principal no matrix role is, in the idp the people's principals name: whom the grant doors grant to.
         self.grantee = f"{callers[Role.OUTSIDER].principal.split('~', 1)[0]}~c2-grantee-{uuid.uuid4().hex[:8]}"
         #: The matrix label: a classification label of the scene's own, its ladder held by the owner, writer and reader.
         self.label = f"c2-label-{self.suffix}"
         self.location = ""
-        #: The uuid the warehouse door minted for the matrix namespace ([[LH-519]]), which every reader's describe answers.
+        #: The uuid the namespace's create minted for it ([[LH-519]]), which every reader's describe answers.
         self.namespace_uuid = ""
         #: A dataset written outside the catalog's doors, relative to the namespace root, which a refused register names.
         self.loose = ""
@@ -241,9 +242,8 @@ class Scene:
 
     def build(self) -> None:
         """Make the matrix namespace, grant each rung, and make the standing objects every refused call shares."""
-        admin, warehouse = self.tenant.admin, self.tenant.project
-        body = {"namespace": self.namespace, "properties": {"rask.tier": "bronze"}}
-        created = scenario.ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{warehouse}/namespaces", json=body, timeout=60))
+        admin = self.tenant.admin
+        created = scenario.ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.namespace}/create", json={"properties": {"rask.tier": "bronze"}}, timeout=60))
         self.namespace_uuid = str(created["properties"]["rask.uuid"])
         for role, relation in ((Role.OWNER, "owner"), (Role.WRITER, "writer"), (Role.READER, "reader")):
             grant = {"user": self.callers[role].principal, "relation": relation}
@@ -272,7 +272,7 @@ class Scene:
         self.append(versions, range(5, 7))
         self.loose = self.written_outside("loose")
         self.held = self.written_outside("held")
-        self.owner.register_table(ln.RegisterTableRequest(id=[self.namespace, "held"], location=self.held))
+        self.owner.register_table(ln.RegisterTableRequest(id=[*self.path, "held"], location=self.held))
         self.append(self.make_table("txn"), range(3, 5))
         self.transaction = str(self.owner.restore_table(ln.RestoreTableRequest(id=self.txn, version=1)).transaction_id)
         self.make_label()
@@ -309,7 +309,7 @@ class Scene:
 
     def sees_namespace(self, role: Role) -> bool:
         """Whether ``role`` may describe the matrix namespace: a grant written to the store is not yet one every check reads."""
-        return attempt(lambda: self.clients[role].describe_namespace(ln.DescribeNamespaceRequest(id=[self.namespace]))).code is None
+        return attempt(lambda: self.clients[role].describe_namespace(ln.DescribeNamespaceRequest(id=self.path))).code is None
 
     def http(self, role: Role) -> requests.Session:
         return self.callers[role].http
@@ -369,10 +369,10 @@ class Scene:
         return {key.decode(): value.decode() for key, value in metadata.items()}
 
     def children(self) -> list[str]:
-        return sorted(self.owner.list_namespaces(ln.ListNamespacesRequest(id=[self.namespace])).namespaces)
+        return sorted(self.owner.list_namespaces(ln.ListNamespacesRequest(id=self.path)).namespaces)
 
     def tables(self, *, declared: bool = False) -> list[str]:
-        return sorted(self.owner.list_tables(ln.ListTablesRequest(id=[self.namespace], include_declared=declared)).tables)
+        return sorted(self.owner.list_tables(ln.ListTablesRequest(id=self.path, include_declared=declared)).tables)
 
     def access(self, namespace: list[str]) -> dict[str, list[str]]:
         """Who holds each `can_*` on ``namespace``, as its owner reviews it."""
@@ -419,7 +419,7 @@ class Scene:
     # Makes, as the owner.
 
     def make_table(self, name: str, ids: range = range(3)) -> list[str]:
-        table = [self.namespace, name]
+        table = [*self.path, name]
         self.owner.create_table(ln.CreateTableRequest(id=table), scenario.arrow_ipc(scenario.rows_of(ids)))
         return table
 
@@ -430,7 +430,7 @@ class Scene:
         self.owner.alter_table_add_columns(ln.AlterTableAddColumnsRequest(id=table, new_columns=[wire.AddColumnsEntry(name=name, expression="id")]))
 
     def make_namespace(self, name: str) -> list[str]:
-        namespace = [self.namespace, name]
+        namespace = [*self.path, name]
         self.owner.create_namespace(ln.CreateNamespaceRequest(id=namespace))
         return namespace
 
@@ -448,7 +448,7 @@ class Scene:
         relative to the namespace root, as a register names it. A table the catalog made is not registrable again: its
         directory is the catalog's layout ([[LH-520]])."""
         bucket = self.location.removeprefix("s3://").split("/", 1)[0]
-        relative = f"{self.namespace}-outside/{name}"
+        relative = f"{self.path[-1]}-outside/{name}"
         rows = scenario.rows_of(range(3))
         lance.write_dataset(
             rows, f"s3://{bucket}/{relative}", storage_options=correctness.store_options().in_clear(), data_storage_version="2.2", enable_stable_row_ids=True
@@ -520,7 +520,7 @@ def _at_schema(scene: Scene, role: Role, allowed: bool) -> Target:
 
 
 def _at_namespace(scene: Scene, role: Role, allowed: bool) -> Target:
-    return Target(namespace=[scene.namespace])
+    return Target(namespace=scene.path)
 
 
 def _version_and_rows(scene: Scene, target: Target) -> tuple[int, int]:
@@ -532,8 +532,9 @@ class Door(BaseModel):
 
     ``rung`` is the least rung of the ladder that clears the gate. Past the gate, a ``declined`` door answers the spec's
     code 0. A refused caller reads ``refused``: the HTTP status of a door a client reaches over plain HTTP (pylance's
-    typed error carries none) and the spec code. ``names_tenant`` marks a door whose path names the tenant's project and
-    warehouse, which its refusal may therefore repeat.
+    typed error carries none) and the spec code. ``names_tenant`` marks a door whose path names the tenant's project or
+    warehouse, which its refusal may therefore repeat: every door but the label's, since a table's or namespace's id
+    begins with its warehouse, whose id is the tenant's project's.
 
     ``aim`` picks what a call acts on: a fresh object where an allowed call would consume one, else the scene's standing
     one, which every refused call shares. ``send`` makes the call as a principal. ``watch`` reads, as the owner, what the
@@ -547,7 +548,7 @@ class Door(BaseModel):
     rung: Rung
     declined: bool = False
     refused: tuple[int | None, int] = (None, PERMISSION_DENIED)
-    names_tenant: bool = False
+    names_tenant: bool = True
     aim: Callable[[Scene, Role, bool], Target] = _at_table
     send: Callable[[Scene, Role, Target], Any]
     watch: Callable[[Scene, Target], object] = _nothing
@@ -558,7 +559,7 @@ def _fresh_table(prefix: str, standing: str) -> Callable[[Scene, Role, bool], Ta
     """A table of its own for an allowed call, which consumes it; the standing ``standing`` for a refused one."""
 
     def aim(scene: Scene, role: Role, allowed: bool) -> Target:
-        return Target(table=scene.make_table(f"{prefix}-{role}") if allowed else [scene.namespace, standing], name=f"{prefix}-{role}-renamed")
+        return Target(table=scene.make_table(f"{prefix}-{role}") if allowed else [*scene.path, standing], name=f"{prefix}-{role}-renamed")
 
     return aim
 
@@ -615,14 +616,14 @@ def _fresh_branch(scene: Scene, role: Role, allowed: bool) -> Target:
 def _fresh_registration(scene: Scene, role: Role, allowed: bool) -> Target:
     """A deregistered location of its own for an allowed register; the standing loose one for a refused one."""
     if not allowed:
-        return Target(table=[scene.namespace, "registered-refused"], location=scene.loose)
-    return Target(table=[scene.namespace, f"registered-{role}"], location=scene.written_outside(f"loose-{role}"))
+        return Target(table=[*scene.path, "registered-refused"], location=scene.loose)
+    return Target(table=[*scene.path, f"registered-{role}"], location=scene.written_outside(f"loose-{role}"))
 
 
 def _fresh_versions(scene: Scene, role: Role, allowed: bool) -> Target:
     """A table of its own with three versions for an allowed delete of version 2; the standing one for a refused one."""
     if not allowed:
-        return Target(table=[scene.namespace, "keep-versions"])
+        return Target(table=[*scene.path, "keep-versions"])
     table = scene.make_table(f"versions-{role}")
     scene.append(table, range(3, 5))
     scene.append(table, range(5, 7))
@@ -688,11 +689,6 @@ def _revoke_label_apply(scene: Scene, role: Role, target: Target) -> requests.Re
     return scene.http(role).post(f"{CATALOG}/management/v1/classification/{scene.label}/access/revoke", json=body, timeout=60)
 
 
-def _warehouse_namespaces(scene: Scene, target: Target) -> list[str]:
-    body = scenario.ok(scene.as_admin(f"/management/v1/warehouses/{scene.tenant.project}/namespaces"))
-    return sorted(json.dumps(item, sort_keys=True) for item in body.get("namespaces") or body.get("items") or [])
-
-
 def _project_warehouses(scene: Scene, target: Target) -> list[str]:
     return scene.warehouses_of(scene.tenant.project)
 
@@ -705,7 +701,7 @@ SPEC_DOORS: tuple[Door, ...] = (
     Door(
         operation="CreateNamespace",
         rung=Rung.WRITER,
-        aim=lambda s, role, allowed: Target(namespace=[s.namespace, f"ns-made-{role}"]),
+        aim=lambda s, role, allowed: Target(namespace=[*s.path, f"ns-made-{role}"]),
         send=lambda s, role, t: s.clients[role].create_namespace(ln.CreateNamespaceRequest(id=t.namespace)),
         watch=lambda s, t: s.children(),
         shows=lambda s, role, t, value, before: (s.children(), sorted([*before, t.namespace[-1]])),
@@ -796,7 +792,7 @@ SPEC_DOORS: tuple[Door, ...] = (
     Door(
         operation="RestoreTable",
         rung=Rung.OWNER,
-        aim=lambda s, role, allowed: Target(table=[s.namespace, "keep-restore"]),
+        aim=lambda s, role, allowed: Target(table=[*s.path, "keep-restore"]),
         send=lambda s, role, t: s.clients[role].restore_table(ln.RestoreTableRequest(id=t.table, version=1)),
         watch=lambda s, t: s.latest(t.table),
         shows=lambda s, role, t, value, before: ((s.latest(t.table), s.ids(t.table)), (before + 1, [0, 1, 2])),
@@ -806,8 +802,8 @@ SPEC_DOORS: tuple[Door, ...] = (
         rung=Rung.OWNER,
         aim=_fresh_table("renamed", "keep-rename"),
         send=lambda s, role, t: s.clients[role].rename_table(ln.RenameTableRequest(id=t.table, new_table_name=t.name)),
-        watch=lambda s, t: (s.exists(t.table), s.exists([s.namespace, t.name])),
-        shows=lambda s, role, t, value, before: ((s.exists(t.table), s.exists([s.namespace, t.name])), (False, True)),
+        watch=lambda s, t: (s.exists(t.table), s.exists([*s.path, t.name])),
+        shows=lambda s, role, t, value, before: ((s.exists(t.table), s.exists([*s.path, t.name])), (False, True)),
     ),
     Door(
         operation="UpdateTableSchemaMetadata",
@@ -968,7 +964,7 @@ SPEC_DOORS: tuple[Door, ...] = (
     Door(
         operation="CreateTable",
         rung=Rung.WRITER,
-        aim=lambda s, role, allowed: Target(table=[s.namespace, f"made-{role}"]),
+        aim=lambda s, role, allowed: Target(table=[*s.path, f"made-{role}"]),
         send=lambda s, role, t: s.clients[role].create_table(ln.CreateTableRequest(id=t.table), scenario.arrow_ipc(scenario.rows_of(range(3)))),
         watch=lambda s, t: s.exists(t.table),
         shows=lambda s, role, t, value, before: (s.ids(t.table), [0, 1, 2]),
@@ -1010,7 +1006,7 @@ SPEC_DOORS: tuple[Door, ...] = (
     Door(
         operation="RefreshMaterializedView",
         rung=Rung.ABOVE,
-        aim=lambda s, role, allowed: Target(table=[s.namespace, "view"]),
+        aim=lambda s, role, allowed: Target(table=[*s.path, "view"]),
         send=lambda s, role, t: s.clients[role].refresh_materialized_view(ln.RefreshMaterializedViewRequest(id=t.table)),
         watch=lambda s, t: s.tables(),
     ),
@@ -1018,7 +1014,7 @@ SPEC_DOORS: tuple[Door, ...] = (
         operation="CreateMaterializedView",
         rung=Rung.WRITER,
         declined=True,
-        aim=lambda s, role, allowed: Target(table=[s.namespace, f"view-{role}"]),
+        aim=lambda s, role, allowed: Target(table=[*s.path, f"view-{role}"]),
         send=lambda s, role, t: s.clients[role].create_materialized_view(
             ln.CreateMaterializedViewRequest(id=t.table, kind="query", source_query="SELECT id FROM t", output_schema="{}")
         ),
@@ -1074,7 +1070,7 @@ SPEC_DOORS: tuple[Door, ...] = (
     Door(
         operation="DeclareTable",
         rung=Rung.WRITER,
-        aim=lambda s, role, allowed: Target(table=[s.namespace, f"declared-{role}"]),
+        aim=lambda s, role, allowed: Target(table=[*s.path, f"declared-{role}"]),
         send=lambda s, role, t: s.clients[role].declare_table(ln.DeclareTableRequest(id=t.table)),
         watch=lambda s, t: s.tables(declared=True),
         shows=lambda s, role, t, value, before: (
@@ -1195,27 +1191,16 @@ MANAGEMENT_DOORS: tuple[Door, ...] = (
         operation="RevokeClassificationApply",
         rung=Rung.OWNER,
         refused=(403, PERMISSION_DENIED),
+        names_tenant=False,
         aim=_fresh_label_holder,
         send=_revoke_label_apply,
         watch=lambda s, t: s.label_holders("apply"),
         shows=lambda s, role, t, value, before: (any(t.name in user for user in s.label_holders("apply")), False),
     ),
     Door(
-        operation="CreateWarehouseNamespace",
-        rung=Rung.ABOVE,
-        refused=(403, PERMISSION_DENIED),
-        names_tenant=True,
-        aim=lambda s, role, allowed: Target(name=f"c2w-{role}-{s.namespace}"),
-        send=lambda s, role, t: s.http(role).post(
-            f"{CATALOG}/management/v1/warehouses/{s.tenant.project}/namespaces", json={"namespace": t.name, "properties": {"rask.tier": "bronze"}}, timeout=60
-        ),
-        watch=_warehouse_namespaces,
-    ),
-    Door(
         operation="DeleteWarehouse",
         rung=Rung.ABOVE,
         refused=(404, TABLE_NOT_FOUND),
-        names_tenant=True,
         send=lambda s, role, t: s.http(role).delete(f"{CATALOG}/management/v1/warehouses/{s.tenant.project}", timeout=60),
         watch=lambda s, t: s.as_admin(f"/management/v1/warehouses/{s.tenant.project}").status_code,
     ),
@@ -1223,9 +1208,8 @@ MANAGEMENT_DOORS: tuple[Door, ...] = (
         operation="CreateProjectWarehouse",
         rung=Rung.ABOVE,
         refused=(403, PERMISSION_DENIED),
-        names_tenant=True,
         send=lambda s, role, t: s.http(role).post(
-            f"{CATALOG}/management/v1/warehouses", json={"id": f"c2w-{role}-{s.namespace}", "project": s.tenant.project}, timeout=120
+            f"{CATALOG}/management/v1/warehouses", json={"id": f"c2w-{role}-{s.suffix}", "project": s.tenant.project}, timeout=120
         ),
         watch=_project_warehouses,
     ),
@@ -1233,7 +1217,6 @@ MANAGEMENT_DOORS: tuple[Door, ...] = (
         operation="GrantProjectRole",
         rung=Rung.ABOVE,
         refused=(403, PERMISSION_DENIED),
-        names_tenant=True,
         send=lambda s, role, t: s.http(role).put(
             f"{CATALOG}/management/v1/projects/{s.tenant.project}/members", json={"user": s.grantee, "relation": "member"}, timeout=60
         ),
@@ -1243,7 +1226,6 @@ MANAGEMENT_DOORS: tuple[Door, ...] = (
         operation="DeleteProject",
         rung=Rung.ABOVE,
         refused=(404, TABLE_NOT_FOUND),
-        names_tenant=True,
         send=lambda s, role, t: s.http(role).delete(f"{CATALOG}/management/v1/projects/{s.tenant.project}", timeout=60),
         watch=lambda s, t: s.as_admin(f"/management/v1/projects/{s.tenant.project}").status_code,
     ),
@@ -1363,16 +1345,18 @@ def _unapproved_blob_base(scene: Scene) -> requests.Response:
 #: admin at the hierarchy's doors, the matrix namespace's owner, its writer at the provenance guard, and the tenant-B
 #: admin, in its own project, at the warehouse door.
 RULES: dict[str, Rule] = {
-    "hierarchy-root-table": Rule(
-        send=lambda s: s.tenant.admin.namespace().create_table(ln.CreateTableRequest(id=[f"root-{s.suffix}"]), scenario.arrow_ipc(scenario.rows_of(range(1)))),
+    "hierarchy-a-table-directly-in-a-warehouse": Rule(
+        send=lambda s: s.tenant.admin.namespace().create_table(
+            ln.CreateTableRequest(id=[s.tenant.project, f"root-{s.suffix}"]), scenario.arrow_ipc(scenario.rows_of(range(1)))
+        ),
         code=INVALID_INPUT,
     ),
-    "hierarchy-top-level-namespace": Rule(
+    "hierarchy-a-warehouse-made-at-a-namespace-door": Rule(
         send=lambda s: s.tenant.admin.namespace().create_namespace(ln.CreateNamespaceRequest(id=[f"top-{s.suffix}"])),
         code=INVALID_INPUT,
     ),
     "hierarchy-populated-namespace-drop": Rule(
-        send=lambda s: s.owner.drop_namespace(ln.DropNamespaceRequest(id=[s.namespace])),
+        send=lambda s: s.owner.drop_namespace(ln.DropNamespaceRequest(id=s.path)),
         code=NAMESPACE_NOT_EMPTY,
         watch=lambda s: s.tables(),
     ),
@@ -1398,15 +1382,15 @@ RULES: dict[str, Rule] = {
         watch=lambda s: s.branches(s.table),
     ),
     "LH-204-a-register-at-a-held-location": Rule(
-        send=lambda s: s.owner.register_table(ln.RegisterTableRequest(id=[s.namespace, "alias"], location=s.held)),
+        send=lambda s: s.owner.register_table(ln.RegisterTableRequest(id=[*s.path, "alias"], location=s.held)),
         code=INVALID_INPUT,
-        watch=lambda s: s.exists([s.namespace, "alias"]),
+        watch=lambda s: s.exists([*s.path, "alias"]),
     ),
     # A table the catalog makes lives in a uuid directory directly under the root, which no registrar may name ([[LH-520]]).
     "LH-520-a-register-in-the-catalogs-layout": Rule(
-        send=lambda s: s.owner.register_table(ln.RegisterTableRequest(id=[s.namespace, "layout"], location=s.location.rstrip("/").rsplit("/", 1)[-1])),
+        send=lambda s: s.owner.register_table(ln.RegisterTableRequest(id=[*s.path, "layout"], location=s.location.rstrip("/").rsplit("/", 1)[-1])),
         code=INVALID_INPUT,
-        watch=lambda s: s.exists([s.namespace, "layout"]),
+        watch=lambda s: s.exists([*s.path, "layout"]),
     ),
     "LH-205-a-warehouse-in-another-store": Rule(
         send=lambda s: s.http(Role.TENANT_B_ADMIN).post(
@@ -1425,7 +1409,7 @@ RULES: dict[str, Rule] = {
     "LH-209-an-unapproved-external-blob-base": Rule(
         send=_unapproved_blob_base,
         code=INVALID_INPUT,
-        watch=lambda s: s.exists([s.namespace, "blob-refused"]),
+        watch=lambda s: s.exists([*s.path, "blob-refused"]),
     ),
 }
 
@@ -1449,7 +1433,7 @@ def test_lancedb_opens_a_table_through_the_namespace_and_reads_its_rows(scene: S
 
     database = lancedb.namespace.connect_namespace("rest", scene.properties(Role.READER))
 
-    read = database.open_table(scene.table[-1], namespace_path=[scene.namespace]).to_arrow()
+    read = database.open_table(scene.table[-1], namespace_path=scene.path).to_arrow()
 
     assert sorted(read.column("id").to_pylist()) == scene.ids(scene.table)
 

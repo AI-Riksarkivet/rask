@@ -33,7 +33,6 @@ from lakehouse.lineage_events import DatasetUuids
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
-WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 
 
 def bearer() -> str:
@@ -84,7 +83,7 @@ def subject_of(token: str) -> str:
 
 
 def owned_output_table(namespace: str, table: str) -> str:
-    """Create ``<namespace>$<table>`` through the catalog and answer the identity that now owns it.
+    """Create ``<namespace>$<table>`` through the catalog, ``namespace`` a full id (`<warehouse>$<name>`), and answer the identity that now owns it.
 
     BOTH HALVES ARE NEEDED AND THE SECOND IS THE NON-OBVIOUS ONE. Creating the table gives it an FGA
     parent and owner tuples; but the bus door authorizes AS `rask_author.sub`, so an event authored by
@@ -96,15 +95,8 @@ def owned_output_table(namespace: str, table: str) -> str:
         return ""
     auth = {"Authorization": f"Bearer {token}"} if token else {}
     table_id = f"{namespace}${table}"
-    if WAREHOUSE:
-        requests.post(
-            f"{CATALOG}/management/v1/warehouses/{WAREHOUSE}/namespaces",
-            json={"namespace": namespace, "adopt_existing": True},
-            headers=auth,
-            timeout=30,
-        )
-    else:
-        requests.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={}, headers=auth, timeout=30)
+    # A 409 is the namespace an earlier run made; the table's create below fails on any parent that is not there.
+    requests.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={}, headers=auth, timeout=30)
     rows = pa.table({"id": pa.array([1], pa.int64())})
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, rows.schema) as writer:

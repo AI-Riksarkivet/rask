@@ -45,12 +45,6 @@ ControlAction = Literal[
     "warehouse_created",
     "warehouse_activated",
     "warehouse_deactivated",
-    "warehouse_bound",
-    # A namespace DETACHED from its warehouse without dropping it — the repair for a binding that
-    # outlived what it pointed at. It is its own action rather than a `warehouse_bound` with an empty
-    # target because the binding cache is positive-and-forever: a replica that never hears the specific
-    # word keeps routing a namespace at a warehouse nothing binds it to any more.
-    "warehouse_unbound",
     "warehouse_deleted",
     # Deletion protection on a warehouse ([[LH-548]]), the warehouse twin of the table and namespace pair below.
     "warehouse_protected",
@@ -165,7 +159,7 @@ class CatalogControlEvent(BaseModel):
     #: uuid identifies holds no grant, and its deregister names it `table:<name>`, with no `object_uuid` ([[LH-534]]).
     object_id: str
     #: The table's or namespace's name when the event was emitted (`db1$t`), beside `object_id`'s uuid: what a person
-    #: is shown, and what a consumer keyed by name (a namespace's warehouse binding) reads. `None` for any other object.
+    #: is shown, and what a consumer keyed by name reads. `None` for any other object.
     object_name: str | None = None
     #: The uuid the catalog minted for the object when it is a table or a namespace (ADR 0173 §10), or for the table or
     #: namespace a grant or policy is scoped to: its identity across a rename, which a name is not.
@@ -216,8 +210,6 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "warehouse_created"
             | "warehouse_activated"
             | "warehouse_deactivated"
-            | "warehouse_bound"
-            | "warehouse_unbound"
             | "warehouse_deleted"
             | "warehouse_protected"
             | "warehouse_unprotected"

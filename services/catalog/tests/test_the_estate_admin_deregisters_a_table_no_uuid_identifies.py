@@ -28,18 +28,18 @@ def test_only_the_estate_admin_deregisters_a_table_no_uuid_identifies(
 ) -> None:
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     catalog = governed_catalog
-    created = catalog.client.post("/v1/namespace/db/create", headers=catalog.bearer("alice"), json={})
+    created = catalog.create_in_the_estate("alice", "db")
     assert created.status_code == 200, created.text
-    connect("dir", {"root": str(tmp_path)}).register_table(RegisterTableRequest(id=["db", "lost"], location="held"))
+    connect("dir", {"root": str(tmp_path)}).register_table(RegisterTableRequest(id=["lance_catalog", "db", "lost"], location="held"))
     catalog.store.write((catalog.person("root"), "owner", "estate:rask"))
 
-    refused = catalog.client.post("/v1/table/db$lost/deregister", headers=catalog.bearer("alice"), json={})
-    removed = catalog.client.post("/v1/table/db$lost/deregister", headers=catalog.bearer("root"), json={})
-    described = catalog.client.post("/v1/table/db$lost/describe", headers=catalog.bearer("alice"), json={})
+    refused = catalog.client.post("/v1/table/lance_catalog$db$lost/deregister", headers=catalog.bearer("alice"), json={})
+    removed = catalog.client.post("/v1/table/lance_catalog$db$lost/deregister", headers=catalog.bearer("root"), json={})
+    described = catalog.client.post("/v1/table/lance_catalog$db$lost/describe", headers=catalog.bearer("alice"), json={})
 
     assert (refused.status_code, refused.json().get("detail"), removed.status_code, described.status_code) == (
         403,
-        "can_deregister required on table:db$lost",
+        "can_deregister required on table:lance_catalog$db$lost",
         200,
         404,
     )
@@ -52,14 +52,18 @@ def test_only_the_estate_admin_deregisters_a_table_no_uuid_identifies(
 
 
 def test_only_the_estate_admin_declares_a_tier_on_a_namespace_no_project_owns(governed_catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """A tier is declared by the namespace's project admin (ADR 0160); a namespace bound to no warehouse has none, so its
-    tier is the estate admin's, asked as its own verb on the estate root."""
+    """A tier is declared by the namespace's project admin (ADR 0160); a namespace of the estate's own warehouse has none,
+    so its tier is the estate admin's, asked as its own verb on the estate root. Both may create a namespace there."""
     catalog = governed_catalog
-    catalog.store.write((catalog.person("root"), "owner", "estate:rask"), (catalog.person("root"), "writer", "warehouse:lance_catalog"))
+    catalog.store.write(
+        (catalog.person("root"), "owner", "estate:rask"),
+        (catalog.person("root"), "writer", "warehouse:lance_catalog"),
+        (catalog.person("alice"), "writer", "warehouse:lance_catalog"),
+    )
     declaring = {"properties": {"rask.tier": "silver"}}
 
-    refused = catalog.client.post("/v1/namespace/staged/create", headers=catalog.bearer("alice"), json=declaring)
-    declared = catalog.client.post("/v1/namespace/staged/create", headers=catalog.bearer("root"), json=declaring)
+    refused = catalog.client.post("/v1/namespace/lance_catalog$staged/create", headers=catalog.bearer("alice"), json=declaring)
+    declared = catalog.client.post("/v1/namespace/lance_catalog$staged/create", headers=catalog.bearer("root"), json=declaring)
 
     assert (refused.status_code, refused.json().get("detail"), declared.status_code) == (403, "can_declare_unowned_tier required on estate:rask", 200), (
         declared.text

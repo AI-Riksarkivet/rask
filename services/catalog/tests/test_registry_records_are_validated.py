@@ -1,13 +1,13 @@
-"""CAT-CORE-12 — the three control-root registries VALIDATE their records instead of eyeballing them.
+"""CAT-CORE-12 — the control-root registries VALIDATE their records instead of eyeballing them.
 
-Warehouses, namespace→warehouse bindings and projects all parse ``json.loads`` into a raw ``dict`` and
+Warehouses and projects both parse ``json.loads`` into a raw ``dict`` and
 then hand-check it with ``.get()`` truthiness::
 
     if isinstance(record, dict) and record.get("id") and record.get("bucket") and record.get("project"):
 
 Truthiness answers "is this key present and non-empty", never "is this the right SHAPE". Every consumer
 then treats the values as strings — ``projects_claiming_bucket`` compares ``r.get("bucket") == bucket``
-and coerces ``str(r["project"])``, the resolver reads ``binding["root_uri"]`` straight into a namespace
+and coerces ``str(r["project"])``, the resolver reads ``record["root_uri"]`` straight into a namespace
 connection — so a record whose ``bucket`` is a LIST passes the guard, is returned as live, and then
 matches no bucket claim at all. That is the wrong direction to fail in: the claim guard exists to stop
 a second project registering a bucket somebody already owns.
@@ -47,34 +47,8 @@ def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_pat
     assert wh_svc.list_warehouses(_root(tmp_path), StorageOptions()) == [good]
 
 
-def test_a_binding_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_path: Path) -> None:
-    wh_svc.bind_namespace(_root(tmp_path), StorageOptions(), "bronze", "wh-a", "s3://bkt-a")
-    _write(tmp_path, "_warehouses/bindings", "zz-typed", {"top_ns": ["bronze"], "warehouse_id": 7, "root_uri": None})
-    readable, skipped = wh_svc.read_bindings(_root(tmp_path), StorageOptions())
-    assert [b["top_ns"] for b in readable] == ["bronze"]
-    assert len(skipped) == 1, "an unusable binding must be REPORTED as skipped — the delete door fails closed on it"
-
-
 def test_a_project_record_with_a_WRONG_TYPED_id_is_skipped(tmp_path: Path) -> None:
     good = {"id": "acme", "created_at": "t", "created_by": "root"}
     proj_svc.put_project(_root(tmp_path), StorageOptions(), good)
     _write(tmp_path, "_projects", "zz-typed", {"id": ["acme"]})
     assert proj_svc.list_projects(_root(tmp_path), StorageOptions()) == [good]
-
-
-def test_an_UNREADABLE_binding_refuses_as_unreadable_rather_than_as_already_bound(tmp_path: Path) -> None:
-    """`bind_namespace`'s convergence check is the fifth singular reader, and it read the record RAW.
-
-    It compares two fields to answer "is this my own earlier write, retried?". On a record it cannot
-    parse the comparison simply fails, so the door answered `NamespaceAlreadyExistsError` — *"already
-    bound to another warehouse"* — which is fail-CLOSED (the bind is refused, correctly) and
-    misdiagnosed: it names a conflict with another tenant when the truth is a record nobody can read.
-    An operator sent to find the competing warehouse is looking for something that does not exist.
-    """
-    import pytest
-    from lance_namespace import ServiceUnavailableError  # the catalog's own — lakehouse ships a same-named, different class
-
-    _write(tmp_path, "_warehouses/bindings", "bronze", {"top_ns": "bronze", "warehouse_id": ["not", "a", "string"], "root_uri": "s3://bkt"})
-
-    with pytest.raises(ServiceUnavailableError):
-        wh_svc.bind_namespace(_root(tmp_path), StorageOptions(), "bronze", "wh-a", "s3://bkt-a")

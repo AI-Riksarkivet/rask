@@ -16,7 +16,7 @@ Authorization: Bearer <token>
 
 - `since` is the last cursor you stored. The answer holds the events with a larger `seq`, **oldest first**.
 - `limit` is at most 500. A page can be shorter than `limit` while more events exist: see the cursor rule.
-- `table` keeps the events naming the table that id (`ns$table`) names now, under every name it has had: lineage
+- `table` keeps the events naming the table that id (`warehouse$ns$table`) names now, under every name it has had: lineage
   resolves the id to the table's uuid, which a rename keeps. `namespace` keeps the events naming a table directly in
   the namespace that id names now. Each resolves as your token sees it; an id that names nothing you may see keeps the
   events whose names match it (for `namespace`, every table id under it). Both may be given.

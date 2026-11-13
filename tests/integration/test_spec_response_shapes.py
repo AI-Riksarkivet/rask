@@ -36,7 +36,7 @@ def _json_media(resp: object) -> str:
 
 def test_count_rows_answers_a_json_integer(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=7)
-    resp = client.post("/v1/table/db$t/count_rows", json={})
+    resp = client.post("/v1/table/lance_catalog$db$t/count_rows", json={})
     assert resp.status_code == 200, resp.text
     assert "application/json" in _json_media(resp), f"spec declares application/json; got {_json_media(resp)!r}"
     assert resp.json() == 7, "the spec's bare integer, not a string"
@@ -44,7 +44,7 @@ def test_count_rows_answers_a_json_integer(client: TestClient, fake_ns: MagicMoc
 
 def test_explain_plan_answers_a_json_string(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.explain_table_query_plan.return_value = "ProjectionExec: expr=[id@0]"
-    resp = client.post("/v1/table/db$t/explain_plan", json={"query": {"vector": {"single_vector": [1.0]}, "k": 1}})
+    resp = client.post("/v1/table/lance_catalog$db$t/explain_plan", json={"query": {"vector": {"single_vector": [1.0]}, "k": 1}})
     assert resp.status_code == 200, resp.text
     assert "application/json" in _json_media(resp), f"the 0.12.0 reqwest client rejects text/plain outright; got {_json_media(resp)!r}"
     assert resp.json() == "ProjectionExec: expr=[id@0]", "a JSON string, so serde parses it"
@@ -52,7 +52,7 @@ def test_explain_plan_answers_a_json_string(client: TestClient, fake_ns: MagicMo
 
 def test_analyze_plan_answers_a_json_string(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.analyze_table_query_plan.return_value = "AnalyzeExec: metrics=[]"
-    resp = client.post("/v1/table/db$t/analyze_plan", json={"vector": {"single_vector": [1.0]}, "k": 1})
+    resp = client.post("/v1/table/lance_catalog$db$t/analyze_plan", json={"vector": {"single_vector": [1.0]}, "k": 1})
     assert resp.status_code == 200, resp.text
     assert "application/json" in _json_media(resp)
     assert resp.json() == "AnalyzeExec: metrics=[]"

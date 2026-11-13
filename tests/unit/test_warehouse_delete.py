@@ -8,7 +8,7 @@ whether the purge primitive was called at all.
 
 The invariants under test are the ones a delete gets wrong silently: that the FGA gate is the PROJECT's
 admin rung and runs before anything that could disclose what the warehouse holds, that ``force`` turns the
-protection lock and NOT the authorization one, that a cascade survives a binding whose namespace is already
+protection lock and NOT the authorization one, that a delete survives a warehouse whose own row is already
 gone, and that the bucket's bytes are never removed by default. What a cascade removes and revokes, on real
 pylance, is `tests/integration/test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
 """
@@ -51,7 +51,6 @@ def _root(tmp_path: Any) -> str:
 
 def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
     data: dict[str, object] = {
-        "warehouses_enabled": True,
         "control_root": _root(tmp_path),
         "s3_access_key_id": "x",
         "s3_secret_access_key": "x",
@@ -62,14 +61,16 @@ def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
 
 
 class _FakeNamespace:
-    """The warehouse's bucket-rooted connection: empty namespaces, and the drops ``native.call`` routes to it.
+    """The warehouse's bucket-rooted connection: the namespaces under its own row, and the drops ``native.call`` routes to it.
 
-    ``missing`` makes a namespace answer ``NamespaceNotFoundError`` — the drift case where a binding
-    outlived the namespace it points at, which the cascade must survive rather than deadlock on.
+    ``held`` names the namespaces directly under the warehouse's row; each is empty. ``missing`` makes a name whose
+    first segment it lists answer ``NamespaceNotFoundError``: the drift case where a half-finished earlier delete
+    dropped the warehouse's own row, which a delete must survive rather than deadlock on.
     """
 
-    def __init__(self, *, missing: frozenset[str] = frozenset()) -> None:
+    def __init__(self, *, held: tuple[str, ...] = (), missing: frozenset[str] = frozenset()) -> None:
         self.dropped: list[list[str]] = []
+        self._held = held
         self._missing = missing
 
     def _require(self, segments: list[str] | None) -> None:
@@ -87,7 +88,7 @@ class _FakeNamespace:
 
     def list_namespaces(self, request: ListNamespacesRequest) -> ListNamespacesResponse:
         self._require(request.id)
-        return ListNamespacesResponse(namespaces=[])
+        return ListNamespacesResponse(namespaces=list(self._held) if len(request.id or []) == 1 else [])
 
     def drop_namespace(self, request: Any) -> None:
         self._require(request.id)
@@ -107,9 +108,9 @@ class _Connections:
 
 
 def _request(root_uri: str = "s3://acme-bkt", ns: _FakeNamespace | None = None) -> Any:
-    """A stand-in request carrying the two pieces of app state the delete touches: the positive binding
-    cache (which it must evict) and the catalog's connections (answering a fake, so no real backend is built)."""
-    state = SimpleNamespace(warehouse_binding_cache={}, connections=_Connections(root_uri, ns if ns is not None else _FakeNamespace()))
+    """A stand-in request carrying the app state the delete touches: the catalog's connections, answering a fake so no
+    real backend is built."""
+    state = SimpleNamespace(connections=_Connections(root_uri, ns if ns is not None else _FakeNamespace()))
     return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
@@ -119,10 +120,9 @@ def _seed(
     warehouse_id: str = "acme-wh",
     project: str = "acme",
     bucket: str = "acme-bkt",
-    namespaces: tuple[str, ...] = (),
     protected: bool = False,
 ) -> dict[str, str]:
-    """Write a warehouse record (+ its namespace bindings) straight into the registry."""
+    """Write a warehouse record straight into the registry."""
     so = settings.storage_options()
     record = {
         "id": warehouse_id,
@@ -135,8 +135,6 @@ def _seed(
     if protected:
         record["protected"] = "true"
     warehouses.put_warehouse(settings.registry_root, so, record)
-    for top_ns in namespaces:
-        warehouses.bind_namespace(settings.registry_root, so, top_ns, warehouse_id, record["root_uri"])
     return record
 
 
@@ -187,26 +185,27 @@ def test_a_warehouse_that_still_holds_namespaces_refuses_and_names_every_one_of_
     # A 409 that does not say WHAT blocks it just moves the search to the user, so the refusal lists the
     # contents and the flag that would take them — and nothing is deleted behind it.
     settings = _settings(tmp_path)
-    _seed(settings, namespaces=("bronze", "silver"))
+    _seed(settings)
+    ns = _FakeNamespace(held=("bronze", "silver"))
     with pytest.raises(NamespaceNotEmptyError) as exc:
-        _delete(settings, _request())
+        _delete(settings, _request(ns=ns))
     message = str(exc.value)
-    assert "bronze" in message and "silver" in message
+    assert "acme-wh$bronze" in message and "acme-wh$silver" in message
     assert "cascade=true" in message
     assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is not None
-    assert warehouses.namespaces_bound_to(settings.registry_root, StorageOptions(), "acme-wh") == ["bronze", "silver"]
+    assert ns.dropped == []
 
 
-def test_a_cascade_survives_a_binding_whose_namespace_is_already_gone(tmp_path: Any) -> None:
-    # Drift (a half-finished earlier delete): refusing here would make the binding undeletable by anyone,
-    # so the absent namespace is logged and its registry record is still cleaned up.
+def test_a_delete_survives_a_warehouse_whose_own_row_is_already_gone(tmp_path: Any) -> None:
+    # Drift (a half-finished earlier delete dropped the warehouse's row last): refusing here would make the record
+    # undeletable by anyone, so the warehouse holds nothing and its registry record is still removed.
     settings = _settings(tmp_path)
-    _seed(settings, namespaces=("bronze",))
-    ns = _FakeNamespace(missing=frozenset({"bronze"}))
+    _seed(settings)
+    ns = _FakeNamespace(missing=frozenset({"acme-wh"}))
     result = _delete(settings, _request(ns=ns), cascade=True)
     assert ns.dropped == []
-    assert result.namespaces_dropped == ["bronze"]
-    assert warehouses.namespaces_bound_to(settings.registry_root, StorageOptions(), "acme-wh") == []
+    assert result.namespaces_dropped == []
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is None
 
 
 # --------------------------------------------------------------------------- #

@@ -108,10 +108,26 @@ shows `ProjectFilterNotice` saying so; while either read is out the list shows i
 the notice says why. The select offers the visible projects and the rows' projects, and keeps an unseen id on screen
 as a disabled "(none you can see)" choice. The subtitle names the filter; the workbench's tables panel keeps it in its own state, so choosing a project keeps the reader
 on `/workbench` (ADR 0202). The rows are the estate-wide read the catalog already answered within the caller's grants;
-the filter narrows them in the browser. A row's project comes from reads the lists already make (`ProjectIndexRead`: the
-warehouses and their estate bindings), and a namespace bound to no warehouse (`provenance`) shows a dash. While that
+the filter narrows them in the browser. A row's project is its warehouse's: every namespace and table id begins with its
+warehouse (ADR 0206), so `projectOf` (`project-filter.ts`) reads the project of the warehouse an id opens with
+(`warehouseOf`, `#lib/api/identifiers.ts`) from an index of the warehouses read (`ProjectIndexRead`). The estate's own
+warehouse, `lance_catalog`, has no registry record and belongs to no project, so what lies in it (the lakehouse's
+`provenance` namespace) shows a dash. While that
 index loads a filtered list shows its loading state; when it failed, `ProjectFilterNotice` says why and offers to clear
 the filter, with no rows. A project's page (`/projects/[project]`) links each list filtered to it.
+
+**The namespaces page reads and writes through the spec's own doors** (`NamespaceRegistry.svelte`,
+`estate-namespaces.ts`). It lists the root (`GET /v1/namespace/$/list`, the warehouses the caller may see, the estate's
+own included), then each warehouse's own listing (`GET /v1/namespace/<warehouse>/list`), one request per warehouse; a
+warehouse whose listing failed (a deactivated one answers 403) is named with why, never folded into "no namespaces".
+Its create makes a namespace directly under a warehouse with the spec's CreateNamespace on `<warehouse>$<name>`
+(`createWarehouseNamespace` in `warehouses.api.ts`). There is no warehouse-binding door.
+
+**A project or warehouse git declares shows "Declared in git"** (`#lib/data/DeclaredInGit.svelte`, `declaredInGit`
+reading `managed_by === 'git'` on the read, [[XC-213]]): the catalog refuses its lifecycle doors (deactivate, activate,
+protection, delete) with 403, so the warehouses page keeps a declared warehouse's activate/deactivate and delete, and
+the project page a declared project's delete, on screen but disabled, with `DECLARED_IN_GIT_REASON` as their
+description, rather than offer what will be refused.
 
 **The audit and streams pages cannot work.** They need the platform's telemetry store and the NATS monitor (`/jsz`),
 which no Gateway route serves to a browser; the owner kept them anyway (2026-11-04): the audit page says where the trail

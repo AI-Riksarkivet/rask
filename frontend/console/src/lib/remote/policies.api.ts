@@ -38,11 +38,8 @@ const PolicyDraftSchema = v.object({
 	target_rows_per_fragment: v.optional(v.number()),
 });
 
-/** Every maintenance policy governing data inside this project, with the scope it was derived from.
- *
- *  `incomplete`/`skipped_bindings` cross the boundary deliberately: a namespace→warehouse binding the
- *  catalog could not read is a namespace whose policies it could not see, and a list that quietly
- *  narrowed would read as checked-and-clean. The page renders that as a banner, never swallows it. */
+/** Every maintenance policy governing data inside this project, with the scope it was derived from
+ *  (the project's warehouses and their buckets). */
 export const fetchProjectPolicies = query(
 	v.string(),
 	async (project): Promise<ApiResult<ProjectPolicies>> =>

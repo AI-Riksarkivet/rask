@@ -35,6 +35,7 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest, Descri
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel, SecretStr
 
+from catalog.services.warehouses import ensure_catalog_row
 from lakehouse import location_claims, maintenance_policies, record_store, trash
 from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.store_credential import S3KeyPair
@@ -55,8 +56,8 @@ from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_
 from tests.integration.store_requests import StoreRequest, counted
 
 
-TABLE = "db$events"
-LOCATION = f"c0ffee00_{TABLE}"
+TABLE = "lance_catalog$db$events"
+LOCATION = "c0ffee00_db$events"
 DAY = timedelta(days=1)
 #: The retention every table here is kept under (`MAINTENANCE_OLDER_THAN_DAYS`).
 RETENTION = timedelta(days=3)
@@ -166,20 +167,25 @@ def _rows(n: int) -> pa.Table:
     return pa.table({"id": pa.array(range(n), pa.int64())})
 
 
-def _table(*, bucket: str, options: StorageOptions, control: str | None = None, registered: bool = True, uuid_: str | None = None) -> Task:
-    """A table of one version in ``bucket``, registered (or not) in its ``__manifest``, its location claimed on the
-    ``control`` root (``bucket``'s own by default) under a fresh uuid; the check's task for it."""
+def _table(
+    *, bucket: str, options: StorageOptions, control: str | None = None, registered: bool = True, uuid_: str | None = None, warehouse: str = "lance_catalog"
+) -> Task:
+    """A table of one version in ``bucket``, registered (or not) in its ``__manifest`` as ``<warehouse>$db$events`` under
+    the warehouse's own row (a catalog on the bucket made it already, or this does), its location claimed on the ``control`` root (``bucket``'s own by default) under a fresh
+    uuid; the check's task for it."""
     root = f"s3://{bucket}"
+    segments = [warehouse, "db", "events"]
     lance.write_dataset(_rows(3), f"{root}/{LOCATION}", storage_options=options.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
     namespace = connect("dir", {"root": root, **{f"storage.{key}": value for key, value in options.in_clear().items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
+    ensure_catalog_row(namespace, warehouse)
+    namespace.create_namespace(CreateNamespaceRequest(id=segments[:2], properties={UUID_PROPERTY: str(uuid.uuid4())}))
     described = f"{root}/{LOCATION}"
     if registered:
-        namespace.register_table(RegisterTableRequest(id=TABLE.split("$"), location=LOCATION))
-        described = str(namespace.describe_table(DescribeTableRequest(id=TABLE.split("$"))).location)
+        namespace.register_table(RegisterTableRequest(id=segments, location=LOCATION))
+        described = str(namespace.describe_table(DescribeTableRequest(id=segments)).location)
     table_uuid = str(uuid.uuid4())
     claims = location_claims.ClaimStore(control_root=control or root, storage_options=options)
-    location_claims.take(claims, described, TABLE, ["db", "events"], is_gone=lambda _claim: False, uuid=table_uuid)
+    location_claims.take(claims, described, "$".join(segments), segments, is_gone=lambda _claim: False, uuid=table_uuid)
     return Task(kind="orphans", uuid=uuid_ or table_uuid, location=described)
 
 
@@ -287,32 +293,39 @@ def test_a_check_holds_the_next_by_what_it_found(
     assert lance.dataset(task.location, storage_options=store.in_clear()).version == version, "a check that raised no floor wrote a version"
 
 
-def _unbound_in_a_bucket_nothing_configures(*, moto_url: str, bucket: str, store: StorageOptions) -> Task:
+def _in_a_bucket_nothing_configures(*, moto_url: str, bucket: str, store: StorageOptions) -> Task:
     elsewhere = f"{bucket}-elsewhere"
     _s3(moto_url).create_bucket(Bucket=elsewhere)
     return _table(bucket=elsewhere, options=store, control=f"s3://{bucket}")
 
 
-def _bound_to_a_deactivated_warehouse_in_a_configured_bucket(*, bucket: str, store: StorageOptions, **_: Any) -> Task:
-    """The table's namespace is bound to a warehouse offboarding has deactivated, whose bucket is also the one this
-    deployment configures (`MAINTENANCE_S3_BUCKET`): the warehouse's status is what decides, not the configured list."""
-    record_store.put_record(f"s3://{bucket}", store, "_warehouses/bindings/db.json", {"warehouse_id": "wh-gone"})
+def _in_a_deactivated_warehouse_in_a_configured_bucket(*, bucket: str, store: StorageOptions, **_: Any) -> Task:
+    """The table is in a warehouse offboarding has deactivated, whose bucket is also the one this deployment configures
+    (`MAINTENANCE_S3_BUCKET`): the warehouse's status is what decides, not the configured list."""
     record_store.put_record(f"s3://{bucket}", store, "_warehouses/wh-gone.json", {"id": "wh-gone", "bucket": bucket, "status": "deactivated"})
-    return _table(bucket=bucket, options=store)
+    return _table(bucket=bucket, options=store, warehouse="wh-gone")
+
+
+def _under_a_first_segment_naming_no_warehouse(*, bucket: str, store: StorageOptions, **_: Any) -> Task:
+    """The table's name begins with an id no warehouse record holds and that is not the estate's own: no warehouse the
+    catalog serves, whatever bucket it is in."""
+    return _table(bucket=bucket, options=store, warehouse="wh-nowhere")
 
 
 @pytest.mark.parametrize(
     "placed",
     [
-        pytest.param(_unbound_in_a_bucket_nothing_configures, id="unbound-in-a-bucket-nothing-configures"),
-        pytest.param(_bound_to_a_deactivated_warehouse_in_a_configured_bucket, id="bound-to-a-deactivated-warehouse-in-a-configured-bucket"),
+        pytest.param(_in_a_bucket_nothing_configures, id="estate-warehouse-in-a-bucket-nothing-configures"),
+        pytest.param(_in_a_deactivated_warehouse_in_a_configured_bucket, id="a-deactivated-warehouse-in-a-configured-bucket"),
+        pytest.param(_under_a_first_segment_naming_no_warehouse, id="a-first-segment-naming-no-warehouse"),
     ],
 )
 def test_a_table_in_a_bucket_maintenance_does_not_govern_is_checked_at_the_ceiling(
     *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings], placed: Callable[..., Task]
 ) -> None:
-    """A deactivated or unbound warehouse's table is no table maintenance writes to, so its check waits the ceiling. A
-    namespace bound to a warehouse is judged by that warehouse's status; only an unbound one falls to the buckets this
+    """A deactivated warehouse's table, one outside every bucket this deployment configures, or one whose name begins
+    with no warehouse's id is no table maintenance writes to, so its check waits the ceiling. A table in a registered
+    warehouse is judged by that warehouse's status; only one in the estate's own warehouse falls to the buckets this
     deployment configures."""
     task = placed(moto_url=moto_url, bucket=bucket, store=store)
     started = datetime.now(UTC)
@@ -320,16 +333,34 @@ def test_a_table_in_a_bucket_maintenance_does_not_govern_is_checked_at_the_ceili
     assert _next(_check(task, settings()), task, started) == (24 * 30, 30 * DAY)
 
 
-def test_a_check_whose_table_cannot_be_read_is_tried_again(
-    *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings]
-) -> None:
-    """A read that fails decides nothing: the check raises, so the worker delivers it again, and holds nothing."""
+def _its_manifests_unreadable(*, moto_url: str, bucket: str, store: StorageOptions) -> Task:
     task = _table(bucket=bucket, options=store)
     s3 = _s3(moto_url)
     for entry in s3.list_objects_v2(Bucket=bucket, Prefix=f"{LOCATION}/_versions/")["Contents"]:
         s3.put_object(Bucket=bucket, Key=entry["Key"], Body=b"not a manifest")
+    return task
 
-    with pytest.raises(OrphanCheckIncompleteError):
+
+def _its_warehouses_record_unreadable(*, moto_url: str, bucket: str, store: StorageOptions) -> Task:
+    _s3(moto_url).put_object(Bucket=bucket, Key="_warehouses/wh-garbled.json", Body=b"not a record")
+    return _table(bucket=bucket, options=store, warehouse="wh-garbled")
+
+
+@pytest.mark.parametrize(
+    ("placed", "unread"),
+    [
+        pytest.param(_its_manifests_unreadable, r"^ValueError: LanceError\(IO\): does not have sufficient data", id="its-manifests"),
+        pytest.param(_its_warehouses_record_unreadable, r"^the table's warehouse could not be read$", id="its-warehouses-record"),
+    ],
+)
+def test_a_check_whose_table_cannot_be_read_is_tried_again(
+    *, moto_url: str, bucket: str, store: StorageOptions, settings: Callable[..., MaintenanceSettings], placed: Callable[..., Task], unread: str
+) -> None:
+    """A read that fails decides nothing: the check raises, so the worker delivers it again, and holds nothing. A
+    warehouse record that cannot be read is no answer about the warehouse's status either way."""
+    task = placed(moto_url=moto_url, bucket=bucket, store=store)
+
+    with pytest.raises(OrphanCheckIncompleteError, match=unread):
         _check(task, settings())
 
 

@@ -1,11 +1,11 @@
 /**
- * The index a catalog list tells a row's project with: the warehouses (each names its project) and
- * the estate bindings (each namespace's warehouse), read through the shared read instances the lists
- * already use, and the projects the caller can see, which say whether a filter names one of them. No
- * door of its own: these are the reads the warehouses and namespaces pages and the filter make.
+ * The index a catalog list tells a row's project with: the warehouses (each names its project; every
+ * id begins with its warehouse), read through the shared read instance the lists already use, and the
+ * projects the caller can see, which say whether a filter names one of them. No door of its own: these
+ * are the reads the warehouses page and the filter make.
  */
 import { fetchVisibleProjects } from '#lib/remote/warehouses.api.ts';
-import { fetchEstateBindings, fetchWarehouses } from './remote/warehouses.api.ts';
+import { fetchWarehouses } from './remote/warehouses.api.ts';
 import {
 	projectIndex,
 	readFailure,
@@ -33,21 +33,14 @@ export class ProjectIndexRead {
 	state = $state.raw<ProjectIndexState>({ kind: 'loading' });
 	readonly visible = new VisibleProjects();
 
-	/** The index once both reads answered; null while loading and after either failed, when a row
-	 *  shows no project rather than a guessed one. */
+	/** The index once the warehouses read answered; null while loading and after it failed, when a
+	 *  row shows no project rather than a guessed one. */
 	index = $derived(this.state.kind === 'ready' ? this.state.index : null);
 
 	async load(): Promise<void> {
-		const [warehouses, bindings] = await Promise.all([
-			fetchWarehouses(),
-			fetchEstateBindings(),
-			this.visible.load(),
-		]);
-		if (!warehouses.ok)
-			this.state = { kind: 'failed', reason: readFailure('warehouses', warehouses) };
-		else if (!bindings.ok)
-			this.state = { kind: 'failed', reason: readFailure('namespace bindings', bindings) };
-		else
-			this.state = { kind: 'ready', index: projectIndex(warehouses.data, bindings.data.bindings) };
+		const [warehouses] = await Promise.all([fetchWarehouses(), this.visible.load()]);
+		this.state = warehouses.ok
+			? { kind: 'ready', index: projectIndex(warehouses.data) }
+			: { kind: 'failed', reason: readFailure('warehouses', warehouses) };
 	}
 }

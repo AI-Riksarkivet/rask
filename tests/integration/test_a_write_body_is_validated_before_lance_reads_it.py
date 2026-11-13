@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 INVALID_INPUT = 13
-TABLE = "db$t"
+TABLE = "lance_catalog$db$t"
 
 
 def _stream(table: pa.Table) -> bytes:
@@ -85,7 +85,7 @@ _BINARY_OFFSETS = struct.pack("<iii", 0, 5, 10)
 
 
 def _seeded(client: TestClient, branch: str | None) -> None:
-    assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     created = client.post(f"/v1/table/{TABLE}/create", content=_stream(_table([1, 2, 3], [b"a", b"b", b"c"], ["x", "y", "z"])), headers=ARROW_STREAM)
     assert created.status_code == 200, created.text
     if branch is not None:
@@ -157,16 +157,16 @@ def test_a_valid_body_that_ipc_leaves_unaligned_for_lance_writes_on_every_arm(re
     """Create and the branch arms write the decoded table in-process, where pylance panics on a buffer
     below its type's alignment (pylance 12.0.0); main hands the bytes to the native reader."""
     body = _stream(_DECIMAL_AFTER_INT8)
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
-    created = real_ns_client.post("/v1/table/db$d/create", content=body, headers=ARROW_STREAM)
+    created = real_ns_client.post("/v1/table/lance_catalog$db$d/create", content=body, headers=ARROW_STREAM)
     assert created.status_code == 200, created.text
-    assert real_ns_client.post("/v1/table/db$d/branches/create", json={"name": "work"}).status_code == 200
+    assert real_ns_client.post("/v1/table/lance_catalog$db$d/branches/create", json={"name": "work"}).status_code == 200
     for door in ("insert", "merge_insert?on=a&when_not_matched_insert_all=true"):
         for query in ("", "branch=work"):
             separator = "&" if "?" in door else "?"
-            written = real_ns_client.post(f"/v1/table/db$d/{door}{separator + query if query else ''}", content=body, headers=ARROW_STREAM)
+            written = real_ns_client.post(f"/v1/table/lance_catalog$db$d/{door}{separator + query if query else ''}", content=body, headers=ARROW_STREAM)
             assert written.status_code == 200, f"{door} {query or 'main'}: {written.status_code} {written.text[:300]}"
 
-    counted = real_ns_client.post("/v1/table/db$d/count_rows", json={"branch": "work"})
+    counted = real_ns_client.post("/v1/table/lance_catalog$db$d/count_rows", json={"branch": "work"})
     assert (counted.status_code, counted.text) == (200, "6"), counted.text

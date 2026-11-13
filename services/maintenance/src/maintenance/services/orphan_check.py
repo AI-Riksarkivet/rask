@@ -105,7 +105,7 @@ def _check(task: Task, settings: MaintenanceSettings, *, now: datetime) -> tuple
             return OrphanCheck(outcome="trashed", next_check=None), None
     except OSError as exc:
         raise OrphanCheckIncompleteError(f"the claim or the trash could not be read: {exc}") from exc
-    governed = governs(task.location, top_namespace=held.segments[0], settings=settings, options=options)
+    governed = governs(task.location, warehouse=held.segments[0], settings=settings, options=options)
     if governed is None:
         raise OrphanCheckIncompleteError("the table's warehouse could not be read")
     if not governed:

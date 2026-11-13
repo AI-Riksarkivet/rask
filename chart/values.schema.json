@@ -171,7 +171,7 @@
                             "type": "string"
                         },
                         "enabled": {
-                            "description": "Schedule a CronJob that backs up the control root (project, warehouse, binding and bucket-claim registries). Off by default.",
+                            "description": "Schedule a CronJob that backs up the control root (project, warehouse and bucket-claim registries). Off by default.",
                             "type": "boolean"
                         },
                         "keep": {
@@ -278,6 +278,44 @@
                         }
                     }
                 },
+                "declarationConverge": {
+                    "type": "object",
+                    "properties": {
+                        "bindingName": {
+                            "description": "Name of the declaration-converge Dapr cron Component; also the catalog's LANCE_DECLARATION_CONVERGE_BINDING_NAME and the route it serves.",
+                            "type": "string"
+                        },
+                        "schedule": {
+                            "description": "Dapr cron schedule on which the catalog converges the estate onto `catalog.declared`; lateness only delays a declared change.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "declared": {
+                    "type": "object",
+                    "properties": {
+                        "grants": {
+                            "description": "Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:\u003cid\u003e` or `warehouse:\u003cid\u003e`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:\u003cnamespace\u003e:\u003cname\u003e`). The catalog revokes a grant removed from here, and only one it wrote from here.",
+                            "type": "array"
+                        },
+                        "projects": {
+                            "description": "Projects git declares, each `{id, admins, protected}`: `admins` lists people's principals (`\u003cidp-id\u003e~\u003cuser id\u003e`), and a project naming none is administered by `auth.bootstrapAdmin` when that is set; `protected` arms its deletion protection. The default declares one project, so a one-team install never creates one.",
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        },
+                        "warehouses": {
+                            "description": "Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it. The id is the first segment of every name in the warehouse.",
+                            "type": "array"
+                        }
+                    }
+                },
                 "erasure": {
                     "type": "object",
                     "properties": {
@@ -357,15 +395,6 @@
                     "type": "number",
                     "maximum": 365,
                     "minimum": 0
-                },
-                "warehouses": {
-                    "type": "object",
-                    "properties": {
-                        "enabled": {
-                            "description": "Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `objectStore.bucket`.",
-                            "type": "boolean"
-                        }
-                    }
                 }
             }
         },
@@ -1861,7 +1890,7 @@
                             "type": "integer"
                         },
                         "replicas": {
-                            "description": "Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. Not rendered while autoscaling.enabled: the HPA owns the count.",
+                            "description": "Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.",
                             "type": "integer"
                         }
                     }
@@ -1934,7 +1963,7 @@
                             "type": "integer"
                         },
                         "provenanceNamespace": {
-                            "description": "Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`).",
+                            "description": "Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`): `lance_catalog$\u003cnamespace\u003e`, a namespace of the estate's own warehouse; the render refuses any other.",
                             "type": "string"
                         },
                         "provenanceRetainVersions": {

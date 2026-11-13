@@ -45,9 +45,10 @@ from opentelemetry import metrics
 from pydantic import BaseModel, Field
 
 from catalog.api.cron import mount_cron
-from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, StorageOptionsDep, estate_namespace, namespace_for_top_ns
+from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, StorageOptionsDep, estate_namespace, namespace_for_warehouse
 from catalog.core.commit_ids import commit_ids_of, tag_move_run_id
 from catalog.core.config import Settings
+from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import PUBLISH_TABLE, LineageEmitter, emit_write_event, run_inputs
 from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
 from lakehouse import location_claims
@@ -146,7 +147,7 @@ async def _live_tables(request: Request, settings: Settings) -> _LiveTables:
         if claim.uuid is None or not claim.segments or await run_in_threadpool(table_claims.kept_in_trash, store, claim):
             continue
         try:
-            ns = await namespace_for_top_ns(request, settings, claim.segments[0]) if len(claim.segments) > 1 else await estate_namespace(request, settings)
+            ns = await namespace_for_warehouse(request, settings, claim.segments[0]) if len(claim.segments) > 1 else await estate_namespace(request, settings)
             described = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=claim.segments))
         except (TableNotFoundError, NamespaceNotFoundError):
             continue
@@ -183,7 +184,7 @@ def _feed_location(settings: Settings, ns: LanceNamespace) -> str | None:
     if not settings.provenance_namespace:
         return None
     try:
-        described = native.call(ns, "describe_table", DescribeTableRequest(id=[settings.provenance_namespace, "events"]))
+        described = native.call(ns, "describe_table", DescribeTableRequest(id=[*parse_identifier(settings.provenance_namespace), "events"]))
     except (TableNotFoundError, NamespaceNotFoundError):
         return None
     return str(described.location or "") or None

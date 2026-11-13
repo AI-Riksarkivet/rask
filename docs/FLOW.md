@@ -41,8 +41,8 @@ landed on, the project and the verified author, and it is signed with the catalo
 ## 3. Lineage records it — feed and edge list
 
 The lineage service consumes the topic and records each event once, as a row of the commit feed
-(`provenance$events`) and, for a successful run, one edge per (input, output) pair at their versions
-(`provenance$edges`). Both are Lance tables in the catalog's provenance namespace, written through the catalog's
+(`lance_catalog$provenance$events`) and, for a successful run, one edge per (input, output) pair at their versions
+(`lance_catalog$provenance$edges`). Both are Lance tables in the catalog's provenance namespace, written through the catalog's
 `merge_insert` door as lineage's own principal; an insert-only merge on each row's key makes a redelivery land
 nothing. The relay tick forwards every recorded event, as standard OpenLineage, to the graph backend the operator
 configured (Marquez in development), which answers upstream, downstream and run-history questions.

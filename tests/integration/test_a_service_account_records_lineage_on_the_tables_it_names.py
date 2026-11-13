@@ -49,7 +49,7 @@ _LINEAGE_SA, _PRODUCER_SA = "rask-sa-lineage", "producer"
 _LINEAGE = f"kubernetes~system:serviceaccount:default:{_LINEAGE_SA}"
 _PRODUCER = f"kubernetes~system:serviceaccount:etl:{_PRODUCER_SA}"
 #: The table the producer may write, one it may only read, and one it holds no grant on.
-_MINE, _READ, _THEIRS = "acme$mine", "acme$read", "acme$theirs"
+_MINE, _READ, _THEIRS = "lance_catalog$acme$mine", "lance_catalog$acme$read", "lance_catalog$acme$theirs"
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
 
 
@@ -68,7 +68,7 @@ class Estate(BaseModel):
 
 @pytest.fixture
 def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any, openfga_store: Any) -> Iterator[Estate]:
-    """alice makes `acme$mine` and `acme$theirs` in a governed catalog; the producer may write the first; lineage is booted against it."""
+    """alice makes `lance_catalog$acme$mine` and `lance_catalog$acme$theirs` in a governed catalog; the producer may write the first; lineage is booted against it."""
     sa = {"RASK_SA_ISSUER": sa_issuer.issuer, "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file), "RASK_SA_CA_FILE": str(sa_issuer.ca_file)}
     people = {
         "RASK_OIDC_ENABLED": "true",
@@ -94,8 +94,10 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
         httpx.Client(base_url=catalog_url, headers=alice, timeout=60) as catalog,
         ExitStack() as stack,
     ):
-        assert catalog.post("/v1/namespace/acme/create", json={}).status_code == 200
-        namespace_uuid = catalog.post("/v1/namespace/acme/describe", json={}).json()["properties"]["rask.uuid"]
+        # alice owns the estate's own warehouse, as the chart's bootstrap hook makes its admin, so she may create in it.
+        openfga_store.write((fga.user_object("dex~alice"), "owner", "warehouse:lance_catalog"))
+        assert catalog.post("/v1/namespace/lance_catalog$acme/create", json={}).status_code == 200
+        namespace_uuid = catalog.post("/v1/namespace/lance_catalog$acme/describe", json={}).json()["properties"]["rask.uuid"]
         uuids: dict[str, str] = {}
         locations: dict[str, str] = {}
         for table in (_MINE, _READ, _THEIRS):
@@ -196,7 +198,9 @@ def test_a_producer_is_judged_on_one_question_whatever_the_names_its_event_carri
 
     # What lineage asked about the event's names; its reads of its own provenance tables are not about them.
     about_names = [
-        path for path in (request.path for request in estate.asked.taken()) if path.startswith("/v1/table/acme$") or path.endswith("/decisions/check")
+        path
+        for path in (request.path for request in estate.asked.taken())
+        if path.startswith("/v1/table/lance_catalog$acme$") or path.endswith("/decisions/check")
     ]
     assert (posted.status_code, about_names) == (status, ["/management/v1/decisions/check"] * questions), posted.text
 

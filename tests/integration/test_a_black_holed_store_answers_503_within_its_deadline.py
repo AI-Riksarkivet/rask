@@ -152,13 +152,13 @@ def _ipc(table: pa.Table) -> bytes:
 
 
 def test_a_read_against_a_black_holed_store_answers_503_within_the_deadline(client: TestClient, proxy: _BlackHoleProxy) -> None:
-    assert client.post("/v1/namespace/bh/create", json={}).status_code == 200
-    created = client.post("/v1/table/bh$t/create", content=_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW)
+    assert client.post("/v1/namespace/lance_catalog$bh/create", json={}).status_code == 200
+    created = client.post("/v1/table/lance_catalog$bh$t/create", content=_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW)
     assert created.status_code == 200, created.text
 
     proxy.black_hole()
     started = time.monotonic()
-    response = client.post("/management/v1/table/bh$t/changes", json={"begin_version": 0, "kind": "inserted"})
+    response = client.post("/management/v1/table/lance_catalog$bh$t/changes", json={"begin_version": 0, "kind": "inserted"})
     elapsed = time.monotonic() - started
 
     assert (response.status_code, response.json()["code"]) == (503, 17), response.text
@@ -166,15 +166,15 @@ def test_a_read_against_a_black_holed_store_answers_503_within_the_deadline(clie
 
 
 def test_a_slow_store_still_completes_a_large_write_and_full_read(client: TestClient, proxy: _BlackHoleProxy) -> None:
-    assert client.post("/v1/namespace/slow/create", json={}).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$slow/create", json={}).status_code == 200
     values = pa.array([0.5] * (_THROTTLED_ROWS * _DIM), pa.float32())
     table = pa.table({"id": pa.array(range(_THROTTLED_ROWS), pa.int64()), "vec": pa.FixedSizeListArray.from_arrays(values, _DIM)})
 
     proxy.throttle(_RATE_BYTES_S)
     # The same app, answering a store failure as the status a caller would receive rather than re-raising it here.
     caller = TestClient(client.app, raise_server_exceptions=False)
-    created = caller.post("/v1/table/slow$t/create", content=_ipc(table), headers=_ARROW)
-    feed = caller.post("/management/v1/table/slow$t/changes", json={"begin_version": 0, "kind": "inserted"})
+    created = caller.post("/v1/table/lance_catalog$slow$t/create", content=_ipc(table), headers=_ARROW)
+    feed = caller.post("/management/v1/table/lance_catalog$slow$t/changes", json={"begin_version": 0, "kind": "inserted"})
 
     assert created.status_code == 200, created.text[:300]
     assert feed.status_code == 200, feed.text[:300]

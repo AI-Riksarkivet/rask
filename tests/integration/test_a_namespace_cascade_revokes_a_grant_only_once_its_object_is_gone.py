@@ -96,18 +96,18 @@ def _uuid(client: TestClient, kind: str, name: str) -> str:
 def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroyed(
     real_ns_client: TestClient, governed: TupleStore, row_goes: bool, deregisters: int
 ) -> None:
-    _ok(real_ns_client, "/v1/namespace/db/create", json={})
-    tables = ["db$a", "db$b", "db$c"]
-    for table in [*tables, "db$t"]:
+    _ok(real_ns_client, "/v1/namespace/lance_catalog$db/create", json={})
+    tables = ["lance_catalog$db$a", "lance_catalog$db$b", "lance_catalog$db$c"]
+    for table in [*tables, "lance_catalog$db$t"]:
         _ok(real_ns_client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
     for table in tables:
         _ok(real_ns_client, f"/management/v1/table/{table}/policy/set", json={"retention_days": 7})
-    uuids = {table: _uuid(real_ns_client, "table", table) for table in [*tables, "db$t"]}
+    uuids = {table: _uuid(real_ns_client, "table", table) for table in [*tables, "lance_catalog$db$t"]}
     locations = {table: str(real_ns_client.post(f"/v1/table/{table}/describe", json={}).json()["location"]) for table in tables}
     assert all(objects_held(location, StorageOptions()) for location in locations.values()), "a table holds no object, so the delete would prove nothing"
-    trashed = f"table:{uuids['db$t']}"
-    _ok(real_ns_client, "/v1/table/db$t/drop", json={})
-    governed_objects = [f"namespace:{_uuid(real_ns_client, 'namespace', 'db')}", *(f"table:{uuids[table]}" for table in tables)]
+    trashed = f"table:{uuids['lance_catalog$db$t']}"
+    _ok(real_ns_client, "/v1/table/lance_catalog$db$t/drop", json={})
+    governed_objects = [f"namespace:{_uuid(real_ns_client, 'namespace', 'lance_catalog$db')}", *(f"table:{uuids[table]}" for table in tables)]
     assert len(governed.naming(governed_objects)) == len(governed_objects), "an object was seeded no tuple, so the revoke below would pass vacuously"
     kept = {t for t in governed.tuples if t[2] == trashed}
     assert kept, "the trashed table kept no grant, so the claim that it keeps them would pass vacuously"
@@ -116,10 +116,10 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
     cascade = {"params": {"purge": "true"}, "json": {"behavior": "Cascade"}}
     if not row_goes:
         # The attempt the failure stops: the first table is destroyed, and its grants and policy are left for the re-issue.
-        stopped = real_ns_client.post("/v1/namespace/db/drop", **cascade)
+        stopped = real_ns_client.post("/v1/namespace/lance_catalog$db/drop", **cascade)
         assert stopped.status_code == 503, stopped.text
 
-    finished = real_ns_client.post("/v1/namespace/db/drop", **cascade)
+    finished = real_ns_client.post("/v1/namespace/lance_catalog$db/drop", **cascade)
 
     assert finished.status_code == 200, finished.text
     assert failing.deregisters == deregisters, "the failure was never injected where the case puts it, so the case would pass vacuously"
@@ -141,11 +141,11 @@ def test_a_cascade_that_cannot_read_a_trash_record_ends_no_grant_it_may_keep(rea
     """The walk finds a trashed table by its namespace's `child` edge alone, and only its trash record says it is
     trashed: a record that cannot be read may be its own, so the cascade refuses with the namespace's own state (500,
     code 18) rather than ending grants an undrop needs ([[LH-572]])."""
-    _ok(real_ns_client, "/v1/namespace/db/create", json={})
-    for table in ("db$a", "db$t"):
+    _ok(real_ns_client, "/v1/namespace/lance_catalog$db/create", json={})
+    for table in ("lance_catalog$db$a", "lance_catalog$db$t"):
         _ok(real_ns_client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
-    trashed = f"table:{_uuid(real_ns_client, 'table', 'db$t')}"
-    _ok(real_ns_client, "/v1/table/db$t/drop", json={})
+    trashed = f"table:{_uuid(real_ns_client, 'table', 'lance_catalog$db$t')}"
+    _ok(real_ns_client, "/v1/table/lance_catalog$db$t/drop", json={})
     kept = {t for t in governed.tuples if t[2] == trashed}
     assert kept, "the trashed table kept no grant, so the claim that it keeps them would pass vacuously"
     settings = get_settings()
@@ -154,7 +154,7 @@ def test_a_cascade_that_cannot_read_a_trash_record_ends_no_grant_it_may_keep(rea
     with fs.open_output_stream(record) as stream:
         stream.write(b"{not json")
 
-    refused = real_ns_client.post("/v1/namespace/db/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
+    refused = real_ns_client.post("/v1/namespace/lance_catalog$db/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
 
     assert (refused.status_code, refused.json().get("code")) == (500, 18), refused.text
     assert {t for t in governed.tuples if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"

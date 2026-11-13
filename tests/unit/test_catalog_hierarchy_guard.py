@@ -45,13 +45,8 @@ def test_the_refusal_names_the_rule_and_the_fix() -> None:
 
 @pytest.mark.parametrize("resource", ["namespace"])
 def test_only_tables_are_gated_here(resource: str) -> None:
-    """Namespaces are deliberately NOT rejected.
-
-    A top-level namespace legitimately parents to the catalog's warehouse root, and until a warehouse
-    can be NAMED in the identifier, refusing one would refuse the only shape the API can express.
-    That gap is real and tracked; encoding it as a rejection now would break every namespace create
-    without giving callers a way to comply.
-    """
+    """Namespaces are not rejected here: a namespace's parent is the namespace above it or, for a name of two
+    segments, its warehouse, and the shape a warehouse holds is the path guard's to judge (`_require_a_name_inside_a_warehouse`)."""
     fga_deps.require_parent(resource, ["anything"])
 
 
@@ -73,20 +68,22 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# A top-level namespace must belong to a warehouse.
+# A rename keeps a table in its warehouse.
 # --------------------------------------------------------------------------- #
 
 
-def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
-    """A refusal that does not say where to go instead is just an outage."""
-    with pytest.raises(InvalidInputError) as exc:
-        fga_deps.require_warehouse_scoped(["bronze"], warehouses_enabled=True)
-    detail = str(exc.value)
-    assert "bronze" in detail
-    assert "/management/v1/warehouses/{warehouse_id}/namespaces" in detail
-    assert "project > warehouse > namespace > table" in detail
-    # …and the other legal shape: nesting under an existing (already bound) namespace.
-    assert f"<parent>{DELIM}bronze" in detail
+@pytest.mark.parametrize(
+    "destination",
+    [
+        pytest.param(["beta-wh", "bronze", "pages"], id="another-warehouse"),
+        pytest.param(["acme-wh", "pages"], id="no-namespace"),
+    ],
+)
+def test_a_rename_out_of_a_namespace_of_its_own_warehouse_is_refused(destination: list[str]) -> None:
+    """A rename moves a pointer inside one directory catalog and never bytes, so a destination in another warehouse, or
+    directly under the warehouse with no namespace, is a 400 that names the shape that would work."""
+    with pytest.raises(InvalidInputError, match=rf"the new name is acme-wh\{DELIM}<namespace>\{DELIM}<table>"):
+        fga_deps.require_rename_within_its_warehouse(["acme-wh", "bronze", "pages"], destination)
 
 
 # --------------------------------------------------------------------------- #

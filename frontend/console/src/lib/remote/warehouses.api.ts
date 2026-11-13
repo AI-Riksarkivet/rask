@@ -32,6 +32,8 @@ const ProjectSchema = v.object({
 		}),
 	),
 	admins: v.array(v.string()),
+	/** `"git"` for a project git declares, whose lifecycle its doors refuse (XC-213); absent otherwise. */
+	managed_by: v.optional(v.picklist(['git', 'self'])),
 });
 
 /** One tenant: its warehouses + effective admins — what `/projects/[project]` renders. Gated by the
@@ -127,18 +129,6 @@ export const deleteProject = command(
 				method: 'DELETE',
 			}),
 			DeleteProjectSchema,
-		),
-);
-
-/** The namespaces BOUND to one warehouse — the warehouse→namespace rung of the hierarchy view
- *  (#104). Same catalog door the bind flow uses, read side. */
-const WarehouseNamespacesSchema = v.object({ namespaces: v.array(v.string()) });
-export const warehouseNamespaces = query(
-	v.string(),
-	async (warehouseId): Promise<ApiResult<{ namespaces: string[] }>> =>
-		parsed(
-			await catalogJSON(`/management/v1/warehouses/${enc(warehouseId)}/namespaces`),
-			WarehouseNamespacesSchema,
 		),
 );
 

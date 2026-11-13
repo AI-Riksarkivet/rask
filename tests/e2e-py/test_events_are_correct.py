@@ -117,8 +117,8 @@ class Forgeries(BaseModel):
 
 
 def _kept_by_the_catalog(admin: Identity, *, forged: str, marker: str) -> list[str]:
-    """The forged control event's rows in the catalog's control feed, read once the feed holds the binding of
-    ``marker``, a namespace the warehouse door made after the forgery was published (`warehouse_bound`, naming it).
+    """The forged control event's rows in the catalog's control feed, read once the feed holds the creation of
+    ``marker``, a namespace the spec's create door made after the forgery was published (`namespace_created`, naming it).
 
     Each catalog replica's broadcast consumer is named by its pod, so the test reads the feed rather than a consumer's
     acknowledgement; the stream reaches it in order, so a feed holding an event published after the forgery has judged the forgery too. The marker
@@ -127,9 +127,9 @@ def _kept_by_the_catalog(admin: Identity, *, forged: str, marker: str) -> list[s
     deadline = time.monotonic() + scenario.SETTLE_SECONDS
     while True:
         events = scenario.ok(admin.http.get(f"{scenario.CATALOG}/management/v1/events", params={"since": 0}, timeout=30))["events"]
-        if any(event.get("action") == "warehouse_bound" and (event.get("extra") or {}).get("namespace") == marker for event in events):
+        if any(event.get("action") == "namespace_created" and event.get("object_name") == marker for event in events):
             return [str(event["event_id"]) for event in events if event.get("event_id") == forged]
-        assert time.monotonic() < deadline, f"the catalog's control feed never showed {marker}'s binding within {scenario.SETTLE_SECONDS:.0f} s"
+        assert time.monotonic() < deadline, f"the catalog's control feed never showed {marker}'s creation within {scenario.SETTLE_SECONDS:.0f} s"
         time.sleep(2)
 
 
@@ -187,6 +187,15 @@ def _named(event: dict[str, Any]) -> str:
     return str(event.get("object_name") or event.get("object_id"))
 
 
+def _of_the_scenario(tenant: Tenant, name: str) -> bool:
+    """Whether a control event named ``name`` is about what the scenario made: the tenant's project or warehouse, or its
+    bronze or silver namespace or anything in them. Every name in the tenant's warehouse begins with the project's id,
+    and criteria 2 and 5 make objects of their own there, so a name merely carrying the id is not the scenario's."""
+    return name in {f"project:{tenant.project}", f"warehouse:{tenant.project}"} or any(
+        name == namespace or name.startswith(f"{namespace}$") for namespace in (tenant.bronze, tenant.silver)
+    )
+
+
 def _grants_to(captured: Captured, person: Identity) -> list[BusMessage]:
     """The `grant_added` messages that name ``person`` as the subject they grant to (`extra.subject`)."""
     subject = user_object(person.principal)
@@ -199,7 +208,7 @@ def _grants_to(captured: Captured, person: Identity) -> list[BusMessage]:
 def captured(byo_tenant: Tenant, byo_run: ScenarioRun) -> Captured:
     tables = {byo_run.bronze_table, byo_run.silver_table}
     lineage = [message for message in bus.messages_since("LINEAGE", byo_tenant.created_at) if _tables_of(message.event) & tables]
-    control = [message for message in bus.messages_since("CATALOG_CONTROL", byo_tenant.created_at) if byo_tenant.project in _named(message.event)]
+    control = [message for message in bus.messages_since("CATALOG_CONTROL", byo_tenant.created_at) if _of_the_scenario(byo_tenant, _named(message.event))]
     return Captured(feed=feed_of(byo_tenant.pipeline, byo_run), lineage=lineage, control=control)
 
 
@@ -250,9 +259,8 @@ def forgeries(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> F
     bus.publish(CONTROL_TOPIC, control_envelope, msg_id=control_id)
     bus.wait_until_acked("LINEAGE", (LINEAGE_DURABLE,), lineage_seq, within=scenario.SETTLE_SECONDS)
     # A namespace the tenant's teardown removes with its warehouse.
-    marker = f"{byo_tenant.project}-marker"
-    body = {"namespace": marker, "properties": {"rask.tier": "bronze"}}
-    scenario.ok(byo_tenant.admin.http.post(f"{scenario.CATALOG}/management/v1/warehouses/{byo_tenant.project}/namespaces", json=body))
+    marker = f"{byo_tenant.project}$marker"
+    scenario.ok(byo_tenant.admin.http.post(f"{scenario.CATALOG}/v1/namespace/{marker}/create", json={"properties": {"rask.tier": "bronze"}}))
     kept = _kept_by_the_catalog(byo_tenant.admin, forged=forged_grant, marker=marker)
     return Forgeries(
         recorded=[

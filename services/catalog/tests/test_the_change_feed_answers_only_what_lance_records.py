@@ -51,7 +51,7 @@ def catalog(root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iter
     from catalog.main import app
 
     with TestClient(app) as client:
-        assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         yield client
     get_settings.cache_clear()
 
@@ -67,12 +67,12 @@ def _valued(ids: list[int]) -> pa.Table:
 @pytest.mark.parametrize("kind", ["inserted", "deleted"])
 def test_a_table_without_stable_row_ids_is_refused_rather_than_answered_empty(catalog: TestClient, root: Path, kind: str) -> None:
     """Both halves of the door: the scan predicates and the deleted-row record."""
-    assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
+    assert catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
     lance.write_dataset(_rows([1, 2]), str(root / "t"), data_storage_version="2.2")
     lance.write_dataset(_rows([3]), str(root / "t"), mode="append")
     lance.dataset(str(root / "t")).delete("id = 1")
 
-    resp = catalog.post("/management/v1/table/db$t/changes", json={"begin_version": 1, "end_version": 3, "kind": kind})
+    resp = catalog.post("/management/v1/table/lance_catalog$db$t/changes", json={"begin_version": 1, "end_version": 3, "kind": kind})
 
     assert resp.status_code == 409, f"{resp.status_code}: {resp.text[:300]}"
     assert resp.json()["code"] == 19, "the spec's InvalidTableState code, which a generated client dispatches on"
@@ -80,10 +80,10 @@ def test_a_table_without_stable_row_ids_is_refused_rather_than_answered_empty(ca
 
 
 def _governed(catalog: TestClient, root: Path) -> str:
-    """`db$t` at version 1 holding ids 1-3, with stable row ids."""
+    """`lance_catalog$db$t` at version 1 holding ids 1-3, with stable row ids."""
     uri = str(root / "t")
     lance.write_dataset(_valued([1, 2, 3]), uri, data_storage_version="2.2", enable_stable_row_ids=True)
-    assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
+    assert catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
     return uri
 
 
@@ -107,7 +107,7 @@ def test_a_closed_window_answers_the_same_set_after_the_table_moves_on(catalog: 
     lance.dataset(uri).update({"v": "v + 1"}, where="id = 1")  # v3, the same row after it
     lance.dataset(uri).insert(_valued([4]))  # v4
 
-    resp = catalog.post("/management/v1/table/db$t/changes", json={"begin_version": 1, "end_version": 2, "kind": "updated"})
+    resp = catalog.post("/management/v1/table/lance_catalog$db$t/changes", json={"begin_version": 1, "end_version": 2, "kind": "updated"})
 
     assert _ids(resp, uri) == [1], "the window was answered from the latest snapshot, where row 1 last changed at version 3"
 
@@ -187,7 +187,7 @@ def test_a_window_is_answered_only_where_the_version_columns_describe_it(
     uri = _governed(catalog, root)
     change(uri)
 
-    resp = catalog.post("/management/v1/table/db$t/changes", json={"begin_version": begin, "kind": kind, "branch": branch})
+    resp = catalog.post("/management/v1/table/lance_catalog$db$t/changes", json={"begin_version": begin, "kind": kind, "branch": branch})
 
     if isinstance(answer, int):
         assert resp.status_code == answer, f"{resp.status_code}: {resp.text[:300]}"

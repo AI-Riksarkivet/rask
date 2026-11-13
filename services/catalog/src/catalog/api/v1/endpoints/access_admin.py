@@ -173,7 +173,7 @@ async def _held_object(resolver: Resolver, obj: str) -> str:
     for that object in the estate admin's question. Every other type's object is held as written.
 
     Raises:
-        InvalidInputError: The object is not ``<type>:<id>`` of a type the model defines.
+        InvalidInputError: The object is not ``<type>:<id>`` of a type the model defines, or names a warehouse as a namespace.
         TableNotFoundError: No table has the name.
         NamespaceNotFoundError: No namespace has the name.
         UnidentifiedObjectError: The object the name resolves to records no uuid.
@@ -183,7 +183,12 @@ async def _held_object(resolver: Resolver, obj: str) -> str:
         return obj
     if is_spelled_as_a_uuid(obj_id):
         return f"{obj_type}:{obj_id.lower()}"
-    held = await resolver.object(obj_type, parse_identifier(obj_id))
+    segments = parse_identifier(obj_id)
+    # A one-segment namespace name is a warehouse ([[LH-593]]), which this door is asked about under its own type:
+    # answered here it would report on `warehouse:<id>` under a namespace's name, registered or not.
+    if obj_type == "namespace" and len(segments) == 1:
+        raise InvalidInputError(f"'{obj_id}' names a warehouse, not a namespace: ask about warehouse:{obj_id}")
+    held = await resolver.object(obj_type, segments)
     if held is None:
         raise _NOT_FOUND[obj_type](f"{obj_type} not found: {obj_id}")
     return held
@@ -688,7 +693,7 @@ def _principal_key(principal: str) -> str:
 PrincipalPath = Annotated[str, Path(description="the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')")]
 
 
-def _refuse_what_git_declares(key: str, naming: list[fga.ClientTuple], settings: Settings) -> None:
+def _refuse_a_principal_the_chart_grants(key: str, naming: list[fga.ClientTuple], settings: Settings) -> None:
     """Refuse (400, code 13) a principal the next upgrade or boot would grant again, naming where it is declared.
 
     The chart's bootstrap hook grants a person's rung on the estate root, and lineage's machine roles there (the root's
@@ -720,7 +725,7 @@ async def delete_principal(
     is revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the
     store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
     what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
-    them, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door
+    them, and a principal whose grants git declares is refused (:func:`_refuse_a_principal_the_chart_grants`). Re-running the door
     revokes whatever was granted since, keeps the first deletion's record and announces again. The announcement is filed
     before the revoke and sent once the deletion is recorded, so a door failing after the record still announces it
     ([[LH-576]]). ``revoked`` counts the tuples this call removed.
@@ -731,7 +736,7 @@ async def delete_principal(
         raise InvalidInputError("an estate admin cannot offboard themselves: the rung this door asks would go with them")
     user = fga.user_object(key)
     naming = await subject_tuples.tuples_naming(client, user)
-    _refuse_what_git_declares(key, naming, settings)
+    _refuse_a_principal_the_chart_grants(key, naming, settings)
     await subject_tuples.refuse_stranding(client, user, naming, who=key)
     deleted = CatalogControlEvent(
         action="principal_deleted",

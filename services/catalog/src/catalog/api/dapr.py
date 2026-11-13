@@ -37,7 +37,6 @@ from pydantic import ValidationError
 from catalog.api.control_relay import bounded, published_keys
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings, get_settings
-from catalog.services import warehouses
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
 from lakehouse.governed.dapr_auth import require_dapr_token, sidecar_app
 from lakehouse.lineage.door import DoorMode, judge
@@ -118,14 +117,7 @@ async def on_control_event(
     change-events into every replica's buffer (and thence the admin console). A malformed event is
     **dropped** (ack, not retried — events are hints and the audit trail is the durable record); a valid one
     is appended (``event_id`` dedupes a redelivery). We always ack ``SUCCESS``: the buffer is best-effort, so
-    a drop only costs the client a redundant re-read on the next poll.
-
-    This route is ALSO the cross-replica cache-invalidation path (#46): the warehouse-binding cache
-    assumed bindings are immutable, and the warehouse delete broke that premise — the deleting
-    replica popped its own cache while every other replica kept routing a dropped namespace at the
-    deleted warehouse's bucket. The broadcast subscription is precisely "every replica hears every
-    mutation", so the eviction lives here; the redundant self-delivery on the publishing replica is
-    a harmless second pop."""
+    a drop only costs the client a redundant re-read on the next poll."""
     data = body.get("data")
     try:
         event = CatalogControlEvent.model_validate(data)
@@ -138,11 +130,6 @@ async def on_control_event(
     buffer = getattr(request.app.state, "control_buffer", None)
     if buffer is not None:
         buffer.append(event)
-    cache = getattr(request.app.state, "warehouse_binding_cache", None)
-    if cache is not None:
-        evicted = warehouses.evict_stale_bindings(cache, action=event.action, object_id=event.object_id, object_name=event.object_name, extra=event.extra)
-        if evicted:
-            log.info("binding_cache_evicted", extra={"action": event.action, "object_id": event.object_id, "evicted": evicted})
     return _SUCCESS
 
 

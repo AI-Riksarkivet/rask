@@ -1,10 +1,9 @@
 <script lang="ts">
-	// `/namespaces` — the catalog's namespaces on the shared @rask/ui DataTable (goal cond 4):
-	// one sortable/searchable row per namespace (derived from the table registry's
-	// `<namespace>$<table>` ids — there is no root-namespace list endpoint), with the medallion
-	// tier badge (goal cond 3) and the #85 drop action preserved (AlertDialog confirm; Restrict by
-	// default, Cascade opt-in). Creation deliberately has NO surface here — the governed path is
-	// the warehouse-bind flow (/warehouses), which the "New namespace" affordance points at.
+	// `/namespaces` — the catalog's namespaces on the shared @rask/ui DataTable (goal cond 4): one
+	// sortable/searchable row per namespace, from each warehouse's own listing (the spec's
+	// ListNamespaces on the warehouse's name) and from the table registry's ids, with the medallion
+	// tier badge (goal cond 3), the #85 drop action (AlertDialog confirm; Restrict by default, Cascade
+	// opt-in) and the create: the spec's CreateNamespace on `<warehouse>$<name>`.
 	import { AlertDialog } from '@rask/ui/alert-dialog';
 	import {
 		createSvelteTable,
@@ -28,26 +27,27 @@
 	import { dropNamespace } from './remote/namespace.api';
 	import { dropRecoveryText } from './drop-recovery';
 	import { DropRecoveryRead } from './drop-recovery-read.svelte.ts';
-	import { fetchEstateBindings } from './remote/warehouses.api';
+	import { createWarehouseNamespace } from './remote/warehouses.api';
+	import { listEstateNamespaces, type EstateNamespaces } from './estate-namespaces.ts';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
-	import { filterVerdict, projectOfNamespace } from './project-filter.ts';
+	import { filterVerdict, projectOf, readFailure } from './project-filter.ts';
 	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOf, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
+	import { DELIMITER, warehouseOf } from '#lib/api/identifiers.ts';
+	import { missingFieldsHint } from '#lib/form-hint.ts';
+	import { Select } from '@rask/ui/select';
 
 	let tables = $state<string[] | null>(null);
-	// #83 the namespaces BOUND in the registry — the same source the drop door consults. Without it
-	// this page lists only namespaces that already hold a table, so a freshly-bound EMPTY namespace is
-	// invisible: exactly the object someone came here to find and drop (the #66 defect, second surface).
-	//
-	// `null` means the bindings READ FAILED, and it is a distinct state from "no bindings" (#86). The
-	// first version of this used `string[]` and swallowed a 403/502 into an empty array — which is
-	// #66's exact shape, an invisible namespace with no error, reintroduced by the fix for it. The
-	// warehouse detail page has always modelled it this way; now both agree.
-	let bindings = $state<Record<string, string> | null>(null);
+	// Each warehouse's own listing — the same listing a warehouse delete reads for what it still holds.
+	// Without it this page would list only namespaces that already hold a table, so an EMPTY one would
+	// be invisible: exactly the object someone came here to find and drop (#66). A listing that failed
+	// is its own state, said in the banner below, never collapsed into "none".
+	let listing = $state.raw<EstateNamespaces | null>(null);
+	let listingFailure = $state<string | null>(null);
 	let lastStatus = $state(0);
 	let settled = $state(false);
 	let busy = $state(false);
@@ -63,17 +63,21 @@
 		onprojectchange,
 	}: { project: string; onprojectchange: (project: string) => void } = $props();
 
-	// Each row's project, from the warehouses and the bindings; the filter narrows the rows this
-	// caller was given, a view and never a boundary.
+	// Each row's project, its warehouse's (the first segment of its id); the filter narrows the rows
+	// this caller was given, a view and never a boundary.
 	const projects = new ProjectIndexRead();
 
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
 
 	async function load(): Promise<void> {
-		// Independent reads, so they go together: the table registry supplies COUNTS, the estate
-		// bindings supply what EXISTS. One catalog call each — no per-warehouse fan-out (#86).
-		const [res, binds] = await Promise.all([fetchTables(), fetchEstateBindings(), projects.load()]);
+		// Independent reads, so they go together: the table registry supplies COUNTS, the warehouses'
+		// listings supply what EXISTS.
+		const [res, listed] = await Promise.all([
+			fetchTables(),
+			listEstateNamespaces(),
+			projects.load(),
+		]);
 		settled = true;
 		if (res.ok) {
 			tables = [...res.data.tables].sort();
@@ -81,17 +85,12 @@
 		} else {
 			lastStatus = res.status;
 		}
-		// Keep the whole MAP, not just its keys. `fetchEstateBindings` answers
-		// `{bindings: Record<namespace, warehouse_id>}` and this line used to take `Object.keys(...)`,
-		// throwing every value away — so the one read that knows which warehouse holds a namespace
-		// discarded it, and no surface in the app could answer that question bottom-up. The bind form on
-		// `/catalog/warehouses` calls the binding IMMUTABLE ONCE SET, so it was a permanent fact you
-		// could create and then see from neither end. Same request, same cost.
-		bindings = binds.ok ? binds.data.bindings : null;
+		listing = listed.ok ? listed.data : null;
+		listingFailure = listed.ok ? null : readFailure('warehouses', listed);
 	}
 
-	// Same source as the table registry it groups (this view IS the table list, folded by namespace), so
-	// the two can no longer disagree about what exists — they now advance on one shared cursor.
+	// The table registry it folds and the namespace listings advance on one shared cursor, so the two
+	// cannot disagree for longer than a tick about what exists.
 	liveRead(lineageTick, () => load());
 
 	// Group by the table's PARENT namespace — every segment but the LAST, via `namespaceOfTable`
@@ -106,29 +105,29 @@
 		ns: string;
 		count: number;
 		stage: StageInfo | null;
-		warehouse: string | null;
+		warehouse: string;
 		project: string | null;
 	};
 
 	const allRows = $derived.by((): Row[] => {
 		const m = new Map<string, number>();
-		// Seed with every BOUND namespace at zero, so one holding no tables still gets a row. `null`
-		// (the read failed) seeds nothing and the banner below says so — never silently "none".
-		for (const ns of Object.keys(bindings ?? {})) m.set(ns, 0);
+		// Seed with every LISTED namespace at zero, so one holding no tables still gets a row. A listing
+		// that failed seeds nothing and the banner below says so — never silently "none".
+		for (const ns of listing?.namespaces ?? []) m.set(ns, 0);
 		for (const t of tables ?? []) {
 			const ns = namespaceOfTable(t);
 			m.set(ns, (m.get(ns) ?? 0) + 1);
 		}
 		return (
 			[...m.entries()]
-				// A namespace with no binding shows `—`, not a blank: unbound is a real state (the resolver
-				// falls back to the default root) and rendering it as absence hides it.
+				// The warehouse is the first segment of the id; one with no registry record (the estate's
+				// own) has no project, and shows a dash there.
 				.map(([ns, count]): Row => ({
 					ns,
 					count,
 					stage: stageOf(ns),
-					warehouse: bindings?.[ns] ?? null,
-					project: projects.index ? projectOfNamespace(projects.index, ns) : null,
+					warehouse: warehouseOf(ns),
+					project: projects.index ? projectOf(projects.index, ns) : null,
 				}))
 				.sort((a, b) => a.ns.localeCompare(b.ns))
 		);
@@ -197,6 +196,49 @@
 		}
 	}
 
+	// The create: a namespace directly under a warehouse, named `<warehouse>$<name>`. Hidden behind
+	// the header's toggle so the page stays a list by default, as the tables page's declare is.
+	let creating = $state(false);
+	let createDraft = $state({ warehouse: '', name: '' });
+	const createHint = $derived(
+		createDraft.name.includes(DELIMITER)
+			? `A name holds no ${DELIMITER}: this creates a namespace directly under the warehouse.`
+			: missingFieldsHint('Creating', [
+					['a warehouse', createDraft.warehouse],
+					['a name', createDraft.name.trim()],
+				]),
+	);
+
+	async function create(): Promise<void> {
+		const warehouse = createDraft.warehouse;
+		const name = createDraft.name.trim();
+		if (busy || createHint !== null) return;
+		busy = true;
+		banner = null;
+		try {
+			const res = await createWarehouseNamespace({ warehouse, name });
+			if (res.ok) {
+				banner = { tone: 'ok', text: `namespace ${warehouse}${DELIMITER}${name} created` };
+				createDraft = { warehouse, name: '' };
+				await load();
+			} else if (res.status === 401)
+				banner = { tone: 'fail', text: 'Sign in — creating a namespace is a per-user action.' };
+			else if (res.status === 403)
+				banner = {
+					tone: 'fail',
+					text: `Denied: creating a namespace in ${warehouse} needs write access there (can_create_namespace). ${res.detail}`,
+				};
+			else if (res.status === 0)
+				banner = {
+					tone: 'fail',
+					text: 'Not confirmed: the catalog did not answer, so the namespace may have been created.',
+				};
+			else banner = { tone: 'fail', text: res.detail };
+		} finally {
+			busy = false;
+		}
+	}
+
 	let sorting = $state<SortingState>([]);
 	let globalFilter = $state('');
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 10 });
@@ -247,12 +289,9 @@
 			meta: { headerClass: 'w-28' },
 		},
 		{
-			// WHICH WAREHOUSE HOLDS THIS. The binding arrives in the same `fetchEstateBindings` read that
-			// seeds the empty-namespace rows, so this column costs nothing extra — it was simply thrown
-			// away. Bottom-up was unanswerable in the console until now: the bind form lives on the
-			// warehouses page and its caption calls the binding immutable once set.
+			// WHICH WAREHOUSE HOLDS THIS: the first segment of the namespace's id, read off the id itself.
 			id: 'warehouse',
-			accessorFn: (r) => r.warehouse ?? '',
+			accessorKey: 'warehouse',
 			header: ({ column }) =>
 				renderComponent(DataTableHeaderButton, {
 					label: 'warehouse',
@@ -321,17 +360,13 @@
 	{#if row.stage}<StageBadge info={row.stage} />{:else}<span class="mut">—</span>{/if}
 {/snippet}
 {#snippet warehouseCell(row: Row)}
-	<!-- A link, because the warehouse has a detail page and the whole point is that this rung was
-	     unreachable from here. `—` for unbound, which is a real state (the resolver falls back to the
-	     default root), not missing data. -->
-	{#if row.warehouse}
-		<a
-			class="wh"
-			href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(row.warehouse) })}
-		>
-			{row.warehouse}
-		</a>
-	{:else}<span class="mut">—</span>{/if}
+	<!-- A link, because the warehouse has a detail page, the estate's own included. -->
+	<a
+		class="wh"
+		href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(row.warehouse) })}
+	>
+		{row.warehouse}
+	</a>
 {/snippet}
 {#snippet actionsCell(row: Row)}
 	<button
@@ -349,30 +384,72 @@
 		<h1>Namespaces</h1>
 		<span class="sub mono"
 			>{projectFilter
-				? `grouped from the catalog registry, in project ${projectFilter} — the namespaces your grants allow there`
-				: 'grouped from the catalog registry, estate-wide — every namespace your grants allow'} ·
-			&lt;namespace&gt;$&lt;table&gt;</span
+				? `in project ${projectFilter} — the namespaces your grants allow there`
+				: 'every warehouse, estate-wide — every namespace your grants allow'} ·
+			&lt;warehouse&gt;$&lt;namespace&gt;</span
 		>
-		<!-- A top-level namespace is created by binding it to a warehouse, so the link opens that form,
-		     its namespace field focused. -->
-		<a
+		<button
 			class="new"
-			href={resolve('catalog/warehouses#bind-namespace')}
-			title="Opens the warehouses page's Bind namespace form, which creates a namespace"
+			aria-expanded={creating}
+			aria-controls="create-namespace"
+			onclick={() => (creating = !creating)}
 		>
 			<Plus size={12} /> New namespace
-		</a>
+		</button>
 	</header>
 
-	<!-- #86: a failed bindings read is its own state. Collapsing it into "no namespaces" is the #66
-	     defect — an empty namespace invisible with nothing said — and this page reintroduced it once. -->
-	{#if bindings === null && settled && !unauthorized && !offline}
+	{#if creating && !unauthorized}
+		<form
+			id="create-namespace"
+			class="create"
+			aria-label="Create namespace"
+			onsubmit={(e) => {
+				e.preventDefault();
+				void create();
+			}}
+		>
+			<label class="field">
+				Warehouse
+				<Select
+					bind:value={createDraft.warehouse}
+					ariaLabel="Warehouse"
+					placeholder="warehouse…"
+					options={(listing?.warehouses ?? []).map((w) => ({ value: w, label: w }))}
+				/>
+			</label>
+			<label class="field">
+				Name
+				<input class="mono" bind:value={createDraft.name} placeholder="bronze" />
+			</label>
+			<button
+				class="jbtn"
+				type="submit"
+				disabled={busy || createHint !== null}
+				aria-describedby={createHint ? 'create-hint' : undefined}
+			>
+				Create
+			</button>
+			{#if createHint}<p class="mut hint" id="create-hint">{createHint}</p>{/if}
+		</form>
+	{/if}
+
+	<!-- #86: a listing that failed is its own state. Collapsing it into "no namespaces" is the #66
+	     defect — an empty namespace invisible with nothing said. -->
+	{#if settled && !unauthorized && !offline && (listingFailure || (listing?.unread.length ?? 0) > 0)}
 		<!-- Its OWN class, not `.banner.fail`: that one means "the action you just took failed", this
-		     means "a read this page depends on is unavailable". Sharing a selector made a spec's strict
-		     locator match two elements the moment both could appear. -->
-		<div class="banner degraded" data-testid="bindings-unavailable">
-			Namespace bindings unavailable — this list shows only namespaces that already hold a table, so
-			a bound-but-empty one may be missing.
+		     means "a read this page depends on is unavailable". -->
+		<div class="banner degraded" data-testid="namespaces-partial">
+			{#if listingFailure}
+				The warehouses could not be listed ({listingFailure}), so this list shows only namespaces
+				that hold a table: an empty one may be missing.
+			{:else}
+				{#each listing?.unread ?? [] as u (u.warehouse)}
+					<p>
+						The namespaces of warehouse <span class="mono">{u.warehouse}</span> could not be listed
+						({u.reason}), so an empty namespace in it may be missing here.
+					</p>
+				{/each}
+			{/if}
 		</div>
 	{/if}
 	{#if banner}
@@ -417,7 +494,7 @@
 				loading={tables === null || verdict.kind === 'waiting'}
 				emptyMessage={projectFilter
 					? `No namespaces in project ${projectFilter}.`
-					: 'No namespaces visible to you. The list holds only the namespaces your grants reach: ask a project admin for access, or bind one to a warehouse.'}
+					: 'No namespaces visible to you. The list holds only the namespaces your grants reach: ask a project admin for access, or create one in a warehouse you can write to.'}
 				onrowclick={openDrawer}
 			/>
 		{/if}
@@ -433,6 +510,8 @@
 		<dl class="rec">
 			<dt>namespace</dt>
 			<dd class="mono">{drawerRow.ns}</dd>
+			<dt>warehouse</dt>
+			<dd class="mono">{drawerRow.warehouse}</dd>
 			<dt>medallion stage</dt>
 			<dd>
 				{#if drawerRow.stage}<StageBadge info={drawerRow.stage} />{:else}<span class="mut"
@@ -508,6 +587,7 @@
 		align-items: center;
 		gap: 5px;
 		margin-left: auto;
+		cursor: pointer;
 		background: var(--panel-2);
 		border: 1px solid var(--line);
 		border-radius: var(--radius-sm);
@@ -530,6 +610,9 @@
 		border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
 		color: var(--ok);
 	}
+	.banner.degraded p {
+		margin: 0;
+	}
 	.banner.degraded {
 		border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
 		background: color-mix(in srgb, var(--warn) 7%, transparent);
@@ -537,6 +620,33 @@
 	.banner.fail {
 		border-color: color-mix(in srgb, var(--fail) 45%, var(--line));
 		color: var(--fail);
+	}
+	.create {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-end;
+		gap: 8px;
+		margin-bottom: 12px;
+	}
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		color: var(--mut);
+		font-size: 12px;
+	}
+	.create input {
+		background: var(--panel-2);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-sm);
+		color: var(--ink);
+		padding: 5px 9px;
+		font-size: 12px;
+	}
+	.hint {
+		flex-basis: 100%;
+		margin: 0;
+		font-size: 12px;
 	}
 	.toolbar {
 		display: flex;

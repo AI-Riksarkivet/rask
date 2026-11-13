@@ -18,8 +18,8 @@ Two properties make it safe:
 
 1. **Durable buffer.** Both streams use **Limits retention** (messages persist after ack, up to `max-age`
    168h), so an event survives the subscriber being down.
-2. **Idempotent ingest.** Lineage records each event in the commit feed (`provenance$events`) and the edge list
-   (`provenance$edges`) with an insert-only merge on each table's unenforced primary key, through the catalog's
+2. **Idempotent ingest.** Lineage records each event in the commit feed (`lance_catalog$provenance$events`) and the edge list
+   (`lance_catalog$provenance$edges`) with an insert-only merge on each table's unenforced primary key, through the catalog's
    `merge_insert` door (`lineage/services/provenance.py`). So redelivery / replay of the same event lands no
    second row — never a duplicate, never corruption. The worst failure mode is *under-reporting* (a lost event), never a corrupt or doubled one.
 
@@ -141,7 +141,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
 4. **The feed is the record.** Lineage writes the edges, then the feed row, each keyed; a failed write answers
    `RETRY`, and the redelivery lands what is missing and nothing twice. The feed keeps `eventsRetentionDays`
    (default 7) and is pruned on the relay tick; the long-lived graph is the forwarded backend's
-   (`services.lineage.forward.url`), fed at least once, in feed order, from a cursor in `provenance$cursors`.
+   (`services.lineage.forward.url`), fed at least once, in feed order, from a cursor in `lance_catalog$provenance$cursors`.
 
 5. **Single points of failure (single-node infra).** Every stateful backing store runs as **one replica** on
    kind — this is a **demo topology, not an HA one**. If any of these pods dies, the pipeline stalls until it

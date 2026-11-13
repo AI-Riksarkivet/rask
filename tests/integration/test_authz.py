@@ -50,6 +50,9 @@ from lance_namespace import (
     DescribeTableResponse,
     DropNamespaceResponse,
     LanceNamespace,
+    ListNamespacesRequest,
+    ListNamespacesResponse,
+    ListTablesRequest,
     ListTablesResponse,
     ServiceUnavailableError,
 )
@@ -59,7 +62,7 @@ from openfga_sdk.client.models.batch_check_single_response import ClientBatchChe
 from openfga_sdk.models.check_error import CheckError
 from starlette.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import get_namespace, get_resolver
+from catalog.api.dependencies import get_namespace, get_resolver, warehouse_object
 from catalog.api.v1.endpoints.access import _can_relations as _model_can_relations
 from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims
@@ -116,7 +119,8 @@ class _DoubleResolver(NamedResolver):
 
     A table is what the double describes, with the claim its location carries: its object is ``table:<claim uuid>``,
     or :func:`_table` for a location no claim records, so a test whose claim is which relation is asked need not
-    claim one. A namespace is what the double describes (:func:`_described_namespace`).
+    claim one. A namespace is what the double describes (:func:`_described_namespace`), and a name of one segment is
+    its warehouse, as the catalog governs it ([[LH-593]]).
     """
 
     def __init__(self, ns: LanceNamespace) -> None:
@@ -134,6 +138,8 @@ class _DoubleResolver(NamedResolver):
     @override
     async def object(self, kind: str, segments: list[str]) -> str | None:
         if kind != "table":
+            if len(segments) == 1:
+                return warehouse_object(_auth_settings(), segments[0])
             uuid = await self.namespace_uuid(segments)
             return None if uuid is None else fga_module.namespace_object(uuid)
         resolved = await self.table(segments)
@@ -225,9 +231,9 @@ def test_read_op_checks_reader_and_allows(client: TestClient, fake_ns: MagicMock
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=True))
 
     # No credential asked for: the vend's own tier probe is `test_the_spec_doors_vend_the_tier_fga_grants.py`'s.
-    resp = client.post("/v1/table/db1$users/describe", json={"vend_credentials": False}, headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/describe", json={"vend_credentials": False}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
-    assert captured == [{"user": "dex~alice", "relation": "can_get_metadata", "obj": _table("db1$users")}]
+    assert captured == [{"user": "dex~alice", "relation": "can_get_metadata", "obj": _table("lance_catalog$db1$users")}]
 
 
 def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -240,7 +246,7 @@ def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: Ma
     monkeypatch.setattr(fga_module, "batch_check", _fake_batch_check(captured, allow=False))
 
     resp = client.get(
-        "/management/v1/table/db1$users/blobs",
+        "/management/v1/table/lance_catalog$db1$users/blobs",
         params={"column": "payload", "row": 0},
         headers={"Authorization": "Bearer t"},
     )
@@ -249,8 +255,8 @@ def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: Ma
     # meaning. A refused read also asks whether the caller sees above the name, because it answers 404
     # rather than 403 to a caller who does ([[LH-236]]) — that second check is a different question and
     # must not be able to change what this one pins.
-    assert {"user": "dex~alice", "relation": "can_read_data", "obj": _table("db1$users")} in captured
-    assert captured[0] == {"user": "dex~alice", "relation": "can_read_data", "obj": _table("db1$users")}
+    assert {"user": "dex~alice", "relation": "can_read_data", "obj": _table("lance_catalog$db1$users")} in captured
+    assert captured[0] == {"user": "dex~alice", "relation": "can_read_data", "obj": _table("lance_catalog$db1$users")}
 
 
 def test_generic_mutation_checks_writer(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -260,12 +266,12 @@ def test_generic_mutation_checks_writer(client: TestClient, fake_ns: MagicMock, 
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
     resp = client.post(
-        "/v1/table/db1$users/update",
+        "/v1/table/lance_catalog$db1$users/update",
         json={"predicate": "id = 1", "updates": {"id": "2"}},
         headers={"Authorization": "Bearer t"},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_write_data", "obj": _table("db1$users")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_write_data", "obj": _table("lance_catalog$db1$users")}
 
 
 def test_rename_is_owner_tier_not_writer(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -278,9 +284,9 @@ def test_rename_is_owner_tier_not_writer(client: TestClient, fake_ns: MagicMock,
     revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
 
-    resp = client.post("/v1/table/db1$users/rename", json={"new_table_name": "u2"}, headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/rename", json={"new_table_name": "u2"}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("db1$users")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("lance_catalog$db1$users")}
     revoke.assert_not_awaited()  # the true owner is NOT evicted
 
 
@@ -294,11 +300,11 @@ def test_drop_table_requires_owner_and_403_is_problem_json(client: TestClient, m
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/v1/table/db1$users/drop", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/drop", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert resp.headers["content-type"].startswith("application/problem+json")
     assert resp.json()["code"] == 15  # PERMISSION_DENIED
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("db1$users")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("lance_catalog$db1$users")}
 
 
 def test_deregister_table_requires_owner(client: TestClient, monkeypatch) -> None:
@@ -307,10 +313,10 @@ def test_deregister_table_requires_owner(client: TestClient, monkeypatch) -> Non
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/v1/table/db1$users/deregister", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/deregister", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert captured[-1]["relation"] == "can_deregister"
-    assert captured[-1]["obj"] == _table("db1$users")
+    assert captured[-1]["obj"] == _table("lance_catalog$db1$users")
 
 
 def test_drop_namespace_requires_owner_on_namespace_object(client: TestClient, monkeypatch) -> None:
@@ -319,9 +325,9 @@ def test_drop_namespace_requires_owner_on_namespace_object(client: TestClient, m
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/v1/namespace/db1/drop", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/namespace/lance_catalog$db1/drop", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": _namespace("db1")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": _namespace("lance_catalog$db1")}
 
 
 def test_hash_or_question_in_id_cannot_downgrade_the_owner_tier(client: TestClient, monkeypatch) -> None:
@@ -334,13 +340,13 @@ def test_hash_or_question_in_id_cannot_downgrade_the_owner_tier(client: TestClie
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/v1/table/db1$us%23ers/drop", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$us%23ers/drop", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("db1$us#ers")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("lance_catalog$db1$us#ers")}
 
-    resp = client.post("/v1/table/db1$us%3Fers/deregister", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$us%3Fers/deregister", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_deregister", "obj": _table("db1$us?ers")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_deregister", "obj": _table("lance_catalog$db1$us?ers")}
 
 
 # --------------------------------------------------------------------------- #
@@ -359,12 +365,12 @@ def test_create_table_checks_writer_on_parent_namespace(client: TestClient, fake
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
     resp = client.post(
-        "/v1/table/db1$users/create",
+        "/v1/table/lance_catalog$db1$users/create",
         content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_table", "obj": _namespace("db1")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_table", "obj": _namespace("lance_catalog$db1")}
 
 
 def test_create_table_does_not_seed_when_backend_fails(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -378,7 +384,7 @@ def test_create_table_does_not_seed_when_backend_fails(client: TestClient, fake_
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
 
     resp = client.post(
-        "/v1/table/db1$users/create",
+        "/v1/table/lance_catalog$db1$users/create",
         content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
@@ -393,9 +399,9 @@ def test_declare_table_is_create_on_parent(client: TestClient, fake_ns: MagicMoc
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/v1/table/db1$users/declare", json={}, headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/declare", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_table", "obj": _namespace("db1")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_table", "obj": _namespace("lance_catalog$db1")}
 
 
 def _minted(fake_ns: MagicMock) -> str:
@@ -416,21 +422,21 @@ def test_create_namespace_seeds_owner_and_parent_link(client: TestClient, fake_n
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
     monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))  # no previous incarnation at the id
 
-    resp = client.post("/v1/namespace/parent$child/create", json={}, headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/namespace/lance_catalog$parent$child/create", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     # authorize() checked can_create_namespace on the parent namespace, not the child.
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_namespace", "obj": _namespace("parent")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_create_namespace", "obj": _namespace("lance_catalog$parent")}
     grant.assert_awaited_once()
     call = grant.await_args
     assert call is not None
     kwargs = call.kwargs
     assert kwargs["obj"] == f"namespace:{_minted(fake_ns)}"
-    assert kwargs["parent_object"] == _namespace("parent")  # nested ns links to its parent
+    assert kwargs["parent_object"] == _namespace("lance_catalog$parent")  # nested ns links to its parent
 
 
 def test_create_top_level_namespace_links_to_catalog_root(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: a TOP-LEVEL namespace seeds its ``parent`` as the FGA root object (the warehouse
-    root), so a warehouse-/project-level grant cascades into it."""
+    """CONTRACT: a namespace directly in a warehouse seeds its ``parent`` as that warehouse's object, the estate's own
+    ``warehouse:lance_catalog`` here ([[LH-593]]), so a warehouse-/project-level grant cascades into it."""
     fake_ns.create_namespace.return_value = CreateNamespaceResponse(properties={})
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
@@ -438,7 +444,7 @@ def test_create_top_level_namespace_links_to_catalog_root(client: TestClient, fa
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
     monkeypatch.setattr(fga_module, "revoke_object_tuples", AsyncMock(return_value=[]))  # no previous incarnation at the id
 
-    resp = client.post("/v1/namespace/bronze/create", json={}, headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/namespace/lance_catalog$bronze/create", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     call = grant.await_args
     assert call is not None
@@ -458,13 +464,13 @@ def test_create_top_level_namespace_links_to_catalog_root(client: TestClient, fa
 def test_drop_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     """CONTRACT: a successful drop_table revokes the table's tuples, on the uuid its location's claim records."""
     fake_ns.deregister_table.return_value = DeregisterTableResponse(location=fake_ns.describe_table.return_value.location)
-    minted = claim_described("db1$users")
+    minted = claim_described("lance_catalog$db1$users")
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
 
-    resp = client.post("/v1/table/db1$users/drop", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/drop", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     revoke.assert_awaited_once()
     call = revoke.await_args
@@ -474,13 +480,13 @@ def test_drop_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monke
 def test_deregister_table_revokes_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     """CONTRACT: a successful deregister_table revokes the table's tuples."""
     fake_ns.deregister_table.return_value = DeregisterTableResponse()
-    minted = claim_described("db1$users")
+    minted = claim_described("lance_catalog$db1$users")
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
     revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(1)])
     monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
 
-    resp = client.post("/v1/table/db1$users/deregister", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/deregister", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     revoke.assert_awaited_once()
     call = revoke.await_args
@@ -495,7 +501,7 @@ def test_overwrite_of_existing_table_by_non_owner_is_denied_and_revokes_nothing(
     who is not the table owner is 403'd BEFORE the destructive write, and NO grant is revoked (the audit's
     eviction/seizure vector). The backend create is never reached."""
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://b/db1$users")  # table exists
-    claim_described("db1$users")
+    claim_described("lance_catalog$db1$users")
 
     async def _check(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
         return relation != "can_drop"  # writer-on-parent (create) allowed; owner-tier can_drop denied
@@ -508,7 +514,7 @@ def test_overwrite_of_existing_table_by_non_owner_is_denied_and_revokes_nothing(
     monkeypatch.setattr(fga_module, "grant_on_create", grant)
 
     resp = client.post(
-        "/v1/table/db1$users/create?mode=overwrite",
+        "/v1/table/lance_catalog$db1$users/create?mode=overwrite",
         content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
@@ -533,9 +539,9 @@ def test_restrict_drop_namespace_revokes_only_itself(client: TestClient, fake_ns
     monkeypatch.setattr(fga_module, "revoke_object_tuples", _revoke)
     monkeypatch.setattr(fga_module, "read_object_tuples", AsyncMock(return_value=[]))  # the namespace holds no child edge
 
-    resp = client.post("/v1/namespace/db1/drop", json={}, headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/namespace/lance_catalog$db1/drop", json={}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
-    assert revoked == [_namespace("db1")]
+    assert revoked == [_namespace("lance_catalog$db1")]
     fake_ns.list_tables.assert_not_called()  # no descendant enumeration on the Restrict path
 
 
@@ -553,20 +559,20 @@ def test_batch_commit_requires_writer_on_each_table(client: TestClient, fake_ns:
     async def fake_batch_check(_c: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         seen.update(user=user, relation=relation, objects=list(objects))
         # Deny db1$b to prove a single denial fails the whole batch.
-        return {o: (o != _table("db1$b")) for o in objects}
+        return {o: (o != _table("lance_catalog$db1$b")) for o in objects}
 
     monkeypatch.setattr(fga_module, "batch_check", fake_batch_check)
 
     body = {
         "operations": [
-            {"create_table_version": {"id": ["db1", "a"]}},
-            {"create_table_version": {"id": ["db1", "b"]}},
+            {"create_table_version": {"id": ["lance_catalog", "db1", "a"]}},
+            {"create_table_version": {"id": ["lance_catalog", "db1", "b"]}},
         ]
     }
     resp = client.post("/v1/table/batch-commit", json=body, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert seen["relation"] == "can_write_data"
-    assert set(seen["objects"]) == {_table("db1$a"), _table("db1$b")}
+    assert set(seen["objects"]) == {_table("lance_catalog$db1$a"), _table("lance_catalog$db1$b")}
 
 
 def test_an_AUTHORIZED_batch_commit_answers_406_and_seeds_nothing(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -586,7 +592,7 @@ def test_an_AUTHORIZED_batch_commit_answers_406_and_seeds_nothing(client: TestCl
     monkeypatch.setattr(fga_module, "batch_check", fake_batch_check)
     monkeypatch.setattr(fga_module, "grant_on_create", fake_grant)
 
-    body = {"operations": [{"declare_table": {"id": ["db1", "fresh"]}}]}
+    body = {"operations": [{"declare_table": {"id": ["lance_catalog", "db1", "fresh"]}}]}
     resp = client.post("/v1/table/batch-commit", json=body, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 406, resp.text
     assert resp.json()["code"] == 0
@@ -601,10 +607,10 @@ def test_batch_commit_deregister_requires_owner_tier(client: TestClient, fake_ns
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "batch_check", _fake_batch_check(captured, allow=False))
 
-    body = {"operations": [{"deregister_table": {"id": ["db1", "a"]}}]}
+    body = {"operations": [{"deregister_table": {"id": ["lance_catalog", "db1", "a"]}}]}
     resp = client.post("/v1/table/batch-commit", json=body, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_deregister", "obj": _table("db1$a")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_deregister", "obj": _table("lance_catalog$db1$a")}
 
 
 class _BatchOpenFga:
@@ -633,7 +639,7 @@ class _BatchOpenFga:
 
 
 _TWO_TABLE_COMMIT = {
-    "operations": [{"create_table_version": {"id": ["db1", t], "version": 2, "manifest_path": "_versions/2.manifest"}} for t in ("a", "b")],
+    "operations": [{"create_table_version": {"id": ["lance_catalog", "db1", t], "version": 2, "manifest_path": "_versions/2.manifest"}} for t in ("a", "b")],
 }
 
 
@@ -641,7 +647,7 @@ def test_batch_commit_answers_503_when_openfga_cannot_answer_an_item(client: Tes
     """CONTRACT: an item OpenFGA could not evaluate is an outage, not a denial — the same 503 the
     single-object guard answers, never a 403 naming a table the caller may well hold a grant on."""
     _wire(client)
-    client.app.state.fga = _BatchOpenFga(unanswered={_table("db1$b")})
+    client.app.state.fga = _BatchOpenFga(unanswered={_table("lance_catalog$db1$b")})
 
     resp = client.post("/v1/table/batch-commit", json=_TWO_TABLE_COMMIT, headers={"Authorization": "Bearer t"})
 
@@ -675,11 +681,11 @@ def test_batch_create_versions_requires_writer(client: TestClient, fake_ns: Magi
 
     monkeypatch.setattr(fga_module, "batch_check", fake_batch_check)
 
-    body = {"entries": [{"id": ["db1", "users"]}]}
+    body = {"entries": [{"id": ["lance_catalog", "db1", "users"]}]}
     resp = client.post("/v1/table/version/batch-create", json=body, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert seen["relation"] == "can_write_data"
-    assert seen["objects"] == [_table("db1$users")]
+    assert seen["objects"] == [_table("lance_catalog$db1$users")]
 
 
 def test_materialized_view_create_is_create_on_parent(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -691,14 +697,14 @@ def test_materialized_view_create_is_create_on_parent(client: TestClient, fake_n
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
     resp = client.post(
-        "/v1/materialized_view/db1$mv/create",
+        "/v1/materialized_view/lance_catalog$db1$mv/create",
         json={"query": "select 1", "view_name": "mv"},
         headers={"Authorization": "Bearer t"},
     )
     assert resp.status_code == 403
     assert captured, "materialized_view create must run an authz check"
     assert captured[-1]["relation"] == "can_create_materialized_view"
-    assert captured[-1]["obj"] == _namespace("db1")  # create-on-parent
+    assert captured[-1]["obj"] == _namespace("lance_catalog$db1")  # create-on-parent
     # NOTE: the post-create owner+parent seeding (the audit's deny-all-on-own-MV fix) uses the
     # same fga.grant_on_create path proven by test_create_table_seeds_owner_and_parent_tuples,
     # now with resource="materialized_view"; a dedicated success-path test is omitted only because
@@ -712,9 +718,9 @@ def test_materialized_view_refresh_checks_can_refresh(client: TestClient, fake_n
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/v1/materialized_view/db1$mv/refresh", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/materialized_view/lance_catalog$db1$mv/refresh", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_refresh", "obj": "materialized_view:db1$mv"}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_refresh", "obj": "materialized_view:lance_catalog$db1$mv"}
 
 
 def test_table_restore_is_owner_tier(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -724,18 +730,34 @@ def test_table_restore_is_owner_tier(client: TestClient, fake_ns: MagicMock, mon
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/v1/table/db1$t/restore", json={"version": 1}, headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$t/restore", json={"version": 1}, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_restore", "obj": _table("db1$t")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_restore", "obj": _table("lance_catalog$db1$t")}
 
 
 @pytest.mark.parametrize(
     ("method", "path", "relation", "obj"),
     [
-        pytest.param("post", "/management/v1/table/db1$t/undrop", "can_drop", _table("db1$t"), id="a-table-undrop-asks-the-drop-rung"),
-        pytest.param("post", "/management/v1/namespace/db1/undrop", "can_delete", _namespace("db1"), id="a-namespace-undrop-asks-the-drop-rung"),
-        pytest.param("get", "/management/v1/table/db1$t/tasks", "can_get_metadata", _table("db1$t"), id="a-table-deadline-is-a-metadata-read"),
-        pytest.param("get", "/management/v1/namespace/db1/tasks", "can_get_metadata", _namespace("db1"), id="a-namespace-deadline-is-a-metadata-read"),
+        pytest.param(
+            "post", "/management/v1/table/lance_catalog$db1$t/undrop", "can_drop", _table("lance_catalog$db1$t"), id="a-table-undrop-asks-the-drop-rung"
+        ),
+        pytest.param(
+            "post",
+            "/management/v1/namespace/lance_catalog$db1/undrop",
+            "can_delete",
+            _namespace("lance_catalog$db1"),
+            id="a-namespace-undrop-asks-the-drop-rung",
+        ),
+        pytest.param(
+            "get", "/management/v1/table/lance_catalog$db1$t/tasks", "can_get_metadata", _table("lance_catalog$db1$t"), id="a-table-deadline-is-a-metadata-read"
+        ),
+        pytest.param(
+            "get",
+            "/management/v1/namespace/lance_catalog$db1/tasks",
+            "can_get_metadata",
+            _namespace("lance_catalog$db1"),
+            id="a-namespace-deadline-is-a-metadata-read",
+        ),
     ],
 )
 def test_a_trash_door_asks_the_rung_of_the_drop_it_answers(
@@ -770,9 +792,9 @@ def test_table_branch_and_tag_create_are_owner_tier(client: TestClient, fake_ns:
         ("tags/update", {"tag": "v1", "version": 2}, "can_update_tag"),
     ]
     for suffix, body, relation in cases:
-        resp = client.post(f"/v1/table/db1$t/{suffix}", json=body, headers={"Authorization": "Bearer t"})
+        resp = client.post(f"/v1/table/lance_catalog$db1$t/{suffix}", json=body, headers={"Authorization": "Bearer t"})
         assert resp.status_code == 403, suffix
-        assert captured[-1] == {"user": "dex~alice", "relation": relation, "obj": _table("db1$t")}, suffix
+        assert captured[-1] == {"user": "dex~alice", "relation": relation, "obj": _table("lance_catalog$db1$t")}, suffix
 
 
 # --------------------------------------------------------------------------- #
@@ -794,7 +816,7 @@ def test_fail_closed_when_fga_client_missing(client: TestClient, fake_ns: MagicM
 
     monkeypatch.setattr(fga_module, "check", boom)
 
-    resp = client.post("/v1/table/db1$users/describe", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/describe", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 503
     assert resp.headers["content-type"].startswith("application/problem+json")
     assert resp.json()["code"] == 17  # SERVICE_UNAVAILABLE
@@ -813,7 +835,7 @@ def test_fail_closed_when_openfga_outage(client: TestClient, fake_ns: MagicMock,
 
     monkeypatch.setattr(fga_module, "check", outage)
 
-    resp = client.post("/v1/table/db1$users/describe", headers={"Authorization": "Bearer t"})
+    resp = client.post("/v1/table/lance_catalog$db1$users/describe", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 503
     assert resp.json()["code"] == 17  # SERVICE_UNAVAILABLE
 
@@ -827,7 +849,7 @@ def test_authn_still_required_when_fga_enabled(client: TestClient, monkeypatch) 
 
     monkeypatch.setattr(fga_module, "check", boom)
 
-    resp = client.post("/v1/table/db1$users/drop")  # no Authorization header
+    resp = client.post("/v1/table/lance_catalog$db1$users/drop")  # no Authorization header
     assert resp.status_code == 401
     assert resp.json()["code"] == 16  # UNAUTHENTICATED
 
@@ -837,16 +859,37 @@ def test_authn_still_required_when_fga_enabled(client: TestClient, monkeypatch) 
 # --------------------------------------------------------------------------- #
 
 
+def _walked(monkeypatch: pytest.MonkeyPatch, fake_ns: MagicMock, tables: list[str]) -> None:
+    """Serve ``GET /v1/table``'s walk of the estate's own warehouse from the double: one namespace ``db`` holding
+    ``tables``. The walk opens each warehouse's catalog itself, since a collection route has no ``{id}`` to route by."""
+
+    async def _the_double(_request: object, _settings: object, _warehouse_id: str) -> MagicMock:
+        return fake_ns
+
+    def _list_tables(request: ListTablesRequest | dict[str, list[str]]) -> ListTablesResponse:
+        segments = request["id"] if isinstance(request, dict) else list(request.id or [])
+        return ListTablesResponse(tables=tables if segments == ["lance_catalog", "db"] else [])
+
+    def _list_namespaces(request: ListNamespacesRequest | dict[str, list[str]]) -> ListNamespacesResponse:
+        segments = request["id"] if isinstance(request, dict) else list(request.id or [])
+        return ListNamespacesResponse(namespaces=["db"] if segments == ["lance_catalog"] else [])
+
+    monkeypatch.setattr("catalog.api.v1.endpoints.tables.namespace_for_warehouse", _the_double)
+    fake_ns.list_tables.side_effect = _list_tables
+    fake_ns.list_namespaces.side_effect = _list_namespaces
+
+
 def test_list_tables_returns_only_the_tables_the_caller_can_read(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: ``GET /v1/table`` returns only tables the caller can read: the listing's own candidates, each asked
-    ``can_read_data`` on the object its name resolves to ([[LH-223]])."""
-    fake_ns.list_all_tables.return_value = ListTablesResponse(tables=["users", "orders", "secret"])
+    ``can_read_data`` on the object its name resolves to ([[LH-223]]), named in full from its warehouse ([[LH-593]])."""
+    _walked(monkeypatch, fake_ns, ["users", "orders", "secret"])
     _wire(client)
     seen: list[dict] = []
+    readable = {_table("lance_catalog$db$users"), _table("lance_catalog$db$orders")}
 
     async def fake_batch_check(_c: object, *, user: str, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
         seen.append({"user": user, "relation": relation, "objects": sorted(objects)})
-        return {obj: obj in {_table("users"), _table("orders")} for obj in objects}
+        return {obj: obj in readable for obj in objects}
 
     monkeypatch.setattr(fga_module, "batch_check", fake_batch_check)
 
@@ -854,22 +897,23 @@ def test_list_tables_returns_only_the_tables_the_caller_can_read(client: TestCli
     assert resp.status_code == 200
     # Sorted, not source-ordered: `paginate`'s keyset cursor is the last NAME of the previous page, and a cursor over
     # an unsorted list silently skips or repeats rows.
-    assert resp.json()["tables"] == ["orders", "users"]  # secret filtered out
-    assert seen == [{"user": "dex~alice", "relation": "can_read_data", "objects": sorted(_table(name) for name in ("orders", "secret", "users"))}]
+    assert resp.json()["tables"] == ["lance_catalog$db$orders", "lance_catalog$db$users"]  # secret filtered out
+    asked = sorted(_table(f"lance_catalog$db${name}") for name in ("orders", "secret", "users"))
+    assert seen == [{"user": "dex~alice", "relation": "can_read_data", "objects": asked}]
 
 
-def test_list_tables_unfiltered_when_fga_disabled(client: TestClient, fake_ns: MagicMock) -> None:
+def test_list_tables_unfiltered_when_fga_disabled(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: with FGA disabled no table is FILTERED OUT — every backend table survives.
 
     "Verbatim" is the wrong word and was the reason this test was stale: the endpoint still sorts and
     dedupes, unconditionally, because pagination depends on it. What FGA disabled changes is membership,
     not order.
     """
-    fake_ns.list_all_tables.return_value = ListTablesResponse(tables=["users", "orders"])
+    _walked(monkeypatch, fake_ns, ["users", "orders"])
     # default settings: oidc/fga disabled
     resp = client.get("/v1/table")
     assert resp.status_code == 200
-    assert resp.json()["tables"] == ["orders", "users"]
+    assert resp.json()["tables"] == ["lance_catalog$db$orders", "lance_catalog$db$users"]
 
 
 def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
@@ -879,7 +923,7 @@ def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicM
     from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
 
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
-    minted = claim_described("db1$users")
+    minted = claim_described("lance_catalog$db1$users")
     _wire(client)
     monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
 
@@ -893,7 +937,7 @@ def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicM
     logging.getLogger(AUDIT_LOGGER).addHandler(handler)
     configure_audit(enabled=True)
     try:
-        resp = client.post("/v1/table/db1$users/describe", headers={"Authorization": "Bearer t"})
+        resp = client.post("/v1/table/lance_catalog$db1$users/describe", headers={"Authorization": "Bearer t"})
     finally:
         logging.getLogger(AUDIT_LOGGER).removeHandler(handler)
 
@@ -913,12 +957,12 @@ def test_table_policy_set_requires_owner_via_can_drop(client: TestClient, monkey
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
     resp = client.post(
-        "/management/v1/table/db1$users/policy/set",
+        "/management/v1/table/lance_catalog$db1$users/policy/set",
         headers={"Authorization": "Bearer t"},
         json={"retention_days": 7},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("db1$users")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("lance_catalog$db1$users")}
 
 
 def test_namespace_policy_set_requires_owner_via_can_delete(client: TestClient, monkeypatch) -> None:
@@ -927,24 +971,27 @@ def test_namespace_policy_set_requires_owner_via_can_delete(client: TestClient, 
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
     resp = client.post(
-        "/management/v1/namespace/silver/policy/set",
+        "/management/v1/namespace/lance_catalog$silver/policy/set",
         headers={"Authorization": "Bearer t"},
         json={"retain_versions": 5},
     )
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": _namespace("silver")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": _namespace("lance_catalog$silver")}
 
 
 def test_table_policy_describe_is_reader_tier(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
     """CONTRACT (#50): reading a policy is a metadata read (``can_get_metadata``): that none is set is answered only
     after the reader gate passes."""
-    minted = claim_described("db1$users")
+    minted = claim_described("lance_catalog$db1$users")
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=True))
 
-    resp = client.post("/management/v1/table/db1$users/policy/describe", headers={"Authorization": "Bearer t"})
-    assert (resp.status_code, resp.json()) == (200, {"kind": "table", "id": "db1$users", "uuid": minted, "set": False})  # gate passed; no policy is stored
+    resp = client.post("/management/v1/table/lance_catalog$db1$users/policy/describe", headers={"Authorization": "Bearer t"})
+    assert (resp.status_code, resp.json()) == (
+        200,
+        {"kind": "table", "id": "lance_catalog$db1$users", "uuid": minted, "set": False},
+    )  # gate passed; no policy is stored
     assert captured[-1] == {"user": "dex~alice", "relation": "can_get_metadata", "obj": f"table:{minted}"}
 
 
@@ -1018,9 +1065,9 @@ def test_table_access_list_requires_owner_via_can_drop(client: TestClient, monke
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
 
-    resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/lance_catalog$db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("db1$users")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_drop", "obj": _table("lance_catalog$db1$users")}
     assert queried == []  # the enumeration never ran for a denied reviewer
 
 
@@ -1029,9 +1076,9 @@ def test_namespace_access_list_requires_owner_via_can_delete(client: TestClient,
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/management/v1/namespace/silver/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/namespace/lance_catalog$silver/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
-    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": _namespace("silver")}
+    assert captured[-1] == {"user": "dex~alice", "relation": "can_delete", "obj": _namespace("lance_catalog$silver")}
 
 
 def test_access_list_enumerates_grants_for_an_owner(client: TestClient, monkeypatch) -> None:
@@ -1046,10 +1093,10 @@ def test_access_list_enumerates_grants_for_an_owner(client: TestClient, monkeypa
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
 
-    resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/lance_catalog$db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert (body["object"], body["name"]) == (_table("db1$users"), "db1$users")
+    assert (body["object"], body["name"]) == (_table("lance_catalog$db1$users"), "lance_catalog$db1$users")
     grants = {g["relation"]: g["users"] for g in body["grants"]}
     assert grants["can_get_metadata"] == ["dex~alice", "dex~bob"]
     assert grants["can_drop"] == ["dex~alice"]
@@ -1069,7 +1116,7 @@ def test_access_list_fails_closed_when_enumeration_hits_an_fga_outage(client: Te
 
     monkeypatch.setattr(fga_module, "list_users", down)
 
-    resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/lance_catalog$db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 503
 
 
@@ -1097,7 +1144,7 @@ def test_access_list_reports_truncation_instead_of_silently_shortening(client: T
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
 
-    resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/lance_catalog$db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["truncated"] is True, "the roll-up must flag a review that is missing holders"
@@ -1118,6 +1165,6 @@ def test_access_list_is_not_flagged_truncated_when_it_is_complete(client: TestCl
         return ["user:dex~alice", "user:dex~bob"]
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
-    body = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"}).json()
+    body = client.post("/management/v1/table/lance_catalog$db1$users/access/list", headers={"Authorization": "Bearer t"}).json()
     assert body["truncated"] is False
     assert all(g["truncated"] is False for g in body["grants"])

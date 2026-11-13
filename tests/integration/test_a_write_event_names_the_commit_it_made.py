@@ -12,8 +12,8 @@ commit that happened, never a re-read. Three ways the event named some other com
 * **a recreated branch.** It restarts its numbering, so ``(table, ref, N)`` names two commits; pylance's
   ``branch_identifier`` tells the incarnations apart, and the event must carry it.
 
-The event also names the tenant whose watchers it reaches, ``rask_lance.project``: the project bound to the table's top
-namespace, however deep the table lies ([[LH-573]]).
+The event also names the tenant whose watchers it reaches, ``rask_lance.project``: the project of the warehouse the
+table's name begins with, however deep the table lies ([[LH-573]]).
 
 Driven through the real catalog app on real pylance, and the event is captured on the WIRE: the real
 ``HttpLineageEmitter`` builds and posts it, and an ``httpx.MockTransport`` stands in for the lineage service.
@@ -47,11 +47,11 @@ from lineage.services.provenance import edges_of
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-TABLE = "lh214$t"
+TABLE = "lance_catalog$lh214$t"
 BRANCH = "dev"
-#: The registry's bindings as the emitter's tenant resolver reads them: a binding names a TOP namespace, never a deeper one
-#: (`catalog.services.warehouses.project_for_namespace`).
-TENANTS = {"lh214": "acme"}
+#: The tenants the emitter's resolver answers, keyed by the warehouse a name begins with ([[LH-593]],
+#: `catalog.services.warehouses.project_of`), never by a namespace.
+TENANTS = {"lance_catalog": "acme"}
 
 
 def _ipc(table: pa.Table) -> bytes:
@@ -76,8 +76,8 @@ def events(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[
             posted.append(json.loads(request.content))
         return httpx.Response(200)
 
-    async def _tenant_of(top_namespace: str) -> str | None:
-        return TENANTS.get(top_namespace)
+    async def _tenant_of(warehouse_id: str) -> str | None:
+        return TENANTS.get(warehouse_id)
 
     emitter = make_emitter(
         enabled=True,
@@ -97,7 +97,7 @@ def events(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[
 
 @pytest.fixture
 def location(real_ns_client: TestClient) -> str:
-    assert real_ns_client.post("/v1/namespace/lh214/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$lh214/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create?mode=overwrite", content=_ipc(_rows(1, 2, 3)), headers=ARROW)
     assert created.status_code == 200, created.text
     return str(real_ns_client.post(f"/v1/table/{TABLE}/describe", json={}).json()["table_uri"])
@@ -298,7 +298,7 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     from catalog.core.config import get_settings
     from catalog.services import table_claims
 
-    table = table_claims.door_table(ns, table_claims.claim_store(get_settings()), ["lh214", "t"], announces=lambda _operation: True)
+    table = table_claims.door_table(ns, table_claims.claim_store(get_settings()), ["lance_catalog", "lh214", "t"], announces=lambda _operation: True)
     assert dataplane.committed_version(table, StorageOptions(), "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
 
 
@@ -316,18 +316,18 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
     client = real_ns_client
     control = _Control()
     monkeypatch.setattr(client.app.state, "control_emitter", control, raising=False)
-    assert client.post("/v1/namespace/lh522/create", json={}).status_code == 200
-    assert client.post("/v1/table/lh522$t/create", content=_ipc(_rows(1)), headers=ARROW).status_code == 200
-    described = client.post("/v1/table/lh522$t/describe", json={}).json()
+    assert client.post("/v1/namespace/lance_catalog$lh522/create", json={}).status_code == 200
+    assert client.post("/v1/table/lance_catalog$lh522$t/create", content=_ipc(_rows(1)), headers=ARROW).status_code == 200
+    described = client.post("/v1/table/lance_catalog$lh522$t/describe", json={}).json()
     table_uuid = described["properties"]["rask.uuid"]
-    namespace_uuid = client.post("/v1/namespace/lh522/describe", json={}).json()["properties"]["rask.uuid"]
+    namespace_uuid = client.post("/v1/namespace/lance_catalog$lh522/describe", json={}).json()["properties"]["rask.uuid"]
     stamped = (lance.dataset(described["location"]).schema.metadata or {}).get(b"lineage.dataset_id")
     for call in (
-        lambda: client.post("/v1/table/lh522$t/insert", content=_ipc(_rows(2)), headers=ARROW),
-        lambda: client.post("/v1/table/lh522$t/rename", json={"new_table_name": "u"}),
-        lambda: client.post("/v1/table/lh522$u/insert", content=_ipc(_rows(3)), headers=ARROW),
-        lambda: client.post("/v1/table/lh522$u/add_columns", json={"new_columns": [{"name": "w", "expression": "id + 1"}]}),
-        lambda: client.post("/v1/table/lh522$u/drop", json={}),
+        lambda: client.post("/v1/table/lance_catalog$lh522$t/insert", content=_ipc(_rows(2)), headers=ARROW),
+        lambda: client.post("/v1/table/lance_catalog$lh522$t/rename", json={"new_table_name": "u"}),
+        lambda: client.post("/v1/table/lance_catalog$lh522$u/insert", content=_ipc(_rows(3)), headers=ARROW),
+        lambda: client.post("/v1/table/lance_catalog$lh522$u/add_columns", json={"new_columns": [{"name": "w", "expression": "id + 1"}]}),
+        lambda: client.post("/v1/table/lance_catalog$lh522$u/drop", json={}),
     ):
         assert call().status_code == 200
 
@@ -343,8 +343,8 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
     lifecycle = {key: value for key, value in renamed["dataset"]["facets"]["lifecycleStateChange"].items() if not key.startswith("_")}
     assert ("run" in renamed, renamed["dataset"]["name"], lifecycle) == (
         False,
-        "lh522$u",
-        {"lifecycleStateChange": "RENAME", "previousIdentifier": {"namespace": renamed["dataset"]["namespace"], "name": "lh522$t"}},
+        "lance_catalog$lh522$u",
+        {"lifecycleStateChange": "RENAME", "previousIdentifier": {"namespace": renamed["dataset"]["namespace"], "name": "lance_catalog$lh522$t"}},
     ), renamed
     projected = [_named(_dataset(targeting_view(event))) for event in events]
     assert projected == [uuids] * len(events), projected
@@ -353,16 +353,19 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
         ("table_renamed", table_uuid, namespace_uuid),
         ("table_dropped", table_uuid, namespace_uuid),
     ], control.named
+    # A namespace directly in a warehouse names no namespace above it: the warehouse is governed under its own type.
+    assert [named for named in control.named if named[0] == "namespace_created"] == [("namespace_created", namespace_uuid, None)], control.named
     assert stamped == table_uuid.encode(), stamped
 
 
-def test_a_tables_create_names_the_tenant_its_top_namespace_is_bound_to_at_any_depth(real_ns_client: TestClient, events: list[dict[str, Any]]) -> None:
-    """A project's watchers are reached through the event's ``rask_lance.project`` alone, and the registry binds a tenant
-    to a top namespace only, so a table two namespaces deep is announced under its first namespace's tenant ([[LH-573]])."""
-    for namespace in ("lh214", "lh214$raw"):
+def test_a_tables_create_names_the_tenant_of_its_warehouse_at_any_depth(real_ns_client: TestClient, events: list[dict[str, Any]]) -> None:
+    """A project's watchers are reached through the event's ``rask_lance.project`` alone, and a tenant is its warehouse's
+    project, so a table two namespaces deep is announced under the tenant of the warehouse its name begins with
+    ([[LH-573]], [[LH-593]])."""
+    for namespace in ("lance_catalog$lh214", "lance_catalog$lh214$raw"):
         assert real_ns_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
 
-    created = real_ns_client.post("/v1/table/lh214$raw$t/create", content=_ipc(_rows(1)), headers=ARROW)
+    created = real_ns_client.post("/v1/table/lance_catalog$lh214$raw$t/create", content=_ipc(_rows(1)), headers=ARROW)
 
     assert created.status_code == 200, created.text
     assert [(_lance(event)["operation"], _lance(event).get("project")) for event in events] == [("create_table", "acme")]
@@ -416,15 +419,15 @@ def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: T
     """[[LH-413]] An edge reads ``src@feed`` into ``t@dev``; each ref is named with its incarnation, since a branch deleted
     and created again under the name restarts its numbering. The event the catalog emits is the one lineage records."""
     client = real_ns_client
-    created = client.post("/v1/table/lh214$src/create?mode=create", content=_ipc(_rows(7)), headers=ARROW)
+    created = client.post("/v1/table/lance_catalog$lh214$src/create?mode=create", content=_ipc(_rows(7)), headers=ARROW)
     assert created.status_code == 200, created.text
-    for table, branch in (("lh214$src", "feed"), (TABLE, BRANCH)):
+    for table, branch in (("lance_catalog$lh214$src", "feed"), (TABLE, BRANCH)):
         assert client.post(f"/v1/table/{table}/branches/create", json={"name": branch}).status_code == 200
     run = {
         "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
         "x-rask-job-namespace": "pipelines",
         "x-rask-job": "nightly",
-        "x-rask-inputs": json.dumps([{"table": ["lh214", "src"], "version": 1, "branch": "feed"}]),
+        "x-rask-inputs": json.dumps([{"table": ["lance_catalog", "lh214", "src"], "version": 1, "branch": "feed"}]),
     }
     before = len(events)
 

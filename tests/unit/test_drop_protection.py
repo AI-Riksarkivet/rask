@@ -37,21 +37,6 @@ from lakehouse.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
-def _request_stub() -> Any:
-    """The minimum `undrop_namespace` touches on a Request: the per-root connection cache.
-
-    It re-derives its namespace connection from the trash record's binding (diff2 F6 leg c), because
-    `NamespaceDep` resolves BEFORE the handler body and — the binding having been removed by the drop
-    — has already fallen back to the estate's default root. These tests drive the handler directly
-    rather than over HTTP, so they supply the one attribute that path reads.
-    """
-    from types import SimpleNamespace
-
-    from catalog.core.namespace import NamespaceConnections
-
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(connections=NamespaceConnections())))
-
-
 #: The root the stand-in backend lays its tables out under (:func:`_location`).
 #: A local root nothing is stored at: a destroy finds no byte to delete, and no store is reached.
 _ROOT = "/nonexistent/bkt"
@@ -88,7 +73,7 @@ def _settings(tmp_path: Any, *, grace_days: int = 0) -> Settings:
 class _NoopLineage:
     """The lineage protocol's write half, doing nothing — the doors' happy path awaits it."""
 
-    async def project_for(self, top_ns: str) -> str | None:
+    async def project_for(self, warehouse_id: str) -> str | None:
         """Part of `LineageEmitter` since the tenant became `rask_lance.project` (WATCH targeting's key).
         `None` is the honest answer for a fake with no registry behind it."""
         return None
@@ -603,7 +588,6 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any, monkeypatch:
     asyncio.run(
         n_ep.undrop_namespace(
             id="bronze",
-            request=_request_stub(),
             ns=ns,
             root=_ROOT,
             settings=settings,
@@ -634,7 +618,6 @@ def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any, monke
         asyncio.run(
             n_ep.undrop_namespace(
                 id="bronze",
-                request=_request_stub(),
                 ns=ns,
                 root=_ROOT,
                 settings=settings,
@@ -669,49 +652,6 @@ def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
     trash.put(settings.registry_root, so, trash.make_record("bronze", uuid=_uuid("bronze"), location="s3://b/t", dropped_by="u", grace_days=7))
     assert trash.get(settings.registry_root, so, _uuid("bronze"), kind="namespace") is None
     assert trash.get(settings.registry_root, so, _uuid("bronze")) is not None
-
-
-def test_a_destructive_drop_of_a_top_level_namespace_removes_its_WAREHOUSE_BINDING(tmp_path: Any) -> None:
-    """`unbind_namespace` existed and only the warehouse-delete door called it, so a direct drop of a
-    top-level namespace leaked its binding — and the UI derives its namespace list from bindings, so
-    the dropped namespace kept LISTING forever. Seen on the deployed estate: `casc9` survived its own
-    successful cascade as a phantom row."""
-    from catalog.services import warehouses
-
-    settings = _settings(tmp_path, grace_days=0)
-    so = settings.storage_options()
-    warehouses.bind_namespace(settings.registry_root, so, "bronze", "wh1", "s3://wh1-bucket")
-    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is not None
-
-    _drop_namespace_cascade(settings, _CascadableNamespace())
-    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is None, "the binding outlived the namespace"
-
-
-def test_a_RECOVERABLE_cascade_UNBINDS_and_records_the_binding_for_the_undrop(tmp_path: Any) -> None:
-    """REVERSED by owner ruling (diff2 F6 leg c). This asserted the opposite until 2026-08-15.
-
-    The binding used to be KEPT on a recoverable drop, on the same reasoning as the grants (#75):
-    undrop rebuilds the subtree and needs a route. The cost was that it OUTLIVED the namespace — and
-    when the grace window expired, the purge reclaimed the bytes and left the binding standing
-    forever, invisible to every reconciler category (`dangling_bindings` keys on a MISSING warehouse
-    record, and the warehouse is still there).
-
-    So the drop unbinds, and the ROOT trash record carries `{warehouse_id, root_uri}` as the only
-    surviving copy — which undrop re-binds from, under a deactivation check. The route is not lost;
-    it moved onto the record that already had to survive for the undrop to work at all.
-    """
-    from catalog.services import warehouses
-    from lakehouse import trash
-
-    settings = _settings(tmp_path, grace_days=7)
-    so = settings.storage_options()
-    warehouses.bind_namespace(settings.registry_root, so, "bronze", "wh1", "s3://wh1-bucket")
-
-    _drop_namespace_cascade(settings, _CascadableNamespace())
-
-    assert warehouses.binding_for_namespace(settings.registry_root, so, "bronze") is None, "the binding outlived its namespace"
-    (record,) = trash.named(settings.registry_root, so, "bronze", kind="namespace")
-    assert record.get("binding") == {"warehouse_id": "wh1", "root_uri": "s3://wh1-bucket"}, "the route was lost, not moved"
 
 
 def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:

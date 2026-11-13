@@ -26,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-_T = "/v1/table/g1$t"
+_T = "/v1/table/lance_catalog$g1$t"
 _VECTOR = {"single_vector": [0.1, 0.2]}
 _UNSUPPORTED = 0
 _BRANCH_NOT_FOUND = 22
@@ -43,7 +43,7 @@ def _ipc(table: pa.Table) -> bytes:
 def table(real_ns_client: TestClient) -> tuple[TestClient, str]:
     """A real table at ``g1$t`` with a vector column and a named scalar index, and its location."""
     client = real_ns_client
-    assert client.post("/v1/namespace/g1/create", json={}).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$g1/create", json={}).status_code == 200
     rows = pa.table(
         {
             "id": pa.array([1, 2, 3], pa.int64()),

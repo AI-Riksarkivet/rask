@@ -1251,7 +1251,7 @@ def relative_location(location: str, *, root: str) -> str:
     location and keeps a relative one as the literal key it is given, while ``describe_table`` answers an absolute URL
     that percent-encodes a registered table's name (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``). The store holds the table's bytes
     under the key that decodes to once (``…/räksmörgås``), so that key, whole, is what the table re-attaches at
-    ([[LH-517]]). ``root`` is the root the namespace's connection is rooted at, its warehouse's for a bound namespace
+    ([[LH-517]]). ``root`` is the root the namespace's connection is rooted at, its warehouse's
     ([[LH-528]]): a location under another root has no key the backend resolves to it.
 
     Raises:

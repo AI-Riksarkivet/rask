@@ -144,7 +144,6 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
     report = await reconcile(
         settings,
         partial(grant_census, settings),
-        warehouses_enabled=settings.warehouses_enabled,
         control_root=settings.resolved_control_root,
         into_sources=read_sources,
         walk=walk,
@@ -334,7 +333,7 @@ def _finding_identity(finding: BaseModel) -> str:
     # the models that offer nothing else — `UnregisteredDataset`, whose entire content is that no
     # root claims the table, so a table id (unique only WITHIN a root) cannot be its identity and the
     # URI is the only answer to "where do I go and look".
-    for field in ("fga_object", "bucket", "namespace", "top_ns", "path", "task", "id", "location"):
+    for field in ("fga_object", "bucket", "namespace", "path", "task", "id", "location"):
         if value := dumped.get(field):
             return str(value)
     return str(dumped)

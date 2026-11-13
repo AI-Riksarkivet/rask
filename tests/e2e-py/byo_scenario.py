@@ -16,7 +16,7 @@ tag gate. `drive` is that job, run from outside the cluster:
    through `version/create`, naming the run and the bronze input as transaction properties.
 
 Three Dex users from the deployed configmap play the parts. The estate admin creates a scratch tenant (a project,
-a warehouse with its own bucket, a bronze and a silver namespace) and declares its gate. The pipeline
+a warehouse with its own bucket, and in it a bronze and a silver namespace) and declares its gate. The pipeline
 identity holds only `writer` on the two namespaces, so it owns what it creates. The validator holds `validator` on
 silver. The tenant is deleted at the end of the session, unless the session keeps the drive for the soak (`kept_drive`).
 
@@ -137,8 +137,9 @@ class Tenant:
         self.pipeline = Identity.person(PIPELINE_USER)
         self.validator = Identity.person(VALIDATOR_USER)
         self.project = project or f"byo-{uuid.uuid4().hex[:8]}"
-        self.bronze = f"{self.project}-bronze"
-        self.silver = f"{self.project}-silver"
+        #: The tenant's two namespaces, in its own warehouse (whose id is the project's), so no other tenant's names meet them.
+        self.bronze = f"{self.project}$bronze"
+        self.silver = f"{self.project}$silver"
         self.tables: list[str] = []
         #: The wall clock just before the tenant's first door, which `create` sets: the tenant's grants are announced
         #: from here, before any write, so a reader of the bus reads from here.
@@ -157,8 +158,7 @@ class Tenant:
         ok(admin.http.post(f"{CATALOG}/management/v1/projects", json={"id": self.project}))
         ok(admin.http.post(f"{CATALOG}/management/v1/warehouses", json={"id": self.project, "project": self.project}))
         for namespace, tier in ((self.bronze, "bronze"), (self.silver, "silver")):
-            body = {"namespace": namespace, "properties": {"rask.tier": tier}}
-            ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{self.project}/namespaces", json=body))
+            ok(admin.http.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={"properties": {"rask.tier": tier}}))
             ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{namespace}/access/grant", json={"user": self.pipeline.principal, "relation": "writer"}))
         ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.silver}/access/grant", json={"user": self.validator.principal, "relation": "validator"}))
         self.declare_gate(review=False)
@@ -307,7 +307,7 @@ class ScenarioRun(BaseModel):
 def drive(tenant: Tenant) -> ScenarioRun:
     """Run the pipeline once on ``tenant`` and record what it saw (the module docstring's six steps)."""
     pipeline, validator, admin = tenant.pipeline, tenant.validator, tenant.admin
-    bronze_id, silver_id = [tenant.bronze, "orders"], [tenant.silver, "orders"]
+    bronze_id, silver_id = [*tenant.bronze.split("$"), "orders"], [*tenant.silver.split("$"), "orders"]
     bronze_table, silver_table = "$".join(bronze_id), "$".join(silver_id)
     start = feed_start(pipeline)
 

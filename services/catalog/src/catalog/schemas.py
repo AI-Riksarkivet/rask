@@ -678,16 +678,9 @@ class ProjectPoliciesResponse(BaseModel):
     actually in force across a tenant, so a project admin could not tell which of their namespaces or
     tables carries a retention override without already knowing its id. This is that read.
 
-    ``buckets`` and ``namespaces`` are the SCOPE the listing was computed from — the project's warehouse
-    buckets and the top-level namespaces bound to those warehouses — reported so a surprising list can be
-    explained without a second call.
-
-    ``incomplete`` / ``skipped_bindings`` are load-bearing, not diagnostics. The namespace half of the
-    scope is derived from the namespace→warehouse bindings, so a binding record that cannot be read is a
-    namespace whose policies cannot be seen: a silently-narrowed list would read as "checked and clean",
-    which is the ``unbound_namespaces`` bug class. The listing still answers 200 (it is a read, not a
-    destructive door — see ``warehouses.namespaces_bound_to`` for the opposite posture) and SAYS it may
-    be short.
+    ``buckets`` and ``warehouses`` are the SCOPE the listing was computed from — the project's warehouses and
+    their buckets — reported so a surprising list can be explained without a second call. A table or namespace
+    record is in scope when its name begins with one of those warehouses.
 
     **Resolution is winner-takes-all** (``PolicyRequest``): a table record shadows a namespace record
     shadows the project record, and the winner supplies EVERY field. These records are what EXISTS, not
@@ -696,10 +689,8 @@ class ProjectPoliciesResponse(BaseModel):
 
     project: str
     buckets: list[str]
-    namespaces: list[str]
+    warehouses: list[str]
     policies: list[PolicyResponse]
-    incomplete: bool = False
-    skipped_bindings: list[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -728,22 +719,18 @@ class CreateWarehouseRequest(RequestBody):
     project: str
     bucket: str | None = None  # defaults to the id (a warehouse = one bucket)
     # Serving designation (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical layout"): "gold" marks this as the
-    # project's gold SERVING warehouse — a tenant's gold target root. Absent (default) = a WORK warehouse. Only "gold" is accepted for now.
+    # project's gold SERVING warehouse. Absent (default) = a WORK warehouse. Only "gold" is accepted. Recorded and read back,
+    # never routed by: a name's first segment names its warehouse ([[LH-593]]).
     serving: str | None = None
     #: Deletion protection as the declaration states it ([[LH-548]]): `true` arms it and `false` clears it, so a
     #: re-POST converges on what it declares either way. Absent leaves it as it stands, so a declaration that never
     #: names it leaves it to `POST /management/v1/warehouses/{warehouse_id}/protection`; a new warehouse is then
     #: unprotected, its record carrying no `protected` key.
     protected: bool | None = None
-    # THE PROJECT'S PRIMARY WAREHOUSE IN ITS SERVING CLASS — the operator's answer to
-    # `AmbiguousProjectWarehouseError`. A project may legitimately hold several active warehouses, and
-    # until 2026-09-06 the resolver silently picked `min()` by id: measured, `acme` held SIX and its
-    # cascade routed to `acme-bucket` purely because that string sorts first. The resolver now REFUSES
-    # an ambiguous set and names this flag as the fix — so the flag has to be settable at the door that
-    # writes the record, or the refusal names a repair only a hand-edited JSON file can perform (the
-    # `rayComputeAccessKey` shape: hardening an operator cannot actually apply).
-    # Absent (default) keeps every existing record byte-identical; a re-POST carries an existing flag
-    # forward, exactly as `serving` does.
+    # THE PROJECT'S PRIMARY WAREHOUSE IN ITS SERVING CLASS, a mark the operator sets for whoever picks one of a
+    # project's several active warehouses. Recorded and read back, never routed by: a name's first segment names its
+    # warehouse ([[LH-593]]). Absent (default) keeps every existing record byte-identical; a re-POST carries an existing
+    # flag forward, exactly as `serving` does.
     primary: bool = False
     # [[LH-067]] THE OBJECT STORE THIS WAREHOUSE'S BUCKET LIVES AT. Absent (default) means the estate's
     # and keeps existing records byte-identical; an explicit empty string re-points a record at the
@@ -774,9 +761,8 @@ class WarehouseResponse(BaseModel):
     #: Who armed the protection (`user:<principal>`), so a refused delete can be traced to its armer ([[LH-548]]); None
     #: while unprotected.
     protected_by: str | None = None
-    # Which warehouse a project's writes actually route to, made OBSERVABLE. An operator resolving an
-    # ambiguity has to be able to read back which record they marked; None on unmarked records
-    # (exclude_none keeps them byte-identical on the wire).
+    # Which warehouse the project marked primary, made OBSERVABLE: an operator has to be able to read back which
+    # record they marked. None on unmarked records (exclude_none keeps them byte-identical on the wire).
     primary: bool | None = None
     # [[LH-067]] Which object store this warehouse is reached at. Readable back for the same reason
     # `primary` is: an operator who set it must be able to confirm what the record now says, and
@@ -789,6 +775,9 @@ class WarehouseResponse(BaseModel):
     # it ([[LH-205]]), which is why a record naming another store is refused rather than served.
     credential_ref: str | None = None
     created_at: str | None = None
+    # `git` while git declares the warehouse ([[XC-213]]): its doors then refuse a change to its status, protection,
+    # delete profile and its delete, which the declaration owns. `self` for a warehouse its own doors manage.
+    managed_by: Literal["git", "self"] = "self"
     #: The warehouse's own delete profile; None where it takes the estate's.
     delete_profile: DeleteProfile | None = None
 
@@ -802,27 +791,6 @@ class WarehouseResponse(BaseModel):
         return data
 
 
-class CreateWarehouseNamespaceRequest(RequestBody):
-    namespace: str  # a single TOP-LEVEL namespace name to create in + bind to this warehouse
-    #: ADOPT a namespace whose bytes were already migrated INTO this warehouse's bucket (the
-    #: sanctioned bytes-first migration): a native "already exists" AT THE WAREHOUSE ROOT converges
-    #: instead of refusing, and the binding + FGA trailer runs as on a fresh create. Both hazard
-    #: guards (write-once binding; default-root collision) apply IDENTICALLY — this flag never
-    #: bypasses them, it only accepts that the physical namespace preceded its governance record.
-    adopt_existing: bool = False
-    #: The namespace's properties, as `CreateNamespace` takes them. `rask.tier` declares its tier and is
-    #: refused unless the warehouse's project admin asks (ADR 0160). Refused with `adopt_existing`: an
-    #: adopted namespace keeps the properties it was created with, so these would silently not land.
-    properties: dict[str, str] | None = None
-
-
-# --------------------------------------------------------------------------- #
-# Credential vending (Track B)
-# --------------------------------------------------------------------------- #
-
-
-# The vend as it is handed to its caller, the secret and the session token in clear: the door builds it from
-# `VendedSession.as_storage_options()` as it answers, and nothing in the catalog holds one otherwise ([[LH-072]]).
 class VendedCredentials(BaseModel):
     """Scoped storage credentials for one table at one tier.
 
@@ -1294,42 +1262,6 @@ class EventsResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-class WarehouseNamespacesResponse(BaseModel):
-    """The namespaces BOUND to one warehouse — the registry's answer, same shape as the spec's
-    ListNamespaces (``{"namespaces": [...]}``) so a spec client parses it unchanged."""
-
-    namespaces: list[str]
-
-
-class EstateBindingsResponse(BaseModel):
-    """Every namespace→warehouse binding the caller can see, in ONE read (#86).
-
-    The per-warehouse sibling answers for one id; a page listing the estate's namespaces was
-    calling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the
-    estate before filtering in Python — O(warehouses × bindings) for a union the underlying
-    ``list_bindings`` already produces in a single pass.
-    """
-
-    bindings: dict[str, str]
-    """``{namespace: warehouse_id}`` — a mapping rather than a list, because every caller so far
-    wants to know WHICH warehouse a namespace lives in, and a list would make them re-derive it."""
-
-
-class UnbindWarehouseNamespaceResponse(BaseModel):
-    """What the unbind actually did — the binding, and whether any replica was still caching it.
-
-    `evicted` is reported rather than assumed because the binding cache is positive-and-forever: the
-    registry record going away is only half the repair, and an operator who cannot see the other half
-    has no way to tell a completed unbind from one the running estate never heard about.
-    """
-
-    warehouse_id: str
-    namespace: str
-    #: False when the binding was already absent — the door is idempotent, so a retry after a partial
-    #: failure converges rather than 404ing on the half that already succeeded.
-    unbound: bool
-
-
 class DeleteWarehouseResponse(BaseModel):
     """What the delete ACTUALLY did — reported step by step, never assumed.
 
@@ -1343,7 +1275,7 @@ class DeleteWarehouseResponse(BaseModel):
     #: The bucket the warehouse owned — named even when it was NOT purged, so the operator knows what survived.
     bucket: str
     #: Every namespace a ``cascade`` actually dropped, nested ones included, in the order it dropped them (empty on a
-    #: non-cascade delete). Each bound one among them is unbound too.
+    #: non-cascade delete).
     namespaces_dropped: list[str]
     #: Tuples removed across the warehouse object AND every namespace and table a cascade removed under it, those a
     #: recoverable drop kept included. 0 when FGA is off.
@@ -1379,6 +1311,9 @@ class ProjectResponse(BaseModel):
     protected: bool = False
     #: Who armed the protection (`user:<principal>`); None while the project is unprotected.
     protected_by: str | None = None
+    #: `git` while git declares the project ([[XC-213]]): its doors then refuse a change to its protection and its
+    #: delete, which the declaration owns. `self` for a project its own doors manage.
+    managed_by: Literal["git", "self"] = "self"
 
 
 class CreateProjectRequest(RequestBody):

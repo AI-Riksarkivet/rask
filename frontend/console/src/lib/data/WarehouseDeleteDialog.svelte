@@ -79,22 +79,23 @@
 
 	// The catalog's emptiness refusal names what blocks the delete:
 	//
-	//   warehouse 'acme-wh' still holds 2 namespace(s): bronze, silver. Drop them first, or pass
-	//   ?cascade=true to drop exactly those with the warehouse.
+	//   warehouse 'acme-wh' still holds 2 namespace(s): acme-wh$bronze, acme-wh$silver. Drop them
+	//   first, or pass ?cascade=true to drop exactly those with the warehouse.
 	//
-	// There is no bindings READ api — the warehouse detail page derives its namespace list from the
-	// table registry by naming convention and says so — which makes this refusal the only authoritative
-	// statement of what a cascade would take. Namespace ids are DNS-safe by the catalog's own
-	// `CONTROL_ID_RE` (lowercase alphanumerics and hyphens), so they cannot contain the '.' that ends
-	// the list. A detail that does NOT match is not forced into the shape: it still renders verbatim,
-	// and the cascade opt-in is simply not offered, because we could not say what it would drop.
-	const BOUND_RE = /still holds \d+ namespace\(s\):\s*([^.]+)\./;
+	// The warehouse page lists the same namespaces, but this refusal is what the cascade would take AT
+	// THE MOMENT it was refused, so the opt-in names exactly these. A name may hold a '.' or a ', '
+	// (ADR 0173 §4), which this parse would cut at, so the names it reads are held to the count the
+	// sentence states. A detail that does NOT match is not forced into the shape: it still renders
+	// verbatim, and the cascade opt-in is simply not offered, because we could not say what it would
+	// drop.
+	const BOUND_RE = /still holds (\d+) namespace\(s\):\s*(.+?)\. Drop them first/;
 	function boundNamespacesIn(detail: string): string[] {
 		const match = BOUND_RE.exec(detail);
-		return (match?.[1] ?? '')
-			.split(',')
+		const names = (match?.[2] ?? '')
+			.split(', ')
 			.map((name) => name.trim())
 			.filter(Boolean);
+		return names.length === Number(match?.[1] ?? -1) ? names : [];
 	}
 
 	async function submit(): Promise<void> {
@@ -168,9 +169,12 @@
 				{#if bound.length > 0}
 					<section class="opt">
 						<label class="check">
-							<Checkbox bind:checked={cascade} aria-label="Drop the bound namespaces (cascade)" />
+							<Checkbox
+								bind:checked={cascade}
+								aria-label="Drop the warehouse’s namespaces (cascade)"
+							/>
 							<span
-								>Also drop the {bound.length} namespace{bound.length === 1 ? '' : 's'} bound to this warehouse</span
+								>Also drop the {bound.length} namespace{bound.length === 1 ? '' : 's'} in this warehouse</span
 							>
 						</label>
 						<ul class="named mono" data-testid="cascade-namespaces">

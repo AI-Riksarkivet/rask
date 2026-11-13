@@ -25,7 +25,7 @@ import asyncio
 import hashlib
 import io
 import json
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -54,7 +54,7 @@ from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod
 from maintenance.services import trash_release
-from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
+from maintenance.services.reconcile import CATEGORIES, CategoryUnavailable, IncompleteScan, ReconcileReport
 from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
 
@@ -91,15 +91,9 @@ def doors(tmp_path: Path) -> Iterator[respx.MockRouter]:
         yield router
 
 
-def _clean_report(skipped: Iterable[str] = ("unbound_namespaces",)) -> ReconcileReport:
-    """A drift report that certifies the estate: every category checked and empty, bar deliberate skips."""
-    skips = list(skipped)
-    return ReconcileReport(
-        checked_at=_NOW.isoformat(),
-        counts={category: 0 for category in CATEGORIES if category not in skips},
-        total=0,
-        skipped=[CategorySkipped(category=category, reason="warehouses are off") for category in skips],
-    )
+def _clean_report() -> ReconcileReport:
+    """A drift report that certifies the estate: every category checked and empty."""
+    return ReconcileReport(checked_at=_NOW.isoformat(), counts=dict.fromkeys(CATEGORIES, 0), total=0)
 
 
 class _Estate:
@@ -879,10 +873,10 @@ def test_a_dry_run_tick_is_DISTINGUISHABLE_on_the_reclamation_counters(monkeypat
 def test_the_purge_blocker_names_only_the_categories_that_actually_BLOCK() -> None:
     """CONTRACT: the reason names the categories inside `report.total`, never the non-gating ones.
 
-    `report.total` deliberately excludes `NON_GATING_CATEGORIES` — `unbound_namespaces` — because it is not
-    a storage fact, cannot change which bytes the purge touches, and crucially HAS NO DOOR: no endpoint in
-    the product binds a legacy namespace. That exclusion exists because gating on it made the gate
-    permanently unsatisfiable.
+    `report.total` deliberately excludes `NON_GATING_CATEGORIES` — `unreachable_namespaces` among them — because it
+    is not a storage fact, cannot change which bytes the purge touches, and crucially HAS NO DOOR: no endpoint in
+    the product removes or moves a namespace row no name reaches. That exclusion exists because gating on it would
+    make the gate permanently unsatisfiable.
 
     The message did not inherit it. It listed every non-zero category, so an operator was pointed at
     work that cannot be done and that would not have unblocked the purge if it could. Measured on the
@@ -897,14 +891,14 @@ def test_the_purge_blocker_names_only_the_categories_that_actually_BLOCK() -> No
     sentence an operator actually reads was not.
     """
     report = _clean_report()
-    report.counts.update({"ghost_projects": 1, "orphan_buckets": 12, "unbound_namespaces": 4})
+    report.counts.update({"ghost_projects": 1, "orphan_buckets": 12, "unreachable_namespaces": 4})
     report.total = 13  # what `reconcile` computes: the gating categories only
 
     reason = mod.report_is_clean(report)
 
     assert reason is not None
     assert "ghost_projects" in reason and "orphan_buckets" in reason, reason
-    assert "unbound_namespaces" not in reason, f"the blocker names a non-gating category: {reason}"
+    assert "unreachable_namespaces" not in reason, f"the blocker names a non-gating category: {reason}"
 
 
 def test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

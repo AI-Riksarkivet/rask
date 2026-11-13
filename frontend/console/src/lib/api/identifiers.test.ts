@@ -14,6 +14,7 @@ import {
 	namespacePrefix,
 	parentNamespace,
 	parentNamespaceOrNull,
+	warehouseOf,
 } from './identifiers';
 
 describe('parentNamespace', () => {
@@ -64,12 +65,24 @@ describe('namespacePrefix', () => {
 });
 
 describe('DELIMITER', () => {
-	it('matches what the chart pins into the catalog', () => {
-		// Not a tautology: it pins the frontend to `chart/templates/services.yaml`, which sets
-		// LANCE_NS_DELIMITER to a LITERAL "$" with no values.yaml knob. If someone makes the chart
-		// configurable, this constant is the thing that must change with it — and this line is where
-		// they will be told so.
+	it('matches the catalog delimiter', () => {
+		// Not a tautology: it pins the console to `lakehouse.naming.CATALOG_DELIMITER`, a constant the
+		// catalog refuses every other spelling of. If that ever changes, this constant changes with it.
 		expect(DELIMITER).toBe('$');
+	});
+});
+
+describe('warehouseOf', () => {
+	it('is the first segment of any id, the catalog warehouse_of', () => {
+		// The warehouse is the FIRST segment, unlike the parent, which is all but the last: a nested
+		// namespace and a deep table both lie in the warehouse that opens their name.
+		expect(warehouseOf('acme-wh$bronze$pages')).toBe('acme-wh');
+		expect(warehouseOf('acme-wh$bronze$raw$pages')).toBe('acme-wh');
+		expect(warehouseOf('lance_catalog$provenance')).toBe('lance_catalog');
+	});
+
+	it('answers a one-segment id itself: that id is a warehouse', () => {
+		expect(warehouseOf('acme-wh')).toBe('acme-wh');
 	});
 });
 

@@ -138,13 +138,13 @@ def test_a_cascade_drop_of_the_root_is_refused_before_any_table_is_touched(tmp_p
     lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}), str(root / "t"), data_storage_version="2.2", enable_stable_row_ids=True)
     try:
         with TestClient(app) as client:
-            assert client.post("/v1/namespace/db/create", json={}).status_code == 200
-            assert client.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
+            assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+            assert client.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
 
             resp = client.post("/v1/namespace/$/drop?purge=true", json={"behavior": "Cascade"})
 
             assert resp.status_code == 400, resp.text
-            assert client.post("/v1/table/db$t/exists").status_code == 200, "a refused root drop must leave every table registered"
+            assert client.post("/v1/table/lance_catalog$db$t/exists").status_code == 200, "a refused root drop must leave every table registered"
             assert lance.dataset(str(root / "t")).count_rows() == 2
     finally:
         get_settings.cache_clear()

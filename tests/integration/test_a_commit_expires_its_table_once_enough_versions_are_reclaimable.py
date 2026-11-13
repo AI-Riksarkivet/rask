@@ -50,7 +50,9 @@ from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_
 from tests.integration.store_requests import counted
 
 
-TABLE = "db$räksmörgås"
+#: The estate's own warehouse, the first segment of every name in its root.
+WAREHOUSE = "lance_catalog"
+TABLE = f"{WAREHOUSE}$db$räksmörgås"
 LOCATION = f"c0ffee00_{TABLE}"
 THRESHOLD = 3
 
@@ -99,12 +101,13 @@ def _table_with(
             enable_stable_row_ids=True,
         )
     namespace = connect("dir", {"root": root, **{f"storage.{key}": value for key, value in options.in_clear().items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={UUID_PROPERTY: namespace_uuid or str(uuid.uuid4())}))
+    namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE], properties={UUID_PROPERTY: str(uuid.uuid4())}))
+    namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE, "db"], properties={UUID_PROPERTY: namespace_uuid or str(uuid.uuid4())}))
     namespace.register_table(RegisterTableRequest(id=TABLE.split("$"), location=LOCATION))
     described = str(namespace.describe_table(DescribeTableRequest(id=TABLE.split("$"))).location)
     table_uuid = str(uuid.uuid4())
     claims = location_claims.ClaimStore(control_root=root, storage_options=options)
-    location_claims.take(claims, described, TABLE, ["db", "räksmörgås"], is_gone=lambda _claim: False, uuid=table_uuid)
+    location_claims.take(claims, described, TABLE, list[str](TABLE.split("$")), is_gone=lambda _claim: False, uuid=table_uuid)
     if policy is not None:
         maintenance_policies.put_policy(root, options, {"kind": "table", "id": TABLE, "uuid": table_uuid, **policy})
     return TableTask(uuid=table_uuid, location=described)
@@ -349,7 +352,7 @@ def test_a_pass_that_cannot_read_its_tables_policy_as_written_reclaims_nothing(
     store does not answer decides nothing and is retried."""
     namespace_uuid = str(uuid.uuid4())
     task = _table_with(THRESHOLD + 1, bucket=bucket, options=store, namespace_uuid=namespace_uuid)
-    maintenance_policies.put_policy(f"s3://{bucket}", store, {"kind": "namespace", "id": "db", "uuid": namespace_uuid, "retain_versions": 1})
+    maintenance_policies.put_policy(f"s3://{bucket}", store, {"kind": "namespace", "id": f"{WAREHOUSE}$db", "uuid": namespace_uuid, "retain_versions": 1})
     key = record_key(maintenance_policies.PREFIX, "table", task.uuid)
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     s3.put_object(Bucket=bucket, Key=key, Body=record(task.uuid))

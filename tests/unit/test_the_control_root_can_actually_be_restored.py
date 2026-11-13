@@ -1,7 +1,7 @@
 """The control root's recoverability, exercised rather than assumed.
 
 [[LH-110]]. The control root holds the estate's governance as small JSON objects — the project and
-warehouse registries, the namespace bindings, protection, policies, gates, transforms, tasks, and the
+warehouse registries, protection, policies, gates, transforms, tasks, and the
 trash records that make a drop recoverable. Lose them and the Lance data survives while every statement
 about who may touch it does not.
 
@@ -59,9 +59,8 @@ SEED = {
     "_policies/state/": b"",
     "_projects/acme.json": b'{"id": "acme"}',
     "_warehouses/acme-wh.json": b'{"id": "acme-wh", "root_uri": "s3://acme-bucket"}',
-    "_warehouses/bindings/acme-bronze.json": b'{"warehouse_id": "acme-wh"}',
-    "_trash/table/acme-bronze$events.json": b'{"expires_at": "2026-10-01"}',
-    "_protection/table/acme-bronze$events.json": b'{"protected": true}',
+    "_trash/table/acme-wh$bronze$events.json": b'{"expires_at": "2026-10-01"}',
+    "_protection/table/acme-wh$bronze$events.json": b'{"protected": true}',
     "_policies/state/acme.json": b'{"retention_days": 30}',
     "_gates/acme.json": b'{"require_human": false}',
     # [[LH-279]] The catalog's base record: without it every table declaring a recorded foreign base is

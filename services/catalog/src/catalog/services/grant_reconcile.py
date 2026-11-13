@@ -23,7 +23,7 @@ from lakehouse.governed import fga
 
 def platform_objects(settings: Settings) -> frozenset[str]:
     """The objects a deployment keeps for itself, which no registry names and no drift report reads as a ghost: the
-    estate root and the default warehouse a top-level namespace hangs off."""
+    estate root and the estate's own warehouse, whose namespaces hang off it."""
     return frozenset({settings.fga_root_object, settings.fga_default_warehouse_object})
 
 

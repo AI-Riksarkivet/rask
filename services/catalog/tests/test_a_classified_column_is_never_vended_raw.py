@@ -11,8 +11,8 @@ A credential for any ref reads every ref's files: a stock client opens a branch 
 (``checkout_version((branch, None))``), and a branch reads its parent's fragments through a base on the table root
 (`lance_docs/lance/format/table/layout.md` § Shallow Clone). So a label on any ref holds the table back.
 
-Every decision is the real model's, on a store of this test's own: alice owns ``db`` and ``db$t`` and may apply the
-label ``pii``; bob is a writer on ``db``. The vendor records every call, since a credential minted and then discarded is
+Every decision is the real model's, on a store of this test's own: alice owns ``lance_catalog$db`` and ``lance_catalog$db$t`` and may apply the
+label ``pii``; bob is a writer on ``lance_catalog$db``. The vendor records every call, since a credential minted and then discarded is
 still a grant at the store.
 """
 
@@ -35,7 +35,7 @@ from lakehouse.governed.store_credential import S3KeyPair
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).
 INVALID_INPUT, PERMISSION_DENIED, INTERNAL = 13, 15, 18
-TABLE = "/v1/table/db$t"
+TABLE = "/v1/table/lance_catalog$db$t"
 PII = {"rask.classification": "pii"}
 
 
@@ -52,17 +52,17 @@ class _Vendor:
 
 @pytest.fixture
 def table(governed_catalog: Any) -> Iterator[tuple[Any, _Vendor]]:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """alice's ``db$t`` (``id``, ``secret``, ``payload.ssn``), bob a writer on ``db``, and the recording vendor."""
+    """alice's ``lance_catalog$db$t`` (``id``, ``secret``, ``payload.ssn``), bob a writer on ``lance_catalog$db``, and the recording vendor."""
     catalog = governed_catalog
     vendor = _Vendor()
     catalog.client.app.dependency_overrides[get_vendor] = lambda: vendor
     catalog.store.write((catalog.person("alice"), "apply", "classification:pii"))
     alice = catalog.bearer("alice")
-    assert catalog.client.post("/v1/namespace/db/create", json={}, headers=alice).status_code == 200
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
     rows = pa.table({"id": pa.array([1, 2], pa.int64()), "secret": pa.array(["a", "b"]), "payload": pa.array([{"ssn": "x"}, {"ssn": "y"}])})
     created = catalog.client.post(f"{TABLE}/create", content=encode_arrow_stream(rows), headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert created.status_code == 200, created.text
-    granted = catalog.client.post("/management/v1/namespace/db/access/grant", json={"user": "dex~bob", "relation": "writer"}, headers=alice)
+    granted = catalog.client.post("/management/v1/namespace/lance_catalog$db/access/grant", json={"user": "dex~bob", "relation": "writer"}, headers=alice)
     assert granted.status_code == 200, granted.text
     yield catalog, vendor
     catalog.client.app.dependency_overrides.pop(get_vendor, None)
@@ -82,7 +82,7 @@ def _bob(catalog: Any, door: str, body: dict[str, Any]) -> tuple[int, int | None
 def _vends_raw(catalog: Any) -> list[str]:  # noqa: ANN401
     """The doors that handed bob a direct credential for the table."""
     raw = []
-    door = catalog.client.post("/management/v1/table/db$t/credentials", headers=catalog.bearer("bob"))
+    door = catalog.client.post("/management/v1/table/lance_catalog$db$t/credentials", headers=catalog.bearer("bob"))
     assert door.status_code == 200, door.text
     if door.json().get("mode") != "server_mediated":
         raw.append("credentials")
@@ -150,8 +150,8 @@ def test_a_classified_table_stays_unvendable_raw_whatever_a_writer_does(
 @pytest.mark.parametrize(
     ("door", "body"),
     [
-        pytest.param("/management/v1/table/db$t/credentials", None, id="the-credentials-door"),
-        pytest.param("/management/v1/table/db$t/credentials?branch=work", None, id="the-credentials-door-for-a-branch"),
+        pytest.param("/management/v1/table/lance_catalog$db$t/credentials", None, id="the-credentials-door"),
+        pytest.param("/management/v1/table/lance_catalog$db$t/credentials?branch=work", None, id="the-credentials-door-for-a-branch"),
         pytest.param(f"{TABLE}/describe", {"vend_credentials": True}, id="describe"),
     ],
 )
@@ -178,8 +178,8 @@ def test_a_classified_table_whose_open_fails_is_vended_to_no_one(
 @pytest.mark.parametrize(
     ("door", "answered_as"),
     [
-        pytest.param("/management/v1/table/db$t/credentials", (200, "server_mediated", None), id="main-is-served-through-the-catalog"),
-        pytest.param("/management/v1/table/db$t/credentials?branch=work", (500, None, INTERNAL), id="a-branch-is-refused"),
+        pytest.param("/management/v1/table/lance_catalog$db$t/credentials", (200, "server_mediated", None), id="main-is-served-through-the-catalog"),
+        pytest.param("/management/v1/table/lance_catalog$db$t/credentials?branch=work", (500, None, INTERNAL), id="a-branch-is-refused"),
     ],
 )
 def test_a_table_whose_branches_cannot_be_listed_is_vended_no_credential(
@@ -209,7 +209,7 @@ def test_the_maintenance_identity_is_vended_the_maintain_tier_of_a_classified_ta
     _label(catalog, "secret")
     catalog.store.write((catalog.person("sweep"), "maintenance", "warehouse:lance_catalog"))
 
-    vended = catalog.client.post("/management/v1/table/db$t/credentials", params={"tier": "maintain"}, headers=catalog.bearer("sweep"))
+    vended = catalog.client.post("/management/v1/table/lance_catalog$db$t/credentials", params={"tier": "maintain"}, headers=catalog.bearer("sweep"))
 
     assert (vended.status_code, vended.json().get("mode")) == (200, "direct"), vended.text
     assert [call["tier"] for call in vendor.calls] == ["maintain"]
@@ -221,6 +221,8 @@ def test_a_writer_cannot_create_a_table_carrying_a_label(table: tuple[Any, _Vend
     field = pa.field("secret", pa.string(), metadata={b"rask.classification": b"pii"})
     rows = encode_arrow_stream(pa.table({"secret": pa.array(["a"])}, schema=pa.schema([field])))
 
-    created = catalog.client.post("/v1/table/db$u/create", content=rows, headers={**catalog.bearer("bob"), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    created = catalog.client.post(
+        "/v1/table/lance_catalog$db$u/create", content=rows, headers={**catalog.bearer("bob"), "Content-Type": ARROW_STREAM_MEDIA_TYPE}
+    )
 
     assert (created.status_code, created.json().get("code")) == (403, PERMISSION_DENIED), created.text

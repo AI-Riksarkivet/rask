@@ -579,7 +579,7 @@ class Admitted(BaseModel):
 def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], relative: str, context: RegistrationContext) -> RegistrationVerdict:
     """Judge the dataset a registration just attached ([[LH-279]]); it writes nothing.
 
-    In order: the location the backend RESOLVED, which is right for a warehouse-bound table too; no other
+    In order: the location the backend RESOLVED, under the root of the table's own warehouse; no other
     registered table may overlap it (:func:`require_exclusive_location`, asked after the
     registration so a concurrent overlap is caught by whichever lands second); the dataset must not carry
     reader flag 256, must have stable row ids and must carry no ``lance.compaction.*`` config ([[LH-538]]); and every base it declares must be its own, configured, approved, already recorded,

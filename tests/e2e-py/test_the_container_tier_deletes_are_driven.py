@@ -86,8 +86,8 @@ def _purge(catalog: str, name: str) -> None:
     assert final.status_code == 200, f"the fixture leaked bucket {name!r}: {final.status_code} {final.text[:300]}"
 
 
-#: The identifier delimiter this estate serves, matching `test_catalog_live.py`'s table ids. A nested
-#: namespace and a table under it are both `parent<DELIM>child`, so one constant spells both.
+#: The identifier delimiter this estate serves. A warehouse's namespace, a nested namespace and a table under it are
+#: each `parent<DELIM>child`, so one constant spells all three.
 DELIM = "$"
 
 
@@ -115,15 +115,15 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
     Everything this leg destroys it created seconds earlier, in this test's own warehouse; the drop is
     the recoverable kind by construction (no `mode`), and the `finally` purges what recovery left.
     """
-    top = f"e2eundrop{uuid.uuid4().hex[:6]}"
+    leaf = f"e2eundrop{uuid.uuid4().hex[:6]}"
+    top = f"{warehouse}{DELIM}{leaf}"
     child = f"{top}{DELIM}kids"
-    bound = requests.post(f"{catalog}/management/v1/warehouses/{warehouse}/namespaces", json={"namespace": top}, headers=_auth(), timeout=30)
-    assert bound.status_code in (200, 201), f"cannot bind the subtree's root: {bound.status_code} {bound.text[:300]}"
-    made = requests.post(f"{catalog}/v1/namespace/{quote(child, safe='')}/create", json={"id": [top, "kids"]}, headers=_auth(), timeout=30)
-    assert made.status_code in (200, 201), f"cannot nest a child namespace: {made.status_code} {made.text[:300]}"
+    namespaces = {top: [warehouse, leaf], child: [warehouse, leaf, "kids"]}
+    for namespace_id, identifier in namespaces.items():
+        made = requests.post(f"{catalog}/v1/namespace/{quote(namespace_id, safe='')}/create", json={"id": identifier}, headers=_auth(), timeout=30)
+        assert made.status_code == 200, f"cannot create the subtree's namespace {namespace_id!r}: {made.status_code} {made.text[:300]}"
 
-    tables = {f"{top}{DELIM}top_rows": [top, "top_rows"], f"{child}{DELIM}kid_rows": [top, "kids", "kid_rows"]}
-    namespaces = {top: [top], child: [top, "kids"]}
+    tables = {f"{top}{DELIM}top_rows": [warehouse, leaf, "top_rows"], f"{child}{DELIM}kid_rows": [warehouse, leaf, "kids", "kid_rows"]}
     for table_id in tables:
         created = requests.post(
             f"{catalog}/v1/table/{quote(table_id, safe='')}/create",
@@ -141,7 +141,9 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
             before[table_id] = described.json().get("location")
             assert before[table_id], f"{table_id!r} describes with no location, so recovery cannot be checked against one"
 
-        dropped = requests.post(f"{catalog}/v1/namespace/{quote(top, safe='')}/drop", json={"id": [top], "behavior": "CASCADE"}, headers=_auth(), timeout=120)
+        dropped = requests.post(
+            f"{catalog}/v1/namespace/{quote(top, safe='')}/drop", json={"id": namespaces[top], "behavior": "CASCADE"}, headers=_auth(), timeout=120
+        )
         assert dropped.status_code == 200, f"the recoverable cascade did not run: {dropped.status_code} {dropped.text[:300]}"
 
         for namespace_id, identifier in namespaces.items():
@@ -198,7 +200,7 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
         # reading as a successful purge.
         purged = requests.post(
             f"{catalog}/v1/namespace/{quote(top, safe='')}/drop?purge=true",
-            json={"id": [top], "behavior": "CASCADE"},
+            json={"id": namespaces[top], "behavior": "CASCADE"},
             headers=_auth(),
             timeout=120,
         )

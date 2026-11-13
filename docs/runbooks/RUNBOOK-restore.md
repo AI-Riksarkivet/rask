@@ -2,7 +2,7 @@
 
 How the estate is backed up, and the **order-sensitive** procedure to restore it. The Postgres leg covers the
 `rask-age` server's one database that holds state, OpenFGA's datastore; lineage keeps no database (its
-commit feed and edge list are Lance tables in the catalog's `provenance` namespace, so they come back with the
+commit feed and edge list are Lance tables in the catalog's `lance_catalog$provenance` namespace, so they come back with the
 object store). Neither the Postgres leg nor the object-store `VolumeSnapshot` leg is drilled: rehearse the
 pg_dump→drop→restore below on a throwaway database, and validate the snapshot leg on your cluster's CSI driver,
 before trusting either in an incident.
@@ -18,14 +18,14 @@ before trusting either in an incident.
 |---|---|---|---|
 | **pg_dump** (gzip) | the `openfga` DB (authz tuples) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
 | **VolumeSnapshot** | the RustFS fixture's data PVC = the **Lance lakehouse** (every tier + registry data, and lineage's provenance tables) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
-| **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + namespace bindings), `_trash/`, `_protection/`, `_policies/`, `_gates/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
+| **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + bucket claims), `_declared_grants/` (the tuples the catalog wrote from git's declaration), `_trash/`, `_protection/`, `_policies/`, `_gates/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
 
 > **The VolumeSnapshot row needs a cluster that can take one.** Measured 2026-09-14 on the k3s dev
 > cluster: `kubectl get volumesnapshotclass` answers *"the server doesn't have a resource type"*, and
 > `backups.volumeSnapshot` is off in the live release — so on this cluster the registry data in that row
 > is covered by **nothing**. That is why the control-root row exists: it needs no CSI, and it restores
 > RECORDS rather than a whole store, which is the right granularity for "somebody deleted the warehouse
-> bindings".
+> records".
 
 **Not backed up** (accept the loss window or externalize — see [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and
 [DURABILITY.md](../DURABILITY.md)): GreptimeDB local WAL/metadata (metrics — reconstructable; the secret store
@@ -66,9 +66,9 @@ drop/recreate it first.
 2. Point the RustFS fixture's StatefulSet at it (or restore into the existing PVC per your CSI driver's clone flow).
 3. Restart the store; then `catalog`/`lineage`/`maintenance` reconnect (their `/readyz` gates hold them out until the
    object store answers). Lineage's commit feed and edge list come back with the store: they are Lance tables in
-   the catalog's `provenance` namespace, restored like any other table.
+   the catalog's `lance_catalog$provenance` namespace, restored like any other table.
 
-## Restore — the control root (projects, warehouses, bindings, trash)
+## Restore — the control root (projects, warehouses, trash)
 
 The control root holds the estate's governance as small JSON objects. The Lance data can survive intact
 while every statement about **who may touch it** is gone, and that is a different failure from losing a
@@ -118,7 +118,7 @@ Three things that exercise taught, each of which had already produced a wrong an
 - Watch `/readyz` on catalog + lineage flip to 200 (lineage's gates on its feed table answering through the catalog).
 - Drive one read (`GET /api/lineage/events`, and `GET /api/lineage/tables/<name>/derived` for a table you know has
   derived tables) to confirm provenance resolves against the restored data.
-- A forwarder cursor in `provenance$cursors` restored behind the graph backend's state re-sends events the backend
+- A forwarder cursor in `lance_catalog$provenance$cursors` restored behind the graph backend's state re-sends events the backend
   already took: the forwarder promises at least once, never exactly once.
 - See [RUNBOOK-oncall.md](RUNBOOK-oncall.md) for the failure modes you may hit during recovery.
 

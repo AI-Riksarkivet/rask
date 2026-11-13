@@ -3,7 +3,7 @@
 The chart's Postgres server, `rask-age` (a single in-chart StatefulSet, `chart/templates/age-postgres.yaml`), serves
 the **OpenFGA** datastore.
 Lineage keeps no database ([ADR 0158](adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md)): its feed and edge list are
-Lance tables in the catalog's `provenance` namespace. The server runs on the `apache/age` image, and its databases
+Lance tables in the catalog's `lance_catalog$provenance` namespace. The server runs on the `apache/age` image, and its databases
 load the `age` extension at init (`age-postgres.yaml`). In production the platform's Postgres replaces it
 (`age.enabled=false` + `age.externalHost`); the server itself leaves the chart under LH-496. For a CNPG-managed copy
 with HA + PITR, the one blocker is that AGE is a Postgres **extension** (a compiled `.so` + control/SQL files per PG

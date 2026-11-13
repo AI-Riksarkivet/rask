@@ -1,7 +1,7 @@
 import { formatZoned } from '@rask/ui/utils';
-import { DELIMITER } from '#lib/api/identifiers.ts';
+import { warehouseOf } from '#lib/api/identifiers.ts';
 import type { Warehouse } from './catalog';
-import { fetchEstateBindings, fetchWarehouse } from './remote/warehouses.api';
+import { fetchServedWarehouses, fetchWarehouse } from './remote/warehouses.api';
 
 // What a drop under a warehouse does, as the warehouse's record keeps it (`delete_profile`, ADR
 // 0146): `soft` keeps the dropped object recoverable for `grace_days`, `hard` destroys it at once,
@@ -43,13 +43,14 @@ export function dropRecoveryText(recovery: DropRecovery): string {
 	}
 }
 
-/** The delete profile of the warehouse a catalog object lives under, found through the binding of its
- *  top-level namespace; `undefined` when the binding or the warehouse could not be read. */
+/** The delete profile of the warehouse a catalog object lives under, the first segment of its id;
+ *  `undefined` when it could not be read. The estate's own warehouse has no registry record, so no
+ *  profile of its own: what lies in it takes the estate's grace period (`null`). */
 export async function deleteProfileOf(id: string): Promise<DeleteProfile | undefined> {
-	const top = id.split(DELIMITER)[0] ?? id;
-	const bindings = await fetchEstateBindings();
-	const warehouse = bindings.ok ? bindings.data.bindings[top] : undefined;
-	if (warehouse === undefined) return undefined;
+	const warehouse = warehouseOf(id);
 	const record = await fetchWarehouse(warehouse);
-	return record.ok ? (record.data.delete_profile ?? null) : undefined;
+	if (record.ok) return record.data.delete_profile ?? null;
+	if (record.status !== 404) return undefined;
+	const served = await fetchServedWarehouses();
+	return served.ok && served.data.namespaces.includes(warehouse) ? null : undefined;
 }

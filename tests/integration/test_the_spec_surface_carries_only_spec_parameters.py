@@ -79,8 +79,8 @@ def test_no_spec_route_advertises_a_parameter_the_spec_does_not_define(client: T
 @pytest.mark.parametrize(
     ("path", "query"),
     [
-        ("/v1/table/nsx$tx/drop", "purge=notabool"),
-        ("/v1/namespace/nsx/drop", "force=notabool"),
+        ("/v1/table/lance_catalog$nsx$tx/drop", "purge=notabool"),
+        ("/v1/namespace/lance_catalog$nsx/drop", "force=notabool"),
     ],
 )
 def test_a_hidden_parameter_is_still_bound_on_the_wire(client: TestClient, path: str, query: str) -> None:

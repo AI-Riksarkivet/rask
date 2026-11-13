@@ -53,7 +53,6 @@ def test_an_override_actually_changes_what_the_dependency_sees() -> None:
                 "LANCE_REST_IMPL": "dir",
                 "LANCE_S3_ACCESS_KEY_ID": "k",
                 "LANCE_S3_SECRET_ACCESS_KEY": "s",
-                "LANCE_WAREHOUSES_ENABLED": False,
             }
         )
         seen["settings"] = s
@@ -66,6 +65,6 @@ def test_an_override_actually_changes_what_the_dependency_sees() -> None:
     app.dependency_overrides[deps.get_settings] = _settings
     app.state.connections = _Connections()
 
-    response = TestClient(app).get("/probe/thing")
+    response = TestClient(app).get("/probe/lance_catalog$thing")
     assert response.status_code == 200, response.text
     assert seen, "the override was never consulted — `get_namespace` read the process settings instead, which is exactly the seam this finding is about"

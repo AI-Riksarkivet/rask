@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import lance_namespace
 import pytest
 from fastapi.testclient import TestClient
 
@@ -44,9 +45,10 @@ def test_a_project_admin_manages_a_role_and_its_grant_reaches_its_assignees(gove
     catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")), 200)
     _status(catalog.client.put("/management/v1/projects/acme/members", json={"user": "dex~alice", "relation": "admin"}, headers=catalog.bearer("root")), 200)
-    warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path)})
-    warehouses.bind_namespace(str(tmp_path), StorageOptions(), "lake", "wh", str(tmp_path))
-    _status(catalog.client.post("/v1/namespace/lake/create", json={}, headers=alice), 200)
+    warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "acme-wh", "project": "acme", "bucket": "acme", "root_uri": str(tmp_path)})
+    warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": str(tmp_path)}), "acme-wh")
+    catalog.store.write(("project:acme", "project", "warehouse:acme-wh"))
+    _status(catalog.client.post("/v1/namespace/acme-wh$lake/create", json={}, headers=alice), 200)
 
     role = _status(catalog.client.post(ROLES, json={"name": "analysts", "description": "reads the lake"}, headers=alice), 201).json()
     assignees, member = f"{ROLES}/{role['id']}/assignees", f"role:{role['id']}#assignee"
@@ -60,16 +62,16 @@ def test_a_project_admin_manages_a_role_and_its_grant_reaches_its_assignees(gove
     _status(catalog.client.put(assignees, json={"user": f"{elsewhere}#assignee"}, headers=alice), 400, INVALID_INPUT)
 
     assert _status(catalog.client.put(assignees, json={"user": "dex~dave"}, headers=alice), 200).json()["assignees"] == [catalog.person("dave")]
-    _status(catalog.client.post("/management/v1/namespace/lake/access/grant", json={"user": member, "relation": "reader"}, headers=alice), 200)
-    _status(catalog.client.post("/v1/namespace/lake/describe", json={}, headers=dave), 200)
+    _status(catalog.client.post("/management/v1/namespace/acme-wh$lake/access/grant", json={"user": member, "relation": "reader"}, headers=alice), 200)
+    _status(catalog.client.post("/v1/namespace/acme-wh$lake/describe", json={}, headers=dave), 200)
 
     assert _status(catalog.client.request("DELETE", assignees, json={"user": "dex~dave"}, headers=alice), 200).json()["assignees"] == []
-    _status(catalog.client.post("/v1/namespace/lake/describe", json={}, headers=dave), 403, PERMISSION_DENIED)
+    _status(catalog.client.post("/v1/namespace/acme-wh$lake/describe", json={}, headers=dave), 403, PERMISSION_DENIED)
 
     _status(catalog.client.put(assignees, json={"user": "dex~dave"}, headers=alice), 200)
     deleted = _status(catalog.client.delete(f"{ROLES}/{role['id']}", headers=alice), 200).json()
     assert deleted["tuples_revoked"] == 3, deleted
-    _status(catalog.client.post("/v1/namespace/lake/describe", json={}, headers=dave), 403, PERMISSION_DENIED)
+    _status(catalog.client.post("/v1/namespace/acme-wh$lake/describe", json={}, headers=dave), 403, PERMISSION_DENIED)
     _status(catalog.client.get(f"{ROLES}/{role['id']}", headers=alice), 404, TABLE_NOT_FOUND)
     assert not [t for t in catalog.store.tuples() if f"role:{role['id']}" in (t[0].split("#")[0], t[2])], "a tuple of the deleted role survived"
 

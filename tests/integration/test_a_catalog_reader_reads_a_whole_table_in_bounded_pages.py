@@ -70,10 +70,10 @@ def _wide_rows() -> bytes:
 
 def test_an_unlimited_read_returns_every_row(catalog_url: str) -> None:
     with httpx.Client(base_url=catalog_url, timeout=60) as client:
-        assert client.post("/v1/namespace/paged/create", json={}).status_code == 200
-        created = client.post("/v1/table/paged$t/create", content=_wide_rows(), headers={"content-type": "application/vnd.apache.arrow.stream"})
+        assert client.post("/v1/namespace/lance_catalog$paged/create", json={}).status_code == 200
+        created = client.post("/v1/table/lance_catalog$paged$t/create", content=_wide_rows(), headers={"content-type": "application/vnd.apache.arrow.stream"})
         assert created.status_code == 200, created.text
 
-    table = CatalogTableReader(RestCatalogTransport(catalog_url), ["paged", "t"]).to_table(columns=["id", "vec"])
+    table = CatalogTableReader(RestCatalogTransport(catalog_url), ["lance_catalog", "paged", "t"]).to_table(columns=["id", "vec"])
 
     assert sorted(table["id"].to_pylist()) == list(range(_ROWS))

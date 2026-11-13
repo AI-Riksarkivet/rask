@@ -81,13 +81,13 @@ class Renamed(BaseModel):
 def renamed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Renamed:
     """A live catalog creates `acme$t` and `acme$src` (one row each), renames them `acme$u` and `acme$src2`, and answers their uuids."""
     with live_catalog(tmp_path / "catalog", monkeypatch) as url, httpx.Client(base_url=url, timeout=60) as catalog:
-        assert catalog.post("/v1/namespace/acme/create", json={}).status_code == 200
+        assert catalog.post("/v1/namespace/lance_catalog$acme/create", json={}).status_code == 200
         for table, renamed_to in (("t", "u"), ("src", "src2")):
-            created = catalog.post(f"/v1/table/acme${table}/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+            created = catalog.post(f"/v1/table/lance_catalog$acme${table}/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
             assert created.status_code == 200, created.text
-            moved = catalog.post(f"/v1/table/acme${table}/rename", json={"new_table_name": renamed_to})
+            moved = catalog.post(f"/v1/table/lance_catalog$acme${table}/rename", json={"new_table_name": renamed_to})
             assert moved.status_code == 200, moved.text
-        uuid = {name: catalog.post(f"/v1/table/acme${name}/describe", json={}).json()["properties"]["rask.uuid"] for name in ("u", "src2")}
+        uuid = {name: catalog.post(f"/v1/table/lance_catalog$acme${name}/describe", json={}).json()["properties"]["rask.uuid"] for name in ("u", "src2")}
     return Renamed(table=uuid["u"], source=uuid["src2"])
 
 
@@ -123,14 +123,18 @@ async def test_a_renamed_tables_writes_pass_lineages_checks(decider: OpenFgaDeci
         {"oidc_enabled": True, "oidc_issuer": "https://idp.example.com", "oidc_audience": "lance", "oidc_connectors": {"local": "dex"}, "fga_enabled": True}
     )
     caller = PersonPrincipal(principal=Principal(idp_id="dex", subject="pipeline"), claims=IDToken(iss="i", sub="pipeline", aud="lance", exp=1, iat=1))
-    write = _write(outputs=[_dataset("acme$u", renamed.table)], inputs=[_dataset("acme$src", renamed.source)], producer="https://rask.invalid/catalog")
-    outside = parse_event(_write(outputs=[_dataset("acme$u")], inputs=[], producer="https://rask.invalid/outside"))
+    write = _write(
+        outputs=[_dataset("lance_catalog$acme$u", renamed.table)],
+        inputs=[_dataset("lance_catalog$acme$src", renamed.source)],
+        producer="https://rask.invalid/catalog",
+    )
+    outside = parse_event(_write(outputs=[_dataset("lance_catalog$acme$u")], inputs=[], producer="https://rask.invalid/outside"))
 
     class _Catalog:
         """The catalog's DescribeTable as the outside producer's bearer reaches it: `acme$u` names the renamed table."""
 
         async def table(self, name: str, *, bearer: str | None) -> DatasetUuids:
-            return DatasetUuids(table_uuid=renamed.table) if (name, bearer) == ("acme$u", "pipeline-token") else DatasetUuids()
+            return DatasetUuids(table_uuid=renamed.table) if (name, bearer) == ("lance_catalog$acme$u", "pipeline-token") else DatasetUuids()
 
         async def namespace(self, name: str, *, bearer: str | None) -> str | None:
             return None

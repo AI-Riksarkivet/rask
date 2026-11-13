@@ -2028,6 +2028,9 @@ TupleOrigin = Literal[
     # nobody granted it: the table's grants stay on its uuid, and the rename's control event (`table_renamed`, `from`
     # and `to`) names the move.
     "rename",
+    # A tuple written or revoked because git declares it, or stopped declaring it ([[XC-213]]): a project's admin, or a
+    # grant to a principal that is not a person. Its own value because no caller at a door made it; the declaration did.
+    "declaration",
     # Revoking a recoverable drop's grants at its deadline (ADR 0146). Its own value because no person revoked them and
     # nothing was destroyed: the grace period ended, and the bytes wait for the purge (`lifecycle_delete`).
     "trash_expired",

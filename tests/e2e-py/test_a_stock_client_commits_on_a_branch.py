@@ -94,7 +94,7 @@ def _put_refused(store: Any, bucket: str, key: str) -> str:
 
 def test_a_stock_client_commits_on_a_branch_and_main_is_unchanged(tenant: Tenant) -> None:
     admin, job = tenant.admin, tenant.job
-    table_id = [tenant.bronze, "people"]
+    table_id = [*tenant.bronze.split("$"), "people"]
     table = "$".join(table_id)
     lance.write_dataset(
         _keyed([1, 2, 3], ["a", "b", "c"]),

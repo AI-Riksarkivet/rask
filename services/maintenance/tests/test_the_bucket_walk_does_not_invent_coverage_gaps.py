@@ -122,7 +122,6 @@ def test_the_reconciler_walks_the_configured_bound(tmp_path: Path, monkeypatch: 
         reconcile_mod.reconcile(
             settings,
             None,
-            warehouses_enabled=False,
             control_root=f"file://{tmp_path / 'control'}",
             namespace_root=f"file://{tmp_path / 'data'}",
             bucket_client=_NoBuckets(),

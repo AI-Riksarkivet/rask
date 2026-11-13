@@ -312,8 +312,8 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
         """The project source. `acme-bronze` is a bound namespace here, so the event names its tenant —
         a consumer reads this field rather than splitting the id for it."""
 
-        async def project_for(self, top_ns: str) -> str | None:
-            return "acme" if top_ns == "acme-bronze" else None
+        async def project_for(self, warehouse_id: str) -> str | None:
+            return "acme" if warehouse_id == "acme-bronze" else None
 
     # The alias, not the field name — pydantic-settings validates on the env alias.
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "x")

@@ -7,11 +7,14 @@
  * was already given. It lives in the URL (`?project=<id>`), so a reload and a shared link show the same
  * rows, and nothing about the person is kept in a cookie or storage.
  *
- * A row's project is read from data the lists already hold: a warehouse names its project; a namespace
- * belongs to the warehouse its top namespace is bound to (the estate bindings); a table and a held
- * promotion belong to their namespace's. A namespace bound to no warehouse (the lakehouse's own
- * `provenance`, for one) has no project, and shows a dash.
+ * A row's project is read from data the lists already hold: a warehouse names its project, and every
+ * namespace and table id begins with its warehouse (ADR 0206), so a namespace, a table and a held
+ * promotion belong to the project of the warehouse their id opens with. The estate's own warehouse
+ * (`lance_catalog`, which holds the lakehouse's `provenance` namespace) has no registry record and
+ * belongs to no project, so what lies in it shows a dash.
  */
+import { warehouseOf } from '#lib/api/identifiers.ts';
+
 /** The URL parameter the filter is kept in. */
 export const PROJECT_PARAM = 'project';
 
@@ -99,37 +102,20 @@ export function filterVerdict(req: {
 	return visible.ids.has(filter) ? { kind: 'apply' } : { kind: 'unseen' };
 }
 
-/** What a list needs to tell a row's project: each warehouse's project, and each bound namespace's
- *  warehouse. */
-export type ProjectIndex = {
-	warehouses: ReadonlyMap<string, string>;
-	bindings: Readonly<Record<string, string>>;
-};
+/** What a list needs to tell a row's project: each registered warehouse's project. */
+export type ProjectIndex = { warehouses: ReadonlyMap<string, string> };
 
-export function projectIndex(
-	warehouses: readonly { id: string; project: string }[],
-	bindings: Readonly<Record<string, string>>,
-): ProjectIndex {
-	return { warehouses: new Map(warehouses.map((w) => [w.id, w.project])), bindings };
+export function projectIndex(warehouses: readonly { id: string; project: string }[]): ProjectIndex {
+	return { warehouses: new Map(warehouses.map((w) => [w.id, w.project])) };
 }
 
 /**
- * The project a namespace belongs to: that of the warehouse its top bound namespace is bound to, read
- * from the outermost segment inwards (`acme$bronze` is bound through `acme`), or null when none is.
+ * The project a catalog object belongs to — a warehouse, a namespace, a table or a hold's table: that
+ * of the warehouse its id opens with, or null for a warehouse with no registry record (the estate's own)
+ * or one the caller cannot see.
  */
-export function projectOfNamespace(index: ProjectIndex, namespace: string): string | null {
-	const segments = namespace.split('$');
-	for (let depth = 1; depth <= segments.length; depth++) {
-		const warehouse = index.bindings[segments.slice(0, depth).join('$')];
-		if (warehouse !== undefined) return index.warehouses.get(warehouse) ?? null;
-	}
-	return null;
-}
-
-/** The project a table belongs to: its namespace's (every segment of its id but the last). */
-export function projectOfTable(index: ProjectIndex, table: string): string | null {
-	const cut = table.lastIndexOf('$');
-	return cut < 0 ? null : projectOfNamespace(index, table.slice(0, cut));
+export function projectOf(index: ProjectIndex, id: string): string | null {
+	return index.warehouses.get(warehouseOf(id)) ?? null;
 }
 
 /**

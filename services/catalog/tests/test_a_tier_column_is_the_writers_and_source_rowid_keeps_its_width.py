@@ -81,8 +81,8 @@ def _app(namespace: Any, monkeypatch: pytest.MonkeyPatch, registry_root: str) ->
 class _Tenant(NoopEmitter):
     """No lineage transport, and the tenant every table here belongs to."""
 
-    async def project_for(self, top_ns: str) -> str | None:
-        del top_ns
+    async def project_for(self, warehouse_id: str) -> str | None:
+        del warehouse_id
         return "acme"
 
 

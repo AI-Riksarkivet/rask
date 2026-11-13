@@ -20,7 +20,7 @@ from lance_namespace import ListNamespacesResponse
 from catalog.api.pagination import MAX_LIST_LIMIT, paginate
 
 
-NAMES = ["a$one", "b$two", "c$three", "d$four", "e$five"]
+NAMES = ["lance_catalog$a$one", "lance_catalog$b$two", "lance_catalog$c$three", "lance_catalog$d$four", "lance_catalog$e$five"]
 
 
 def test_exact_fit_ends_pagination() -> None:
@@ -35,11 +35,11 @@ def test_a_limit_past_the_cap_or_none_is_answered_the_cap_and_a_token_that_conti
     children = sorted(f"child{i:05d}" for i in range(MAX_LIST_LIMIT + 500))
     fake_ns.list_namespaces.side_effect = lambda _request: ListNamespacesResponse(namespaces=list(children))
 
-    first = client.get("/v1/namespace/a/list", params=asked)
+    first = client.get("/v1/namespace/lance_catalog$a/list", params=asked)
     assert first.status_code == 200, first.text
     assert first.json()["namespaces"] == children[:MAX_LIST_LIMIT]
 
-    rest = client.get("/v1/namespace/a/list", params={**asked, "page_token": first.json()["page_token"]})
+    rest = client.get("/v1/namespace/lance_catalog$a/list", params={**asked, "page_token": first.json()["page_token"]})
     assert rest.status_code == 200, rest.text
     assert rest.json()["namespaces"] == children[MAX_LIST_LIMIT:]
     assert rest.json().get("page_token") is None

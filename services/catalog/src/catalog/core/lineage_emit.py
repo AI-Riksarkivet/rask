@@ -45,7 +45,7 @@ from opentelemetry import metrics
 from pydantic import BaseModel
 
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id, tag_move_run_id
-from catalog.core.identifiers import top_namespace
+from catalog.core.identifiers import warehouse_of
 from catalog.core.run_context import RunContext
 from lakehouse import outbox
 from lakehouse.governed import fga
@@ -468,16 +468,15 @@ def build_write_event(
     }
 
 
-#: How the emitter learns which TENANT a write belongs to, given the table's TOP namespace segment.
+#: How the emitter learns which TENANT a write belongs to, given the warehouse the table's name begins with ([[LH-593]]).
 #:
 #: A callable rather than a registry import, for the reason every other seam in this estate is one: the
 #: builder stays pure and testable, and a deployment with no warehouse registry supplies nothing rather
-#: than a stub that lies. Wired once in `main.py`, where the app-level binding cache lives.
+#: than a stub that lies. Wired once in `main.py`, as one read of the warehouse's record.
 #:
-#: IT CANNOT BE A STRING SPLIT. A project-qualified name joins with `-` ("acme", "bronze") -> "acme-bronze",
-#: but `CONTROL_ID_PATTERN` ALLOWS `-` inside a project id — so "acme-bronze" is ambiguous between project
-#: `acme` and project `acme-bronze`, and guessing wrong notifies the wrong tenant's watchers. The
-#: registry binding is the only sound answer.
+#: IT CANNOT BE A STRING RULE. A warehouse id is chosen by its project's admin and `CONTROL_ID_PATTERN` allows `-` inside
+#: it, so `acme-bronze` may be project `acme`'s warehouse or project `acme-bronze`'s, and guessing wrong notifies the wrong
+#: tenant's watchers. The warehouse's record is the only sound answer.
 type ProjectResolver = Callable[[str], Awaitable[str | None]]
 
 
@@ -496,8 +495,8 @@ class EmitFields(TypedDict, total=False):
     the write side) stay explicit: they differ between ``emit_create`` and ``emit_write``, and a
     required field in a ``total=False`` bundle would be an optional one.
 
-    The tenant is no field here: the emitter resolves it from the table's top namespace in ``emit_write``, so an event
-    names the project the registry binds and no other.
+    The tenant is no field here: the emitter resolves it from the warehouse the table's name begins with in ``emit_write``,
+    so an event names the project the warehouse's record names and no other.
     """
 
     #: When the commit was made (``dataplane.CommitReadback.committed_at``), the event's ``eventTime``; now when unknown.
@@ -533,8 +532,8 @@ class EmitFields(TypedDict, total=False):
 class LineageEmitter(Protocol):
     """Emits catalog write events to the lineage service (best-effort)."""
 
-    async def project_for(self, top_ns: str) -> str | None:
-        """The tenant owning ``top_ns``, or ``None`` when it cannot be resolved."""
+    async def project_for(self, warehouse_id: str) -> str | None:
+        """The tenant owning warehouse ``warehouse_id``, or ``None`` when it cannot be resolved."""
         ...
 
     async def emit_create(
@@ -588,8 +587,8 @@ class OriginatorBoundEmitter:
         """
         return {**fields, "originator": fields.get("originator") or self.originator}
 
-    async def project_for(self, top_ns: str) -> str | None:
-        return await self.inner.project_for(top_ns)
+    async def project_for(self, warehouse_id: str) -> str | None:
+        return await self.inner.project_for(warehouse_id)
 
     async def emit_create(
         self,
@@ -618,7 +617,7 @@ class OriginatorBoundEmitter:
 class NoopEmitter:
     """The emitter used when lineage emission is disabled — does nothing."""
 
-    async def project_for(self, top_ns: str) -> str | None:
+    async def project_for(self, warehouse_id: str) -> str | None:
         return None
 
     async def emit_create(
@@ -672,20 +671,20 @@ class _BaseLineageEmitter:
     #: recorded, so announcing their own commits would record them again, without end. Set by `make_emitter`.
     _unannounced: Callable[[str, str], bool] | None = None
 
-    async def project_for(self, top_ns: str) -> str | None:
+    async def project_for(self, warehouse_id: str) -> str | None:
         """Resolve the tenant, swallowing failure. BEST-EFFORT LIKE THE EMIT ITSELF: this runs on a
         committed write, and a registry blip must cost the watchers their notification, never the
         caller their request. `None` emits the event to its author alone.
 
         A failure is logged at WARNING with its cause: the event goes out naming no `rask_lance.project`, which reaches
         none of the project's watchers, and coverage is decided here at the producer, where nothing downstream can
-        tell the miss from a namespace that has no tenant."""
-        if self._project_resolver is None or not top_ns:
+        tell the miss from a warehouse that has no tenant."""
+        if self._project_resolver is None or not warehouse_id:
             return None
         try:
-            return await self._project_resolver(top_ns)
+            return await self._project_resolver(warehouse_id)
         except Exception as exc:  # noqa: BLE001 — the committed write is answered whatever the registry says
-            log.warning("lineage_project_unresolved", extra={"namespace": top_ns, "error": str(exc)[:300]})
+            log.warning("lineage_project_unresolved", extra={"warehouse": warehouse_id, "error": str(exc)[:300]})
             return None
 
     async def emit_create(
@@ -715,10 +714,10 @@ class _BaseLineageEmitter:
         # HERE, the one place every catalog emit passes through, so no door can announce a provenance row.
         if self._unannounced is not None and self._unannounced(namespace, operation):
             return
-        # THE EVENT'S TENANT, resolved once, here, for the same reason: the registry binds a tenant to a top namespace
-        # only, so the key is the table's top namespace however deep the table lies ([[LH-573]]). Best-effort: this
+        # THE EVENT'S TENANT, resolved once, here, for the same reason: a tenant owns a warehouse, so the key is the
+        # warehouse the table's name begins with however deep the table lies ([[LH-573]], [[LH-593]]). Best-effort: this
         # runs on a committed write, so an unresolvable tenant costs a notification, not a request.
-        project = await self.project_for(top_namespace(namespace))
+        project = await self.project_for(warehouse_of(namespace))
         try:
             run_id = self._run_id(version, operation, fields)
         except SigningKeyUnavailableError as exc:

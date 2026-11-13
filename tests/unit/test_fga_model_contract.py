@@ -30,6 +30,7 @@ from lance_namespace import InternalError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
+from catalog.api.dependencies import Resolver
 from catalog.core import tier_policy
 from catalog.core.config import Settings
 from lakehouse.governed import fga as fga_module
@@ -62,7 +63,7 @@ def _model_relations() -> dict[str, set[str]]:
 # --------------------------------------------------------------------------- #
 
 
-def _settings(*, lock_root: bool) -> Settings:
+def _settings() -> Settings:
     # model_validate (not Settings(...)) so field-name keys validate cleanly — the fields carry
     # LANCE_* aliases. OIDC is required whenever FGA is on (authz needs an authenticated user).
     return Settings.model_validate(
@@ -73,7 +74,6 @@ def _settings(*, lock_root: bool) -> Settings:
             "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_api_url": "http://openfga:8080",
-            "fga_lock_root_create": lock_root,
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
         }
@@ -107,8 +107,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     ``_authorize_transaction`` is picked up here automatically instead of drifting from a copy.
     """
     pairs: set[tuple[str, str]] = set()
-    settings = _settings(lock_root=False)
-    root_settings = _settings(lock_root=True)
+    settings = _settings()
 
     # 1. Non-create ops: _action_relation(type, suffix) for EVERY guarded type x EVERY suffix the rung
     #    maps declare — owner- and writer-tier full suffixes and reader-tier trailing actions. A suffix a type does not declare is refused and sends OpenFGA nothing, so it adds no
@@ -130,28 +129,26 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
                 continue
             pairs.add((fga_type, relation))
 
-    # 2. Create-on-parent: the parent is a namespace for a NESTED child, and the configured root
-    #    object (a `warehouse:`) for a TOP-LEVEL child when fga_lock_root_create is on — so each
+    # 2. Create-on-parent: the parent of a child nested in a namespace is that namespace, and the parent of a namespace
+    #    directly in a warehouse is the warehouse, which the resolver governs a one-segment namespace name as — so each
     #    can_create_* must resolve on BOTH types.
+    resolver = Resolver(cast("Request", None), settings)
     for resource in fga_deps._CREATE_ON_PARENT_SUFFIXES:
-        nested = fga_deps._create_parent_rung(resource, ["parent_ns", "child"], settings)
+        nested = fga_deps._create_parent_rung(resource, ["acme-wh", "parent_ns", "child"])
         assert nested is not None
         pairs.add((_rung_type(nested), nested.relation))
-        top = fga_deps._create_parent_rung(resource, ["top_level_child"], root_settings)
-        assert top is not None, "fga_lock_root_create must gate a top-level create on the root object"
-        # WHERE it is checked may change; WHICH permission it needs may not. `lockRootCreate` moves the
-        # check from the parent namespace to the root object — it is not a licence to ask for a weaker
-        # relation there. Asserting only `is not None` and that the pair RESOLVES (which is all this
-        # test did until 2026-08-22) cannot tell the tiers apart: `can_get_metadata` resolves on the
-        # root type perfectly well. Measured — swapping this branch to the reader-tier
-        # `can_get_metadata` left 3,125 tests passing, and `deploy/values-prod.yaml:22` ships
-        # `lockRootCreate: true` as the ONLY thing stopping any authenticated token from minting
-        # top-level namespaces and tables in production.
+        top = fga_deps._create_parent_rung(resource, ["acme-wh", "child"])
+        assert top is not None and isinstance(top.on, tier_policy.Named)
+        warehouse = asyncio.run(resolver.object(top.on.kind, list(top.on.segments)))
+        assert warehouse is not None and _obj_type(warehouse) == "warehouse", f"a create directly in a warehouse is asked on {warehouse!r}"
+        # WHERE it is checked differs; WHICH permission it needs may not. A create directly in a warehouse is no licence
+        # to ask for a weaker relation there: `can_get_metadata` resolves on the warehouse type perfectly well, so
+        # asserting only that the pair RESOLVES cannot tell the tiers apart.
         assert top.relation == nested.relation, (
-            f"the locked-root create for {resource!r} asks for {top.relation!r} while the nested create asks "
-            f"for {nested.relation!r} — locking the root must not downgrade the tier it demands"
+            f"the create in a warehouse for {resource!r} asks for {top.relation!r} while the nested create asks "
+            f"for {nested.relation!r}: a warehouse parent must not downgrade the tier it demands"
         )
-        pairs.add((_rung_type(top), top.relation))
+        pairs.add((_obj_type(warehouse), top.relation))
 
     # 3. Transactions (asked on the table their id names) and the batch routes: drive the real coroutines with a
     #    recording fga.check / fga.batch_check.
@@ -172,23 +169,23 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
 
     token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
     for suffix in ("describe", "alter"):
-        asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), ["db1", "t", "txn1"], suffix, token=token))
+        asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), ["acme-wh", "db1", "t", "txn1"], suffix, token=token))
 
     body = {
-        "entries": [{"id": ["db1", "users"]}],
+        "entries": [{"id": ["acme-wh", "db1", "users"]}],
         "operations": [
-            {"declare_table": {"id": ["db1", "new"]}},  # create-on-parent
-            *[{op: {"id": ["db1", "a"]}} for op in fga_deps._BATCH_OWNER_OPS],  # owner tier
-            {"commit_table": {"id": ["db1", "b"]}},  # generic writer tier
+            {"declare_table": {"id": ["acme-wh", "db1", "new"]}},  # create-on-parent
+            *[{op: {"id": ["acme-wh", "db1", "a"]}} for op in fga_deps._BATCH_OWNER_OPS],  # owner tier
+            {"commit_table": {"id": ["acme-wh", "db1", "b"]}},  # generic writer tier
         ],
     }
     asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, NamedResolver(), settings, user="dex~alice"))
 
     # 4. A rename: the rung the router asks on its source and the one its door asks where the table lands, each within
     #    the source's namespace and into another.
-    for destination in (["db1", "renamed"], ["db2", "child"]):
-        pairs.add(("table", fga_deps._rename_relation(["db1", "child"], destination)))
-        asyncio.run(fga_deps.require_rename_destination(_CLIENT, settings, token, NamedResolver(), source=["db1", "child"], destination=destination))
+    for destination in (["acme-wh", "db1", "renamed"], ["acme-wh", "db2", "child"]):
+        pairs.add(("table", fga_deps._rename_relation(["acme-wh", "db1", "child"], destination)))
+        asyncio.run(fga_deps.require_rename_destination(_CLIENT, settings, token, NamedResolver(), source=["acme-wh", "db1", "child"], destination=destination))
 
     pairs.update(checked)
     return pairs

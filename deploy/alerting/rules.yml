@@ -203,6 +203,19 @@ groups:
             readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed
 
+      # The catalog converges the estate's projects, warehouses and service grants onto what git declares, once a minute
+      # (XC-213, ADR 0206). One tick's failure is a blip the next tick repairs; the same object failing on three ticks
+      # within fifteen minutes is a declaration the estate does not hold.
+      - alert: CatalogDeclarationNotConverging
+        expr: (max by (lance_catalog_object) (increase(catalog_declaration_converge_failed_total[15m])) >= 3) or (max by (lance_catalog_object) (catalog_declaration_converge_failed_total unless catalog_declaration_converge_failed_total offset 15m) >= 3)
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "The estate is not what git declares"
+          description: >-
+            The catalog's declaration converge tick could not make or correct {{ $labels.lance_catalog_object }} on three ticks within fifteen minutes, so the estate is not what git declares: a declared project, warehouse or service grant is missing or drifted, or the declaration itself cannot be read. Read the catalog's `declaration_converge_failed` and `declaration_unreadable` logs for the object and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#the-estate-is-not-what-git-declares
+
       # A released erasure obligation is final, so a table found derived from its table after the release, written before
       # it, may still hold the subject (ADR 0183 §5). One is enough to page.
       - alert: ErasureDerivedAfterRelease
@@ -336,11 +349,11 @@ groups:
           severity: critical
           service: catalog
         annotations:
-          summary: "The catalog is REFUSING control events ({{ $labels.lance_catalog_reason }}) — its feed and binding cache skip them"
+          summary: "The catalog is REFUSING control events ({{ $labels.lance_catalog_reason }}) — its feed skips them"
           description: >-
-            A control event its role's signature does not verify was ACKED, reached no change-event feed and evicted no
-            binding, so only this alert and the `catalog_signature_refused` log line record it. Forged events are reaching
-            the bus, or a signer broke and each replica keeps a binding the event would have evicted.
+            A control event its role's signature does not verify was ACKED and reached no change-event feed, so only this
+            alert and the `catalog_signature_refused` log line record it. Forged events are reaching the bus, or a signer
+            broke.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
 
   - name: lance-catalog
@@ -361,11 +374,10 @@ groups:
           severity: warning
           service: catalog
         annotations:
-          summary: "The catalog dead-lettered control events ({{ $labels.topic }}) — its feed and binding cache missed them"
+          summary: "The catalog dead-lettered control events ({{ $labels.topic }}) — its feed missed them"
           description: >-
             A catalog replica's sidecar exhausted its retry schedule on a control event and parked it on dlq.catalog.control,
-            so that replica's change-event feed lacks it and a binding the event names may stay cached until it expires. The
-            park is kept on the DLQ stream. Read the replica's logs for the failing delivery (keys unavailable, a crash in
+            so that replica's change-event feed lacks it. The park is kept on the DLQ stream. Read the replica's logs for the failing delivery (keys unavailable, a crash in
             the handler).
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 

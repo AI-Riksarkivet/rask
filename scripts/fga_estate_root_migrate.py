@@ -11,7 +11,7 @@ rather than a note in the row. The chart's bootstrap hook seeds `auth.bootstrapA
 this covers everyone else, including the subjects a running estate acquired outside the chart.
 
 NOTHING IS REMOVED. The old tuples keep governing the WAREHOUSE, which is their other and still-correct
-job: `warehouse:lance_catalog` parents the estate's top-level namespaces, so `owner` there is what makes
+job: `warehouse:lance_catalog` parents the namespaces of the estate's own warehouse, so `owner` there is what makes
 the medallion cascade reach bronze/silver/gold. A revoke would take that with it.
 
 DIRECT TUPLES ONLY, and that is a TIGHTENING rather than an oversight. `warehouse#owner_effective` resolves

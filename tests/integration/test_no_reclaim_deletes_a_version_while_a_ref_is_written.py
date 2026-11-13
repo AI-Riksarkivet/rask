@@ -45,7 +45,7 @@ from maintenance.services.plan import PlanContext
 from tests.integration.maintenance_vend_doors import CATALOG_URL, described_by, maintain_tier_door
 
 
-TABLE = "db$t"
+TABLE = "lance_catalog$db$t"
 
 
 class _Estate:
@@ -56,7 +56,7 @@ class _Estate:
         self.client = client
         self.root = f"s3://{bucket}"
         self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
-        assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         for start, mode in ((0, None), (3, "overwrite"), (6, "overwrite")):
             params = {"mode": mode} if mode else {}
             rows = encode_arrow_stream(pa.table({"id": pa.array(range(start, start + 3), pa.int64())}))
@@ -73,8 +73,9 @@ class _Estate:
     def swept(self, policies: list[dict[str, object]] | None = None) -> DatasetResult:
         """Maintenance's own pass over the table under ``policies``, every version but the current one reclaimable."""
         now = datetime.now(UTC)
-        namespace = self.client.post("/v1/namespace/db/describe", json={})
-        assert namespace.status_code == 200, namespace.text
+        # The uuid of each row above the table, the warehouse's own among them, as its `__manifest` row holds it.
+        described = {name: self.client.post(f"/v1/namespace/{name}/describe", json={}) for name in ("lance_catalog", "lance_catalog$db")}
+        assert [answer.status_code for answer in described.values()] == [200, 200], [answer.text for answer in described.values()]
         settings = MaintenanceSettings.model_validate(
             {
                 "s3_endpoint": self.url,
@@ -87,7 +88,10 @@ class _Estate:
                 "catalog_url": CATALOG_URL,
             }
         )
-        ids = TableIds(by_location={normalise(self.location): TABLE}, namespace_uuids={"db": str(namespace.json()["properties"][UUID_PROPERTY])})
+        ids = TableIds(
+            by_location={normalise(self.location): TABLE},
+            namespace_uuids={name: str(answer.json()["properties"][UUID_PROPERTY]) for name, answer in described.items()},
+        )
         readings = table_pass.PassReadings(
             table_ids=ids,
             context=PlanContext(policies=list(policies or []), now=now, older_than=timedelta(0)),

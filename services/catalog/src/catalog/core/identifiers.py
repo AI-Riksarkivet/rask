@@ -41,7 +41,7 @@ def is_spelled_as_a_uuid(segment: str) -> bool:
 
 
 #: How deep a namespace tree may nest — an EXCLUSIVE bound: this depth is the first one NOT allowed,
-#: so the deepest legal namespace has ``MAX_NAMESPACE_DEPTH - 1`` segments. That is not a stylistic
+#: so the deepest legal namespace has ``MAX_NAMESPACE_DEPTH - 1`` segments, its warehouse's included. That is not a stylistic
 #: choice. Both read walkers already compared ``>=`` (they stop descending once a parent has this many
 #: segments), so a door that allowed exactly this many would mint namespaces whose TABLES no walker
 #: enumerates — invisible to the cascade drop and to the trash. One number, one comparison, three sites.
@@ -59,9 +59,9 @@ def is_spelled_as_a_uuid(segment: str) -> bool:
 #: return `Code(2002) Authorization Model resolution required too many rewrite rules` — an ERROR, not
 #: a deny. The fleet fails closed on an unrecognised authz error, so that surfaces as a 503 on the
 #: browse path for the WHOLE bucket, including its owners, and it is LATERAL: one deep sibling branch
-#: poisons the negative check for every object in the warehouse. 8 keeps the deepest legal tree well
+#: poisons the negative check for every object in the warehouse. 9 (a warehouse and seven namespaces) keeps the deepest legal tree well
 #: inside the evaluator's reach. (The medallion is two levels; Polaris allows 16.)
-MAX_NAMESPACE_DEPTH = 8
+MAX_NAMESPACE_DEPTH = 9
 
 
 #: The most characters a name holds (ADR 0173 §4).
@@ -116,9 +116,8 @@ def parse_identifier(id_str: str) -> list[str]:
     return id_str.split(CATALOG_DELIMITER)
 
 
-def top_namespace(id_str: str) -> str:
-    """The top namespace a string identifier lies under: its first segment, the only rung the warehouse registry binds,
-    so a project or a warehouse is found from it at any depth; ``""`` for the root."""
+def warehouse_of(id_str: str) -> str:
+    """The warehouse a string identifier lies in: its first segment ([[LH-593]]); ``""`` for the root."""
     return id_str.partition(CATALOG_DELIMITER)[0]
 
 

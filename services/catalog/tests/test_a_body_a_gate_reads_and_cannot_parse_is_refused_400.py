@@ -18,13 +18,13 @@ import pytest
 @pytest.mark.parametrize(
     "door",
     [
-        pytest.param("/management/v1/namespace/bronze/access/grant", id="a-grant"),
+        pytest.param("/management/v1/namespace/lance_catalog$bronze/access/grant", id="a-grant"),
         pytest.param("/v1/table/batch-commit", id="a-batch"),
     ],
 )
 def test_a_body_the_gate_cannot_parse_is_refused_400(governed_catalog: Any, door: str) -> None:  # noqa: ANN401 — the catalog conftest's GovernedCatalog
     alice = governed_catalog.bearer("alice")
-    assert governed_catalog.client.post("/v1/namespace/bronze/create", json={}, headers=alice).status_code == 200
+    assert governed_catalog.create_in_the_estate("alice", "bronze").status_code == 200
 
     refused = governed_catalog.client.post(door, content=b"{", headers={**alice, "Content-Type": "text/plain"})
 

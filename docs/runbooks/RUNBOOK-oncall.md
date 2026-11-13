@@ -10,7 +10,7 @@ fixture's) or a user report — not a page.
 ## Orientation
 
 - **Services** (FastAPI): `catalog` (REST catalog and tier governance), `lineage`
-  (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `provenance` namespace;
+  (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `lance_catalog$provenance` namespace;
   the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (a NATS work queue its replicas share: each table's pass, the hourly audit with the drift report, the daily scan; and the write-event lane, ADR 0198),
   and the console's static-file server `rask-console`; public `/api/*` reaches the lakehouse through the platform's Gateway on the chart's HTTPRoutes (`chart/templates/route.yaml`), and `/` reaches the console on the chart's HTTPRoute `rask-console` (`chart/templates/console.yaml`). The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
@@ -38,6 +38,7 @@ fixture's) or a user report — not a page.
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | `CatalogCommitsReannounced`, `CatalogCommitsUnauthored` or `CatalogCommitReconcileBlocked` firing | [Committed versions re-announced](#committed-versions-re-announced) |
 | `CatalogManifestReclaimFailing` firing, `manifest_reclaim_failed` WARN logs | [A root's namespace index is not reclaimed](#a-roots-namespace-index-is-not-reclaimed) |
+| `CatalogDeclarationNotConverging` firing, `declaration_converge_failed` WARN or `declaration_unreadable` ERROR logs | [The estate is not what git declares](#the-estate-is-not-what-git-declares) |
 | `ErasureDerivedAfterRelease` or `ErasureLateDerivedUnwatched` firing | [A table derived from an erased table found after the release](#a-table-derived-from-an-erased-table-found-after-the-release) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | `LanceObjectStoreThrottled` or `LanceObjectStoreRetriesHigh` firing: writes and passes slow, nothing failing yet | [The object store throttles or retries](#the-object-store-throttles-or-retries) |
@@ -104,7 +105,7 @@ provenance tables through the catalog, retried until the catalog answers) runs *
 `dependency=catalog` (`dependency_answering` follows once it answers again).
 
 **Cause.** Lineage keeps no database: its commit feed and edge list are Lance tables in the catalog's
-`provenance` namespace, read and written through the catalog's doors as lineage's own principal. A background
+`lance_catalog$provenance` namespace, read and written through the catalog's doors as lineage's own principal. A background
 read of the feed table through the catalog, every 5 s within 5 s (`lakehouse.health`, ADR 0203), gates `/readyz`,
 which answers from that read's verdict. While it fails, every delivery answers `RETRY`, so the bus keeps the events
 and nothing is lost. The bus, the secret store, OpenFGA and, where the outbox the relay drains is kept on it, the object
@@ -242,6 +243,33 @@ are retried on the next tick, and a table gone from the catalog is not one of th
 **Act.** A re-announcement needs nothing further once its cause is understood. An unauthored version is unjudged:
 treat it as an incident on the credential that wrote it, and restore the table to the last authored version if its
 content is not trusted.
+
+## The estate is not what git declares
+
+**Symptom.** `CatalogDeclarationNotConverging` (warning) names an object (`project:<id>`, `warehouse:<id>`,
+`grant:<object>#<relation>`, `revoke:<object>#<relation>`, `release`, `grants` or `declaration`), and the catalog's
+`declaration_converge_failed` WARN logs carry that object and the error, on at least three ticks within fifteen minutes.
+
+**Cause.** The catalog converges the projects, warehouses and service grants the chart's `catalog.declared` values
+declare, on its `catalog-declaration-converge-cron` tick (XC-213, ADR 0206). One object's failure leaves every other
+object to the same tick, so the alert names exactly what the estate does not hold as declared.
+
+**Diagnose.** The log's error says which:
+
+- `declaration`, with a `declaration_unreadable` ERROR: the mounted file is not a declaration (an id that is no control
+  id, a grant naming a person, a rung the object's type does not define, an id declared twice). Nothing is converged
+  and nothing is released until it reads. Read it as the pod does:
+  `kubectl get configmap <release>-catalog-declaration -o jsonpath='{.data.declaration\.json}'`.
+- `warehouse:<id>`: its project is not declared and has no record (404), its bucket is reserved or claimed by another
+  project (400, 409), its store failed the probe (400) or could not be probed (503), or its id is registered to another
+  project (409).
+- `grant:…`: the object it names has no registry record, or OpenFGA did not answer.
+- `revoke:project:<id>#admin`: the admin git stopped declaring is the project's last direct admin, which is never
+  revoked (409). Declare another admin first.
+
+**Act.** Correct the values and let the reconciler apply them; the next tick converges. A store or OpenFGA outage clears
+on its own. Never make the declared object at its door instead: a project or warehouse git declares refuses a change
+there, and one made by hand before git declared it is taken over as it stands.
 
 ## A root's namespace index is not reclaimed
 

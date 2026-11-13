@@ -1,7 +1,7 @@
 """The estate admin's raw access doors take a table or namespace by name as they take it by uuid ([[LH-591]]).
 
 Every grant is held by the object's uuid (``table:<uuid>``, ``namespace:<uuid>``, [[LH-524]]), and every catalog door is
-addressed by name and resolves it through the request's ``Resolver``. A door handing OpenFGA ``table:db$t`` as written
+addressed by name and resolves it through the request's ``Resolver``. A door handing OpenFGA ``table:lance_catalog$db$t`` as written
 would ask about an object no tuple names, and its check would answer denied whoever reads the table. So check,
 list-users, expand and simulate resolve a name as every door does, and answer the uuid object they asked about with its
 name beside it. The tuple door's names are pinned beside its filters
@@ -39,12 +39,12 @@ def _uuid(catalog: Any, kind: str, name: str) -> str:
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Any:
-    """root administers the estate; alice owns namespace ``db`` and table ``db$t``, on which the raw door grants bob ``reader`` by name."""
+    """root administers the estate; alice owns namespace ``lance_catalog$db`` and table ``lance_catalog$db$t``, on which the raw door grants bob ``reader`` by name."""
     catalog = governed_catalog
     catalog.store.write((fga.user_object("dex~root"), "owner", "estate:rask"))
-    _ok(catalog, "/v1/namespace/db/create", json={})
-    _ok(catalog, "/v1/table/db$t/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
-    _ok(catalog, f"{ACCESS}/tuples", "root", json={"user": catalog.person("bob"), "relation": "reader", "object": "table:db$t"})
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    _ok(catalog, "/v1/table/lance_catalog$db$t/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    _ok(catalog, f"{ACCESS}/tuples", "root", json={"user": catalog.person("bob"), "relation": "reader", "object": "table:lance_catalog$db$t"})
     return catalog
 
 
@@ -65,7 +65,10 @@ def _asking(door: str, obj: str, catalog: Any) -> dict[str, Any]:
 @pytest.mark.parametrize("door", ["check", "list-users", "expand", "simulate"])
 @pytest.mark.parametrize(
     ("kind", "name", "absent", "code"),
-    [pytest.param("table", "db$t", "db$gone", TABLE_NOT_FOUND, id="table"), pytest.param("namespace", "db", "gone", NAMESPACE_NOT_FOUND, id="namespace")],
+    [
+        pytest.param("table", "lance_catalog$db$t", "lance_catalog$db$gone", TABLE_NOT_FOUND, id="table"),
+        pytest.param("namespace", "lance_catalog$db", "lance_catalog$gone", NAMESPACE_NOT_FOUND, id="namespace"),
+    ],
 )
 def test_a_door_answers_an_object_by_name_as_it_answers_it_by_uuid(estate: Any, door: str, kind: str, name: str, absent: str, code: int) -> None:
     uuid_object = f"{kind}:{_uuid(estate, kind, name)}"
@@ -81,3 +84,10 @@ def test_a_door_answers_an_object_by_name_as_it_answers_it_by_uuid(estate: Any, 
     # alice owns the objects asked about and holds nothing on the estate: the door is the estate admin's alone.
     kept_out = estate.client.post(f"{ACCESS}/{door}", json=_asking(door, uuid_object, estate), headers=estate.bearer("alice"))
     assert (kept_out.status_code, kept_out.json()["detail"]) == (403, "can_administer_authz required on estate:rask")
+
+
+def test_a_door_refuses_a_warehouse_named_as_a_namespace(estate: Any) -> None:
+    """A namespace name of one segment is a warehouse ([[LH-593]]), asked about under its own type, never as a namespace."""
+    refused = estate.client.post(f"{ACCESS}/check", json=_asking("check", "namespace:lance_catalog", estate), headers=estate.bearer("root"))
+
+    assert (refused.status_code, refused.headers["content-type"], refused.json()["code"]) == (400, "application/problem+json", 13), refused.text

@@ -10,7 +10,9 @@ Argo step, a person with credentials) meets through HTTP and nothing else:
    an error, never a silent downgrade.
 2. Where the project has a DECLARED `GateSpec`, that record governs the key column and its required
    columns are enforced on top of the caller's. An external writer — the party trusted least —
-   otherwise got a weaker gate than a writer that names the declared key column itself.
+   otherwise got a weaker gate than a writer that names the declared key column itself. The project is
+   the one the warehouse record of the table's first segment names ([[LH-593]]), read with lineage
+   emission off, since turning telemetry off must not turn a governance control off.
 
 Driven through a real ``dir`` namespace and real pylance writes, like `tests/unit/test_publication.py`:
 the subject is what the assertions actually do to a real dataset, and a doubled namespace would prove
@@ -36,7 +38,7 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import publication as door
 from catalog.core.identifiers import with_minted_uuid
 from catalog.core.lineage_emit import NoopEmitter
-from catalog.services import table_claims
+from catalog.services import table_claims, warehouses
 from catalog.services.dataplane import create_table
 from catalog.services.publication import published_version
 from lakehouse import gate_specs
@@ -60,12 +62,12 @@ _CALLER = PersonPrincipal(
     claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
 )
 
-#: In a namespace, because a table the catalog makes lives in one (ADR 0173 §5).
-TABLE_ID = ["db", "pages"]
+#: In a namespace of a warehouse, because a table the catalog makes lives in one (ADR 0173 §5, [[LH-593]]).
+TABLE_ID = ["acme-wh", "db", "pages"]
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
 
-#: The project the stubbed lineage binding resolves `db` to — the key a declared gate is stored under.
+#: The project warehouse `acme-wh` belongs to — the key a declared gate is stored under.
 PROJECT = "acme"
 
 
@@ -75,9 +77,10 @@ def _table(ids: list[int]) -> pa.Table:
 
 @pytest.fixture
 def registry_root(tmp_path: Path) -> str:
-    """Where a declared `GateSpec` lives — the catalog's own control root."""
+    """Where a declared `GateSpec` lives — the catalog's own control root — holding the record of warehouse `acme-wh`."""
     root = tmp_path / "control"
     root.mkdir()
+    warehouses.put_warehouse(str(root), StorageOptions(), {"id": TABLE_ID[0], "project": PROJECT, "bucket": "acme", "root_uri": str(tmp_path / "data")})
     return str(root)
 
 
@@ -85,9 +88,10 @@ def registry_root(tmp_path: Path) -> str:
 def ns(tmp_path: Path, registry_root: str):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     root = str(tmp_path / "data")
     namespace = connect("dir", {"root": root})
+    warehouses.ensure_catalog_row(namespace, TABLE_ID[0])
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1], properties=with_minted_uuid(None)))
     registry = BaseRegistry(control_root=registry_root, storage_options={})
-    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=registry, holder="db$pages")
+    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=registry, holder="acme-wh$db$pages")
     return namespace
 
 
@@ -109,21 +113,13 @@ def app(ns, registry_root: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Fas
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: _CALLER
     application.dependency_overrides[FgaClientDep.__metadata__[0].dependency] = lambda: object()
     application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = lambda: None
-    application.dependency_overrides[get_lineage_emitter] = _Tenant
+    application.dependency_overrides[get_lineage_emitter] = NoopEmitter
 
     async def _noop_emit(*_a: Any, **_k: Any) -> None:
         return None
 
     monkeypatch.setattr(door, "emit_control", _noop_emit)
     yield application
-
-
-class _Tenant(NoopEmitter):
-    """No lineage transport, and the tenant every table here belongs to."""
-
-    async def project_for(self, top_ns: str) -> str | None:
-        del top_ns
-        return PROJECT
 
 
 @pytest.fixture
@@ -133,7 +129,7 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 
 def _publish(client: TestClient, **body: Any) -> Any:  # noqa: ANN401 — httpx.Response
-    return client.post("/management/v1/table/db$pages/publish", json={"version": 1, **body})
+    return client.post("/management/v1/table/acme-wh$db$pages/publish", json={"version": 1, **body})
 
 
 def _assertion(payload: dict[str, Any], name: str) -> dict[str, Any] | None:

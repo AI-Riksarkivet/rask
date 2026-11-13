@@ -34,7 +34,7 @@ from catalog.services import dataplane
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-T = "/v1/table/g$t"
+T = "/v1/table/lance_catalog$g$t"
 _VECTOR: dict[str, Any] = {}
 
 
@@ -52,8 +52,8 @@ def _rows(n: int = 3) -> bytes:
 @pytest.fixture
 def client(real_ns_client: TestClient) -> TestClient:
     """A table `g$t` of three rows with a branch `b`, and a child namespace `g$child`."""
-    assert real_ns_client.post("/v1/namespace/g/create", json={}).status_code == 200
-    assert real_ns_client.post("/v1/namespace/g$child/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$g/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$g$child/create", json={}).status_code == 200
     assert real_ns_client.post(f"{T}/create", content=_rows(), headers=ARROW).status_code == 200
     assert real_ns_client.post(f"{T}/branches/create", json={"name": "b"}).status_code == 200
     return real_ns_client
@@ -76,7 +76,7 @@ _ADD_COLUMNS_VIRTUAL = {
     [
         pytest.param(lambda c: c.post(f"{T}/exists", json={"version": 999}), 404, 11, id="exists-a-version-the-table-lacks"),
         pytest.param(lambda c: c.get("/v1/namespace/$/list?limit=0"), 400, 13, id="namespace-list-limit-zero"),
-        pytest.param(lambda c: c.get("/v1/namespace/g/table/list?limit=0"), 400, 13, id="table-list-limit-zero"),
+        pytest.param(lambda c: c.get("/v1/namespace/lance_catalog$g/table/list?limit=0"), 400, 13, id="table-list-limit-zero"),
         pytest.param(
             lambda c: c.post(f"{T}/alter_columns", json={"alterations": [{"path": "id", "virtual_column": _VIRTUAL}]}), 406, 0, id="alter-a-virtual-column"
         ),
@@ -90,7 +90,9 @@ _ADD_COLUMNS_VIRTUAL = {
         pytest.param(
             lambda c: c.post(f"{T}/analyze_plan", json={"k": 1, "filter": "id = 'x' + 1", "vector": _VECTOR}), 400, 13, id="analyze-a-mistyped-literal"
         ),
-        pytest.param(lambda c: c.post("/v1/table/g$lv/create", content=_LIST_VIEW, headers=ARROW), 400, 13, id="create-a-type-lance-does-not-store"),
+        pytest.param(
+            lambda c: c.post("/v1/table/lance_catalog$g$lv/create", content=_LIST_VIEW, headers=ARROW), 400, 13, id="create-a-type-lance-does-not-store"
+        ),
         pytest.param(
             lambda c: c.post(f"{T}/add_columns", json={"new_columns": [{"name": "x", "expression": "id + 1", "computed": "id + 2"}]}),
             406,
@@ -125,9 +127,11 @@ _ADD_COLUMNS_VIRTUAL = {
             id="merge-a-timeout-the-catalog-does-not-hold",
         ),
         # Table properties the door would keep nowhere: only a create keeps them, on the table's schema metadata.
-        pytest.param(lambda c: c.post("/v1/table/g$d/declare", json={"properties": {"owner": "alice"}}), 406, 0, id="declare-properties-kept-nowhere"),
         pytest.param(
-            lambda c: c.post("/v1/table/g$r/register", json={"location": "elsewhere", "properties": {"owner": "alice"}}),
+            lambda c: c.post("/v1/table/lance_catalog$g$d/declare", json={"properties": {"owner": "alice"}}), 406, 0, id="declare-properties-kept-nowhere"
+        ),
+        pytest.param(
+            lambda c: c.post("/v1/table/lance_catalog$g$r/register", json={"location": "elsewhere", "properties": {"owner": "alice"}}),
             406,
             0,
             id="register-properties-kept-nowhere",
@@ -162,7 +166,7 @@ def test_an_edge_path_answers_the_spec_code(client: TestClient, send: Callable[[
 @pytest.mark.parametrize(
     ("send", "names_a_namespace"),
     [
-        pytest.param(lambda c: c.post("/v1/table/g$child/create", content=_rows(), headers=ARROW), True, id="a-namespace-holds-the-id"),
+        pytest.param(lambda c: c.post("/v1/table/lance_catalog$g$child/create", content=_rows(), headers=ARROW), True, id="a-namespace-holds-the-id"),
         # The `dir` backend's `namespace_exists` answers present for a table's id too, so a table holder is checked first.
         pytest.param(lambda c: c.post(f"{T}/declare", json={}), False, id="a-table-holds-the-id"),
     ],
@@ -194,15 +198,15 @@ def test_an_existok_create_that_loses_the_race_keeps_the_winners_table(client: T
 
     def declared_after_the_winner(*args: Any, **kwargs: Any) -> str:  # noqa: ANN401 — passed through to declare_table
         monkeypatch.setattr(dataplane, "declare_table", declare)
-        assert client.post("/v1/table/g$race/create?mode=ExistOk", content=_rows(2), headers=ARROW).status_code == 200
+        assert client.post("/v1/table/lance_catalog$g$race/create?mode=ExistOk", content=_rows(2), headers=ARROW).status_code == 200
         return declare(*args, **kwargs)
 
     monkeypatch.setattr(dataplane, "declare_table", declared_after_the_winner)
 
-    lost = client.post("/v1/table/g$race/create?mode=ExistOk", content=_rows(7), headers=ARROW)
+    lost = client.post("/v1/table/lance_catalog$g$race/create?mode=ExistOk", content=_rows(7), headers=ARROW)
 
     assert (lost.status_code, lost.json()["version"]) == (200, 1), lost.text
-    assert client.post("/v1/table/g$race/count_rows", json={}).text == "2"
+    assert client.post("/v1/table/lance_catalog$g$race/count_rows", json={}).text == "2"
 
 
 class _Panic(BaseException):
@@ -216,8 +220,8 @@ def test_a_panic_in_the_first_write_answers_500_and_leaves_the_name_free(client:
         raise _Panic("not yet implemented")
 
     monkeypatch.setattr(dataplane, "_write_blob", panics)
-    panicked = TestClient(client.app, raise_server_exceptions=False).post("/v1/table/g$p/create", content=_rows(), headers=ARROW)
+    panicked = TestClient(client.app, raise_server_exceptions=False).post("/v1/table/lance_catalog$g$p/create", content=_rows(), headers=ARROW)
     monkeypatch.setattr(dataplane, "_write_blob", write)
 
     assert (panicked.status_code, panicked.json()["code"]) == (500, 18), panicked.text
-    assert client.post("/v1/table/g$p/create", content=_rows(), headers=ARROW).status_code == 200, "the panicked create left its name declared"
+    assert client.post("/v1/table/lance_catalog$g$p/create", content=_rows(), headers=ARROW).status_code == 200, "the panicked create left its name declared"

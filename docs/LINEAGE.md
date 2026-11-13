@@ -7,10 +7,10 @@ backend the operator chooses ([ADR 0158](adr/0158-provenance-is-a-service-the-li
 catalog control plane, and it keeps no database.
 
 ```
-catalog, maintenance ─lineage.events.v1─▶ lineage ──merge_insert / query──▶ catalog ──▶ provenance$events
-a user's pipeline ──POST /api/v1/lineage─▶   │                                         provenance$edges
-pipelines, notifiers ◀── GET /events ────────┤                                         provenance$refusals
-erasure ◀── GET /tables/{name}/derived ──────┤                                         provenance$cursors
+catalog, maintenance ─lineage.events.v1─▶ lineage ──merge_insert / query──▶ catalog ──▶ lance_catalog$provenance$events
+a user's pipeline ──POST /api/v1/lineage─▶   │                                         lance_catalog$provenance$edges
+pipelines, notifiers ◀── GET /events ────────┤                                         lance_catalog$provenance$refusals
+erasure ◀── GET /tables/{name}/derived ──────┤                                         lance_catalog$provenance$cursors
                                              └─ relay tick ─ OpenLineage HTTP ─▶ graph backend (Marquez, DataHub, …)
 ```
 
@@ -22,7 +22,7 @@ erasure ◀── GET /tables/{name}/derived ──────┤              
 | **what / when** changed | Lance versions + tags (immutable, time-travel) |
 | **how / from where / by whom** | this service: the commit feed and the edge list; the full graph in the forwarded backend |
 
-A governed table is recorded under the uuid the catalog minted for it, with its bare catalog id (e.g. `bronze$images`)
+A governed table is recorded under the uuid the catalog minted for it, with its bare catalog id (e.g. `acme$bronze$images`)
 beside it as the name its event used, so the same object is governed by OpenFGA (`table:<uuid>`), versioned by Lance and
 traced here, and a rename does not split its lineage (ADR 0173 §10). An external source (anything outside the governed tiers, R23) is recorded
 namespace-qualified, `<namespace>/<name>`, so an external input can never resolve onto a governed table's edges
@@ -37,15 +37,16 @@ the feed and the edge list too (`lineage.services.names.stamp_resolved_uuids`). 
 ## Where the records live
 
 Lineage holds no storage credential for its tables. They are Lance tables in the catalog's **provenance namespace**
-(chart value `services.lineage.provenanceNamespace`, default `provenance`; `LANCE_PROVENANCE_NAMESPACE` on the catalog,
+(chart value `services.lineage.provenanceNamespace`, default `lance_catalog$provenance`, a namespace of the estate's own
+warehouse, which the render and the catalog's boot both require; `LANCE_PROVENANCE_NAMESPACE` on the catalog,
 `LINEAGE_PROVENANCE_NAMESPACE` on lineage, and the two must agree):
 
 | Table | Holds |
 |---|---|
-| `provenance$events` | the commit feed: one row per admitted event, the full event JSON in `event` |
-| `provenance$edges` | one row per (input, output) pair a successful run asserts, with both versions and branches |
-| `provenance$refusals` | outbox events refused by governance, recorded before the staged object is deleted |
-| `provenance$cursors` | each forwarder's position in the feed, keyed by the endpoint URL it posts to |
+| `lance_catalog$provenance$events` | the commit feed: one row per admitted event, the full event JSON in `event` |
+| `lance_catalog$provenance$edges` | one row per (input, output) pair a successful run asserts, with both versions and branches |
+| `lance_catalog$provenance$refusals` | outbox events refused by governance, recorded before the staged object is deleted |
+| `lance_catalog$provenance$cursors` | each forwarder's position in the feed, keyed by the endpoint URL it posts to |
 
 Lineage writes them through the catalog's `merge_insert` door and reads them through its `query` door, as its own
 principal (its projected service-account token for audience `rask-catalog`, `RASK_CATALOG_IDENTITY_TOKEN_FILE`). So
@@ -139,11 +140,11 @@ overlapping ticks need no lock (`lineage/api/relay_cron.py`):
 
 1. **Drain the outbox.** Producers stage each event under `_lineage_outbox` before publishing it; the tick records
    each survivor, re-publishes it and deletes it, oldest first and bounded per tick. An event governance refuses is
-   recorded to `provenance$refusals` before its staged object is deleted. Lineage's object-store grant is only this
+   recorded to `lance_catalog$provenance$refusals` before its staged object is deleted. Lineage's object-store grant is only this
    prefix (list, get, delete).
 2. **Forward.** Every recorded event, as standard OpenLineage over the HTTP transport, is POSTed to
    `services.lineage.forward.url` + `endpoint` (default `api/v1/lineage`), at least once and in feed order, from a
-   cursor in `provenance$cursors` keyed by the endpoint URL. The cursor moves by a conditional merge
+   cursor in `lance_catalog$provenance$cursors` keyed by the endpoint URL. The cursor moves by a conditional merge
    (`source.seq > target.seq`), so a slower replica's tick never moves it back. A 400, 413 or 422 refuses that one
    event, which is counted and passed; any other non-2xx answer or a transport error stops the tick at the last event
    the backend took, and the next tick resumes there. `forward.authSecret.{name,key}` names an API key in the Dapr
@@ -219,8 +220,7 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   claimed identity and the reason. A key list that cannot be read is an outage, not a verdict, and the delivery is
   retried. What each reason means and what to do:
   [RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events).
-- **The doors that act on the bus.** The catalog's own `/control-events` (which feeds `GET /management/v1/events` and
-  the warehouse-binding cache) and maintenance's `/maintenance-arrival` verify the same signatures before they act, in
+- **The doors that act on the bus.** The catalog's own `/control-events` (which feeds `GET /management/v1/events`) and maintenance's `/maintenance-arrival` verify the same signatures before they act, in
   the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce), and a notifier's doors verify
   them with the same settings (`lakehouse.signature_doors`). A lineage event verifies against `RASK_EVENT_SIGNERS` and
   `RASK_EVENT_DELEGATORS`, lineage's own sets. A control

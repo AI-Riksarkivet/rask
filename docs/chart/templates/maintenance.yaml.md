@@ -234,7 +234,7 @@ its tables would accumulate superseded versions FOREVER. This list names the buc
 chart itself knows of: the medallion storage zones (gold can live in its own bucket) and
 the approved multi-base data bases. A warehouse's bucket is created by an API call at
 runtime, so it is governed from the warehouse registry instead, read per task through the
-table's namespace binding: no value names it, and a deactivated warehouse's tables are
+warehouse the first segment of the table's name names: no value names it, and a deactivated warehouse's tables are
 not passed.
 
 ## `- { name: MAINTENANCE_S3_PLATFORM_BUCKETS, value: {{ include "lance.maintenancePlatformBuckets" . | quote }} }`
@@ -246,13 +246,6 @@ then never be clean. Measured 2026-08-16: `rask-observability`, a platform bucke
 estate made for GreptimeDB's object store, sat in that list.
 Sourced from `lance.maintenancePlatformBuckets`: `objectStore.buckets` (the set the
 provisioning hook, `object-store-provisioning.yaml`, creates on the dev store) plus the multibase bases.
-
-## `- { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }`
-
-The drift reconciler's inputs. It only READS: the catalog's grant census says who
-(`GET /management/v1/grants/census`, which leaves out the objects the deployment keeps for itself), the control-root
-registries say what exists, object storage holds the bytes. `MAINTENANCE_WAREHOUSES_ENABLED` mirrors the catalog's
-setting and must match it: a divergent one reports every namespace as unbound.
 
 ## `args:`
 

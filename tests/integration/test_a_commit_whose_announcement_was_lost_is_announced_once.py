@@ -207,15 +207,15 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
 
             if not any(getattr(route, "path", None) == f"/{_TICK}" for route in app.routes):
                 commit_reconcile.mount_commit_reconcile(app, _TICK)
-            assert catalog.post("/v1/namespace/db/create", json={}).status_code == 200
+            assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
             # The gate is down, so each write's own announcement is lost after its commit.
-            assert catalog.post("/v1/table/db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
-            assert catalog.post("/v1/table/db$t/insert", content=_rows(3, 5), headers=_ARROW).status_code == 200
+            assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+            assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(3, 5), headers=_ARROW).status_code == 200
             # A delete commits detached and is finalized by the catalog, where the create and the insert commit through Lance.
-            assert catalog.post("/v1/table/db$t/delete", json={"predicate": "id = 0"}).status_code == 200
+            assert catalog.post("/v1/table/lance_catalog$db$t/delete", json={"predicate": "id = 0"}).status_code == 200
             # A table only declared holds no version: nothing to announce, and nothing the tick cannot read.
-            assert catalog.post("/v1/table/db$declared/declare", json={}).status_code == 200
-            originals = [event for event in gate.refused if "run" in event and event["outputs"][0]["name"] == "db$t"]
+            assert catalog.post("/v1/table/lance_catalog$db$declared/declare", json={}).status_code == 200
+            originals = [event for event in gate.refused if "run" in event and event["outputs"][0]["name"] == "lance_catalog$db$t"]
             assert len(originals) == 3, gate.refused
             # The caller the catalog authenticated, as each write's own announcement names it.
             author = originals[0]["run"]["facets"]["rask_author"]["sub"]
@@ -227,7 +227,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
             monkeypatch.setenv("RASK_OIDC_ENABLED", "false")
             with live_lineage(catalog_url, monkeypatch, port=free_port()) as lineage_url, httpx.Client(base_url=lineage_url, timeout=60) as lineage:
                 gate.lineage = lineage_url
-                assert _commits(_follow(lineage), "db$t") == [], "the writes' own announcements reached the feed, so none was lost"
+                assert _commits(_follow(lineage), "lance_catalog$db$t") == [], "the writes' own announcements reached the feed, so none was lost"
 
                 # The feed, then the table, described while the store does not answer: the tick announces nothing, counts the
                 # failure and logs its cause, and never reads an unanswered describe as a feed or a table that is not there.
@@ -246,9 +246,9 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 outage = InternalError('IO { source: Generic { store: "S3", source: RetryError { inner: Status { status: 503 } } } }')
                 unannounced: list[dict[str, Any]] = []
                 for described, error, events in (
-                    (["provenance", "events"], outage, ["commit_reconcile_feed_unreadable"]),
-                    (["db", "t"], outage, ["commit_reconcile_table_unreadable"]),
-                    (["db", "t"], PermissionDeniedError("warehouse 'wh' is deactivated"), []),
+                    (["lance_catalog", "provenance", "events"], outage, ["commit_reconcile_feed_unreadable"]),
+                    (["lance_catalog", "db", "t"], outage, ["commit_reconcile_table_unreadable"]),
+                    (["lance_catalog", "db", "t"], PermissionDeniedError("warehouse 'wh' is deactivated"), []),
                 ):
                     monkeypatch.setattr(DirectoryNamespace, "describe_table", failing(described, error))
                     with caplog.at_level(logging.ERROR, logger="catalog.api.commit_reconcile"):
@@ -274,7 +274,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                         raise OSError("the store did not answer")
                     return real_checkout(dataset, version)
 
-                location_of_t = str(catalog.post("/v1/table/db$t/describe", json={}).json()["location"]).rstrip("/").rsplit("/", 1)[-1]
+                location_of_t = str(catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]).rstrip("/").rsplit("/", 1)[-1]
                 monkeypatch.setattr(lance.LanceDataset, "checkout_version", unreadable_once)
                 blocked = catalog.post(f"/{_TICK}")
                 assert (blocked.json()["reannounced"], blocked.json()["unreadable"]) == (0, 1), blocked.json()
@@ -282,10 +282,10 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 tick = catalog.post(f"/{_TICK}")
                 assert tick.status_code == 200, tick.text
                 assert tick.json()["reannounced"] == 3, tick.json()
-                assert _commits(_follow(lineage), "db$t") == [
-                    ("db$t", "create_table", "1", author),
-                    ("db$t", "insert", "2", author),
-                    ("db$t", "delete", "3", author),
+                assert _commits(_follow(lineage), "lance_catalog$db$t") == [
+                    ("lance_catalog$db$t", "create_table", "1", author),
+                    ("lance_catalog$db$t", "insert", "2", author),
+                    ("lance_catalog$db$t", "delete", "3", author),
                 ]
 
                 # Each write's own announcement arriving late, as the outbox relay delivers one it had staged; the tick that
@@ -307,8 +307,10 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 # The record the store kept holds main's mark below its version, so the next tick reads it and forgets it.
                 settings = get_settings()
                 control, control_so = settings.registry_root, settings.storage_options()
-                uuid_of_t = catalog.post("/v1/table/db$t/describe", json={}).json()["properties"]["rask.uuid"]
-                second = lance.dataset(catalog.post("/v1/table/db$t/describe", json={"vend_credentials": False}).json()["location"]).read_transaction(2)
+                uuid_of_t = catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"]["rask.uuid"]
+                second = lance.dataset(
+                    catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]
+                ).read_transaction(2)
                 assert second is not None
 
                 def recorded_second() -> str | None:
@@ -316,10 +318,10 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                     return record.author if record is not None else None
 
                 assert (commit_records.read_marks(control, control_so, uuid_of_t).refs, recorded_second()) == ({"": 1}, author)
-                assert _commits(_follow(lineage), "db$t") == [
-                    ("db$t", "create_table", "1", author),
-                    ("db$t", "insert", "2", author),
-                    ("db$t", "delete", "3", author),
+                assert _commits(_follow(lineage), "lance_catalog$db$t") == [
+                    ("lance_catalog$db$t", "create_table", "1", author),
+                    ("lance_catalog$db$t", "insert", "2", author),
+                    ("lance_catalog$db$t", "delete", "3", author),
                 ]
 
                 # A write through a door whose author record the store refuses, its announcement lost too: the write lands,
@@ -332,7 +334,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 gate.lineage = None
                 monkeypatch.setattr(commit_records, "record_author", refused)
                 with caplog.at_level(logging.ERROR, logger="catalog.services.commit_authors"):
-                    assert catalog.post("/v1/table/db$t/insert", content=_rows(5, 6), headers=_ARROW).status_code == 200
+                    assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(5, 6), headers=_ARROW).status_code == 200
                 monkeypatch.setattr(commit_records, "record_author", real_record)
                 gate.lineage = lineage_url
                 missed = [(record.levelno, record.getMessage()) for record in caplog.records if record.name == "catalog.services.commit_authors"]
@@ -341,8 +343,8 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 # A write through a door, announced, then two versions committed straight to the store, past every door: one
                 # carries the write's transaction uuid and stamps another estate's person, and the write's record names the
                 # version it landed at; the other's transaction cannot be read, which no catalog commit leaves.
-                assert catalog.post("/v1/table/db$t/insert", content=_rows(6, 7), headers=_ARROW).status_code == 200
-                location = catalog.post("/v1/table/db$t/describe", json={"vend_credentials": False}).json()["location"]
+                assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(6, 7), headers=_ARROW).status_code == 200
+                location = catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]
                 written = lance.dataset(location)
                 reused = written.read_transaction(written.version)
                 assert reused is not None
@@ -364,23 +366,23 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 monkeypatch.setattr(lance.LanceDataset, "read_transaction", real_read)
                 assert (past_every_door.json()["reannounced"], past_every_door.json()["unauthored"]) == (0, 3), past_every_door.json()
                 assert recorded_second() is None
-                assert _commits(_follow(lineage), "db$t") == [
-                    ("db$t", "create_table", "1", author),
-                    ("db$t", "insert", "2", author),
-                    ("db$t", "delete", "3", author),
-                    ("db$t", "insert", "5", author),
+                assert _commits(_follow(lineage), "lance_catalog$db$t") == [
+                    ("lance_catalog$db$t", "create_table", "1", author),
+                    ("lance_catalog$db$t", "insert", "2", author),
+                    ("lance_catalog$db$t", "delete", "3", author),
+                    ("lance_catalog$db$t", "insert", "5", author),
                 ]
 
                 # Config commits ([[LH-575]]): a floor raise through its door, its author recorded and announced on no feed;
                 # a floor stamp set straight at the store, past every door, counted; and a disarm, the commit every door
                 # makes before its own, neither.
-                raised = catalog.post("/management/v1/table/db$t/maintenance/floor", json={})
+                raised = catalog.post("/management/v1/table/lance_catalog$db$t/maintenance/floor", json={})
                 assert (raised.status_code, raised.json()["version"] is not None) == (200, True), raised.text
                 lance.dataset(location).update_config({FLOOR_KEY: "1"})
                 lance.dataset(location).delete_config_keys(["lance.auto_cleanup.interval"])
                 configs = catalog.post(f"/{_TICK}")
                 assert (configs.json()["reannounced"], configs.json()["unauthored"]) == (0, 1), configs.json()
-                assert len(_commits(_follow(lineage), "db$t")) == 4
+                assert len(_commits(_follow(lineage), "lance_catalog$db$t")) == 4
 
                 # A dataset written outside the catalog, registered, then written through the catalog while the gate is
                 # down again: only that last write's announcement is the catalog's, and lost.
@@ -392,37 +394,37 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 )
                 stock.create_branch("work")
                 lance.dataset(outside).checkout_version(("work", None)).insert(pa.table({"id": pa.array([3], pa.int64())}))
-                registered = catalog.post("/v1/table/db$registered/register", json={"location": "outside/registered"})
+                registered = catalog.post("/v1/table/lance_catalog$db$registered/register", json={"location": "outside/registered"})
                 assert registered.status_code == 200, registered.text
-                assert catalog.post("/v1/table/db$registered/insert", content=_rows(4, 5), headers=_ARROW).status_code == 200
+                assert catalog.post("/v1/table/lance_catalog$db$registered/insert", content=_rows(4, 5), headers=_ARROW).status_code == 200
                 gate.lineage = lineage_url
 
                 after_register = catalog.post(f"/{_TICK}")
                 assert (after_register.json()["reannounced"], after_register.json()["unauthored"], after_register.json()["unreadable"]) == (1, 0, 0), (
                     after_register.json()
                 )
-                assert _commits(_follow(lineage), "db$registered") == [("db$registered", "insert", "3", author)]
+                assert _commits(_follow(lineage), "lance_catalog$db$registered") == [("lance_catalog$db$registered", "insert", "3", author)]
                 # Lineage recorded every event above in the provenance namespace through the catalog's doors, and none of
                 # those writes is announced, so none keeps an author record.
-                uuid_of_registered = catalog.post("/v1/table/db$registered/describe", json={}).json()["properties"]["rask.uuid"]
+                uuid_of_registered = catalog.post("/v1/table/lance_catalog$db$registered/describe", json={}).json()["properties"]["rask.uuid"]
                 assert {path.name for path in (Path(control) / commit_records.AUTHORS_PREFIX).iterdir()} == {uuid_of_t, uuid_of_registered}
 
                 # A version published while the gate is down: the tag moves, and its announcement is lost after the move.
                 gate.lineage = None
-                published = catalog.post("/management/v1/table/db$t/publish", json={"version": 3, "key_column": "id"})
+                published = catalog.post("/management/v1/table/lance_catalog$db$t/publish", json={"version": 3, "key_column": "id"})
                 assert (published.status_code, published.json()["published"]) == (200, True), published.text
-                lost = [event for event in gate.refused if _publications([{"event": event}], "db$t")]
+                lost = [event for event in gate.refused if _publications([{"event": event}], "lance_catalog$db$t")]
                 assert len(lost) == 1, gate.refused
                 gate.lineage = lineage_url
                 republished = catalog.post(f"/{_TICK}")
                 assert (republished.json()["reannounced"], republished.json()["unauthored"]) == (1, 0), republished.json()
-                assert _publications(_follow(lineage), "db$t") == [(3, author)]
+                assert _publications(_follow(lineage), "lance_catalog$db$t") == [(3, author)]
                 late = lineage.post("/api/v1/lineage", json=lost[0], headers=alice)
                 assert late.status_code == 201, late.text
-                assert _publications(_follow(lineage), "db$t") == [(3, author)]
+                assert _publications(_follow(lineage), "lance_catalog$db$t") == [(3, author)]
                 # A publication the feed holds is not announced again, nor is a retry of it, which moves nothing.
                 assert catalog.post(f"/{_TICK}").json()["reannounced"] == 0
-                retried = catalog.post("/management/v1/table/db$t/publish", json={"version": 3, "key_column": "id"})
+                retried = catalog.post("/management/v1/table/lance_catalog$db$t/publish", json={"version": 3, "key_column": "id"})
                 assert (retried.status_code, retried.json()["published"]) == (200, True), retried.text
                 after_the_retry = catalog.post(f"/{_TICK}").json()
                 assert (after_the_retry["reannounced"], after_the_retry["unauthored"]) == (0, 0), after_the_retry
@@ -440,31 +442,36 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 past_the_tag_door = catalog.post(f"/{_TICK}")
                 assert (past_the_tag_door.json()["reannounced"], past_the_tag_door.json()["unauthored"]) == (0, 1), past_the_tag_door.json()
                 assert catalog.post(f"/{_TICK}").json()["unauthored"] == 0
-                assert _publications(_follow(lineage), "db$t") == [(3, author)]
+                assert _publications(_follow(lineage), "lance_catalog$db$t") == [(3, author)]
                 assert commit_records.tag_movers(control, control_so, uuid_of_t, tag="published") == []
 
                 # An erasure drops `published`, and the version it named before is published again while the gate is down: a
                 # move of its own, so the tick announces it as a run of its own, and its original arriving late is that run.
                 lance.dataset(location).tags.delete("published")
                 gate.lineage = None
-                again = catalog.post("/management/v1/table/db$t/publish", json={"version": 3, "key_column": "id"})
+                again = catalog.post("/management/v1/table/lance_catalog$db$t/publish", json={"version": 3, "key_column": "id"})
                 assert (again.status_code, again.json()["published"]) == (200, True), again.text
-                lost_again = [event for event in gate.refused if _publications([{"event": event}], "db$t")][1:]
+                lost_again = [event for event in gate.refused if _publications([{"event": event}], "lance_catalog$db$t")][1:]
                 gate.lineage = lineage_url
                 assert catalog.post(f"/{_TICK}").json()["reannounced"] == 1
                 assert lineage.post("/api/v1/lineage", json=lost_again[0], headers=alice).status_code == 201
-                assert _publications(_follow(lineage), "db$t") == [(3, author), (3, author)]
+                assert _publications(_follow(lineage), "lance_catalog$db$t") == [(3, author), (3, author)]
 
                 # A write whose writer's clock runs two days behind, past the horizon, its announcement lost: a version's age
                 # is the store's stamp on its manifest, never the time its writer wrote into it, so it is looked for and
                 # announced rather than taken as one the feed has long since dropped.
-                assert catalog.post("/v1/table/db$late/create", content=_rows(0, 1), headers=_ARROW).status_code == 200
+                assert catalog.post("/v1/table/lance_catalog$db$late/create", content=_rows(0, 1), headers=_ARROW).status_code == 200
                 gate.lineage = None
-                assert catalog.post("/v1/table/db$late/insert", content=_rows(1, 2), headers=_ARROW).status_code == 200
+                assert catalog.post("/v1/table/lance_catalog$db$late/insert", content=_rows(1, 2), headers=_ARROW).status_code == 200
                 gate.lineage = lineage_url
-                _stamped_behind(catalog.post("/v1/table/db$late/describe", json={"vend_credentials": False}).json()["location"], 2, timedelta(days=2))
+                _stamped_behind(
+                    catalog.post("/v1/table/lance_catalog$db$late/describe", json={"vend_credentials": False}).json()["location"], 2, timedelta(days=2)
+                )
                 assert catalog.post(f"/{_TICK}").json()["reannounced"] == 1
-                assert _commits(_follow(lineage), "db$late") == [("db$late", "create_table", "1", author), ("db$late", "insert", "2", author)]
+                assert _commits(_follow(lineage), "lance_catalog$db$late") == [
+                    ("lance_catalog$db$late", "create_table", "1", author),
+                    ("lance_catalog$db$late", "insert", "2", author),
+                ]
 
     assert [amount for amount, _ in counted.added] == [1, 1, 1, 1, 1, 1, 1]
     # The create, both inserts the catalog recorded, the refused one, the registered table's insert, and the late table's

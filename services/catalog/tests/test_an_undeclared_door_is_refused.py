@@ -127,6 +127,9 @@ class _EveryNameHolds(Resolver):
     def _uuid(kind: str, segments: list[str]) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{kind}:{'$'.join(segments)}"))
 
+    async def require_active_warehouse(self, warehouse_id: str) -> None:
+        del warehouse_id
+
     async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:
         return ResolvedTable(segments=segments, location=f"memory://{self._uuid('table', segments)}")
 

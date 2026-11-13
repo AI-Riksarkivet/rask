@@ -230,15 +230,15 @@ def estate() -> Iterator[Estate]:
     skip_unless_live(f"{CATALOG}/livez", what="the catalog")
 
     suffix = uuid.uuid4().hex[:8]
-    live = Estate(project=f"tracka{suffix}", warehouse=f"tracka{suffix}-wh", namespace=f"trackans{suffix}")
+    warehouse = f"tracka{suffix}-wh"
+    live = Estate(project=f"tracka{suffix}", warehouse=warehouse, namespace=f"{warehouse}{CATALOG_DELIMITER}trackans{suffix}")
 
     r = requests.post(f"{CATALOG}/management/v1/projects", json={"id": live.project}, headers=_auth(), timeout=60)
     assert r.status_code == 200, f"could not mint a scratch project (is this token a project creator?): {r.text}"
     r = requests.post(f"{CATALOG}/management/v1/warehouses", json={"id": live.warehouse, "project": live.project}, headers=_auth(), timeout=120)
     assert r.status_code == 200, r.text
-    # The binding is what makes the namespace resolvable at all: a top-level namespace with no warehouse
-    # is refused 400 by the hierarchy guard, so this call is the namespace's creation, not a decoration.
-    r = requests.post(f"{CATALOG}/management/v1/warehouses/{live.warehouse}/namespaces", json={"namespace": live.namespace}, headers=_auth(), timeout=60)
+    # The namespace is the warehouse's, its id beginning with the warehouse's: the tables below land in that bucket.
+    r = requests.post(f"{CATALOG}/v1/namespace/{live.namespace}/create", json={}, headers=_auth(), timeout=60)
     assert r.status_code == 200, r.text
 
     try:

@@ -47,13 +47,6 @@ above: `--reuse-values` with the key missing must render the default, and the me
 a fraction of a day is a valid grace (the schema types it `number`), and truncating one would
 turn the dev estate's 0.04 into 0, which switches recoverable drops off ([[LH-518]]).
 
-## `- { name: LANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }`
-
-#3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /management/v1/warehouses
-provisions a bucket per warehouse + binds namespaces; an unbound namespace still routes to
-LANCE_REST_ROOT (backward-compatible). The warehouse registry lives under LANCE_REST_ROOT
-(control_root defaults to it), so no extra bucket is needed.
-
 ## `{{- $reserved := list }}`
 
 Buckets no warehouse may claim (audit 2026-07-23): the medallion ZONE buckets (gold can
@@ -119,10 +112,12 @@ The SAME prefix `LINEAGE_OUTBOX_URI` names below, because that is the only thing
 it: lineage's relay cron records and re-publishes what it finds there. A private prefix
 would stage objects nothing ever reads, which looks like durability and is not.
 
-## `- { name: LANCE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }`
+## `- { name: LANCE_PROVENANCE_NAMESPACE, value: {{ include "lance.provenanceNamespace" $root | quote }} }`
 
 The namespace the catalog keeps for provenance (ADR 0158): lineage's feed, edge list and outbox refusals are
-tables in it. The catalog creates it at boot, protects it, and never announces a write under it, because each of
+tables in it. It is a namespace of the estate's own warehouse (`lance_catalog$provenance`: the first segment of every
+name is its warehouse, and the estate's is the id of `RASK_FGA_DEFAULT_WAREHOUSE_OBJECT`), and the catalog refuses to
+boot on one outside it. The catalog creates it at boot, protects it, and never announces a write under it, because each of
 those rows records an announcement. Rendered from the same value as lineage's `LINEAGE_PROVENANCE_NAMESPACE`, so
 the two services cannot name different namespaces.
 
@@ -203,23 +198,6 @@ hasKey+ternary, NOT `| default`: Sprig's default() treats boolean false as empty
 which `helm upgrade --reuse-values` from a pre-#41 release does (live crash 2026-07-15,
 pydantic bool_parsing on LANCE_AUDIT_ENABLED=""). hasKey defaults a MISSING key to true and
 still honors an explicit false.
-
-## `- { name: LANCE_FGA_LOCK_ROOT_CREATE, value: {{ hasKey .Values.auth "lockRootCreate" | ternary .Values.auth...`
-
-Lock top-level (root) namespace/table creation to holders of a warehouse-level create grant.
-Off in dev (self-serve); ON in prod (values-prod) — else any Dex-authenticated user can squat
-unlimited root namespaces in the shared warehouse bucket (assessment finding). hasKey+ternary
-like LANCE_AUDIT_ENABLED above: a missing key under --reuse-values must render the default,
-not "" (pydantic bool_parsing crash).
-
-F2-11. LOCKED BY DEFAULT ON A REAL DEPLOYMENT, and the derivation is the point: this
-was an opt-in that only `values-prod.yaml` set, so every estate that did not think
-about it let ANY authenticated subject mint a top-level namespace — measured live
-2026-09-07, `LANCE_FGA_LOCK_ROOT_CREATE=false` on the running catalog. The same
-shape F2-9 already fixed for credentials: answer "is this a real deployment?" once,
-on a signal an operator cannot forget, rather than four times on a flag they can.
-An explicit `auth.lockRootCreate` still wins in BOTH directions — a real deployment
-that genuinely wants open self-serve says so, and says it deliberately.
 
 ## `sessionAffinity: ClientIP`
 

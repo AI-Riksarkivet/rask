@@ -61,7 +61,7 @@ from tests.integration import store_requests
 
 
 _TOKEN = {"Authorization": "Bearer t"}
-_TABLE = ["db", "t"]
+_TABLE = ["lance_catalog", "db", "t"]
 #: What ``writer`` and ``maintainer`` on a table grant (``model.fga``: writer -> reader -> can_read_data, can_get_metadata;
 #: either one -> can_create_version).
 _WRITER_AND_MAINTAINER = frozenset({"can_get_metadata", "can_read_data", "can_write_data", "can_maintain", "can_create_version"})
@@ -233,7 +233,7 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
 
 def _created(served: Served) -> lance_namespace.LanceNamespace:
     stock = served.stock()
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
     lance.write_dataset(
         _keyed([1, 2, 3], ["a", "b", "c"]),
         namespace_client=stock,
@@ -302,13 +302,13 @@ def test_a_stock_client_renames_a_labelled_column_and_its_label_goes_with_it(ser
     """A label belongs to a field, which Lance identifies by its id, and a rename keeps both (pylance 13.0.0): a stock
     client's rename commits through ``version/create`` as the catalog's own ``alter_columns`` door commits it."""
     stock = served.stock()
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
     _create_a_labelled_table(stock)
 
     # pylance types each alteration as an iterable of them and takes the mapping itself (13.0.0).
-    lance.dataset(namespace_client=stock, table_id=["db", "u"]).alter_columns(cast("Iterable[AlterColumn]", {"path": "v", "name": "w"}))
+    lance.dataset(namespace_client=stock, table_id=["lance_catalog", "db", "u"]).alter_columns(cast("Iterable[AlterColumn]", {"path": "v", "name": "w"}))
 
-    renamed = lance.dataset(namespace_client=stock, table_id=["db", "u"])
+    renamed = lance.dataset(namespace_client=stock, table_id=["lance_catalog", "db", "u"])
     assert (renamed.version, renamed.schema.names, renamed.schema.field("w").metadata) == (2, ["id", "w"], {b"rask.classification": b"pii"})
 
 
@@ -412,7 +412,7 @@ def test_the_index_door_refuses_and_a_writers_own_index_build_commits_through_ve
     stock = _created(served)
     served.granted = frozenset({"can_get_metadata", "can_read_data", "can_write_data", "can_create_version"})
 
-    refused = httpx.post(f"{served.url}/v1/table/db$t/create_scalar_index", json={"column": "id", "index_type": "BTREE"}, headers=_TOKEN)
+    refused = httpx.post(f"{served.url}/v1/table/lance_catalog$db$t/create_scalar_index", json={"column": "id", "index_type": "BTREE"}, headers=_TOKEN)
     assert refused.status_code == 406, refused.text
     assert "create_scalar_index" in refused.json()["detail"] and "version/create" in refused.json()["detail"]
     caplog.clear()
@@ -444,7 +444,7 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
     _opened(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
     stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
     served_on_s3.granted = frozenset({*_WRITER_AND_MAINTAINER, "can_drop"})
-    recorded = httpx.post(f"{served_on_s3.url}/management/v1/table/db$t/erasure", json={"predicate": "id = 2"}, headers=_TOKEN)
+    recorded = httpx.post(f"{served_on_s3.url}/management/v1/table/lance_catalog$db$t/erasure", json={"predicate": "id = 2"}, headers=_TOKEN)
     assert recorded.status_code == 202, recorded.text
     before = _opened(stock, options).version
     served_on_s3.granted = _WRITER_AND_MAINTAINER
@@ -459,7 +459,9 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
             Compaction.commit(job, [task.execute(job) for task in Compaction.plan(job, {"materialize_deletions_threshold": 0.0}).tasks])
             head().drop_index("v_idx")
         verified = httpx.post(
-            f"{served_on_s3.url}/management/v1/table/db$t/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": "id = 2"}, headers=_TOKEN
+            f"{served_on_s3.url}/management/v1/table/lance_catalog$db$t/erasure/{recorded.json()['obligation_id']}/verify",
+            json={"predicate": "id = 2"},
+            headers=_TOKEN,
         )
         _opened(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
 
@@ -531,7 +533,9 @@ def _append_at_file_version_2_1(stock: lance_namespace.LanceNamespace) -> None:
 
 
 def _create_at_file_version_2_1(stock: lance_namespace.LanceNamespace) -> None:
-    lance.write_dataset(_keyed([9], ["z"]), namespace_client=stock, table_id=["db", "u"], mode="create", data_storage_version="2.1", enable_stable_row_ids=True)
+    lance.write_dataset(
+        _keyed([9], ["z"]), namespace_client=stock, table_id=["lance_catalog", "db", "u"], mode="create", data_storage_version="2.1", enable_stable_row_ids=True
+    )
 
 
 def _append_a_new_key(stock: lance_namespace.LanceNamespace) -> None:
@@ -539,14 +543,18 @@ def _append_a_new_key(stock: lance_namespace.LanceNamespace) -> None:
 
 
 def _create_a_table(stock: lance_namespace.LanceNamespace) -> None:
-    lance.write_dataset(_keyed([9], ["z"]), namespace_client=stock, table_id=["db", "u"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(
+        _keyed([9], ["z"]), namespace_client=stock, table_id=["lance_catalog", "db", "u"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True
+    )
 
 
 def _create_a_labelled_table(stock: lance_namespace.LanceNamespace) -> None:
     labelled = _keyed([9], ["z"])
     fields = [field.with_metadata({**(field.metadata or {}), b"rask.classification": b"pii"}) if field.name == "v" else field for field in labelled.schema]
     rows = labelled.cast(pa.schema(fields, metadata=labelled.schema.metadata))
-    lance.write_dataset(rows, namespace_client=stock, table_id=["db", "u"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(
+        rows, namespace_client=stock, table_id=["lance_catalog", "db", "u"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True
+    )
 
 
 def _append_a_held_key(stock: lance_namespace.LanceNamespace) -> None:
@@ -630,11 +638,11 @@ def _compact(stock: lance_namespace.LanceNamespace) -> None:
     Compaction.commit(dataset, [task.execute(dataset) for task in plan.tasks])
 
 
-_UNKEYED = ["db", "u"]
+_UNKEYED = ["lance_catalog", "db", "u"]
 
 
 def _rewrite(stock: lance_namespace.LanceNamespace, *, compacted: list[int], replaced: list[int], values: list[int] | None = None) -> None:
-    """A Rewrite of a keyless ``db$u`` (fragments ``[1, 2]``, ``[3]``, ``[4]``) claiming to replace ``replaced``.
+    """A Rewrite of a keyless ``lance_catalog$db$u`` (fragments ``[1, 2]``, ``[3]``, ``[4]``) claiming to replace ``replaced``.
 
     Its one new fragment is what Lance's own compaction task writes for fragments ``compacted``, so it carries their
     rows and stable row ids, unless ``values`` names the rows its files hold instead, under those same row ids.
@@ -831,41 +839,55 @@ def _staged_with(
 @pytest.mark.parametrize(
     ("stage", "denied", "protect", "status", "code", "staged_at"),
     [
-        pytest.param(_append_at_file_version_2_1, set(), False, 400, 13, ("db$t", 4), id="foreign-data-file-versions-are-refused"),
-        pytest.param(_create_at_file_version_2_1, set(), False, 400, 13, ("db$u", 1), id="a-create-is-at-2.2-with-stable-row-ids"),
-        pytest.param(_append_a_held_key, set(), False, 400, 13, ("db$t", 4), id="a-held-primary-key-is-refused"),
-        pytest.param(_replace_a_key_with_a_held_one, set(), False, 400, 13, ("db$t", 4), id="a-held-primary-key-is-refused-in-a-replaced-file"),
-        pytest.param(_drop_the_key_column, set(), False, 400, 13, ("db$t", 4), id="the-key-column-is-kept"),
-        pytest.param(_re_append_a_held_file, set(), False, 400, 13, ("db$t", 4), id="a-held-data-file-is-not-appended-again"),
-        pytest.param(_undelete_as_an_update, set(), False, 400, 13, ("db$t", 4), id="a-deleted-row-does-not-come-back-whatever-the-label"),
-        pytest.param(_reuse_live_row_ids_as_an_update, set(), False, 400, 13, ("db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
-        pytest.param(_staged_with(_an_append, 14, 1), set(), False, 400, 13, ("db$t", 4), id="the-next-row-id-never-falls"),
-        pytest.param(_staged_with(_a_delete_of_the_newest_fragment, 11, 0), set(), False, 400, 13, ("db$t", 4), id="the-max-fragment-id-never-falls"),
-        # The table's next row id is 4 and the appended row takes 4: the counter holds, and the next append would mint 4.
-        pytest.param(_staged_with(_an_append, 14, 4), set(), False, 400, 13, ("db$t", 4), id="the-next-row-id-passes-every-new-row"),
-        pytest.param(_append_at_file_version_2_1, set(), False, 409, 14, ("db$t", 3), id="a-version-the-table-already-holds-is-taken"),
-        pytest.param(_arm_auto_cleanup, set(), False, 400, 13, ("db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
-        pytest.param(_steer_compaction, set(), False, 400, 13, ("db$t", 4), id="compaction-is-not-steered-by-a-commit"),
-        pytest.param(_opt_into_managed_blobs, set(), False, 400, 13, ("db$t", 4), id="managed-blobs-are-not-opted-into"),
-        pytest.param(_opt_into_spilled_row_lineage, set(), False, 400, 13, ("db$t", 4), id="spilled-row-lineage-is-not-opted-into"),
-        pytest.param(_stamp_a_scheme_lance_does_not_know, set(), False, 400, 13, ("db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"),
-        pytest.param(_restore_version_1, {"can_restore"}, False, 403, 15, ("db$t", 4), id="a-writer-cannot-stage-a-restore"),
-        pytest.param(_overwrite, set(), True, 409, 19, ("db$t", 4), id="an-overwrite-of-a-protected-table-is-refused"),
-        pytest.param(_compact, {"can_maintain"}, False, 403, 15, ("db$t", 4), id="a-writer-cannot-stage-a-compaction"),
-        pytest.param(_append_a_new_key, {"can_write_data"}, False, 403, 15, ("db$t", 4), id="a-maintainer-cannot-stage-an-append"),
-        pytest.param(_create_a_table, {"can_write_data"}, False, 403, 15, ("db$u", 1), id="a-maintainer-cannot-commit-a-tables-first-version"),
-        pytest.param(_create_a_labelled_table, {"can_classify"}, False, 403, 15, ("db$u", 1), id="a-first-version-labels-a-field-only-for-a-classifier"),
-        pytest.param(_rewrite_losing_a_replaced_fragments_rows, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-loses-no-row"),
-        pytest.param(_rewrite_duplicating_a_carried_fragments_rows, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-duplicates-no-row"),
-        pytest.param(_rewrite_changing_a_carried_rows_value, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-changes-no-value"),
-        pytest.param(_index_read_through_a_base, set(), False, 400, 13, ("db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
-        pytest.param(_index_with_no_files, set(), False, 400, 13, ("db$t", 4), id="an-index-names-files-that-are-there"),
-        pytest.param(_initialise_mem_wal, set(), False, 406, 0, ("db$t", 4), id="a-mem-wal-is-not-served"),
-        pytest.param(_data_staged_under_an_index_label, set(), False, 400, 13, ("db$t", 4), id="an-index-commit-changes-no-data"),
+        pytest.param(_append_at_file_version_2_1, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="foreign-data-file-versions-are-refused"),
+        pytest.param(_create_at_file_version_2_1, set(), False, 400, 13, ("lance_catalog$db$u", 1), id="a-create-is-at-2.2-with-stable-row-ids"),
+        pytest.param(_append_a_held_key, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused"),
+        pytest.param(_replace_a_key_with_a_held_one, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused-in-a-replaced-file"),
+        pytest.param(_drop_the_key_column, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="the-key-column-is-kept"),
+        pytest.param(_re_append_a_held_file, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="a-held-data-file-is-not-appended-again"),
+        pytest.param(_undelete_as_an_update, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="a-deleted-row-does-not-come-back-whatever-the-label"),
+        pytest.param(_reuse_live_row_ids_as_an_update, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
+        pytest.param(_staged_with(_an_append, 14, 1), set(), False, 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-never-falls"),
         pytest.param(
-            _append_under_a_transaction_recorded_for_another_commit, set(), False, 400, 13, ("db$t", 4), id="another-commits-transaction-is-not-reused"
+            _staged_with(_a_delete_of_the_newest_fragment, 11, 0), set(), False, 400, 13, ("lance_catalog$db$t", 4), id="the-max-fragment-id-never-falls"
         ),
-        pytest.param(_append_under_a_transaction_whose_record_is_unreadable, set(), False, 400, 13, ("db$t", 4), id="an-unreadable-record-is-no-retrys"),
+        # The table's next row id is 4 and the appended row takes 4: the counter holds, and the next append would mint 4.
+        pytest.param(_staged_with(_an_append, 14, 4), set(), False, 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-passes-every-new-row"),
+        pytest.param(_append_at_file_version_2_1, set(), False, 409, 14, ("lance_catalog$db$t", 3), id="a-version-the-table-already-holds-is-taken"),
+        pytest.param(_arm_auto_cleanup, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
+        pytest.param(_steer_compaction, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="compaction-is-not-steered-by-a-commit"),
+        pytest.param(_opt_into_managed_blobs, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="managed-blobs-are-not-opted-into"),
+        pytest.param(_opt_into_spilled_row_lineage, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="spilled-row-lineage-is-not-opted-into"),
+        pytest.param(
+            _stamp_a_scheme_lance_does_not_know, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"
+        ),
+        pytest.param(_restore_version_1, {"can_restore"}, False, 403, 15, ("lance_catalog$db$t", 4), id="a-writer-cannot-stage-a-restore"),
+        pytest.param(_overwrite, set(), True, 409, 19, ("lance_catalog$db$t", 4), id="an-overwrite-of-a-protected-table-is-refused"),
+        pytest.param(_compact, {"can_maintain"}, False, 403, 15, ("lance_catalog$db$t", 4), id="a-writer-cannot-stage-a-compaction"),
+        pytest.param(_append_a_new_key, {"can_write_data"}, False, 403, 15, ("lance_catalog$db$t", 4), id="a-maintainer-cannot-stage-an-append"),
+        pytest.param(_create_a_table, {"can_write_data"}, False, 403, 15, ("lance_catalog$db$u", 1), id="a-maintainer-cannot-commit-a-tables-first-version"),
+        pytest.param(
+            _create_a_labelled_table, {"can_classify"}, False, 403, 15, ("lance_catalog$db$u", 1), id="a-first-version-labels-a-field-only-for-a-classifier"
+        ),
+        pytest.param(_rewrite_losing_a_replaced_fragments_rows, set(), False, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-loses-no-row"),
+        pytest.param(_rewrite_duplicating_a_carried_fragments_rows, set(), False, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-duplicates-no-row"),
+        pytest.param(_rewrite_changing_a_carried_rows_value, set(), False, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-changes-no-value"),
+        pytest.param(_index_read_through_a_base, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
+        pytest.param(_index_with_no_files, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-index-names-files-that-are-there"),
+        pytest.param(_initialise_mem_wal, set(), False, 406, 0, ("lance_catalog$db$t", 4), id="a-mem-wal-is-not-served"),
+        pytest.param(_data_staged_under_an_index_label, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-index-commit-changes-no-data"),
+        pytest.param(
+            _append_under_a_transaction_recorded_for_another_commit,
+            set(),
+            False,
+            400,
+            13,
+            ("lance_catalog$db$t", 4),
+            id="another-commits-transaction-is-not-reused",
+        ),
+        pytest.param(
+            _append_under_a_transaction_whose_record_is_unreadable, set(), False, 400, 13, ("lance_catalog$db$t", 4), id="an-unreadable-record-is-no-retrys"
+        ),
     ],
 )
 def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_error(
@@ -881,7 +903,7 @@ def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_err
     lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
     _opened(stock).delete("id = 2")
     if protect:
-        assert httpx.post(f"{served.url}/management/v1/table/db$t/protection", json={"protected": True}, headers=_TOKEN).status_code == 200
+        assert httpx.post(f"{served.url}/management/v1/table/lance_catalog$db$t/protection", json={"protected": True}, headers=_TOKEN).status_code == 200
     served.denied.update(denied)
 
     # pylance reports a refused finalize as an OSError; a manifest staged by hand asks nothing until it is answered below.
@@ -972,7 +994,7 @@ def test_index_segments_that_overlap_are_refused_before_any_read_of_their_statis
             namespace_client_managed_versioning=True,
         )
 
-    status, code, detail = _answer_to_the_staged_commit(served, "db$t", 2)
+    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 2)
     assert (status, code) == (400, 13), detail
     assert "are covered by more than one of its segments" in detail, detail
     assert _opened(stock).version == 1
@@ -1002,7 +1024,7 @@ def test_a_commit_whose_store_read_fails_is_service_unavailable_and_leaves_the_t
         # pylance reports the refused finalize as an OSError; the catalog's own answer is read back below.
         with contextlib.suppress(OSError):
             lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=served.storage_options)
-        status, code, detail = _answer_to_the_staged_commit(served, "db$t", 2, location=location)
+        status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 2, location=location)
 
     assert (status, code) == (503, 17), detail
     after = _opened(stock, served.storage_options)
@@ -1022,7 +1044,7 @@ def test_a_commit_on_a_table_whose_latest_version_does_not_open_is_refused_as_in
     staged.write_bytes(manifest_bytes.with_manifest_version(latest.read_bytes(), 3))
     latest.write_bytes(b"not a manifest")
 
-    status, code, detail = _answer_to_the_staged_commit(served, "db$t", 3, location=location)
+    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 3, location=location)
 
     assert (status, code) == (500, 18), detail
     assert sorted(path.name for path in versions.glob("*.manifest")) == sorted({latest.name, f"{(1 << 64) - 1 - 1}.manifest"})
@@ -1066,7 +1088,7 @@ def test_a_refused_branch_commit_leaves_the_branch_at_its_version_and_answers_a_
         stage(stock)
 
     branch, version = staged_at
-    status, code, detail = _answer_to_the_staged_commit(served, "db$t", version, branch=branch)
+    status, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", version, branch=branch)
     assert ((status, code), names in detail) == (answer, True), detail
     assert list(_opened(stock).branches.list()) == ["work"]
     work = _branch(stock)
@@ -1201,12 +1223,14 @@ def test_a_retry_of_an_in_flight_commit_leaves_the_record_its_twin_made(served: 
     async def _a_twin_while_waiting(table: table_claims.DoorTable, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
         if posted:
             raise table_claims.TurnWaitRefusedError("every seat a commit waits in is taken")
-        described = await asyncio.to_thread(httpx.post, f"{served.url}/v1/table/db$t/describe", json={"vend_credentials": False}, headers=_TOKEN)
+        described = await asyncio.to_thread(httpx.post, f"{served.url}/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}, headers=_TOKEN)
         (pending,) = Path(described.json()["location"].removeprefix("file://")).glob("_versions/*.manifest-*")
         # Off the event loop, which serves the describe a stock client's open sends.
         request = {"version": (await asyncio.to_thread(_opened, stock)).version + 1, "manifest_path": pending.relative_to("/").as_posix()}
         posted.append(request["manifest_path"])
-        twins.append((await asyncio.to_thread(httpx.post, f"{served.url}/v1/table/db$t/version/create", json=request, headers=_TOKEN)).status_code)
+        twins.append(
+            (await asyncio.to_thread(httpx.post, f"{served.url}/v1/table/lance_catalog$db$t/version/create", json=request, headers=_TOKEN)).status_code
+        )
         return await waited(table, ref, mine=mine, handed=handed)
 
     stock = _created(served)
@@ -1225,7 +1249,7 @@ def test_a_retry_of_an_in_flight_commit_leaves_the_record_its_twin_made(served: 
 
 
 #: An unkeyed table, so the catalog's ``/insert`` appends through Lance's own commit rather than a keyed plan.
-_APPENDED_TO = ["db", "w"]
+_APPENDED_TO = ["lance_catalog", "db", "w"]
 
 
 class _Appender:
@@ -1312,7 +1336,7 @@ def test_a_stock_writer_beside_a_writer_appending_through_insert_in_a_tight_loop
     the commit again (measured on pylance 13.0.0), for as long as Lance itself retries: as far from the catalog as on the
     estate, its retries came 6.2 to 11.7 s after each 409. Its retry lands while ``/insert`` waits, and neither fails."""
     stock = served.stock()
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
     lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     through_version_create = _HookedCommits(served.stock(), delay=round_trip_seconds) if round_trip_seconds else served.stock()
     through_insert = served.stock()
@@ -1337,7 +1361,7 @@ def test_a_stock_schema_change_that_loses_to_a_writer_appending_through_insert_h
     pylance never stages it again, and the catalog hands it no turn. Measured with one handed: the writer appending through
     ``/insert`` waited 30 s for a retry that never came."""
     stock = served.stock()
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
     lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     through_insert = served.stock()
     landed_at: list[float] = []
@@ -1380,7 +1404,7 @@ def test_a_stock_writer_commits_while_a_turn_handed_to_another_stock_writer_is_h
     the peers waiting, 16 stock writers on one table at the estate's round trip landed 4 of 32 appends, and racing it 10 of
     32, as many as with no turn. The turn here is handed to a writer that never stages its commit again."""
     stock = served.stock()
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
     lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     _turns(stock, tmp_path).hand(None, commit_turns.Writer(caller="a-peer", transaction="a-commit-it-never-stages-again"))
 
@@ -1397,7 +1421,7 @@ def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served
     writers: when the retry reaches ``version/create``, the record keeps a turn under the writer's own token, read from
     the store, and holds no door's."""
     stock = served.stock()
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
     lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     competitor = served.stock()
     waited = table_claims.DoorTable.wait_for_turn_in_loop
@@ -1460,9 +1484,9 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
     outnumber the request threads only while none is shed."""
     served = served_without_the_write_cap
     stock = served.stock()
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
     seeded = pa.table({"id": pa.array(range(51), pa.int64()), "v": pa.array(range(51), pa.int64())})
-    for table_id in (_APPENDED_TO, ["db", "other"]):
+    for table_id in (_APPENDED_TO, ["lance_catalog", "db", "other"]):
         lance.write_dataset(seeded, namespace_client=stock, table_id=table_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     write = {
         "insert": lambda row: served.stock().insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(100 + row))),
@@ -1498,7 +1522,7 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
         slowest, until = 0.0, time.monotonic() + 4
         while time.monotonic() < until:
             began = time.monotonic()
-            stock.describe_table(lance_namespace.DescribeTableRequest(id=["db", "other"]))
+            stock.describe_table(lance_namespace.DescribeTableRequest(id=["lance_catalog", "db", "other"]))
             slowest = max(slowest, time.monotonic() - began)
             time.sleep(0.2)
     finally:
@@ -1519,15 +1543,20 @@ _RUN = {
     "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
     "x-rask-job-namespace": "pipelines",
     "x-rask-job": "nightly",
-    "x-rask-inputs": json.dumps([{"table": ["db", "src"], "version": 1}]),
+    "x-rask-inputs": json.dumps([{"table": ["lance_catalog", "db", "src"], "version": 1}]),
 }
 
 
 def _with_source(served: Served) -> lance_namespace.LanceNamespace:
-    """``db$t`` at version 1 and the input ``db$src`` at version 1."""
+    """``lance_catalog$db$t`` at version 1 and the input ``lance_catalog$db$src`` at version 1."""
     stock = _created(served)
     lance.write_dataset(
-        _keyed([1], ["s"]), namespace_client=stock, table_id=["db", "src"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True
+        _keyed([1], ["s"]),
+        namespace_client=stock,
+        table_id=["lance_catalog", "db", "src"],
+        mode="create",
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
     )
     return stock
 
@@ -1561,7 +1590,7 @@ class _Recorder:
     def __init__(self) -> None:
         self.writes: list[dict[str, Any]] = []
 
-    async def project_for(self, top_ns: str) -> str | None:
+    async def project_for(self, warehouse_id: str) -> str | None:
         return None
 
     async def emit_create(self, **fields: Any) -> None:
@@ -1593,30 +1622,30 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
         "rask.author": "dex~alice",
         "rask.operation": operation,
     }
-    assert json.loads(properties["rask.inputs"]) == [{"table": ["db", "src"], "version": 1}]
+    assert json.loads(properties["rask.inputs"]) == [{"table": ["lance_catalog", "db", "src"], "version": 1}]
     (announced,) = recorder.writes
     assert (announced["version"], [ref[:3] for ref in announced["inputs"]], str(announced["run"].run_id), announced["run"].job) == (
         2,
-        [("db$src", 1, None)],
+        [("lance_catalog$db$src", 1, None)],
         "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
         "nightly",
     )
 
 
-_SILVER = ["lab", "t"]
+_SILVER = ["lance_catalog", "lab", "t"]
 _PROVENANCE = {
     "rask.run_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
     "rask.job_namespace": "pipelines",
     "rask.job": "nightly",
     "rask.author": "dex~alice",
-    "rask.inputs": json.dumps([{"table": ["db", "src"], "version": 1}]),
+    "rask.inputs": json.dumps([{"table": ["lance_catalog", "db", "src"], "version": 1}]),
 }
 
 
 def _stock_append_naming_no_run(served: Served) -> tuple[int, int, str]:
     with pytest.raises(OSError):
         lance.write_dataset(_keyed([2], ["b"]), namespace_client=served.stock(), table_id=_SILVER, mode="append")
-    return _answer_to_the_staged_commit(served, "lab$t", 2)
+    return _answer_to_the_staged_commit(served, "lance_catalog$lab$t", 2)
 
 
 def _stock_append_naming_another_author(served: Served) -> tuple[int, int, str]:
@@ -1624,12 +1653,14 @@ def _stock_append_naming_another_author(served: Served) -> tuple[int, int, str]:
     forged = {**_PROVENANCE, "rask.author": "mallory"}
     with pytest.raises(OSError):
         lance.write_dataset(_keyed([2], ["b"]), namespace_client=served.stock(), table_id=_SILVER, mode="append", transaction_properties=forged)
-    return _answer_to_the_staged_commit(served, "lab$t", 2)
+    return _answer_to_the_staged_commit(served, "lance_catalog$lab$t", 2)
 
 
 def _insert_door_naming_no_run(served: Served) -> tuple[int, int, str]:
     answer = httpx.post(
-        f"{served.url}/v1/table/lab$t/insert", content=_ipc(_keyed([2], ["b"])), headers={**_TOKEN, "content-type": "application/vnd.apache.arrow.stream"}
+        f"{served.url}/v1/table/lance_catalog$lab$t/insert",
+        content=_ipc(_keyed([2], ["b"])),
+        headers={**_TOKEN, "content-type": "application/vnd.apache.arrow.stream"},
     )
     return answer.status_code, answer.json()["code"], answer.json()["detail"]
 
@@ -1642,20 +1673,20 @@ def _update_door(served: Served) -> tuple[int, int, str]:
         "x-rask-job": "nightly",
         "x-rask-inputs": _PROVENANCE["rask.inputs"],
     }
-    answer = httpx.post(f"{served.url}/v1/table/lab$t/update", json={"updates": [["v", "'z'"]]}, headers={**_TOKEN, **context})
+    answer = httpx.post(f"{served.url}/v1/table/lance_catalog$lab$t/update", json={"updates": [["v", "'z'"]]}, headers={**_TOKEN, **context})
     return answer.status_code, answer.json()["code"], answer.json()["detail"]
 
 
 def _register_into_silver(served: Served) -> tuple[int, int, str]:
     """``register`` attaches bytes written elsewhere and commits nothing a run can reach ([[LH-463]])."""
-    answer = httpx.post(f"{served.url}/v1/table/lab$registered/register", json={"location": "elsewhere"}, headers=_TOKEN)
+    answer = httpx.post(f"{served.url}/v1/table/lance_catalog$lab$registered/register", json={"location": "elsewhere"}, headers=_TOKEN)
     return answer.status_code, answer.json().get("code"), answer.json().get("detail", "")
 
 
 def _rename_into_silver(served: Served) -> tuple[int, int, str]:
     """A rename commits nothing a run can reach, so it may not move another tier's table into silver."""
-    body = {"new_table_name": "moved", "new_namespace_id": ["lab"]}
-    answer = httpx.post(f"{served.url}/v1/table/db$src/rename", json=body, headers=_TOKEN)
+    body = {"new_table_name": "moved", "new_namespace_id": ["lance_catalog", "lab"]}
+    answer = httpx.post(f"{served.url}/v1/table/lance_catalog$db$src/rename", json=body, headers=_TOKEN)
     return answer.status_code, answer.json()["code"], answer.json()["detail"]
 
 
@@ -1676,7 +1707,7 @@ def test_a_silver_commit_lands_only_when_it_names_its_run_and_inputs(
     from catalog.main import app
 
     stock = _with_source(served)
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lab"], properties={"rask.tier": "silver"}))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "lab"], properties={"rask.tier": "silver"}))
     lance.write_dataset(
         _keyed([1], ["a"]),
         namespace_client=stock,
@@ -1696,7 +1727,7 @@ def test_a_silver_commit_lands_only_when_it_names_its_run_and_inputs(
     lance.write_dataset(_keyed([2], ["b"]), namespace_client=stock, table_id=_SILVER, mode="overwrite", transaction_properties=_PROVENANCE)
     landed = lance.dataset(namespace_client=stock, table_id=_SILVER)
     assert (landed.version, _committed_properties(landed, 2)) == (2, _PROVENANCE)
-    assert [(write["version"], [ref[:3] for ref in write["inputs"]]) for write in recorder.writes] == [(2, [("db$src", 1, None)])]
+    assert [(write["version"], [ref[:3] for ref in write["inputs"]]) for write in recorder.writes] == [(2, [("lance_catalog$db$src", 1, None)])]
     # A restore brings back rows the table held, here a fragment the overwrite dropped, so it names no run.
     landed.checkout_version(1).restore()
     assert _rows(lance.dataset(namespace_client=stock, table_id=_SILVER)) == [(1, "a")]
@@ -1712,7 +1743,7 @@ def _stock_append_naming(served: Served, inputs: str) -> tuple[int, str]:
     }
     with pytest.raises(OSError):
         lance.write_dataset(_keyed([4], ["d"]), namespace_client=served.stock(), table_id=_TABLE, mode="append", transaction_properties=provenance)
-    _, code, detail = _answer_to_the_staged_commit(served, "db$t", 2)
+    _, code, detail = _answer_to_the_staged_commit(served, "lance_catalog$db$t", 2)
     return code, detail
 
 
@@ -1727,14 +1758,14 @@ def _insert_door_naming(served: Served, inputs: str) -> tuple[int, str]:
 
 
 def _a_name_holding_no_table(served: Served, stock: lance_namespace.LanceNamespace) -> list[str]:
-    return ["db", "nowhere"]
+    return ["lance_catalog", "db", "nowhere"]
 
 
 def _a_table_the_caller_cannot_read(served: Served, stock: lance_namespace.LanceNamespace) -> list[str]:
     # The input's grants are held by the uuid the catalog minted for it, which its describe answers (ADR 0173 §8).
-    source_uuid = (stock.describe_table(lance_namespace.DescribeTableRequest(id=["db", "src"])).properties or {})["rask.uuid"]
+    source_uuid = (stock.describe_table(lance_namespace.DescribeTableRequest(id=["lance_catalog", "db", "src"])).properties or {})["rask.uuid"]
     served.denied.add(f"can_read_data table:{source_uuid}")
-    return ["db", "src"]
+    return ["lance_catalog", "db", "src"]
 
 
 @pytest.mark.parametrize("commit", [pytest.param(_stock_append_naming, id="a-stock-commit"), pytest.param(_insert_door_naming, id="the-insert-door")])

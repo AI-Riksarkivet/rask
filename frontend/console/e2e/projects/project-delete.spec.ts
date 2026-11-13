@@ -238,3 +238,17 @@ test('a 404 is rendered as the no-oracle refusal it is, not as "deleted"', async
 	await expect(page).toHaveURL(/\/projects\/acme$/);
 	await expect(page.getByText(/retired —/)).toHaveCount(0);
 });
+
+test('a project git declares says so, and its delete is disabled with the reason', async ({
+	page,
+}) => {
+	// The delete door answers 403 for a project git declares (XC-213): the page names that, and keeps
+	// the control on screen, disabled, described by the reason, so nothing it offers is refused.
+	await seed(page, { 'GET /management/v1/projects/acme': { ...EMPTY_PROJECT, managed_by: 'git' } });
+	await page.goto('/projects/acme');
+	await expect(page.locator('[data-slot="badge"]', { hasText: 'Declared in git' })).toBeVisible();
+	const del = page.getByRole('button', { name: 'Delete project' });
+	await expect(del).toBeDisabled();
+	await expect(del).toHaveAccessibleDescription(/declared in git|catalog\.declared/i);
+	expect(await deletePaths(page)).toEqual([]);
+});

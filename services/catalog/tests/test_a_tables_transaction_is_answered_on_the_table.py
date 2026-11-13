@@ -10,7 +10,7 @@ AlterTransaction is all or nothing (`lance_docs/ns_catalog/spec.yaml`: "either s
 apply no action"). On pylance 13.0.0 the `dir` backend answers SUCCEEDED to a status change and to a property and applies
 neither, so the catalog declines the door with the spec's Unsupported (406) rather than pass a 200 that applied nothing.
 
-Every decision is the real model's, on a store of this test's own: alice creates `db1` and `db1$t` through the doors,
+Every decision is the real model's, on a store of this test's own: alice creates `lance_catalog$db1` and `lance_catalog$db1$t` through the doors,
 which seed her ownership, and grants bob `reader` on the table. Carol holds nothing.
 """
 
@@ -28,21 +28,21 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 UNSUPPORTED, INVALID_INPUT, PERMISSION_DENIED = 0, 13, 15
 
 #: The transaction the table's create committed, named by the version it made.
-TRANSACTION = "db1$t$1"
+TRANSACTION = "lance_catalog$db1$t$1"
 
 CANCEL = {"actions": [{"setStatusAction": {"status": "Canceled"}}]}
 
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the catalog conftest's GovernedCatalog
-    """`db1$t`, which alice owns and bob reads."""
+    """`lance_catalog$db1$t`, which alice owns and bob reads."""
     alice = governed_catalog.bearer("alice")
     client = governed_catalog.client
-    assert client.post("/v1/namespace/db1/create", json={}, headers=alice).status_code == 200
+    assert governed_catalog.create_in_the_estate("alice", "db1").status_code == 200
     rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
-    created = client.post("/v1/table/db1$t/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    created = client.post("/v1/table/lance_catalog$db1$t/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert created.status_code == 200, created.text
-    granted = client.post("/management/v1/table/db1$t/access/grant", json={"user": "dex~bob", "relation": "reader"}, headers=alice)
+    granted = client.post("/management/v1/table/lance_catalog$db1$t/access/grant", json={"user": "dex~bob", "relation": "reader"}, headers=alice)
     assert granted.status_code == 200, granted.text
     return governed_catalog
 

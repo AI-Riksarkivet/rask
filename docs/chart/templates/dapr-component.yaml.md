@@ -233,6 +233,14 @@ ADR 0138: releases an erasure's pinning tags and branches when due. Delivered to
 
 ## `{{- if .Values.dapr.enabled }}`
 
+The catalog declaration converge cron binding (from its own rationale below).
+
+### `{{- if .Values.dapr.enabled }}`
+
+ADR 0206 (XC-213): converges the estate's projects, warehouses and service grants onto `catalog.declared`, which the catalog mounts from the ConfigMap `<release>-catalog-declaration`. Delivered to POST /<name> at the catalog's pod root; name, env and route are one string. Every catalog replica ticks: the registry's conditional writes and OpenFGA's duplicate-tolerant write leave one record and one tuple, and an object two replicas made in the same tick is announced by each.
+
+## `{{- if .Values.dapr.enabled }}`
+
 The catalog manifest reclaim cron binding (from its own rationale below).
 
 ### `{{- if .Values.dapr.enabled }}`

@@ -31,12 +31,12 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 PROBE_SECONDS = 1.0
 #: How long a held store call holds before the test lets it go, well past the probe's second.
 HELD_SECONDS = 10.0
-TABLE = "/v1/table/db$t"
+TABLE = "/v1/table/lance_catalog$db$t"
 
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """The catalog on a `dir` root of its own, holding ``db$t`` at version 1 with the tag ``kept`` on it."""
+    """The catalog on a `dir` root of its own, holding ``lance_catalog$db$t`` at version 1 with the tag ``kept`` on it."""
     for key, value in {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": str(tmp_path),
@@ -48,7 +48,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     from catalog.main import app
 
     with TestClient(app) as made:
-        assert made.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert made.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
         assert made.post(f"{TABLE}/create", content=rows, headers={"content-type": ARROW_STREAM_MEDIA_TYPE}).status_code == 200
         assert made.post(f"{TABLE}/tags/create", json={"tag": "kept", "version": 1}).status_code == 200

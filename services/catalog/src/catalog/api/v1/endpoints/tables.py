@@ -65,7 +65,7 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
     TrashedUuidQuery,
     VendorDep,
-    namespace_for_top_ns,
+    namespace_for_warehouse,
 )
 from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
@@ -125,47 +125,59 @@ router = APIRouter(prefix="/v1/table", tags=["table"])
 management_router = APIRouter(prefix="/management/v1/table", tags=["table-management"])
 
 
-def _collect_tables(ns: LanceNamespace, root_tables: list[str]) -> list[str]:
-    """Every table in the tree, fully qualified, declared ones included — root tables plus each namespace's, depth-first.
+def _collect_tables(ns: LanceNamespace, warehouse_id: str) -> list[str]:
+    """Every table in warehouse ``warehouse_id``, fully qualified, declared ones included: each namespace's, depth-first.
 
     Synchronous and run in a threadpool by the caller: the native namespace client is blocking, and
-    a walk of N namespaces is N blocking calls.
-
-    ``root_tables`` arrives already holding the root rows AND every bound warehouse's tables, because
-    this walk alone is blind to a bound namespace: the shipped ``dir`` backend stores a namespace as a
-    ``__manifest`` ROW, so ``list_namespaces`` at the ROOT yields nothing (measured live: the estate
-    held media/silver/alpha/beta with registered tables while this walk returned only the two flat
-    root rows, so the lakehouse Tables registry showed 2 of 9). :func:`list_all_tables` lists those
-    through the BINDINGS registry, each through its own warehouse-rooted connection, before calling here.
+    a walk of N namespaces is N blocking calls. ``ns`` is the warehouse's own directory catalog. A namespace that
+    cannot be listed is logged and left out, so one bad namespace never empties the listing.
     """
-    found = list(root_tables)
-    stack: list[list[str]] = [[]]
+    found: list[str] = []
+    stack: list[list[str]] = [[warehouse_id]]
     seen: set[tuple[str, ...]] = set()
     while stack:
         parent = stack.pop()
         if len(parent) >= MAX_NAMESPACE_DEPTH or tuple(parent) in seen:
             continue
         seen.add(tuple(parent))
-        if parent:
-            try:
-                tables = native.call(ns, "list_tables", ListTablesRequest(id=parent, include_declared=True)).tables or []
-                found.extend(fga.canonical_object_id([*parent, name]) for name in tables)
-            except Exception:  # noqa: BLE001 — one bad namespace, not a blank registry
-                log.warning("could not list tables in %s", parent, exc_info=True)
         try:
+            tables = native.call(ns, "list_tables", ListTablesRequest(id=parent, include_declared=True)).tables or []
+            found.extend(fga.canonical_object_id([*parent, name]) for name in tables)
             children = native.call(ns, "list_namespaces", ListNamespacesRequest(id=parent)).namespaces or []
-        except Exception:  # noqa: BLE001 — a namespace we cannot list must not empty the whole list
-            log.warning("could not list namespaces under %s", parent or "<root>", exc_info=True)
+        except Exception:  # noqa: BLE001 — one bad namespace, not a blank registry
+            log.warning("could not list %s", parent, exc_info=True)
             continue
         stack.extend([*parent, child] for child in children)
-    # A bound namespace the native walk ALSO found arrives twice — dedupe, deterministically.
-    return sorted(set(found))
+    return found
+
+
+async def _tables_of_every_warehouse(request: Request, settings: Settings) -> list[str]:
+    """Every table of every warehouse the catalog serves, fully qualified (`acme$bronze$pages`), unordered.
+
+    ONE WALK PER WAREHOUSE, each through that warehouse's own directory catalog ([[LH-593]]): a collection route has no
+    `{id}` to route by, and a table's name begins with its warehouse. Concurrent, since each warehouse is an independent
+    round trip, and tolerant: a warehouse that cannot be listed (deactivated, an unreadable bucket) is logged and left
+    out, never a blank registry.
+    """
+    warehouse_ids = await run_in_threadpool(
+        partial(warehouses.served_ids, settings.registry_root, settings.storage_options(), estate=settings.estate_warehouse)
+    )
+
+    async def _tables_in(warehouse_id: str) -> list[str]:
+        return await run_in_threadpool(_collect_tables, await namespace_for_warehouse(request, settings, warehouse_id), warehouse_id)
+
+    names: list[str] = []
+    for warehouse_id, listed in zip(warehouse_ids, await asyncio.gather(*(_tables_in(w) for w in warehouse_ids), return_exceptions=True), strict=True):
+        if isinstance(listed, BaseException):
+            log.warning("could not list warehouse %s", warehouse_id, exc_info=listed)
+        else:
+            names.extend(listed)
+    return names
 
 
 @router.get("", response_model_exclude_none=True)
 async def list_all_tables(
     request: Request,
-    ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
@@ -175,58 +187,18 @@ async def list_all_tables(
     page_token: str | None = None,
     include_declared: bool = True,
 ) -> ListTablesResponse:
-    """List every table in the namespace via ``list_all_tables``; when FGA is on,
-    filter the result down to the tables the caller can ``can_read_data``.
+    """List every table of every warehouse; when FGA is on, only those the caller can ``can_read_data``.
+
     ``include_declared=false`` lists only the tables that hold a committed version, each judged by its own storage
     (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
 
-    Pagination is applied to the FINAL merged result, never to the native root call: the response is
-    root tables + bound seeds + the namespace walk, so a native-level ``limit`` would truncate only
-    the first ingredient and silently DROP tables from every page (#141 — the endpoint advertised
-    pagination and ignored it). The merged list is sorted and deduped, so the cursor is keyset-style:
-    ``page_token`` = the last name of the page, stateless and stable across pages. The walk itself
-    still costs the full estate server-side per call — acceptable at admin frequency, and honest now.
+    Pagination is applied to the merged, sorted result, never to a native call, whose ``limit`` would truncate one
+    warehouse's walk and drop tables from every page. The cursor is keyset-style: ``page_token`` is the last name of
+    the page, stateless and stable across pages. The walk costs the full estate server-side per call, acceptable at
+    admin frequency.
     """
-    req = ListTablesRequest(id=[], include_declared=True)
-    response: ListTablesResponse = await run_in_threadpool(native.call, ns, "list_all_tables", req)
-    # RECURSE INTO CHILD NAMESPACES. `list_all_tables` at the root returns only tables sitting
-    # DIRECTLY at the root — despite the name — so with the estate's own convention (tiers are
-    # namespaces: bronze$pages, silver$features, gold$catalog) this endpoint answered `{"tables":[]}`
-    # while the catalog happily reported `bronze` -> ["pages"] one call away. Both lakehouse
-    # registries (Tables and Namespaces, which derives its groups from THIS list) were therefore
-    # permanently empty the moment anyone did the right thing and put a table in a namespace.
-    #
-    # Names come back FULLY QUALIFIED (`bronze$pages`), which is what the UI already assumes — it
-    # groups on the delimiter — and what the FGA filter below resolves to each table's uuid.
-    # BOUND namespaces first, each through its OWN warehouse-rooted connection. The request-scoped
-    # `ns` on a collection route is ALWAYS the default root (get_namespace has no {id} to route by),
-    # so listing a bound seed through it structurally returns nothing — measured live as the estate
-    # listing showing 2 of 9 while every per-namespace route saw everything. `namespace_for_top_ns`
-    # is the same binding resolution the per-id routes use; a seed that fails (deactivated warehouse,
-    # unreadable bucket) degrades to a warning, never a blank registry.
-    bound = await run_in_threadpool(warehouses.list_bindings, settings.registry_root, settings.storage_options())
-
-    async def _seed_tables(top: str) -> list[str]:
-        seed_ns = await namespace_for_top_ns(request, settings, top)
-        listed = await run_in_threadpool(native.call, seed_ns, "list_tables", ListTablesRequest(id=[top], include_declared=True))
-        return [fga.canonical_object_id([top, name]) for name in (listed.tables or [])]
-
-    # CONCURRENT, not one seed at a time (catalog-api-11). Each bound warehouse is an independent
-    # round trip whose result is only collected — nothing between two of them makes the order matter —
-    # and this runs on the registry page every render, so a sequential walk made the estate listing
-    # cost N round trips in N tenants. `gather(return_exceptions=True)` keeps the per-seed tolerance
-    # exactly as it was: one unreachable warehouse degrades to a warning, never a blank registry.
-    # Bounded by anyio's own threadpool limiter, which every `run_in_threadpool` here shares.
-    for top, listed_or_error in zip(
-        [b["top_ns"] for b in bound],
-        await asyncio.gather(*(_seed_tables(b["top_ns"]) for b in bound), return_exceptions=True),
-        strict=True,
-    ):
-        if isinstance(listed_or_error, BaseException):
-            log.warning("could not list bound namespace %s", top, exc_info=listed_or_error)
-        else:
-            response.tables.extend(listed_or_error)
-    candidates = [(name, parse_identifier(name)) for name in await run_in_threadpool(_collect_tables, ns, response.tables)]
+    response = ListTablesResponse(tables=[])
+    candidates = [(name, parse_identifier(name)) for name in sorted(await _tables_of_every_warehouse(request, settings))]
     if not include_declared:
         candidates = await listings.holding_a_version(resolver, so, candidates)
     # With FGA on, return only the tables the caller can read, each judged on the object its name resolves to; pages
@@ -1133,7 +1105,7 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
     keeps the event it was given.
 
     THE BACKEND RESOLVES IT AGAINST THE RIGHT ROOT, which is why this asks rather than joining against a
-    configured one: a warehouse-bound table belongs to its warehouse's root, and a caller-side join would
+    configured one: a table belongs to its warehouse's root, and a caller-side join would
     be wrong for exactly the tenant tables that matter.
 
     NEVER FAILS THE REGISTER. The registration is already committed, so an unreachable describe or an
@@ -1714,14 +1686,12 @@ async def rename_table(
     await fga_deps.require_table_unprotected(settings, table, force=force)
     # A rename can MINT an orphan as surely as a create, so its destination's namespace must exist. Same rule, same
     # door — checked before the native call, so a refused rename leaves the source exactly where it was.
+    fga_deps.require_rename_within_its_warehouse(segments, new_segments)
     await fga_deps.require_parent_exists(ns, "table", new_segments)
     # A rename mints a name in the destination's namespace, so the caller must be one who may put a table there, asked
     # BEFORE the (destructive, relocating) rename. (authorize already asked the source's rung.)
     await fga_deps.require_rename_destination(client, settings, token, resolver, source=segments, destination=new_segments)
-    # The grants stay on the table's uuid and so follow it, so each is judged as a grant on the destination before
-    # anything moves.
     renamed = fga.table_object(table.require_uuid())
-    await fga_deps.require_grants_may_follow(client, settings, obj=renamed, source=segments, destination=new_segments)
     # A rename moves no grant ([[LH-524]]): every grant is held by the table's uuid, which the rename keeps. Into
     # another namespace its parent and child edges move with it, and those are all it writes in OpenFGA.
     reparent = await fga_deps.parent_edge_mover(client, settings, token, resolver, obj=renamed, source=segments, destination=new_segments)

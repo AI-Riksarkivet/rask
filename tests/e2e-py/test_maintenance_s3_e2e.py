@@ -37,7 +37,7 @@ that variable names the shared catalog bucket the CAS suite uses.
 **Scope, stated plainly.** The warehouse registry records are written as JSON directly to the control
 root rather than through ``POST /management/v1/warehouses``. That contradicts seed_estate.py's "drive the real
 doors" rule and is a deliberate bound: what is under test is the READER
-(``warehouse_records.namespace_warehouse``, and the listing the scan's bucket set is built on), not catalog
+(``warehouse_records.warehouse_record``, and the listing the scan's bucket set is built on), not catalog
 provisioning — which ``test_warehouses_e2e.py`` already drives, and which would re-gate this suite
 behind a deployed catalog and two tokens. This suite proves nothing about warehouse creation.
 
@@ -65,6 +65,7 @@ from liveness import skip_unless_live
 from pydantic import BaseModel, Field
 from throwaway_rustfs import ThrowawayStore
 
+from catalog.services.warehouses import ensure_catalog_row
 from lakehouse import location_claims
 from lakehouse.base_refs import normalise
 from lakehouse.maintenance_due import read_due
@@ -156,7 +157,8 @@ def estate(s3: Any, rustfs_store: ThrowawayStore) -> Iterator[Estate]:
         reg_uri=f"s3://{names['reg']}/regtbl",
         deact_uri=f"s3://{names['deact']}/deacttbl",
     )
-    options = _settings_for(built, rustfs_store).storage_options()
+    pinned = _settings_for(built, rustfs_store)
+    options = pinned.storage_options()
 
     # THREE separate appends, so Lance's compaction planner has real work to list on object storage; a single-fragment
     # dataset would make the due evaluation a no-op and every assertion below vacuous. The namespace and the table carry
@@ -189,30 +191,27 @@ def estate(s3: Any, rustfs_store: ThrowawayStore) -> Iterator[Estate]:
         lance.write_dataset(_rows(), uri, storage_options=options.in_clear())
 
     # Each table a pass is given is one the catalog names: a row in its own bucket's `__manifest`, under a namespace carrying
-    # its uuid, and its location's claim on the control root recording the table's. A warehouse's tables are under a top
-    # namespace bound to it, one warehouse per top namespace, as the catalog binds them.
+    # its uuid, and its location's claim on the control root recording the table's. Every name begins with its warehouse
+    # ([[LH-593]]): the control bucket's are the estate's own warehouse's, and each registered bucket's are its warehouse's,
+    # each root holding its warehouse's row as the catalog gives it one.
     claims = location_claims.ClaimStore(control_root=f"s3://{built.ctl}", storage_options=options)
-    for bucket, uri, top in ((built.ctl, built.plain_uri, "e2e"), (built.reg, built.reg_uri, "e2e-reg"), (built.deact, built.deact_uri, "e2e-deact")):
+    placed = ((built.ctl, built.plain_uri, pinned.estate_warehouse), (built.reg, built.reg_uri, "wh-reg"), (built.deact, built.deact_uri, "wh-deact"))
+    for bucket, uri, warehouse in placed:
         name = uri.rsplit("/", 1)[-1]
         namespace = connect("dir", {"root": f"s3://{bucket}", **{f"storage.{key}": value for key, value in options.in_clear().items()}})
-        namespace.create_namespace(CreateNamespaceRequest(id=[top], properties={UUID_PROPERTY: str(uuid.uuid4())}))
-        namespace.register_table(RegisterTableRequest(id=[top, name], location=name))
+        ensure_catalog_row(namespace, warehouse)
+        namespace.create_namespace(CreateNamespaceRequest(id=[warehouse, "e2e"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
+        namespace.register_table(RegisterTableRequest(id=[warehouse, "e2e", name], location=name))
         built.uuids[uri] = str(uuid.uuid4())
-        location_claims.take(claims, normalise(uri), f"{top}${name}", [top, name], is_gone=lambda _claim: False, uuid=built.uuids[uri])
+        location_claims.take(claims, normalise(uri), f"{warehouse}$e2e${name}", [warehouse, "e2e", name], is_gone=lambda _claim: False, uuid=built.uuids[uri])
 
-    # The warehouse REGISTRY, on the control root — the record shapes `catalog/services/warehouses.py` writes: each
-    # warehouse, and the binding of the top namespace its tables are under, which `warehouse_records.namespace_warehouse`
-    # reads. `reg` is active, `deact` quarantined.
-    for wid, bucket, status, top in (("wh-reg", built.reg, "active", "e2e-reg"), ("wh-deact", built.deact, "deactivated", "e2e-deact")):
+    # The warehouse REGISTRY, on the control root — the record shape `catalog/services/warehouses.py` writes, which a pass
+    # reads by a table's first segment (`warehouse_records.warehouse_record`). `reg` is active, `deact` quarantined.
+    for wid, bucket, status in (("wh-reg", built.reg, "active"), ("wh-deact", built.deact, "deactivated")):
         s3.put_object(
             Bucket=built.ctl,
             Key=f"_warehouses/{wid}.json",
             Body=json.dumps({"id": wid, "project": "e2e-maint", "bucket": bucket, "status": status}).encode(),
-        )
-        s3.put_object(
-            Bucket=built.ctl,
-            Key=f"_warehouses/bindings/{top}.json",
-            Body=json.dumps({"top_ns": top, "warehouse_id": wid, "root_uri": f"s3://{bucket}"}).encode(),
         )
 
     yield built
@@ -232,7 +231,6 @@ def _settings_for(estate: Estate, store: ThrowawayStore) -> MaintenanceSettings:
         s3_extra_buckets=estate.extra,
         s3_region="us-east-1",
         older_than_days=1,
-        warehouses_enabled=True,
     )
 
 
@@ -305,7 +303,7 @@ def test_a_registry_only_buckets_table_is_passed_and_a_deactivated_ones_is_not(
 ) -> None:
     """#81's residual, closed against real storage.
 
-    `reg` is named by NO config — only by a warehouse record the pass reads at runtime, through its namespace's binding,
+    `reg` is named by NO config — only by a warehouse record the pass reads at runtime, by its table's first segment,
     which is the whole point: a bucket is created by an API call, so a config-time list goes stale by construction.
     `deact` is named by a record too, and must be left alone until its recheck: deactivate is offboarding step one, and
     reclaiming a quarantined tenant's versions would leave maintenance as the one process still deleting data the estate

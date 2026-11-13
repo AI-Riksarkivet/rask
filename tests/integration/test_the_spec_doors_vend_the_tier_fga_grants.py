@@ -68,7 +68,7 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     client.app.dependency_overrides[get_settings] = _auth_settings
     claims = table_claims.claim_store(_auth_settings())
     client.app.dependency_overrides[get_resolver] = lambda: NamedResolver(tables=lambda segments: table_claims.resolve(fake_ns, claims, segments))
-    claim_described("db$t")
+    claim_described("lance_catalog$db$t")
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(
         principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
@@ -136,7 +136,7 @@ def test_a_spec_door_vends_the_highest_tier_fga_grants(
     fake_ns.declare_table.return_value = DeclareTableResponse(location=fake_ns.describe_table.return_value.location)
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
-        response = client.post(f"/v1/table/db$t/{door}", json=body, headers=_HEADERS)
+        response = client.post(f"/v1/table/lance_catalog$db$t/{door}", json=body, headers=_HEADERS)
 
     if tier == 403:
         assert response.status_code == 403, response.text
@@ -171,7 +171,7 @@ def test_a_vend_that_fails_fails_only_a_caller_that_asked(
     fake_ns.declare_table.return_value = DeclareTableResponse(location=fake_ns.describe_table.return_value.location)
     vendor.vend.side_effect = EndpointConnectionError(endpoint_url="http://sts.unreachable")
 
-    response = client.post(f"/v1/table/db$t/{door}", json=body, headers=_HEADERS)
+    response = client.post(f"/v1/table/lance_catalog$db$t/{door}", json=body, headers=_HEADERS)
 
     assert response.status_code == status, response.text
     if status == 200:

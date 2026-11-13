@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 INVALID_INPUT = 13
-CREATE = "/v1/table/db$t/create"
+CREATE = "/v1/table/lance_catalog$db$t/create"
 KEY = "3f2b8c1a-7d4e-4f6a-9b0c-5e1d2a3b4c5d"
 #: A run the spec Context names whole: its id, a UUID, and its job's namespace and name.
 _RUN = {"x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", "x-rask-job-namespace": "pipelines", "x-rask-job": "nightly"}
@@ -78,7 +78,7 @@ _OFFSETS = struct.pack("<iii", 0, 5, 10)
     ],
 )
 def test_a_keyed_shape_refusal_lets_the_corrected_retry_run(real_ns_client: TestClient, malformed: str, headers: dict[str, str], refusal: str) -> None:
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     keyed = {**ARROW_STREAM, "Idempotency-Key": KEY}
 
     refused = real_ns_client.post(malformed, content=_rows(), headers={**keyed, **headers})
@@ -89,7 +89,7 @@ def test_a_keyed_shape_refusal_lets_the_corrected_retry_run(real_ns_client: Test
     retried = real_ns_client.post(CREATE, content=_rows(), headers=keyed)
 
     assert retried.status_code == 200, f"the corrected retry under the same key was refused: {retried.status_code} {retried.text[:300]}"
-    counted = real_ns_client.post("/v1/table/db$t/count_rows", json={})
+    counted = real_ns_client.post("/v1/table/lance_catalog$db$t/count_rows", json={})
     assert (counted.status_code, counted.text) == (200, "3"), counted.text
 
 
@@ -116,7 +116,7 @@ def test_a_keyed_shape_refusal_lets_the_corrected_retry_run(real_ns_client: Test
     ],
 )
 def test_a_keyed_body_that_is_not_an_arrow_stream_lets_the_corrected_retry_run(real_ns_client: TestClient, body: bytes) -> None:
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     keyed = {**ARROW_STREAM, "Idempotency-Key": KEY}
 
     refused = real_ns_client.post(CREATE, content=body, headers=keyed)
@@ -127,7 +127,7 @@ def test_a_keyed_body_that_is_not_an_arrow_stream_lets_the_corrected_retry_run(r
     retried = real_ns_client.post(CREATE, content=_rows(), headers=keyed)
 
     assert retried.status_code == 200, f"the corrected retry under the same key was refused: {retried.status_code} {retried.text[:300]}"
-    counted = real_ns_client.post("/v1/table/db$t/count_rows", json={})
+    counted = real_ns_client.post("/v1/table/lance_catalog$db$t/count_rows", json={})
     assert (counted.status_code, counted.text) == (200, "3"), counted.text
 
 
@@ -138,7 +138,7 @@ def test_a_keyed_create_refused_after_its_claim_lets_the_corrected_retry_run(rea
 
     refused = real_ns_client.post(CREATE, content=_rows(), headers=keyed)
     assert (refused.status_code, refused.json().get("code")) == (404, 1), refused.text
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
     retried = real_ns_client.post(CREATE, content=_rows(), headers=keyed)
 
@@ -161,10 +161,10 @@ def test_a_release_the_store_fails_never_answers_over_the_refusal(real_ns_client
 def test_string_properties_still_create(real_ns_client: TestClient) -> None:
     """The positive half: a spec-shaped map passes the shape check and lands on the table, in its schema metadata
     ([[LH-503]]): the declaration that places the table keeps no properties ([[LH-520]])."""
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
     created = real_ns_client.post(f'{CREATE}?properties={{"team":"eng"}}', content=_rows(), headers=ARROW_STREAM)
 
     assert created.status_code == 200, created.text
-    described = real_ns_client.post("/v1/table/db$t/describe", json={"load_detailed_metadata": True}).json()
+    described = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={"load_detailed_metadata": True}).json()
     assert (described.get("metadata") or {}).get("team") == "eng", described

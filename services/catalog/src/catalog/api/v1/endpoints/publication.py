@@ -77,10 +77,10 @@ promotions_router = APIRouter(prefix="/management/v1/promotions", tags=["publica
 
 
 class ProjectSource(Protocol):
-    """The one method `publication_extra` needs. `LineageEmitter` satisfies it and carries the
-    request-scoped binding cache; demanding the whole emitter would ask for six more it does not use."""
+    """The one method `publication_extra` needs. `LineageEmitter` satisfies it; demanding the whole emitter would ask
+    for six more it does not use."""
 
-    async def project_for(self, top_ns: str) -> str | None: ...
+    async def project_for(self, warehouse_id: str) -> str | None: ...
 
 
 #: NO LOCAL COPY OF "is this a person" LIVES HERE. `catalog.core.lineage_emit.is_person_subject` is the
@@ -158,11 +158,10 @@ async def publication_extra(
 ) -> dict[str, Any]:
     """The `table_published` payload: the version RANGE, the vended location, and the TENANT.
 
-    The tenant is here because the catalog is the only component that can answer it — the binding
-    (namespace → warehouse → project) is a registry read, and `CONTROL_ID_PATTERN` permits `-` inside a
-    project id, so no string rule can recover `acme` from `acme-bronze`: a consumer that took segment 0
-    would get the namespace instead. Resolved through the emitter so this names the
-    same tenant the lineage facet does, off the same request-scoped cache.
+    The tenant is here because the catalog is the only component that can answer it: a name's first segment is its
+    warehouse ([[LH-593]]), and the warehouse's project is a registry read, since `CONTROL_ID_PATTERN` permits `-`
+    inside a project id and no string rule can recover `acme` from warehouse `acme-bronze`. Resolved through the emitter
+    so this names the same tenant the lineage facet does.
 
     `project` is OMITTED rather than empty when unresolved: a single-tenant estate has no tenant, and
     a consumer must be able to tell that from one named "". Resolution cannot raise
@@ -184,24 +183,7 @@ async def publication_extra(
     if originator:
         extra["originator"] = originator
     project = await lineage.project_for(segments[0]) if segments else None
-    # STAMPED ONLY WHEN THE ID ACTUALLY CARRIES THAT TENANT ([[LH-137]], owner ruling 2026-09-21).
-    # `project_for_namespace` walks binding -> warehouse -> project and does no prefix check, by
-    # design — it is a registry read. So a TENANT-LESS lane namespace like `silver`, bound to a
-    # warehouse that belongs to a project, resolves to that project. Stamping it there is not a
-    # cosmetic error: a consumer that reads this field verbatim and composes the next tier as
-    # `<project>-<dataset>` targets `<project>-gold$catalog`, a table nobody wrote, so every promotion
-    # out of a tenant-less namespace fails.
-    #
-    # A CHECK, NOT A PARSE, which is why this is sound where a string rule is not. This module's
-    # docstring records that `acme-bronze` cannot be DECOMPOSED into a project, because
-    # `CONTROL_ID_PATTERN` permits `-` inside a project id. It can still be verified against a project the
-    # registry already answered: a project-qualified name joins with `-` and nothing else, so a qualified
-    # namespace always starts with `f"{project}-"`. Nothing here has to choose between `acme` and
-    # `acme-eu` — the registry chose, and this only confirms the id agrees.
-    #
-    # THE LOOKUP ABOVE IS DELIBERATELY UNGATED: `resolve_effective_gate` resolves through the same
-    # request-scoped cache, so gating the call rather than the emit would weaken a warehouse's own gate.
-    if project and segments[0].startswith(f"{project}-"):
+    if project:
         extra["project"] = project
     return extra
 
@@ -209,9 +191,9 @@ async def publication_extra(
 log = logging.getLogger(__name__)
 
 
-async def _project_from_binding(settings: Settings, so: StorageOptions, top_ns: str) -> str | None:
-    """The tenant from the warehouse binding, or ``None`` for a namespace bound to no project, whose publish the request's
-    own gate governs.
+async def _project_of_warehouse(settings: Settings, so: StorageOptions, warehouse_id: str) -> str | None:
+    """The tenant owning the warehouse a table is in, or ``None`` for the estate's own warehouse, whose publish the
+    request's own gate governs.
 
     A REGISTRY THAT CANNOT BE READ REFUSES THE PUBLISH ([[LH-572]]): read as no tenant, the declaration the project made
     would not be consulted, and the request's own gate, the weakest a writer can name, would publish in its place. The
@@ -219,22 +201,16 @@ async def _project_from_binding(settings: Settings, so: StorageOptions, top_ns: 
     tenant decides which gate a version is judged by.
 
     Raises:
-        ServiceUnavailableError: The store did not answer the read of the binding or the warehouse record it names.
-        InternalError: The binding or the warehouse record is there and cannot be read as one.
+        ServiceUnavailableError: The store did not answer the read of the warehouse record.
+        InternalError: The warehouse record is there and cannot be read as one.
     """
     try:
-        return await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, so, top_ns)
+        return await run_in_threadpool(warehouses.project_of, settings.registry_root, so, warehouse_id)
     except (OSError, ValueError) as exc:
-        raise store_refusal(exc, reading=f"reading the project namespace {top_ns!r} is bound to", so="its declared gate cannot be found") from exc
+        raise store_refusal(exc, reading=f"reading the project warehouse {warehouse_id!r} belongs to", so="its declared gate cannot be found") from exc
 
 
-async def resolve_effective_gate(
-    settings: Settings,
-    so: StorageOptions,
-    lineage: ProjectSource,
-    segments: list[str],
-    body: PublishRequest,
-) -> publication.EffectiveGate:
+async def resolve_effective_gate(settings: Settings, so: StorageOptions, segments: list[str], body: PublishRequest) -> publication.EffectiveGate:
     """The gate this publish runs under: the project's DECLARED record where one exists, else the request.
 
     THE DECLARATION IS CONSULTED HERE BECAUSE THIS DOOR IS THE ONE EVERY WRITER SHARES. A writer —
@@ -242,27 +218,12 @@ async def resolve_effective_gate(
     alone gave the least-trusted writer the weakest gate. The composition rules and why the two fields
     compose differently live on `publication.EffectiveGate`.
 
-    The project comes from the same request-scoped binding `publication_extra` names the tenant with,
-    for the same reason: `CONTROL_ID_PATTERN` permits `-` inside a project id, so no string rule recovers
-    `acme` from `acme-bronze`, and a declaration is keyed by project. A namespace bound to no project leaves the request
-    governing, since there is no declaration to find without a project id; a binding or a declaration that cannot be
-    read refuses ([[LH-572]]).
+    The project is the table's warehouse's, read from the registry and never from the lineage emitter: turning
+    telemetry off must not turn a governance control off. A table in the estate's own warehouse leaves the request
+    governing, since a declaration is keyed by project; a warehouse record or a declaration that cannot be read
+    refuses ([[LH-572]]).
     """
-    # THE EMITTER FIRST, THE BINDING AS THE FLOOR — and the floor is the fix.
-    #
-    # This read the emitter alone. With `LANCE_LINEAGE_EMIT_ENABLED=false` that is a `NoopEmitter` whose
-    # `project_for` returns None unconditionally, so no project resolved, no declaration loaded, and
-    # every project's declared gate silently did not apply while publish still answered 200. Measured by
-    # flipping that one variable. Turning off telemetry must not turn off a governance control.
-    #
-    # The emitter is kept as the fast path rather than replaced, because its resolver is
-    # `project_for_namespace` PLUS the request-scoped binding cache (`main.py::_resolve_project`) — so
-    # reading the registry directly would answer identically and pay a warehouse read on every publish
-    # of a hot namespace. The fallback runs only when the emitter cannot answer, which is exactly the
-    # emit-off case and a cold cache.
-    project = (await lineage.project_for(segments[0]) if segments else None) or None
-    if project is None and segments:
-        project = await _project_from_binding(settings, so, segments[0])
+    project = await _project_of_warehouse(settings, so, segments[0]) if segments else None
     spec = await run_in_threadpool(publication.declared_gate, settings.registry_root, so, project or "")
     return publication.effective_gate(spec, key_column=body.key_column, required_columns=body.required_columns)
 
@@ -313,7 +274,7 @@ async def publish_table(
     # THE GATE THIS PUBLISH RUNS, composed before either path: the project's DECLARED record where one
     # exists, the request's own values where none does. Resolved here rather than inside `publish` so
     # the gate_only QUESTION and the publish ACT cannot end up under different policy.
-    gate = await resolve_effective_gate(settings, so, lineage, segments, body)
+    gate = await resolve_effective_gate(settings, so, segments, body)
     if body.gate_only:
         # A QUESTION: the same assertions on the same version, tag untouched, no hold and no control
         # event. It returns before the publish so nothing here can advance `published` or open a hold by

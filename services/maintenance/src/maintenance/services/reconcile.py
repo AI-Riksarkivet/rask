@@ -12,21 +12,21 @@ checks that they do:
   held three such projects), and it can hold none at all for one that exists. Maintenance holds no OpenFGA credential,
   since one could write any tuple ([[XC-084]]): it reads the store's grant census through the catalog
   (``GET /management/v1/grants/census``).
-* **The registries** — JSON records on the control root (``_projects/``, ``_warehouses/``,
-  ``_warehouses/bindings/``) — say WHAT EXISTS. Since Decision 1 this is the definition of existence.
+* **The registries** — JSON records on the control root (``_projects/``, ``_warehouses/``) — say WHAT
+  EXISTS. Since Decision 1 this is the definition of existence.
 * **Object storage** holds the BYTES. A warehouse delete removes the record; the bucket survives unless
   someone explicitly asked to purge it, so a bucket can outlive the record that named it.
 
-Seven detectors, one per drift category, each independently testable and each degrading on its own:
-a category whose source is unreachable reports UNAVAILABLE **with the reason** while the other six
-still report. A drift report that 500s on one bad store tells you nothing about the other six. Nor is
+One detector per drift category, each independently testable and each degrading on its own: a
+category whose source is unreachable reports UNAVAILABLE **with the reason** while the others still
+report. A drift report that 500s on one bad store tells you nothing about the others. Nor is
 anything capped silently — a truncated scan that reads as "all clear" is worse than no scan, so every
 page ceiling, unreadable record and paginated listing lands in :attr:`ReconcileReport.incomplete`.
 
 Why the registries are re-read here rather than imported from the catalog: maintenance has no catalog
 client BY DESIGN, and declaring one would put the whole catalog closure in the maintenance image, because
 `uv sync --package` installs a member's declared closure. This is the same catalog↔maintenance shape as
-:mod:`lakehouse.maintenance_policies` and :mod:`lakehouse.warehouse_registry`:
+:mod:`lakehouse.maintenance_policies` and :mod:`lakehouse.warehouse_records`:
 one service writes the records, another reads them straight off the bucket. The record layout is the
 shared contract, and the reader below is deliberately the *tolerant* half of it — a record it cannot
 parse is reported as an incomplete scan, never allowed to void a category.
@@ -66,18 +66,17 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-#: The registry prefixes, byte-identical to what the catalog writes them at. Bindings live UNDER the
+#: The registry prefixes, byte-identical to what the catalog writes them at. The bucket claims live UNDER the
 #: warehouse prefix, so every warehouse listing here is non-recursive (a recursive one would read the
-#: bindings as malformed warehouse records).
+#: claims as malformed warehouse records).
 _PROJECTS_PREFIX = control_prefixes.PROJECTS
 _WAREHOUSES_PREFIX = control_prefixes.WAREHOUSES
-_BINDINGS_PREFIX = f"{_WAREHOUSES_PREFIX}/bindings"
 #: Trash records are keyed `<kind>/<id>` UNDER this prefix, so the listing is recursive by nature.
 _TRASH_PREFIX = control_prefixes.TRASH
 
 #: The namespace spec's own object index, one per root: ``object_id``/``object_type`` rows recording
 #: every namespace and table. It is the ONLY place a namespace exists — namespaces are not directories
-#: — so the unbound-namespace scan reads this rather than listing prefixes.
+#: — so the unreachable-namespace scan reads this rather than listing prefixes.
 #: Public because the #79 purge re-reads the SAME index to re-check liveness before it deletes anything.
 #: One constant rather than two copies: a purge looking at the wrong path would find no live objects and
 #: happily destroy every one of them.
@@ -91,11 +90,10 @@ CATEGORIES: tuple[str, ...] = (
     "ghost_projects",
     "ghost_warehouses",
     "unreferenced_projects",
-    "unbound_namespaces",
+    "unreachable_namespaces",
     "orphan_buckets",
     "orphaned_trash",
     "ghost_tables",
-    "dangling_bindings",
     "ungoverned_tables",
     "unregistered_datasets",
     "absent_datasets",
@@ -107,14 +105,11 @@ CATEGORIES: tuple[str, ...] = (
 #: THE GATE'S JOB IS TO PROVE THE STORAGE STATE IS UNDERSTOOD before the purge deletes expired trash
 #: bytes. None of these is a storage fact, and none can change which bytes the purge touches:
 #:
-#:   * `unbound_namespaces` — a top-level namespace with no warehouse BINDING record. It is a registry
-#:     gap about routing, not about what exists on disk. No endpoint in the product binds a legacy
-#:     namespace, so gating on it did not make the purge safer — it made the gate permanently
-#:     unsatisfiable. MEASURED 2026-08-16: the estate sat at 5 with every gating category at zero, so
-#:     `report_is_clean` could never return None by any action an operator could take. An unreachable
-#:     gate is not a safety property; it is a feature that cannot be switched on, and it hides the
-#:     categories that DO matter behind a total that never falls. Adding a door is still the strictly
-#:     better fix — the drift is real — and it WRITES a registry record for live data.
+#:   * `unreachable_namespaces` — a top-level namespace row on a root that is not its warehouse's, so no
+#:     name reaches it ([[LH-593]]). It is a fact about naming, not about which bytes exist, and no door
+#:     removes or moves such a row, so gating on it would make the gate unsatisfiable by any action an
+#:     operator could take: an unreachable gate is not a safety property, and it hides the categories that
+#:     DO matter behind a total that never falls.
 #:   * `ungoverned_tables` — a catalog table carrying NO authorization tuples. Same test as the one
 #:     above and the same answer: it is an AUTHZ fact rather than a storage one (the bytes are intact
 #:     and the purge cannot touch them differently for it), and no endpoint clears it directly. Gating
@@ -125,7 +120,7 @@ CATEGORIES: tuple[str, ...] = (
 #:     bytes, which are not the bytes a live record fails to find.
 NON_GATING_CATEGORIES: frozenset[str] = frozenset(
     {
-        "unbound_namespaces",
+        "unreachable_namespaces",
         "ungoverned_tables",
         "orphaned_trash",
         "ghost_tables",
@@ -174,12 +169,16 @@ class UnreferencedProject(BaseModel):
     id: str
 
 
-class UnboundNamespace(BaseModel):
-    """A top-level namespace on the SHARED default root with no warehouse binding (pre-rule legacy)."""
+class UnreachableNamespace(BaseModel):
+    """A top-level namespace row on a root whose warehouse it does not name, so no name reaches it ([[LH-593]]).
+
+    A name's first segment is its warehouse, and a warehouse's names are served from its own root, so the only top-level
+    rows a root's ``__manifest`` may hold are the ids of the warehouses served from it (the estate's own on the estate's
+    root). Any other row, and everything recorded beneath it, is on disk under a name the catalog routes to another root.
+    """
 
     namespace: str
-    #: The root it was found on — the shared default bucket, which is exactly where an unbound
-    #: namespace silently resolves to.
+    #: The root whose manifest holds the row: which bucket an operator goes and looks in.
     root: str
 
 
@@ -248,13 +247,6 @@ class OrphanedTrash(BaseModel):
     location: str
 
 
-class DanglingBinding(BaseModel):
-    """A namespace→warehouse binding pointing at a warehouse_id with no record."""
-
-    top_ns: str
-    warehouse_id: str
-
-
 class CategoryUnavailable(BaseModel):
     """A category that could NOT be checked because a store it needs was unreachable."""
 
@@ -263,10 +255,9 @@ class CategoryUnavailable(BaseModel):
 
 
 class CategorySkipped(BaseModel):
-    """A category deliberately not checked, with why: ``unbound_namespaces`` while warehouses are off, where the rule
-    does not apply, and the two the storage walk finds while the run walks no storage (the hourly audit). Kept out of
-    ``counts``, so a category nobody checked never reads as a zero. A skipped walk gates the purge
-    (:data:`WALK_CATEGORIES`); ``unbound_namespaces`` does not."""
+    """A category deliberately not checked, with why: the two the storage walk finds while the run walks no storage
+    (the hourly audit). Kept out of ``counts``, so a category nobody checked never reads as a zero. A skipped walk gates
+    the purge (:data:`WALK_CATEGORIES`)."""
 
     category: str
     reason: str
@@ -294,7 +285,7 @@ class ReconcileReport(BaseModel):
     ghost_projects: list[GhostObject] = Field(default_factory=list)
     ghost_warehouses: list[GhostObject] = Field(default_factory=list)
     unreferenced_projects: list[UnreferencedProject] = Field(default_factory=list)
-    unbound_namespaces: list[UnboundNamespace] = Field(default_factory=list)
+    unreachable_namespaces: list[UnreachableNamespace] = Field(default_factory=list)
     ungoverned_tables: list[UngovernedTable] = Field(default_factory=list)
     #: The INVERSE of `ungoverned_tables`: tuples on a table neither the catalog nor the trash names.
     #: Reported, never gating.
@@ -302,7 +293,6 @@ class ReconcileReport(BaseModel):
     orphan_buckets: list[OrphanBucket] = Field(default_factory=list)
     #: Trash naming a root nothing maintains. Reported, never gating — see `NON_GATING_CATEGORIES`.
     orphaned_trash: list[OrphanedTrash] = Field(default_factory=list)
-    dangling_bindings: list[DanglingBinding] = Field(default_factory=list)
     #: Datasets on storage no catalog record names, from the daily walk.
     unregistered_datasets: list[UnregisteredDataset] = Field(default_factory=list)
     #: The INVERSE of `unregistered_datasets`: a catalog record whose location holds no bytes
@@ -354,7 +344,7 @@ def _list_json_records(
 ) -> tuple[list[dict[str, str]], list[str]]:
     """Every readable JSON record directly under ``<root>/<prefix>``, plus a reason per record SKIPPED.
 
-    Non-recursive, so ``_warehouses`` does not swallow ``_warehouses/bindings``. Per-record tolerance
+    Non-recursive, so ``_warehouses`` does not swallow ``_warehouses/bucket-claims``. Per-record tolerance
     matches the catalog's own listings — but here a skip is not merely survived, it is REPORTED: a
     record this cannot read is a tenant it cannot see, and a category computed without it may name a
     live object as drift.
@@ -406,9 +396,8 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions) -> list[st
     (a child is recorded as ``parent<delimiter>child``). A root with no manifest yet is a fresh estate,
     not an error: it yields ``[]``.
 
-    This reads the SHARED DEFAULT root deliberately: a warehouse-BOUND namespace is created against its
-    warehouse's own bucket and is recorded in THAT bucket's manifest, so the shared root's manifest is
-    precisely where an unbound one lands.
+    Each warehouse's names are recorded in its own root's manifest under its id ([[LH-593]]), so a root's top-level
+    rows are the warehouses served from it, and any other is a row no name reaches.
     """
     fs, base = fs_and_base(root, storage_options)
     # Probe first so the fresh-estate case never rides an exception: an absent dataset raises, and a
@@ -483,14 +472,12 @@ def _tables_across(roots: list[str], storage_options: StorageOptions) -> tuple[l
 def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptions) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """``(namespace, root)`` pairs across EVERY root, plus the roots that could not be read (F3.3).
 
-    The scan read exactly ONE root — the shared default bucket — while a warehouse-enabled estate puts
-    each tenant's namespaces in that tenant's OWN bucket. So the whole per-warehouse namespace layer
-    was outside the reconciler's field of view: not merely unrepaired, UNREPORTED, and a zero in a
-    drift report is read as "checked and clean". That report is also the gate `purge_expired_trash`
-    consults before deleting anything, so the blind spot let it certify an estate it had never looked at.
+    Each tenant's namespaces are in that tenant's OWN root, so a scan of one root leaves every other warehouse's
+    namespace layer outside the reconciler's field of view: not merely unrepaired, UNREPORTED, and a zero in a drift
+    report is read as "checked and clean".
 
     The root travels WITH each namespace rather than being applied to the batch, because
-    `UnboundNamespace.root` is what tells an operator which bucket to go and look in — and with more
+    `UnreachableNamespace.root` is what tells an operator which bucket to go and look in — and with more
     than one root in play, a batch-level root would be wrong for every finding but one.
 
     PER-ROOT TOLERANCE, and the alternative was measured and rejected. Raising on the first unreadable
@@ -641,9 +628,21 @@ def _ungoverned_tables(tables: Iterable[tuple[str, str]], uuids: Mapping[str, st
     )
 
 
-def _unbound_namespaces(namespaces: Iterable[tuple[str, str]], bound: set[str]) -> list[UnboundNamespace]:
-    """Top-level namespaces that no binding claims, each carrying the root it was actually found on."""
-    return [UnboundNamespace(namespace=name, root=root) for name, root in sorted(namespaces) if name not in bound]
+def _unreachable_namespaces(namespaces: Iterable[tuple[str, str]], served: Mapping[str, set[str]]) -> list[UnreachableNamespace]:
+    """Top-level namespace rows naming no warehouse their root serves, each carrying the root it was found on."""
+    return [UnreachableNamespace(namespace=name, root=root) for name, root in sorted(namespaces) if name not in served.get(root, set())]
+
+
+def served_by_root(warehouse_records: Iterable[Mapping[str, str]], *, namespace_root: str, estate_warehouse: str) -> dict[str, set[str]]:
+    """The warehouses each root serves: the estate's own on the estate's root, and each registered one on its ``root_uri``.
+
+    Several warehouses may share a root, so each root maps to a set.
+    """
+    served: dict[str, set[str]] = {namespace_root: {estate_warehouse}}
+    for record in warehouse_records:
+        if root := str(record.get("root_uri") or ""):
+            served.setdefault(root, set()).add(str(record["id"]))
+    return served
 
 
 def _orphaned_trash(records: list[dict[str, Any]], *, claimed: set[str]) -> list[OrphanedTrash]:
@@ -677,14 +676,6 @@ def _orphan_buckets(buckets: Iterable[str], *, claimed: set[str], platform: set[
     return [OrphanBucket(bucket=bucket) for bucket in sorted(buckets) if bucket not in claimed and bucket not in platform]
 
 
-def _dangling_bindings(bindings: Iterable[Mapping[str, str]], warehouse_ids: set[str]) -> list[DanglingBinding]:
-    """Bindings pointing at a warehouse_id with no record — a namespace routed at nothing."""
-    return sorted(
-        (DanglingBinding(top_ns=str(b["top_ns"]), warehouse_id=str(b["warehouse_id"])) for b in bindings if str(b["warehouse_id"]) not in warehouse_ids),
-        key=lambda d: (d.top_ns, d.warehouse_id),
-    )
-
-
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
@@ -708,8 +699,6 @@ class Sources(BaseModel):
     warehouse_records_error: str | None = None
     trash: list[dict[str, str]] | None = None
     trash_error: str | None = None
-    bindings: list[dict[str, str]] | None = None
-    bindings_error: str | None = None
     namespaces: list[tuple[str, str]] | None = None
     namespaces_error: str | None = None
     tables: list[tuple[str, str]] | None = None
@@ -751,10 +740,6 @@ _FGA_OFF = "authorization is off in the catalog, so authz-vs-registry drift cann
 #: What the drift report reads OpenFGA through: the catalog's census of the store's grants, or ``None`` when the catalog
 #: answers that authorization is off. Raises when the census cannot be had.
 type GrantCensusReader = Callable[[], fga.GrantCensus | None]
-
-#: Said when the warehouse feature is off. With warehouses disabled an unbound namespace is CORRECT —
-#: reporting it would train the reader to ignore the category before it ever means anything.
-_WAREHOUSES_OFF = "warehouses are disabled — every namespace resolving to the shared default root is correct, not drift"
 
 
 def _bucket_of(root_uri: str) -> str | None:
@@ -830,9 +815,9 @@ async def load_sources(
     storage_options: StorageOptions,
     bucket_client: Any,
 ) -> Sources:
-    """Read all seven sources. Nothing here raises.
+    """Read every source. Nothing here raises.
 
-    The five reads that depend on nothing — FGA tuples, the three registries, the bucket listing — run
+    The reads that depend on nothing — FGA tuples, the three registries, the bucket listing — run
     CONCURRENTLY; each is independent IO into a different store, so serialising them only sums their
     latencies. The namespace scan is the one dependent read (it consumes the warehouse records to reach
     every registered root, diff2 F3.3), so it awaits after the gather rather than joining it.
@@ -842,7 +827,6 @@ async def load_sources(
         (sources.tuples, sources.tuples_error),
         (sources.project_records, sources.project_records_error),
         (sources.warehouse_records, sources.warehouse_records_error),
-        (sources.bindings, sources.bindings_error),
         (sources.buckets, sources.buckets_error),
         (sources.trash, sources.trash_error),
     ) = await asyncio.gather(
@@ -857,14 +841,6 @@ async def load_sources(
             storage_options=storage_options,
             prefix=_WAREHOUSES_PREFIX,
             required=("id", "bucket", "project"),
-        ),
-        _registry_source(
-            sources,
-            source_name="registry:bindings",
-            control_root=control_root,
-            storage_options=storage_options,
-            prefix=_BINDINGS_PREFIX,
-            required=("top_ns", "warehouse_id"),
         ),
         _bucket_source(sources, bucket_client),
         _registry_source(
@@ -882,7 +858,7 @@ async def load_sources(
     )
     # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry loaded above rather
     # than reading it again — two reads would be two answers, and the second could disagree with the one
-    # `dangling_bindings` was computed from.
+    # `orphan_buckets` is computed from.
     warehouse_roots = sorted({str(r["root_uri"]) for r in (sources.warehouse_records or []) if r.get("root_uri")})
     namespace_roots = [namespace_root, *(r for r in warehouse_roots if r != namespace_root)]
     scanned, sources.namespaces_error = await _read_blocking("catalog:namespaces", _top_level_namespaces_across, namespace_roots, storage_options)
@@ -971,19 +947,21 @@ def _run_category[Finding](
 def build_report(
     sources: Sources,
     *,
-    warehouses_enabled: bool,
+    served: Mapping[str, set[str]],
     platform_buckets: set[str],
 ) -> ReconcileReport:
-    """Run every detector whose inputs are present; record the rest as unavailable or skipped."""
+    """Run every detector whose inputs are present; record the rest as unavailable or skipped.
+
+    ``served`` is the warehouses each scanned root serves (:func:`served_by_root`), read off the same registry snapshot.
+    """
     report = ReconcileReport(checked_at=datetime.now(UTC).isoformat(), incomplete=list(sources.incomplete))
     project_ids = {str(r["id"]) for r in sources.project_records or []}
     warehouse_ids = {str(r["id"]) for r in sources.warehouse_records or []}
     # The shared input orders, named once. Three categories read the tuple scan and the project
-    # registry; two read the binding index and the warehouse registry. Naming them is what stops a
-    # fourth category from quietly introducing a fourth opinion about which outage to report.
+    # registry; three read the warehouse registry. Naming them is what stops a fourth category from
+    # quietly introducing a fourth opinion about which outage to report.
     tuples_and_projects = (sources.tuples_error, sources.project_records_error)
     tuples_and_warehouses = (sources.tuples_error, sources.warehouse_records_error)
-    bindings_and_warehouses = (sources.bindings_error, sources.warehouse_records_error)
 
     report.ghost_projects = _run_category(
         report,
@@ -1004,18 +982,15 @@ def build_report(
         detect=lambda: _unreferenced_projects(project_ids, _by_type(sources, "project")),
     )
 
-    if not warehouses_enabled:
-        report.skipped.append(CategorySkipped(category="unbound_namespaces", reason=_WAREHOUSES_OFF))
-    else:
-        # `warehouse_records_error` joins the guard: that registry is what ENUMERATES the roots to
-        # scan, so without it the scan silently covers the shared root alone — which is the pre-F3.3
-        # blind spot reappearing as a clean report rather than as an unavailable category.
-        report.unbound_namespaces = _run_category(
-            report,
-            "unbound_namespaces",
-            inputs=(sources.namespaces_error, *bindings_and_warehouses),
-            detect=lambda: _unbound_namespaces(sources.namespaces or [], {str(b["top_ns"]) for b in sources.bindings or []}),
-        )
+    # `warehouse_records_error` joins the guard: that registry is what ENUMERATES the roots to scan and
+    # names the warehouses each serves, so without it every registered warehouse's own row would read as
+    # unreachable on a root the scan never reached.
+    report.unreachable_namespaces = _run_category(
+        report,
+        "unreachable_namespaces",
+        inputs=(sources.namespaces_error, sources.warehouse_records_error),
+        detect=lambda: _unreachable_namespaces(sources.namespaces or [], served),
+    )
 
     report.ghost_tables = _run_category(
         report,
@@ -1055,12 +1030,6 @@ def build_report(
         inputs=(sources.trash_error, sources.warehouse_records_error),
         detect=lambda: _orphaned_trash(sources.trash or [], claimed={str(r["bucket"]) for r in sources.warehouse_records or []} | platform_buckets),
     )
-    report.dangling_bindings = _run_category(
-        report,
-        "dangling_bindings",
-        inputs=bindings_and_warehouses,
-        detect=lambda: _dangling_bindings(sources.bindings or [], warehouse_ids),
-    )
 
     # `total` is the PURGE GATE, not the drift count — every category stays in `counts` and is still
     # reported. See `NON_GATING_CATEGORIES` for why these two are reported without gating.
@@ -1082,7 +1051,7 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, s
     a zero in a drift report is read as "checked and clean".
 
     Reuses the registry `_read_sources` ALREADY loaded rather than reading it again. Two reads would
-    be two answers — the second could disagree with the one `orphan_buckets` and `dangling_bindings`
+    be two answers — the second could disagree with the one `orphan_buckets` and `orphaned_trash`
     were computed from, and a report whose categories disagree about which warehouses exist is worse
     than one that is merely incomplete.
 
@@ -1211,7 +1180,6 @@ async def reconcile(
     settings: MaintenanceSettings,
     grants: GrantCensusReader | None = None,
     *,
-    warehouses_enabled: bool,
     control_root: str | None = None,
     namespace_root: str | None = None,
     # FILLED with the stores this run read, for a caller that must act on the SAME snapshot the report
@@ -1233,18 +1201,14 @@ async def reconcile(
 
     ``control_root`` defaults to the root the sweep already reads the maintenance-policy registry from
     (``MAINTENANCE_POLICY_ROOT``, else the primary bucket) — the catalog's control root, and the one
-    place the project/warehouse/binding records live. ``namespace_root`` defaults to the primary
-    lakehouse bucket: the SHARED default root, where a namespace with no warehouse binding lands.
-
-    ``warehouses_enabled`` mirrors the catalog's own switch and is passed IN — compaction does not own
-    that setting, and inferring it from the presence of records would report an estate mid-migration as
-    clean. With warehouses off, ``unbound_namespaces`` is skipped, not zero.
+    place the project and warehouse records live. ``namespace_root`` defaults to the primary lakehouse
+    bucket: the estate's own root, which serves the estate's own warehouse (``settings.estate_warehouse``).
 
     ``walk`` lists every bucket for its datasets (:func:`_walk_storage`): the daily scan walks, the hourly audit does
     not, and its two categories are then skipped, not zero.
     """
     # `resolved_control_root`, not `resolved_policy_root`. This defaulted to the POLICY root while its
-    # own docstring above says "the catalog's control root … the one place the project/warehouse/binding
+    # own docstring above says "the catalog's control root … the one place the project and warehouse
     # records live" — two different settings that happen to coincide whenever neither is overridden.
     # Latent only because `routes.py` passes the value explicitly; every other caller, and every test,
     # read the wrong default, so an estate that moved its policy root would have had the drift report
@@ -1284,7 +1248,7 @@ async def reconcile(
         into_sources.append(sources)
     report = build_report(
         sources,
-        warehouses_enabled=warehouses_enabled,
+        served=served_by_root(sources.warehouse_records or [], namespace_root=resolved_namespace_root, estate_warehouse=settings.estate_warehouse),
         platform_buckets=platform,
     )
     # The storage walk runs after the store comparison and only where the caller asks for it: it lists every

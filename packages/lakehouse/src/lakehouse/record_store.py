@@ -141,7 +141,7 @@ def list_records(control_root: str, storage_options: StorageOptions, prefix: str
     """Every readable record under ``prefix`` (unordered). An absent prefix yields ``[]``.
 
     NON-RECURSIVE on purpose: registries park their own state under a child prefix
-    (``_policies/state/``, ``_warehouses/bindings/``) and those are not records of this kind.
+    (``_policies/state/``, ``_warehouses/bucket-claims/``) and those are not records of this kind.
 
     One unreadable or malformed record is SKIPPED with a warning rather than voiding the listing. That
     is the tolerance every caller was written for — these feed maintenance sweeps, where one bad record

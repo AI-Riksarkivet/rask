@@ -144,15 +144,15 @@ class TestThePublicDoor:
     def test_a_refused_table_is_refused_and_the_namespace_is_unchanged(
         self, catalog: TestClient, root: Path, written: Callable[[Path], None], status: int, code: int, named: tuple[str, ...]
     ) -> None:
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         written(root / "refused")
 
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "refused"})
+        resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "refused"})
 
         assert (resp.status_code, resp.headers["content-type"], resp.json()["code"]) == (status, "application/problem+json", code), resp.text
         assert all(word.lower() in resp.json()["detail"].lower() for word in named), resp.json()["detail"]
-        assert not _is_registered(catalog, "db$t"), "a refused registration must leave nothing attached"
-        listed = catalog.get("/v1/namespace/db/table/list")
+        assert not _is_registered(catalog, "lance_catalog$db$t"), "a refused registration must leave nothing attached"
+        listed = catalog.get("/v1/namespace/lance_catalog$db/table/list")
         assert listed.status_code == 200, listed.text
         assert listed.json().get("tables", []) == []
 
@@ -162,7 +162,7 @@ class TestThePublicDoor:
         """pylance 11 cannot open a flag-256 table at all. Its refusal names the flags, and that is the same fact."""
         from catalog.core import namespace as core_namespace
 
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1], version="2.1")
 
         real = core_namespace.lance.dataset
@@ -175,10 +175,10 @@ class TestThePublicDoor:
 
         monkeypatch.setattr(core_namespace.lance, "dataset", _refuse)
 
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
+        resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"})
 
         assert resp.status_code == 400, resp.text
-        assert not _is_registered(catalog, "db$t")
+        assert not _is_registered(catalog, "lance_catalog$db$t")
 
     @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unstable", 400), ("compaction-config", 400), ("unreadable", 503), ("clean", 200)])
     def test_a_refused_dataset_never_gains_an_owner_a_lineage_node_or_an_event(
@@ -206,7 +206,7 @@ class TestThePublicDoor:
             async def emit(self, _event: object) -> None:
                 called.append("control")
 
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         if case == "unstable":
             lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}), str(root / "t"), data_storage_version="2.2")
         else:
@@ -222,11 +222,11 @@ class TestThePublicDoor:
         monkeypatch.setattr(announcing, "emit_write_event", _spy("lineage"))
         catalog.app.dependency_overrides[get_control_emitter] = _Control
 
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
+        resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"})
 
         assert resp.status_code == status, resp.text
         assert sorted(called) == (["control", "lineage", "seed"] if case == "clean" else []), called
-        assert _is_registered(catalog, "db$t") is (case == "clean"), "a refused registration must leave nothing attached"
+        assert _is_registered(catalog, "lance_catalog$db$t") is (case == "clean"), "a refused registration must leave nothing attached"
 
     @pytest.mark.parametrize(("mix", "converged"), [(True, False), (False, True)])
     def test_a_re_register_never_converges_a_base_record_onto_a_mixed_dataset(
@@ -236,9 +236,9 @@ class TestThePublicDoor:
         there, and a mixed dataset's never does."""
         from lakehouse import base_registry
 
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1, 2], version="2.1")
-        assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
         if mix:
             _mix(root / "t")
         claim_bases, recorded = base_registry.claim_bases, []
@@ -249,7 +249,7 @@ class TestThePublicDoor:
 
         monkeypatch.setattr(base_registry, "claim_bases", _recording)
 
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
+        resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"})
 
         assert resp.status_code == 409, resp.text
         assert bool(recorded) is converged
@@ -258,7 +258,7 @@ class TestThePublicDoor:
         """A 400 says nothing was attached; when the detach failed, the dataset IS attached, so the caller must hear it."""
         from catalog.api.v1.endpoints import tables
 
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1, 2], version="2.1")
         _mix(root / "t")
         call = tables.native.call
@@ -270,7 +270,7 @@ class TestThePublicDoor:
 
         monkeypatch.setattr(tables.native, "call", _no_detach)
 
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
+        resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"})
 
         assert resp.status_code == 503, resp.text
         assert resp.json()["attached"] is True and "deregister" in resp.json()["remedy"]
@@ -290,12 +290,12 @@ class TestThePublicDoor:
             async def emit(self, event: CatalogControlEvent) -> None:
                 sent["control"] = event.extra.get("location")
 
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1], version="2.2")
         monkeypatch.setattr(announcing, "emit_write_event", _lineage)
         catalog.app.dependency_overrides[get_control_emitter] = _Control
 
-        assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
 
         for key in ("source_uri", "control"):
             assert str(sent[key]).rstrip("/").endswith(str(root / "t")), f"{key} carried {sent[key]!r}, not the resolved location"
@@ -314,62 +314,62 @@ class TestThePublicDoor:
         external.mkdir()
         monkeypatch.setenv("LANCE_EXTERNAL_BLOB_BASES", f"file://{external}/")
         get_settings.cache_clear()
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1], version="2.2", initial_bases=[lance.DatasetBasePath(str(external), "source")])
         assert manifest_feature_flags(lance.dataset(str(root / "t"))) == (18, 18), "precondition: flag 16 plus stable row ids"
 
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "t"})
+        resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"})
 
         assert resp.status_code == 200, resp.text
 
     def test_a_location_holding_no_dataset_still_registers(self, catalog: TestClient) -> None:
         """The backend accepts an absent location, and there are no data files there to judge."""
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
 
-        resp = catalog.post("/v1/table/db$t/register", json={"location": "nothing-here"})
+        resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "nothing-here"})
 
         assert resp.status_code == 200, resp.text
 
 
 class TestTheCatalogsOwnReRegisters:
     def test_a_table_undrop_restores_a_mixed_table_and_warns(self, catalog: TestClient, root: Path, caplog: pytest.LogCaptureFixture) -> None:
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1, 2], version="2.1")
-        assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
-        assert catalog.post("/v1/table/db$t/drop").status_code == 200
-        assert not _is_registered(catalog, "db$t"), "precondition: a recoverable drop detaches the table"
+        assert catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/drop").status_code == 200
+        assert not _is_registered(catalog, "lance_catalog$db$t"), "precondition: a recoverable drop detaches the table"
         _mix(root / "t")
 
         with caplog.at_level(logging.WARNING):
-            resp = catalog.post("/management/v1/table/db$t/undrop")
+            resp = catalog.post("/management/v1/table/lance_catalog$db$t/undrop")
 
         assert resp.status_code == 200, resp.text
-        assert _is_registered(catalog, "db$t"), "the undrop must restore the table, not strand it in the trash"
+        assert _is_registered(catalog, "lance_catalog$db$t"), "the undrop must restore the table, not strand it in the trash"
         assert _mixed_warnings(caplog), "the restore of a mixed table must be visible to an operator"
 
     def test_a_namespace_undrop_restores_a_mixed_table_and_warns(self, catalog: TestClient, root: Path, caplog: pytest.LogCaptureFixture) -> None:
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1, 2], version="2.1")
-        assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
-        dropped = catalog.post("/v1/namespace/db/drop", json={"behavior": "Cascade"})
+        assert catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
+        dropped = catalog.post("/v1/namespace/lance_catalog$db/drop", json={"behavior": "Cascade"})
         assert dropped.status_code == 200, dropped.text
         _mix(root / "t")
 
         with caplog.at_level(logging.WARNING):
-            resp = catalog.post("/management/v1/namespace/db/undrop")
+            resp = catalog.post("/management/v1/namespace/lance_catalog$db/undrop")
 
         assert resp.status_code == 200, resp.text
-        assert _is_registered(catalog, "db$t")
+        assert _is_registered(catalog, "lance_catalog$db$t")
         assert _mixed_warnings(caplog)
 
     def test_a_clean_undrop_does_not_warn(self, catalog: TestClient, root: Path, caplog: pytest.LogCaptureFixture) -> None:
-        _create_namespace(catalog, "db")
+        _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1, 2], version="2.1")
-        assert catalog.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
-        assert catalog.post("/v1/table/db$t/drop").status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/drop").status_code == 200
 
         with caplog.at_level(logging.WARNING):
-            resp = catalog.post("/management/v1/table/db$t/undrop")
+            resp = catalog.post("/management/v1/table/lance_catalog$db$t/undrop")
 
         assert resp.status_code == 200, resp.text
         assert _mixed_warnings(caplog) == []

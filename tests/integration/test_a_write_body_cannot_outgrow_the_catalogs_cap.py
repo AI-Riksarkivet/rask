@@ -49,12 +49,12 @@ def capped(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> T
     """The real-backend client, with the catalog's cap set before its settings are first read."""
     monkeypatch.setenv("LANCE_MAX_BODY_BYTES", str(_CAP))
     client: TestClient = request.getfixturevalue("real_ns_client")
-    assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     seeded = client.post(
-        "/v1/table/db$t/create", content=_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64()), "s": ["a", "b", "c"]})), headers=ARROW_STREAM
+        "/v1/table/lance_catalog$db$t/create", content=_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64()), "s": ["a", "b", "c"]})), headers=ARROW_STREAM
     )
     assert seeded.status_code == 200, seeded.text
-    assert client.post("/v1/table/db$t/branches/create", json={"name": "work"}).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "work"}).status_code == 200
     return client
 
 
@@ -72,11 +72,15 @@ _INFLATING = _stream(pa.table({"id": pa.array([4, 5], pa.int64()), "s": ["x" * (
 @pytest.mark.parametrize(
     ("door", "branch", "body"),
     [
-        pytest.param("db$new/create", None, _DECLARING, id="create-bytes-declaring-a-million-rows"),
-        pytest.param("db$t/insert", None, _INFLATING, id="insert-main-an-lz4-body-inflating-to-4-MiB"),
-        pytest.param("db$t/insert", "work", _DECLARING, id="insert-branch-bytes-declaring-a-million-rows"),
-        pytest.param("db$t/merge_insert?on=id&when_not_matched_insert_all=true", None, _INFLATING, id="merge-main-an-lz4-body-inflating-to-4-MiB"),
-        pytest.param("db$t/merge_insert?on=id&when_not_matched_insert_all=true", "work", _DECLARING, id="merge-branch-bytes-declaring-a-million-rows"),
+        pytest.param("lance_catalog$db$new/create", None, _DECLARING, id="create-bytes-declaring-a-million-rows"),
+        pytest.param("lance_catalog$db$t/insert", None, _INFLATING, id="insert-main-an-lz4-body-inflating-to-4-MiB"),
+        pytest.param("lance_catalog$db$t/insert", "work", _DECLARING, id="insert-branch-bytes-declaring-a-million-rows"),
+        pytest.param(
+            "lance_catalog$db$t/merge_insert?on=id&when_not_matched_insert_all=true", None, _INFLATING, id="merge-main-an-lz4-body-inflating-to-4-MiB"
+        ),
+        pytest.param(
+            "lance_catalog$db$t/merge_insert?on=id&when_not_matched_insert_all=true", "work", _DECLARING, id="merge-branch-bytes-declaring-a-million-rows"
+        ),
     ],
 )
 def test_a_body_the_catalog_cannot_hold_is_refused_at_every_write_door(capped: TestClient, door: str, branch: str | None, body: bytes) -> None:
@@ -89,28 +93,31 @@ def test_a_body_the_catalog_cannot_hold_is_refused_at_every_write_door(capped: T
     assert refused.status_code == 400, f"{refused.status_code} {refused.text[:300]}"
     assert refused.json().get("code") == INVALID_INPUT, refused.json()
     if door.endswith("/create"):
-        assert capped.post("/v1/table/db$new/describe", json={}).status_code == 404, "a refused create left a table behind"
+        assert capped.post("/v1/table/lance_catalog$db$new/describe", json={}).status_code == 404, "a refused create left a table behind"
     else:
-        assert _rows(capped, "db$t", branch) == 3, "a refused write must write no rows"
+        assert _rows(capped, "lance_catalog$db$t", branch) == 3, "a refused write must write no rows"
 
 
 @pytest.mark.parametrize(("rows", "fits"), [pytest.param(50_000, True, id="widening-within-the-cap"), pytest.param(200_000, False, id="widening-past-the-cap")])
 def test_a_widened_insert_answers_the_same_on_both_arms(capped: TestClient, rows: int, fits: bool) -> None:  # noqa: FBT001 — parametrized
     """int32 rows into an int64 column double as the table's types. The coercion holds that to the cap once,
     before either arm, so a branch cannot refuse what main accepts, nor main lose the count it reports."""
-    assert capped.post("/v1/table/db$w/create", content=_stream(pa.table({"id": pa.array([0], pa.int64())})), headers=ARROW_STREAM).status_code == 200
-    assert capped.post("/v1/table/db$w/branches/create", json={"name": "work"}).status_code == 200
+    assert (
+        capped.post("/v1/table/lance_catalog$db$w/create", content=_stream(pa.table({"id": pa.array([0], pa.int64())})), headers=ARROW_STREAM).status_code
+        == 200
+    )
+    assert capped.post("/v1/table/lance_catalog$db$w/branches/create", json={"name": "work"}).status_code == 200
     body = _stream(pa.table({"id": pa.array(range(rows), pa.int32())}))
     assert len(body) < _CAP, "the caller's body is over the cap as sent"
 
-    answers = [capped.post(f"/v1/table/db$w/insert{query}", content=body, headers=ARROW_STREAM) for query in ("", "?branch=work")]
+    answers = [capped.post(f"/v1/table/lance_catalog$db$w/insert{query}", content=body, headers=ARROW_STREAM) for query in ("", "?branch=work")]
 
     if fits:
         assert [(a.status_code, a.json().get("num_inserted_rows")) for a in answers] == [(200, rows), (200, rows)], [a.text[:200] for a in answers]
     else:
         assert [a.status_code for a in answers] == [400, 400], [a.text[:200] for a in answers]
         assert all("as the table's column types" in a.json()["detail"] for a in answers), [a.json()["detail"] for a in answers]
-        assert (_rows(capped, "db$w", None), _rows(capped, "db$w", "work")) == (1, 1)
+        assert (_rows(capped, "lance_catalog$db$w", None), _rows(capped, "lance_catalog$db$w", "work")) == (1, 1)
 
 
 @pytest.mark.parametrize("branch", [None], ids=["main"])
@@ -122,11 +129,11 @@ def test_a_dictionary_is_refused_before_the_cast_expands_it(capped: TestClient, 
     pool, previous = _a_pool_of_its_own(), pa.default_memory_pool()
     pa.set_memory_pool(pool)
     try:
-        refused = capped.post(f"/v1/table/db$t/insert{'?branch=' + branch if branch else ''}", content=body, headers=ARROW_STREAM)
+        refused = capped.post(f"/v1/table/lance_catalog$db$t/insert{'?branch=' + branch if branch else ''}", content=body, headers=ARROW_STREAM)
     finally:
         pa.set_memory_pool(previous)
 
     assert refused.status_code == 400, refused.text[:300]
     assert "as the table's column types" in refused.json()["detail"], refused.json()
     assert pool.max_memory() < 8 * 1024 * 1024, f"the refusal allocated {pool.max_memory():,} bytes: the cast ran first"
-    assert _rows(capped, "db$t", branch) == 3
+    assert _rows(capped, "lance_catalog$db$t", branch) == 3
