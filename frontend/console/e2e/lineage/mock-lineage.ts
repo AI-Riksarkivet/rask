@@ -70,12 +70,17 @@ Bun.serve({
 		const url = new URL(req.url);
 		const bearer = (req.headers.get('authorization') ?? DEV_BEARER).replace(/^Bearer /, '');
 
-		// The cursor probe: newest first, so `events[0].seq` IS the cursor. `seq === 0` means the feed is
-		// empty, which the real service also reports as an empty list.
+		// The feed. With `since` it is followed forward as the real service answers a follower: the
+		// events after the cursor and the `since` to pass next, which is the feed's newest seq for a
+		// cursor at or past it. Without one it is newest first. `seq === 0` means the feed is empty,
+		// which the real service also reports as an empty list.
 		if (url.pathname === '/events') {
 			probes += 1;
-			const events = seq === 0 ? [] : [{ seq, event_type: 'COMPLETE', job: 'mock/job' }];
-			return json({ events, next_cursor: null });
+			const newest = { seq, event_type: 'COMPLETE', job: 'mock/job' };
+			const since = url.searchParams.get('since');
+			if (since !== null)
+				return json({ events: seq > Number(since) ? [newest] : [], next_cursor: seq });
+			return json({ events: seq === 0 ? [] : [newest], next_cursor: null });
 		}
 
 		// ── the #83 outbox: the backlog and the replay that DRAINS it (per bearer) ──

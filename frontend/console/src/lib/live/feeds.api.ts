@@ -17,10 +17,11 @@ export type { LineagePulse } from '#lib/api/runs-feed.ts';
  *
  * Two event sources, deliberately, and each surface picks the one that actually reports its changes:
  *
- *  - `lineageFeed` — `GET /events?limit=1&summary=true` on the lineage plane. **Governed per subject**:
- *    an event is returned only if the caller `can_get_metadata` on every dataset it references, so a
- *    non-admin gets a real live feed and never learns that an event they cannot see exists. Everything
- *    data-shaped (tables, namespaces, runs, the lineage DAG, the outbox backlog) hangs off this.
+ *  - `lineageFeed` — `GET /events?since=` on the lineage plane, followed forward from the feed's head.
+ *    **Governed per subject**: an event is returned only if the caller `can_get_metadata` on every
+ *    dataset it references, so a non-admin gets a real live feed and never learns that an event they
+ *    cannot see exists. Everything data-shaped (tables, namespaces, runs, the lineage DAG, the outbox
+ *    backlog) hangs off this.
  *  - `controlFeed` — `GET /management/v1/events?since=` on the catalog control plane, which is
  *    **estate-admin gated** (`can_observe_events` on the FGA root) and reports *governance* mutations:
  *    warehouses, tenants, grants. Those never touch a dataset, so they never move the lineage cursor.
