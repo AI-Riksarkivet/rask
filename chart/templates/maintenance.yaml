@@ -141,6 +141,7 @@ spec:
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      {{- include "lance.spreadConstraints" "maintenance" | nindent 6 }}
       {{- include "lance.podSecurityContext" . | nindent 6 }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
       {{- with $.Values.imagePullSecrets }}
@@ -210,6 +211,7 @@ spec:
         lance.dev/logs: otlp
     spec:
       terminationGracePeriodSeconds: {{ $grace }}
+      {{- include "lance.spreadConstraints" "maintenance-worker" | nindent 6 }}
       {{- include "lance.podSecurityContext" . | nindent 6 }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
       {{- with $.Values.imagePullSecrets }}
@@ -233,7 +235,7 @@ spec:
           env:
             {{- include "lance.maintenanceEnv" (list $root "worker" $drain) | nindent 12 }}
           {{- include "lance.appProbes" . | nindent 10 }}
-          resources: {{- include "lance.resources" (dict "root" . "comp" "maintenance") | nindent 12 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" "maintenanceWorker") | nindent 12 }}
           {{- include "lance.maintenanceVolumes" . | nindent 10 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}

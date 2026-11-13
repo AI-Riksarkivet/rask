@@ -1662,6 +1662,34 @@
                         }
                     }
                 },
+                "maintenanceWorker": {
+                    "description": "CPU/memory requests and limits for maintenance's queue worker pods (`maintenance.worker`); the web pods keep the default tier.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
                 "otel-collector": {
                     "description": "CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter.",
                     "type": "object",

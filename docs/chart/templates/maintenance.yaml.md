@@ -258,3 +258,16 @@ setting and must match it: a divergent one reports every namespace as unbound.
 
 No `command:`, so the image's tini, its ENTRYPOINT, stays the container's PID 1 and runs uvicorn's command line from
 `args` ([[LH-313]]; `services.yaml.md` § `args:`).
+
+## `lance.spreadConstraints`
+
+Both Deployments spread their replicas over the nodes by their own component label, as the catalog and lineage do
+(`services.yaml.md`): two worker replicas on one node are one node's loss away from nobody pulling a task, which pages
+only once `MaintenanceQueueStalled` or `MaintenanceTaskMetricsMissing` has waited out its window. `ScheduleAnyway`, so a
+one-node estate still schedules both.
+
+## `resources:` on the worker
+
+The worker names the `maintenanceWorker` tier (`values.yaml` `resources.maintenanceWorker`), sized from its measured
+working set (ADR 0198, 2026-11-13); the web pods, which serve the write-event lane and run no pass, keep the default
+tier.

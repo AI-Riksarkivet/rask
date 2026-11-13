@@ -539,3 +539,33 @@ time, doubling with the workers (1.98, 3.96, 7.92). What bounds maintenance is t
 many replicas run, never the bus; a queue of N tasks behind passes of length P on R replicas is waited out in N x P / R.
 Not measured here: a real pass (its store reads and Lance's cleanup), which the estate's own
 `maintenance.tasks.duration` reads, and workers in processes of their own, each under its own CPU limit.
+
+### What a burst costs on the estate, measured 2026-11-13 on helm revision 55
+
+Method: on the dev estate (k3s, one node; three nats-servers, RustFS, one catalog replica), `rask-maintenance-worker`
+was scaled to 1, 2 and 4 replicas in turn and back to the 2 git declares. Per leg, 24 client threads created 120 tables
+of ten rows through the catalog's namespace door in a scratch tenant; each create's announcement holds its table's pass
+300 s out, so the passes came due over the time the creates took. The worker's own instruments were read from the
+telemetry store as `increase` over the leg (a raw before/after sum reads a removed replica's series), the queue's
+gauges and the worker containers' working set (`kubectl top`) every 2 s, and the tenant was dropped at the end. One leg
+each; a first one-worker leg was discarded, since the hourly audit fell inside it and queued 109 of its tables itself.
+
+| Workers | Creates admitted per second | Passes completed per second | Wait, mean | Waits within 1 s | Waits within 5 s | Pass, mean | Peak waiting | Peak worker memory |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1.31 | 1.33 | 1.24 s | 56 of 126 | 126 of 126 | 0.29 s | 5 | 256 Mi |
+| 2 | 1.47 | 1.50 | 0.25 s | 128 of 131 | 131 of 131 | 0.20 s | 0 | 209 Mi |
+| 4 | 1.37 | 1.44 | 0.11 s | 119 of 119 | 119 of 119 | 0.30 s | 0 | 217 Mi |
+
+Read: the estate's maintenance is bounded by how fast commits arrive, not by its workers. The catalog admitted 1.3 to 1.5
+creates a second, a pass of a new table took 0.2 to 0.3 s, and at every replica count the passes completed as fast as
+they came due; no task was delivered twice. One worker kept up with waits of 1.2 s on average and under 5 s at worst;
+the second replica is there for a worker's death and brings the wait to a quarter of a second, and four add nothing
+this load can show. Over the 26 hours before, the estate ran 186 table passes averaging 0.86 s, none retried, ended or
+overrun. So scaling the workers on these readings (R7) has nothing to act on until passes are much longer or commits
+arrive some tens of times faster than one catalog replica admits them. Not measured: a pass that reclaims versions or
+data directories (these tables had one version), and a backlog deep enough to make workers the bound, which the bus lane
+above measures with sleeps.
+
+Found while measuring: an hourly audit that falls between a table's first commit and the pass that commit holds queues
+the table itself, since a held follow-up is neither a schedule nor a queued task, so the table is passed twice, five
+minutes apart.

@@ -123,7 +123,9 @@ def test_the_worker_runs_in_pods_of_its_own_whose_sidecar_outlives_its_drain_and
     drain; and it health-checks the worker's probe port, so it leaves when the worker does rather than at the block's end
     (measured on daprd 1.19.0-rc.4: with the check, 3 s after the app; without it, the whole block). A health check also
     gates a sidecar's subscriptions, so only this pod, which subscribes to nothing, has one. The second case moves every
-    lifecycle number, so only a computed grace and block pass it."""
+    lifecycle number, so only a computed grace and block pass it. Each Deployment's replicas spread over the nodes by its
+    own label, so one node's loss leaves a worker pulling, and the worker takes a resources tier of its own, sized from
+    its measured working set, where the web pods keep the default one."""
     import yaml  # noqa: PLC0415
     from test_invariants import CHART  # noqa: PLC0415
 
@@ -131,7 +133,9 @@ def test_the_worker_runs_in_pods_of_its_own_whose_sidecar_outlives_its_drain_and
 
     lifecycle = {**yaml.safe_load((CHART / "values.yaml").read_text())["lifecycle"], **moved}
     docs = render(
-        *DEFAULT_ARGS, "--set", "maintenance.queue.drainSeconds=60", *(arg for key, value in moved.items() for arg in ("--set", f"lifecycle.{key}={value}"))
+        *DEFAULT_ARGS,
+        *("--set", "maintenance.queue.drainSeconds=60", "--set", "resources.maintenanceWorker.requests.memory=333Mi"),
+        *(arg for key, value in moved.items() for arg in ("--set", f"lifecycle.{key}={value}")),
     )
     worker, web = (_deployment(docs, name)["spec"]["template"] for name in ("rask-maintenance-worker", "rask-maintenance"))
     process, served = worker["spec"]["containers"][0], web["spec"]["containers"][0]
@@ -145,6 +149,13 @@ def test_the_worker_runs_in_pods_of_its_own_whose_sidecar_outlives_its_drain_and
     ]
 
     assert process["args"][-3:] == ["python", "-m", "maintenance.worker"]
+    spreads = {
+        (of, over): [selects(rule["labelSelector"], pods["metadata"]["labels"]) for rule in template["spec"]["topologySpreadConstraints"]]
+        for of, template in (("worker", worker), ("web", web))
+        for over, pods in (("worker", worker), ("web", web))
+    }
+    assert spreads == {("worker", "worker"): [True], ("worker", "web"): [False], ("web", "worker"): [False], ("web", "web"): [True]}
+    assert (process["resources"]["requests"]["memory"], served["resources"]["requests"]["memory"]) == ("333Mi", "128Mi")
     pre_stop = int(" ".join(process["lifecycle"]["preStop"]["exec"]["command"]).rsplit(" ", 1)[-1])
     assert (grace, pre_stop, selecting) == (int(lifecycle["maintenanceTerminationGracePeriodSeconds"]), int(lifecycle["preStopSeconds"]), [])
     assert pre_stop + int(env["MAINTENANCE_DRAIN_SECONDS"]) <= int(notes[BLOCK].rstrip("s")) == grace - int(lifecycle["teardownSeconds"])

@@ -238,6 +238,12 @@ resources:
   default:
     requests: { cpu: 50m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # Sized from the worker's own working set: 183 to 211 Mi idle and 256 Mi at the peak of a burst of 120 table passes
+  # (measured 2026-11-13, helm revision 55, ADR 0198), which the default tier's 128 Mi request understates to the scheduler.
+  # -- CPU/memory requests and limits for maintenance's queue worker pods (`maintenance.worker`); the web pods keep the default tier.
+  maintenanceWorker:
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
   # THE TWO HPA TARGETS, and they exist because of that: an HPA's `averageUtilization` is a fraction
   # of the REQUEST, so on the `default` tier above (50m request, 1000m limit — 20:1) a 70% target
   # fires at 35 millicores. Any real request load clears that instantly, the HPA slams to
