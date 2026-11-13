@@ -1280,15 +1280,18 @@ estate with no hostname names the catalog's in-cluster Service, unique per relea
 
 ## `{{- define "rask.apiRoutes" -}}`
 
-THE ONE ROUTE TABLE: the public `/api/*` prefixes the cluster route publishes, as a JSON list of
-`{prefix, component, service, port, rewrite}`. `route.yaml` renders one HTTPRoute rule per row
-(`rewrite` becomes a `URLRewrite` `ReplacePrefixMatch`; empty forwards the path unchanged), and
-`network-policy.yaml` renders one `<release>-edge-<component>` policy per row admitting that port, so a
-published prefix and an admitted port come from one list and cannot drift.
+THE ONE ROUTE TABLE: the doors the cluster route publishes, as a JSON list of
+`{prefix, component, service, port, rewrite, paths}`, one row per service. Each of `paths` is published at
+`<prefix><path>`: with `rewrite` true `route.yaml` renders one rule per path whose `URLRewrite` `ReplacePrefixMatch`
+lands on `<path>`; with it false, one rule matching every path, forwarded unchanged. `/docs`, `/redoc` and
+`/openapi.json` join each row's paths under `docs.enabled` only. `network-policy.yaml` renders one
+`<release>-edge-<component>` policy per row admitting that port, so a published service and an admitted port come from
+one list and cannot drift.
 
 The rows mirror the gates of the templates that render each backend: catalog and lineage always
 (services.yaml), so the route never names a Service that did not render.
 
-A new public prefix is a row here plus a row in
-`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py`. A client's own prefixes are not rows: its
+A new door a service mounts at its root is a path in its row; the gate in
+`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` fails until it is, and fails on a path that
+reaches only the pod's probes, `/dapr/subscribe`, a Dapr delivery or a cron tick. A client's own prefixes are not rows: its
 release publishes them with an HTTPRoute of its own.

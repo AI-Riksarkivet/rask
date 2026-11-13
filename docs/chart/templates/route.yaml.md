@@ -39,16 +39,24 @@ whatever host its listener accepts (`localhost`, the node's address), and the ki
 
 ## `name: {{ include "rask.fullname" . }}-api`
 
-`<release>-api`: one rule per public `/api/*` prefix, ranged from the `rask.apiRoutes` helper
-(`_helpers.tpl`). The helper is the ONE route table — the NetworkPolicy edge rules
-(`network-policy.yaml`, `<release>-edge-<component>`) range the same list, so a prefix the route
+`<release>-api`: the doors each service publishes, ranged from the `rask.apiRoutes` helper (`_helpers.tpl`): one
+rule holding every match of a service whose path is forwarded unchanged, and one rule per path of a service the route
+rewrites, since a rule carries one rewrite. The helper is the ONE route table — the NetworkPolicy edge rules
+(`network-policy.yaml`, `<release>-edge-<component>`) range the same list, so a service the route
 publishes is always a port the policy admits. Gateway API matches the longest prefix first, regardless of
 rule order.
 
 | Public prefix | Service | Path at the service |
 | --- | --- | --- |
-| `/api/catalog` | `<fullname>-catalog` | `/…` |
-| `/api/lineage` | `<fullname>-lineage` | `/…` |
+| `/api/catalog/v1`, `/api/catalog/management/v1` | `<fullname>-catalog` | unchanged; the catalog strips `/api/catalog` |
+| `/api/lineage/events`, `/api/lineage/api/v1/lineage`, `/api/lineage/admin/dlq`, `/api/lineage/tables` | `<fullname>-lineage` | `/events`, `/api/v1/lineage`, `/admin/dlq`, `/tables` |
+| `<prefix>/docs`, `<prefix>/redoc`, `<prefix>/openapi.json`, under `docs.enabled` only | each of the two | as its row above |
+
+No row publishes a service's root. A pod answers routes for its own platform (the kubelet's `/livez` and `/readyz`,
+the sidecar's `/dapr/subscribe`, the Dapr deliveries and cron ticks), and a prefix over the root would publish those and
+every route the service mounts later. The route keeps them off the edge; the pod's port still admits any peer
+(`<release>-edge-<component>`), and each route authenticates or answers only what a sidecar needs. Anonymous, `/dapr/subscribe` and each tick's `OPTIONS` answer 2xx, so publishing
+them hands the edge the estate's topics and binding names.
 
 A client has no row here, and none is rendered: a client publishes its own prefixes from its own release. The console,
 the lakehouse's own UI, is routed at `/` by `console.yaml` on the same parentRefs and hostnames, and every `/api/*` row
@@ -60,15 +68,16 @@ the service the prefix names.
 
 The offline gate is `tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` (the render);
 the live one is `tests/e2e-py/test_the_cluster_route_reaches_each_service.py` (marker `edge`,
-`make e2e-edge RASK_E2E_EDGE_URL=…`). A new public prefix is a row in `rask.apiRoutes` plus a row in that
-render test.
+`make e2e-edge RASK_E2E_EDGE_URL=…`). The render gate boots each app under the env its pod renders and fails when the
+route publishes a route the pod answers only for its platform, leaves a door the app mounts unpublished, or names a
+path the app mounts nothing under: a new root route of a service is a path in its `rask.apiRoutes` row, or a delivery
+or tick the gate already reads off the app.
 
 ## `- type: URLRewrite`
 
-`ReplacePrefixMatch` maps a public prefix to the path the service mounts, so the route owns the
+`ReplacePrefixMatch` maps a public path to the path the service mounts, so the route owns the
 public→internal mapping and the services, their tests and their in-cluster callers keep their own paths
-(lineage serves at its root; the media trio mount under `/api`). A row with an empty `rewrite` forwards the path
-unchanged. The catalog's row is one: a rewrite rebuilds the path from its decoded form, so the `%2B` and `%2F` the
+(lineage serves at its root). A row with `rewrite: false` forwards the path unchanged. The catalog's row is one: a rewrite rebuilds the path from its decoded form, so the `%2B` and `%2F` the
 catalog judges a name by would arrive as `+` and `/` (measured on Traefik 3.7.8), and the catalog strips its public
 prefix itself (`rask.catalogPublicPrefix`, `LANCE_PUBLIC_PATH_PREFIX`, [[LH-526]]).
 

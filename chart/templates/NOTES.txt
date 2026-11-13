@@ -33,10 +33,10 @@ Services (ClusterIP):
 {{- if .Values.route.enabled }}
 {{- with .Values.route.hostnames }}
 
-API: http://{{ first . }}/api/catalog/livez
+API: http://{{ first . }}/api/catalog/v1/… (the Lance namespace doors) and /api/lineage/events
 {{- else }}
 
-API: http://<gateway-address>/api/catalog/livez   (host-less routes, any Host)
+API: http://<gateway-address>/api/catalog/v1/… (the Lance namespace doors) and /api/lineage/events   (host-less routes, any Host)
 {{- end }}
 The routes attach to {{ range .Values.route.parentRefs }}{{ .namespace | default $root.Release.Namespace }}/{{ .name }} {{ end }}— the platform's Gateway serves them.
 {{- else }}

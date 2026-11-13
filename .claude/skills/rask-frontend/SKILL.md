@@ -275,7 +275,7 @@ floating groups and no context menu.
 
 | loop | command | what runs |
 |---|---|---|
-| UI against the cluster | `make dev-k3s` | reuses :8080 when it already serves the issuer, else port-forwards `kube-system/traefik` 8080:80, waits for `/dex` and `/api/lineage/livez`, runs `vite dev` (:5173) with `/api` proxied there, and stops the forward by PID |
+| UI against the cluster | `make dev-k3s` | reuses :8080 when it already serves the issuer, else port-forwards `kube-system/traefik` 8080:80, waits for `/dex` and lineage's `/api/lineage/events` (200 or its 401), runs `vite dev` (:5173) with `/api` proxied there, and stops the forward by PID |
 | UI against an edge you name | `make dev` (`RASK_EDGE_URL`, default `http://localhost:8080`) | `vite dev` on :5173; an edit to `@rask/ui` reaches it through HMR |
 | Storybook | `make storybook` | `@rask/ui`'s Storybook on :6006 |
 

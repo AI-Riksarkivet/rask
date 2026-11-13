@@ -1139,7 +1139,8 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- define "rask.apiRoutes" -}}
 {{- $root := . -}}
 {{- $rows := list -}}
-{{- $rows = append $rows (dict "prefix" (include "rask.catalogPublicPrefix" $root) "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" "") -}}
-{{- $rows = append $rows (dict "prefix" "/api/lineage" "component" "lineage" "service" (printf "%s-lineage" (include "lance.fullname" $root)) "port" .Values.services.lineage.port "rewrite" "/") -}}
+{{- $docs := ternary (list "/docs" "/redoc" "/openapi.json") (list) .Values.docs.enabled -}}
+{{- $rows = append $rows (dict "prefix" (include "rask.catalogPublicPrefix" $root) "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" false "paths" (concat (list "/v1" "/management/v1") $docs)) -}}
+{{- $rows = append $rows (dict "prefix" "/api/lineage" "component" "lineage" "service" (printf "%s-lineage" (include "lance.fullname" $root)) "port" .Values.services.lineage.port "rewrite" true "paths" (concat (list "/events" "/api/v1/lineage" "/admin/dlq" "/tables") $docs)) -}}
 {{- toJson $rows -}}
 {{- end -}}

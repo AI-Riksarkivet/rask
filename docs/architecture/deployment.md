@@ -275,8 +275,10 @@ address, token, scrape job, alert or network peer (ADR 0189).
   and the HTTPRoute `rask-console` sending `/` to it. Under `networkPolicy.enabled` its pod admits its port from
   anywhere and dials nothing.
 - **The cluster route** (`templates/route.yaml`) — Gateway API HTTPRoutes on the platform's Gateway
-  (`route.parentRefs`): `<release>-api` sends each public `/api/*` prefix to its service, with a `URLRewrite`
-  `ReplacePrefixMatch` where the service mounts another path (the table is `rask.apiRoutes` in `_helpers.tpl`), and
+  (`route.parentRefs`): `<release>-api` sends each door a service publishes (the catalog's `/v1` and `/management/v1`,
+  lineage's feed, intake, parks and derived tables; never a probe, `/dapr/subscribe` or a Dapr delivery or tick) to
+  its service under its public prefix, with a `URLRewrite` `ReplacePrefixMatch` where the service mounts another path
+  (the table is `rask.apiRoutes` in `_helpers.tpl`), and
   `<release>-dex`, rendered only with `auth.enabled` and `dex.enabled`, sends `/dex` to the development Dex. Both
   are longer prefixes than the console's `/`, so they keep winning. A real deployment names the hosts the
   routes answer (`route.hostnames`), and the render refuses one that names none, since a host-less route claims every

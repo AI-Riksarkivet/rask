@@ -17,17 +17,27 @@ spec:
   {{- end }}
   rules:
     {{- range $row := include "rask.apiRoutes" . | fromJsonArray }}
+    {{- if $row.rewrite }}
+    {{- range $path := $row.paths }}
     - matches:
-        - path: { type: PathPrefix, value: {{ $row.prefix | quote }} }
-      {{- with $row.rewrite }}
+        - path: { type: PathPrefix, value: {{ printf "%s%s" $row.prefix $path | quote }} }
       filters:
         - type: URLRewrite
           urlRewrite:
-            path: { type: ReplacePrefixMatch, replacePrefixMatch: {{ . | quote }} }
-      {{- end }}
+            path: { type: ReplacePrefixMatch, replacePrefixMatch: {{ $path | quote }} }
       backendRefs:
         - name: {{ $row.service }}
           port: {{ $row.port }}
+    {{- end }}
+    {{- else }}
+    - matches:
+        {{- range $path := $row.paths }}
+        - path: { type: PathPrefix, value: {{ printf "%s%s" $row.prefix $path | quote }} }
+        {{- end }}
+      backendRefs:
+        - name: {{ $row.service }}
+          port: {{ $row.port }}
+    {{- end }}
     {{- end }}
 {{- if and .Values.auth.enabled .Values.dex.enabled }}
 ---

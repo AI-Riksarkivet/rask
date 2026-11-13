@@ -27,8 +27,9 @@ For FastAPI app/router/lifespan idioms see `fastapi`. This skill is *only* the t
 
 | Public prefix | Service | Port | Rewritten to (`URLRewrite` `ReplacePrefixMatch`) | Rendered by |
 |---|---|---|---|---|
-| `/api/catalog` | `<release>-catalog` | 2333 | unchanged; the catalog strips the prefix from the bytes as sent (`LANCE_PUBLIC_PATH_PREFIX`), since a rewrite would turn `%2B` and `%2F` into `+` and `/` ([[LH-526]]) | product chart (`rask.catalogPublicPrefix`) |
-| `/api/lineage` | `<release>-lineage` | 8000 | `/` | product chart |
+| `/api/catalog/v1`, `/api/catalog/management/v1` | `<release>-catalog` | 2333 | unchanged; the catalog strips `/api/catalog` from the bytes as sent (`LANCE_PUBLIC_PATH_PREFIX`), since a rewrite would turn `%2B` and `%2F` into `+` and `/` ([[LH-526]]) | product chart (`rask.catalogPublicPrefix`) |
+| `/api/lineage/events`, `/api/lineage/api/v1/lineage`, `/api/lineage/admin/dlq`, `/api/lineage/tables` | `<release>-lineage` | 8000 | `/events`, `/api/v1/lineage`, `/admin/dlq`, `/tables` | product chart |
+| `<prefix>/docs`, `<prefix>/redoc`, `<prefix>/openapi.json` | each of the two | | as its row | product chart, `docs.enabled` only |
 | `/dex` | `<release>-dex` | 5556 | unchanged | product chart, dev Dex only |
 | `/` | `<release>-console` (the web pod) | 3000 (`console.port`) | unchanged | product chart (`console.enabled`) |
 
@@ -39,9 +40,13 @@ with its Gateway provider switched on by `deploy/k3s/traefik-gateway.yaml` (a He
 `kube-system`, listener `web` on the node's port 80. `deploy/values-local.yaml` attaches to it (`route.parentRefs`) and
 sets `forwardedAllowIps: 10.42.0.0/16`.
 
-**Adding a lakehouse prefix** is one row in `rask.apiRoutes` (`prefix`, `component`, `service`, `port`, `rewrite`;
-an empty `rewrite` forwards the path as is) plus its case in the offline render gate
-`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py`. The same row also renders that
+**The route publishes doors, never a service's root** ([[CTL-001]]): the probes, `/dapr/subscribe`, the Dapr deliveries
+and the cron ticks are not published at the edge (a request there falls to the console's 404), though the pod's port
+still admits any peer. **Adding a
+door at a service's root** is one path in its `rask.apiRoutes` row (`prefix`, `component`, `service`, `port`, `rewrite`
+true to land each path on itself, false to forward unchanged, `paths`); the offline render gate
+`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` boots each app under its rendered env and fails
+until the row lists it. The same row also renders that
 component's `<release>-edge-<component>` NetworkPolicy, so the route and the admission cannot drift apart. The live
 proof that every row reaches its service is `tests/e2e-py/test_the_cluster_route_reaches_each_service.py` (marker
 `edge`, `make e2e-edge RASK_E2E_EDGE_URL=…`). A client publishes its own prefixes from its own release; the product
@@ -51,8 +56,8 @@ chart names no client.
 
 | Service | Port | Public prefix | What it is |
 |---|---|---|---|
-| **catalog** | 2333 | `/api/catalog` | the Lance Namespace REST catalog and the management doors (`rask-lance-catalog`) |
-| **lineage** | 8000 | `/api/lineage` | the OpenLineage intake, the commit feed (`GET /events`) and the forwarder (ADR 0158) |
+| **catalog** | 2333 | `/api/catalog` (its `/v1` and `/management/v1` doors) | the Lance Namespace REST catalog and the management doors (`rask-lance-catalog`) |
+| **lineage** | 8000 | `/api/lineage` (its feed, intake, parks and derived-table doors) | the OpenLineage intake, the commit feed (`GET /events`) and the forwarder (ADR 0158) |
 | **maintenance** | 8000 | none | the work-queue worker (each table's pass, the hourly audit, the daily scan, ADR 0198) and the write-event lane; it pulls its tasks from NATS and is reached only by its Dapr subscription (`/maintenance-arrival`) and the probes |
 | **console** | 3000 | `/` | the console's static-file server (`serve.ts`), the lakehouse's own UI; calls no door itself (`rask-frontend`) |
 
@@ -68,8 +73,9 @@ There is no local router. The console's `/api` needs an edge on `RASK_EDGE_URL` 
 (`frontend/console/dev/config.json`):
 
 - **`make dev-k3s`** uses :8080 when it already serves the issuer; otherwise it port-forwards k3s Traefik's Service
-  (`kube-system/traefik`, the Gateway that serves the release's HTTPRoutes) to :8080, waits until `/dex` and
-  `/api/lineage/livez` answer, and runs the console with Vite HMR against it. Needs `make k3s-up`.
+  (`kube-system/traefik`, the Gateway that serves the release's HTTPRoutes) to :8080, waits until `/dex` answers and
+  lineage's `/api/lineage/events` answers 200 or its own 401, and runs the console with Vite HMR against it. Needs
+  `make k3s-up`.
 - **`make dev`** runs the console against whatever edge `RASK_EDGE_URL` names.
 
 The console has one Vite `/api` proxy (`frontend/console/vite.config.ts`), to `RASK_EDGE_URL`; it never addresses a

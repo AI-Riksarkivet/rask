@@ -347,11 +347,12 @@ claude-bootstrap:
 dev:                  # the console with Vite HMR, /api → RASK_EDGE_URL, signing in at the issuer dev/config.json names
 	bun --cwd=frontend run dev
 
-# How long dev-k3s waits for the port-forwarded Traefik to serve both the issuer and the edge before it gives up.
+# How long dev-k3s waits for the port-forwarded Traefik to serve both the issuer and the edge before it gives up. The
+# edge serves when lineage's feed door answers through it, 200 or its own 401: the route publishes doors, not probes.
 DEV_K3S_WAIT ?= 60
 dev-k3s:              # the console with Vite HMR against the IN-CLUSTER edge and Dex, both through k3s Traefik on :8080
 	@serves() { curl -sf http://localhost:8080/dex/.well-known/openid-configuration >/dev/null 2>&1 && \
-	    curl -sf http://localhost:8080/api/lineage/livez >/dev/null 2>&1; }; \
+	    case "$$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:8080/api/lineage/events?limit=1')" in 200|401) ;; *) false ;; esac; }; \
 	if serves; then \
 	  echo "==> :8080 already serves the issuer and the edge; using it"; \
 	  RASK_EDGE_URL=http://localhost:8080 bun --cwd=frontend run dev; \
@@ -362,7 +363,7 @@ dev-k3s:              # the console with Vite HMR against the IN-CLUSTER edge an
 	  deadline=$$(( $$(date +%s) + $(DEV_K3S_WAIT) )); \
 	  until serves; do \
 	    kill -0 $$PF 2>/dev/null || { echo "!! the port-forward exited (is :8080 held by something that is not the estate's edge?)"; exit 1; }; \
-	    [ "$$(date +%s)" -lt "$$deadline" ] || { echo "!! :8080 did not serve both the issuer and /api/lineage/livez within $(DEV_K3S_WAIT) s"; exit 1; }; \
+	    [ "$$(date +%s)" -lt "$$deadline" ] || { echo "!! :8080 did not serve both the issuer and lineage's /api/lineage/events within $(DEV_K3S_WAIT) s"; exit 1; }; \
 	    sleep 1; done; \
 	  echo "==> issuer and edge reachable; starting the console (Vite HMR)"; \
 	  RASK_EDGE_URL=http://localhost:8080 bun --cwd=frontend run dev; \
@@ -552,7 +553,7 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check k3s-values-check ## Apply 
 	@$(K3S_PINS_CHECK)
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership $(K3S_VALUES)
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
-	@echo "API → http://<node-ip>/api/catalog/livez   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
+	@echo "API → http://<node-ip>/api/catalog/v1/… and /api/lineage/events   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 
 k3s-values: k3s-values-check ## Print the values `make k3s-up` supplies, as `helm get values rask -o json` reads them (a server dry run: writes nothing)
 	@$(K3S_PINS_CHECK)

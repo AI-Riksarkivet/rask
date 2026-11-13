@@ -4,7 +4,8 @@ No rask process sits between the edge and a service (ADR 0156, ADR 0165): the Ga
 Service, rewriting the prefix where the service serves another path, and each service authenticates every request
 itself. One anonymous request per prefix proves both halves at once: an RFC 9457 `unauthenticatederror` comes only from
 a rask service's own door (the Gateway answers an unrouted path with its own 404), so the route reached the service, the
-rewrite landed on a route it serves, and the door refused.
+rewrite landed on a route it serves, and the door refused. The routes publish each service's doors by name, so what a pod
+answers only for its platform (probes, `/dapr/subscribe`, Dapr's cron ticks) falls to the console's `/` and its 404.
 
 A lakehouse prefix whose door verifies a person also refuses a token the IdP issued for another client: the same person's
 token from the sign-in client without the lakehouse's audience ([[LH-515]]).
@@ -38,6 +39,16 @@ _PROBES = [
 ]
 
 
+#: What a service's pod answers for its own platform (the sidecar's subscription read, the kubelet's probes, a Dapr cron
+#: tick), which the route publishes under no prefix: the console's server answers each 404.
+_UNPUBLISHED = [
+    ("GET", "/api/catalog/dapr/subscribe"),
+    ("GET", "/api/lineage/dapr/subscribe"),
+    ("GET", "/api/catalog/readyz"),
+    ("POST", "/api/lineage/lineage-relay-cron"),
+]
+
+
 @pytest.fixture(scope="module")
 def another_audience() -> str:
     """alice's access token from the sign-in client, asked for without the lakehouse's audience: `aud` names that client."""
@@ -65,6 +76,13 @@ def test_an_anonymous_request_reaches_the_service_and_is_refused_there(edge: str
     assert response.status_code == 401, (response.status_code, response.text[:300])
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json()["type"] == "https://lance.org/problems/unauthenticatederror"
+
+
+@pytest.mark.parametrize(("method", "path"), _UNPUBLISHED)
+def test_a_route_only_the_pod_answers_is_not_published_at_the_edge(edge: str, method: str, path: str) -> None:
+    response = requests.request(method, f"{edge}{path}", timeout=15)
+
+    assert (response.status_code, response.json()) == (404, {"detail": f"no route serves {path}"})
 
 
 @pytest.mark.parametrize(("method", "path"), _PROBES)
