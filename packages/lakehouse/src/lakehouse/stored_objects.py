@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.objectfs import fs_and_base
 from lakehouse.records import store_clock
-from lakehouse.storage.client import MAX_POOL_CONNECTIONS
+from lakehouse.storage.client import MAX_POOL_CONNECTIONS, S3Client
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
 
@@ -302,11 +302,7 @@ def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) 
     if not paths:
         return
     if not on_s3(uri):
-        fs, _ = fs_and_base(uri, storage_options)
-        for path in paths:
-            with suppress(FileNotFoundError):
-                fs.delete_file(path)
-                _record_deleted(path)
+        _delete_local(uri, storage_options, paths)
         return
     client = object_client(storage_options)
     by_bucket: dict[str, list[str]] = {}
@@ -315,15 +311,32 @@ def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) 
         by_bucket.setdefault(bucket, []).append(key)
     for bucket, keys in by_bucket.items():
         for start in range(0, len(keys), _DELETE_BATCH):
-            batch = keys[start : start + _DELETE_BATCH]
-            answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True})
-            refused = answered.get("Errors") or []
-            refused_keys = {str(error.get("Key")) for error in refused}
-            for key in batch:
-                if key not in refused_keys:
-                    _record_deleted(f"{bucket}/{key}")
-            if refused:
-                raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
+            _delete_batch(client, bucket, keys[start : start + _DELETE_BATCH])
+
+
+def _delete_local(uri: str, storage_options: StorageOptions, paths: list[str]) -> None:
+    """Delete each local path that is there, recording each one deleted."""
+    fs, _ = fs_and_base(uri, storage_options)
+    for path in paths:
+        with suppress(FileNotFoundError):
+            fs.delete_file(path)
+            _record_deleted(path)
+
+
+def _delete_batch(client: S3Client, bucket: str, keys: list[str]) -> None:
+    """One DeleteObjects request for ``keys`` in ``bucket``, recording each key the store deleted.
+
+    Raises:
+        OSError: The store refused a key; the keys it did delete are recorded first.
+    """
+    answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True})
+    refused = answered.get("Errors") or []
+    refused_keys = {str(error.get("Key")) for error in refused}
+    for key in keys:
+        if key not in refused_keys:
+            _record_deleted(f"{bucket}/{key}")
+    if refused:
+        raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
 
 
 @contextmanager
@@ -344,13 +357,18 @@ def recording_removed_transactions(ref_root: str, storage_options: StorageOption
     try:
         yield
     finally:
-        try:
-            gone = before - _paths_under(directory, storage_options)
-        except OSError:
-            log.exception("file_audit_transactions_unrecorded", extra={"directory": directory, "listed_before": len(before)})
-        else:
-            for path in sorted(gone):
-                _record_deleted(path)
+        _record_gone(directory, storage_options, before)
+
+
+def _record_gone(directory: str, storage_options: StorageOptions, before: set[str]) -> None:
+    """Record each of ``before`` no longer under ``directory``; a listing that fails records nothing and says so."""
+    try:
+        after = _paths_under(directory, storage_options)
+    except OSError:
+        log.exception("file_audit_transactions_unrecorded", extra={"directory": directory, "listed_before": len(before)})
+        return
+    for path in sorted(before - after):
+        _record_deleted(path)
 
 
 def _paths_under(uri: str, storage_options: StorageOptions) -> set[str]:
@@ -363,8 +381,10 @@ def _paths_under(uri: str, storage_options: StorageOptions) -> set[str]:
 
     try:
         return {stored.path for stored in iter_under(uri, storage_options)}
-    except (ClientError, BotoCoreError) as exc:
+    except ClientError as exc:
         raise OSError(f"the store refused listing {uri}: {exc}") from exc
+    except BotoCoreError as exc:
+        raise OSError(f"the store could not be reached listing {uri}: {exc}") from exc
 
 
 def _record_deleted(path: str) -> None:
