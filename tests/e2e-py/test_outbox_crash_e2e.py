@@ -41,6 +41,7 @@ from datetime import UTC, datetime
 import pytest
 import requests
 from credentials import Credential, credential
+from liveness import skip_unless_live
 from outbox_probe import bearer, owned_output_table, table_uuids
 
 from catalog.core.lineage_emit import INSERT, build_write_event
@@ -143,10 +144,7 @@ def _so() -> StorageOptions:
 def lineage() -> str:
     if not LINEAGE or not DAPR_TOKEN:
         pytest.skip("set LANCE_E2E_LINEAGE_URL and the run's dapr-token credential (deployed stack, outbox enabled)")
-    try:
-        requests.get(f"{LINEAGE}/livez", timeout=5).raise_for_status()
-    except Exception:
-        pytest.skip("lineage service not reachable")
+    skip_unless_live(f"{LINEAGE}/livez", what="lineage")
     return LINEAGE
 
 

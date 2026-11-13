@@ -680,19 +680,13 @@ e2e-live: ## Run the e2e suites against the DEPLOYED k3s release (discovers addr
 e2e-ci: bootstrap ## Governed kind stack + every tests/e2e-py module it can serve, then Phase 1's acceptance and its soak == CI e2e-stack
 	CLUSTER=$(KIND_CLUSTER) RELEASE=rask bash scripts/e2e_stack.sh
 
-# The tenant-isolation attack (#74's live half), as a STANDALONE target against an already-deployed
-# estate. `e2e-ci`'s kind stack now runs the same suite itself: `scripts/e2e_stack.sh` provisions a
-# second project and grants bob admin on it, so the five legs execute there under the harness's
-# no-silent-skips gate. This target remains for driving the suite against a cluster the harness did
-# not build, where the two tokens come from the operator rather than from Dex-on-localhost.
-# The suite's own docstring cited this target for months while no Makefile defined it (diff2 F5) —
-# so anyone following the docs ran nothing and saw no error.
-#
-# Un-skipping it is the point: with the env unset every test in the file SKIPS, which is why a
-# key-name mismatch in it survived to be found by reading rather than by running.
-e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled stack (needs 2 tenants)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! set LANCE_E2E_CATALOG_URL, LANCE_E2E_PROJECT_B and LANCE_E2E_CREDENTIALS (a directory holding the token and tenant-b-token files; and LANCE_E2E_S3), or run: bash scripts/e2e_live.sh tests/e2e-py/test_credential_isolation_e2e.py"; exit 1; }
-	uv run pytest tests/e2e-py/test_credential_isolation_e2e.py -m e2e -v
+# The tenant-isolation attack (#74's live half) against an already-deployed estate: the module makes its own two scratch
+# tenants per run and removes them, so it needs only the catalog, Dex and the store's address. `e2e-ci` runs it too.
+e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled stack (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX, LANCE_E2E_S3)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-isolation needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX, LANCE_E2E_S3, or run: bash scripts/e2e_live.sh tests/e2e-py/test_credential_isolation_e2e.py"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-isolation needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX, LANCE_E2E_S3, or run: bash scripts/e2e_live.sh tests/e2e-py/test_credential_isolation_e2e.py"; exit 1; }
+	@test -n "$(LANCE_E2E_S3)" || { echo "  !! e2e-isolation needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX, LANCE_E2E_S3, or run: bash scripts/e2e_live.sh tests/e2e-py/test_credential_isolation_e2e.py"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_S3=$(LANCE_E2E_S3) uv run pytest tests/e2e-py/test_credential_isolation_e2e.py -m e2e -v --require-live
 
 # The CONTAINER tier's deletes ([[LH-028]]): table-level drop/protect/force/undrop were proven live and
 # warehouse/project delete never were, which is exactly where `force` and cascade interact. Every
@@ -708,11 +702,11 @@ e2e-fga-model: ## The DEPLOYED OpenFGA model matches this repo's — the third c
 	@# a chart hook; this is the other half, because a hook that writes and a check that the write LANDED
 	@# are different assertions and only the second notices a hook that silently stopped running.
 	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! set LANCE_E2E_FGA (a deployed OpenFGA), or run: bash scripts/e2e_live.sh tests/e2e-py/test_the_deployed_model_is_the_one_the_code_reasons_about.py"; exit 1; }
-	uv run pytest tests/e2e-py/test_the_deployed_model_is_the_one_the_code_reasons_about.py -m e2e -v
+	uv run pytest tests/e2e-py/test_the_deployed_model_is_the_one_the_code_reasons_about.py -m e2e -v --require-live
 
 e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-disclosure rule, vs a deployed release
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! set LANCE_E2E_CATALOG_URL and LANCE_E2E_CREDENTIALS (a directory holding the token file), or run: bash scripts/e2e_live.sh tests/e2e-py/test_the_container_tier_deletes_are_driven.py"; exit 1; }
-	uv run pytest tests/e2e-py/test_the_container_tier_deletes_are_driven.py -m e2e -v
+	uv run pytest tests/e2e-py/test_the_container_tier_deletes_are_driven.py -m e2e -v --require-live
 
 # ---- one target per e2e suite marker (audit H1) ------------------------------
 # pyproject.toml declares twelve per-suite markers with the comment "used by the e2e make targets
@@ -749,7 +743,7 @@ e2e-byo-pipeline:   ## LH-478 live proof: a stock-client pipeline seeds bronze, 
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m byo_pipeline -v --require-live
 e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs (needs LANCE_E2E_S3_ENDPOINT)
 	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-cas needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m cas -v
+	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m cas -v --require-live
 e2e-chaos:          ## Criterion 5's dependency-outage drills (XC-095): each takes one dependency of the release down, drives the doors while it is gone, restores it and holds the estate to criteria 1 and 4; they TAKE THE RELEASE'S DEPENDENCIES DOWN, so they run only with --chaos (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on its cluster; `bash scripts/e2e_live.sh -m phase1 --require-live --chaos` discovers them)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
@@ -789,7 +783,7 @@ e2e-observability:  ## OTLP → GreptimeDB observability proof (needs LANCE_E2E_
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m observability -v
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m observability -v --require-live
 e2e-phase1:         ## Phase 1's acceptance (XC-090): one drive of the bring-your-own scenario, its own claims, and each criterion module read off it; criterion 1, provenance, is XC-091, criterion 2, the catalog, is XC-092, criterion 4, events, is XC-094, and criterion 5's drills (XC-095) run only with --chaos (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, and LANCE_E2E_CREDENTIALS, a directory holding the service-token file; `bash scripts/e2e_live.sh -m phase1 --require-live` discovers them, and with `--chaos --keep-drive PATH` runs the drills and keeps the drive for `make e2e-soak`)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
@@ -809,7 +803,7 @@ e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_CREDENTIALS)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_CREDENTIALS — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_CREDENTIALS=$(LANCE_E2E_CREDENTIALS) LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m track_a -v
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_CREDENTIALS=$(LANCE_E2E_CREDENTIALS) LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m track_a -v --require-live
 
 # ---- the local image path (registry + Dagger engine) ------------------------
 # `make dev-registry` once per host (a local registry on :5000, and k3s pointed at it), and

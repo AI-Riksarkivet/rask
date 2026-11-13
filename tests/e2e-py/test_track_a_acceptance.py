@@ -79,6 +79,7 @@ import pyarrow.ipc as ipc
 import pytest
 import requests
 from credentials import Credential, credential
+from liveness import skip_unless_live
 
 from lakehouse.naming import CATALOG_DELIMITER
 
@@ -231,10 +232,7 @@ def estate() -> Iterator[Estate]:
     publish gate under test is the one the REQUEST names. Driving inside a tenant that declares one would
     silently substitute its policy for the assertion's key column and required columns.
     """
-    try:
-        requests.get(f"{CATALOG}/livez", timeout=10).raise_for_status()
-    except Exception:  # noqa: BLE001 — an unreachable estate is a skip, not a failure
-        pytest.skip(f"catalog not reachable at {CATALOG}")
+    skip_unless_live(f"{CATALOG}/livez", what="the catalog")
 
     suffix = uuid.uuid4().hex[:8]
     live = Estate(project=f"tracka{suffix}", warehouse=f"tracka{suffix}-wh", namespace=f"trackans{suffix}")
@@ -384,6 +382,7 @@ def test_the_gate_agrees_with_the_publish_on_a_conforming_tier(estate: Estate) -
     # A verdict, never a write: `published` is false on this path whatever the assertions say.
     assert body["published"] is False, body
     assert body["reason"] is None, body
+    assert body["assertions"], f"the gate judged no assertion, so its pass says nothing: {body}"
     assert all(a["success"] for a in body["assertions"]), body
 
     act = estate.publish("symmetry_ok")

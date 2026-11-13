@@ -33,6 +33,7 @@ import pyarrow as pa
 import pytest
 import requests
 from credentials import Credential, credential
+from liveness import skip_unless_live
 from principals import DEX_CLIENT, DEX_SCOPE
 
 
@@ -172,10 +173,7 @@ def pipeline_run() -> Iterator[dict[str, Any]]:
         ("greptime", GREPTIME, "/health"),
     )
     for name, url, probe in probes:
-        try:
-            requests.get(f"{url.rstrip('/')}{probe}", timeout=5).raise_for_status()
-        except Exception:
-            pytest.skip(f"{name} not reachable at {url}")
+        skip_unless_live(f"{url.rstrip('/')}{probe}", what=name)
 
     auth = _auth_headers()
     token = uuid.uuid4().hex[:8]

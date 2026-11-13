@@ -1,159 +1,124 @@
-"""#74 — tenant-isolation ATTACK: tenant B's vended credentials must be REFUSED on tenant A's bucket.
+"""A vended credential reaches its own table at its own tier, and the store refuses it everywhere else (#74).
 
-open_lakehouse_diff §3 names this "the single most important untested claim in the security story":
-byte-PLACEMENT isolation is proven (test_warehouses_e2e.py — A's table lands in bucket-a, absent from
-bucket-b), but nothing ever attacked the STS session-policy scoping. Placement proves the catalog
-WRITES to the right bucket; it says nothing about whether a credential handed to tenant B can be
-pointed at tenant A's bucket by a client that simply ignores the location it was given.
+Taken from the attacker's side: the job identity asks the catalog for a credential on a table of tenant B, where it holds
+`writer`, then builds a raw S3 client from it and points it elsewhere. The refusal must come from the STORE, since the
+catalog is out of the request path once a direct credential exists; that is why the session policy has to be right
+(`catalog.core.vending.build_session_policy`).
 
-This is an ATTACK test, so it is written from the attacker's side: take the credentials the catalog
-really vended for B's table, build a raw S3 client from them, and try A's bucket directly. The
-refusal must come from the STORE, not from the catalog — the catalog is not in the request path at
-all once a direct credential exists, which is the whole reason a session policy has to be right.
+Every leg attacks a key the session policy would have to name to allow it, at the table's real location, read off
+`describe` and never composed (`lance_docs/ns_catalog/catalog/dir/index.md`, a table's directory is the catalog's to
+choose): a key outside the vended prefix is refused whatever the tier allows, so a leg aimed there could not fail.
 
-Both tiers, because they fail differently: a read-tier credential that could LIST another tenant's
-bucket leaks the estate's shape; a write-tier one that could PUT there is cross-tenant corruption.
+- Its own table: each tier lists it, and at one data-file key the write tier's put lands while the read tier's is refused.
+- A sibling table of the same tenant, in the same bucket: refused at both tiers, which tells a policy scoped to the
+  table's prefix from one scoped to the bucket.
+- A table of tenant A, where the job holds nothing: list, read and write are each refused, and a read is refused as
+  AccessDenied, never NoSuchKey, which would mean the store evaluated the request inside A's bucket.
 
-NOT mockable — the point is the object store's own evaluation of the session policy. moto's STS
-does not enforce inline session policies the way a real store does, so a moto pass would be a lie.
-Skipped unless a deployed stack + two tenants' tokens are configured; run via `make e2e-isolation`.
+NOT mockable: the point is the object store's own evaluation of the session policy, which moto's STS does not perform.
+Both tenants are this module's own (`scratch_tenant.provisioned`), created per run and removed with their buckets.
 """
 
 from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlparse
 
 import boto3
+import pyarrow as pa
 import pytest
-import requests
 from botocore.client import Config
 from botocore.exceptions import ClientError
-from credentials import Credential, credential
+from pydantic import BaseModel
+from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
 
-from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage_options import ENDPOINT
 
 
-CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
-TOKEN_A = credential(Credential.TOKEN)
-TOKEN_B = credential(Credential.TENANT_B_TOKEN)
-PROJECT_A = os.environ.get("LANCE_E2E_PROJECT", "acme")
-PROJECT_B = os.environ.get("LANCE_E2E_PROJECT_B", "")
-S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
-ARROW_STREAM = "application/vnd.apache.arrow.stream"
+S3 = os.environ.get("LANCE_E2E_S3", "")
+REFUSED = ("AccessDenied", "AccessDeniedException")
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.skipif(not (CATALOG and DEX and S3), reason="set LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX and LANCE_E2E_S3 (a deployed estate)"),
+]
 
 
-def _auth(token: str) -> dict[str, str]:
-    return {"authorization": f"Bearer {token}"}
+class Placed(BaseModel):
+    """A table and where its bytes are: its bucket and its key prefix there, as `describe` answers them."""
+
+    table: str
+    bucket: str
+    prefix: str
 
 
-def _arrow_ipc() -> bytes:
-    import io
+class Estates(BaseModel):
+    """Tenant A's table, and tenant B's two tables in one bucket."""
 
-    import pyarrow as pa
-    import pyarrow.ipc as ipc
+    a: Placed
+    b: Placed
+    b_sibling: Placed
 
-    table = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
+
+def _create(tenant: Tenant, name: str) -> Placed:
+    """The tenant's admin creates ``name`` in its bronze namespace; where the catalog put it."""
+    table = f"{tenant.bronze}${name}"
+    ok(
+        tenant.admin.http.post(
+            f"{CATALOG}/v1/table/{table}/create",
+            data=encode_arrow_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64())})),
+            headers={"content-type": ARROW_STREAM_MEDIA_TYPE},
+            timeout=60,
+        )
+    )
+    tenant.tables.append(table)
+    location = str(ok(tenant.admin.http.post(f"{CATALOG}/v1/table/{table}/describe", json={}, timeout=60))["location"])
+    bucket, _, prefix = location.removeprefix("s3://").partition("/")
+    return Placed(table=table, bucket=bucket, prefix=prefix.rstrip("/"))
 
 
 @pytest.fixture(scope="module")
-def catalog() -> str:
-    if not (CATALOG and TOKEN_A and TOKEN_B and PROJECT_B):
-        pytest.skip(
-            "set LANCE_E2E_CATALOG_URL, LANCE_E2E_PROJECT_B and the run's token and tenant-b-token credentials (two tenants on a deployed, vending-enabled stack)"
-        )
-    try:
-        requests.get(f"{CATALOG}/livez", timeout=5).raise_for_status()
-    except Exception:
-        pytest.skip("catalog not reachable")
-    return CATALOG
+def tenant_a() -> Iterator[Tenant]:
+    yield from provisioned("iso-a", grants=())
 
 
-def _provision(catalog: str, token: str, project: str, warehouse: str, ns: str, table: str) -> str:
-    """One tenant's warehouse → namespace → table. Returns the table's canonical id."""
-    r = requests.post(f"{catalog}/management/v1/warehouses", json={"id": warehouse, "project": project}, headers=_auth(token), timeout=30)
-    assert r.status_code in (200, 409), r.text
-    r = requests.post(f"{catalog}/management/v1/warehouses/{warehouse}/namespaces", json={"namespace": ns}, headers=_auth(token), timeout=30)
-    assert r.status_code in (200, 409), r.text
-    ident = f"{ns}{CATALOG_DELIMITER}{table}"
-    r = requests.post(
-        f"{catalog}/v1/table/{ident}/create?mode=overwrite",
-        data=_arrow_ipc(),
-        headers={**_auth(token), "content-type": ARROW_STREAM},
-        timeout=60,
-    )
-    assert r.status_code == 200, r.text
-    return ident
+@pytest.fixture(scope="module")
+def tenant_b() -> Iterator[Tenant]:
+    yield from provisioned("iso-b", grants=("writer",))
 
 
-def _vend(catalog: str, token: str, ident: str, tier: str) -> dict[str, str]:
-    """The vended ``storage_options`` for this caller's table at this tier.
+@pytest.fixture(scope="module")
+def estates(tenant_a: Tenant, tenant_b: Tenant) -> Estates:
+    return Estates(a=_create(tenant_a, "t"), b=_create(tenant_b, "t"), b_sibling=_create(tenant_b, "sibling"))
 
-    Returns the INNER block, not ``body["credentials"]`` (diff2 F5). The response is
-    ``{mode, credentials: {storage_options, expires_at_millis}, location, read_version}``, so the
-    outer object carries no key material at all — this test read it for its whole life and would have
-    raised ``KeyError`` on its first real run. It never did, because the suite is env-gated and skips
-    unless a two-tenant deployed stack is configured, which is also why the mismatch survived: a test
-    that never runs cannot fail. The unit pin in ``tests/unit/test_vending.py`` exists so the SHAPE is
-    now checked by something that runs on every commit.
-    """
-    r = requests.post(f"{catalog}/management/v1/table/{ident}/credentials?tier={tier}", headers=_auth(token), timeout=30)
-    assert r.status_code == 200, r.text
-    body = r.json()
+
+def _vend(identity: Identity, table: str, tier: str) -> dict[str, str]:
+    """The ``storage_options`` the catalog vends ``identity`` for ``table`` at ``tier``."""
+    body = ok(identity.http.post(f"{CATALOG}/management/v1/table/{table}/credentials", params={"tier": tier}, timeout=30))
     if body.get("mode") != "direct":
-        pytest.skip(f"stack vends {body.get('mode')} — a session policy is only attackable in direct mode")
-    credentials = body.get("credentials") or {}
-    options = credentials.get("storage_options")
-    assert options, f"vended credentials carried no storage_options: {credentials!r}"
+        pytest.skip(f"the estate vends {body.get('mode')}: a session policy is attackable only in direct mode")
+    options = (body.get("credentials") or {}).get("storage_options")
+    assert options, f"the vend carried no storage_options: {body}"
     return options
 
 
-def _client(creds: dict[str, str]) -> Any:
-    """A raw S3 client wearing the vended credentials — the catalog is NOT in this path.
+def _client(creds: dict[str, str]) -> Any:  # noqa: ANN401 — boto3's client is untyped
+    """A raw S3 client wearing the vended credential, the catalog out of its path.
 
-    ``aws_``-PREFIXED key names, and the coincidence with boto3's own kwargs is worth naming because
-    this file once had the opposite instruction. The vendors emit Lance-style options, which are
-    passed straight to Lance — and object_store's spelling for a credential that must DISPLACE the
-    ambient AWS_* environment is the prefixed one. With the bare spellings it blends the two sources
-    and signs with a pair belonging to neither identity: measured in-cluster 2026-09-03 as
-    `403 SignatureDoesNotMatch` on every write from a pod that carries the root key in its env.
-
-    So these are read out of the payload because the SERVER emits them under these names, not because
-    boto3 takes kwargs that happen to match. That distinction was the original lesson and it still
-    holds; only the vocabulary changed, and `tests/unit/test_vending.py` pins both sides to it.
-
-    ``endpoint`` comes from the vended options when present, falling back to the env. The vendor
-    includes it whenever the deployment configures one, and preferring it keeps the attack pointed at
-    the store the catalog actually issued the credential for.
-
-    BUT THE VENDED ADDRESS IS REACHABLE ONLY FROM INSIDE THE CLUSTER, and these suites run from the
-    host. The catalog vends its own `LANCE_S3_ENDPOINT`, which on this estate is
-    `http://rask-rustfs:9000` — a Service DNS name — so every leg died on
-    `Temporary failure in name resolution` before it could assert anything (measured 2026-09-10: 8
-    failed in 59s, the first drive after these legs stopped skipping).
-
-    So the ADDRESS is remapped to the discovered ClusterIP and NOTHING ELSE IS. The key, the secret and
-    the session TOKEN are used exactly as vended, and the session policy that scopes them is evaluated
-    by the store against bucket and prefix — not against the address the request arrived on. Swapping
-    the route therefore takes nothing away from what the leg proves; swapping the credential would, and
-    this does not.
+    The vended endpoint is the store's in-cluster Service name, which the runner off the cluster cannot resolve, so only
+    the HOST is swapped for the address the runner reaches the store at. The key, secret and session token are used as
+    vended, and the store evaluates the session policy against bucket and key, not against the address a request came in
+    on. The keys are read under the `aws_`-prefixed names the catalog emits for Lance (`tests/unit/test_vending.py`).
     """
     endpoint = creds.get(ENDPOINT) or S3
-    if S3 and endpoint:
-        # Host swap only: keep scheme, port and path from the vended value, take the reachable host.
-        vended = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
-        reachable = urlparse(S3 if "://" in S3 else f"http://{S3}")
-        if vended.hostname and reachable.netloc and vended.hostname != reachable.hostname:
-            endpoint = f"{vended.scheme}://{reachable.netloc}"
+    vended = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")
+    reachable = urlparse(S3 if "://" in S3 else f"http://{S3}")
+    if vended.hostname != reachable.hostname:
+        endpoint = f"{vended.scheme}://{reachable.netloc}"
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
@@ -165,115 +130,87 @@ def _client(creds: dict[str, str]) -> Any:
     )
 
 
-@pytest.fixture(scope="module")
-def estates(catalog: str) -> dict[str, str]:
-    """Two tenants, two warehouses, two buckets — provisioned through the real doors."""
-    a = _provision(catalog, TOKEN_A, PROJECT_A, "e2e-iso-a", "isoans", "isoatbl")
-    b = _provision(catalog, TOKEN_B, PROJECT_B, "e2e-iso-b", "isobns", "isobtbl")
-    # A SECOND table for the SAME tenant, in the same bucket. It is what separates "the store refused
-    # because the bucket belongs to someone else" from "the session policy scoped the credential to one
-    # prefix" — see `test_a_credential_is_scoped_to_its_TABLE_not_merely_its_bucket`.
-    b2 = _provision(catalog, TOKEN_B, PROJECT_B, "e2e-iso-b", "isobns", "isobtbl2")
-    return {
-        "a_ident": a,
-        "b_ident": b,
-        "b2_ident": b2,
-        "a_bucket": "e2e-iso-a",
-        "b_bucket": "e2e-iso-b",
-        # The REAL storage prefix, read off the catalog's own answer rather than composed from the
-        # namespace: `describe` returns `s3://<bucket>/<uuid8>_<ns>$<table>`, and only that path is
-        # inside the vended credential's session policy.
-        "b_prefix": _prefix_of(catalog, TOKEN_B, b, "e2e-iso-b"),
-        "b2_prefix": _prefix_of(catalog, TOKEN_B, b2, "e2e-iso-b"),
-    }
+def _refusal(call: Any) -> str:  # noqa: ANN401 — a boto3 call
+    """The store's error code for ``call``, or ``"taken"`` when the store answered it."""
+    try:
+        call()
+    except ClientError as error:
+        return str(error.response["Error"]["Code"])
+    return "taken"
 
 
-def _prefix_of(catalog: str, token: str, ident: str, bucket: str) -> str:
-    """The table's key prefix inside its bucket, from `describe`. Never composed."""
-    r = requests.post(f"{catalog}/v1/table/{ident}/describe", json={}, headers=_auth(token), timeout=30)
-    assert r.status_code == 200, r.text
-    location = str((r.json() or {}).get("location") or "")
-    return location.removeprefix(f"s3://{bucket}/").rstrip("/")
+def _a_data_file(placed: Placed) -> str:
+    """A new key under the table's `data/`, where the write tier stages a writer's files (`WRITER_PUT_GLOBS`)."""
+    return f"{placed.prefix}/data/{uuid.uuid4().hex}.lance"
 
 
 @pytest.mark.parametrize("tier", ["read", "write"])
-def test_the_credential_still_works_on_its_OWN_table(catalog: str, estates: dict[str, str], tier: str) -> None:
-    """The negative twin, and the reason this suite cannot pass vacuously: a credential that is
-    refused EVERYWHERE would satisfy every assertion above while breaking the product. B's own
-    table must remain readable with B's own credential."""
-    creds = _vend(catalog, TOKEN_B, estates["b_ident"], tier)
-    s3 = _client(creds)
-    # ASK THE CATALOG WHERE THE TABLE IS; do not compose the path. The `dir` backend lays tables out
-    # FLAT — `<uuid8>_<namespace>$<table>/` — so listing the NAMESPACE name matches nothing and the
-    # session policy correctly refuses it. Measured 2026-09-10: this leg asserted `Prefix="isobns"`
-    # and got AccessDenied, while the real prefix answered KeyCount=3 with `data/` and `_versions/`
-    # under it. The policy was right and the expectation was wrong — the same layout trap the register
-    # records for `tier_of`, where one URI encodes its tier five different ways.
-    #
-    # The TRAILING SLASH is load-bearing: the policy gates `s3:ListBucket` on `s3:prefix` matching
-    # `<prefix>/*`, so a bare prefix with no slash does not match its own table's condition.
-    prefix = estates["b_prefix"]
-    listing = s3.list_objects_v2(Bucket=estates["b_bucket"], Prefix=f"{prefix}/", MaxKeys=5)
-    assert listing.get("KeyCount", 0) > 0, (
-        f"B cannot read B's own table at {prefix!r} — the session policy is too tight, and every isolation assertion in this file passes vacuously while it is"
-    )
+def test_a_credential_lists_its_own_table(tenant_b: Tenant, estates: Estates, tier: str) -> None:
+    """Without this, a credential refused everywhere would pass every refusal below while breaking the product. The
+    trailing slash is load-bearing: the policy gates `s3:ListBucket` on `s3:prefix` matching `<prefix>/*`."""
+    s3 = _client(_vend(tenant_b.job, estates.b.table, tier))
+
+    listing = s3.list_objects_v2(Bucket=estates.b.bucket, Prefix=f"{estates.b.prefix}/", MaxKeys=5)
+
+    assert listing.get("KeyCount", 0) > 0, f"a {tier}-tier credential cannot list its own table at {estates.b.prefix!r}"
 
 
-def test_read_tier_credentials_cannot_write_to_their_OWN_table(catalog: str, estates: dict[str, str]) -> None:
-    """The tier split is a security boundary too, not just an ergonomic one: a READ credential for
-    the caller's own table must not be able to PUT into it."""
-    creds = _vend(catalog, TOKEN_B, estates["b_ident"], "read")
-    s3 = _client(creds)
-    key = f"isobns/isobtbl.lance/data/{uuid.uuid4().hex}.lance"
-    with pytest.raises(ClientError) as exc:
-        s3.put_object(Bucket=estates["b_bucket"], Key=key, Body=b"read-tier-should-not-write")
-    assert exc.value.response["Error"]["Code"] in ("AccessDenied", "AccessDeniedException"), (
-        "a read-tier credential could WRITE — the tier split is not enforced at the store"
-    )
+@pytest.mark.parametrize(("tier", "answer"), [pytest.param("read", "AccessDenied", id="read-is-refused"), pytest.param("write", "taken", id="write-lands")])
+def test_a_put_into_the_tables_own_data_is_answered_by_its_tier(tenant_b: Tenant, estates: Estates, tier: str, answer: str) -> None:
+    """The tier split is a boundary the store holds: at one key under the table's own `data/`, the write tier's put lands
+    and the read tier's is refused, so the read leg fails if the read vend ever grants `PutObject` on its prefix."""
+    s3 = _client(_vend(tenant_b.job, estates.b.table, tier))
+    key = _a_data_file(estates.b)
+
+    answered = _refusal(lambda: s3.put_object(Bucket=estates.b.bucket, Key=key, Body=b"a tier's put"))
+
+    assert answered == answer, f"a {tier}-tier credential's put at {key} answered {answered}"
 
 
 @pytest.mark.parametrize("tier", ["read", "write"])
-def test_a_credential_is_scoped_to_its_TABLE_not_merely_its_bucket(catalog: str, estates: dict[str, str], tier: str) -> None:
-    """THE DISCRIMINATOR the cross-tenant legs cannot supply on their own.
+def test_a_credential_lists_no_sibling_table(tenant_b: Tenant, estates: Estates, tier: str) -> None:
+    """Two tables of one tenant in one bucket: a refusal here comes from the policy's prefix, not the bucket's owner."""
+    s3 = _client(_vend(tenant_b.job, estates.b.table, tier))
 
-    Every assertion above attacks ANOTHER TENANT'S bucket, so all six would pass just as well if the
-    store refused on bucket ownership and never read the session policy at all — and then a widened or
-    broken policy would change nothing observable. [[LH-054]] records that gap as needing a
-    "widened-policy sabotage lever" in the harness chart values; this is the same question asked without
-    one, using only credentials the catalog legitimately vends.
+    answered = _refusal(lambda: s3.list_objects_v2(Bucket=estates.b_sibling.bucket, Prefix=f"{estates.b_sibling.prefix}/", MaxKeys=1))
 
-    Two tables, ONE tenant, ONE bucket. `build_session_policy` scopes object actions to
-    `arn:aws:s3:::{bucket}/{prefix}/*` and gates `s3:ListBucket` on `s3:prefix` matching `{prefix}/*`
-    (`vending.py:208-249`), so a credential vended for table 1 must be refused on table 2 — while a
-    bucket-level refusal would let it straight through. The positive control is
-    `test_the_credential_still_works_on_its_OWN_table`: the same credential DOES list its own prefix.
-    """
-    creds = _vend(catalog, TOKEN_B, estates["b_ident"], tier)
-    s3 = _client(creds)
-
-    with pytest.raises(ClientError) as exc:
-        s3.list_objects_v2(Bucket=estates["b_bucket"], Prefix=f"{estates['b2_prefix']}/", MaxKeys=1)
-
-    code = exc.value.response["Error"]["Code"]
-    assert code in ("AccessDenied", "AccessDeniedException"), (
-        f"a {tier}-tier credential for one table listed a SIBLING table in the same bucket ({code}) — the "
-        "session policy is scoped to the bucket rather than the prefix, which also means every "
-        "cross-tenant assertion in this file is passing on bucket ownership rather than on the policy"
-    )
+    assert answered in REFUSED, f"a {tier}-tier credential for one table listed its sibling: {answered}"
 
 
-def test_a_write_credential_cannot_plant_an_object_in_a_SIBLING_table(catalog: str, estates: dict[str, str]) -> None:
-    """The corruption case inside one tenant. Separate from the read leg for the reason the
-    cross-tenant pair is separate: a policy can be right for GET and wrong for PUT."""
-    creds = _vend(catalog, TOKEN_B, estates["b_ident"], "write")
-    s3 = _client(creds)
-    key = f"{estates['b2_prefix']}/data/{uuid.uuid4().hex}.lance"
+def test_a_write_credential_puts_nothing_into_a_sibling_table(tenant_b: Tenant, estates: Estates) -> None:
+    """Separate from the list leg: a policy can be right for listing and wrong for PUT."""
+    s3 = _client(_vend(tenant_b.job, estates.b.table, "write"))
 
-    with pytest.raises(ClientError) as exc:
-        s3.put_object(Bucket=estates["b_bucket"], Key=key, Body=b"sibling-table")
+    answered = _refusal(lambda: s3.put_object(Bucket=estates.b_sibling.bucket, Key=_a_data_file(estates.b_sibling), Body=b"sibling"))
 
-    code = exc.value.response["Error"]["Code"]
-    assert code in ("AccessDenied", "AccessDeniedException"), (
-        f"a write credential for one table PUT into a sibling table's prefix: {code} — one tenant's tables "
-        "are not isolated from each other, and a compromised writer reaches every table it was never vended"
-    )
+    assert answered in REFUSED, f"a write credential for one table put into its sibling: {answered}"
+
+
+@pytest.mark.parametrize("tier", ["read", "write"])
+def test_a_credential_lists_no_table_of_another_tenant(tenant_b: Tenant, estates: Estates, tier: str) -> None:
+    s3 = _client(_vend(tenant_b.job, estates.b.table, tier))
+
+    answered = _refusal(lambda: s3.list_objects_v2(Bucket=estates.a.bucket, Prefix=f"{estates.a.prefix}/", MaxKeys=1))
+
+    assert answered in REFUSED, f"tenant B's {tier}-tier credential listed tenant A's table: {answered}"
+
+
+@pytest.mark.parametrize("tier", ["read", "write"])
+def test_a_credential_reads_no_object_of_another_tenant(tenant_a: Tenant, tenant_b: Tenant, estates: Estates, tier: str) -> None:
+    """The key is one tenant A's own credential lists, so NoSuchKey could only mean the store let the request in."""
+    own = _client(_vend(tenant_a.admin, estates.a.table, "read"))
+    key = str(own.list_objects_v2(Bucket=estates.a.bucket, Prefix=f"{estates.a.prefix}/_versions/", MaxKeys=1)["Contents"][0]["Key"])
+    s3 = _client(_vend(tenant_b.job, estates.b.table, tier))
+
+    answered = _refusal(lambda: s3.get_object(Bucket=estates.a.bucket, Key=key))
+
+    assert answered in REFUSED, f"tenant B's {tier}-tier credential read tenant A's {key}: {answered}"
+
+
+def test_a_write_credential_puts_nothing_into_another_tenants_table(tenant_b: Tenant, estates: Estates) -> None:
+    """Cross-tenant corruption: tenant B's write credential, aimed at a data-file key under tenant A's table."""
+    s3 = _client(_vend(tenant_b.job, estates.b.table, "write"))
+
+    answered = _refusal(lambda: s3.put_object(Bucket=estates.a.bucket, Key=_a_data_file(estates.a), Body=b"cross-tenant"))
+
+    assert answered in REFUSED, f"tenant B's write credential put into tenant A's table: {answered}"

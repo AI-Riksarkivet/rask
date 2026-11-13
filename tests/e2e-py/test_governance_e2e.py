@@ -39,6 +39,7 @@ import requests
 from credentials import Credential, credential
 from fga_store import read, tuples_on
 from lance_namespace import ErrorCode
+from liveness import skip_unless_live
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 from refusals import assert_refused, described, namespace_uuid
 from topology import OUTSIDER, WAREHOUSE, assert_parent_exists, create_top_level
@@ -68,12 +69,9 @@ pytestmark = pytest.mark.e2e
 def stack() -> tuple[str, str]:
     if not (SERVER and LINEAGE):
         pytest.skip("set LANCE_E2E_AUTH_SERVER and LANCE_E2E_LINEAGE_URL to run the governance e2e")
-    try:
-        requests.get(f"{SERVER}/livez", timeout=5).raise_for_status()
-        requests.get(f"{LINEAGE}/livez", timeout=5).raise_for_status()
-        requests.get(f"{DEX}/.well-known/openid-configuration", timeout=5).raise_for_status()
-    except Exception:
-        pytest.skip("governance stack (catalog / lineage / dex) not reachable")
+    skip_unless_live(f"{SERVER}/livez", what="the catalog")
+    skip_unless_live(f"{LINEAGE}/livez", what="lineage")
+    skip_unless_live(f"{DEX}/.well-known/openid-configuration", what="Dex")
     return SERVER.rstrip("/"), LINEAGE.rstrip("/")
 
 

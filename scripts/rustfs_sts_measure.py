@@ -1,6 +1,7 @@
 """Measure whether a RustFS store meets rask's zero-trust needs (ADR 0063's experiment, repeated).
 
-Usage: uv run python scripts/rustfs_sts_measure.py <endpoint>   (a fresh throwaway store, root pair rustfsadmin/rustfsadmin)
+Usage: RUSTFS_ACCESS_KEY=<key> RUSTFS_SECRET_KEY=<secret> uv run python scripts/rustfs_sts_measure.py <endpoint>
+(a fresh throwaway store, booted with that root pair; the scoped user it creates gets a secret drawn per run)
 
 Re-run on every RustFS bump (`.claude/skills/rask-rustfs` § 7), against a store brought up as a Dagger service, never
 against the estate's: it creates buckets, users and canned policies with the root pair. The script at 64ef118a9 made
@@ -10,6 +11,8 @@ Prints one line per check: PASS/FAIL, the check, and what the store answered, an
 """
 
 import json
+import os
+import secrets
 import sys
 import threading
 import time
@@ -35,7 +38,9 @@ from lakehouse.storage_options import StorageOptions
 
 ENDPOINT = sys.argv[1]
 REGION = "us-east-1"
-ROOT = ("rustfsadmin", "rustfsadmin")
+ROOT = (os.environ["RUSTFS_ACCESS_KEY"], os.environ["RUSTFS_SECRET_KEY"])
+#: The scoped user's secret, drawn per run: the user exists only on this run's throwaway store.
+CATALOG_SECRET = secrets.token_urlsafe(24)
 CFG = Config(s3={"addressing_style": "path"}, retries={"max_attempts": 1})
 RESULTS: list[tuple[bool, str, str]] = []
 
@@ -125,11 +130,11 @@ def scoped_user_and_read_session() -> bool:
     }
     seen = admin("PUT", "/rustfs/admin/v3/add-canned-policy", {"name": "catalog"}, json.dumps(catalog_policy).encode())
     record(seen[0] == 200, "admin: create canned policy `catalog` (no sts statement)", f"{seen[0]} {seen[1]}")
-    seen = admin("PUT", "/rustfs/admin/v3/add-user", {"accessKey": "catalog"}, json.dumps({"secretKey": "catalog-secret-1", "status": "enabled"}).encode())
+    seen = admin("PUT", "/rustfs/admin/v3/add-user", {"accessKey": "catalog"}, json.dumps({"secretKey": CATALOG_SECRET, "status": "enabled"}).encode())
     record(seen[0] == 200, "admin: add user `catalog`", f"{seen[0]} {seen[1]}")
     seen = admin("PUT", "/rustfs/admin/v3/set-user-or-group-policy", {"policyName": "catalog", "userOrGroup": "catalog", "isGroup": "false"})
     record(seen[0] == 200, "admin: attach `catalog` to user `catalog`", f"{seen[0]} {seen[1]}")
-    scoped = s3("catalog", "catalog-secret-1")
+    scoped = s3("catalog", CATALOG_SECRET)
     record(
         code_of(lambda: scoped.get_object(Bucket="tenant-a", Key="t1/data.txt")) == "200",
         "scoped user reads its own bucket",
@@ -147,7 +152,7 @@ def scoped_user_and_read_session() -> bool:
         ],
     }
     try:
-        creds = assume("catalog", "catalog-secret-1", read_policy)
+        creds = assume("catalog", CATALOG_SECRET, read_policy)
         record(
             True,
             "a NON-ROOT user's AssumeRole with a session policy issues credentials",
@@ -177,7 +182,7 @@ def scoped_user_and_read_session() -> bool:
     try:
         wide = assume(
             "catalog",
-            "catalog-secret-1",
+            CATALOG_SECRET,
             {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": ["arn:aws:s3:::unrelated/*"]}]},
         )
         got = code_of(lambda: s3(wide.access_key_id, wide.secret_access_key, wide.session_token).get_object(Bucket="unrelated", Key="x.txt"))
@@ -200,7 +205,7 @@ def write_session() -> None:
             {"Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::tenant-a"], "Condition": {"StringLike": {"s3:prefix": ["t1/*", "t1"]}}},
         ],
     }
-    wcreds = assume("catalog", "catalog-secret-1", write_policy)
+    wcreds = assume("catalog", CATALOG_SECRET, write_policy)
     writer = s3(wcreds.access_key_id, wcreds.secret_access_key, wcreds.session_token)
     for name, call, want in [
         ("vended write: PUT in scope", lambda: writer.put_object(Bucket="tenant-a", Key="t1/w.txt", Body=b"x"), "200"),
@@ -242,7 +247,7 @@ def write_session() -> None:
     # The record store is pyarrow's S3FileSystem, and rask writes it with a service's own scoped pair (the catalog's,
     # maintenance's), never a vended session: `lakehouse.record_store.put_record`.
     own = StorageOptions.from_flat(
-        {"endpoint": ENDPOINT, "aws_access_key_id": "catalog", "aws_secret_access_key": "catalog-secret-1", "region": REGION, "allow_http": "true"}
+        {"endpoint": ENDPOINT, "aws_access_key_id": "catalog", "aws_secret_access_key": CATALOG_SECRET, "region": REGION, "allow_http": "true"}
     )
     try:
         put_record("s3://tenant-a", own, "_protection/x.json", {"k": "v"})

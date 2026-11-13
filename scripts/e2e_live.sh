@@ -93,14 +93,14 @@ DEX_SECRET="$(kubectl get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2
 OIDC_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="RASK_OIDC_AUDIENCE")].value}' 2>/dev/null)"
 : "${OIDC_AUDIENCE:=rask-lakehouse}"
 mint() { password_grant "http://$DEX/dex/token" "$DEX_CLIENT" "$DEX_SECRET" "openid email federated:id audience:server:client_id:$OIDC_AUDIENCE" "$1" password; }
-ALICE="$(mint alice@example.com)"; BOB="$(mint bob@example.com)"
+ALICE="$(mint alice@example.com)"
 # A THIRD IDENTITY, because bob is not the non-admin this estate needs. The seed assigns bob to acme's
 # admins role, which holds `admin` on `project:acme` — so bob holds `can_administer` and the 403 legs had
 # nothing to assert. `publisher@rask.internal` is in the deployed Dex configmap and is in no role; measured
 # 2026-09-06: can_administer(project:acme) is False for publisher and True for bob.
 PUBLISHER="$(mint publisher@rask.internal)"
 [ -n "$ALICE" ] || fail "Dex issued no token for alice — is auth enabled and dex reachable at $DEX?"
-printf '   alice=%s… bob=%s…\n' "${ALICE:0:18}" "${BOB:0:18}"
+printf '   alice=%s…\n' "${ALICE:0:18}"
 
 step "3/4 reading the estate's own secrets"
 # From the Dapr app-token Secret, never from a values file: the token the sidecar stamps is the one
@@ -133,7 +133,7 @@ url LANCE_E2E_DEX             "$DEX" /dex
 url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
 if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
-[ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
+[ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip, which fails the run):%s\n' "$_missing"
 if [ -n "$FGA" ]; then
   # OPENFGA ADMITS ONLY A PROJECTED `rask-openfga` TOKEN ([[XC-077]]), so this runner and the suites speak
   # to it as the bootstrap Job's ServiceAccount, the identity that writes the estate's standing tuples. A
@@ -230,43 +230,6 @@ else
   printf '   note: no warehouse found for project %s — the suites that need one use the root door and may be refused\n' "${LANCE_E2E_PROJECT:-acme}"
 fi
 
-# ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------
-# Five legs in `test_credential_isolation_e2e.py` assert that a credential vended for tenant A is
-# REFUSED on tenant B's data — the sharpest statement of storage isolation this estate makes — and all
-# five skipped, because the runner that discovers every other address and credential from the cluster
-# set neither variable they gate on.
-#
-# A FIXED ID, deliberately, not one per run. This is estate FURNITURE like `acme`, created once and
-# reused: a per-run tenant would leave a project behind on every drive, and a project has no retention
-# to clean it up (§ Q8-15 is what accumulation does to a control). `POST /management/v1/projects` writes the
-# record and the creator's admin tuple in one operation. Measured against the deployed catalog: a
-# SECOND create answers 200 and echoes the current admin set rather than 409 — it converges. 409 is
-# accepted below anyway, because which of the two a door gives for "already there" is exactly the kind
-# of thing that changes under you, and both mean the same to this script.
-#
-# GUARDED like the warehouse block above: an estate that refuses the create prints a note and the legs
-# skip exactly as they do today. Provisioning a tenant must never be the reason a suite run dies.
-if [ -n "$CATALOG" ] && [ -n "$ALICE" ] && [ -n "$BOB" ]; then
-  TENANT_B="${LANCE_E2E_PROJECT_B:-e2etenantb}"
-  B_CODE="$(authorized "$ALICE" -s -o /dev/null -w '%{http_code}' -m 20 -X POST "http://$CATALOG/management/v1/projects" \
-    -H 'content-type: application/json' \
-    -d "{\"id\":\"$TENANT_B\"}" 2>/dev/null || true)"
-  BOB_PRINCIPAL="$(authorized "$BOB" -s -m 20 "http://$CATALOG/management/v1/me" \
-    | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))" 2>/dev/null || true)"
-  if [ "$B_CODE" = "200" ] || [ "$B_CODE" = "201" ] || [ "$B_CODE" = "409" ]; then
-    # Bob administers tenant B while alice administers acme, which is what makes the isolation legs a
-    # real cross-tenant test rather than one principal talking to two of its own projects.
-    [ -n "$BOB_PRINCIPAL" ] && authorized "$ALICE" -s -o /dev/null -m 20 -X POST "http://$CATALOG/management/v1/access/tuples" \
-      -H 'content-type: application/json' \
-      -d "{\"user\":\"$BOB_PRINCIPAL\",\"relation\":\"admin\",\"object\":\"project:$TENANT_B\"}" 2>/dev/null || true
-    export LANCE_E2E_PROJECT_B="$TENANT_B"
-    keep tenant-b-token "$BOB"
-    printf '   tenant B: %s (admin=bob) — the credential-isolation legs will RUN\n' "$TENANT_B"
-  else
-    printf '   note: could not provision tenant B (HTTP %s) — the 5 credential-isolation legs will SKIP\n' "${B_CODE:-?}"
-  fi
-fi
-
 step "4/4 running the suites against the live estate"
 # `-m e2e` and NOT a file list: the marker is what the suites declare about themselves, so a new suite
 # is picked up without editing this script. Args override for a narrower run.
@@ -278,5 +241,22 @@ ROOT=(tests/e2e-py)
 for arg in "$@"; do
   case "$arg" in tests/* | */tests/*) ROOT=() ;; esac
 done
-[ "$#" -gt 0 ] || set -- -m e2e
-PYTHONPATH=services uv run pytest "${ROOT[@]}" "$@" -v
+# THE MULTIBASE FAN-OUT LEG needs two data bases the deployed catalog admits (`catalog.multibase.dataBases`), read off its
+# own container. An estate declaring fewer cannot serve it, so the default selection leaves that one leg out and says so;
+# a run that names it gets what it named, and fails under `--require-live` when it skips.
+BASES="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="LANCE_MULTIBASE_DATA_BASES")].value}' 2>/dev/null || true)"
+IFS=, read -r -a DATA_BASES <<<"$BASES"
+NOT_SERVED=()
+if [ "${#DATA_BASES[@]}" -ge 2 ]; then
+  export LANCE_E2E_BASE_A="${DATA_BASES[0]}" LANCE_E2E_BASE_B="${DATA_BASES[1]}"
+else
+  NOT_SERVED=(--deselect tests/e2e-py/test_multibase_e2e.py::test_multibase_redirects_data_and_reads_fan_out)
+  printf '   the catalog admits %s data base(s), so the multibase fan-out leg is left out of the default selection\n' "${#DATA_BASES[@]}"
+fi
+
+# A SKIP IS A FAILED DRIVE (`--require-live`): the estate is up, so a suite that skipped never ran. The default selection
+# leaves out the two markers whose rig only their own Dagger lane stands up, as `scripts/e2e_stack.sh` does: `nats_auth`
+# (an operator-mode broker, `dagger call nats-auth`) and `rustfs_provisioning` (a throwaway store, `dagger call
+# rustfs-provisioning`).
+[ "$#" -gt 0 ] || set -- -m "e2e and not nats_auth and not rustfs_provisioning" "${NOT_SERVED[@]}"
+PYTHONPATH=services uv run pytest "${ROOT[@]}" "$@" -v --require-live

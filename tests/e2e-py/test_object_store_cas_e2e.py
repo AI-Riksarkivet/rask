@@ -31,9 +31,9 @@ import lance
 import pyarrow as pa
 import pytest
 from botocore.config import Config
-from botocore.exceptions import ClientError
 from cas_append_worker import append_rows
 from credentials import Credential, credential
+from liveness import skip_unless_live
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
@@ -76,10 +76,7 @@ def s3():
     if not ENDPOINT:
         pytest.skip("set LANCE_E2E_S3_ENDPOINT (see module docstring / make e2e-cas)")
     client = _s3()
-    try:
-        client.head_bucket(Bucket=BUCKET)
-    except ClientError as exc:
-        pytest.skip(f"RustFS bucket {BUCKET!r} unreachable at {ENDPOINT}: {exc}")
+    skip_unless_live(ENDPOINT, what=f"the bucket {BUCKET!r}", probe=lambda _url, _timeout: client.head_bucket(Bucket=BUCKET))
     return client
 
 

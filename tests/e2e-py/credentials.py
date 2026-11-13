@@ -26,8 +26,6 @@ class Credential(StrEnum):
     DAPR_TOKEN = "dapr-token"
     #: A bearer of the estate's admin, who administers the scenario's project.
     TOKEN = "token"
-    #: A bearer of the admin of the second tenant, for the cross-tenant legs.
-    TENANT_B_TOKEN = "tenant-b-token"
     #: The secret of the confidential sign-in client the live lanes' password grant presents.
     DEX_SECRET = "dex-secret"
     #: A `rask-openfga` TokenRequest for the bootstrap Job's ServiceAccount; it expires, so its readers re-read the file.

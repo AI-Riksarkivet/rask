@@ -52,7 +52,10 @@ def test_a_pipeline_seeds_bronze_derives_silver_and_its_breach_waits_for_a_valid
     assert (insert["inputs"], insert["event"]["run"]["facets"]["parent"]["job"]) == ([run.bronze_table], {"namespace": "byo-pipeline", "name": "byo-silver"}), (
         insert
     )
-    assert (run.caught_up["events"], run.caught_up["next_cursor"]) == ([], run.cursor), run.caught_up
+    # No silver row follows the last publication. The cursor may move past rows of other tables that landed meanwhile,
+    # which the table filter hides and `next_cursor` still covers (`docs/COMMIT-EVENTS.md`), so it is held only to never
+    # moving backwards: an equal cursor holds only on an estate where nothing else commits.
+    assert (run.caught_up["events"], run.caught_up["next_cursor"] >= run.cursor) == ([], True), run.caught_up
 
 
 def test_the_write_tier_credential_cannot_forge_the_published_tag(byo_tenant: Tenant) -> None:

@@ -44,7 +44,6 @@ dev = [
     "requests>=2.32",
     "ruff",
     "ty",
-    "datasets>=4.8.4",
     "pylance>=13.0.0",
     "lancedb>=0.40.0",
     # The third stock client criterion 2 reads a governed table through (tests/e2e-py/test_the_catalog_is_correct.py):

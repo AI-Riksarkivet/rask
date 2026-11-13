@@ -392,10 +392,8 @@ PYEOF
 step "7/9 mint Dex tokens + build the tenant through the catalog's doors"
 mint() { password_grant http://localhost:5556/dex/token rask-web lance-catalog-secret "openid email federated:id audience:server:client_id:rask-lakehouse" "$1" password; }
 ALICE="$(mint alice@example.com)"
-BOB="$(mint bob@example.com)"
-[ -n "$ALICE" ] && [ -n "$BOB" ] || { echo "!! Dex issued no token"; exit 1; }
+[ -n "$ALICE" ] || { echo "!! Dex issued no token"; exit 1; }
 keep token "$ALICE"
-keep tenant-b-token "$BOB"
 
 # The FGA subject is the principal the token proves (`<idp-id>~<user id>`, LH-063), NOT the email — granting the
 # email authorizes nobody. The catalog names it: `/management/v1/me` answers the principal its connector map derives.
@@ -404,7 +402,6 @@ principal_of() {
   | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))"
 }
 PRINCIPAL="$(principal_of "$ALICE")"
-BOB_PRINCIPAL="$(principal_of "$BOB")"
 # The install named the estate admin from the Dex fixture before Dex existed (stack_values.sh); the catalog says who
 # Dex's token proves. A mismatch is an estate whose admin is nobody the suites can log in as.
 [ "$PRINCIPAL" = "$ADMIN_PRINCIPAL" ] || { echo "!! auth.bootstrapAdmin=$ADMIN_PRINCIPAL but alice's token proves $PRINCIPAL"; exit 1; }
@@ -457,16 +454,6 @@ door "$ALICE" POST /management/v1/warehouses "{\"id\":\"$WAREHOUSE\",\"project\"
 door "$ALICE" POST "/management/v1/warehouses/$WAREHOUSE/namespaces" '{"namespace":"mbns","adopt_existing":true}' 200 201 409 || exit 1
 echo "   project $PROJECT > warehouse $WAREHOUSE > namespace mbns"
 
-# ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------
-# Five legs in `test_credential_isolation_e2e.py` assert that a credential vended for tenant A is REFUSED on tenant
-# B's data — the sharpest statement of storage isolation this estate makes. BOB ADMINISTERS B WHILE ALICE ADMINISTERS
-# acme, which is what makes this a cross-tenant test rather than one principal talking to two of its own projects.
-# Minting a project is the estate admin's, so alice creates it and grants bob through the project's members door.
-TENANT_B=e2etenantb
-door "$ALICE" POST /management/v1/projects "{\"id\":\"$TENANT_B\"}" 200 201 409 || exit 1
-door "$ALICE" PUT "/management/v1/projects/$TENANT_B/members" "{\"user\":\"$BOB_PRINCIPAL\",\"relation\":\"admin\"}" 200 || exit 1
-echo "   tenant B: $TENANT_B (admin=bob)"
-
 step "8/9 the outbox suite's Dapr app token"
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
@@ -497,7 +484,6 @@ export LANCE_E2E_FGA_STORE_ID="$SID"
 export LANCE_E2E_PROJECT="$PROJECT"
 # The suites' top-level namespaces arrive through this warehouse (`topology.create_top_level`, `outbox_probe`).
 export LANCE_E2E_WAREHOUSE="$WAREHOUSE"
-export LANCE_E2E_PROJECT_B="$TENANT_B"
 export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"

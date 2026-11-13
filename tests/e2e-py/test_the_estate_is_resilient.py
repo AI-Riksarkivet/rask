@@ -11,8 +11,9 @@ criteria 1 and 4 hold the scenario to (`correctness`):
 
 The drills, and what each outage must look like while it lasts:
 
-1. The object store. A write through the catalog's own door is refused ServiceUnavailable (code 17, 503), or gets no
-   answer within the bound the catalog's own store timeouts set, and never lands while the store is gone.
+1. The object store. A write through the catalog's own door is refused ServiceUnavailable (503, code 17) within the
+   bound the catalog's own store timeouts set, and never lands while the store is gone. No answer, or no door reached,
+   is a failure: a catalog that did not answer or was not there is not one that refused.
 2. OpenFGA, the authorization decision. A governed write answers ServiceUnavailable at its authorization check: never an
    allow, and never a deny, which would read as a missing grant (`lakehouse.governed.fga`).
 3. Lineage, the commit feed's recorder. Commits go on landing, and each announcement is recorded once lineage is back:
@@ -107,8 +108,9 @@ pytestmark = [
 
 
 class Refusal(BaseModel):
-    """A write a door did not take: the spec code its answer carried, or none when it never reached a door."""
+    """A write a door did not take: the HTTP status and spec code its answer carried, both none when no door answered."""
 
+    status: int | None
     code: int | None
     text: str
 
@@ -185,11 +187,11 @@ class Drills:
         except requests.Timeout:
             with self._lock:
                 self.unanswered.append(run)
-            return Refusal(code=None, text=f"no answer within {within:.0f} s")
+            return Refusal(status=None, code=None, text=f"no answer within {within:.0f} s")
         except requests.ConnectionError as error:
-            return Refusal(code=None, text=f"no door reached: {str(error)[:200]}")
+            return Refusal(status=None, code=None, text=f"no door reached: {str(error)[:200]}")
         if answer.status_code != 200:
-            return Refusal(code=_problem_code(answer), text=f"{answer.status_code}: {answer.text[:300]}")
+            return Refusal(status=answer.status_code, code=_problem_code(answer), text=f"{answer.status_code}: {answer.text[:300]}")
         return self._record(table, int(answer.json()["version"]), run)
 
     def describe(self, table: list[str]) -> int | Refusal:
@@ -198,7 +200,7 @@ class Drills:
         try:
             described = self.pipeline.namespace().describe_table(ln.DescribeTableRequest(id=table, vend_credentials=False, load_detailed_metadata=True))
         except ln.LanceNamespaceError as error:
-            return Refusal(code=error.code, text=str(error)[:300])
+            return Refusal(status=None, code=error.code, text=str(error)[:300])
         assert described.version is not None, f"{table} described no version"
         return int(described.version)
 
@@ -210,9 +212,9 @@ class Drills:
                 f"{CATALOG}/v1/table/{'$'.join(table)}/describe", json={"vend_credentials": False, "load_detailed_metadata": True}, timeout=60
             )
         except requests.ConnectionError as error:
-            return Refusal(code=None, text=f"no door reached: {str(error)[:200]}")
+            return Refusal(status=None, code=None, text=f"no door reached: {str(error)[:200]}")
         if answer.status_code != 200:
-            return Refusal(code=_problem_code(answer), text=f"{answer.status_code}: {answer.text[:300]}")
+            return Refusal(status=answer.status_code, code=_problem_code(answer), text=f"{answer.status_code}: {answer.text[:300]}")
         return int(answer.json()["version"])
 
     def serving(self, table: list[str]) -> None:
@@ -299,8 +301,9 @@ def _outage_failure(error: Exception) -> Literal["lost", "refused"] | None:
     return None
 
 
-def _refused(probe: Commit | Refusal | int, *, codes: tuple[int | None, ...] = (SERVICE_UNAVAILABLE,)) -> bool:
-    return isinstance(probe, Refusal) and probe.code in codes
+def _refused(probe: Commit | Refusal | int) -> bool:
+    """Whether a door answered ``probe`` ServiceUnavailable: 503 with the spec's code 17, never a silence or no door."""
+    return isinstance(probe, Refusal) and (probe.status, probe.code) == (503, SERVICE_UNAVAILABLE)
 
 
 @pytest.fixture(scope="module")
@@ -321,7 +324,7 @@ def test_an_object_store_outage_refuses_a_write_and_the_estate_recovers_correct(
     drills.serving(table)
     drills.append(table, range(8, 12))
 
-    assert _refused(refused, codes=(SERVICE_UNAVAILABLE, None)), f"a write while the object store was gone answered {refused}"
+    assert _refused(refused), f"a write while the object store was gone answered {refused}"
     drills.assert_correct([table], since=started)
 
 
@@ -401,7 +404,7 @@ def test_a_sealed_secret_store_refuses_every_write_the_catalog_cannot_announce_a
     drills.serving(table)
     drills.append(table, range(8, 12))
 
-    assert _refused(refused, codes=(SERVICE_UNAVAILABLE, None)), f"a write the catalog could not announce answered {refused}"
+    assert _refused(refused), f"a write the catalog could not announce answered {refused}"
     drills.assert_correct([table], since=started)
 
 

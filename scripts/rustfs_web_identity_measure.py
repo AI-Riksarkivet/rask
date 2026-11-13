@@ -3,7 +3,7 @@
 Two halves, run on the host while the store runs as a Dagger service:
 
     uv run python scripts/rustfs_web_identity_measure.py serve <port> <state-dir>      # a stand-in ServiceAccount issuer
-    uv run python scripts/rustfs_web_identity_measure.py measure <endpoint> <state-dir>
+    RUSTFS_ACCESS_KEY=<key> RUSTFS_SECRET_KEY=<secret> uv run python scripts/rustfs_web_identity_measure.py measure <endpoint> <state-dir>
 
 `serve` publishes what rask's issuer mirror publishes (`lakehouse.governed.issuer_mirror`): the discovery document
 of an issuer whose `iss` is the cluster's, `https://kubernetes.default.svc.cluster.local`, with `jwks_uri` pointed at
@@ -19,6 +19,8 @@ this form of it, which also reads back the create's file version and stable row 
 import base64
 import http.server
 import json
+import os
+import secrets
 import sys
 import threading
 import time
@@ -49,7 +51,14 @@ ISSUER = "https://kubernetes.default.svc.cluster.local"
 AUDIENCE = "rask-object-store"
 CATALOG = "system:serviceaccount:default:rask-sa-catalog"
 REGION = "us-east-1"
-ROOT = ("rustfsadmin", "rustfsadmin")
+
+
+def _root() -> tuple[str, str]:
+    """The throwaway store's root pair, as it was booted with; read by `measure` alone, since `serve` holds no store
+    credential. An unset pair fails here rather than signing the admin calls with nothing."""
+    return os.environ["RUSTFS_ACCESS_KEY"], os.environ["RUSTFS_SECRET_KEY"]
+
+
 CFG = Config(s3={"addressing_style": "path"}, retries={"max_attempts": 1})
 RESULTS: list[tuple[bool, str, str]] = []
 
@@ -133,7 +142,7 @@ def token(state: Path, sub: str = CATALOG, *, aud: str = AUDIENCE, ttl: int = 60
 
 def admin(endpoint: str, method: str, path: str, params: dict[str, str], body: bytes = b"") -> tuple[int, str]:
     req = AWSRequest(method=method, url=f"{endpoint}{path}", params=params, data=body)
-    S3SigV4Auth(Credentials(*ROOT), "s3", REGION).add_auth(req)
+    S3SigV4Auth(Credentials(*_root()), "s3", REGION).add_auth(req)
     prepared = req.prepare()
     r = requests.request(method, prepared.url, headers=dict(prepared.headers), data=body, timeout=30)
     return r.status_code, r.text[:300].replace("\n", " ")
@@ -183,7 +192,7 @@ def code_of(call: Callable[[], object]) -> str:
 
 
 def wait_up(endpoint: str) -> None:
-    root = boto3.client("s3", endpoint_url=endpoint, aws_access_key_id=ROOT[0], aws_secret_access_key=ROOT[1], region_name=REGION, config=CFG)
+    root = boto3.client("s3", endpoint_url=endpoint, aws_access_key_id=_root()[0], aws_secret_access_key=_root()[1], region_name=REGION, config=CFG)
     deadline = time.monotonic() + 120
     while True:
         try:
@@ -217,7 +226,7 @@ def write_policy(bucket: str, prefix: str) -> Policy:
 
 def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
     wait_up(endpoint)
-    root = boto3.client("s3", endpoint_url=endpoint, aws_access_key_id=ROOT[0], aws_secret_access_key=ROOT[1], region_name=REGION, config=CFG)
+    root = boto3.client("s3", endpoint_url=endpoint, aws_access_key_id=_root()[0], aws_secret_access_key=_root()[1], region_name=REGION, config=CFG)
     for bucket in ("tenant-a", "tenant-b", "unrelated"):
         root.create_bucket(Bucket=bucket)
     root.put_object(Bucket="tenant-a", Key="t1/x", Body=b"a1")
@@ -319,9 +328,8 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
     issuer = refused(lambda: exchange(endpoint, token(state, iss="https://evil.example")))
     record(issuer != "issued", "a token from another issuer is refused", issuer)
 
-    status, _ = admin(
-        endpoint, "PUT", "/rustfs/admin/v3/add-user", {"accessKey": "rask-catalog"}, json.dumps({"secretKey": "x" * 40, "status": "enabled"}).encode()
-    )
+    user = json.dumps({"secretKey": secrets.token_urlsafe(30), "status": "enabled"}).encode()
+    status, _ = admin(endpoint, "PUT", "/rustfs/admin/v3/add-user", {"accessKey": "rask-catalog"}, user)
     status_list, listed = admin(endpoint, "GET", "/rustfs/admin/v3/list-users", {})
     record(
         status == 200 and status_list == 200 and "rask-catalog" in listed,

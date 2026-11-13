@@ -23,6 +23,7 @@ import pyarrow.ipc as ipc
 import pytest
 import requests
 from credentials import Credential, credential
+from liveness import skip_unless_live
 from topology import assert_parent_exists, create_top_level
 
 from lakehouse.naming import CATALOG_DELIMITER
@@ -78,10 +79,7 @@ def _arrow_many_rows(n: int = 4000) -> bytes:
 def catalog() -> str:
     if not CATALOG or not TOKEN:
         pytest.skip("set LANCE_E2E_CATALOG_URL and the run's token credential (deployed stack with multibase allowlist)")
-    try:
-        requests.get(f"{CATALOG}/livez", timeout=5).raise_for_status()
-    except Exception:
-        pytest.skip("catalog not reachable")
+    skip_unless_live(f"{CATALOG}/livez", what="the catalog")
     return CATALOG
 
 

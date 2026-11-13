@@ -13,6 +13,11 @@ build/
 uv-cache/
 .python-version-local
 .env
+# Secrets that must never be committed: any env file but the documented example, and key material.
+.env.*
+!.env.example
+*.pem
+*.key
 
 # JS / SvelteKit
 node_modules/

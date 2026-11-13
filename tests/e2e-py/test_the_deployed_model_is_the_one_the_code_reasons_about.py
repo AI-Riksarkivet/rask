@@ -40,6 +40,7 @@ from typing import Any
 
 import pytest
 from credentials import Credential, credential_path
+from liveness import skip_unless_live
 
 from lakehouse.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document, shape
 from lakehouse.governed.fga import ModelHistory, newest_store
@@ -67,10 +68,8 @@ def held() -> tuple[str, ModelHistory]:
     """The store the estate uses, and its history read against this checkout's model."""
     if not FGA:
         pytest.skip("set LANCE_E2E_FGA (a deployed OpenFGA) — scripts/e2e_live.sh discovers it")
-    try:
-        stores = _get("/stores").get("stores") or []
-    except Exception as exc:  # noqa: BLE001 — an unreachable store is a skip, not a drift failure
-        pytest.skip(f"openfga not reachable: {type(exc).__name__}")
+    skip_unless_live(f"{FGA}/stores", what="OpenFGA", probe=lambda _url, _timeout: _get("/stores"))
+    stores = _get("/stores").get("stores") or []
     named = newest_store(stores, STORE_NAME)
     store = STORE or (str(named["id"]) if named else "")
     if not store:

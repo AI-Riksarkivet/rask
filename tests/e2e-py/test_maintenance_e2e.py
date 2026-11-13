@@ -60,4 +60,4 @@ def test_a_commit_is_followed_by_its_tables_pass(byo_tenant: Tenant) -> None:
 
     assert record is not None, f"no pass followed the commits on {table} within {scenario.COMMIT_PASS_SECONDS:.0f} s: its due record never appeared"
     assert (record["table"], record["version"]) == (table, 4), f"no pass followed the last commit on {table}: {record}"
-    assert record["compaction"] is not None and record["compaction"]["candidate_fragments"] >= 2, f"the pass listed no compaction: {record}"
+    assert record["compaction"] is not None and record["compaction"]["candidate_fragments"] == 4, f"the pass did not list the four commits' fragments: {record}"

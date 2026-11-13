@@ -65,6 +65,7 @@ from credentials import Credential, credential
 from lance import blob_array, blob_field
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
+from liveness import skip_unless_live
 from pydantic import BaseModel, Field
 
 from lakehouse import location_claims
@@ -132,10 +133,7 @@ def s3() -> Any:
     from lakehouse.storage import s3_client
 
     client = s3_client(ENDPOINT, access_key=ACCESS_KEY, secret_key=SECRET_KEY)
-    try:
-        client.list_buckets()
-    except Exception as exc:  # noqa: BLE001 — no store, no suite; the reason belongs in the skip
-        pytest.skip(f"S3 store unreachable at {ENDPOINT}: {exc}")
+    skip_unless_live(ENDPOINT, what="the S3 store", probe=lambda _url, _timeout: client.list_buckets())
     return client
 
 

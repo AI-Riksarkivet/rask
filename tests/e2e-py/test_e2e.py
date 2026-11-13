@@ -13,6 +13,7 @@ import pyarrow as pa
 import pytest
 import requests
 from credentials import Credential, credential
+from liveness import skip_unless_live
 from topology import assert_parent_exists, create_top_level
 
 from lakehouse.naming import CATALOG_DELIMITER
@@ -57,10 +58,7 @@ def _fresh(namespace: str, stem: str) -> str:
 def base() -> str:
     if not URL:
         pytest.skip("set LANCE_REST_E2E_URL to run e2e tests")
-    try:
-        requests.get(f"{URL}/livez", timeout=5).raise_for_status()
-    except Exception:
-        pytest.skip(f"server not reachable at {URL}")
+    skip_unless_live(f"{URL}/livez", what="the catalog")
     return URL.rstrip("/")
 
 

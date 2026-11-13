@@ -297,7 +297,11 @@ class Link:
     It can also lose one subject's traffic while the rest flows (:meth:`drop`): a `PUB` or `HPUB` the client sends on a
     subject a dropped pattern matches never reaches the broker, as a message the network lost, so a request on it goes
     unanswered while the connection, and every other subject, stays up. Only the client's publishes are read for it: the
-    protocol frames each one as a line naming its subject and payload size, then the payload."""
+    protocol frames each one as a line naming its subject and payload size, then the payload.
+
+    Or it can slow the client's side of the path (:meth:`lag`), as a slow route to the server holding a stream's leader
+    does: every frame the client sends, a pull and the unsubscribe that gives it up alike, reaches the broker that many
+    seconds after it was sent, in order, while what the broker sends comes back at once."""
 
     def __init__(self, target_port: int) -> None:
         self._target_port = target_port
@@ -306,6 +310,7 @@ class Link:
         self._server: asyncio.Server | None = None
         self._writers: set[asyncio.StreamWriter] = set()
         self._dropped: set[str] = set()
+        self._lag = 0.0
 
     @property
     def url(self) -> str:
@@ -332,9 +337,14 @@ class Link:
         """Lose every publish the client sends on a subject `pattern` matches (NATS wildcards), until :meth:`flow`."""
         self._dropped.add(pattern)
 
+    def lag(self, seconds: float) -> None:
+        """Deliver every frame the client sends `seconds` after it was sent, until :meth:`flow`."""
+        self._lag = seconds
+
     def flow(self) -> None:
-        """Pass every publish on again."""
+        """Pass every publish on again, at once."""
         self._dropped.clear()
+        self._lag = 0.0
 
     async def stop(self) -> None:
         server, self._server = self._server, None
@@ -347,18 +357,43 @@ class Link:
         broker_reader, broker_writer = await asyncio.open_connection("127.0.0.1", self._target_port, limit=_LINE_LIMIT)
         self._writers |= {client_writer, broker_writer}
 
-        async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, frames: bool) -> None:
+        loop = asyncio.get_running_loop()
+        # The client's frames, each with when it was read, so a lag delays every frame by the same span rather than adding up.
+        sent: asyncio.Queue[tuple[float, bytes]] = asyncio.Queue()
+
+        async def read_client() -> None:
             try:
-                while chunk := await (self._client_frame(reader) if frames else reader.read(65536)):
-                    writer.write(chunk)
-                    await writer.drain()
+                while frame := await self._client_frame(client_reader):
+                    sent.put_nowait((loop.time(), frame))
             except (ConnectionError, OSError, asyncio.IncompleteReadError):
                 pass
             finally:
-                writer.close()
-                self._writers.discard(writer)
+                sent.put_nowait((loop.time(), b""))
 
-        await asyncio.gather(pipe(client_reader, broker_writer, True), pipe(broker_reader, client_writer, False))
+        async def to_broker() -> None:
+            try:
+                while (frame := await sent.get())[1]:
+                    await asyncio.sleep(max(0.0, frame[0] + self._lag - loop.time()))
+                    broker_writer.write(frame[1])
+                    await broker_writer.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                broker_writer.close()
+                self._writers.discard(broker_writer)
+
+        async def to_client() -> None:
+            try:
+                while chunk := await broker_reader.read(65536):
+                    client_writer.write(chunk)
+                    await client_writer.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                client_writer.close()
+                self._writers.discard(client_writer)
+
+        await asyncio.gather(read_client(), to_broker(), to_client())
 
     async def _client_frame(self, reader: asyncio.StreamReader) -> bytes:
         """The client's next frame as it goes on to the broker: a protocol line, with its payload for a publish, or nothing

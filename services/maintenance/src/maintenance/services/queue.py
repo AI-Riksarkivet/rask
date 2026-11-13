@@ -41,7 +41,9 @@ from typing import TYPE_CHECKING, Final, Literal, NoReturn
 import nats
 from nats.aio.client import Client, RawCredentials
 from nats.aio.msg import Msg
+from nats.aio.subscription import Subscription
 from nats.errors import Error as NatsError
+from nats.js.api import Header
 from nats.js.errors import (
     APIError,
     BucketNotFoundError,
@@ -96,6 +98,9 @@ INBOX_PREFIX: Final = "_INBOX_maintenance"
 CLAIMS_BUCKET: Final = "MAINTENANCE_CLAIMS"
 #: How long a worker waits on an empty queue before asking again, and how many fired schedules it moves at once.
 _FETCH_TIMEOUT: Final = 5.0
+#: The status with which JetStream ends a pull whose wait ran out with no message. Any other status ending a task's pull,
+#: which always asks the server to wait, is a refusal (a consumer the bus does not hold, a request it would not take).
+_PULL_EXPIRED: Final = "408"
 _DUE_BATCH: Final = 10
 #: The kinds whose task has a schedule of its own, which the hourly audit reads to find one nothing holds.
 _SCHEDULED_KINDS: Final = frozenset({"table", "trash", "orphans"})
@@ -334,7 +339,7 @@ async def _still_working_on(waiting: Collection[Msg]) -> None:
             log.warning("maintenance_store_event_unvouched", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
-async def _unsubscribe(subscription: JetStreamContext.PullSubscription) -> None:
+async def _unsubscribe(subscription: Subscription | JetStreamContext.PullSubscription) -> None:
     """End ``subscription``; one the bus already dropped is logged and left."""
     try:
         await subscription.unsubscribe()
@@ -656,6 +661,38 @@ class TaskQueue:
         """A pull subscription on the chart's durable ``consumer`` of ``stream``, which it binds to and never creates."""
         return await self._js.pull_subscribe_bind(durable=consumer, stream=stream)
 
+    async def next_task(self, *, wait: float, answered_within: float) -> Msg | None:
+        """The task one pull on the queue is answered with, or ``None`` once the bus ends the pull with none.
+
+        The pull asks the server to wait ``wait`` seconds, on an inbox of its own, and is read until the server ends it:
+        with the task, or with the status saying it found none. Never sooner: the server counts the wait from the pull's
+        arrival and goes on answering it until it learns of the unsubscribe, so a client that stopped reading at its own
+        ``wait`` would leave the server answering an inbox nobody reads for as long as the path to the stream's leader
+        takes, and a task sent then would be spent there, handed on only an ack wait later and a delivery short (nats-py's
+        fetch stops reading 0.1 ms after the wait it asks the server for). A bus that says nothing for ``answered_within``
+        past the wait is judged gone, and the pull given up.
+
+        Raises:
+            QueueUnavailableError: The bus ended the pull with a status other than finding nothing.
+        """
+        inbox = self._client.new_inbox()
+        subscription = await self._client.subscribe(inbox)
+        try:
+            request = {"batch": 1, "expires": int(wait * 1_000_000_000)}
+            await self._client.publish(f"$JS.API.CONSUMER.MSG.NEXT.{TASKS_STREAM}.{TASK_CONSUMER}", json.dumps(request).encode(), reply=inbox)
+            try:
+                answer = await subscription.next_msg(timeout=wait + answered_within)
+            except TimeoutError:
+                return None
+        finally:
+            await _unsubscribe(subscription)
+        status = (answer.headers or {}).get(Header.STATUS)
+        if status is None:
+            return answer
+        if status == _PULL_EXPIRED:
+            return None
+        raise QueueUnavailableError(f"the bus ended a pull for a task with {status} {(answer.headers or {}).get(Header.DESCRIPTION, '')}".rstrip())
+
     async def _api[M: BaseModel](self, subject: str, body: dict[str, object], answer: type[M]) -> M:
         """One JetStream API request's answer, read as ``answer``.
 
@@ -799,27 +836,32 @@ class Worker:
         """Pull one task at a time from the chart's durable consumer until :meth:`stop`, and none while ``ready`` says no:
         a service whose signing key is unresolved takes no task, since what its pass emits could not be signed.
 
-        Each pull has a subscription of its own, ended once the pull is answered or given up on. A pull a reconnect held
-        back can reach the server after the worker gave up on it, and be answered while a pass runs; on a subscription
-        that outlived it, that task would wait in the client and be run once the pass ended, its ack wait long run out and
-        the task perhaps another replica's by then. Sent to an inbox no one reads, it is handed on after its ack wait
-        instead, so a task is only ever run off the pull it answered, and arrives as its ack wait starts: its lease counts
-        from then.
+        Each pull has a subscription of its own, read until the bus ends the pull (:meth:`TaskQueue.next_task`), then
+        ended. A pull a reconnect held back can reach the server after the worker gave up on it, and be answered while a
+        pass runs; on a subscription that outlived it, that task would wait in the client and be run once the pass ended,
+        its ack wait long run out and the task perhaps another replica's by then. Sent to an inbox no one reads, it is
+        handed on after its ack wait instead, so a task is only ever run off the pull it answered, and arrives as its ack
+        wait starts: its lease counts from then.
         """
         while not self._stopping.is_set():
             if not self._ready():
                 await self.pause(_FETCH_TIMEOUT)
                 continue
-            subscription = await self._bound(TASKS_STREAM, TASK_CONSUMER)
-            if subscription is None:
-                return
-            try:
-                msgs = await self._fetch(subscription, 1)
-                received = monotonic()
-            finally:
-                await _unsubscribe(subscription)
-            for msg in msgs:
-                await self._safely(self._hand_on(msg, received) if self._hands_on(msg) else self._handle(msg, received), msg)
+            msg = await self._next_task()
+            if msg is None:
+                continue
+            received = monotonic()
+            await self._safely(self._hand_on(msg, received) if self._hands_on(msg) else self._handle(msg, received), msg)
+
+    async def _next_task(self) -> Msg | None:
+        """The task the next pull is answered with, or ``None``: an empty wait, or a pull the bus refused or dropped, which
+        is logged and asked again after a pause."""
+        try:
+            return await self._queue.next_task(wait=_FETCH_TIMEOUT, answered_within=_API_TIMEOUT)
+        except (NatsError, QueueUnavailableError) as exc:
+            log.warning("maintenance_fetch_failed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
+            await self.pause(_FETCH_TIMEOUT)
+            return None
 
     async def _bound(self, stream: str, consumer: str) -> JetStreamContext.PullSubscription | None:
         """A pull subscription on the chart's durable ``consumer`` of ``stream``, asked for again after a pause while the

@@ -9,44 +9,50 @@ does not grant fails here as it would on the estate. Only what a task runs is th
 test's: it records which worker ran it, and holds while the test holds it. The render shortens the consumer's ack wait to
 `_ACK_WAIT` seconds, so a dead worker's task moves within the test.
 
-* A worker in a process of its own takes a task late in its pull, as one put on an idle queue arrives, and is killed
-  mid-run (SIGKILL). Its lease counts from the task's arrival, so while it lived its heartbeat kept the
-  task from the other worker for three ack waits, and the queue refused a second task for the table; once it was dead,
-  the task went to the other worker.
-* A pass that runs past twice its bound ends its worker's process (exit 70): two workers in processes of their own, with
-  a one-second bound, take one table's task in turn and hang on it. The task outlived its worker on both of its
-  `maintenance.queue.maxDeliver` deliveries, so the next delivery ends it without running it, which frees its table and
-  holds its next try a recheck out.
+ONE BUS FOR THE MODULE, ITS QUEUE DECLARED AFRESH FOR EACH TEST. The cluster and every user any test connects as are made
+once (`bus`); before each test the maintenance streams and the claims bucket are deleted and the stream Job declares them
+again (`declared`), so no test reads a message, a delivery count or a claim another left, and a test that deletes a stream
+leaves nothing behind. A broker refusal of the worker's user fails the test that drew it.
+
+Each test claims one behaviour:
+
+* A pass that runs past twice its bound ends its worker's process (exit 70); a task that outlived its worker on every
+  `maintenance.queue.maxDeliver` delivery is ended unrun on the next, which frees its table and holds its next try a
+  recheck out.
+* A task put late in its worker's pull stays with that worker for as long as it beats, its lease counted from the task's
+  arrival; the queue refuses a second task for a table whose task is in flight; a worker killed mid-run (SIGKILL) has its
+  task go to another.
 * A worker the bus stops answering mid-pass (its connection cut through a `Link`) ends its process (exit 70) before the
   ack wait its last answered heartbeat restarted runs out, though its records go to a Collector that never answers, so
-  its task, handed to the other worker, starts only once the first has ended: never two passes of one table at once.
-* A fired schedule whose task's publish the network lost (the `Link` drops that subject while every other flows) is
-  given back, and moved again once publishes flow.
-* A worker asked to stop whose drain ends with a pass still running ends its process (exit 70), so the task, handed to
-  the other worker after its ack wait, never runs beside it.
-* A worker whose pass ends while the bus is cut ends its process (exit 70) once its ack cannot be answered before its
-  lease runs out, so no ack held through the cut lands after it: the task, handed to the other worker, stays held.
+  its task, handed to the other worker, starts only once the first has ended. A worker asked to stop whose drain ends
+  with a pass still running does the same, and so does one whose pass ends while the bus is cut, so no ack held through
+  the cut frees the task the other worker then runs.
 * A task JetStream delivers to a pull its worker gave up on (one replayed, as a reconnect replays it, while the worker's
-  pass runs) is never run off that delivery: it waits out its ack wait and runs once, on the worker that pulled it next,
-  even after the first worker's pass ends and it pulls again.
+  pass runs) is never run off that delivery: it waits out its ack wait and runs once, on the worker that pulled it next.
 * An ack the network held past its worker's lease lands on a delivery a live pass holds (the rig sends it, as a
-  partition that heals would), freeing the table's task under that pass. A task put for the table then waits out the
-  live pass's claim on it, and runs only once that pass is done: never two passes of one table at once.
-* A burst of three commits on each of six tables, their follow-ups put at once as replicas taking a burst of store events
-  put them, holds one follow-up per table, the other two refused; each fires once, and the two ready workers share the
-  six passes, each run once. A worker that is not ready takes none. A copied stream refuses a put racing another for its
-  subject with another code than a put after it (`nats_auth_rig.Broker`), and both mean the table is covered.
+  partition that heals would), freeing the table's task under that pass; a task put for the table then waits out the live
+  pass's claim on it, and runs only once that pass is done.
+* A burst of follow-ups put at once, as replicas taking a burst of store events put them, holds one per table; each held
+  follow-up runs once; and two ready workers share the passes, each holding the first it takes so the other must take the
+  next, while a worker that is not ready takes none. A copied stream refuses a put racing another for its subject with
+  another code than a put after it (`nats_auth_rig.Broker`), and both mean the table is covered.
 * Three puts of one table's task at once queue one. A follow-up that fires while that task holds its table waits until
   the task is done, then passes the table again: the commit it follows may be one the running pass read the table before.
-* A worker whose claims bucket the bus holds no longer, deleted after the worker bound it, ends its task loop, and with it
-  its process, on the first claim it asks, rather than holding a task it can never claim.
+* A claim and its renewal asked again after an answer was lost find their own token; a claim another holds is neither
+  taken nor renewed; a release frees only its holder's claim.
+* A worker whose claims bucket the bus holds no longer ends its task loop on the first claim it asks; a claim the bus does
+  not answer holds the task until it is answered, spending no delivery.
+* A task whose run fails, an error or a native library's panic, comes back after its retry delay, and on its last delivery
+  is ended with its failure logged; an ended task's next try is held a recheck out; a message on the queue that is no task
+  is ended without running.
+* A store event is acknowledged once its table's pass is held, ended at once when it is no store event, delivered again
+  after its delivery's retry delay when the store refused a claim's read, and ended on its last delivery when the store
+  refuses it on every one.
 
 A replica started as the service starts it (`maintenance.services.tasks.running_worker`, its bus credential read from a
-stand-in of the store's secrets API) keeps its loops and its schedules:
-
-* A loop that ends before the replica stops, with an error or without, ends the replica's process.
-* The audit's and the scan's schedules, which a purged or recreated schedules stream loses, are put back on the cadence
-  the replica asserts them on.
+stand-in of the store's secrets API) keeps its loops and its schedules: a loop that ends before the replica stops, with an
+error or without, ends the replica's process; the audit's and the scan's schedules are asserted at its start, and put
+back on the cadence the replica asserts them on once the bus loses them.
 
 A worker whose credential the bus takes no longer ends its process (exit 70), whether the bus ends the session holding it
 or refuses it at a reconnect: the store issues a new credential when a user's grants change and revokes the old one, and
@@ -66,7 +72,7 @@ import os
 import re
 import sys
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
@@ -75,6 +81,7 @@ from typing import Any, NoReturn, cast
 
 import httpx
 import pytest
+import pytest_asyncio
 import respx
 from measured_metrics import Measured
 from nats.aio.msg import Msg
@@ -83,7 +90,7 @@ from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanKind
-from pydantic import SecretStr
+from pydantic import BaseModel, SecretStr
 
 from lakehouse import location_claims, store_session
 from lakehouse.control_emit import NoopControlEmitter
@@ -102,6 +109,7 @@ from maintenance.services.queue import (
     TASKS_STREAM,
     ClaimsBucketMissingError,
     Task,
+    TaskKind,
     TaskQueue,
     Worker,
     sample_queue,
@@ -117,9 +125,9 @@ _WORKER = "maintenance-worker"
 #: The store's own bus user, which publishes each object write on `store.events` (`deploy/fixtures/rustfs`).
 _STORE = "object-store"
 #: The test's own user, every JetStream call granted: it reads and purges what the worker's schedules leave on the bus,
-#: and sees and replays the workers' pulls.
+#: sees and replays the workers' pulls, and fires a schedule as the bus fires one.
 _RIG = "rask-test-rig"
-_RIG_GRANTS = Permissions(publish=("$JS.API.>", "$JS.ACK.>"), subscribe=("_INBOX.>", "$JS.API.CONSUMER.MSG.NEXT.>", f"{INBOX_PREFIX}.>"))
+_RIG_GRANTS = Permissions(publish=("$JS.API.>", "$JS.ACK.>", "maintenance.due.>"), subscribe=("_INBOX.>", "$JS.API.CONSUMER.MSG.NEXT.>", f"{INBOX_PREFIX}.>"))
 #: The consumer's ack wait the render is given, and the heartbeat each worker beats inside it.
 _ACK_WAIT = 4
 _HEARTBEAT = 1
@@ -138,8 +146,11 @@ _DOOMED_DRAIN = 1.0
 #: How far into a worker's 5 s pull its task is put: past the 4 s ack wait, so a lease counted from the pull's sending
 #: would run out before the task's first heartbeat.
 _LATE_IN_PULL = 4.0
-#: Long enough for a pull a stopped replica left open to expire (`maintenance.services.queue` pulls for 5 s).
-_PULL_EXPIRY = 6.0
+#: How long a worker's pull waits at the server for a task (`maintenance.services.queue`).
+_FETCH_SECONDS = 5.0
+#: How long the link holds each frame a worker sends on its way to the broker: the time a slow path to the stream's leader
+#: adds, short of the heartbeat, within which a worker's claim and heartbeat must be answered.
+_PULL_TRANSIT = 0.3
 #: A credential with the worker's grants that runs out a minute after it is issued (nsc's least expiry). From then on the
 #: bus takes it no longer, as it takes a revoked one no longer: it ends a session holding it, and refuses it at a connect.
 _EXPIRING = "maintenance-worker-expiring"
@@ -352,268 +363,6 @@ def _the_bus(tmp_path: Path, extra: dict[str, Permissions] | None = None) -> tup
     return tools, docs, mint_, broker
 
 
-@pytest.mark.asyncio
-async def test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other(tmp_path: Path) -> None:
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
-    runs = _Runs()
-    replicas: list[_Replica] = []
-    doomed: list[asyncio.subprocess.Process] = []
-    lane: TaskQueue | None = None
-    sniffer: Client | None = None
-    started: list[_Replica] = []
-
-    async def start(name: str, ready: Callable[[], bool]) -> _Replica:
-        replica = await _Replica.start(broker.url, worker, name, runs, ready=ready)
-        replicas.append(replica)
-        started.append(replica)
-        return replica
-
-    # Every pull a worker makes for a task, its reply inbox, as the rig sees it go by.
-    pulls: list[str] = []
-    next_task = f"$JS.API.CONSUMER.MSG.NEXT.{TASKS_STREAM}.{TASK_CONSUMER}"
-
-    async def pulled(msg: Msg) -> None:
-        pulls.append(msg.reply)
-
-    def refusals() -> list[Violation]:
-        """What the broker refused the worker's user: a call the chart's table does not grant."""
-        return [v for v in violations(broker.log_text()) if mint_.user_of(v.user_key) == _WORKER]
-
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        # The commit lane's connection: the service's own publishes, under the same user.
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        sniffer = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        await sniffer.nc.subscribe(next_task, cb=pulled)
-        await sniffer.settle()
-
-        killer = Task(kind="table", uuid="killer", location="s3://bucket/killer")
-        assert await lane.enqueue(killer) is True, refusals()
-        for _ in range(_MAX_DELIVER):
-            doomed.append(hung := await _doomed(broker.url, worker, 1))
-            assert await _said(hung) == ["running", "killer"], f"a worker did not take the task its table held; refused: {refusals()}"
-            ended = await _until(lambda: hung.returncode is not None, 30)
-            assert ended and hung.returncode == _HUNG_EXIT, f"a pass past twice its bound did not end its worker's process (exit {hung.returncode})"
-
-        dying = Task(kind="table", uuid="dying", location="s3://bucket/dying")
-        doomed.append(dier := await _doomed(broker.url, worker, 600))
-
-        async def killer_ended() -> bool:
-            return "killer" not in await lane.held("task", "table")
-
-        # The doomed worker first takes "killer"'s last delivery and ends it unrun; the late put is timed from a later pull.
-        assert await _until(killer_ended, _ACK_WAIT + 15), "a task that outlived its worker on every delivery still holds its table"
-        assert runs.times("killer") == 0, "a task past its last delivery was run, not ended"
-        assert "killer" in await lane.held("schedule", "table"), "an ended task's table holds no next try, so the hourly audit hands it back"
-        seen = len(pulls)
-        assert await _until(lambda: len(pulls) > seen, 15), "the doomed worker never pulled again"
-        # Late in the pull, as a task put on an idle queue arrives: nothing to poll for.
-        await asyncio.sleep(_LATE_IN_PULL)
-        assert await lane.enqueue(dying) is True, refusals()
-        said = await _said(dier)
-        assert said == ["running", "dying"], f"the doomed worker said {said}; refused: {refusals()}"
-        second_ready = asyncio.Event()
-        second_ready.set()
-        await start("second", second_ready.is_set)
-        assert await lane.enqueue(dying) is False, "the queue took a second task for a table whose task is in flight"
-        # Three ack waits in which the task must stay with the worker that still beats for it: nothing to poll for.
-        await asyncio.sleep(3 * _ACK_WAIT)
-        assert runs.times("dying") == 0, "a live worker's task went to another: its heartbeat did not hold it"
-        dier.kill()
-        await dier.wait()
-        assert await _until(lambda: runs.times("dying") == 1, _ACK_WAIT + 15), f"a dead worker's task never reached the other; refused: {refusals()}"
-
-        # The other worker takes nothing until the stranded one holds its task, once its own pull still open expires.
-        second_ready.clear()
-        await asyncio.sleep(_PULL_EXPIRY)
-        link = Link(broker.port)
-        await link.start()
-        cut = Task(kind="table", uuid="cut", location="s3://bucket/cut")
-        doomed.append(stranded := await _doomed(link.url, worker, 600))
-        assert await lane.enqueue(cut) is True, refusals()
-        said = await _said(stranded)
-        assert said == ["running", "cut"], f"the stranded worker said {said}; refused: {refusals()}"
-        second_ready.set()
-        runs.at_start["cut"] = lambda: stranded.returncode
-        outage = asyncio.create_task(link.cut(4 * _ACK_WAIT))
-        assert await _until(lambda: link.down, 5), "the link was never cut"
-        # Its last heartbeat was answered before the cut, so its lease runs out within one ack wait of it.
-        ended_itself = await _until(lambda: stranded.returncode is not None, _ACK_WAIT)
-        assert ended_itself and stranded.returncode == _HUNG_EXIT, (
-            f"a worker the bus stopped answering ran its pass past its lease (exit {stranded.returncode})"
-        )
-        assert await _until(lambda: runs.times("cut") == 1, _ACK_WAIT + 15), f"a stranded worker's task never reached the other; refused: {refusals()}"
-        assert runs.seen["cut"] == _HUNG_EXIT, "the task went to another worker while the one the bus stopped answering still ran it"
-        await outage
-        await link.stop()
-
-        second_ready.clear()
-        await asyncio.sleep(_PULL_EXPIRY)
-        draining = Task(kind="table", uuid="drained", location="s3://bucket/drained")
-        doomed.append(stopping := await _doomed(broker.url, worker, 600))
-        assert await lane.enqueue(draining) is True, refusals()
-        said = await _said(stopping)
-        assert said == ["running", "drained"], f"the stopping worker said {said}; refused: {refusals()}"
-        second_ready.set()
-        runs.at_start["drained"] = lambda: stopping.returncode
-        assert stopping.stdin is not None
-        stopping.stdin.write(b"stop\n")
-        await stopping.stdin.drain()
-        ended_itself = await _until(lambda: stopping.returncode is not None, _DOOMED_DRAIN + 5)
-        assert ended_itself and stopping.returncode == _HUNG_EXIT, f"a worker whose drain ended mid-pass kept its pass (exit {stopping.returncode})"
-        assert await _until(lambda: runs.times("drained") == 1, _ACK_WAIT + 15), f"a drained worker's task never reached the other; refused: {refusals()}"
-        assert runs.seen["drained"] == _HUNG_EXIT, "the task went to another worker while the one draining still ran it"
-
-        second_ready.clear()
-        await asyncio.sleep(_PULL_EXPIRY)
-        link = Link(broker.port)
-        await link.start()
-        settling = Task(kind="table", uuid="settled", location="s3://bucket/settled")
-        doomed.append(settler := await _doomed(link.url, worker, 600))
-        assert await lane.enqueue(settling) is True, refusals()
-        said = await _said(settler)
-        assert said == ["running", "settled"], f"the settling worker said {said}; refused: {refusals()}"
-        release_settled = runs.held["settled"] = asyncio.Event()
-        second_ready.set()
-        outage = asyncio.create_task(link.cut(4 * _ACK_WAIT))
-        # The pass ends once the cut stands, so its ack cannot be answered.
-        assert await _until(lambda: link.down, 5), "the link was never cut"
-        assert settler.stdin is not None
-        settler.stdin.write(b"finish\n")
-        await settler.stdin.drain()
-        ended_itself = await _until(lambda: settler.returncode is not None, 2 * _ACK_WAIT)
-        assert ended_itself and settler.returncode == _HUNG_EXIT, (
-            f"a worker whose pass ended in a bus cut kept its ack for after it (exit {settler.returncode})"
-        )
-        assert await _until(lambda: runs.times("settled") == 1, _ACK_WAIT + 15), f"the settling worker's task never reached the other; refused: {refusals()}"
-        await outage
-        await link.stop()
-        # The bus is back, and no ack held through the cut freed the task the other worker still runs.
-        assert await lane.enqueue(settling) is False, "an ack sent once the bus came back freed a task another worker still ran"
-        release_settled.set()
-
-        await start("first", lambda: True)
-        await start("not-ready", lambda: False)
-        burst = [Task(kind="table", uuid=f"burst-{n}", location=f"s3://bucket/burst-{n}") for n in range(6)]
-        due = datetime.now(UTC) + timedelta(seconds=2)
-        held = [sorted(await asyncio.gather(*(lane.follow_up(task, due) for _ in range(3)), return_exceptions=True), key=repr) for task in burst]
-        assert held == [[False, False, True]] * len(burst), f"a burst held other than one follow-up per table: {held}"
-        assert await _until(lambda: all(runs.times(task.uuid) for task in burst), 30), f"the burst's passes did not all run: {runs.ran}; refused: {refusals()}"
-        # An ack wait past the last pass, in which no pass may run a second time: nothing to poll for.
-        await asyncio.sleep(_ACK_WAIT + 1)
-        passes = [(name, uuid) for name, uuid in runs.ran if uuid.startswith("burst-")]
-        assert Counter(uuid for _, uuid in passes) == Counter(task.uuid for task in burst), f"a burst's pass ran other than once: {passes}"
-        assert {name for name, _ in passes} == {"first", "second"}, f"the two ready workers did not share the burst, or one not ready took a pass: {passes}"
-
-        busy = Task(kind="table", uuid="busy", location="s3://bucket/busy")
-        release = runs.held["busy"] = asyncio.Event()
-        put = sorted(await asyncio.gather(*(lane.enqueue(busy) for _ in range(3)), return_exceptions=True), key=repr)
-        assert put == [False, False, True], f"three puts of one table's task at once queued other than one: {put}"
-        assert await _until(lambda: runs.times("busy") == 1, 15), f"the busy table's task never ran; refused: {refusals()}"
-        assert await lane.follow_up(busy, datetime.now(UTC) + timedelta(seconds=1)) is True
-        # The follow-up fires inside these seconds while the task still holds its table, and must not pass it: nothing to poll for.
-        await asyncio.sleep(4)
-        assert runs.times("busy") == 1, "a follow-up was passed while a task still held its table"
-        release.set()
-        assert await _until(lambda: runs.times("busy") == 2, _FOLLOW_UP_WAIT), "a follow-up that fired while its table was held was never passed"
-
-        async def drained() -> bool:
-            return not await lane.held("task", "table")
-
-        assert await _until(drained, 10), f"the queue still holds {await lane.held('task', 'table')} after every task ran"
-
-        for replica in replicas:
-            await replica.stop()
-        replicas.clear()
-        # The stopped replicas' pulls expire, so the next task can only answer a pull this part of the test made: nothing to poll for.
-        await asyncio.sleep(_PULL_EXPIRY)
-        beta_ready = asyncio.Event()
-        await start("alpha", lambda: True)
-        await start("beta", beta_ready.is_set)
-        release_first = runs.held["first"] = asyncio.Event()
-        release_late = runs.held["late"] = asyncio.Event()
-        assert await lane.enqueue(Task(kind="table", uuid="first", location="s3://bucket/first")) is True
-        assert await _until(lambda: runs.times("first") == 1, 15), f"the first task never ran; refused: {refusals()}"
-        # Alpha's pull its running pass answered, replayed as a reconnect replays a pull it held back; the next task answers it.
-        await sniffer.nc.publish(next_task, json.dumps({"batch": 1, "expires": 30_000_000_000}).encode(), reply=pulls[-1])
-        await sniffer.settle()
-        assert await lane.enqueue(Task(kind="table", uuid="late", location="s3://bucket/late")) is True
-        beta_ready.set()
-        assert await _until(lambda: runs.times("late") == 1, _ACK_WAIT + 15), (
-            f"a task delivered to a pull its worker gave up on was never handed on: {runs.ran}"
-        )
-        release_first.set()
-        # Alpha pulls again once its pass ends, and must not run the task its old pull was answered with: nothing to poll for.
-        await asyncio.sleep(_ACK_WAIT)
-        late = [name for name, uuid in runs.ran if uuid == "late"]
-        assert late == ["beta"], f"a task ran off a delivery to a pull its worker had given up on, beside its redelivery: {late}"
-        release_late.set()
-
-        # A claim, and its renewal, asked again after an answer was lost find their own token standing, and no other's.
-        mine = await lane.claim("table.asked-again", "mine", within=10)
-        assert mine is not None, "the commit lane's connection could not claim a free table"
-        renewed = await lane.renew("table.asked-again", "mine", mine, within=10)
-        assert renewed is not None, "a claim's holder could not renew it"
-        assert await lane.renew("table.asked-again", "mine", mine, within=10) == renewed, "a renewal asked again after its answer was lost was refused"
-        assert await lane.claim("table.asked-again", "mine", within=10) == renewed, "a claim asked again after its answer was lost was refused"
-        assert await lane.renew("table.asked-again", "theirs", mine, within=10) is None, "a stale renewal took a claim another holds"
-        assert await lane.claim("table.asked-again", "theirs", within=10) is None, "a claim was taken while another's stood"
-        # A release naming the revision a renewal moved since, as when the renewal's answer was lost, finds its own token
-        # standing; a release of a claim another holds leaves it.
-        await lane.release("table.asked-again", "mine", mine)
-        theirs = await lane.claim("table.asked-again", "theirs", within=10)
-        assert theirs is not None, "a release refused for a revision a renewal had moved left its holder's claim standing"
-        await lane.release("table.asked-again", "mine", renewed)
-        assert await lane.claim("table.asked-again", "mine", within=10) is None, "a release by a former holder freed the claim another holds"
-        await lane.release("table.asked-again", "theirs", theirs)
-
-        deliveries: list[Msg] = []
-
-        async def delivered(msg: Msg) -> None:
-            if msg.subject.endswith(".fenced"):
-                deliveries.append(msg)
-
-        await sniffer.nc.subscribe(f"{INBOX_PREFIX}.>", cb=delivered)
-        await sniffer.settle()
-        release_fenced = runs.held["fenced"] = asyncio.Event()
-        fenced = Task(kind="table", uuid="fenced", location="s3://bucket/fenced")
-        assert await lane.enqueue(fenced) is True
-        assert await _until(lambda: runs.times("fenced") == 1 and bool(deliveries), 15), f"the fenced task never ran; refused: {refusals()}"
-        # A late ack on the delivery the live pass holds, as one the network held past a stale worker's lease lands.
-        await sniffer.nc.publish(deliveries[0].reply, b"+ACK")
-        await sniffer.settle()
-
-        async def freed() -> bool:
-            return "fenced" not in await lane.held("task", "table")
-
-        assert await _until(freed, 10), "a late ack did not free the task a live pass holds"
-        assert await lane.enqueue(fenced) is True, "the queue refused a task for a table whose task a late ack freed"
-        # The next task's delivery comes at once, and must wait out the live pass's claim: nothing to poll for.
-        await asyncio.sleep(2 * _ACK_WAIT)
-        assert runs.times("fenced") == 1, f"a pass ran beside another of its table once a late ack freed its task: {runs.ran}"
-        release_fenced.set()
-        assert await _until(lambda: runs.times("fenced") == 2, _ACK_WAIT + 30), f"the table's next task never ran once its pass ended: {runs.ran}"
-        ended = {replica.name: replica.ended for replica in started if replica.ended}
-        assert not ended, f"an in-process replica ended where a worker ends its process: {ended}"
-    finally:
-        # The cluster stops even when a client's close raises (a drain that times out does): its servers would outlive the run.
-        try:
-            for process in doomed:
-                if process.returncode is None:
-                    process.kill()
-                    await process.wait()
-            for replica in replicas:
-                await replica.stop()
-            if lane is not None:
-                await lane.close()
-            if sniffer is not None:
-                await sniffer.close()
-        finally:
-            broker.stop()
-    assert refusals() == [], "the broker refused the worker a call the chart must grant"
-
-
 def _replica_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broker: Broker) -> MaintenanceSettings:
     """A replica's settings as the service reads them, reaching its secrets in the store with its ServiceAccount token as
     the pod does, and the store session its lifespan exchanges that token for already held: no test here reads an object."""
@@ -659,103 +408,6 @@ async def _returns(_worker: Worker) -> None:
     return None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("loop", [pytest.param(_raises, id="with-an-error"), pytest.param(_returns, id="without-one")])
-async def test_a_loop_that_ends_ends_its_replica(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loop: Callable[[Worker], Awaitable[None]]) -> None:
-    """A replica's loop that ends before the replica stops ends its process, whether it raised or returned: a replica whose
-    loop is gone stays Ready with that loop's work undone, and only a new container repairs it (ADR 0203)."""
-    tools, docs, mint_, broker = _the_bus(tmp_path)
-    ended: list[tuple[str, object]] = []
-
-    def record_the_end(event: str, **extra: object) -> None:
-        ended.append((event, extra.get("loop")))
-
-    monkeypatch.setattr(tasks, "run_task", _runs_nothing)
-    monkeypatch.setattr(Worker, "run_due", loop)
-    settings = _replica_settings(tmp_path, monkeypatch, broker)
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        async with AsyncExitStack() as stack:
-            await _start_replica(stack, settings, mint_.credentials[_WORKER], end=cast("EndProcess", record_the_end))
-            assert await _until(lambda: bool(ended), 20), "the loop moving fired schedules ended and its replica went on"
-    finally:
-        broker.stop()
-    assert ended == [("background_work_ended", "maintenance-due")]
-
-
-@pytest.mark.asyncio
-async def test_a_replica_puts_back_the_schedules_the_bus_lost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    monkeypatch.setattr(tasks, "run_task", _runs_nothing)
-    monkeypatch.setattr(tasks, "_CADENCE_SECONDS", 2.0)
-    settings = _replica_settings(tmp_path, monkeypatch, broker)
-    cadences = [Task(kind="audit").subject("schedule"), Task(kind="scan").subject("schedule")]
-    rig: Client | None = None
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-
-        async def held() -> list[bool]:
-            answers = [await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": subject}) or {} for subject in cadences]
-            return ["message" in answer for answer in answers]
-
-        async with AsyncExitStack() as stack:
-            await _start_replica(stack, settings, mint_.credentials[_WORKER])
-            assert await held() == [True, True], "a replica started without the audit's and the scan's schedules"
-            for subject in cadences:
-                await reader.request(f"$JS.API.STREAM.PURGE.{SCHEDULES_STREAM}", {"filter": subject})
-
-            async def put_back() -> bool:
-                return await held() == [True, True]
-
-            assert await _until(put_back, 10), "the schedules the bus lost were never put back"
-    finally:
-        try:
-            if rig is not None:
-                await rig.close()
-        finally:
-            broker.stop()
-
-
-@pytest.mark.asyncio
-async def test_a_worker_whose_credential_the_bus_takes_no_longer_ends_itself(tmp_path: Path) -> None:
-    """nats-py keeps the credential a worker read at start: it closes for good on a session the server ends, and retries a
-    credential the server refuses for ever. So a worker the bus takes its credential from no longer ends its process, and
-    its pod, started again, reads the credential the store then holds. One connection is held while its credential runs
-    out, which the server ends; another is cut through a `Link` until the credential has run out, and refused when it
-    reconnects."""
-    tools, docs, _, broker = _the_bus(tmp_path)
-    publish, subscribe = nats_users(docs)[_WORKER]
-    grants = Permissions(publish=tuple(sorted(publish)), subscribe=tuple(sorted(subscribe)), expiry="1m")
-    link = Link(broker.port)
-    await link.start()
-    holding: list[asyncio.subprocess.Process] = []
-    logs = (tmp_path / "held.log", tmp_path / "cut.log")
-    try:
-        credential = issue(tools.nsc, tmp_path / "nsc", _EXPIRING, grants)
-        holding += [await _holding(broker.url, credential, logs[0]), await _holding(link.url, credential, logs[1])]
-        held, cut = holding
-        assert [await _said(held), await _said(cut)] == [["connected"], ["connected"]], "a worker could not connect with its own credential"
-
-        outage = asyncio.create_task(link.cut(_EXPIRY + 15))
-        session_ended = await _until(lambda: held.returncode is not None, _EXPIRY + 30)
-        assert session_ended and held.returncode == _HUNG_EXIT, (
-            f"a worker whose session the bus ended kept its process (exit {held.returncode}): {logs[0].read_text()[-600:]}"
-        )
-        await outage
-        refused = await _until(lambda: cut.returncode is not None, 30)
-        assert refused and cut.returncode == _HUNG_EXIT, (
-            f"a worker the bus refused at a reconnect kept reconnecting (exit {cut.returncode}): {logs[1].read_text()[-600:]}"
-        )
-    finally:
-        for process in holding:
-            if process.returncode is None:
-                process.kill()
-                await process.wait()
-        await link.stop()
-        broker.stop()
-
-
 def _schedule_of(answer: dict[str, Any] | None) -> str | None:
     """The `Nats-Schedule` header of a message a `STREAM.MSG.GET` answered with, or None when it found none."""
     stored = (answer or {}).get("message")
@@ -788,411 +440,6 @@ async def _never_run(task: Task) -> None:
     raise AssertionError(f"a store-event worker ran the task {task}")
 
 
-@pytest.mark.asyncio
-async def test_a_worker_settles_each_store_event_by_what_its_handling_found(
-    tmp_path: Path, maintenance_metrics: Measured, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A store event is acknowledged once its table's pass is held, ended at once when it is no store event, delivered
-    again after its delivery's retry delay when the store refused a claim's read, and ended on its last
-    delivery when the store refuses it on every one; each settling is counted by its outcome. The handling is the service's own
-    (`maintenance.services.store_events.StoreEvents`), on a control root of the test's own, where a claim the store cannot
-    read is a directory standing at its key. The worker ends an event on the third delivery, which the consumer the
-    render declares at `_MAX_DELIVER` allows (one past it)."""
-    # The delay is drawn at random beneath a bound that doubles (`redelivery_delay`, whose draw has a test of its own);
-    # drawn here at 6 s a delivery, each gap names the delivery it followed.
-    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda delivered: 6.0 * delivered)
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    control = tmp_path / "control"
-    control.mkdir()
-    settings = MaintenanceSettings(s3_bucket="b", control_root=str(control), commit_pass_delay_seconds=3600)
-    claims = location_claims.ClaimStore(control_root=str(control))
-    for table in ("held", "flaky", "locked"):
-        location_claims.take(claims, f"s3://b/{table}", f"db${table}", ["db", table], is_gone=lambda _claim: False, uuid=table)
-    unreadable_claims = {table: control / location_claims.claim_key(f"s3://b/{table}") for table in ("flaky", "locked")}
-    for claim in unreadable_claims.values():
-        claim.unlink()
-        claim.mkdir()
-    events = {
-        "held": _write_event("held/data/a.lance"),
-        "unreadable": _write_event("held/data/b.lance", bucket=["b"]),
-        "flaky": _write_event("flaky/data/c.lance"),
-        "locked": _write_event("locked/data/d.lance"),
-    }
-    handled: dict[bytes, list[float]] = {body: [] for body in events.values()}
-    queue: TaskQueue | None = None
-    store: Client | None = None
-    rig: Client | None = None
-    loops: list[asyncio.Task[None]] = []
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        queue = await TaskQueue.connect(broker.url, mint_.credentials[_WORKER].creds_file.read_text(), name="store-events")
-        replica = StoreEvents(settings, queue)
-        loop = asyncio.get_running_loop()
-
-        async def handle(body: bytes) -> int:
-            handled[body].append(loop.time())
-            return await replica.hold_passes(body)
-
-        worker = Worker(
-            queue,
-            run=_never_run,
-            ready=lambda: True,
-            heartbeat_seconds=_HEARTBEAT,
-            ack_wait_seconds=_ACK_WAIT,
-            max_deliver=_MAX_DELIVER + 1,
-            max_pass_seconds=600,
-            retry_ended_seconds=3600,
-            store_events=handle,
-        )
-        loops.append(asyncio.create_task(worker.run_store_events()))
-        store = await Client.connect(broker.url, mint_.credentials[_STORE], _STORE)
-        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        for body in events.values():
-            await store.nc.publish("store.events", body)
-        await store.settle()
-        assert await _until(lambda: len(handled[events["flaky"]]) == 1, 30), f"the event the store refused was never handled: {handled}"
-        unreadable_claims["flaky"].rmdir()
-        location_claims.take(claims, "s3://b/flaky", "db$flaky", ["db", "flaky"], is_gone=lambda _claim: False, uuid="flaky")
-
-        async def settled() -> bool:
-            state = (await reader.request(f"$JS.API.STREAM.INFO.{STORE_EVENTS_STREAM}") or {}).get("state", {})
-            return len(handled[events["flaky"]]) == 2 and len(handled[events["locked"]]) == 3 and state.get("messages") == 0
-
-        assert await _until(settled, 90), f"the store's events were not all settled: {handled}"
-
-        async def follow_up(table: str) -> dict[str, Any] | None:
-            subject = Task(kind="table", uuid=table).follow_up_subject("schedule")
-            return await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": subject})
-
-        held = {table: _held_at(await follow_up(table)) is not None for table in ("held", "flaky", "locked")}
-    finally:
-        try:
-            for running in loops:
-                running.cancel()
-            await asyncio.gather(*loops, return_exceptions=True)
-            for client in (store, rig):
-                if client is not None:
-                    await client.close()
-            if queue is not None:
-                await queue.close()
-        finally:
-            broker.stop()
-
-    locked = handled[events["locked"]]
-    waits = [round(later - earlier) for earlier, later in pairwise(locked)]
-    assert {name: len(handled[body]) for name, body in events.items()} == {"held": 1, "unreadable": 1, "flaky": 2, "locked": 3}
-    assert 5 <= waits[0] < 10 and 11 <= waits[1] < 17, f"the refused event came back after {waits} s, not after each delivery's retry delay"
-    assert held == {"held": True, "flaky": True, "locked": False}
-    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"held": 2, "retried": 3, "unreadable": 1, "ended": 1}
-
-
-class _Panic(BaseException):
-    """Where ``pyo3_runtime.PanicException`` sits: a BaseException that is no Exception and no request to stop."""
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [pytest.param(RuntimeError, id="an-error"), pytest.param(_Panic, id="a-native-panic")])
-async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_delivery_and_an_unreadable_one_ends_at_once(
-    tmp_path: Path, maintenance_metrics: Measured, failure: type[BaseException], caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A task whose run raises, an error or a native library's panic, is delivered again after its retry delay, and on its
-    last delivery is ended with the failure's traceback logged, its next try held a recheck out, while its worker serves
-    on; a message on the queue that is no task is ended without running. Each hand-back, each delivery past a task's first
-    and each end is counted by kind."""
-    caplog.set_level(logging.ERROR, logger=worker_queue.__name__)
-    # The delay is drawn at random beneath its bound; drawn here at 12 s, the gap between two runs is the rule's delay.
-    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 12.0)
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
-    runs: list[float] = []
-    queue: TaskQueue | None = None
-    writer: Client | None = None
-    rig: Client | None = None
-    loops: list[asyncio.Task[None]] = []
-    ended_at: datetime | None = None
-    held_at: datetime | None = None
-    failing = Task(kind="table", uuid="failing", location="s3://bucket/failing")
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        queue = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="failing")
-        loop = asyncio.get_running_loop()
-
-        async def fails(task: Task) -> None:
-            runs.append(loop.time())
-            raise failure(f"the pass of {task.uuid} failed")
-
-        def ends_its_process(event: str, **extra: object) -> NoReturn:
-            raise AssertionError(f"the worker ended its process: {event} {extra}")
-
-        replica = Worker(
-            queue,
-            run=fails,
-            ready=lambda: True,
-            heartbeat_seconds=_HEARTBEAT,
-            ack_wait_seconds=_ACK_WAIT,
-            max_deliver=_MAX_DELIVER,
-            max_pass_seconds=600,
-            retry_ended_seconds=3600,
-            end=ends_its_process,
-        )
-        loops.append(asyncio.create_task(replica.run_tasks()))
-        writer = await Client.connect(broker.url, worker, "garbage", inbox=INBOX_PREFIX)
-        await writer.nc.publish("maintenance.task.table.garbage", b"no task")
-        await writer.settle()
-        assert await queue.enqueue(failing) is True
-        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-
-        async def ended() -> bool:
-            return len(runs) == _MAX_DELIVER and not await queue.held("task", "table")
-
-        assert await _until(ended, 60), f"the failing task was not ended on its last delivery: {len(runs)} runs"
-        ended_at = datetime.now(UTC)
-
-        async def next_try() -> datetime | None:
-            return _held_at(await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": failing.subject("schedule")}))
-
-        assert await _until(lambda: _is_held(next_try), 10), "the ended task's next try was never held"
-        held_at = await next_try()
-    finally:
-        try:
-            for running in loops:
-                running.cancel()
-            await asyncio.gather(*loops, return_exceptions=True)
-            for client in (writer, rig):
-                if client is not None:
-                    await client.close()
-            if queue is not None:
-                await queue.close()
-        finally:
-            broker.stop()
-
-    assert 11.0 <= runs[1] - runs[0] < 17.0, f"the failed task came back after {runs[1] - runs[0]:.1f} s, not after its retry delay"
-    assert held_at is not None and abs((held_at - ended_at).total_seconds() - 3600) < 10, f"the ended task's next try is held for {held_at}, not a recheck out"
-    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("retried", "redelivered", "ended", "completed")}
-    assert counted == {
-        "retried": {"table": _MAX_DELIVER - 1},
-        "redelivered": {"table": _MAX_DELIVER - 1},
-        "ended": {"table": 1, "unreadable": 1},
-        "completed": {},
-    }
-    ended_by = [record.exc_info[0] for record in caplog.records if record.message == "maintenance_task_ended" and record.exc_info]
-    assert ended_by == [failure], f"the ended task's failure was not logged with its traceback: {ended_by}"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("allowed", "taken_by"),
-    [
-        pytest.param(_MAX_DELIVER, "next", id="with-a-delivery-to-spare-it-goes-to-another-replica"),
-        pytest.param(1, "stopping", id="on-its-last-delivery-it-is-handled-where-it-arrived"),
-    ],
-)
-async def test_a_task_a_pull_answers_as_its_worker_stops(tmp_path: Path, maintenance_metrics: Measured, allowed: int, taken_by: str) -> None:
-    """A pull in flight when a worker is asked to stop can still be answered. With a delivery to spare the task is given
-    back at once and another replica runs it, rather than its pass starting under the drain; on the last delivery the
-    worker allows it is handled where it arrived, since a hand-back would spend the consumer's last delivery and leave
-    the task on the queue, undelivered, for good. Either way the task's wait is recorded once, at its first delivery, and
-    the delivery the hand-back causes is counted as a redelivery, though no run failed. And a connection the bus has gone
-    from still closes."""
-    tools, docs, mint_, broker = _the_bus(tmp_path)
-    worker = mint_.credentials[_WORKER]
-    ran: list[str] = []
-    queues: list[TaskQueue] = []
-    loops: list[asyncio.Task[None]] = []
-    task = Task(kind="table", uuid="late", location="s3://bucket/late")
-    closed_without_its_bus: BaseException | None = None
-
-    def ends_its_process(event: str, **extra: object) -> NoReturn:
-        raise AssertionError(f"the worker ended its process: {event} {extra}")
-
-    def replica(queue: TaskQueue, name: str, max_deliver: int) -> Worker:
-        async def run(_task: Task) -> None:
-            ran.append(name)
-
-        return Worker(
-            queue,
-            run=run,
-            ready=lambda: True,
-            heartbeat_seconds=_HEARTBEAT,
-            ack_wait_seconds=_ACK_WAIT,
-            max_deliver=max_deliver,
-            max_pass_seconds=600,
-            retry_ended_seconds=3600,
-            end=ends_its_process,
-        )
-
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        for name in ("stopping", "next"):
-            queues.append(await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name=name))
-        stopping = replica(queues[0], "stopping", allowed)
-        loops.append(asyncio.create_task(stopping.run_tasks()))
-        await asyncio.sleep(1.0)  # its first pull is out, and waits up to five seconds for a task
-        stopping.stop()
-        assert await queues[1].enqueue(task) is True
-        await asyncio.wait_for(loops[0], timeout=15)
-        loops.append(asyncio.create_task(replica(queues[1], "next", _MAX_DELIVER).run_tasks()))
-
-        async def settled() -> bool:
-            return bool(ran) and not await queues[1].held("task", "table")
-
-        assert await _until(settled, 30), f"the task was never run and settled: ran by {ran}"
-    finally:
-        for running in loops:
-            running.cancel()
-        await asyncio.gather(*loops, return_exceptions=True)
-        broker.stop()
-        for queue in queues:
-            try:
-                await asyncio.wait_for(queue.close(), timeout=30)
-            except BaseException as exc:  # noqa: BLE001 — kept for the assertion below
-                closed_without_its_bus = exc
-
-    assert ran == [taken_by]
-    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("wait", "redelivered", "retried")}
-    assert counted == {"wait": {"table": 1}, "redelivered": {"table": 1} if taken_by == "next" else {}, "retried": {}}
-    assert closed_without_its_bus is None, f"a connection whose bus is gone did not close: {closed_without_its_bus!r}"
-
-
-@pytest.mark.asyncio
-async def test_an_idle_worker_stops_and_closes_its_connection_at_once(tmp_path: Path) -> None:
-    """A worker with nothing to do stops within one pull's wait, and its connection then closes at once: each loop ends
-    the subscription it pulled on, so the connection's drain waits on none (measured on the estate before each did:
-    an idle worker took 34 s to stop, the client's 30 s drain timeout, on every rollout)."""
-    tools, docs, mint_, broker = _the_bus(tmp_path)
-    queue: TaskQueue | None = None
-    took: float | None = None
-
-    def ends_its_process(event: str, **extra: object) -> NoReturn:
-        raise AssertionError(f"the worker ended its process: {event} {extra}")
-
-    async def handled(_body: bytes) -> int:
-        return 0
-
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        queue = await TaskQueue.connect(broker.url, mint_.credentials[_WORKER].creds_file.read_text(), name="idle")
-        idle = Worker(
-            queue,
-            run=_never_run,
-            ready=lambda: True,
-            heartbeat_seconds=_HEARTBEAT,
-            ack_wait_seconds=_ACK_WAIT,
-            max_deliver=_MAX_DELIVER,
-            max_pass_seconds=600,
-            retry_ended_seconds=3600,
-            end=ends_its_process,
-            store_events=handled,
-        )
-        loops = [asyncio.create_task(loop()) for loop in (idle.run_tasks, idle.run_due, idle.run_store_events)]
-        await asyncio.sleep(2.0)  # each loop's pull is out
-        began = asyncio.get_running_loop().time()
-        await idle.drain(loops, 20)
-        await queue.close()
-        took = asyncio.get_running_loop().time() - began
-    finally:
-        broker.stop()
-
-    assert took is not None and took < 10, f"an idle worker took {took:.1f} s to stop and close"
-
-
-@pytest.mark.parametrize(
-    ("first", "second"),
-    [
-        pytest.param(Task(kind="audit"), Task(kind="scan"), id="the-audit-and-the-scan"),
-        pytest.param(
-            Task(kind="table", uuid="shared", location="s3://bucket/shared"),
-            Task(kind="orphans", uuid="shared", location="s3://bucket/shared"),
-            id="a-tables-pass-and-its-orphan-check",
-        ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_two_tasks_holding_one_claim_never_run_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: Task, second: Task) -> None:
-    """The audit and the scan each repair the estate from a drift report of their own, and a table's orphan check reads
-    the files its pass's cleanup deletes, so each pair holds one claim: one waits out the other's while it runs, on two
-    replicas, and runs once it is done."""
-    # The give-back's delay is drawn at random beneath 15 s; drawn here at the bound, the second delivery comes after the
-    # release below, where a short draw would spend the task's last delivery on the claim still held.
-    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 15.0)
-    tools, docs, mint_, broker = _the_bus(tmp_path)
-    worker = mint_.credentials[_WORKER]
-    runs = _Runs()
-    runs.held[first.uuid] = release = asyncio.Event()
-    replicas: list[_Replica] = []
-    lane: TaskQueue | None = None
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        for name in ("first-replica", "second-replica"):
-            replicas.append(await _Replica.start(broker.url, worker, name, runs, ready=lambda: True))
-        assert await lane.enqueue(first) is True
-        assert await lane.enqueue(second) is True
-        assert await _until(lambda: len(runs.ran) >= 1, 15), f"neither task ran: {runs.ran}"
-        # The other's first delivery waits one ack wait for the claim, and comes back after its retry delay: nothing to poll
-        # for while it must not run, and released before its second delivery, which a held claim would give back again.
-        await asyncio.sleep(3 * _ACK_WAIT)
-        beside = list(runs.ran)
-        release.set()
-        assert await _until(lambda: len(runs.ran) == 2, 60), f"the other never ran once the first was done: {runs.ran}"
-    finally:
-        try:
-            for replica in replicas:
-                await replica.stop()
-            if lane is not None:
-                await lane.close()
-        finally:
-            broker.stop()
-    assert len(beside) == 1, f"two tasks holding one claim ran at once: {beside}"
-
-
-@pytest.mark.asyncio
-async def test_an_audit_the_scan_outlasts_is_given_up_and_is_not_counted_as_a_task_that_ended(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An audit that finds the scan's claim held on every delivery failed at nothing: it leaves the queue on its last
-    delivery without running and without the count the ended-tasks alert reads, and its next firing brings it back."""
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
-    runs = _Runs()
-    runs.held[""] = release = asyncio.Event()
-    ended: list[str] = []
-    monkeypatch.setattr(worker_queue, "record_task_ended", lambda *, kind: ended.append(kind))
-    replicas: list[_Replica] = []
-    lane: TaskQueue | None = None
-    rig: Client | None = None
-    left = False
-    ran: list[tuple[str, str]] = []
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        for name in ("scan-replica", "audit-replica"):
-            replicas.append(await _Replica.start(broker.url, worker, name, runs, ready=lambda: True))
-        assert await lane.enqueue(Task(kind="scan")) is True
-        assert await _until(lambda: len(runs.ran) == 1, 15), f"the scan never ran: {runs.ran}"
-        assert await lane.enqueue(Task(kind="audit")) is True
-
-        async def the_audit_left_the_queue() -> bool:
-            answer = await reader.request(f"$JS.API.STREAM.MSG.GET.{TASKS_STREAM}", {"last_by_subj": Task(kind="audit").subject("task")})
-            return answer is not None and "error" in answer
-
-        left = await _until(the_audit_left_the_queue, 120)
-        # Read before the scan is let go: a replica stopped mid-pass leaves its task to the other, which would run it.
-        ran = list(runs.ran)
-    finally:
-        release.set()
-        try:
-            for replica in replicas:
-                await replica.stop()
-            for client in (lane, rig):
-                if client is not None:
-                    await client.close()
-        finally:
-            broker.stop()
-
-    assert left, "the audit was still queued behind the scan's claim after every delivery it had"
-    assert (ended, ran) == ([], [("scan-replica", "")]), f"the audit was counted as ended, or ran beside the scan: {ended} {ran}"
-
-
 async def _purge_the_claims(rig: Client, _monkeypatch: pytest.MonkeyPatch) -> None:
     purged = await rig.request("$JS.API.STREAM.PURGE.KV_MAINTENANCE_CLAIMS")
     assert purged is not None and purged.get("success") is True, f"the claims were not purged: {purged}"
@@ -1205,6 +452,1149 @@ async def _break_the_renewal(_rig: Client, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(TaskQueue, "renew", fault)
 
 
+class _Bus:
+    """The module's bus: the cluster, the users minted for it, the render its stream Job came from, and what the servers
+    had logged when the running test began, so a test reads only its own lines."""
+
+    def __init__(self, tools: Tools, docs: tuple[dict[str, Any], ...], mint_: Mint, broker: Broker, home: Path) -> None:
+        self.tools, self.docs, self.mint, self.broker, self.home = tools, docs, mint_, broker, home
+        self._before: Counter[str] = Counter()
+
+    @property
+    def worker(self) -> Credential:
+        return self.mint.credentials[_WORKER]
+
+    async def rig(self) -> Client:
+        return await Client.connect(self.broker.url, self.mint.credentials[_RIG], _RIG, answer_within=10.0)
+
+    def declare(self) -> None:
+        """The chart's stream Job, run as `admin` (`_declare_the_queue`)."""
+        _declare_the_queue(self.tools, self.docs, self.broker, self.mint.credentials["admin"], self.home)
+
+    async def declare_afresh(self) -> None:
+        """Delete the maintenance streams and the claims bucket, then have the stream Job declare them again: no message,
+        delivery count, consumer state or claim survives into the next test."""
+        rig = await self.rig()
+        try:
+            for stream in (TASKS_STREAM, SCHEDULES_STREAM, STORE_EVENTS_STREAM, f"KV_{CLAIMS_BUCKET}"):
+                await rig.request(f"$JS.API.STREAM.DELETE.{stream}")
+        finally:
+            await rig.close()
+        await asyncio.to_thread(self.declare)
+        self._before = Counter(self.broker.log_text().splitlines())
+
+    def logged_since(self) -> str:
+        """What the servers logged since the running test began. Each line carries its time to the microsecond, so a line
+        logged before is told from a new one by its text."""
+        return "\n".join((Counter(self.broker.log_text().splitlines()) - self._before).elements())
+
+    def refusals(self) -> list[Violation]:
+        """What the broker refused the worker's user since the running test began: a call the chart's table does not
+        grant."""
+        return [v for v in violations(self.logged_since()) if self.mint.user_of(v.user_key) == _WORKER]
+
+
+@pytest.fixture(scope="module")
+def bus(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Bus]:
+    home = tmp_path_factory.mktemp("bus")
+    tools, docs, mint_, broker = _the_bus(home, {_RIG: _RIG_GRANTS})
+    try:
+        yield _Bus(tools, docs, mint_, broker, home)
+    finally:
+        broker.stop()
+
+
+@pytest_asyncio.fixture
+async def declared(bus: _Bus) -> AsyncIterator[_Bus]:
+    """The module's bus with its queue freshly declared; a call the broker refused the worker fails the test."""
+    await bus.declare_afresh()
+    yield bus
+    assert bus.refusals() == [], "the broker refused the worker a call the chart must grant"
+
+
+class _Pulls:
+    """Every pull a worker makes, as the rig sees it go by: its subject, its reply inbox, and when it was seen."""
+
+    def __init__(self) -> None:
+        self.seen: list[tuple[str, str, float]] = []
+
+    async def record(self, msg: Msg) -> None:
+        self.seen.append((msg.subject, msg.reply, asyncio.get_running_loop().time()))
+
+    async def next_after(self, count: int, seconds: float) -> float:
+        """When the first pull after the ``count``-th was seen, waiting up to ``seconds`` for it."""
+        assert await _until(lambda: len(self.seen) > count, seconds), "no worker pulled"
+        return self.seen[count][2]
+
+
+class _Fleet:
+    """What one test starts on the bus: the commit lane's connection, in-process replicas, workers in processes of their
+    own, the rig's connection; each stopped at the test's end."""
+
+    def __init__(self, bus: _Bus) -> None:
+        self.bus = bus
+        self.replicas: list[_Replica] = []
+        self.processes: list[asyncio.subprocess.Process] = []
+        self.queues: list[TaskQueue] = []
+        self.clients: list[Client] = []
+        self.links: list[Link] = []
+        #: Loops the test runs itself, cancelled first.
+        self.on_stop: list[asyncio.Task[None]] = []
+
+    async def lane(self, name: str = "commit-lane") -> TaskQueue:
+        queue = await TaskQueue.connect(self.bus.broker.url, self.bus.worker.creds_file.read_text(), name=name)
+        self.queues.append(queue)
+        return queue
+
+    async def start(self, name: str, runs: _Runs, *, ready: Callable[[], bool] = lambda: True, url: str | None = None) -> _Replica:
+        replica = await _Replica.start(url or self.bus.broker.url, self.bus.worker, name, runs, ready=ready)
+        self.replicas.append(replica)
+        return replica
+
+    async def doomed(self, max_pass_seconds: float, url: str | None = None) -> asyncio.subprocess.Process:
+        process = await _doomed(url or self.bus.broker.url, self.bus.worker, max_pass_seconds)
+        self.processes.append(process)
+        return process
+
+    async def rig(self) -> Client:
+        client = await self.bus.rig()
+        self.clients.append(client)
+        return client
+
+    async def link(self) -> Link:
+        link = Link(self.bus.broker.port)
+        await link.start()
+        self.links.append(link)
+        return link
+
+    async def pulls(self) -> _Pulls:
+        """The rig, watching every pull for a task."""
+        pulls = _Pulls()
+        rig = await self.rig()
+        await rig.nc.subscribe(f"$JS.API.CONSUMER.MSG.NEXT.{TASKS_STREAM}.{TASK_CONSUMER}", cb=pulls.record)
+        await rig.settle()
+        return pulls
+
+    def ended(self) -> dict[str, list[str]]:
+        """The in-process replicas that ended where a worker ends its process, and why."""
+        return {replica.name: replica.ended for replica in self.replicas if replica.ended}
+
+    async def stop(self) -> None:
+        for running in self.on_stop:
+            running.cancel()
+        await asyncio.gather(*self.on_stop, return_exceptions=True)
+        for process in self.processes:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+        for replica in self.replicas:
+            await replica.stop()
+        for client in self.clients:
+            await client.close()
+        for queue in self.queues:
+            await queue.close()
+        for link in self.links:
+            await link.stop()
+
+
+@pytest_asyncio.fixture
+async def fleet(declared: _Bus) -> AsyncIterator[_Fleet]:
+    made = _Fleet(declared)
+    try:
+        yield made
+    finally:
+        await made.stop()
+
+
+def _task(uuid: str, kind: TaskKind = "table") -> Task:
+    return Task(kind=kind, uuid=uuid, location=f"s3://bucket/{uuid}")
+
+
+# --- a worker's hold on its task --------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_pass_past_twice_its_bound_ends_its_workers_process(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    assert await lane.enqueue(_task("hung")) is True, fleet.bus.refusals()
+    hung = await fleet.doomed(1)
+    assert await _said(hung) == ["running", "hung"], f"a worker did not take the task; refused: {fleet.bus.refusals()}"
+
+    ended = await _until(lambda: hung.returncode is not None, 30)
+
+    assert ended and hung.returncode == _HUNG_EXIT, f"a pass past twice its bound did not end its worker's process (exit {hung.returncode})"
+
+
+async def _outlived_every_delivery(fleet: _Fleet) -> tuple[TaskQueue, _Runs, bool]:
+    """A table task whose pass outlived its worker on each of its deliveries, the next delivery handed to a worker that
+    would run it: the commit lane, that worker's runs, and whether the task stopped holding its table."""
+    lane = await fleet.lane()
+    assert await lane.enqueue(_task("killer")) is True, fleet.bus.refusals()
+    for _ in range(_MAX_DELIVER):
+        hung = await fleet.doomed(1)
+        assert await _said(hung) == ["running", "killer"], f"a worker did not take the task its table held; refused: {fleet.bus.refusals()}"
+        assert await _until(lambda hung=hung: hung.returncode is not None, 30), "a pass past twice its bound did not end its worker's process"
+    runs = _Runs()
+    await fleet.start("next", runs)
+
+    async def killer_ended() -> bool:
+        return "killer" not in await lane.held("task", "table")
+
+    return lane, runs, await _until(killer_ended, _ACK_WAIT + 15)
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_outlived_its_worker_on_every_delivery_is_ended_unrun(fleet: _Fleet) -> None:
+    _, runs, ended = await _outlived_every_delivery(fleet)
+
+    assert (ended, runs.times("killer")) == (True, 0), f"a task past its last delivery still held its table, or was run: {runs.ran}"
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_outlived_its_worker_on_every_delivery_holds_its_tables_next_try(fleet: _Fleet) -> None:
+    lane, _, _ = await _outlived_every_delivery(fleet)
+
+    assert "killer" in await lane.held("schedule", "table"), "an ended task's table holds no next try, so the hourly audit hands it back"
+
+
+@pytest.mark.asyncio
+async def test_a_task_put_late_in_its_workers_pull_stays_with_it_while_it_beats(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    pulls = await fleet.pulls()
+    dier = await fleet.doomed(600)
+    # The task arrives late in the doomed worker's pull, as one put on an idle queue arrives: timed from the pull itself.
+    pulled_at = await pulls.next_after(0, 15)
+    await asyncio.sleep(max(0.0, pulled_at + _LATE_IN_PULL - asyncio.get_running_loop().time()))
+    assert await lane.enqueue(_task("dying")) is True, fleet.bus.refusals()
+    assert await _said(dier) == ["running", "dying"], f"the doomed worker did not take the task; refused: {fleet.bus.refusals()}"
+    runs = _Runs()
+    await fleet.start("second", runs)
+
+    # Three ack waits in which the task must stay with the worker that still beats for it: nothing to poll for.
+    await asyncio.sleep(3 * _ACK_WAIT)
+
+    assert runs.times("dying") == 0, "a live worker's task went to another: its heartbeat did not hold it"
+
+
+@pytest.mark.asyncio
+async def test_a_second_task_for_a_table_whose_task_is_in_flight_is_refused(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    runs = _Runs()
+    runs.held["in-flight"] = asyncio.Event()
+    await fleet.start("first", runs)
+    assert await lane.enqueue(_task("in-flight")) is True, fleet.bus.refusals()
+    assert await _until(lambda: runs.times("in-flight") == 1, 15), f"the task never ran; refused: {fleet.bus.refusals()}"
+
+    again = await lane.enqueue(_task("in-flight"))
+
+    assert again is False, "the queue took a second task for a table whose task is in flight"
+
+
+@pytest.mark.asyncio
+async def test_a_killed_workers_task_goes_to_another_worker(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    dier = await fleet.doomed(600)
+    assert await lane.enqueue(_task("dying")) is True, fleet.bus.refusals()
+    assert await _said(dier) == ["running", "dying"], f"the doomed worker did not take the task; refused: {fleet.bus.refusals()}"
+    runs = _Runs()
+    await fleet.start("second", runs)
+
+    dier.kill()
+    await dier.wait()
+
+    assert await _until(lambda: runs.times("dying") == 1, _ACK_WAIT + 15), f"a dead worker's task never reached the other; refused: {fleet.bus.refusals()}"
+
+
+@pytest.mark.asyncio
+async def test_a_worker_the_bus_stops_answering_mid_pass_ends_its_process_before_its_task_runs_elsewhere(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    link = await fleet.link()
+    stranded = await fleet.doomed(600, url=link.url)
+    assert await lane.enqueue(_task("cut")) is True, fleet.bus.refusals()
+    assert await _said(stranded) == ["running", "cut"], f"the stranded worker did not take the task; refused: {fleet.bus.refusals()}"
+    runs = _Runs()
+    runs.at_start["cut"] = lambda: stranded.returncode
+    await fleet.start("second", runs)
+
+    outage = asyncio.create_task(link.cut(4 * _ACK_WAIT))
+    assert await _until(lambda: link.down, 5), "the link was never cut"
+    # Its last heartbeat was answered before the cut, so its lease runs out within one ack wait of it.
+    ended_itself = await _until(lambda: stranded.returncode is not None, _ACK_WAIT)
+    moved = await _until(lambda: runs.times("cut") == 1, _ACK_WAIT + 15)
+    await outage
+
+    assert ended_itself and stranded.returncode == _HUNG_EXIT, f"a worker the bus stopped answering ran its pass past its lease (exit {stranded.returncode})"
+    assert moved, f"a stranded worker's task never reached the other; refused: {fleet.bus.refusals()}"
+    assert runs.seen["cut"] == _HUNG_EXIT, "the task went to another worker while the one the bus stopped answering still ran it"
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_drain_ends_mid_pass_ends_its_process_before_its_task_runs_elsewhere(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    stopping = await fleet.doomed(600)
+    assert await lane.enqueue(_task("drained")) is True, fleet.bus.refusals()
+    assert await _said(stopping) == ["running", "drained"], f"the stopping worker did not take the task; refused: {fleet.bus.refusals()}"
+    runs = _Runs()
+    runs.at_start["drained"] = lambda: stopping.returncode
+    await fleet.start("second", runs)
+    assert stopping.stdin is not None
+
+    stopping.stdin.write(b"stop\n")
+    await stopping.stdin.drain()
+
+    ended_itself = await _until(lambda: stopping.returncode is not None, _DOOMED_DRAIN + 5)
+    assert ended_itself and stopping.returncode == _HUNG_EXIT, f"a worker whose drain ended mid-pass kept its pass (exit {stopping.returncode})"
+    assert await _until(lambda: runs.times("drained") == 1, _ACK_WAIT + 15), f"a drained worker's task never reached the other; refused: {fleet.bus.refusals()}"
+    assert runs.seen["drained"] == _HUNG_EXIT, "the task went to another worker while the one draining still ran it"
+
+
+class _CutSettle(BaseModel):
+    """What a pass that ended once the bus was cut left: its worker's exit, whether its task reached the other worker,
+    and whether the queue took the task again once the bus was back."""
+
+    exit: int | None
+    moved: bool
+    put_again: bool
+
+
+async def _a_pass_ends_in_a_bus_cut(fleet: _Fleet) -> _CutSettle:
+    lane = await fleet.lane()
+    link = await fleet.link()
+    settler = await fleet.doomed(600, url=link.url)
+    assert await lane.enqueue(_task("settled")) is True, fleet.bus.refusals()
+    assert await _said(settler) == ["running", "settled"], f"the settling worker did not take the task; refused: {fleet.bus.refusals()}"
+    runs = _Runs()
+    release = runs.held["settled"] = asyncio.Event()
+    await fleet.start("second", runs)
+    outage = asyncio.create_task(link.cut(4 * _ACK_WAIT))
+    # The pass ends once the cut stands, so its ack cannot be answered.
+    assert await _until(lambda: link.down, 5), "the link was never cut"
+    assert settler.stdin is not None
+    settler.stdin.write(b"finish\n")
+    await settler.stdin.drain()
+    await _until(lambda: settler.returncode is not None, 2 * _ACK_WAIT)
+    moved = await _until(lambda: runs.times("settled") == 1, _ACK_WAIT + 15)
+    await outage
+    # The bus is back: an ack held through the cut must not have freed the task the other worker still runs.
+    put_again = await lane.enqueue(_task("settled"))
+    release.set()
+    return _CutSettle(exit=settler.returncode, moved=moved, put_again=put_again)
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_pass_ends_in_a_bus_cut_ends_its_process(fleet: _Fleet) -> None:
+    settled = await _a_pass_ends_in_a_bus_cut(fleet)
+
+    assert settled.exit == _HUNG_EXIT, f"a worker whose pass ended in a bus cut kept its ack for after it (exit {settled.exit})"
+
+
+@pytest.mark.asyncio
+async def test_no_ack_held_through_a_bus_cut_frees_the_task_another_worker_runs(fleet: _Fleet) -> None:
+    """The task must have reached the other worker for its being refused a second put to say the ack did not free it."""
+    settled = await _a_pass_ends_in_a_bus_cut(fleet)
+
+    assert (settled.moved, settled.put_again) == (True, False), f"the task never moved, or an ack sent once the bus came back freed it: {settled}"
+
+
+@pytest.mark.asyncio
+async def test_a_task_delivered_as_its_workers_pull_runs_out_runs_on_that_delivery(fleet: _Fleet, maintenance_metrics: Measured) -> None:
+    """A pull's wait at the server counts from the request's arrival, and the server goes on answering it until the
+    worker's unsubscribe arrives too, so on a slow path to the stream's leader the server holds a pull past the moment
+    its worker stopped waiting, by the time the path takes. A task sent in that window answers a pull its worker must
+    still be reading: run then, and not handed on an ack wait later on a second delivery. The link slows every frame the
+    worker sends by `_PULL_TRANSIT`, and the task is put halfway through the window that opens."""
+    pulls = await fleet.pulls()
+    link = await fleet.link()
+    link.lag(_PULL_TRANSIT)
+    lane = await fleet.lane()
+    runs = _Runs()
+    await fleet.start("puller", runs, url=link.url)
+    arrived = await pulls.next_after(len(pulls.seen), 15)
+    # Placed in time, not waited for: the server holds this pull until `arrived + _FETCH_SECONDS`, and its worker, which
+    # sent it `_PULL_TRANSIT` earlier, would stop waiting `_PULL_TRANSIT` before that.
+    await asyncio.sleep(arrived + _FETCH_SECONDS - _PULL_TRANSIT / 2 - asyncio.get_running_loop().time())
+
+    assert await lane.enqueue(_task("in-transit")) is True, fleet.bus.refusals()
+
+    assert await _until(lambda: runs.times("in-transit") == 1, _ACK_WAIT + 15), f"the task never ran: {runs.ran}"
+    assert maintenance_metrics.by("maintenance.tasks.redelivered", "kind") == {}, (
+        "the task ran only on a second delivery: its first went to a pull its worker had stopped reading"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_task_delivered_to_a_pull_its_worker_gave_up_on_runs_once_on_the_worker_that_pulls_next(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    pulls = await fleet.pulls()
+    runs = _Runs()
+    release_first = runs.held["first"] = asyncio.Event()
+    release_late = runs.held["late"] = asyncio.Event()
+    beta_ready = asyncio.Event()
+    await fleet.start("alpha", runs)
+    await fleet.start("beta", runs, ready=beta_ready.is_set)
+    assert await lane.enqueue(_task("first")) is True
+    assert await _until(lambda: runs.times("first") == 1, 15), f"the first task never ran; refused: {fleet.bus.refusals()}"
+    # Alpha's pull its running pass answered, replayed as a reconnect replays a pull it held back; the next task answers it.
+    rig = await fleet.rig()
+    await rig.nc.publish(pulls.seen[-1][0], json.dumps({"batch": 1, "expires": 30_000_000_000}).encode(), reply=pulls.seen[-1][1])
+    await rig.settle()
+    assert await lane.enqueue(_task("late")) is True
+    beta_ready.set()
+    assert await _until(lambda: runs.times("late") == 1, _ACK_WAIT + 15), f"a task delivered to a pull its worker gave up on was never handed on: {runs.ran}"
+
+    release_first.set()
+    # Alpha pulls again once its pass ends, and must not run the task its old pull was answered with: nothing to poll for.
+    await asyncio.sleep(_ACK_WAIT)
+    release_late.set()
+
+    late = [name for name, uuid in runs.ran if uuid == "late"]
+    assert late == ["beta"], f"a task ran off a delivery to a pull its worker had given up on, beside its redelivery: {late}"
+    assert fleet.ended() == {}, f"an in-process replica ended where a worker ends its process: {fleet.ended()}"
+
+
+@pytest.mark.asyncio
+async def test_a_late_ack_that_frees_a_live_passs_task_lets_no_second_pass_of_its_table_run_beside_it(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    rig = await fleet.rig()
+    deliveries: list[Msg] = []
+
+    async def delivered(msg: Msg) -> None:
+        if msg.subject.endswith(".fenced"):
+            deliveries.append(msg)
+
+    await rig.nc.subscribe(f"{INBOX_PREFIX}.>", cb=delivered)
+    await rig.settle()
+    runs = _Runs()
+    release = runs.held["fenced"] = asyncio.Event()
+    await fleet.start("alpha", runs)
+    assert await lane.enqueue(_task("fenced")) is True
+    assert await _until(lambda: runs.times("fenced") == 1 and bool(deliveries), 15), f"the fenced task never ran; refused: {fleet.bus.refusals()}"
+    # A late ack on the delivery the live pass holds, as one the network held past a stale worker's lease lands.
+    await rig.nc.publish(deliveries[0].reply, b"+ACK")
+    await rig.settle()
+
+    async def freed() -> bool:
+        return "fenced" not in await lane.held("task", "table")
+
+    assert await _until(freed, 10), "a late ack did not free the task a live pass holds"
+    assert await lane.enqueue(_task("fenced")) is True, "the queue refused a task for a table whose task a late ack freed"
+    # The next task's delivery comes at once, and must wait out the live pass's claim: nothing to poll for.
+    await asyncio.sleep(2 * _ACK_WAIT)
+    beside = runs.times("fenced")
+    release.set()
+
+    assert beside == 1, f"a pass ran beside another of its table once a late ack freed its task: {runs.ran}"
+    assert await _until(lambda: runs.times("fenced") == 2, _ACK_WAIT + 30), f"the table's next task never ran once its pass ended: {runs.ran}"
+    assert fleet.ended() == {}, f"an in-process replica ended where a worker ends its process: {fleet.ended()}"
+
+
+# --- bursts, and a table's tasks put at once --------------------------------------------------------------------------
+
+_BURST = [_task(f"burst-{n}") for n in range(6)]
+
+
+@pytest.mark.asyncio
+async def test_a_burst_of_follow_ups_holds_one_per_table(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    due = datetime.now(UTC) + timedelta(hours=1)
+
+    held = [sorted(await asyncio.gather(*(lane.follow_up(task, due) for _ in range(3)), return_exceptions=True), key=repr) for task in _BURST]
+
+    assert held == [[False, False, True]] * len(_BURST), f"a burst held other than one follow-up per table: {held}"
+
+
+@pytest.mark.asyncio
+async def test_each_follow_up_of_a_burst_runs_once(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    runs = _Runs()
+    await fleet.start("first", runs)
+    await fleet.start("second", runs)
+    due = datetime.now(UTC) + timedelta(seconds=2)
+    for task in _BURST:
+        assert await lane.follow_up(task, due) is True
+    assert await _until(lambda: all(runs.times(task.uuid) for task in _BURST), 30), f"the burst's passes did not all run: {runs.ran}"
+
+    # An ack wait past the last pass, in which no pass may run a second time: nothing to poll for.
+    await asyncio.sleep(_ACK_WAIT + 1)
+
+    assert Counter(uuid for _, uuid in runs.ran) == Counter(task.uuid for task in _BURST), f"a burst's pass ran other than once: {runs.ran}"
+
+
+async def _a_held_burst(fleet: _Fleet) -> list[tuple[str, str]]:
+    """Two ready workers and one not ready, and a burst of follow-ups each ready worker holds the first pass of, so the
+    burst's second pass can only go to the other ready worker: the share is fixed by the holds, not by which pull the bus
+    answers first. Which worker took which of the first two passes, once every pass of the burst has run."""
+    lane = await fleet.lane()
+    runs = _Runs()
+    released = asyncio.Event()
+    for task in _BURST:
+        runs.held[task.uuid] = released
+    await fleet.start("first", runs)
+    await fleet.start("second", runs)
+    await fleet.start("not-ready", runs, ready=lambda: False)
+    due = datetime.now(UTC) + timedelta(seconds=2)
+    for task in _BURST:
+        assert await lane.follow_up(task, due) is True
+    assert await _until(lambda: len(runs.ran) == 2, 30), f"the two ready workers did not each take a pass: {runs.ran}; refused: {fleet.bus.refusals()}"
+    holding = list(runs.ran)
+    released.set()
+    assert await _until(lambda: all(runs.times(task.uuid) for task in _BURST), 30), f"the burst's passes did not all run: {runs.ran}"
+    return holding + runs.ran[2:]
+
+
+@pytest.mark.asyncio
+async def test_two_ready_workers_share_a_burst(fleet: _Fleet) -> None:
+    ran = await _a_held_burst(fleet)
+
+    assert {name for name, _ in ran[:2]} == {"first", "second"}, f"the two ready workers did not share the burst: {ran}"
+
+
+@pytest.mark.asyncio
+async def test_a_worker_that_is_not_ready_takes_no_pass_of_a_burst(fleet: _Fleet) -> None:
+    ran = await _a_held_burst(fleet)
+
+    assert "not-ready" not in {name for name, _ in ran}, f"a worker that was not ready took a pass: {ran}"
+
+
+@pytest.mark.asyncio
+async def test_three_puts_of_one_tables_task_at_once_queue_one(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+
+    put = sorted(await asyncio.gather(*(lane.enqueue(_task("busy")) for _ in range(3)), return_exceptions=True), key=repr)
+
+    assert put == [False, False, True], f"three puts of one table's task at once queued other than one: {put}"
+
+
+async def _a_follow_up_fires_while_its_tables_task_runs(fleet: _Fleet) -> tuple[TaskQueue, _Runs, int]:
+    """A table's task held running while its follow-up fires: the commit lane, the runs, and how many passes of the
+    table had run by the time the task was let finish."""
+    lane = await fleet.lane()
+    runs = _Runs()
+    release = runs.held["busy"] = asyncio.Event()
+    await fleet.start("first", runs)
+    assert await lane.enqueue(_task("busy")) is True
+    assert await _until(lambda: runs.times("busy") == 1, 15), f"the busy table's task never ran; refused: {fleet.bus.refusals()}"
+    assert await lane.follow_up(_task("busy"), datetime.now(UTC) + timedelta(seconds=1)) is True
+    # The follow-up fires inside these seconds while the task still holds its table, and must not pass it: nothing to poll for.
+    await asyncio.sleep(4)
+    beside = runs.times("busy")
+    release.set()
+    return lane, runs, beside
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_that_fires_while_its_tables_task_runs_does_not_pass_the_table_beside_it(fleet: _Fleet) -> None:
+    _, _, beside = await _a_follow_up_fires_while_its_tables_task_runs(fleet)
+
+    assert beside == 1, "a follow-up was passed while a task still held its table"
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_that_fires_while_its_tables_task_runs_passes_the_table_once_the_task_is_done(fleet: _Fleet) -> None:
+    """Done means the follow-up's pass ran and its table is held by nothing after it."""
+    lane, runs, _ = await _a_follow_up_fires_while_its_tables_task_runs(fleet)
+
+    async def passed_and_freed() -> bool:
+        return runs.times("busy") == 2 and not await lane.held("task", "table")
+
+    assert await _until(passed_and_freed, _FOLLOW_UP_WAIT), f"the follow-up was never passed, or its table stayed held: {runs.ran}"
+
+
+# --- claims -----------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_claim_and_its_renewal_asked_again_find_their_own_token_standing(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    mine = await lane.claim("table.asked-again", "mine", within=10)
+    assert mine is not None, "the commit lane's connection could not claim a free table"
+    renewed = await lane.renew("table.asked-again", "mine", mine, within=10)
+    assert renewed is not None, "a claim's holder could not renew it"
+
+    again = (await lane.renew("table.asked-again", "mine", mine, within=10), await lane.claim("table.asked-again", "mine", within=10))
+
+    assert again == (renewed, renewed), "a renewal or a claim asked again after its answer was lost was refused"
+
+
+@pytest.mark.asyncio
+async def test_a_claim_another_holds_is_neither_taken_nor_renewed(fleet: _Fleet) -> None:
+    """A stale holder's renewal names a revision the holder's own renewal has since moved."""
+    lane = await fleet.lane()
+    mine = await lane.claim("table.held", "mine", within=10)
+    assert mine is not None, "the commit lane's connection could not claim a free table"
+    assert await lane.renew("table.held", "mine", mine, within=10) is not None, "a claim's holder could not renew it"
+
+    taken = (await lane.renew("table.held", "theirs", mine, within=10), await lane.claim("table.held", "theirs", within=10))
+
+    assert taken == (None, None), "a stale renewal or a claim took a claim another holds"
+
+
+@pytest.mark.asyncio
+async def test_a_release_naming_a_revision_a_renewal_moved_frees_its_holders_claim(fleet: _Fleet) -> None:
+    """As when the renewal's answer was lost, the release names the revision before it; it finds its own token standing."""
+    lane = await fleet.lane()
+    mine = await lane.claim("table.released", "mine", within=10)
+    assert mine is not None, "the commit lane's connection could not claim a free table"
+    assert await lane.renew("table.released", "mine", mine, within=10) is not None, "a claim's holder could not renew it"
+
+    await lane.release("table.released", "mine", mine)
+
+    assert await lane.claim("table.released", "theirs", within=10) is not None, "a release refused for a moved revision left its holder's claim standing"
+
+
+@pytest.mark.asyncio
+async def test_a_release_by_a_former_holder_leaves_the_current_holders_claim(fleet: _Fleet) -> None:
+    lane = await fleet.lane()
+    mine = await lane.claim("table.passed-on", "mine", within=10)
+    assert mine is not None, "the commit lane's connection could not claim a free table"
+    await lane.release("table.passed-on", "mine", mine)
+    theirs = await lane.claim("table.passed-on", "theirs", within=10)
+    assert theirs is not None, "a released claim could not be taken"
+
+    await lane.release("table.passed-on", "mine", mine)
+
+    assert await lane.claim("table.passed-on", "mine", within=10) is None, "a release by a former holder freed the claim another holds"
+
+
+# --- a replica started as the service starts it -----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("loop", [pytest.param(_raises, id="with-an-error"), pytest.param(_returns, id="without-one")])
+async def test_a_loop_that_ends_ends_its_replica(
+    declared: _Bus, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, loop: Callable[[Worker], Awaitable[None]]
+) -> None:
+    """A replica's loop that ends before the replica stops ends its process, whether it raised or returned: a replica whose
+    loop is gone stays Ready with that loop's work undone, and only a new container repairs it (ADR 0203)."""
+    ended: list[tuple[str, object]] = []
+
+    def record_the_end(event: str, **extra: object) -> None:
+        ended.append((event, extra.get("loop")))
+
+    monkeypatch.setattr(tasks, "run_task", _runs_nothing)
+    monkeypatch.setattr(Worker, "run_due", loop)
+    settings = _replica_settings(tmp_path, monkeypatch, declared.broker)
+    async with AsyncExitStack() as stack:
+        await _start_replica(stack, settings, declared.worker, end=cast("EndProcess", record_the_end))
+        assert await _until(lambda: bool(ended), 20), "the loop moving fired schedules ended and its replica went on"
+    assert ended == [("background_work_ended", "maintenance-due")]
+
+
+_CADENCES = [Task(kind="audit").subject("schedule"), Task(kind="scan").subject("schedule")]
+
+
+async def _cadences_held(reader: Client) -> list[bool]:
+    answers = [await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": subject}) or {} for subject in _CADENCES]
+    return ["message" in answer for answer in answers]
+
+
+@pytest.mark.asyncio
+async def test_a_replica_starts_with_the_audits_and_the_scans_schedules(fleet: _Fleet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tasks, "run_task", _runs_nothing)
+    settings = _replica_settings(tmp_path, monkeypatch, fleet.bus.broker)
+    reader = await fleet.rig()
+    async with AsyncExitStack() as stack:
+        await _start_replica(stack, settings, fleet.bus.worker)
+        held = await _cadences_held(reader)
+    assert held == [True, True], "a replica started without the audit's and the scan's schedules"
+
+
+@pytest.mark.asyncio
+async def test_a_replica_puts_back_the_schedules_the_bus_lost(fleet: _Fleet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tasks, "run_task", _runs_nothing)
+    monkeypatch.setattr(tasks, "_CADENCE_SECONDS", 2.0)
+    settings = _replica_settings(tmp_path, monkeypatch, fleet.bus.broker)
+    reader = await fleet.rig()
+    async with AsyncExitStack() as stack:
+        await _start_replica(stack, settings, fleet.bus.worker)
+        assert await _until(lambda: _all_held(reader), 10), "a replica started without the audit's and the scan's schedules"
+        for subject in _CADENCES:
+            await reader.request(f"$JS.API.STREAM.PURGE.{SCHEDULES_STREAM}", {"filter": subject})
+
+        put_back = await _until(lambda: _all_held(reader), 10)
+    assert put_back, "the schedules the bus lost were never put back"
+
+
+async def _all_held(reader: Client) -> bool:
+    return await _cadences_held(reader) == [True, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_a_cut", [pytest.param(False, id="the-bus-ends-its-session"), pytest.param(True, id="the-bus-refuses-it-at-a-reconnect")])
+async def test_a_worker_whose_credential_the_bus_takes_no_longer_ends_itself(fleet: _Fleet, tmp_path: Path, through_a_cut: bool) -> None:
+    """nats-py keeps the credential a worker read at start: it closes for good on a session the server ends, and retries a
+    credential the server refuses for ever. So a worker the bus takes its credential from no longer ends its process, and
+    its pod, started again, reads the credential the store then holds. A connection held while its credential runs out
+    is ended by the server; one cut through a `Link` until the credential has run out is refused when it reconnects."""
+    bus = fleet.bus
+    publish, subscribe = nats_users(bus.docs)[_WORKER]
+    grants = Permissions(publish=tuple(sorted(publish)), subscribe=tuple(sorted(subscribe)), expiry="1m")
+    credential = issue(bus.tools.nsc, bus.home / "nsc", f"{_EXPIRING}-{'cut' if through_a_cut else 'held'}", grants)
+    link = await fleet.link()
+    log = tmp_path / "holding.log"
+    holding = await _holding(link.url if through_a_cut else bus.broker.url, credential, log)
+    fleet.processes.append(holding)
+    assert await _said(holding) == ["connected"], "a worker could not connect with its own credential"
+
+    if through_a_cut:
+        await link.cut(_EXPIRY + 15)
+        ended = await _until(lambda: holding.returncode is not None, 30)
+    else:
+        ended = await _until(lambda: holding.returncode is not None, _EXPIRY + 30)
+
+    assert ended and holding.returncode == _HUNG_EXIT, (
+        f"a worker whose credential the bus took no longer kept its process (exit {holding.returncode}): {log.read_text()[-600:]}"
+    )
+
+
+# --- store events -----------------------------------------------------------------------------------------------------
+
+
+class _StoreEvents:
+    """The service's own store-event handling (`maintenance.services.store_events.StoreEvents`) behind one worker, on a
+    control root of the test's own, where a claim the store cannot read is a directory standing at its key. The worker
+    ends an event on the third delivery, which the consumer the render declares at `_MAX_DELIVER` allows (one past it)."""
+
+    def __init__(self, fleet: _Fleet, control: Path) -> None:
+        self.fleet = fleet
+        self.control = control
+        self.claims = location_claims.ClaimStore(control_root=str(control))
+        self.handled: list[float] = []
+        self._loops: list[asyncio.Task[None]] = []
+
+    def claim(self, table: str, *, readable: bool) -> None:
+        location_claims.take(self.claims, f"s3://b/{table}", f"db${table}", ["db", table], is_gone=lambda _claim: False, uuid=table)
+        if not readable:
+            key = self.control / location_claims.claim_key(f"s3://b/{table}")
+            key.unlink()
+            key.mkdir()
+
+    def make_readable(self, table: str) -> None:
+        (self.control / location_claims.claim_key(f"s3://b/{table}")).rmdir()
+        location_claims.take(self.claims, f"s3://b/{table}", f"db${table}", ["db", table], is_gone=lambda _claim: False, uuid=table)
+
+    async def deliver(self, body: bytes) -> None:
+        queue = await self.fleet.lane("store-events")
+        replica = StoreEvents(MaintenanceSettings(s3_bucket="b", control_root=str(self.control), commit_pass_delay_seconds=3600), queue)
+        loop = asyncio.get_running_loop()
+
+        async def handle(event: bytes) -> int:
+            self.handled.append(loop.time())
+            return await replica.hold_passes(event)
+
+        worker = Worker(
+            queue,
+            run=_never_run,
+            ready=lambda: True,
+            heartbeat_seconds=_HEARTBEAT,
+            ack_wait_seconds=_ACK_WAIT,
+            max_deliver=_MAX_DELIVER + 1,
+            max_pass_seconds=600,
+            retry_ended_seconds=3600,
+            store_events=handle,
+        )
+        self._loops.append(asyncio.create_task(worker.run_store_events()))
+        store = await Client.connect(self.fleet.bus.broker.url, self.fleet.bus.mint.credentials[_STORE], _STORE)
+        self.fleet.clients.append(store)
+        await store.nc.publish("store.events", body)
+        await store.settle()
+
+    async def settled_after(self, deliveries: int, seconds: float) -> bool:
+        """Whether the event was handled ``deliveries`` times and its stream holds nothing, within ``seconds``."""
+        reader = await self.fleet.rig()
+
+        async def settled() -> bool:
+            state = (await reader.request(f"$JS.API.STREAM.INFO.{STORE_EVENTS_STREAM}") or {}).get("state", {})
+            return len(self.handled) == deliveries and state.get("messages") == 0
+
+        return await _until(settled, seconds)
+
+    async def follow_up_held(self, table: str) -> bool:
+        reader = await self.fleet.rig()
+        subject = Task(kind="table", uuid=table).follow_up_subject("schedule")
+        return _held_at(await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": subject})) is not None
+
+    def waits(self) -> list[int]:
+        return [round(later - earlier) for earlier, later in pairwise(self.handled)]
+
+    async def stop(self) -> None:
+        for running in self._loops:
+            running.cancel()
+        await asyncio.gather(*self._loops, return_exceptions=True)
+
+
+@pytest_asyncio.fixture
+async def store_events(fleet: _Fleet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_StoreEvents]:
+    # The delay is drawn at random beneath a bound that doubles (`redelivery_delay`, whose draw has a test of its own);
+    # drawn here at 6 s a delivery, each gap names the delivery it followed.
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda delivered: 6.0 * delivered)
+    control = tmp_path / "control"
+    control.mkdir()
+    made = _StoreEvents(fleet, control)
+    try:
+        yield made
+    finally:
+        await made.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_store_event_whose_pass_is_held_is_acknowledged(store_events: _StoreEvents, maintenance_metrics: Measured) -> None:
+    store_events.claim("held", readable=True)
+
+    await store_events.deliver(_write_event("held/data/a.lance"))
+
+    assert await store_events.settled_after(1, 30), f"the event was not settled on its first delivery: {store_events.handled}"
+    assert await store_events.follow_up_held("held"), "the event's table holds no pass"
+    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"held": 1}
+
+
+@pytest.mark.asyncio
+async def test_a_store_event_that_is_no_store_event_is_ended_at_once(store_events: _StoreEvents, maintenance_metrics: Measured) -> None:
+    await store_events.deliver(_write_event("held/data/b.lance", bucket=["b"]))
+
+    assert await store_events.settled_after(1, 30), f"the event that is no store event was delivered again: {store_events.handled}"
+    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"unreadable": 1}
+
+
+@pytest.mark.asyncio
+async def test_a_store_event_whose_claim_the_store_refused_comes_back_after_its_retry_delay(store_events: _StoreEvents, maintenance_metrics: Measured) -> None:
+    store_events.claim("flaky", readable=False)
+    await store_events.deliver(_write_event("flaky/data/c.lance"))
+    assert await _until(lambda: len(store_events.handled) == 1, 30), "the event the store refused was never handled"
+
+    store_events.make_readable("flaky")
+
+    assert await store_events.settled_after(2, 60), f"the event the store refused once was not settled: {store_events.handled}"
+    assert 5 <= store_events.waits()[0] < 10, f"the refused event came back after {store_events.waits()} s, not after its retry delay"
+    assert await store_events.follow_up_held("flaky"), "the event's table holds no pass once its claim was read"
+    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"retried": 1, "held": 1}
+
+
+@pytest.mark.asyncio
+async def test_a_store_event_the_store_refuses_on_every_delivery_is_ended_on_its_last(store_events: _StoreEvents, maintenance_metrics: Measured) -> None:
+    store_events.claim("locked", readable=False)
+
+    await store_events.deliver(_write_event("locked/data/d.lance"))
+
+    assert await store_events.settled_after(3, 90), f"the event the store refused on every delivery was not ended: {store_events.handled}"
+    waits = store_events.waits()
+    assert 5 <= waits[0] < 10 and 11 <= waits[1] < 17, f"the refused event came back after {waits} s, not after each delivery's retry delay"
+    assert not await store_events.follow_up_held("locked"), "an event that was ended held its table's pass"
+    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"retried": 2, "ended": 1}
+
+
+# --- a task whose run fails -------------------------------------------------------------------------------------------
+
+
+class _Panic(BaseException):
+    """Where ``pyo3_runtime.PanicException`` sits: a BaseException that is no Exception and no request to stop."""
+
+
+def _ends_its_process(event: str, **extra: object) -> NoReturn:
+    raise AssertionError(f"the worker ended its process: {event} {extra}")
+
+
+async def _failing_worker(fleet: _Fleet, failure: type[BaseException], runs: list[float]) -> TaskQueue:
+    """A worker whose every run raises ``failure``, each run's time kept in ``runs``; the queue it pulls on."""
+    queue = await fleet.lane("failing")
+    loop = asyncio.get_running_loop()
+
+    async def fails(task: Task) -> None:
+        runs.append(loop.time())
+        raise failure(f"the pass of {task.uuid} failed")
+
+    replica = Worker(
+        queue,
+        run=fails,
+        ready=lambda: True,
+        heartbeat_seconds=_HEARTBEAT,
+        ack_wait_seconds=_ACK_WAIT,
+        max_deliver=_MAX_DELIVER,
+        max_pass_seconds=600,
+        retry_ended_seconds=3600,
+        end=_ends_its_process,
+    )
+    running = asyncio.create_task(replica.run_tasks())
+    fleet.on_stop.append(running)
+    return queue
+
+
+_FAILURES = [pytest.param(RuntimeError, id="an-error"), pytest.param(_Panic, id="a-native-panic")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", _FAILURES)
+async def test_a_task_whose_run_fails_comes_back_after_its_retry_delay(fleet: _Fleet, monkeypatch: pytest.MonkeyPatch, failure: type[BaseException]) -> None:
+    # The delay is drawn at random beneath its bound; drawn here at 12 s, the gap between two runs is the rule's delay.
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 12.0)
+    runs: list[float] = []
+    queue = await _failing_worker(fleet, failure, runs)
+
+    assert await queue.enqueue(_task("failing")) is True
+
+    assert await _until(lambda: len(runs) == 2, 30), f"the failed task was not delivered again: {len(runs)} runs"
+    assert 11.0 <= runs[1] - runs[0] < 17.0, f"the failed task came back after {runs[1] - runs[0]:.1f} s, not after its retry delay"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", _FAILURES)
+async def test_a_task_whose_run_fails_on_its_last_delivery_is_ended_with_its_failure_logged(
+    fleet: _Fleet, maintenance_metrics: Measured, failure: type[BaseException], caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker serves on: a run's failure, a native library's panic included, is the task's, never the process's."""
+    caplog.set_level(logging.ERROR, logger=worker_queue.__name__)
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 1.0)
+    runs: list[float] = []
+    queue = await _failing_worker(fleet, failure, runs)
+
+    assert await queue.enqueue(_task("failing")) is True
+
+    async def ended() -> bool:
+        return len(runs) == _MAX_DELIVER and not await queue.held("task", "table")
+
+    assert await _until(ended, 30), f"the failing task was not ended on its last delivery: {len(runs)} runs"
+    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("retried", "redelivered", "ended", "completed")}
+    assert counted == {"retried": {"table": _MAX_DELIVER - 1}, "redelivered": {"table": _MAX_DELIVER - 1}, "ended": {"table": 1}, "completed": {}}
+    ended_by = [record.exc_info[0] for record in caplog.records if record.message == "maintenance_task_ended" and record.exc_info]
+    assert ended_by == [failure], f"the ended task's failure was not logged with its traceback: {ended_by}"
+
+
+@pytest.mark.asyncio
+async def test_an_ended_tasks_next_try_is_held_a_recheck_out(fleet: _Fleet, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 1.0)
+    runs: list[float] = []
+    queue = await _failing_worker(fleet, RuntimeError, runs)
+    reader = await fleet.rig()
+    failing = _task("failing")
+    assert await queue.enqueue(failing) is True
+
+    async def ended() -> bool:
+        return len(runs) == _MAX_DELIVER and not await queue.held("task", "table")
+
+    assert await _until(ended, 30), f"the failing task was not ended on its last delivery: {len(runs)} runs"
+    ended_at = datetime.now(UTC)
+
+    async def next_try() -> datetime | None:
+        return _held_at(await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": failing.subject("schedule")}))
+
+    assert await _until(lambda: _is_held(next_try), 10), "the ended task's next try was never held"
+    held_at = await next_try()
+    assert held_at is not None and abs((held_at - ended_at).total_seconds() - 3600) < 10, f"the ended task's next try is held for {held_at}, not a recheck out"
+
+
+@pytest.mark.asyncio
+async def test_a_message_on_the_queue_that_is_no_task_is_ended_without_running(fleet: _Fleet, maintenance_metrics: Measured) -> None:
+    runs: list[float] = []
+    await _failing_worker(fleet, RuntimeError, runs)
+    writer = await Client.connect(fleet.bus.broker.url, fleet.bus.worker, "garbage", inbox=INBOX_PREFIX)
+    fleet.clients.append(writer)
+
+    await writer.nc.publish("maintenance.task.table.garbage", b"no task")
+    await writer.settle()
+
+    assert await _until(lambda: maintenance_metrics.by("maintenance.tasks.ended", "kind") == {"unreadable": 1}, 30), "the message that is no task was not ended"
+    assert runs == [], "a message that is no task was run"
+
+
+# --- stopping ---------------------------------------------------------------------------------------------------------
+
+
+def _counting_worker(queue: TaskQueue, name: str, max_deliver: int, ran: list[str]) -> Worker:
+    async def run(_task: Task) -> None:
+        ran.append(name)
+
+    return Worker(
+        queue,
+        run=run,
+        ready=lambda: True,
+        heartbeat_seconds=_HEARTBEAT,
+        ack_wait_seconds=_ACK_WAIT,
+        max_deliver=max_deliver,
+        max_pass_seconds=600,
+        retry_ended_seconds=3600,
+        end=_ends_its_process,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed", "taken_by"),
+    [
+        pytest.param(_MAX_DELIVER, "next", id="with-a-delivery-to-spare-it-goes-to-another-replica"),
+        pytest.param(1, "stopping", id="on-its-last-delivery-it-is-handled-where-it-arrived"),
+    ],
+)
+async def test_a_task_a_pull_answers_as_its_worker_stops(fleet: _Fleet, maintenance_metrics: Measured, allowed: int, taken_by: str) -> None:
+    """A pull in flight when a worker is asked to stop can still be answered. With a delivery to spare the task is given
+    back at once and another replica runs it, rather than its pass starting under the drain; on the last delivery the
+    worker allows it is handled where it arrived, since a hand-back would spend the consumer's last delivery and leave
+    the task on the queue, undelivered, for good. Either way the task's wait is recorded once, at its first delivery, and
+    the delivery the hand-back causes is counted as a redelivery, though no run failed."""
+    ran: list[str] = []
+    pulls = await fleet.pulls()
+    stopping = _counting_worker(await fleet.lane("stopping"), "stopping", allowed, ran)
+    lane = await fleet.lane("next")
+    first = asyncio.create_task(stopping.run_tasks())
+    fleet.on_stop.append(first)
+    # Its first pull is out, and waits up to five seconds for a task.
+    await pulls.next_after(0, 15)
+    stopping.stop()
+    assert await lane.enqueue(_task("late")) is True
+    await asyncio.wait_for(first, timeout=15)
+    fleet.on_stop.append(asyncio.create_task(_counting_worker(lane, "next", _MAX_DELIVER, ran).run_tasks()))
+
+    async def settled() -> bool:
+        return bool(ran) and not await lane.held("task", "table")
+
+    assert await _until(settled, 30), f"the task was never run and settled: ran by {ran}"
+    assert ran == [taken_by]
+    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("wait", "redelivered", "retried")}
+    assert counted == {"wait": {"table": 1}, "redelivered": {"table": 1} if taken_by == "next" else {}, "retried": {}}
+
+
+@pytest.mark.asyncio
+async def test_a_connection_whose_bus_is_gone_still_closes(fleet: _Fleet) -> None:
+    link = await fleet.link()
+    queue = await TaskQueue.connect(link.url, fleet.bus.worker.creds_file.read_text(), name="orphaned")
+    await fleet.links.pop().stop()
+
+    closed: BaseException | None = None
+    try:
+        await asyncio.wait_for(queue.close(), timeout=30)
+    except BaseException as exc:  # noqa: BLE001 — kept for the assertion below
+        closed = exc
+
+    assert closed is None, f"a connection whose bus is gone did not close: {closed!r}"
+
+
+@pytest.mark.asyncio
+async def test_an_idle_worker_stops_and_closes_its_connection_at_once(fleet: _Fleet) -> None:
+    """A worker with nothing to do stops within one pull's wait, and its connection then closes at once: each loop ends
+    the subscription it pulled on, so the connection's drain waits on none (measured on the estate before each did:
+    an idle worker took 34 s to stop, the client's 30 s drain timeout, on every rollout)."""
+    rig = await fleet.rig()
+    pulled: set[str] = set()
+
+    async def seen(msg: Msg) -> None:
+        pulled.add(msg.subject)
+
+    await rig.nc.subscribe("$JS.API.CONSUMER.MSG.NEXT.>", cb=seen)
+    await rig.settle()
+
+    async def handled(_body: bytes) -> int:
+        return 0
+
+    queue = await TaskQueue.connect(fleet.bus.broker.url, fleet.bus.worker.creds_file.read_text(), name="idle")
+    idle = Worker(
+        queue,
+        run=_never_run,
+        ready=lambda: True,
+        heartbeat_seconds=_HEARTBEAT,
+        ack_wait_seconds=_ACK_WAIT,
+        max_deliver=_MAX_DELIVER,
+        max_pass_seconds=600,
+        retry_ended_seconds=3600,
+        end=_ends_its_process,
+        store_events=handled,
+    )
+    loops = [asyncio.create_task(loop()) for loop in (idle.run_tasks, idle.run_due, idle.run_store_events)]
+    assert await _until(lambda: len(pulled) == len(loops), 15), f"not every loop pulled: {pulled}"
+
+    began = asyncio.get_running_loop().time()
+    await idle.drain(loops, 20)
+    await queue.close()
+    took = asyncio.get_running_loop().time() - began
+
+    assert took < 10, f"an idle worker took {took:.1f} s to stop and close"
+
+
+# --- what one claim keeps apart, and a claim that cannot be had -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        pytest.param(Task(kind="audit"), Task(kind="scan"), id="the-audit-and-the-scan"),
+        pytest.param(_task("shared"), _task("shared", kind="orphans"), id="a-tables-pass-and-its-orphan-check"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_two_tasks_holding_one_claim_never_run_at_once(fleet: _Fleet, monkeypatch: pytest.MonkeyPatch, first: Task, second: Task) -> None:
+    """The audit and the scan each repair the estate from a drift report of their own, and a table's orphan check reads
+    the files its pass's cleanup deletes, so each pair holds one claim: one waits out the other's while it runs, on two
+    replicas, and runs once it is done."""
+    # The give-back's delay is drawn at random beneath 15 s; drawn here at the bound, the second delivery comes after the
+    # release below, where a short draw would spend the task's last delivery on the claim still held.
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 15.0)
+    lane = await fleet.lane()
+    runs = _Runs()
+    release = runs.held[first.uuid] = asyncio.Event()
+    for name in ("first-replica", "second-replica"):
+        await fleet.start(name, runs)
+    assert await lane.enqueue(first) is True
+    assert await lane.enqueue(second) is True
+    assert await _until(lambda: len(runs.ran) >= 1, 15), f"neither task ran: {runs.ran}"
+
+    # The other's first delivery waits one ack wait for the claim, and comes back after its retry delay: nothing to poll
+    # for while it must not run, and released before its second delivery, which a held claim would give back again.
+    await asyncio.sleep(3 * _ACK_WAIT)
+    beside = list(runs.ran)
+    release.set()
+
+    assert len(beside) == 1, f"two tasks holding one claim ran at once: {beside}"
+    assert await _until(lambda: len(runs.ran) == 2, 60), f"the other never ran once the first was done: {runs.ran}"
+
+
+class _OutlastedAudit(BaseModel):
+    """What an audit that found the scan's claim held on every delivery left: whether it left the queue, which passes
+    ran meanwhile, and which kinds the ended-tasks count was told of."""
+
+    left: bool
+    ran: list[tuple[str, str]]
+    ended: list[str]
+
+
+async def _an_audit_the_scan_outlasts(fleet: _Fleet, monkeypatch: pytest.MonkeyPatch) -> _OutlastedAudit:
+    runs = _Runs()
+    release = runs.held[""] = asyncio.Event()
+    ended: list[str] = []
+    monkeypatch.setattr(worker_queue, "record_task_ended", lambda *, kind: ended.append(kind))
+    lane = await fleet.lane()
+    reader = await fleet.rig()
+    for name in ("scan-replica", "audit-replica"):
+        await fleet.start(name, runs)
+    assert await lane.enqueue(Task(kind="scan")) is True
+    assert await _until(lambda: len(runs.ran) == 1, 15), f"the scan never ran: {runs.ran}"
+    assert await lane.enqueue(Task(kind="audit")) is True
+
+    async def the_audit_left_the_queue() -> bool:
+        answer = await reader.request(f"$JS.API.STREAM.MSG.GET.{TASKS_STREAM}", {"last_by_subj": Task(kind="audit").subject("task")})
+        return answer is not None and "error" in answer
+
+    left = await _until(the_audit_left_the_queue, 120)
+    # Read before the scan is let go: a replica stopped mid-pass leaves its task to the other, which would run it.
+    ran = list(runs.ran)
+    release.set()
+    return _OutlastedAudit(left=left, ran=ran, ended=ended)
+
+
+@pytest.mark.asyncio
+async def test_an_audit_the_scan_outlasts_leaves_the_queue_unrun(fleet: _Fleet, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An audit that finds the scan's claim held on every delivery leaves the queue on its last delivery without running;
+    its next firing brings it back."""
+    audit = await _an_audit_the_scan_outlasts(fleet, monkeypatch)
+
+    assert (audit.left, audit.ran) == (True, [("scan-replica", "")]), f"the audit stayed queued, or ran beside the scan: {audit}"
+
+
+@pytest.mark.asyncio
+async def test_an_audit_the_scan_outlasts_is_not_counted_as_a_task_that_ended(fleet: _Fleet, monkeypatch: pytest.MonkeyPatch) -> None:
+    """It failed at nothing, so the count the ended-tasks alert reads is not told of it."""
+    audit = await _an_audit_the_scan_outlasts(fleet, monkeypatch)
+
+    assert audit.ended == [], f"the audit was counted as ended: {audit}"
+
+
 @pytest.mark.parametrize(
     ("act", "reason"),
     [
@@ -1214,302 +1604,188 @@ async def _break_the_renewal(_rig: Client, monkeypatch: pytest.MonkeyPatch) -> N
 )
 @pytest.mark.asyncio
 async def test_a_pass_whose_claim_is_gone_ends_its_replica(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, act: Callable[[Client, pytest.MonkeyPatch], Awaitable[None]], reason: str
+    fleet: _Fleet, monkeypatch: pytest.MonkeyPatch, act: Callable[[Client, pytest.MonkeyPatch], Awaitable[None]], reason: str
 ) -> None:
     """A pass renews its claim on its table with each heartbeat, and one that finds the claim no longer its own cannot
     tell whether another pass has taken the table: the replica ends itself rather than run beside it. So does one whose
     heartbeat ends by an error nothing expected, since the pass would run on with nothing vouching for it."""
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
     runs = _Runs()
     runs.held["claimed"] = asyncio.Event()
-    replica: _Replica | None = None
-    lane: TaskQueue | None = None
-    rig: Client | None = None
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        replica = await _Replica.start(broker.url, worker, "claiming", runs, ready=lambda: True)
-        assert await lane.enqueue(Task(kind="table", uuid="claimed", location="s3://bucket/claimed")) is True
-        assert await _until(lambda: runs.times("claimed") == 1, 15), f"the task never ran: {runs.ran}"
+    lane = await fleet.lane()
+    rig = await fleet.rig()
+    replica = await fleet.start("claiming", runs)
+    assert await lane.enqueue(_task("claimed")) is True
+    assert await _until(lambda: runs.times("claimed") == 1, 15), f"the task never ran: {runs.ran}"
 
-        await act(rig, monkeypatch)
+    await act(rig, monkeypatch)
 
-        ended = await _until(lambda: bool(replica is not None and replica.ended), 3 * _ACK_WAIT)
-    finally:
-        try:
-            if replica is not None:
-                await replica.stop()
-            for client in (lane, rig):
-                if client is not None:
-                    await client.close()
-        finally:
-            broker.stop()
-
-    assert ended and replica is not None and replica.ended == [reason], f"the replica ran on: {replica.ended if replica else None}"
+    assert await _until(lambda: bool(replica.ended), 3 * _ACK_WAIT), "the replica ran on"
+    assert replica.ended == [reason], f"the replica ended for another reason: {replica.ended}"
 
 
 @pytest.mark.asyncio
-async def test_a_worker_whose_claims_bucket_is_gone_ends_its_task_loop(tmp_path: Path) -> None:
+async def test_a_worker_whose_claims_bucket_is_gone_ends_its_task_loop(fleet: _Fleet) -> None:
     """A worker binds the claims bucket before it takes a task; one the bus deleted since answers each claim with no
     stream, and the bucket's own lookup says it is gone for good. The task loop ends on the first claim, so the process
     ends and starts again, where a worker that kept asking would hold its task until the pass's hung bound ended it."""
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
     runs = _Runs()
-    replica: _Replica | None = None
-    lane: TaskQueue | None = None
-    rig: Client | None = None
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        queue = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="unclaiming")
-        await queue.bind_claims()
-        deleted = await rig.request(f"$JS.API.STREAM.DELETE.KV_{CLAIMS_BUCKET}")
-        assert deleted is not None and deleted.get("success") is True, f"the claims bucket was not deleted: {deleted}"
-        replica = _Replica(queue, "unclaiming", runs, ready=lambda: True)
-        assert await lane.enqueue(Task(kind="table", uuid="unclaimed", location="s3://bucket/unclaimed")) is True
+    lane = await fleet.lane()
+    rig = await fleet.rig()
+    queue = await fleet.lane("unclaiming")
+    await queue.bind_claims()
+    deleted = await rig.request(f"$JS.API.STREAM.DELETE.KV_{CLAIMS_BUCKET}")
+    assert deleted is not None and deleted.get("success") is True, f"the claims bucket was not deleted: {deleted}"
+    replica = _Replica(queue, "unclaiming", runs, ready=lambda: True)
+    fleet.replicas.append(replica)
 
-        ended = await _until(lambda: replica is not None and replica.task_loop_failure() is not None, 3 * _ACK_WAIT)
-        failure = replica.task_loop_failure()
-    finally:
-        try:
-            if replica is not None:
-                await replica.stop()
-            for client in (lane, rig):
-                if client is not None:
-                    await client.close()
-        finally:
-            broker.stop()
+    assert await lane.enqueue(_task("unclaimed")) is True
 
-    assert (ended, type(failure), runs.times("unclaimed")) == (True, ClaimsBucketMissingError, 0), f"the worker held on: {failure!r}"
+    assert await _until(lambda: replica.task_loop_failure() is not None, 3 * _ACK_WAIT), "the worker held on"
+    assert (type(replica.task_loop_failure()), runs.times("unclaimed")) == (ClaimsBucketMissingError, 0), f"the worker held on: {replica.task_loop_failure()!r}"
 
 
 @pytest.mark.asyncio
-async def test_a_fired_schedule_that_is_no_task_is_ended_and_not_delivered_again(tmp_path: Path) -> None:
-    """What a schedule fires is moved onto the queue as the task it carries; one that carries none can never be moved, so
-    it is ended, where giving it back would deliver it for ever (the consumer of fired schedules has no delivery bound)."""
-    fires = Permissions(publish=(*_RIG_GRANTS.publish, "maintenance.due.>"), subscribe=_RIG_GRANTS.subscribe)
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: fires})
-    replica: _Replica | None = None
-    rig: Client | None = None
-    ended = False
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        replica = await _Replica.start(broker.url, mint_.credentials[_WORKER], "mover", _Runs(), ready=lambda: True)
-        await reader.nc.publish("maintenance.due.table.garbage", b"no task")
-        await reader.settle()
-
-        async def the_schedules_hold_nothing() -> bool:
-            state = (await reader.request(f"$JS.API.STREAM.INFO.{SCHEDULES_STREAM}") or {}).get("state", {})
-            return state.get("messages") == 0 and state.get("last_seq", 0) >= 1
-
-        ended = await _until(the_schedules_hold_nothing, 20)
-    finally:
-        try:
-            if replica is not None:
-                await replica.stop()
-            if rig is not None:
-                await rig.close()
-        finally:
-            broker.stop()
-
-    assert ended, "the fired schedule that is no task was still held, to be delivered again"
-
-
-@pytest.mark.asyncio
-async def test_a_task_whose_claim_the_bus_does_not_answer_is_held_until_it_is_and_then_runs(tmp_path: Path) -> None:
+async def test_a_task_whose_claim_the_bus_does_not_answer_is_held_until_it_is_and_then_runs(fleet: _Fleet) -> None:
     """A claim the bus does not answer, its publish lost on the way as the network loses one, says nothing of whether
     another pass holds the table: the worker keeps the task and asks again, and runs it once the claim is answered,
     without spending a delivery on it. A bucket the bus holds no longer is an answer for good, which ends the worker's
     task loop instead (`test_a_worker_whose_claims_bucket_is_gone_ends_its_task_loop`)."""
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
     runs = _Runs()
-    replica: _Replica | None = None
-    lane: TaskQueue | None = None
-    rig: Client | None = None
-    link: Link | None = None
-    ran_unclaimed: list[tuple[str, str]] = []
-    ran = False
-    redelivered: object = None
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        link = Link(broker.port)
-        await link.start()
-        link.drop(f"$KV.{CLAIMS_BUCKET}.>")
-        replica = await _Replica.start(link.url, worker, "waiting", runs, ready=lambda: True)
-        assert await lane.enqueue(Task(kind="table", uuid="unclaimed", location="s3://bucket/unclaimed")) is True
-        # Longer than the worker's wait between asks, and well inside the first redelivery delay (15 s).
-        await asyncio.sleep(_ACK_WAIT)
-        ran_unclaimed = list(runs.ran)
+    lane = await fleet.lane()
+    rig = await fleet.rig()
+    link = await fleet.link()
+    link.drop(f"$KV.{CLAIMS_BUCKET}.>")
+    replica = await fleet.start("waiting", runs, url=link.url)
+    assert await lane.enqueue(_task("unclaimed")) is True
+    # Longer than the worker's wait between asks, and well inside the first redelivery delay (15 s): nothing to poll for
+    # while the task must not run.
+    await asyncio.sleep(_ACK_WAIT)
+    ran_unclaimed = list(runs.ran)
 
-        link.flow()
+    link.flow()
 
-        ran = await _until(lambda: runs.times("unclaimed") == 1, 30)
-        consumer = await rig.request(f"$JS.API.CONSUMER.INFO.{TASKS_STREAM}.{TASK_CONSUMER}") or {}
-        redelivered = consumer.get("num_redelivered")
-    finally:
-        try:
-            if replica is not None:
-                await replica.stop()
-            for client in (lane, rig):
-                if client is not None:
-                    await client.close()
-            if link is not None:
-                await link.stop()
-        finally:
-            broker.stop()
-
+    ran = await _until(lambda: runs.times("unclaimed") == 1, 30)
+    consumer = await rig.request(f"$JS.API.CONSUMER.INFO.{TASKS_STREAM}.{TASK_CONSUMER}") or {}
     assert ran_unclaimed == [], f"the task ran with no claim on its table: {ran_unclaimed}"
-    assert ran and replica is not None and replica.ended == [], (
-        f"the task did not run once its claim was answered: {runs.ran} {replica.ended if replica else None}"
-    )
-    assert redelivered == 0, f"the unanswered claim spent {redelivered} of the task's deliveries"
+    assert ran and replica.ended == [], f"the task did not run once its claim was answered: {runs.ran} {replica.ended}"
+    assert consumer.get("num_redelivered") == 0, f"the unanswered claim spent {consumer.get('num_redelivered')} of the task's deliveries"
 
 
-@pytest.mark.asyncio
-async def test_an_orphan_check_is_bounded_by_its_own_bound_and_a_pass_by_the_pass_bound(tmp_path: Path) -> None:
-    """Each kind's bound is its own (`maintenance.orphanCheck.maxSeconds` for a check, `maintenance.queue.maxPassSeconds`
-    for the others): a check that runs past twice its bound ends its replica, while a pass running as long is within
-    its own."""
-    tools, docs, mint_, broker = _the_bus(tmp_path)
-    worker = mint_.credentials[_WORKER]
+# --- bounds -----------------------------------------------------------------------------------------------------------
+
+
+async def _a_task_run_past_twice_the_checks_bound(fleet: _Fleet, task: Task) -> list[str]:
+    """``task`` run for four seconds, past twice the orphan check's one-second bound and well inside the pass bound, by a
+    worker whose bounds are each kind's own (`maintenance.orphanCheck.maxSeconds` for a check,
+    `maintenance.queue.maxPassSeconds` for the others): where the worker ended its process, in that time."""
     runs = _Runs()
     ended: list[str] = []
-    queue: TaskQueue | None = None
-    lane: TaskQueue | None = None
-    loops: list[asyncio.Task[None]] = []
-    passing, checking = (
-        Task(kind="table", uuid="passing", location="s3://bucket/passing"),
-        Task(kind="orphans", uuid="checking", location="s3://bucket/checking"),
-    )
-    runs.held["passing"] = passed = asyncio.Event()
-    runs.held["checking"] = asyncio.Event()
+    runs.held[task.uuid] = asyncio.Event()
+    queue = await fleet.lane("bounded")
+    lane = await fleet.lane()
 
     def ends_its_process(event: str, **extra: object) -> NoReturn:
         ended.append(f"{event} {extra.get('subject')}")
-        for loop in loops:
+        for loop in fleet.on_stop:
             loop.cancel()
         raise _Ended(event)
 
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        queue = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="bounded")
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        replica = Worker(
-            queue,
-            run=runs.of("bounded"),
-            ready=lambda: True,
-            heartbeat_seconds=_HEARTBEAT,
-            ack_wait_seconds=_ACK_WAIT,
-            max_deliver=_MAX_DELIVER,
-            max_pass_seconds=600,
-            max_seconds_by_kind={"orphans": 1},
-            retry_ended_seconds=3600,
-            end=ends_its_process,
-        )
-        loops.append(asyncio.create_task(replica.run_tasks()))
-        assert await lane.enqueue(passing) is True
-        assert await _until(lambda: runs.times("passing") == 1, 15), f"the pass never ran: {runs.ran}"
-        # Past twice the check's bound, inside the pass's: nothing to poll for while the pass must run on.
-        await asyncio.sleep(4)
-        alive = list(ended)
-        passed.set()
-
-        async def pass_done() -> bool:
-            return "passing" not in await lane.held("task", "table")
-
-        assert await _until(pass_done, 15), "the pass was never acknowledged"
-        assert await lane.enqueue(checking) is True
-        assert await _until(lambda: bool(ended), 15), f"the check ran past twice its bound and its replica lived on: {runs.ran}"
-    finally:
-        try:
-            for loop in loops:
-                loop.cancel()
-            await asyncio.gather(*loops, return_exceptions=True)
-            for client in (queue, lane):
-                if client is not None:
-                    await client.close()
-        finally:
-            broker.stop()
-    assert (alive, ended) == ([], [f"maintenance_task_hung {checking.subject('task')}"])
+    replica = Worker(
+        queue,
+        run=runs.of("bounded"),
+        ready=lambda: True,
+        heartbeat_seconds=_HEARTBEAT,
+        ack_wait_seconds=_ACK_WAIT,
+        max_deliver=_MAX_DELIVER,
+        max_pass_seconds=600,
+        max_seconds_by_kind={"orphans": 1},
+        retry_ended_seconds=3600,
+        end=ends_its_process,
+    )
+    fleet.on_stop.append(asyncio.create_task(replica.run_tasks()))
+    assert await lane.enqueue(task) is True
+    assert await _until(lambda: runs.times(task.uuid) == 1, 15), f"the task never ran: {runs.ran}"
+    # Past twice the check's bound, inside the pass's: an end, or none, is what these seconds show.
+    await asyncio.sleep(4)
+    return ended
 
 
 @pytest.mark.asyncio
-async def test_a_tables_first_check_is_held_once_and_a_held_one_keeps_its_time(tmp_path: Path) -> None:
+async def test_an_orphan_check_past_twice_its_own_bound_ends_its_replica(fleet: _Fleet) -> None:
+    checking = _task("checking", kind="orphans")
+
+    ended = await _a_task_run_past_twice_the_checks_bound(fleet, checking)
+
+    assert ended == [f"maintenance_task_hung {checking.subject('task')}"], f"the check ran past twice its bound and its replica lived on: {ended}"
+
+
+@pytest.mark.asyncio
+async def test_a_pass_as_long_as_that_is_within_the_pass_bound(fleet: _Fleet) -> None:
+    ended = await _a_task_run_past_twice_the_checks_bound(fleet, _task("passing"))
+
+    assert ended == [], f"a pass within the pass bound ended its replica: {ended}"
+
+
+# --- schedules --------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_tables_first_check_is_held_once_and_a_held_one_keeps_its_time(fleet: _Fleet) -> None:
     """A table's pass holds its check only where none is held (`TaskQueue.schedule_first`): a second hold is refused and
     the first one's time stands, so a check's own interval is never replaced by a pass's."""
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
-    lane: TaskQueue | None = None
-    rig: Client | None = None
-    check = Task(kind="orphans", uuid="first-check", location="s3://bucket/first-check")
+    lane = await fleet.lane()
+    rig = await fleet.rig()
+    check = _task("first-check", kind="orphans")
     soon, later = datetime.now(UTC) + timedelta(hours=1), datetime.now(UTC) + timedelta(days=1)
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        holds = [await lane.schedule_first(check, soon), await lane.schedule_first(check, later)]
-        held = _held_at(await rig.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": check.subject("schedule")}))
-        covered = "first-check" in await lane.held("schedule", "orphans")
-    finally:
-        try:
-            for client in (lane, rig):
-                if client is not None:
-                    await client.close()
-        finally:
-            broker.stop()
-    assert (holds, covered) == ([True, False], True)
+
+    holds = [await lane.schedule_first(check, soon), await lane.schedule_first(check, later)]
+
+    held = _held_at(await rig.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": check.subject("schedule")}))
+    assert (holds, "first-check" in await lane.held("schedule", "orphans")) == ([True, False], True)
     assert held is not None and abs((held - soon).total_seconds()) < 1, f"the held check's time was replaced: {held}"
 
 
 @pytest.mark.asyncio
-async def test_a_fired_schedule_whose_move_the_bus_lost_is_moved_again(tmp_path: Path) -> None:
-    """A fired schedule whose task's publish never reached the bus, while the replica's pulls and settles still did, is
-    given back and moved again once publishes flow: its task runs once, and not before."""
-    tools, docs, mint_, broker = _the_bus(tmp_path)
-    worker = mint_.credentials[_WORKER]
-    runs = _Runs()
-    link = Link(broker.port)
-    replica: _Replica | None = None
-    lane: TaskQueue | None = None
-    before: list[tuple[str, str]] = []
-    moved = False
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        await link.start()
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        replica = await _Replica.start(link.url, worker, "mover", runs, ready=lambda: True)
-        link.drop("maintenance.task.>")
-        assert await lane.follow_up(Task(kind="table", uuid="moved", location="s3://bucket/moved"), datetime.now(UTC) + timedelta(seconds=1)) is True
+async def test_a_fired_schedule_that_is_no_task_is_ended_and_not_delivered_again(fleet: _Fleet) -> None:
+    """What a schedule fires is moved onto the queue as the task it carries; one that carries none can never be moved, so
+    it is ended, where giving it back would deliver it for ever (the consumer of fired schedules has no delivery bound)."""
+    reader = await fleet.rig()
+    await fleet.start("mover", _Runs())
 
-        # The mover gives the fired schedule back once its publish goes unanswered, which the broker traces.
-        assert await _until(lambda: "-NAK" in broker.log_text(), 30), "the mover never gave back the schedule whose move was lost"
-        before = list(runs.ran)
-        link.flow()
-        moved = await _until(lambda: runs.times("moved") == 1, 45)
-    finally:
-        try:
-            if replica is not None:
-                await replica.stop()
-            if lane is not None:
-                await lane.close()
-            await link.stop()
-        finally:
-            broker.stop()
+    await reader.nc.publish("maintenance.due.table.garbage", b"no task")
+    await reader.settle()
 
-    assert before == [], f"a task ran though its move's publish was lost: {before}"
-    assert moved and replica is not None and replica.ended == [], f"the move was never made again once publishes flowed: {runs.ran}"
+    async def the_schedules_hold_nothing() -> bool:
+        state = (await reader.request(f"$JS.API.STREAM.INFO.{SCHEDULES_STREAM}") or {}).get("state", {})
+        return state.get("messages") == 0 and state.get("last_seq", 0) >= 1
+
+    assert await _until(the_schedules_hold_nothing, 20), "the fired schedule that is no task was still held, to be delivered again"
 
 
 @pytest.mark.asyncio
-async def test_a_tasks_run_is_a_span_of_its_own_linked_to_the_trace_that_queued_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_fired_schedule_whose_move_the_bus_lost_is_moved_again(fleet: _Fleet) -> None:
+    """A fired schedule whose task's publish never reached the bus, while the replica's pulls and settles still did, is
+    given back and moved again once publishes flow: its task runs once, and not before."""
+    runs = _Runs()
+    link = await fleet.link()
+    lane = await fleet.lane()
+    replica = await fleet.start("mover", runs, url=link.url)
+    link.drop("maintenance.task.>")
+    assert await lane.follow_up(_task("moved"), datetime.now(UTC) + timedelta(seconds=1)) is True
+    # The mover gives the fired schedule back once its publish goes unanswered, which the broker traces.
+    assert await _until(lambda: "-NAK" in fleet.bus.logged_since(), 30), "the mover never gave back the schedule whose move was lost"
+    before = list(runs.ran)
+
+    link.flow()
+
+    assert before == [], f"a task ran though its move's publish was lost: {before}"
+    assert await _until(lambda: runs.times("moved") == 1, 45), f"the move was never made again once publishes flowed: {runs.ran}"
+    assert replica.ended == [], f"the mover ended where a worker ends its process: {replica.ended}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("held", [pytest.param(False, id="queued-directly"), pytest.param(True, id="held-as-a-follow-up")])
+async def test_a_tasks_run_is_a_span_of_its_own_linked_to_the_trace_that_queued_it(fleet: _Fleet, monkeypatch: pytest.MonkeyPatch, held: bool) -> None:
     """A task's run is a consumer span that starts a trace of its own and links to the span the task was queued under,
     whether it was put on the queue directly or held as a schedule the worker moved there when it fired: the context
     rides the message's headers across both hops. A link and not a parent, since each pass holds its table's next pass
@@ -1518,41 +1794,26 @@ async def test_a_tasks_run_is_a_span_of_its_own_linked_to_the_trace_that_queued_
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     monkeypatch.setattr(worker_queue, "tracer", provider.get_tracer(worker_queue.__name__), raising=False)
-    callers = provider.get_tracer("a-caller")
-    tools, docs, mint_, broker = _the_bus(tmp_path)
-    worker = mint_.credentials[_WORKER]
     runs = _Runs()
-    replica: _Replica | None = None
-    lane: TaskQueue | None = None
-    queued_under: dict[str, int] = {}
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
-        replica = await _Replica.start(broker.url, worker, "runner", runs, ready=lambda: True)
-        with callers.start_as_current_span("queues-a-task") as caller:
-            queued_under["queued"] = caller.get_span_context().span_id
-            assert await lane.enqueue(Task(kind="table", uuid="queued", location="s3://bucket/queued")) is True
-        with callers.start_as_current_span("holds-a-follow-up") as caller:
-            queued_under["held"] = caller.get_span_context().span_id
-            assert await lane.follow_up(Task(kind="table", uuid="held", location="s3://bucket/held"), datetime.now(UTC) + timedelta(seconds=1)) is True
-        ran = await _until(lambda: {uuid for _, uuid in runs.ran} == {"queued", "held"} and len(_task_spans(exporter)) == 2, 45)
-    finally:
-        try:
-            if replica is not None:
-                await replica.stop()
-            if lane is not None:
-                await lane.close()
-        finally:
-            broker.stop()
+    lane = await fleet.lane()
+    await fleet.start("runner", runs)
+    with provider.get_tracer("a-caller").start_as_current_span("queues-a-task") as caller:
+        queued_under = caller.get_span_context()
+        if held:
+            assert await lane.follow_up(_task("traced"), datetime.now(UTC) + timedelta(seconds=1)) is True
+        else:
+            assert await lane.enqueue(_task("traced")) is True
 
-    assert ran, f"the two tasks did not both run under a span: ran {runs.ran}, spans {[span.name for span in exporter.get_finished_spans()]}"
-    spans = {str((span.attributes or {})["maintenance.task.uuid"]): span for span in _task_spans(exporter)}
-    callers_traces = {span.context.span_id: span.context.trace_id for span in exporter.get_finished_spans() if span.name != _TASK_SPAN}
-    assert {uuid: (span.kind, span.parent, [link.context.span_id for link in span.links]) for uuid, span in spans.items()} == {
-        "queued": (SpanKind.CONSUMER, None, [queued_under["queued"]]),
-        "held": (SpanKind.CONSUMER, None, [queued_under["held"]]),
-    }
-    assert all(span.context.trace_id not in callers_traces.values() for span in spans.values()), "a task's run joined the trace that queued it"
+    assert await _until(lambda: runs.times("traced") == 1 and len(_task_spans(exporter)) == 1, 45), (
+        f"the task did not run under a span: ran {runs.ran}, spans {[span.name for span in exporter.get_finished_spans()]}"
+    )
+    (span,) = _task_spans(exporter)
+    assert (span.kind, span.parent, [link.context.span_id for link in span.links], span.context.trace_id == queued_under.trace_id) == (
+        SpanKind.CONSUMER,
+        None,
+        [queued_under.span_id],
+        False,
+    )
 
 
 #: The name of the span a table task's run is.
@@ -1564,144 +1825,154 @@ def _task_spans(exporter: InMemorySpanExporter) -> list[ReadableSpan]:
 
 
 @pytest.mark.asyncio
-async def test_a_fired_schedule_the_queue_refuses_is_counted_and_given_back(tmp_path: Path, maintenance_metrics: Measured) -> None:
+async def test_a_fired_schedule_the_queue_refuses_is_counted_and_given_back(fleet: _Fleet, maintenance_metrics: Measured) -> None:
     """A fired schedule the queue does not take (its stream is gone, as on a bus whose stream Job has not run again yet)
     is counted on `maintenance.schedules.not_queued` and given back, and is moved once the queue takes it again."""
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
-    task = Task(kind="table", uuid="refused", location="s3://bucket/refused")
-    queue: TaskQueue | None = None
-    rig: Client | None = None
-    loops: list[asyncio.Task[None]] = []
-    refused = moved = False
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        dropped = await rig.request(f"$JS.API.STREAM.DELETE.{TASKS_STREAM}")
-        assert dropped is not None and dropped.get("success") is True, f"the task stream was not removed: {dropped}"
-        queue = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="mover")
-        mover = Worker(
-            queue,
-            run=_never_run,
-            ready=lambda: True,
-            heartbeat_seconds=_HEARTBEAT,
-            ack_wait_seconds=_ACK_WAIT,
-            max_deliver=_MAX_DELIVER,
-            max_pass_seconds=600,
-            retry_ended_seconds=3600,
-        )
-        loops.append(asyncio.create_task(mover.run_due()))
-        await queue.schedule_at(task, datetime.now(UTC))
-        refused = await _until(lambda: maintenance_metrics.of("maintenance.schedules.not_queued") == 1, 20)
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = queue
+    rig = await fleet.rig()
+    dropped = await rig.request(f"$JS.API.STREAM.DELETE.{TASKS_STREAM}")
+    assert dropped is not None and dropped.get("success") is True, f"the task stream was not removed: {dropped}"
+    queue = await fleet.lane("mover")
+    mover = Worker(
+        queue,
+        run=_never_run,
+        ready=lambda: True,
+        heartbeat_seconds=_HEARTBEAT,
+        ack_wait_seconds=_ACK_WAIT,
+        max_deliver=_MAX_DELIVER,
+        max_pass_seconds=600,
+        retry_ended_seconds=3600,
+    )
+    fleet.on_stop.append(asyncio.create_task(mover.run_due()))
+    await queue.schedule_at(_task("refused"), datetime.now(UTC))
+    refused = await _until(lambda: maintenance_metrics.of("maintenance.schedules.not_queued") == 1, 20)
 
-        async def queued() -> bool:
-            return "refused" in await lane.held("task", "table")
+    await asyncio.to_thread(fleet.bus.declare)
 
-        moved = await _until(queued, 60)
-    finally:
-        try:
-            for running in loops:
-                running.cancel()
-            await asyncio.gather(*loops, return_exceptions=True)
-            if rig is not None:
-                await rig.close()
-            if queue is not None:
-                await queue.close()
-        finally:
-            broker.stop()
-    assert (refused, moved) == (True, True), f"the refused schedule was counted {refused} and moved {moved}"
+    async def queued() -> bool:
+        return "refused" in await queue.held("task", "table")
 
+    assert (refused, await _until(queued, 60)) == (True, True), "the refused schedule was not counted, or not moved once the queue took it again"
+
+
+# --- the sampler and the task timings ---------------------------------------------------------------------------------
 
 #: How old the newest of the sampled messages is when the sampler reads them, in seconds.
 _AGED = 5.0
 
 
+class _Backlog:
+    """A task running and one queued behind it on the queue, and, when asked, a store event delivered twice and unsettled,
+    with when each was put."""
+
+    def __init__(self, fleet: _Fleet) -> None:
+        self.fleet = fleet
+        self.runs = _Runs()
+        self.release = self.runs.held["running"] = asyncio.Event()
+        self.runs.held["waiting"] = asyncio.Event()
+        self.clock = asyncio.get_running_loop().time
+        self.queued_at = self.started_at = self.published_at = 0.0
+
+    async def build(self, *, with_a_store_event: bool) -> TaskQueue:
+        lane = await self.fleet.lane("sampler")
+        await self.fleet.start("running", self.runs)
+        self.queued_at = self.clock()
+        assert await lane.enqueue(_task("running")) is True
+        assert await _until(lambda: self.runs.times("running") == 1, 15), f"the first task never ran: {self.runs.ran}"
+        self.started_at = self.clock()
+        assert await lane.enqueue(_task("waiting")) is True
+        self.published_at = self.clock()
+        if with_a_store_event:
+            rig = await self.fleet.rig()
+            store = await Client.connect(self.fleet.bus.broker.url, self.fleet.bus.mint.credentials[_STORE], _STORE)
+            self.fleet.clients.append(store)
+            await store.js.publish("store.events", _write_event("t/data/a.lance"), timeout=10)
+            events = await rig.js.pull_subscribe_bind(durable="maintenance-store-events", stream=STORE_EVENTS_STREAM)
+            await (await events.fetch(1, timeout=5))[0].nak()
+            await events.fetch(1, timeout=5)
+            # An age is read over elapsed time: this ages the oldest message well past the tolerance the reading is held
+            # to, so an age read as 0 is told apart.
+            await asyncio.sleep(_AGED - (self.clock() - self.published_at))
+        return lane
+
+
 @pytest.mark.asyncio
-async def test_the_sampler_reads_the_queue_as_the_bus_holds_it_and_keeps_what_it_cannot_read(tmp_path: Path, maintenance_metrics: Measured) -> None:
+async def test_the_sampler_reads_each_streams_depth_and_age_and_each_durables_backlog_as_the_bus_holds_them(
+    fleet: _Fleet, maintenance_metrics: Measured
+) -> None:
     """The worker's sampler (`maintenance.services.queue.sample_queue`), as `maintenance-worker` under the grants the
     render issues, reads each stream's depth and its oldest message's age, and each durable's messages not yet delivered,
-    deliveries awaiting an ack and redeliveries, as the bus holds them: a task running and one queued behind it, and a
-    store event delivered twice and unsettled. A stream it cannot read leaves its gauges at their last values. The task
-    that ran is timed from its claim to its acknowledgement, and each task's wait from its queuing to its first
-    delivery."""
-    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
-    worker = mint_.credentials[_WORKER]
-    runs = _Runs()
-    runs.held["running"] = release = asyncio.Event()
-    runs.held["waiting"] = asyncio.Event()
-    replica: _Replica | None = None
-    lane: TaskQueue | None = None
-    clients: list[Client] = []
-    clock = asyncio.get_running_loop().time
-    try:
-        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
-        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="sampler")
-        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
-        store = await Client.connect(broker.url, mint_.credentials[_STORE], _STORE)
-        clients += [rig, store]
-        replica = await _Replica.start(broker.url, worker, "running", runs, ready=lambda: True)
-        queued_at = clock()
-        assert await lane.enqueue(Task(kind="table", uuid="running", location="s3://bucket/running")) is True
-        assert await _until(lambda: runs.times("running") == 1, 15), f"the first task never ran: {runs.ran}"
-        started_at = clock()
-        assert await lane.enqueue(Task(kind="table", uuid="waiting", location="s3://bucket/waiting")) is True
-        published_at = clock()
-        await store.js.publish("store.events", _write_event("t/data/a.lance"), timeout=10)
-        events = await rig.js.pull_subscribe_bind(durable="maintenance-store-events", stream=STORE_EVENTS_STREAM)
-        await (await events.fetch(1, timeout=5))[0].nak()
-        await events.fetch(1, timeout=5)
-        # Ages the oldest message well past the tolerance the reading is held to, so an age read as 0 is told apart.
-        await asyncio.sleep(_AGED - (clock() - published_at))
+    deliveries awaiting an ack and redeliveries: a task running and one queued behind it, and a store event delivered
+    twice and unsettled."""
+    backlog = _Backlog(fleet)
+    lane = await backlog.build(with_a_store_event=True)
 
-        unread = await sample_queue(lane)
-        sampled_at = clock()
-        depth = maintenance_metrics.by("maintenance.queue.messages", "stream")
-        oldest = maintenance_metrics.by("maintenance.queue.oldest", "stream")
-        backlog = {name: maintenance_metrics.by(f"maintenance.queue.{name}", "consumer") for name in ("waiting", "ack_pending", "redelivered")}
+    unread = await sample_queue(lane)
 
-        dropped = await rig.request(f"$JS.API.STREAM.DELETE.{STORE_EVENTS_STREAM}")
-        assert dropped is not None and dropped.get("success") is True, f"the store events' stream was not removed: {dropped}"
-        unread_once_gone = await sample_queue(lane)
-        kept = (
-            maintenance_metrics.of("maintenance.queue.messages", stream=STORE_EVENTS_STREAM),
-            maintenance_metrics.of("maintenance.queue.oldest", stream=STORE_EVENTS_STREAM),
-            maintenance_metrics.of("maintenance.queue.ack_pending", consumer="maintenance-store-events"),
-        )
-
-        released_at = clock()
-        release.set()
-        timed = await _until(lambda: maintenance_metrics.of("maintenance.tasks.duration", kind="table") == 1, 15)
-        acked_by = clock()
-        waited = await _until(lambda: maintenance_metrics.of("maintenance.tasks.wait", kind="table") == 2, 15)
-        delivered_by = clock()
-    finally:
-        try:
-            if replica is not None:
-                await replica.stop()
-            for client in clients:
-                await client.close()
-            if lane is not None:
-                await lane.close()
-        finally:
-            broker.stop()
-
+    sampled_at = backlog.clock()
+    oldest = maintenance_metrics.by("maintenance.queue.oldest", "stream")
     assert unread == 0
-    assert depth == {TASKS_STREAM: 2, SCHEDULES_STREAM: 0, STORE_EVENTS_STREAM: 1}
+    assert maintenance_metrics.by("maintenance.queue.messages", "stream") == {TASKS_STREAM: 2, SCHEDULES_STREAM: 0, STORE_EVENTS_STREAM: 1}
     assert set(oldest) == {TASKS_STREAM, STORE_EVENTS_STREAM}
-    assert abs(oldest[TASKS_STREAM] - (sampled_at - queued_at)) < 1.5, f"the oldest task's age read {oldest[TASKS_STREAM]:.1f} s"
-    assert abs(oldest[STORE_EVENTS_STREAM] - (sampled_at - published_at)) < 1.5, f"the oldest event's age read {oldest[STORE_EVENTS_STREAM]:.1f} s"
-    assert backlog == {
+    assert abs(oldest[TASKS_STREAM] - (sampled_at - backlog.queued_at)) < 1.5, f"the oldest task's age read {oldest[TASKS_STREAM]:.1f} s"
+    assert abs(oldest[STORE_EVENTS_STREAM] - (sampled_at - backlog.published_at)) < 1.5, f"the oldest event's age read {oldest[STORE_EVENTS_STREAM]:.1f} s"
+    assert {name: maintenance_metrics.by(f"maintenance.queue.{name}", "consumer") for name in ("waiting", "ack_pending", "redelivered")} == {
         "waiting": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 0},
         "ack_pending": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 1},
         "redelivered": {"maintenance-worker": 0, "maintenance-due": 0, "maintenance-store-events": 1},
     }
-    assert (unread_once_gone, kept) == (2, (1, oldest[STORE_EVENTS_STREAM], 1))
+
+
+@pytest.mark.asyncio
+async def test_a_stream_the_sampler_cannot_read_keeps_its_gauges_at_their_last_values(fleet: _Fleet, maintenance_metrics: Measured) -> None:
+    backlog = _Backlog(fleet)
+    lane = await backlog.build(with_a_store_event=True)
+    assert await sample_queue(lane) == 0
+    last = (
+        maintenance_metrics.of("maintenance.queue.messages", stream=STORE_EVENTS_STREAM),
+        maintenance_metrics.of("maintenance.queue.oldest", stream=STORE_EVENTS_STREAM),
+        maintenance_metrics.of("maintenance.queue.ack_pending", consumer="maintenance-store-events"),
+    )
+    rig = await fleet.rig()
+    dropped = await rig.request(f"$JS.API.STREAM.DELETE.{STORE_EVENTS_STREAM}")
+    assert dropped is not None and dropped.get("success") is True, f"the store events' stream was not removed: {dropped}"
+
+    unread = await sample_queue(lane)
+
+    kept = (
+        maintenance_metrics.of("maintenance.queue.messages", stream=STORE_EVENTS_STREAM),
+        maintenance_metrics.of("maintenance.queue.oldest", stream=STORE_EVENTS_STREAM),
+        maintenance_metrics.of("maintenance.queue.ack_pending", consumer="maintenance-store-events"),
+    )
+    assert (unread, kept) == (2, last)
+
+
+@pytest.mark.asyncio
+async def test_a_task_is_timed_from_its_claim_to_its_acknowledgement(fleet: _Fleet, maintenance_metrics: Measured) -> None:
+    backlog = _Backlog(fleet)
+    await backlog.build(with_a_store_event=False)
+    released_at = backlog.clock()
+
+    backlog.release.set()
+
+    timed = await _until(lambda: maintenance_metrics.of("maintenance.tasks.duration", kind="table") == 1, 15)
+    acked_by = backlog.clock()
     total = maintenance_metrics.total("maintenance.tasks.duration", kind="table")
-    assert timed and total is not None and released_at - started_at <= total <= acked_by - queued_at, f"the task ran {total} s by its count"
-    # The first task was delivered as it was queued; the second waited behind it from its queuing, before `published_at`,
-    # until the first was released.
+    assert timed and total is not None and released_at - backlog.started_at <= total <= acked_by - backlog.queued_at, f"the task ran {total} s by its count"
+
+
+@pytest.mark.asyncio
+async def test_a_tasks_wait_is_timed_from_its_queuing_to_its_first_delivery(fleet: _Fleet, maintenance_metrics: Measured) -> None:
+    """The first task is delivered as it is queued; the second waits behind it from its queuing, before `published_at`,
+    until the first is released."""
+    backlog = _Backlog(fleet)
+    await backlog.build(with_a_store_event=False)
+    released_at = backlog.clock()
+
+    backlog.release.set()
+
+    waited = await _until(lambda: maintenance_metrics.of("maintenance.tasks.wait", kind="table") == 2, 15)
+    delivered_by = backlog.clock()
     waits = maintenance_metrics.total("maintenance.tasks.wait", kind="table")
-    assert waited and waits is not None and released_at - published_at <= waits <= delivered_by - queued_at, f"the two tasks waited {waits} s by their count"
-    assert [v for v in violations(broker.log_text()) if mint_.user_of(v.user_key) == _WORKER] == []
+    assert waited and waits is not None and released_at - backlog.published_at <= waits <= delivered_by - backlog.queued_at, (
+        f"the two tasks waited {waits} s by their count"
+    )

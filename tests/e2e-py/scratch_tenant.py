@@ -117,3 +117,16 @@ def provisioned(purpose: str, grants: Sequence[str]) -> Iterator[Tenant]:
     finally:
         left = made.tear_down()
         assert not left, f"the scratch tenant {made.project} was not fully removed: {left}"
+
+
+def tuples_on(identity: Identity, obj: str) -> list[tuple[str, str]]:
+    """Every tuple the store holds on ``obj``, as ``(user, relation)`` in order, as ``identity`` reads them through the
+    catalog's tuple door, page by page: a reading a refused call must leave the same."""
+    found: list[tuple[str, str]] = []
+    params = {"object": obj}
+    while True:
+        page = ok(identity.http.get(f"{CATALOG}/management/v1/access/tuples", params=params, timeout=60))
+        found += [(str(held["user"]), str(held["relation"])) for held in page["tuples"]]
+        if not page.get("continuation"):
+            return sorted(found)
+        params["continuation"] = str(page["continuation"])

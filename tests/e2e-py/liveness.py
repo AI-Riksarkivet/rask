@@ -20,6 +20,9 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+import pytest
+import requests
+
 
 #: Per-attempt HTTP timeout. Generous rather than tight: an attempt that gives up in 5 s is what this
 #: module exists to replace, and a slow answer is still an answer.
@@ -38,7 +41,7 @@ INTERVAL_SECONDS = 3.0
 def wait_until_live(
     url: str,
     *,
-    probe: Callable[[str, float], None],
+    probe: Callable[[str, float], object],
     budget_seconds: float = BUDGET_SECONDS,
     interval_seconds: float = INTERVAL_SECONDS,
     attempt_timeout_seconds: float = ATTEMPT_TIMEOUT_SECONDS,
@@ -70,3 +73,18 @@ def wait_until_live(
         if waited >= budget_seconds:
             return False, waited, last_error
         sleep(interval_seconds)
+
+
+def _answers_ok(url: str, timeout: float) -> None:
+    requests.get(url, timeout=timeout).raise_for_status()
+
+
+def skip_unless_live(url: str, *, what: str, probe: Callable[[str, float], object] = _answers_ok) -> None:
+    """Skip the caller unless ``url`` answers within the budget, naming what was waited for and for how long.
+
+    ``probe`` defaults to a GET that must answer 2xx; a store's suite passes its own (a bucket's HEAD). A run under
+    `--require-live` turns the skip into a failure, so an estate that is not there fails a live target.
+    """
+    live, waited, error = wait_until_live(url, probe=probe)
+    if not live:
+        pytest.skip(f"{what} not reachable at {url} after {waited:.0f} s: {error}")

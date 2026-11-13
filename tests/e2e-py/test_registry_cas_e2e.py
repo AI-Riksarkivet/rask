@@ -19,8 +19,8 @@ import threading
 import uuid
 
 import pytest
-from botocore.exceptions import BotoCoreError, ClientError
 from credentials import Credential, credential
+from liveness import skip_unless_live
 
 from lakehouse import records
 from lakehouse.storage_options import StorageOptions, object_client
@@ -48,10 +48,8 @@ _SO = StorageOptions.from_flat(
 def live_root() -> str:
     if not ENDPOINT:
         pytest.skip("set LANCE_E2E_S3_ENDPOINT (see module docstring)")
-    try:
-        object_client(_SO).head_bucket(Bucket=BUCKET)
-    except (ClientError, BotoCoreError) as exc:
-        pytest.skip(f"bucket {BUCKET!r} unreachable at {ENDPOINT}: {exc}")
+    client = object_client(_SO)
+    skip_unless_live(ENDPOINT, what=f"the bucket {BUCKET!r}", probe=lambda _url, _timeout: client.head_bucket(Bucket=BUCKET))
     return f"s3://{BUCKET}"
 
 

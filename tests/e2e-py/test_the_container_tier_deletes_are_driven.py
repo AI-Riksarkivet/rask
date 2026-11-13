@@ -31,6 +31,7 @@ import pyarrow as pa
 import pytest
 import requests
 from credentials import Credential, credential
+from liveness import skip_unless_live
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -48,10 +49,7 @@ def _auth(token: str = "") -> dict[str, str]:
 def catalog() -> str:
     if not CATALOG or not TOKEN:
         pytest.skip("set LANCE_E2E_CATALOG_URL and the run's token credential (a deployed stack with warehouses enabled)")
-    try:
-        requests.get(f"{CATALOG}/livez", timeout=5).raise_for_status()
-    except Exception:
-        pytest.skip("catalog not reachable")
+    skip_unless_live(f"{CATALOG}/livez", what="the catalog")
     return CATALOG
 
 
