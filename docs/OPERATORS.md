@@ -86,7 +86,7 @@ DOES have are already owned elsewhere:
 
 | Concern | Owner today | Status |
 |---|---|---|
-| background maintenance (version expiry, trash purge, orphan scan, reconcile, the due list) | `services/maintenance`: per-table passes on a NATS work queue, held after each commit and at least every `maintenance.queue.recheckHours`, plus the hourly audit and the daily scan (ADR 0198; FAIL-visible) | shipped; compaction and index builds are a bring-your-own job's, judged at `version/create` (ADR 0162) |
+| background maintenance (version expiry, trash purge, orphan scan, reconcile, the due list) | `services/maintenance`: per-table passes on a NATS work queue, held after each commit and at least every `maintenance.queue.recheckHours`, plus the hourly audit and the daily scan (ADR 0198; FAIL-visible) | shipped; compaction and index builds are a bring-your-own job's, judged at `version/create` (ADR 0162). On an estate with no such job, `make compact-due` runs the same caller by hand, as the person whose bearer is in `COMPACT_CATALOG_TOKEN` (`scripts/compact_due_tables.py`) |
 | stream/bucket/grant provisioning | chart Jobs + seed scripts (idempotent) | shipped; NACK could absorb the stream half |
 | version/feature pinning (`pylance`, data_storage_version) | image pins + probe-before-callsite (§0) + `lance_docs/` | process, not software |
 

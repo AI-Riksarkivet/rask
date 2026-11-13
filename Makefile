@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image seed-dev e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: fga-store-check fga-estate-migrate sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -380,6 +380,12 @@ frontend-check:       # svelte-check, lint, format, unit tests and knip over the
 # namespaces and grants a fresh install shows nothing of.
 seed-dev: ## Seed the dev estate's projects, warehouses, namespaces and grants through the catalog (needs a running cluster)
 	uv run python scripts/seed_estate.py
+
+# Each table the catalog lists as due, compacted by hand through the catalog's doors as the bearer in
+# COMPACT_CATALOG_TOKEN (scripts/compact_due_tables.py). A scheduled compaction job is bring-your-own (ADR 0174) and
+# lives outside this repository; this is the same caller run by a person on an estate that has none.
+compact-due: ## Compact every table the catalog's due list names, as COMPACT_CATALOG_TOKEN's person (ONLY=<namespace> to narrow)
+	uv run python scripts/compact_due_tables.py $(if $(ONLY),--only $(ONLY),)
 
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
 # Prove lakehouse.storage and pylance work against a REAL rustfs backend (not moto).
