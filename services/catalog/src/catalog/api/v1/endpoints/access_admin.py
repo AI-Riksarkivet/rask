@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, Path, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     InvalidInputError,
+    NamespaceNotFoundError,
     ServiceUnavailableError,
     TableNotFoundError,
 )
@@ -33,9 +34,10 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import announcing, fga_deps
 from catalog.api.announcing import Announcer, AnnouncerDep
-from catalog.api.dependencies import FgaClientDep, SettingsDep
+from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
+from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier
 from catalog.schemas import (
     AccessCheckBody,
     AccessCheckResult,
@@ -51,11 +53,12 @@ from catalog.schemas import (
     AccessSimulateResult,
     AccessTuple,
     AccessTuplesPage,
+    NamedAccessTuple,
     PrincipalDeleted,
     PrincipalRecord,
     TupleCondition,
 )
-from catalog.services import principals, subject_tuples
+from catalog.services import object_names, principals, subject_tuples
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed import fga
@@ -156,6 +159,53 @@ def _validated_object(obj: str) -> str:
     return obj
 
 
+#: The types whose objects OpenFGA holds by the uuid the catalog minted and the catalog's doors address by name, each with
+#: the spec's error for a name no object holds (`lance_docs/ns_catalog/namespace/operations/errors.md`: codes 4 and 1).
+_NOT_FOUND: dict[str, type[TableNotFoundError | NamespaceNotFoundError]] = {"table": TableNotFoundError, "namespace": NamespaceNotFoundError}
+
+
+async def _held_object(resolver: Resolver, obj: str) -> str:
+    """The object a caller named, as OpenFGA holds it ([[LH-591]]).
+
+    A table or namespace is held by its uuid (``table:<uuid>``, [[LH-524]]), so an id spelled as a uuid is that object,
+    and any other id is a name, resolved through the request's :class:`Resolver` as every door resolves one. A
+    uuid-spelled id is never read as a name first: a namespace named after another object's uuid would then stand in
+    for that object in the estate admin's question. Every other type's object is held as written.
+
+    Raises:
+        InvalidInputError: The object is not ``<type>:<id>`` of a type the model defines.
+        TableNotFoundError: No table has the name.
+        NamespaceNotFoundError: No namespace has the name.
+        UnidentifiedObjectError: The object the name resolves to records no uuid.
+    """
+    obj_type, _, obj_id = _validated_object(obj).partition(":")
+    if obj_type not in _NOT_FOUND:
+        return obj
+    if is_spelled_as_a_uuid(obj_id):
+        return f"{obj_type}:{obj_id.lower()}"
+    held = await resolver.object(obj_type, parse_identifier(obj_id))
+    if held is None:
+        raise _NOT_FOUND[obj_type](f"{obj_type} not found: {obj_id}")
+    return held
+
+
+async def _named(resolver: Resolver, settings: Settings, obj: str) -> tuple[str, str | None]:
+    """The object a caller named as OpenFGA holds it (:func:`_held_object`), and the name it holds now, so an answer reads
+    the same whichever form the caller asked in.
+
+    A name the request's :class:`Resolver` just resolved is the name the object holds; only an object named by its uuid
+    is looked up (:func:`object_names.current_names`), which reads every root's index.
+    """
+    held = await _held_object(resolver, obj)
+    obj_type, _, obj_id = obj.partition(":")
+    if obj_type not in _NOT_FOUND:
+        return held, None
+    if not is_spelled_as_a_uuid(obj_id):
+        return held, fga.canonical_object_id(parse_identifier(obj_id))
+    names = await run_in_threadpool(object_names.current_names, settings, [held])
+    return held, names.get(held)
+
+
 def _qualified_subject(user: str) -> str:
     """Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified object or userset
     (``role:<id>#assignee``) passes through verbatim — the same resolution as the
@@ -231,6 +281,8 @@ router = APIRouter(prefix="/management/v1/access", tags=["access"], dependencies
 @router.get("/tuples")
 async def read_access_tuples(
     client: EstateFgaClient,
+    resolver: ResolverDep,
+    settings: SettingsDep,
     token: CurrentToken,
     object_type: Annotated[str | None, Query(description="with user=, that subject's tuples on the objects of this type (e.g. 'table')")] = None,
     user: Annotated[str | None, Query(description="filter by subject (bare id = user:<id>)")] = None,
@@ -244,10 +296,11 @@ async def read_access_tuples(
     ``object_type`` (that subject's tuples on the object, or on the objects of the type), or no filter (the whole store,
     paginated). Read refuses a filter naming no object type, and one naming a type with neither an object id nor a user
     (OpenFGA v1.18.3), and OpenFGA's refusal would reach the caller as a 503, so ``user`` alone and ``object_type`` alone
-    are a 400 here, naming the half to add.
+    are a 400 here, naming the half to add. Each table and namespace object is answered with the name it holds now
+    (``name``, [[LH-591]]), and an ``object`` filter may name a table or namespace by its name or its uuid.
     """
     if object is not None:
-        obj_filter: str | None = _validated_object(object)
+        obj_filter: str | None = await _held_object(resolver, object)
     elif object_type is not None:
         if object_type not in _model_types():
             raise InvalidInputError(f"{object_type!r} is not a type the authorization model defines")
@@ -280,13 +333,14 @@ async def read_access_tuples(
     # #41: the raw-tuple listing is an estate-wide ACL disclosure — audit it distinctly from the gate's
     # allow, exactly like access_review on the per-object surface.
     audit(AuditAction.ACCESS_TUPLES_READ, AuditOutcome.SUCCESS, subject=subject, resource=resource, delivered=len(tuples))
+    names = await run_in_threadpool(object_names.current_names, settings, [t.object for t in tuples])
     return AccessTuplesPage(
-        tuples=[_as_access_tuple(t) for t in tuples],
+        tuples=[_as_access_tuple(t, name=names.get(t.object)) for t in tuples],
         continuation=next_token,
     )
 
 
-def _as_access_tuple(t: fga.ClientTuple) -> AccessTuple:
+def _as_access_tuple(t: fga.ClientTuple, *, name: str | None = None) -> NamedAccessTuple:
     """Map a stored tuple out to the wire, CONDITION INCLUDED.
 
     Dropping the condition here would make every time-boxed grant read back as permanent — the UI
@@ -295,7 +349,7 @@ def _as_access_tuple(t: fga.ClientTuple) -> AccessTuple:
     condition = None
     if (c := getattr(t, "condition", None)) is not None and getattr(c, "name", None):
         condition = TupleCondition(name=c.name, context=dict(getattr(c, "context", None) or {}))
-    return AccessTuple(user=t.user, relation=t.relation, object=t.object, condition=condition)
+    return NamedAccessTuple(user=t.user, relation=t.relation, object=t.object, condition=condition, name=name)
 
 
 def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientTuple:
@@ -370,20 +424,27 @@ async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Call
 
 
 @router.post("/tuples")
-async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
     """Write ONE raw tuple (idempotent — a duplicate write is success), echoing the tuple as stored.
 
     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
     derived ``can_*`` action or an unknown type/relation is a 400) — the raw-tuple analog of the
-    per-object grant surface's grantable-rung guard, without its table/namespace restriction.
+    per-object grant surface's grantable-rung guard, without its table/namespace restriction. A table or namespace
+    named by its name is written on its uuid object (:func:`_held_object`), the one every decision reads.
     """
-    return await _mutate_tuple(client, announcer, token, body, write=True)
+    held = body.model_copy(update={"object": await _held_object(resolver, body.object)})
+    return await _mutate_tuple(client, announcer, token, held, write=True)
 
 
 @router.delete("/tuples")
-async def delete_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
-    """Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed."""
-    return await _mutate_tuple(client, announcer, token, body, write=False)
+async def delete_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+    """Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
+
+    A table or namespace named by its name is resolved as the write door resolves it (:func:`_held_object`), so a
+    revoke sent with the body its grant was written with removes that grant.
+    """
+    held = body.model_copy(update={"object": await _held_object(resolver, body.object)})
+    return await _mutate_tuple(client, announcer, token, held, write=False)
 
 
 @router.get("/model")
@@ -403,22 +464,23 @@ async def get_access_model(client: EstateFgaClient, settings: SettingsDep) -> Ac
 
 
 @router.post("/check")
-async def check_access(client: EstateFgaClient, token: CurrentToken, body: AccessCheckBody) -> AccessCheckResult:
+async def check_access(client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessCheckBody) -> AccessCheckResult:
     """One ``(user, relation, object)`` OpenFGA Check over ANY model type — the estate-wide extension of
     the per-object ``…/access/check`` playground (#68), which stays as-is for table/namespace owners.
 
     Any relation the compiled model defines on the type may be probed (base rungs included — an admin
     debugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.
-    ``checked`` echoes the resolved tuple so the verdict is unambiguous.
+    ``checked`` echoes the resolved tuple so the verdict is unambiguous: a table or namespace may be named by its name or
+    its uuid, and ``checked`` names the uuid object asked about with its name beside it ([[LH-591]]).
 
     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
     ``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one
     wins, which is how a caller asks "was this true at 14:00?".
     """
-    obj = _validated_object(body.object)
-    fga_type = obj.partition(":")[0]
+    fga_type = _validated_object(body.object).partition(":")[0]
     if body.relation not in _defined_relations(fga_type):
         raise InvalidInputError(f"{body.relation!r} is not a relation the model defines on {fga_type}")
+    obj, name = await _named(resolver, settings, body.object)
     user = _qualified_subject(body.user)
     subject = token.subject if token else "anonymous"
     try:
@@ -428,7 +490,7 @@ async def check_access(client: EstateFgaClient, token: CurrentToken, body: Acces
         raise
     # Same disclosure event as the per-object simulator — one queryable stream for "who probed the graph".
     audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.SUCCESS, subject=subject, resource=obj)
-    checked = AccessTuple(user=user, relation=body.relation, object=obj)
+    checked = NamedAccessTuple(user=user, relation=body.relation, object=obj, name=name)
     return AccessCheckResult(allowed=allowed, checked=checked)
 
 
@@ -441,7 +503,7 @@ def _validated_relation(obj_or_type: str, relation: str) -> str:
 
 
 @router.post("/list-objects")
-async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body: AccessListObjectsRequest) -> AccessListObjectsResponse:
+async def list_access_objects(client: EstateFgaClient, settings: SettingsDep, token: CurrentToken, body: AccessListObjectsRequest) -> AccessListObjectsResponse:
     """ "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
 
     The forward half of a who-reaches-what view, and the answer ``GET /tuples`` structurally cannot give: Read needs
@@ -450,7 +512,8 @@ async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body
     reached through role → project → warehouse → namespace shows up here and nowhere else.
 
     The subject may be a userset (``role:<id>#assignee``), which matters because a grant to a role reaches
-    data through the role, and only the userset question shows that.
+    data through the role, and only the userset question shows that. ``names`` gives each table's and namespace's name
+    now beside its uuid object ([[LH-591]]).
     """
     if body.type not in _model_types():
         raise InvalidInputError(f"{body.type!r} is not a type the authorization model defines")
@@ -473,19 +536,23 @@ async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body
         delivered=len(listing.objects),
         truncated=listing.truncated,
     )
-    return AccessListObjectsResponse(objects=listing.objects, user=user, relation=relation, type=body.type, truncated=listing.truncated)
+    names = await run_in_threadpool(object_names.current_names, settings, listing.objects)
+    return AccessListObjectsResponse(objects=listing.objects, user=user, relation=relation, type=body.type, truncated=listing.truncated, names=names)
 
 
 @router.post("/list-users")
-async def list_access_users(client: EstateFgaClient, token: CurrentToken, body: AccessListUsersRequest) -> AccessListUsersResponse:
+async def list_access_users(
+    client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessListUsersRequest
+) -> AccessListUsersResponse:
     """ "Who can do this?" — every subject holding ``relation`` on ``object``, effective access included.
 
     The inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in
     the hierarchy can revoke access for many principals at once, and "are you sure?" is not an answer to
-    "how many". Subjects come back fully qualified so a userset is never mistaken for a user.
+    "how many". Subjects come back fully qualified so a userset is never mistaken for a user. A table or namespace may be
+    named by its name or its uuid; ``object`` names the uuid object asked about and ``name`` its name ([[LH-591]]).
     """
-    obj = _validated_object(body.object)
-    relation = _validated_relation(obj, body.relation)
+    relation = _validated_relation(_validated_object(body.object), body.relation)
+    obj, name = await _named(resolver, settings, body.object)
     if body.user_type not in _model_types():
         raise InvalidInputError(f"{body.user_type!r} is not a type the authorization model defines")
     if body.user_relation is not None and body.user_relation not in _defined_relations(body.user_type):
@@ -509,6 +576,7 @@ async def list_access_users(client: EstateFgaClient, token: CurrentToken, body: 
     return AccessListUsersResponse(
         users=users,
         object=obj,
+        name=name,
         relation=relation,
         user_type=body.user_type,
         user_relation=body.user_relation,
@@ -517,7 +585,9 @@ async def list_access_users(client: EstateFgaClient, token: CurrentToken, body: 
 
 
 @router.post("/expand")
-async def expand_access(client: EstateFgaClient, token: CurrentToken, body: AccessExpandRequest) -> AccessExpandResponse:
+async def expand_access(
+    client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessExpandRequest
+) -> AccessExpandResponse:
     """WHY a relation resolves — the userset tree, optionally followed through the cascade.
 
     Check answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,
@@ -528,10 +598,11 @@ async def expand_access(client: EstateFgaClient, token: CurrentToken, body: Acce
 
     ``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited
     round trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and
-    one response.
+    one response. A table or namespace may be named by its name or its uuid; ``object`` names the uuid object expanded
+    and ``name`` its name ([[LH-591]]).
     """
-    obj = _validated_object(body.object)
-    relation = _validated_relation(obj, body.relation)
+    relation = _validated_relation(_validated_object(body.object), body.relation)
+    obj, name = await _named(resolver, settings, body.object)
     depth = max(1, min(body.depth, fga.MAX_EXPAND_TREE_DEPTH))
     subject = token.subject if token else "anonymous"
     try:
@@ -545,13 +616,16 @@ async def expand_access(client: EstateFgaClient, token: CurrentToken, body: Acce
     return AccessExpandResponse(
         tree=AccessExpandNode.model_validate(tree) if tree else None,
         object=obj,
+        name=name,
         relation=relation,
         depth=depth,
     )
 
 
 @router.post("/simulate")
-async def simulate_access(client: EstateFgaClient, token: CurrentToken, body: AccessSimulateRequest) -> AccessSimulateResult:
+async def simulate_access(
+    client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessSimulateRequest
+) -> AccessSimulateResult:
     """ "Would this grant do what I think?" — a Check evaluated as if ``hypothetical`` existed.
 
     Nothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the
@@ -568,13 +642,14 @@ async def simulate_access(client: EstateFgaClient, token: CurrentToken, body: Ac
     Every hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a
     derived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,
     and — more importantly — a hypothesis this API would refuse to write must not be simulatable, or
-    the answer describes a grant that cannot exist.
+    the answer describes a grant that cannot exist. A table or namespace, the checked one and each hypothesis's, may be
+    named by its name or its uuid, and is asked about as its uuid object ([[LH-591]]).
     """
-    obj = _validated_object(body.object)
-    relation = _validated_relation(obj, body.relation)
+    relation = _validated_relation(_validated_object(body.object), body.relation)
+    obj, name = await _named(resolver, settings, body.object)
     user = _qualified_subject(body.user)
     # Validated, not merely parsed — same gate a real write clears.
-    hypothetical = [_validated_write_tuple(t, evaluated=True) for t in body.hypothetical]
+    hypothetical = [_validated_write_tuple(t.model_copy(update={"object": await _held_object(resolver, t.object)}), evaluated=True) for t in body.hypothetical]
     subject = token.subject if token else "anonymous"
     try:
         # Two checks, one round trip each. The baseline cannot be skipped when `hypothetical` is empty
@@ -593,7 +668,7 @@ async def simulate_access(client: EstateFgaClient, token: CurrentToken, body: Ac
     return AccessSimulateResult(
         allowed=allowed,
         baseline=baseline,
-        checked=AccessTuple(user=user, relation=relation, object=obj),
+        checked=NamedAccessTuple(user=user, relation=relation, object=obj, name=name),
         hypothetical=[_as_access_tuple(t) for t in hypothetical],
     )
 

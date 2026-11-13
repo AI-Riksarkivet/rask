@@ -11,6 +11,7 @@ import {
 	ListObjectsResultSchema,
 	ListUsersResultSchema,
 	SimulateResultSchema,
+	namedObject,
 	TupleConditionSchema,
 	TupleSchema,
 	TuplesPageSchema,
@@ -55,7 +56,14 @@ const TupleInputSchema = v.object({
 	relation: v.string(),
 	object: v.string(),
 	condition: v.optional(v.nullable(TupleConditionSchema)),
+	/** The name `object` holds now, for the activity log alone: the catalog holds a table or namespace by its uuid
+	 *  object and refuses a field its tuple does not define, so this never reaches the wire. */
+	name: v.optional(v.nullable(v.string())),
 });
+type TupleInput = v.InferOutput<typeof TupleInputSchema>;
+
+/** The tuple the catalog's door takes: everything but the display name. */
+const wire = ({ name: _name, ...tuple }: TupleInput) => tuple;
 
 /** Every tuple the filter matches, page by page to the store's last, or to `MAX_GRAPH_PAGES` (`truncated`). One page
  *  is never the whole answer: the door pages, so a reader that stopped at the first would show part of an object's
@@ -90,19 +98,19 @@ export const fetchObjectTuples = query(v.string(), async (object) => everyTuple(
  *  command; there the refresh is a no-op (no store is mounted) and the gallery is invalidated at the
  *  call site instead. */
 export const writeTuple = command(
-	({ user, relation, object, condition }) => {
+	(tuple) => {
 		// The model the grant dialog was built from is read already; its parameter types say which
 		// value is the window.
 		const model = fetchAccessModel().current;
-		const box = model?.ok ? timeBoxLabel(condition, model.data.conditions) : null;
-		return `Grant ${relation} on ${object} to ${user}${box ? `, time-boxed ${box}` : ''}`;
+		const box = model?.ok ? timeBoxLabel(tuple.condition, model.data.conditions) : null;
+		return `Grant ${tuple.relation} on ${namedObject(tuple.object, tuple.name)} to ${tuple.user}${box ? `, time-boxed ${box}` : ''}`;
 	},
 	TupleInputSchema,
 	async (tuple): Promise<ApiResult<Tuple>> => {
 		const result = parsed(
 			await catalogJSON('/management/v1/access/tuples', {
 				method: 'POST',
-				body: JSON.stringify(tuple),
+				body: JSON.stringify(wire(tuple)),
 			}),
 			TupleSchema,
 		);
@@ -113,13 +121,14 @@ export const writeTuple = command(
 
 /** Revoke: delete one raw tuple (the tuple IS the identity — same body as the write). */
 export const deleteTuple = command(
-	({ user, relation, object }) => `Revoke ${relation} on ${object} from ${user}`,
+	(tuple) =>
+		`Revoke ${tuple.relation} on ${namedObject(tuple.object, tuple.name)} from ${tuple.user}`,
 	TupleInputSchema,
 	async (tuple): Promise<ApiResult<Tuple>> => {
 		const result = parsed(
 			await catalogJSON('/management/v1/access/tuples', {
 				method: 'DELETE',
-				body: JSON.stringify(tuple),
+				body: JSON.stringify(wire(tuple)),
 			}),
 			TupleSchema,
 		);

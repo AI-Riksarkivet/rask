@@ -20,7 +20,7 @@
 	import { onMount, untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { Filter, RotateCcw, ShieldAlert } from '@lucide/svelte';
-	import { parseModelTypes, type Tuple } from '../access';
+	import { namedObject, parseModelTypes, type Tuple } from '../access';
 	import {
 		accessMe,
 		checkAccess,
@@ -161,6 +161,20 @@
 	let registry = $state<string[]>([]);
 	/** Every tuple in the store — the canvas's base graph, and what the facet counts are computed on. */
 	let storeTuples = $state<Tuple[]>([]);
+	/** The names the last query's answer gave its table and namespace objects (`table:<uuid>` → `db$t`). */
+	let answerNames = $state.raw<ReadonlyMap<string, string>>(new Map());
+	/**
+	 * The name each table and namespace object holds now. OpenFGA holds both by uuid, so a node, a chip or a hop
+	 * would read `table:98792568-…` with nothing to say which table; the catalog answers each object's current name
+	 * beside it, on the tuple reads and on every query, and the uuid stays the node's id.
+	 */
+	const objectNames = $derived.by(() => {
+		const names = new Map(answerNames);
+		for (const t of storeTuples) if (t.name) names.set(t.object, t.name);
+		return names;
+	});
+	/** An id as a person reads it: a named object as `<type>:<name>`, anything else as written. */
+	const shown = (id: string): string => namedObject(id, objectNames.get(id));
 	/** The store is bigger than MAX_GRAPH_PAGES. Said out loud rather than silently clipped. */
 	let truncated = $state(false);
 	/**
@@ -258,8 +272,10 @@
 	const entryPoints = $derived.by(() => {
 		const fromStore = [...new Set(storeTuples.flatMap((t) => [t.user, t.object]))]
 			.filter((id) => !isSubject(id))
-			.sort();
-		const fromRegistry = registry.map((t) => `table:${t}`);
+			.sort((a, b) => shown(a).localeCompare(shown(b)));
+		// A registered table the store already holds by its uuid is offered once, as that uuid object.
+		const named = new Set(fromStore.map(shown));
+		const fromRegistry = registry.map((t) => `table:${t}`).filter((id) => !named.has(id));
 		return [...new Set([...fromStore, ...fromRegistry])].slice(0, 12);
 	});
 
@@ -343,6 +359,7 @@
 			return;
 		}
 		const parsed = res.data;
+		answerNames = new Map(Object.entries(parsed.names));
 		answer = buildNeighbourhood(
 			parsed.user,
 			parsed.objects.map((o) => ({ user: parsed.user, relation: parsed.relation, object: o })),
@@ -361,6 +378,7 @@
 			return;
 		}
 		const parsed = res.data;
+		answerNames = parsed.name ? new Map([[parsed.object, parsed.name]]) : new Map();
 		answer = buildNeighbourhood(
 			parsed.object,
 			parsed.users.map((u) => ({ user: u, relation: parsed.relation, object: parsed.object })),
@@ -368,7 +386,7 @@
 		seed = parsed.object;
 		selected = parsed.object;
 		chain = [
-			`${parsed.users.length} subject(s) hold ${parsed.relation} on ${parsed.object}` +
+			`${parsed.users.length} subject(s) hold ${parsed.relation} on ${shown(parsed.object)}` +
 				(parsed.truncated ? ' — TRUNCATED by the store, the real number is higher' : ''),
 		];
 	}
@@ -386,6 +404,11 @@
 			return;
 		}
 		const probed = checkRes.data;
+		// The catalog resolved a name to the uuid object it checked, so the verdict, the selection and the derivation
+		// all name that object, and the name rides beside it.
+		answerNames = probed.checked.name
+			? new Map([[probed.checked.object, probed.checked.name]])
+			: new Map();
 		verdict = {
 			allowed: probed.allowed,
 			user: probed.checked.user,
@@ -402,7 +425,7 @@
 		seed = parsed.object;
 		chain = answer.edges
 			.filter((e) => e.onPath)
-			.map((e) => `${e.source} → ${e.target} (${e.label})`);
+			.map((e) => `${shown(e.source)} → ${shown(e.target)} (${e.label})`);
 	}
 
 	// ── the rendered graph ──
@@ -473,7 +496,7 @@
 			data: {
 				fgaId: n.id,
 				fgaType: n.fgaType,
-				label: n.label,
+				label: objectNames.get(n.id) ?? n.label,
 				role: n.role,
 				via: n.via,
 			},
@@ -724,6 +747,7 @@
 				size="sm"
 				variant="outline"
 				class="font-mono"
+				title={entry}
 				onclick={() => {
 					object = entry;
 					selected = entry;
@@ -734,7 +758,7 @@
 					pushUrl({ seed: entry });
 				}}
 			>
-				{entry}
+				{shown(entry)}
 			</Button>
 		{:else}
 			<span class="text-muted-foreground">
@@ -863,6 +887,7 @@
 
 			<Inspector
 				{selected}
+				selectedName={selected ? (objectNames.get(selected) ?? null) : null}
 				{verdict}
 				{chain}
 				{dsl}

@@ -163,11 +163,18 @@ class AccessTuple(RequestBody):
     and the distinction has to survive the read path, or an expiring grant renders as forever."""
 
 
+class NamedAccessTuple(AccessTuple):
+    """A tuple as the estate admin's doors answer it: ``name`` is the name its table or namespace object holds now,
+    beside ``object``, which names its uuid ([[LH-591]]); ``None`` for any other object and for one no name holds."""
+
+    name: str | None = None
+
+
 class AccessTuplesPage(BaseModel):
     """One page of the raw tuple listing. ``continuation`` is the OpenFGA Read token for the next page —
     ``null`` on the last page."""
 
-    tuples: list[AccessTuple]
+    tuples: list[NamedAccessTuple]
     continuation: str | None
 
 
@@ -221,7 +228,7 @@ class AccessCheckResult(BaseModel):
     different subject than the one OpenFGA saw."""
 
     allowed: bool
-    checked: AccessTuple
+    checked: NamedAccessTuple
 
 
 class AccessListObjectsRequest(RequestBody):
@@ -245,6 +252,8 @@ class AccessListObjectsResponse(BaseModel):
     #: True when OpenFGA stopped at its ListObjects ceiling, so ``objects`` is a part of what the subject reaches, not
     #: all of it: a reach review that reads a cut answer as whole concludes the rest is out of reach.
     truncated: bool = False
+    #: The name each table or namespace object in ``objects`` holds now ([[LH-591]]); an object no name holds is absent.
+    names: dict[str, str] = Field(default_factory=dict)
 
 
 class AccessListUsersRequest(RequestBody):
@@ -269,6 +278,8 @@ class AccessListUsersResponse(BaseModel):
 
     users: list[str]
     object: str
+    #: The name ``object`` holds now, when it is a table or a namespace ([[LH-591]]).
+    name: str | None = None
     relation: str
     user_type: str
     user_relation: str | None = None
@@ -353,7 +364,7 @@ class AccessSimulateResult(BaseModel):
 
     allowed: bool
     baseline: bool
-    checked: AccessTuple
+    checked: NamedAccessTuple
     hypothetical: list[AccessTuple]
 
 
@@ -378,6 +389,8 @@ class AccessExpandResponse(BaseModel):
 
     tree: AccessExpandNode | None = None
     object: str
+    #: The name ``object`` holds now, when it is a table or a namespace ([[LH-591]]).
+    name: str | None = None
     relation: str
     depth: int
     """Hops actually requested (clamped server-side). 1 is a plain Expand; higher follows the cascade."""

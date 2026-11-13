@@ -13,7 +13,15 @@ function catalogAnswering(pages: unknown[]) {
 	return asked;
 }
 
-const tuple = (user: string) => ({ user, relation: 'reader', object: 'table:t1', condition: null });
+/** A table held by its uuid, as the catalog answers it, with its current name beside it. */
+const TABLE = 'table:6f0c2f3e-1b7a-4c41-9d3e-0a6f2b8c1d01';
+const tuple = (user: string) => ({
+	user,
+	relation: 'reader',
+	object: TABLE,
+	condition: null,
+	name: 'db$t1',
+});
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -26,15 +34,15 @@ describe('everyTuple', () => {
 			{ tuples: [tuple('user:c')], continuation: null },
 		]);
 
-		const answer = await everyTuple({ object: 'table:t1' });
+		const answer = await everyTuple({ object: TABLE });
 
 		expect(answer).toEqual({
 			ok: true,
 			data: { tuples: [tuple('user:a'), tuple('user:b'), tuple('user:c')], truncated: false },
 		});
 		expect(asked).toEqual([
-			'/api/catalog/management/v1/access/tuples?page_size=100&object=table%3At1',
-			'/api/catalog/management/v1/access/tuples?page_size=100&object=table%3At1&continuation=c1',
+			`/api/catalog/management/v1/access/tuples?page_size=100&object=${encodeURIComponent(TABLE)}`,
+			`/api/catalog/management/v1/access/tuples?page_size=100&object=${encodeURIComponent(TABLE)}&continuation=c1`,
 		]);
 	});
 });

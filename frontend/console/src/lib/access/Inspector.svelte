@@ -21,7 +21,7 @@
 	import { assertionName, toFgaYaml } from './assertion';
 	import { Subject } from './identity/index.ts';
 	import { timeBoxLabel } from './time-box.ts';
-	import type { Tuple } from '../access';
+	import { namedObject, type Tuple } from '../access';
 	import {
 		deleteTuple,
 		fetchObjectTuples,
@@ -32,6 +32,8 @@
 
 	type Props = {
 		selected: string | null;
+		/** The name the selected table or namespace holds now; `selected` is its uuid object, as OpenFGA holds it. */
+		selectedName: string | null;
 		verdict: { allowed: boolean; user: string; relation: string; object: string } | null;
 		/** The derivation, already flattened to words by the explorer — rendered here as the chain. */
 		chain: readonly string[];
@@ -55,6 +57,7 @@
 
 	let {
 		selected,
+		selectedName,
 		verdict,
 		chain,
 		dsl,
@@ -252,6 +255,7 @@
 			user: gUser.trim(),
 			relation: gRelation.trim(),
 			object: selected ?? '',
+			name: selectedName,
 			// Only the tuple-side parameters. `grant_time` defaults to NOW at the moment of writing —
 			// that is what "starting now, for 4 hours" means, and asking an operator to type an ISO
 			// timestamp for the present instant is friction with no decision in it.
@@ -276,7 +280,10 @@
 		try {
 			const res = await writeTuple(t);
 			message = res.ok
-				? { ok: true, text: `Wrote (${t.user}, ${t.relation}, ${t.object}).` }
+				? {
+						ok: true,
+						text: `Wrote (${t.user}, ${t.relation}, ${namedObject(t.object, t.name)}).`,
+					}
 				: { ok: false, text: res.status === 403 ? 'Denied: estate-admin only.' : res.detail };
 			if (res.ok) {
 				grantOpen = false;
@@ -378,6 +385,9 @@
 				Select a node on the canvas to see the tuples stored on it.
 			</p>
 		{:else}
+			{#if selectedName}
+				<p class="truncate font-mono text-xs" title={selectedName}>{selectedName}</p>
+			{/if}
 			<p class="truncate font-mono text-[11px] text-muted-foreground" title={selected}>
 				{selected}
 			</p>

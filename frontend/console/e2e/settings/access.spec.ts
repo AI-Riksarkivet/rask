@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { seed as seedFor } from '../mock-client';
 import { MOCK_CATALOG } from '../ports';
+import { TABLE } from './access-fixtures';
 
 // `/settings/access` — the ONE query-driven FGA explorer, in the console since #105.
 //
@@ -106,6 +107,11 @@ test('the four tabs are gone — one canvas, one query bar, one inspector', asyn
 
 test('"why" runs Check + Expand and lights the derivation hop by hop', async ({ page }) => {
 	await open(page);
+	// The table is offered by its name, and the jump-to chip names the uuid object the store holds it by.
+	await expect(page.getByRole('button', { name: 'table:db1$t', exact: true })).toHaveAttribute(
+		'title',
+		TABLE,
+	);
 	await ask(page, 'Why…', {
 		Subject: 'user:alice',
 		Relation: 'can_read_data',
@@ -114,6 +120,13 @@ test('"why" runs Check + Expand and lights the derivation hop by hop', async ({ 
 
 	// The verdict is the fact…
 	await expect(page.getByText('ALLOWED')).toBeVisible();
+	// …about the uuid object the catalog resolved the name to: the inspector selects it and names it, and its
+	// node on the canvas reads as the table's name.
+	await expect(page.getByText(TABLE, { exact: true })).toBeVisible();
+	await expect(page.getByTitle('db1$t', { exact: true })).toBeVisible();
+	await expect(
+		page.locator('[data-slot="access-node"]').filter({ hasText: 'db1$t' }).first(),
+	).toBeVisible();
 	// …and the derivation is the explanation. A one-level Expand could not produce this: it comes from
 	// following `owner from parent` into namespace:db1, which is the whole point of `depth`.
 	await expect(page.getByRole('heading', { name: 'Derivation' })).toBeVisible();
@@ -219,7 +232,7 @@ test('revoke states the blast radius BEFORE the write', async ({ page }) => {
 	await expect(page.getByText(/principals? currently hold/)).toBeVisible();
 	const measured = await accessState(page);
 	expect(measured.listUsersBodies.at(-1)).toMatchObject({
-		object: 'table:db1$t',
+		object: TABLE,
 		relation: 'owner',
 	});
 	// Measured, not yet written.
@@ -255,7 +268,7 @@ test('a verdict exports as committable .fga.yaml', async ({ page }) => {
 	expect(yaml).toContain('tests:');
 	expect(yaml).toContain('check:');
 	expect(yaml).toContain('- user: "user:alice"');
-	expect(yaml).toContain('object: "table:db1$t"');
+	expect(yaml).toContain(`object: "${TABLE}"`);
 	expect(yaml).toContain('assertions: { can_read_data: true }');
 
 	// …and it must carry the FACTS, not just the claim. `fga model test` never contacts the OpenFGA
@@ -295,7 +308,7 @@ test('the Grant dialog simulates before it writes, and says when a grant is a no
 	expect(simulated.simulateBodies.at(-1)).toMatchObject({
 		user: 'user:carol',
 		relation: 'reader',
-		object: 'table:db1$t',
+		object: TABLE,
 	});
 	// The hypothesis is sent; nothing is written.
 	const sent = simulated.simulateBodies.at(-1);
@@ -378,9 +391,11 @@ test('a time-boxed grant sends its condition to the store, and says its window w
 	expect(written).toMatchObject({
 		user: 'user:contractor',
 		relation: 'reader',
-		object: 'table:db1$t',
+		object: TABLE,
 		condition: { name: 'non_expired_grant' },
 	});
+	// The display name labels the activity log and never reaches the wire.
+	expect(written).not.toHaveProperty('name');
 	const ctx = (written as { condition: { context: Record<string, string> } }).condition.context;
 	expect(ctx.grant_duration).toBe('4h');
 	// Blank timestamp means "now" — the window opens when the grant is written, which is what

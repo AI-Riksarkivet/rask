@@ -25,12 +25,20 @@ export type TupleCondition = v.InferOutput<typeof TupleConditionSchema>;
 export const TupleSchema = v.object({
 	user: v.string(), // e.g. user:alice, role:<id>#assignee, namespace:db1
 	relation: v.string(), // e.g. owner, can_read_data, parent
-	object: v.string(), // e.g. table:db1$t, warehouse:acme-wh, project:acme
+	object: v.string(), // e.g. table:<uuid>, warehouse:acme-wh, project:acme
 	/** Present when the grant is TIME-BOXED. `null` is permanent — and the distinction has to survive
 	 *  the read path, or an expiring grant renders as forever. */
 	condition: v.optional(v.nullable(TupleConditionSchema), null),
+	/** The name a table or namespace object holds now, beside `object`, which names its uuid (`table:<uuid>`). The
+	 *  catalog answers it on reads and verdicts; `null` for any other object and for one no name holds. */
+	name: v.optional(v.nullable(v.string()), null),
 });
 export type Tuple = v.InferOutput<typeof TupleSchema>;
+
+/** An object as a person reads it: a table or namespace the catalog named as `<type>:<name>`, anything else as written.
+ *  The uuid stays the object's id everywhere it is used. */
+export const namedObject = (object: string, name: string | null | undefined): string =>
+	name ? `${object.slice(0, object.indexOf(':'))}:${name}` : object;
 
 export const TuplesPageSchema = v.object({
 	tuples: v.array(TupleSchema),
@@ -76,12 +84,16 @@ export const ListObjectsResultSchema = v.object({
 	user: v.string(), // the RESOLVED subject the store saw — never the local form state
 	relation: v.string(),
 	type: v.string(),
+	/** The name each table or namespace object in `objects` holds now; an object no name holds is absent. */
+	names: v.optional(v.record(v.string(), v.string()), {}),
 });
 export type ListObjectsResult = v.InferOutput<typeof ListObjectsResultSchema>;
 
 export const ListUsersResultSchema = v.object({
 	users: v.array(v.string()), // fully qualified: user:alice, role:validators#assignee, user:*
 	object: v.string(),
+	/** The name `object` holds now, when it is a table or a namespace. */
+	name: v.optional(v.nullable(v.string()), null),
 	relation: v.string(),
 	user_type: v.string(),
 	user_relation: v.nullable(v.string()),
@@ -149,6 +161,8 @@ export const ExpandResultSchema = v.object({
 	 *  two must never render as each other. */
 	tree: v.nullable(ExpandNodeSchema),
 	object: v.string(),
+	/** The name `object` holds now, when it is a table or a namespace. */
+	name: v.optional(v.nullable(v.string()), null),
 	relation: v.string(),
 	depth: v.number(),
 });

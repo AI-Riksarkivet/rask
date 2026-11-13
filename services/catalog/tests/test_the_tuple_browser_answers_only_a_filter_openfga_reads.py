@@ -8,6 +8,10 @@ server, which is what the estate admin got for ``?object_type=classification`` a
 rev 46. So the door refuses an object type alone and a user alone itself, 400 code 13 naming the half to add, and hands
 OpenFGA only a filter its Read answers.
 
+A table or namespace is held by its uuid (``table:<uuid>``, [[LH-524]]), so the browser answers each such object's
+current name beside it, and its ``object`` filter, like every door, takes the object by its name or its uuid
+([[LH-591]]).
+
 Every answer is the real OpenFGA's, on a store of this test's own. The estate admin's ``owner`` tuple on the estate is
 seeded as the chart's bootstrap hook seeds it; the label tuples are written through the raw-tuple door the browser
 reads them back from.
@@ -15,10 +19,14 @@ reads them back from.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import lance
+import pyarrow as pa
 import pytest
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga
 
 
@@ -96,3 +104,66 @@ def test_a_filter_openfga_cannot_read_is_refused_naming_what_to_add(
 
     body = refused.json()
     assert (refused.status_code, refused.headers["content-type"], body["code"], body["detail"]) == (400, PROBLEM, INVALID_INPUT, detail)
+
+
+_WAREHOUSE = "warehouse:lance_catalog"
+_ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
+
+
+def _ok(catalog: Any, path: str, caller: str = "alice", **kwargs: Any) -> dict[str, Any]:
+    answer = catalog.client.post(path, headers={**catalog.bearer(caller), **kwargs.pop("headers", {})}, **kwargs)
+    assert answer.status_code == 200, f"{path}: {answer.status_code} {answer.text}"
+    return answer.json()
+
+
+def _uuid(catalog: Any, kind: str, name: str) -> str:
+    return str(_ok(catalog, f"/v1/{kind}/{name}/describe", json={})["properties"]["rask.uuid"])
+
+
+@pytest.fixture
+def named(governed_catalog: Any, tmp_path: Path) -> Any:
+    """alice's namespace ``db`` holding ``db$inner``, a table ``db$t`` the catalog made and renamed ``db$u``, and a table
+    ``db$reg`` registered at a location of its registrar's (``ext/reg``, which names no uuid). The raw door grants bob
+    ``reader`` on ``db$t`` by name, and grants and revokes carol the same by name."""
+    catalog = governed_catalog
+    catalog.store.write(ROOT_OWNS_THE_ESTATE)
+    _ok(catalog, "/v1/namespace/db/create", json={})
+    _ok(catalog, "/v1/namespace/db$inner/create", json={})
+    _ok(catalog, "/v1/table/db$t/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    lance.write_dataset(_ROWS, str(tmp_path / "ext" / "reg"), data_storage_version="2.2", enable_stable_row_ids=True)
+    _ok(catalog, "/v1/table/db$reg/register", json={"location": "ext/reg"})
+    for door, user in (("post", "bob"), ("post", "carol"), ("delete", "carol")):
+        grant = {"user": catalog.person(user), "relation": "reader", "object": "table:db$t"}
+        answered = catalog.client.request(door.upper(), TUPLES, json=grant, headers=catalog.bearer("root"))
+        assert answered.status_code == 200, answered.text
+    _ok(catalog, "/v1/table/db$t/rename", json={"new_table_name": "u"})
+    return catalog
+
+
+def test_the_browser_names_each_table_and_namespace_as_it_is_named_now_and_filters_by_name(named: Any) -> None:
+    table, registered = f"table:{_uuid(named, 'table', 'db$u')}", f"table:{_uuid(named, 'table', 'db$reg')}"
+    namespace, inner = f"namespace:{_uuid(named, 'namespace', 'db')}", f"namespace:{_uuid(named, 'namespace', 'db$inner')}"
+
+    page = named.client.get(TUPLES, headers=named.bearer("root"))
+
+    assert page.status_code == 200, page.text
+    alice, bob = named.person("alice"), named.person("bob")
+    assert {(t["user"], t["relation"], t["object"], t["name"]) for t in page.json()["tuples"]} == {
+        (fga.user_object("dex~root"), "owner", "estate:rask", None),
+        (alice, "owner", namespace, "db"),
+        (_WAREHOUSE, "parent", namespace, "db"),
+        (namespace, "child", _WAREHOUSE, None),
+        (alice, "owner", inner, "db$inner"),
+        (namespace, "parent", inner, "db$inner"),
+        (inner, "child", namespace, "db"),
+        (alice, "owner", table, "db$u"),
+        (bob, "reader", table, "db$u"),
+        (namespace, "parent", table, "db$u"),
+        (table, "child", namespace, "db"),
+        (alice, "owner", registered, "db$reg"),
+        (namespace, "parent", registered, "db$reg"),
+        (registered, "child", namespace, "db"),
+    }
+    by_name = named.client.get(TUPLES, params={"object": "table:db$u"}, headers=named.bearer("root")).json()
+    assert by_name == named.client.get(TUPLES, params={"object": table}, headers=named.bearer("root")).json()
+    assert {t["user"] for t in by_name["tuples"]} == {alice, bob, namespace}

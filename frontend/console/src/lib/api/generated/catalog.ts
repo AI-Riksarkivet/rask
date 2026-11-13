@@ -54,7 +54,8 @@ export interface paths {
          *
          *     Any relation the compiled model defines on the type may be probed (base rungs included — an admin
          *     debugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.
-         *     ``checked`` echoes the resolved tuple so the verdict is unambiguous.
+         *     ``checked`` echoes the resolved tuple so the verdict is unambiguous: a table or namespace may be named by its name or
+         *     its uuid, and ``checked`` names the uuid object asked about with its name beside it ([[LH-591]]).
          *
          *     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
          *     ``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one
@@ -88,7 +89,8 @@ export interface paths {
          *
          *     ``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited
          *     round trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and
-         *     one response.
+         *     one response. A table or namespace may be named by its name or its uuid; ``object`` names the uuid object expanded
+         *     and ``name`` its name ([[LH-591]]).
          */
         post: operations["expand_access_management_v1_access_expand_post"];
         delete?: never;
@@ -116,7 +118,8 @@ export interface paths {
          *     reached through role → project → warehouse → namespace shows up here and nowhere else.
          *
          *     The subject may be a userset (``role:<id>#assignee``), which matters because a grant to a role reaches
-         *     data through the role, and only the userset question shows that.
+         *     data through the role, and only the userset question shows that. ``names`` gives each table's and namespace's name
+         *     now beside its uuid object ([[LH-591]]).
          */
         post: operations["list_access_objects_management_v1_access_list_objects_post"];
         delete?: never;
@@ -140,7 +143,8 @@ export interface paths {
          *
          *     The inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in
          *     the hierarchy can revoke access for many principals at once, and "are you sure?" is not an answer to
-         *     "how many". Subjects come back fully qualified so a userset is never mistaken for a user.
+         *     "how many". Subjects come back fully qualified so a userset is never mistaken for a user. A table or namespace may be
+         *     named by its name or its uuid; ``object`` names the uuid object asked about and ``name`` its name ([[LH-591]]).
          */
         post: operations["list_access_users_management_v1_access_list_users_post"];
         delete?: never;
@@ -234,7 +238,8 @@ export interface paths {
          *     Every hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a
          *     derived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,
          *     and — more importantly — a hypothesis this API would refuse to write must not be simulatable, or
-         *     the answer describes a grant that cannot exist.
+         *     the answer describes a grant that cannot exist. A table or namespace, the checked one and each hypothesis's, may be
+         *     named by its name or its uuid, and is asked about as its uuid object ([[LH-591]]).
          */
         post: operations["simulate_access_management_v1_access_simulate_post"];
         delete?: never;
@@ -258,7 +263,8 @@ export interface paths {
          *     ``object_type`` (that subject's tuples on the object, or on the objects of the type), or no filter (the whole store,
          *     paginated). Read refuses a filter naming no object type, and one naming a type with neither an object id nor a user
          *     (OpenFGA v1.18.3), and OpenFGA's refusal would reach the caller as a 503, so ``user`` alone and ``object_type`` alone
-         *     are a 400 here, naming the half to add.
+         *     are a 400 here, naming the half to add. Each table and namespace object is answered with the name it holds now
+         *     (``name``, [[LH-591]]), and an ``object`` filter may name a table or namespace by its name or its uuid.
          */
         get: operations["read_access_tuples_management_v1_access_tuples_get"];
         put?: never;
@@ -268,12 +274,16 @@ export interface paths {
          *
          *     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
          *     derived ``can_*`` action or an unknown type/relation is a 400) — the raw-tuple analog of the
-         *     per-object grant surface's grantable-rung guard, without its table/namespace restriction.
+         *     per-object grant surface's grantable-rung guard, without its table/namespace restriction. A table or namespace
+         *     named by its name is written on its uuid object (:func:`_held_object`), the one every decision reads.
          */
         post: operations["write_access_tuple_management_v1_access_tuples_post"];
         /**
          * Delete Access Tuple
          * @description Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
+         *
+         *     A table or namespace named by its name is resolved as the write door resolves it (:func:`_held_object`), so a
+         *     revoke sent with the body its grant was written with removes that grant.
          */
         delete: operations["delete_access_tuple_management_v1_access_tuples_delete"];
         options?: never;
@@ -4411,7 +4421,7 @@ export interface components {
         AccessCheckResult: {
             /** Allowed */
             allowed: boolean;
-            checked: components["schemas"]["AccessTuple"];
+            checked: components["schemas"]["NamedAccessTuple"];
         };
         /**
          * AccessExpandDifference
@@ -4486,6 +4496,8 @@ export interface components {
         AccessExpandResponse: {
             /** Depth */
             depth: number;
+            /** Name */
+            name?: string | null;
             /** Object */
             object: string;
             /** Relation */
@@ -4560,6 +4572,10 @@ export interface components {
          *     is worse than no result.
          */
         AccessListObjectsResponse: {
+            /** Names */
+            names?: {
+                [key: string]: string;
+            };
             /** Objects */
             objects: string[];
             /** Relation */
@@ -4617,6 +4633,8 @@ export interface components {
          *     access review must never read as a complete one.
          */
         AccessListUsersResponse: {
+            /** Name */
+            name?: string | null;
             /** Object */
             object: string;
             /** Relation */
@@ -4682,7 +4700,7 @@ export interface components {
             allowed: boolean;
             /** Baseline */
             baseline: boolean;
-            checked: components["schemas"]["AccessTuple"];
+            checked: components["schemas"]["NamedAccessTuple"];
             /** Hypothetical */
             hypothetical: components["schemas"]["AccessTuple"][];
         };
@@ -4710,7 +4728,7 @@ export interface components {
             /** Continuation */
             continuation: string | null;
             /** Tuples */
-            tuples: components["schemas"]["AccessTuple"][];
+            tuples: components["schemas"]["NamedAccessTuple"][];
         };
         /**
          * AddColumnsEntry
@@ -8453,6 +8471,22 @@ export interface components {
             };
             /** Subject */
             subject: string;
+        };
+        /**
+         * NamedAccessTuple
+         * @description A tuple as the estate admin's doors answer it: ``name`` is the name its table or namespace object holds now,
+         *     beside ``object``, which names its uuid ([[LH-591]]); ``None`` for any other object and for one no name holds.
+         */
+        NamedAccessTuple: {
+            condition?: components["schemas"]["TupleCondition"] | null;
+            /** Name */
+            name?: string | null;
+            /** Object */
+            object: string;
+            /** Relation */
+            relation: string;
+            /** User */
+            user: string;
         };
         /**
          * NamespaceExistsRequest

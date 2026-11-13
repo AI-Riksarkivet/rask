@@ -13,9 +13,14 @@
 
 import { MOCK_CATALOG_PORT } from './ports';
 import {
+	answered,
 	DSL,
 	EXPAND_TREE,
+	held,
 	MODEL_CONDITIONS,
+	NAMES,
+	OTHER_TABLE,
+	TABLE,
 	TUPLES,
 	type FixtureTuple,
 } from './settings/access-fixtures';
@@ -145,7 +150,7 @@ Bun.serve({
 		// does (access_admin emits `grant_added` on every raw-tuple write).
 		if (url.pathname === '/__mock/access/tuple' && req.method === 'POST') {
 			const body = (await req.json()) as { bearer: string; tuple: FixtureTuple };
-			accessStateOf(body.bearer).extraTuples.push(body.tuple);
+			accessStateOf(body.bearer).extraTuples.push(answered(body.tuple));
 			return json({ ok: true });
 		}
 		if (url.pathname === '/__mock/add' && req.method === 'POST') {
@@ -195,9 +200,9 @@ Bun.serve({
 			if (url.pathname === '/management/v1/access/tuples') {
 				if (req.method === 'GET') {
 					const object = url.searchParams.get('object');
-					let tuples = [...TUPLES, ...state.extraTuples].filter(
-						(t) => !state.deleted.some((d) => sameTuple(d, t)),
-					);
+					let tuples = [...TUPLES, ...state.extraTuples]
+						.map(answered)
+						.filter((t) => !state.deleted.some((d) => sameTuple(d, t)));
 					if (object) tuples = tuples.filter((t) => t.object === object);
 					return json({ tuples, continuation: null });
 				}
@@ -205,17 +210,26 @@ Bun.serve({
 				const body = (await req.json()) as FixtureTuple;
 				if (req.method === 'POST') state.written.push(body as unknown as Body);
 				if (req.method === 'DELETE') state.deleted.push(body);
-				return json(body);
+				// A write is stored on the uuid object a name resolves to; a delete names the stored tuple.
+				return json(req.method === 'POST' ? answered(body) : body);
 			}
 			if (url.pathname === '/management/v1/access/check' && req.method === 'POST') {
 				const body = (await req.json()) as Body;
 				const user = String(body.user ?? '');
+				const object = held(String(body.object ?? ''));
+				const subject = user.includes(':') ? user : `user:${user}`;
+				// Answered from the store by the object the name resolved to, as the catalog's check is: a check naming
+				// a table by its name answers what the store holds on that table's uuid object.
+				const holds = [...TUPLES, ...state.extraTuples]
+					.map(answered)
+					.some((t) => t.object === object && t.user === subject);
 				return json({
-					allowed: true,
+					allowed: holds,
 					checked: {
-						user: user.includes(':') ? user : `user:${user}`,
+						user: subject,
 						relation: body.relation,
-						object: body.object,
+						object,
+						name: NAMES[object] ?? null,
 					},
 				});
 			}
@@ -223,7 +237,8 @@ Bun.serve({
 				state.expandBody = (await req.json()) as Body;
 				return json({
 					tree: EXPAND_TREE,
-					object: 'table:db1$t',
+					object: TABLE,
+					name: NAMES[TABLE],
 					relation: 'can_read_data',
 					depth: 3,
 				});
@@ -232,7 +247,8 @@ Bun.serve({
 				state.listUsersBodies.push((await req.json()) as Body);
 				return json({
 					users: ['user:alice', 'user:bob', 'role:validators#assignee'],
-					object: 'table:db1$t',
+					object: TABLE,
+					name: NAMES[TABLE],
 					relation: 'reader',
 					user_type: 'user',
 					user_relation: null,
@@ -242,7 +258,8 @@ Bun.serve({
 			if (url.pathname === '/management/v1/access/list-objects' && req.method === 'POST') {
 				state.listObjectsBody = (await req.json()) as Body;
 				return json({
-					objects: ['table:db1$t', 'table:db1$u'],
+					objects: [TABLE, OTHER_TABLE],
+					names: { [TABLE]: NAMES[TABLE], [OTHER_TABLE]: NAMES[OTHER_TABLE] },
 					user: 'user:alice',
 					relation: 'can_read_data',
 					type: 'table',
@@ -253,8 +270,8 @@ Bun.serve({
 				return json({
 					allowed: true,
 					baseline: false,
-					checked: { user: 'user:carol', relation: 'reader', object: 'table:db1$t' },
-					hypothetical: [{ user: 'user:carol', relation: 'reader', object: 'table:db1$t' }],
+					checked: { user: 'user:carol', relation: 'reader', object: TABLE, name: NAMES[TABLE] },
+					hypothetical: [{ user: 'user:carol', relation: 'reader', object: TABLE }],
 				});
 			}
 		}

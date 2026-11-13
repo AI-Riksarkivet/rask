@@ -108,7 +108,7 @@
             "type": "boolean"
           },
           "checked": {
-            "$ref": "#/components/schemas/AccessTuple"
+            "$ref": "#/components/schemas/NamedAccessTuple"
           }
         },
         "required": [
@@ -334,6 +334,17 @@
             "title": "Depth",
             "type": "integer"
           },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "object": {
             "title": "Object",
             "type": "string"
@@ -513,6 +524,13 @@
       "AccessListObjectsResponse": {
         "description": "The objects the subject reaches, plus the RESOLVED query that produced them \u2014 echoed for the same\nreason ``AccessCheckResult.checked`` is: a result read against a different subject than OpenFGA saw\nis worse than no result.",
         "properties": {
+          "names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Names",
+            "type": "object"
+          },
           "objects": {
             "items": {
               "type": "string"
@@ -623,6 +641,17 @@
       "AccessListUsersResponse": {
         "description": "The effective subject set (ListUsers EXPANDS the model \u2014 role assignees and the\nparent cascade are included, so this is effective access, not stored tuples). ``\"*\"`` is a public\nwildcard. ``truncated`` flags the server's silent ``listUsersMaxResults`` ceiling: an under-reported\naccess review must never read as a complete one.",
         "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "object": {
             "title": "Object",
             "type": "string"
@@ -743,7 +772,7 @@
             "type": "boolean"
           },
           "checked": {
-            "$ref": "#/components/schemas/AccessTuple"
+            "$ref": "#/components/schemas/NamedAccessTuple"
           },
           "hypothetical": {
             "items": {
@@ -813,7 +842,7 @@
           },
           "tuples": {
             "items": {
-              "$ref": "#/components/schemas/AccessTuple"
+              "$ref": "#/components/schemas/NamedAccessTuple"
             },
             "title": "Tuples",
             "type": "array"
@@ -9210,6 +9239,52 @@
         "title": "MyPermissionsResponse",
         "type": "object"
       },
+      "NamedAccessTuple": {
+        "additionalProperties": false,
+        "description": "A tuple as the estate admin's doors answer it: ``name`` is the name its table or namespace object holds now,\nbeside ``object``, which names its uuid ([[LH-591]]); ``None`` for any other object and for one no name holds.",
+        "properties": {
+          "condition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TupleCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "object": {
+            "title": "Object",
+            "type": "string"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user",
+          "relation",
+          "object"
+        ],
+        "title": "NamedAccessTuple",
+        "type": "object"
+      },
       "NamespaceExistsRequest": {
         "description": "NamespaceExistsRequest",
         "properties": {
@@ -12819,7 +12894,7 @@
     },
     "/management/v1/access/check": {
       "post": {
-        "description": "One ``(user, relation, object)`` OpenFGA Check over ANY model type \u2014 the estate-wide extension of\nthe per-object ``\u2026/access/check`` playground (#68), which stays as-is for table/namespace owners.\n\nAny relation the compiled model defines on the type may be probed (base rungs included \u2014 an admin\ndebugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.\n``checked`` echoes the resolved tuple so the verdict is unambiguous.\n\n``context`` supplies the runtime values a CONDITION needs \u2014 ``current_time`` for the model's\n``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one\nwins, which is how a caller asks \"was this true at 14:00?\".",
+        "description": "One ``(user, relation, object)`` OpenFGA Check over ANY model type \u2014 the estate-wide extension of\nthe per-object ``\u2026/access/check`` playground (#68), which stays as-is for table/namespace owners.\n\nAny relation the compiled model defines on the type may be probed (base rungs included \u2014 an admin\ndebugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.\n``checked`` echoes the resolved tuple so the verdict is unambiguous: a table or namespace may be named by its name or\nits uuid, and ``checked`` names the uuid object asked about with its name beside it ([[LH-591]]).\n\n``context`` supplies the runtime values a CONDITION needs \u2014 ``current_time`` for the model's\n``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one\nwins, which is how a caller asks \"was this true at 14:00?\".",
         "operationId": "check_access_management_v1_access_check_post",
         "parameters": [
           {
@@ -12886,7 +12961,7 @@
     },
     "/management/v1/access/expand": {
       "post": {
-        "description": "WHY a relation resolves \u2014 the userset tree, optionally followed through the cascade.\n\nCheck answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,\nso a permission derived over three objects is indistinguishable from a direct grant \u2014 and they have\nvery different blast radii. This returns the derivation itself, keeping OpenFGA's own operators\n(``union`` / ``intersection`` / ``difference``) rather than flattening them away: the operator is\nfrequently the whole explanation for a surprising grant.\n\n``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited\nround trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and\none response.",
+        "description": "WHY a relation resolves \u2014 the userset tree, optionally followed through the cascade.\n\nCheck answers yes/no and list-users answers who; neither says through WHICH rung or WHICH parent hop,\nso a permission derived over three objects is indistinguishable from a direct grant \u2014 and they have\nvery different blast radii. This returns the derivation itself, keeping OpenFGA's own operators\n(``union`` / ``intersection`` / ``difference``) rather than flattening them away: the operator is\nfrequently the whole explanation for a surprising grant.\n\n``depth`` is server-side on purpose. Walking the chain client-side costs one estate-gated, audited\nround trip per hop under the browser client's fixed timeout; here it is one gate, one audit row, and\none response. A table or namespace may be named by its name or its uuid; ``object`` names the uuid object expanded\nand ``name`` its name ([[LH-591]]).",
         "operationId": "expand_access_management_v1_access_expand_post",
         "parameters": [
           {
@@ -12953,7 +13028,7 @@
     },
     "/management/v1/access/list-objects": {
       "post": {
-        "description": "\"What can this subject reach?\" \u2014 every ``type`` object on which ``user`` holds ``relation``.\n\nThe forward half of a who-reaches-what view, and the answer ``GET /tuples`` structurally cannot give: Read needs\nan object type per call and returns only STORED tuples, so enumerating a subject meant one audited\nread per model type and still missed everything derived. ListObjects expands the model, so a table\nreached through role \u2192 project \u2192 warehouse \u2192 namespace shows up here and nowhere else.\n\nThe subject may be a userset (``role:<id>#assignee``), which matters because a grant to a role reaches\ndata through the role, and only the userset question shows that.",
+        "description": "\"What can this subject reach?\" \u2014 every ``type`` object on which ``user`` holds ``relation``.\n\nThe forward half of a who-reaches-what view, and the answer ``GET /tuples`` structurally cannot give: Read needs\nan object type per call and returns only STORED tuples, so enumerating a subject meant one audited\nread per model type and still missed everything derived. ListObjects expands the model, so a table\nreached through role \u2192 project \u2192 warehouse \u2192 namespace shows up here and nowhere else.\n\nThe subject may be a userset (``role:<id>#assignee``), which matters because a grant to a role reaches\ndata through the role, and only the userset question shows that. ``names`` gives each table's and namespace's name\nnow beside its uuid object ([[LH-591]]).",
         "operationId": "list_access_objects_management_v1_access_list_objects_post",
         "parameters": [
           {
@@ -13020,7 +13095,7 @@
     },
     "/management/v1/access/list-users": {
       "post": {
-        "description": "\"Who can do this?\" \u2014 every subject holding ``relation`` on ``object``, effective access included.\n\nThe inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in\nthe hierarchy can revoke access for many principals at once, and \"are you sure?\" is not an answer to\n\"how many\". Subjects come back fully qualified so a userset is never mistaken for a user.",
+        "description": "\"Who can do this?\" \u2014 every subject holding ``relation`` on ``object``, effective access included.\n\nThe inverse of list-objects and the primitive a revoke needs BEFORE it writes: a tuple sitting high in\nthe hierarchy can revoke access for many principals at once, and \"are you sure?\" is not an answer to\n\"how many\". Subjects come back fully qualified so a userset is never mistaken for a user. A table or namespace may be\nnamed by its name or its uuid; ``object`` names the uuid object asked about and ``name`` its name ([[LH-591]]).",
         "operationId": "list_access_users_management_v1_access_list_users_post",
         "parameters": [
           {
@@ -13278,7 +13353,7 @@
     },
     "/management/v1/access/simulate": {
       "post": {
-        "description": "\"Would this grant do what I think?\" \u2014 a Check evaluated as if ``hypothetical`` existed.\n\nNothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the\nsimulation owes no cleanup. This exists because the model is CONCENTRIC: a grant three levels up\ncascades to every child, and predicting that by reading the DSL is exactly the reasoning humans get\nwrong. The only way to find out today is to write the tuple and look \u2014 which on an authorization\nstore is a change you then have to remember to undo.\n\nReturns the DELTA. ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant\nthat unlocks access both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the\ncaller can distinguish \"this is what changes the answer\" from \"this grant is a no-op\" \u2014 and the\nsecond is the more common finding.\n\nEvery hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a\nderived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,\nand \u2014 more importantly \u2014 a hypothesis this API would refuse to write must not be simulatable, or\nthe answer describes a grant that cannot exist.",
+        "description": "\"Would this grant do what I think?\" \u2014 a Check evaluated as if ``hypothetical`` existed.\n\nNothing is written. OpenFGA's contextual tuples are per-request, so the store is untouched and the\nsimulation owes no cleanup. This exists because the model is CONCENTRIC: a grant three levels up\ncascades to every child, and predicting that by reading the DSL is exactly the reasoning humans get\nwrong. The only way to find out today is to write the tuple and look \u2014 which on an authorization\nstore is a change you then have to remember to undo.\n\nReturns the DELTA. ``allowed`` alone cannot be acted on: a grant that changes nothing and a grant\nthat unlocks access both answer true. ``baseline`` is the same Check WITHOUT the hypothesis, so the\ncaller can distinguish \"this is what changes the answer\" from \"this grant is a no-op\" \u2014 and the\nsecond is the more common finding.\n\nEvery hypothetical tuple is validated exactly like a real write (``_validated_write_tuple``): a\nderived ``can_*`` or an unknown type is a clean 400 here rather than a confusing OpenFGA rejection,\nand \u2014 more importantly \u2014 a hypothesis this API would refuse to write must not be simulatable, or\nthe answer describes a grant that cannot exist. A table or namespace, the checked one and each hypothesis's, may be\nnamed by its name or its uuid, and is asked about as its uuid object ([[LH-591]]).",
         "operationId": "simulate_access_management_v1_access_simulate_post",
         "parameters": [
           {
@@ -13345,7 +13420,7 @@
     },
     "/management/v1/access/tuples": {
       "delete": {
-        "description": "Delete ONE raw tuple (idempotent \u2014 an already-absent tuple is success), echoing the tuple removed.",
+        "description": "Delete ONE raw tuple (idempotent \u2014 an already-absent tuple is success), echoing the tuple removed.\n\nA table or namespace named by its name is resolved as the write door resolves it (:func:`_held_object`), so a\nrevoke sent with the body its grant was written with removes that grant.",
         "operationId": "delete_access_tuple_management_v1_access_tuples_delete",
         "parameters": [
           {
@@ -13410,7 +13485,7 @@
         ]
       },
       "get": {
-        "description": "One page of the raw tuple store, estate-admin gated.\n\nEach filter is one OpenFGA's Read answers: ``object`` alone (one object's tuples), ``user`` with ``object`` or\n``object_type`` (that subject's tuples on the object, or on the objects of the type), or no filter (the whole store,\npaginated). Read refuses a filter naming no object type, and one naming a type with neither an object id nor a user\n(OpenFGA v1.18.3), and OpenFGA's refusal would reach the caller as a 503, so ``user`` alone and ``object_type`` alone\nare a 400 here, naming the half to add.",
+        "description": "One page of the raw tuple store, estate-admin gated.\n\nEach filter is one OpenFGA's Read answers: ``object`` alone (one object's tuples), ``user`` with ``object`` or\n``object_type`` (that subject's tuples on the object, or on the objects of the type), or no filter (the whole store,\npaginated). Read refuses a filter naming no object type, and one naming a type with neither an object id nor a user\n(OpenFGA v1.18.3), and OpenFGA's refusal would reach the caller as a 503, so ``user`` alone and ``object_type`` alone\nare a 400 here, naming the half to add. Each table and namespace object is answered with the name it holds now\n(``name``, [[LH-591]]), and an ``object`` filter may name a table or namespace by its name or its uuid.",
         "operationId": "read_access_tuples_management_v1_access_tuples_get",
         "parameters": [
           {
@@ -13555,7 +13630,7 @@
         ]
       },
       "post": {
-        "description": "Write ONE raw tuple (idempotent \u2014 a duplicate write is success), echoing the tuple as stored.\n\nOnly a directly-assignable relation the compiled model defines on the object's type is accepted (a\nderived ``can_*`` action or an unknown type/relation is a 400) \u2014 the raw-tuple analog of the\nper-object grant surface's grantable-rung guard, without its table/namespace restriction.",
+        "description": "Write ONE raw tuple (idempotent \u2014 a duplicate write is success), echoing the tuple as stored.\n\nOnly a directly-assignable relation the compiled model defines on the object's type is accepted (a\nderived ``can_*`` action or an unknown type/relation is a 400) \u2014 the raw-tuple analog of the\nper-object grant surface's grantable-rung guard, without its table/namespace restriction. A table or namespace\nnamed by its name is written on its uuid object (:func:`_held_object`), the one every decision reads.",
         "operationId": "write_access_tuple_management_v1_access_tuples_post",
         "parameters": [
           {
