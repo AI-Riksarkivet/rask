@@ -24,13 +24,12 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Final
 
-from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
 from lakehouse import location_claims
 from lakehouse.draining import retry_when_draining
-from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.governed.dapr_auth import require_dapr_token, sidecar_app
 from lakehouse.governed.signing_key import published_key_fetch
 from lakehouse.lineage.door import DoorMode, DoorVerdict, judge
 from lakehouse.lineage.keys import PublishedKeys
@@ -142,12 +141,13 @@ async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, q
     return {"status": SUCCESS}
 
 
-def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> DaprApp | None:
-    """Register the write-event subscription and create its door's refusal series at 0, or nothing when the lane is off."""
+def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> bool:
+    """Register the write-event subscription and create its door's refusal series at 0, or nothing when the lane is off;
+    report whether it registered."""
     if not (settings.arrival_enabled and settings.lineage_topic):
-        return None
+        return False
     create_signature_refused_series()
-    wrapper = DaprApp(app)
+    wrapper = sidecar_app(app)
 
     @wrapper.subscribe(
         pubsub=settings.lineage_pubsub,
@@ -185,7 +185,7 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> DaprA
                 return {"status": SUCCESS}
         return await handle_arrival(event, config, queue)
 
-    return wrapper
+    return True
 
 
 __all__ = ["handle_arrival", "register_arrival_route"]

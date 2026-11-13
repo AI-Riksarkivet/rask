@@ -101,8 +101,12 @@ def _delivery_app(monkeypatch: pytest.MonkeyPatch, *, dlq_topic: str | None = No
     return TestClient(app), repo
 
 
+#: The header the app's own sidecar stamps on every call it makes to the app.
+_TOKEN = {"dapr-api-token": "s3cret"}
+
+
 def _subs(client: TestClient) -> dict[str, dict[str, Any]]:
-    response = client.get("/dapr/subscribe")
+    response = client.get("/dapr/subscribe", headers=_TOKEN)
     assert response.status_code == 200
     return {s["topic"]: s for s in response.json()}
 
@@ -144,7 +148,7 @@ def test_dapr_disabled_registers_no_ingest_route_at_all(monkeypatch: pytest.Monk
     register_dapr(app)
     get_settings.cache_clear()
     client = TestClient(app)
-    assert client.get("/dapr/subscribe").json() == []
+    assert client.get("/dapr/subscribe", headers=_TOKEN).json() == []
     assert client.post("/lineage-events", json=_CLOUD_EVENT).status_code == 404
 
 

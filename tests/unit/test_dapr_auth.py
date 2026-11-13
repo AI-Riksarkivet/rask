@@ -11,12 +11,16 @@ token, since the flags can diverge (the audit's mount/assert decoupling hole).
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from lance_namespace import PermissionDeniedError
 
-from lakehouse.governed.dapr_auth import assert_app_token_configured, require_dapr_token
+from lakehouse.governed.dapr_auth import assert_app_token_configured, require_dapr_token, sidecar_app
+from lakehouse.ns_errors import install_problem_handlers
 from lineage.core.config import LineageSettings
 
 
@@ -31,6 +35,20 @@ def test_non_ascii_header_is_a_clean_403(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     with pytest.raises(PermissionDeniedError):
         require_dapr_token("sécrét")
+
+
+def test_a_sidecar_apps_subscription_read_answers_the_sidecar_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The list names the app's topics, components and delivery routes, and any pod that reaches the port can ask."""
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+    app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
+    sidecar_app(app).subscribe(pubsub="bus", topic="t", route="/t")(lambda: None)
+    client = TestClient(app)
+
+    answers = (client.get("/dapr/subscribe", headers={"dapr-api-token": "s3cret"}), client.get("/dapr/subscribe"))
+
+    assert (answers[0].json(), answers[1].status_code) == ([{"pubsubname": "bus", "topic": "t", "route": "/t", "metadata": {}}], 403)
+    assert "/dapr/subscribe" not in app.openapi()["paths"]
 
 
 # --------------------------------------------------------------------------- #

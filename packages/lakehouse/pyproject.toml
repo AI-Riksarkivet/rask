@@ -10,6 +10,7 @@ dependencies = [
     "pydantic-settings>=2.14",
     "python-dotenv>=1.0",
     "dapr>=1.18.1",
+    "dapr-ext-fastapi>=1.18.1",
     # The auth plane (`lakehouse.governed`): the OpenFGA client and its async transport, token verification, the
     # bounded retries and the HTTP client the doors' callers send with.
     "openfga-sdk>=0.10.4",

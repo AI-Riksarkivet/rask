@@ -19,8 +19,10 @@ from lakehouse.ns_errors import install_problem_handlers
 from tests.unit import chart_render
 
 
-def _subs(client: TestClient) -> list[dict]:
-    response = client.get("/dapr/subscribe")
+def _subs(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """The subscriptions the app hands its own sidecar, read as the sidecar reads them: with the app token."""
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+    response = client.get("/dapr/subscribe", headers={"dapr-api-token": "s3cret"})
     assert response.status_code == 200
     return response.json()
 
@@ -44,7 +46,7 @@ def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(mo
     install_problem_handlers(app, logging.getLogger(__name__))
     register_dapr(app)
     get_settings.cache_clear()
-    subs = {s["topic"]: s for s in _subs(TestClient(app))}
+    subs = {s["topic"]: s for s in _subs(TestClient(app), monkeypatch)}
     assert subs["dlq.lineage.events"]["pubsubname"] == "lineage-pubsub-lineage-dlq"
     assert subs["lineage.events.v1"]["pubsubname"] != "lineage-pubsub-lineage-dlq", "the MAIN subscription must stay on the replay component"
 
@@ -54,7 +56,7 @@ def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(mo
     install_problem_handlers(app2, logging.getLogger(__name__))
     register_dapr(app2)
     get_settings.cache_clear()
-    subs2 = {s["topic"]: s for s in _subs(TestClient(app2))}
+    subs2 = {s["topic"]: s for s in _subs(TestClient(app2), monkeypatch)}
     assert subs2["dlq.lineage.events"]["pubsubname"] == subs2["lineage.events.v1"]["pubsubname"], "unset -> dev fallback to the main component"
 
 
@@ -71,6 +73,7 @@ def _catalog_control_lane(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "s")
     get_settings.cache_clear()
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     register_control_dapr(app)
     get_settings.cache_clear()
     return app
@@ -84,6 +87,7 @@ def _maintenance_arrival_lane(env: dict[str, str], monkeypatch: pytest.MonkeyPat
     for key in keys:
         monkeypatch.delenv(key, raising=False)
     app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
     register_arrival_route(app, MaintenanceSettings.model_validate({**{key: env[key] for key in keys if key in env}, "MAINTENANCE_S3_ACCESS_KEY_ID": "test"}))
     return app
 
@@ -119,7 +123,7 @@ def test_a_lakehouse_lane_parks_what_its_retries_cannot_deliver_on_the_topic_the
     env = next(chart_render.env_of(c) for workload, _, c in chart_render.containers(docs) if workload == deployment and chart_render.uvicorn_target(c))
     retried = {name for d in docs if d.get("kind") == "Resiliency" for name in d["spec"]["targets"].get("components", {})}
 
-    subscription = next(s for s in _subs(TestClient(build(env, monkeypatch))) if s["route"] == route)
+    subscription = next(s for s in _subs(TestClient(build(env, monkeypatch)), monkeypatch) if s["route"] == route)
 
     parked = subscription.get("deadLetterTopic")
     assert parked == env.get(dlq_env), "the subscription must park on the topic the chart renders for it"

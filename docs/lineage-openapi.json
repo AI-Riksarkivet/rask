@@ -939,25 +939,6 @@
         ]
       }
     },
-    "/dapr/subscribe": {
-      "get": {
-        "operationId": "_get_subscriptions_dapr_subscribe_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": " Get Subscriptions",
-        "tags": [
-          "PubSub"
-        ]
-      }
-    },
     "/events": {
       "get": {
         "description": "The ingested OpenLineage events \u2014 newest first, or FORWARD from ``since`` for a follower.\n\n**Following (LH-472).** ``since=<seq>`` returns the events with a larger seq, oldest first, and\n``next_cursor`` is always the ``since`` to pass next; it equals the one passed when nothing new has\ncommitted. Seq order is commit order (a row's stable Lance row id, assigned when its commit lands; see\n``lineage.services.provenance``), so a follower that always passes\n``next_cursor`` back reads every row it may see exactly once. ``table=`` keeps the rows naming the table that id\nnames now, under every name it has had ([[LH-522]]); ``namespace=`` the rows naming a table directly in that\nnamespace. Each resolves to its uuid as the caller sees it, and a name that resolves to none keeps the rows\nnaming it, or a table under it. The contract a pipeline polls is ``docs/COMMIT-EVENTS.md``.\n\n**Durable** (a Lance table the catalog keeps, shared by every replica) and **governed**: when auth is\non the feed is filtered like the per-dataset reads \u2014 an event is shown only if the caller\n``can_get_metadata`` on *every* dataset it references (and a dataset-less event is hidden), so the\naudit feed never discloses a table outside the caller's reach. Auth off \u2192 pass-through. (#22)\n\nPagination (additive, defaults = the old behavior): ``after`` = keyset cursor (the previous\npage's ``next_cursor``); ``limit`` \u2264 500 (server-capped); ``summary=true`` drops the full\n``event`` payload from the read itself. The governance filter ALWAYS runs before the slice \u2014\npagination can never disclose a hidden row's CONTENT. ``next_cursor`` is a WINDOW FLOOR, not\nnecessarily a visible row's seq (on a hidden-dense page it is the fetch window's last seq \u2014\nexclusive, so the hidden row itself is never returned; bare seq numbers were already inferable\nfrom gaps in the pre-pagination feed, so this adds no new disclosure class \u2014 reviewed\n2026-07-11).",
@@ -1274,5 +1255,10 @@
         ]
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "."
+    }
+  ]
 }

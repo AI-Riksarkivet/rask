@@ -17,11 +17,10 @@ import logging
 from collections.abc import Mapping
 from typing import Annotated, Any
 
-from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.governed.dapr_auth import require_dapr_token, sidecar_app
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import get_settings
 from lineage.core.metrics import Door, Outcome, create_signature_refused_series, record_outcome
@@ -212,7 +211,7 @@ def register_dapr(app: FastAPI) -> None:
     staged event share (`create_signature_refused_series`)."""
     settings = get_settings()
     create_signature_refused_series()
-    dapr_app = DaprApp(app)
+    dapr_app = sidecar_app(app)
     if settings.dapr_enabled:
         dapr_app.subscribe(
             pubsub=settings.dapr_pubsub,

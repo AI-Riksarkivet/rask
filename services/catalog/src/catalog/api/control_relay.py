@@ -41,7 +41,7 @@ shutdown.
 **Delivered at the POD ROOT.** A Dapr input binding arrives as ``POST /<component name>``, never under a
 prefix, and this app's routers already mount at the root (``lakehouse.lance_app``). The Component's
 name, ``LANCE_CONTROL_RELAY_BINDING_NAME`` and the served path are ONE string — see
-:func:`build_control_relay_router`.
+:func:`catalog.api.cron.mount_cron`.
 """
 
 from __future__ import annotations
@@ -52,11 +52,11 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ValidationError
 
-from catalog.api.cron import record_tick
+from catalog.api.cron import mount_cron
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
 from lakehouse import dapr_publish, outbox, outbox_metrics
@@ -318,21 +318,6 @@ async def _on_cron(
     return report
 
 
-async def _ack_binding() -> dict[str, str]:
-    """Dapr's startup pre-flight (``OPTIONS /<binding name>``) — a 2xx confirms this app consumes the
-    binding. Without it the app answers 405, the sidecar logs the binding as not consumed, and the
-    schedule ticks into nothing."""
-    return {"status": "ok"}
-
-
-def build_control_relay_router(binding_name: str) -> APIRouter:
-    """Register the relay at the EXACT binding name the sidecar delivers to (POST drain, OPTIONS ack)."""
-    router = APIRouter()
-    router.add_api_route(f"/{binding_name}", _on_cron, methods=["POST"], tags=["control-relay"])
-    router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], include_in_schema=False)
-    return router
-
-
 def mount_control_relay(app: FastAPI, binding_name: str) -> bool:
     """Mount the relay when a binding name is configured; report whether it was.
 
@@ -340,8 +325,4 @@ def mount_control_relay(app: FastAPI, binding_name: str) -> bool:
     (or has no sidecar), and mounting an always-live cron door for it would add a replay surface with
     no component behind it.
     """
-    if not binding_name:
-        return False
-    app.include_router(build_control_relay_router(binding_name))
-    record_tick(app, binding_name)
-    return True
+    return mount_cron(app, binding_name, _on_cron, tag="control-relay")

@@ -166,6 +166,12 @@ def test_the_boot_assertion_reads_the_store_too(monkeypatch: pytest.MonkeyPatch)
 
     assert_app_token_configured(dapr_enabled=True)
 
+    # What boot read is what the door first answers from. The sidecar's first calls to a started app are its
+    # subscription read and its binding pre-flights, each asked once and a refusal taken as "none" until the pod
+    # restarts, so a store that stops answering between boot and those calls must not cost the door its token.
+    _store(monkeypatch, None)
+    require_dapr_token("from-the-store")
+
     _store(monkeypatch, {"unrelated-field": "irrelevant"})
     with pytest.raises(RuntimeError, match="failing closed"):
         assert_app_token_configured(dapr_enabled=True)

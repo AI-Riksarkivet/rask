@@ -61,7 +61,7 @@ def test_the_app_mounts_the_tick_only_when_a_binding_names_it() -> None:
     assert (TestClient(bare).options(f"/{RELAY}").status_code, TestClient(mounted).options(f"/{RELAY}").status_code) == (404, 200)
 
 
-def test_the_discovery_preflight_answers_its_sidecar_alone_at_the_binding_name_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_discovery_preflight_answers_only_its_sidecar_and_only_at_the_binding_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     sidecar = {"dapr-api-token": "s3cret"}
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, set()) as lineage:

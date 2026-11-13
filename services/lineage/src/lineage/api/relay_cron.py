@@ -25,7 +25,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel
 
 from lakehouse import outbox, outbox_metrics
-from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.governed.dapr_auth import add_binding_preflight, require_dapr_token
 from lakehouse.storage_options import StorageOptions
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import enforce_bus_authz
@@ -259,14 +259,9 @@ async def _drain_outbox(
     return DrainOutcome(drained=drained, stranded=stranded, refused=refused, recorded=recorded)
 
 
-async def _ack_binding() -> dict[str, str]:
-    """Dapr's startup pre-flight (OPTIONS /<binding-name>) — a 2xx confirms this app consumes the binding."""
-    return {"status": "ok"}
-
-
 def build_relay_cron_router(binding_name: str) -> APIRouter:
     """Register the relay tick's route at the exact binding name the sidecar delivers to (POST tick, OPTIONS ack)."""
     router = APIRouter()
     router.add_api_route(f"/{binding_name}", _on_cron, methods=["POST"], tags=["relay"])
-    router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], include_in_schema=False)
+    add_binding_preflight(router, binding_name)
     return router

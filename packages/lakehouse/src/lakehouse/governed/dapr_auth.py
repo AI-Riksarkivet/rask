@@ -28,7 +28,9 @@ import secrets
 from pathlib import Path
 from typing import Annotated, Self
 
-from fastapi import Header
+from dapr.ext.fastapi import DaprApp  # noqa: TID251
+from fastapi import APIRouter, Depends, FastAPI, Header
+from fastapi.routing import APIRoute
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -139,6 +141,11 @@ def _read_app_tokens(read: StoreRead) -> dict[str, str]:
     return {current: bundle[current], previous: bundle.get(previous, "")}
 
 
+def _app_token_read(door: DaprDoorSettings) -> StoreRead:
+    """The store read that holds ``door``'s current and previous tokens."""
+    return StoreRead(store=door.secret_store, secret=door.secret_key, fields=(door.app_token_field, door.app_token_previous_field))
+
+
 def expected_app_tokens() -> tuple[str, ...]:
     """The tokens every door on this app accepts, the current one first: from the store, or from env.
 
@@ -163,7 +170,7 @@ def expected_app_tokens() -> tuple[str, ...]:
         return (token,) if token else ()
     if not door.app_token_from_store:
         return (door.app_api_token,) if door.app_api_token else ()
-    read = StoreRead(store=door.secret_store, secret=door.secret_key, fields=(door.app_token_field, door.app_token_previous_field))
+    read = _app_token_read(door)
     try:
         tokens = secret_cache.STORE_READS.get(read, functools.partial(_read_app_tokens, read))
     except _NoCurrentToken:
@@ -277,6 +284,42 @@ def require_dapr_token(
         raise PermissionDeniedError("invalid or missing Dapr app-api-token")
 
 
+#: Where a sidecar reads its app's subscriptions at startup; ``DaprApp`` mounts it on construction.
+_SUBSCRIPTIONS_PATH = "/dapr/subscribe"
+
+
+def sidecar_app(app: FastAPI) -> DaprApp:
+    """A ``DaprApp`` on ``app`` whose subscription read answers the app's own sidecar alone, out of the schema.
+
+    The list names the app's topics, components and delivery routes, and ``DaprApp`` mounts its route with no guard and
+    takes none, so the route it mounted is mounted again behind :func:`require_dapr_token`. The sidecar stamps its app
+    token on this read as on every call it makes (measured on daprd 1.19.0-rc.4, 2026-11-13), and answers a refusal by
+    loading no subscription, so a door left unconfigured shows as a lane that receives nothing rather than as an open
+    list.
+    """
+    wrapper = DaprApp(app)
+    mounted = [route for route in app.router.routes if isinstance(route, APIRoute) and route.path == _SUBSCRIPTIONS_PATH]
+    if len(mounted) != 1:
+        raise RuntimeError(f"DaprApp mounted {len(mounted)} routes at {_SUBSCRIPTIONS_PATH}, where one is guarded: the subscription read would answer anyone")
+    app.router.routes.remove(mounted[0])
+    app.add_api_route(_SUBSCRIPTIONS_PATH, mounted[0].endpoint, methods=["GET"], dependencies=[Depends(require_dapr_token)], include_in_schema=False)
+    return wrapper
+
+
+async def _ack_binding() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+def add_binding_preflight(router: APIRouter, binding_name: str) -> None:
+    """Answer Dapr's startup pre-flight for an input binding, ``OPTIONS /<binding_name>``, to the app's own sidecar alone.
+
+    A 2xx tells the sidecar this app consumes the binding; without one it logs the binding as not consumed and never
+    delivers. The sidecar stamps its app token on the pre-flight as on the delivery (measured on daprd 1.19.0-rc.4,
+    2026-11-13), so an answer to anyone else would only tell a peer that reaches the port which bindings the estate runs.
+    """
+    router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], dependencies=[Depends(require_dapr_token)], include_in_schema=False)
+
+
 def assert_app_token_configured(*, dapr_enabled: bool) -> None:
     """Fail closed at startup: when Dapr ingest is enabled the delivery route is live and MUST be
     authenticated, so an unset/blank ``APP_API_TOKEN`` is a misconfiguration — not the dev default — and
@@ -290,7 +333,12 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
 
     In store mode it fetches with the BOOT retry budget rather than the request-path one: this runs in
     a lifespan, where a store still seeding is the expected condition and waiting is the correct
-    response. The request path cannot afford that and reads with a single attempt (`expected_app_tokens`)."""
+    response. The request path cannot afford that and reads with a single attempt (`expected_app_tokens`).
+
+    What it read is held where the request path reads (`secret_cache.STORE_READS`), so the door's first answers come
+    from it. A started app's first callers are its sidecar's subscription read and binding pre-flights, each asked once
+    and a refusal taken as "none" until the pod restarts (Dapr v1.19.0-rc.4, `pkg/runtime/pubsub/subscriptions.go` and
+    `pkg/runtime/processor/binding/send.go`), so they must not wait on a store read of their own."""
     if not dapr_enabled:
         return
     door = DaprDoorSettings()
@@ -301,7 +349,10 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
     if door.app_token_from_store:
         from lakehouse.governed.secrets import fetch_required_secrets  # imported here, not at module scope: keeps this module import-light
 
-        fetch_required_secrets(door.secret_store, door.secret_key, require=door.app_token_field)
+        bundle = fetch_required_secrets(door.secret_store, door.secret_key, require=door.app_token_field)
+        read = _app_token_read(door)
+        current, previous = read.fields
+        secret_cache.STORE_READS.get(read, lambda: {current: bundle[current], previous: bundle.get(previous, "")})
         return
     if not door.app_api_token:
         raise RuntimeError(

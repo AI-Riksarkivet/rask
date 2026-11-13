@@ -13,7 +13,9 @@ what it owns is the part that is identical in all of them:
    DISCARDED — which is not hypothetical, it hid a two-day lineage feed outage.
 2. The ``FastAPI`` construction with docs OPT-IN. ``/docs``, ``/redoc`` and ``/openapi.json`` are all
    gated on the service's own ``docs_enabled``; a service that sets none of the three serves all
-   three, which is how the schemas shipped openly once.
+   three, which is how the schemas shipped openly once. Each page names its schema by a URL relative to itself, and
+   the schema its server the same way (``_SERVED_BESIDE_THE_SCHEMA``): a service is published under a prefix its route
+   rewrites or the service strips, which it is never told, so only a relative URL is right behind every route.
 3. ``register_handlers`` THEN ``install_problem_handlers``. ``lakehouse.exceptions.DomainError``
    subclasses ``HTTPException``, so without the first, starlette's built-in handler renders it —
    status and headers intact, ``{"detail": ...}`` body — which is how the draining 503 came to declare
@@ -46,6 +48,8 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any, Final
 
 from fastapi import APIRouter, FastAPI
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse
 from starlette.middleware import Middleware
 
 from lakehouse.app import setup_logging
@@ -74,6 +78,27 @@ def _forbid_migrations_on_read() -> None:
     a write a read makes is never one this process may make.
     """
     os.environ[_AUTO_MIGRATION] = "false"
+
+
+#: The schema's one server, relative to wherever the schema itself was fetched from (OpenAPI resolves a relative server
+#: URL against the document's own), so a client reading it under a public prefix calls the doors under that prefix.
+_SERVED_BESIDE_THE_SCHEMA: Final = "."
+
+#: The schema as each docs page names it: beside the page, whatever prefix the page was reached under.
+_SCHEMA_BESIDE_THE_PAGE: Final = "openapi.json"
+
+
+def _mount_docs(app: FastAPI) -> None:
+    """Serve ``/docs`` and ``/redoc``, each fetching the schema beside itself."""
+
+    async def swagger() -> HTMLResponse:
+        return get_swagger_ui_html(openapi_url=_SCHEMA_BESIDE_THE_PAGE, title=f"{app.title} - Swagger UI")
+
+    async def redoc() -> HTMLResponse:
+        return get_redoc_html(openapi_url=_SCHEMA_BESIDE_THE_PAGE, title=f"{app.title} - ReDoc")
+
+    app.add_api_route("/docs", swagger, methods=["GET"], include_in_schema=False)
+    app.add_api_route("/redoc", redoc, methods=["GET"], include_in_schema=False)
 
 
 def build_lance_service_app(
@@ -127,10 +152,13 @@ def build_lance_service_app(
         title=title,
         version=version,
         lifespan=lifespan,
-        docs_url="/docs" if docs_enabled else None,
-        redoc_url="/redoc" if docs_enabled else None,
+        docs_url=None,
+        redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,
+        servers=[{"url": _SERVED_BESIDE_THE_SCHEMA}],
     )
+    if docs_enabled:
+        _mount_docs(app)
     register_handlers(app)
     install_problem_handlers(app, log)
     # Each layer added is OUTER to those added before it: innermost first.

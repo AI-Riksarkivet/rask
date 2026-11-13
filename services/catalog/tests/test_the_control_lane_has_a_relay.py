@@ -301,7 +301,7 @@ def test_pointing_the_control_outbox_at_the_LINEAGE_prefix_is_REFUSED_at_boot() 
         _settings("s3://bucket/_lineage_outbox", lineage_uri="s3://bucket/_lineage_outbox")
 
 
-def test_the_binding_name_IS_the_served_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_binding_name_is_the_served_path_and_its_preflight_answers_the_sidecar_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A Dapr input binding is delivered to POST /<component-name> at the POD ROOT. A component named
     one thing and a route mounted at another is a cron that fires into a 404 on every tick. The pre-flight answers the
     sidecar alone: an anonymous 2xx would tell any peer that reaches the port which bindings the estate runs."""

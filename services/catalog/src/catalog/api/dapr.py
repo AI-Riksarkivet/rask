@@ -8,7 +8,8 @@ not a competing-consumer group) and appends it to its own per-replica ring buffe
 the console. There is **no broker client in app code** — the Dapr sidecar owns delivery; this is a plain
 HTTP route the sidecar POSTs each event to.
 
-``DaprApp(app)`` always serves GET ``/dapr/subscribe`` (the registration the sidecar reads at startup); the
+``DaprApp(app)`` always serves GET ``/dapr/subscribe`` (the registration the sidecar reads at startup, answered to
+the sidecar's token alone); the
 subscription itself is registered **only** when control eventing is enabled (``control_emit_enabled``,
 matching the emitter gate in ``main.py``), so an HTTP-only / control-off deployment carries no always-live
 ingest route. The thin ``main`` builds ``app`` first, then calls :func:`register_control_dapr` so the
@@ -28,7 +29,6 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any, Final, get_args
 
-from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from opentelemetry import metrics
@@ -39,7 +39,7 @@ from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
-from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.governed.dapr_auth import require_dapr_token, sidecar_app
 from lakehouse.lineage.door import DoorMode, judge
 from lakehouse.lineage.signing import RefusalReason, control_signature_of, verify_control_signature
 
@@ -164,7 +164,7 @@ def register_control_dapr(app: FastAPI) -> None:
     # answer at this boundary rather than the default habit it looks like elsewhere. The REQUEST-time
     # readers above take theirs by injection.
     settings = get_settings()
-    dapr_app = DaprApp(app)
+    dapr_app = sidecar_app(app)
     if settings.control_emit_enabled:
         dapr_app.subscribe(
             pubsub=settings.control_pubsub,

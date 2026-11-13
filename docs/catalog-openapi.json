@@ -12857,25 +12857,6 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/dapr/subscribe": {
-      "get": {
-        "operationId": "_get_subscriptions_dapr_subscribe_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": " Get Subscriptions",
-        "tags": [
-          "PubSub"
-        ]
-      }
-    },
     "/livez": {
       "get": {
         "operationId": "livez_livez_get",
@@ -30850,5 +30831,10 @@
         ]
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "."
+    }
+  ]
 }

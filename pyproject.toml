@@ -170,6 +170,7 @@ extend-select = ["TID251", "FAST001"]
 # maintenance/services/credentials.py and maintenance/services/sweep.py.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
+"dapr.ext.fastapi.DaprApp".msg = "Build it with lakehouse.governed.dapr_auth.sidecar_app: a bare DaprApp answers /dapr/subscribe to anyone."
 "boto3".msg = "Build S3/STS clients through lakehouse.storage.s3_client / sts_client: a raw boto3 client carries no timeouts."
 "lance.write_dataset".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (the catalog dataplane)."

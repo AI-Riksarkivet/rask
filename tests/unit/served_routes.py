@@ -26,11 +26,16 @@ from fastapi.testclient import TestClient
 app = importlib.import_module(sys.argv[1]).app
 paths = sorted({c.path for c in iter_route_contexts(app.routes) if c.path})
 deliveries = set()
-for s in TestClient(app).get("/dapr/subscribe").json():
+for s in TestClient(app).get("/dapr/subscribe", headers={"dapr-api-token": "probe"}).json():
     routes = s.get("routes") or {}
     deliveries |= {r for r in (s.get("route"), routes.get("default"), *(rule["path"] for rule in routes.get("rules", []))) if r}
 print(json.dumps({"paths": paths, "deliveries": sorted(deliveries)}))
 """
+
+
+#: The app answers its subscription read to its sidecar's token alone, and the rendered pod reads that token from the
+#: secret store through the sidecar; the probe has neither, so it names a token of its own for the read.
+_SIDECAR_TOKEN = {"RASK_APP_TOKEN_FROM_STORE": "false", "APP_API_TOKEN": "probe"}
 
 
 class Served(BaseModel):
@@ -41,10 +46,11 @@ class Served(BaseModel):
 
 
 def served(module: str, env: dict[str, str]) -> Served:
-    """Boot `module`'s app under `env` alone (plus the interpreter's PATH and HOME, where set) and read what it mounts."""
+    """Boot `module`'s app under `env`, the interpreter's PATH and HOME where set, and the probe's own sidecar token
+    (`_SIDECAR_TOKEN`, which replaces the store-read token `env` names), and read what it mounts."""
     probe = subprocess.run(
         [sys.executable, "-c", _PROBE, module],
-        env={**{key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}, **env},
+        env={**{key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}, **env, **_SIDECAR_TOKEN},
         capture_output=True,
         text=True,
         timeout=120,

@@ -12,10 +12,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 
-
-async def _ack_binding() -> dict[str, str]:
-    """Dapr's startup pre-flight (``OPTIONS /<binding name>``): a 2xx confirms this app consumes the binding."""
-    return {"status": "ok"}
+from lakehouse.governed.dapr_auth import add_binding_preflight
 
 
 def mount_cron(app: FastAPI, binding_name: str, tick: Callable[..., Awaitable[BaseModel]], *, tag: str) -> bool:
@@ -24,7 +21,7 @@ def mount_cron(app: FastAPI, binding_name: str, tick: Callable[..., Awaitable[Ba
         return False
     router = APIRouter()
     router.add_api_route(f"/{binding_name}", tick, methods=["POST"], tags=[tag])
-    router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], include_in_schema=False)
+    add_binding_preflight(router, binding_name)
     app.include_router(router)
     record_tick(app, binding_name)
     return True
