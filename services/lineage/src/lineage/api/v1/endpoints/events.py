@@ -35,8 +35,11 @@ router = APIRouter(tags=["query"])
 # so the fetch window collapses to `limit` there.
 _EVENTS_FETCH = 2000
 _EVENTS_RETURN = 500
-#: How many rows past the estimate a governed page's next read takes, so a page whose rows grow sparser is not read
-#: in many small reads.
+#: How many times the rows read so far a governed page reads next while none was visible: a page whose caller sees a
+#: row near the head finds it in a read or two, and one whose window is all hidden reads it in a few.
+_CHUNK_GROWTH: Final = 8
+#: How many rows past the estimate a governed page's next read takes once some were visible, so a page whose rows grow
+#: sparser is not read in many small reads.
 _CHUNK_MARGIN: Final = 2
 
 
@@ -319,12 +322,12 @@ async def get_events(
     visible: list[EventRecord] = []
     # The window is read and governed a chunk at a time, stopping once `limit` rows are visible: each row is judged on
     # its own, so the page and its cursor are the ones governing the whole window gives, and a page whose first rows
-    # are visible reads only those ([[LH-590]]). Each later chunk is sized from the share of rows visible so far, so a
-    # mostly hidden window is read in two reads.
+    # are visible reads only those ([[LH-590]]). Each later chunk grows from the rows read while none was visible, and is
+    # sized from the share of rows visible once some were, so a mostly hidden window is read in a few reads.
     chunk = limit
     while len(visible) < limit and len(records) < fetch:
         if records:
-            chunk = fetch if not visible else -(-(limit - len(visible)) * len(records) // len(visible)) * _CHUNK_MARGIN
+            chunk = len(records) * _CHUNK_GROWTH if not visible else -(-(limit - len(visible)) * len(records) // len(visible)) * _CHUNK_MARGIN
         read = await window.take(min(chunk, fetch - len(records)))
         if not read:
             break

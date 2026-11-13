@@ -264,15 +264,18 @@ def test_a_page_costs_the_same_whatever_the_feeds_length(tmp_path: Path, monkeyp
                 return [_stamped(event, uuid_of) for event in events]
 
             _recorded(store, stamped([visible("2026-10-15T10:00:01+00:00"), hidden("2026-10-15T10:00:02+00:00")]))
+            _recorded(store, stamped([hidden(f"2026-10-15T10:01:{n:02d}+00:00") if n % 3 else visible(f"2026-10-15T10:01:{n:02d}+00:00") for n in range(10)]))
             _recorded(store, stamped([visible("2026-10-15T10:00:03+00:00")]))
             _recorded(store, stamped([visible("2026-10-15T10:00:04+00:00")]))
+            _recorded(store, stamped([hidden("2026-10-15T10:00:05+00:00")]))
             short = costs()
             _recorded(store, stamped([hidden(f"2026-10-15T11:00:{n:02d}+00:00") if n % 3 else visible(f"2026-10-15T11:00:{n:02d}+00:00") for n in range(60)]))
             _recorded(store, stamped([visible("2026-10-15T12:00:01+00:00")]))
             _recorded(store, stamped([visible("2026-10-15T12:00:02+00:00")]))
+            _recorded(store, stamped([hidden("2026-10-15T12:00:03+00:00")]))
             long = costs()
 
-    assert long == short, f"a page of a 66-row feed cost {long}, of a 6-row feed {short}"
+    assert long == short, f"a page of a 78-row feed cost {long}, of a 17-row feed {short}"
 
 
 def _newest_first(query: Callable[[RestCatalogTransport, QueryTableRequest], bytes]) -> Callable[[RestCatalogTransport, QueryTableRequest], bytes]:
