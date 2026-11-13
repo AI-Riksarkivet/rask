@@ -125,16 +125,19 @@ def test_the_worker_runs_in_pods_of_its_own_whose_sidecar_outlives_its_drain_and
     gates a sidecar's subscriptions, so only this pod, which subscribes to nothing, has one. The second case moves every
     lifecycle number, so only a computed grace and block pass it. Each Deployment's replicas spread over the nodes by its
     own label, so one node's loss leaves a worker pulling, and the worker takes a resources tier of its own, sized from
-    its measured working set, where the web pods keep the default one."""
+    its measured working set, where the web pods keep the default one. The audit, the scan and an orphan check are each
+    bounded by a value of their own, which reaches the worker's settings as that kind's bound."""
     import yaml  # noqa: PLC0415
     from test_invariants import CHART  # noqa: PLC0415
 
+    from maintenance.core.config import MaintenanceSettings  # noqa: PLC0415
     from tests.unit.chart_render import DEFAULT_ARGS, render, selects  # noqa: PLC0415
 
     lifecycle = {**yaml.safe_load((CHART / "values.yaml").read_text())["lifecycle"], **moved}
     docs = render(
         *DEFAULT_ARGS,
         *("--set", "maintenance.queue.drainSeconds=60", "--set", "resources.maintenanceWorker.requests.memory=333Mi"),
+        *("--set", "maintenance.queue.auditMaxSeconds=1234", "--set", "maintenance.queue.scanMaxSeconds=4321"),
         *(arg for key, value in moved.items() for arg in ("--set", f"lifecycle.{key}={value}")),
     )
     worker, web = (_deployment(docs, name)["spec"]["template"] for name in ("rask-maintenance-worker", "rask-maintenance"))
@@ -156,6 +159,13 @@ def test_the_worker_runs_in_pods_of_its_own_whose_sidecar_outlives_its_drain_and
     }
     assert spreads == {("worker", "worker"): [True], ("worker", "web"): [False], ("web", "worker"): [False], ("web", "web"): [True]}
     assert (process["resources"]["requests"]["memory"], served["resources"]["requests"]["memory"]) == ("333Mi", "128Mi")
+    bounds = MaintenanceSettings(
+        s3_bucket="b",
+        audit_max_seconds=int(env["MAINTENANCE_AUDIT_MAX_SECONDS"]),
+        scan_max_seconds=int(env["MAINTENANCE_SCAN_MAX_SECONDS"]),
+        orphan_check_max_seconds=int(env["MAINTENANCE_ORPHAN_CHECK_MAX_SECONDS"]),
+    ).max_seconds_by_kind
+    assert bounds == {"audit": 1234, "scan": 4321, "orphans": 1800}
     pre_stop = int(" ".join(process["lifecycle"]["preStop"]["exec"]["command"]).rsplit(" ", 1)[-1])
     assert (grace, pre_stop, selecting) == (int(lifecycle["maintenanceTerminationGracePeriodSeconds"]), int(lifecycle["preStopSeconds"]), [])
     assert pre_stop + int(env["MAINTENANCE_DRAIN_SECONDS"]) <= int(notes[BLOCK].rstrip("s")) == grace - int(lifecycle["teardownSeconds"])

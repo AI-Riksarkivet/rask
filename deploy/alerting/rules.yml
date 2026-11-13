@@ -612,8 +612,9 @@ groups:
             deliveries, and a worker ended it. The maintenance_task_ended ERROR line names the subject and the last error; kind unreadable is a
             message no task parses. Its next try is held `maintenance.queue.recheckHours` out, unless a commit queues it sooner.
 
-      # A task running past its bound (`maintenance.queue.maxPassSeconds`, or `maintenance.orphanCheck.maxSeconds` for a
-      # table's orphan check). It keeps its task until twice that, when its replica exits and the task is delivered again,
+      # A task running past its bound (`maintenance.queue.maxPassSeconds`; the audit's, the scan's and an orphan check's
+      # own are `maintenance.queue.auditMaxSeconds`, `.scanMaxSeconds` and `maintenance.orphanCheck.maxSeconds`). It keeps
+      # its task until twice that, when its replica exits and the task is delivered again,
       # so until then this count is the only sign.
       - alert: MaintenancePassesOverran
         expr: sum by (kind) (increase(maintenance_passes_overran_total[1h])) > 0
@@ -623,8 +624,9 @@ groups:
         annotations:
           summary: "A maintenance {{ $labels.kind }} task is running past its bound"
           description: >-
-            A {{ $labels.kind }} task has run past its bound (`maintenance.queue.maxPassSeconds`, or
-            `maintenance.orphanCheck.maxSeconds` for kind orphans) and still holds its task; at twice that its replica
+            A {{ $labels.kind }} task has run past its bound (`maintenance.queue.maxPassSeconds`, or its kind's own:
+            `maintenance.queue.auditMaxSeconds`, `maintenance.queue.scanMaxSeconds`,
+            `maintenance.orphanCheck.maxSeconds`) and still holds its task; at twice that its replica
             exits and the task is delivered again. The
             maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later
             commit's pass of its table can start.

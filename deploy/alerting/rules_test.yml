@@ -807,7 +807,7 @@ tests:
               kind: scan
             exp_annotations:
               summary: "A maintenance scan task is running past its bound"
-              description: "A scan task has run past its bound (`maintenance.queue.maxPassSeconds`, or `maintenance.orphanCheck.maxSeconds` for kind orphans) and still holds its task; at twice that its replica exits and the task is delivered again. The maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later commit's pass of its table can start."
+              description: "A scan task has run past its bound (`maintenance.queue.maxPassSeconds`, or its kind's own: `maintenance.queue.auditMaxSeconds`, `maintenance.queue.scanMaxSeconds`, `maintenance.orphanCheck.maxSeconds`) and still holds its task; at twice that its replica exits and the task is delivered again. The maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later commit's pass of its table can start."
 
   # The oldest task ages in step with the clock, as on a queue no worker takes from: past six hours, held 30m, it warns.
   # The same age on STORE_EVENTS is not this rule's, and two replicas sampling the same stream raise one alert.

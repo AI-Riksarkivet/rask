@@ -305,6 +305,18 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: A check's own bound, as `max_pass_seconds` is a pass's: past it the check is logged and counted, and at twice it its
     #: replica ends itself.
     orphan_check_max_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_ORPHAN_CHECK_MAX_SECONDS")
+    #: The hourly audit's own bound. It reads one record per table (about 7 ms a table over moto, measured 2026-11-13),
+    #: and an audit still running when the next fires holds the claim the two share, so its bound stays under the hour.
+    audit_max_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_AUDIT_MAX_SECONDS")
+    #: The daily scan's own bound. Its storage walk makes three store requests per table (about 54 ms a table over moto,
+    #: measured 2026-11-13), so under a pass's bound it would be ended at twice 1800 s on an estate of some tens of
+    #: thousands of tables, every delivery, and not tried again until the next day.
+    scan_max_seconds: int = Field(default=7200, ge=60, alias="MAINTENANCE_SCAN_MAX_SECONDS")
+
+    @property
+    def max_seconds_by_kind(self) -> dict[str, float]:
+        """The bound of each task kind that has one of its own; any other kind is bounded by ``max_pass_seconds``."""
+        return {"orphans": self.orphan_check_max_seconds, "audit": self.audit_max_seconds, "scan": self.scan_max_seconds}
 
     #: Rebuild authorization tuples the control-plane registries still justify ([[LH-061]], owner
     #: ruling 2026-09-19 overturning the standing deferral on a write-capable reconcile).

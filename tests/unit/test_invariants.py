@@ -320,6 +320,8 @@ def _render_refusal(*flags: str) -> str | None:
         ),
         pytest.param("queue.maxPassSeconds=10", "schema refuses maintenance.queue.maxPassSeconds", id="a-pass-bound-the-worker-refuses"),
         pytest.param("queue.maxPassSeconds=60", None, id="a-pass-bound-the-worker-takes"),
+        pytest.param("queue.scanMaxSeconds=10", "schema refuses maintenance.queue.scanMaxSeconds", id="a-scan-bound-the-worker-refuses"),
+        pytest.param("queue.auditMaxSeconds=null", "maintenance.queue.auditMaxSeconds is required", id="no-audit-bound"),
         pytest.param("queue.ackWaitSeconds=2", "schema refuses maintenance.queue.ackWaitSeconds", id="an-ack-wait-no-heartbeat-fits-in"),
         pytest.param("queue.auditSchedule=@every 30m", "schema refuses maintenance.queue.auditSchedule", id="an-interval-each-reassertion-would-restart"),
         pytest.param("queue.auditSchedule=bogus", "schema refuses maintenance.queue.auditSchedule", id="a-schedule-nats-refuses"),

@@ -831,6 +831,10 @@ maintenance:
     maxDeliver: 10 # @schema type: integer; minimum: 1
     # -- A pass running longer than this is logged and counted; at twice this its replica exits, Kubernetes restarts it, and the task is delivered again.
     maxPassSeconds: 1800 # @schema type: integer; minimum: 60
+    # -- The hourly audit's own bound, in seconds, as `maxPassSeconds` is a pass's. It reads one record per table (about 7 ms a table over moto, measured 2026-11-13); keep it under the hour, since an audit still running holds the claim it shares with the scan.
+    auditMaxSeconds: 1800 # @schema type: integer; minimum: 60
+    # -- The daily scan's own bound, in seconds. Its storage walk grows with the estate (three store requests and about 54 ms a table over moto, measured 2026-11-13): past it the scan is counted (`maintenance.passes.overran`, kind scan), and at twice it its replica exits.
+    scanMaxSeconds: 7200 # @schema type: integer; minimum: 60
     # -- The longest a table goes without a pass: what bounds a lost commit event, and the versions a deleted tag or branch releases.
     recheckHours: 24 # @schema type: integer; minimum: 1
     # -- When a pass that could not decide, or found the table's history held, is tried again.

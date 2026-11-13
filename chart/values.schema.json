@@ -764,6 +764,11 @@
                             "type": "integer",
                             "minimum": 3
                         },
+                        "auditMaxSeconds": {
+                            "description": "The hourly audit's own bound, in seconds, as `maxPassSeconds` is a pass's. It reads one record per table (about 7 ms a table over moto, measured 2026-11-13); keep it under the hour, since an audit still running holds the claim it shares with the scan.",
+                            "type": "integer",
+                            "minimum": 60
+                        },
                         "auditSchedule": {
                             "description": "The audit's NATS message schedule (ADR-51): the drift report without the storage walk, its repairs and the lost-task backstop, once per firing on one replica.",
                             "type": "string",
@@ -801,6 +806,11 @@
                         },
                         "retrySeconds": {
                             "description": "When a pass that could not decide, or found the table's history held, is tried again.",
+                            "type": "integer",
+                            "minimum": 60
+                        },
+                        "scanMaxSeconds": {
+                            "description": "The daily scan's own bound, in seconds. Its storage walk grows with the estate (three store requests and about 54 ms a table over moto, measured 2026-11-13): past it the scan is counted (`maintenance.passes.overran`, kind scan), and at twice it its replica exits.",
                             "type": "integer",
                             "minimum": 60
                         },

@@ -161,7 +161,7 @@ async def _worker_on(
         ack_wait_seconds=settings.task_ack_wait_seconds,
         max_deliver=settings.task_max_deliver,
         max_pass_seconds=settings.max_pass_seconds,
-        max_seconds_by_kind={"orphans": settings.orphan_check_max_seconds},
+        max_seconds_by_kind=settings.max_seconds_by_kind,
         retry_ended_seconds=settings.recheck_hours * 3600,
         store_events=StoreEvents(settings, queue).hold_passes,
         end=end,

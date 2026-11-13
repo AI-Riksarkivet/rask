@@ -576,3 +576,25 @@ above measures with sleeps.
 Found while measuring: an hourly audit that falls between a table's first commit and the pass that commit holds queues
 the table itself, since a held follow-up is neither a schedule nor a queued task, so the table is passed twice, five
 minutes apart.
+
+### The audit and the scan are bounded on their own, measured 2026-11-13
+
+Both ran under a table pass's bound (`maintenance.queue.maxPassSeconds`, 1800 s, the replica ended at twice it), while
+their cost grows with the estate, which the 2026-11-10 amendment left unmeasured. Measured over moto with the real
+catalog and maintenance (one warehouse, tables of one commit, two runs each, equal to within 2 %):
+
+| Tables | Audit | Audit's store requests | Scan | Scan's store requests |
+| --- | --- | --- | --- | --- |
+| 10 | 0.61 s | 38 | 1.13 s | 59 |
+| 40 | 0.85 s | 68 | 2.71 s | 149 |
+| 160 | 1.61 s | 188 | 9.22 s | 509 |
+
+Both are linear: the audit reads one record per table, about 7 ms a table, and the scan's storage walk makes three
+requests per table, about 54 ms a table. At moto's speed the scan would pass 1800 s near 33,000 tables and be ended at
+twice that on every delivery, then not tried again until the next day, since a scan is rescheduled by nothing but its
+daily firing; the audit would reach its bound near 270,000. So each kind takes a bound of its own, as an orphan check
+has: `maintenance.queue.auditMaxSeconds` (1800, kept under the hour, since a running audit holds the claim it shares
+with the scan) and `maintenance.queue.scanMaxSeconds` (7200). A scan past its bound is counted and warned of
+(`MaintenancePassesOverran`), and one that long also holds the audits behind it, which `MaintenanceAuditNotCompleting`
+pages on: the two alerts are the signal that the walk needs splitting by warehouse, which this does not do. A real
+store's latency is not moto's; the slope per table is what to re-read there.
