@@ -55,6 +55,7 @@ from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
 from catalog.core.modes import CreateMode, InsertMode
+from catalog.core.run_context import IDEMPOTENCY_KEY_PROPERTY
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
 from catalog.services import blob_serving, dataplane, table_create
@@ -216,6 +217,7 @@ async def create_table(
 @router.post("/{id}/insert", response_model_exclude_none=True)
 async def insert_into_table(
     id: str,
+    keyed: idem.KeyedDoorDep,
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
@@ -239,7 +241,13 @@ async def insert_into_table(
     writer rung, not ``can_drop``: it keeps the table's schema, so it does what a delete of every row and an insert do
     (ADR 0099, [[LH-415]]).
 
-    The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]])."""
+    The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
+
+    An ``Idempotency-Key`` makes a resent append converge ([[LH-577]]): a caller that gave up on a slow append, which may
+    have committed, sends it again under the same key and is answered the first attempt's response, nothing appended a
+    second time. The key names one append, its mode and its ref included. Its commit carries the key, so a resend that
+    takes the key over from an attempt lost unanswered past its lease finds that attempt's commit and answers with it
+    rather than appending again. Optional, as on every keyed door (:mod:`catalog.api.idempotency`)."""
     segments = parse_identifier(id)
     # PARSED HERE, ONCE: pylance's `LanceDataset.insert` refuses a value outside Append/Overwrite with a
     # bare ValueError or OSError (500, measured on pylance 12.0.0), where the spec answers InvalidInput.
@@ -254,6 +262,19 @@ async def insert_into_table(
         dataplane.coerce_insert_arrow, table, so, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
+    # After every shape refusal, so a malformed body claims no key. The claim binds the table, the mode and the ref, so the
+    # key on another table, mode or ref is refused rather than answered with this append's response ([[LH-576]]).
+    converge = await keyed.begin(
+        endpoint=f"POST /v1/table/{{id}}/insert mode={insert_mode.value} branch={dataplane.recorded_branch(branch) or ''}",
+        target=fga.canonical_object_id(segments),
+    )
+    if converge.replay is not None:
+        return InsertIntoTableResponse.model_validate(converge.replay.body)
+    if converge.taken_over_since is not None and converge.mark is not None:
+        landed = await run_in_threadpool(partial(dataplane.committed_under_key, table, so, branch=branch, mark=converge.mark, since=converge.taken_over_since))
+        if landed is not None:
+            await converge.remember(200, landed)
+            return landed
     await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
     # A held commit turn is waited out here, in the event loop, so a writer waiting on it holds no request thread
     # ([[LH-259]]); the insert asks again right before Lance commits it.
@@ -266,9 +287,15 @@ async def insert_into_table(
             req,
             data,
             max_bytes=settings.max_body_bytes,
-            transaction_properties=lineage_deps.door_stamp(token, OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT, run),
+            transaction_properties={
+                **lineage_deps.door_stamp(token, OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT, run),
+                **({IDEMPOTENCY_KEY_PROPERTY: converge.mark} if converge.mark is not None else {}),
+            },
         )
     )
+    # Recorded as soon as the append has committed: a failure after this line (the lineage emit) answers the caller an
+    # error, and its resend under the key is answered with this commit rather than appending again.
+    await converge.remember(200, response)
     # The version THIS insert committed, off the handle that committed it: a reopen would name whichever
     # append landed last.
     await lineage_deps.emit_measured_write(

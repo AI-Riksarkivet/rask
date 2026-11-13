@@ -22,7 +22,13 @@
 	import { Subject } from './identity/index.ts';
 	import { timeBoxLabel } from './time-box.ts';
 	import type { Tuple } from '../access';
-	import { deleteTuple, fetchTuples, listUsers, simulate, writeTuple } from '../remote/access.api';
+	import {
+		deleteTuple,
+		fetchObjectTuples,
+		listUsers,
+		simulate,
+		writeTuple,
+	} from '../remote/access.api';
 
 	type Props = {
 		selected: string | null;
@@ -60,6 +66,7 @@
 	}: Props = $props();
 
 	let tuples = $state<Tuple[] | null>(null);
+	let truncated = $state(false);
 	let status = $state(0);
 	let message = $state<{ ok: boolean; text: string } | null>(null);
 	let busy = $state(false);
@@ -72,7 +79,7 @@
 			return;
 		}
 		const seq = ++inflight;
-		const res = await fetchTuples({ object: selected, pageSize: 100 });
+		const res = await fetchObjectTuples(selected);
 		if (seq !== inflight) return; // latest-wins: a fast click-through must not resurrect a stale node
 		if (!res.ok) {
 			tuples = null;
@@ -80,6 +87,7 @@
 			return;
 		}
 		tuples = res.data.tuples;
+		truncated = res.data.truncated;
 		status = 200;
 	}
 
@@ -409,6 +417,11 @@
 						</li>
 					{/each}
 				</ul>
+				{#if truncated}
+					<p class="mt-1 text-xs text-muted-foreground">
+						Showing the first pages only: this object holds more tuples than the inspector reads.
+					</p>
+				{/if}
 			{/if}
 		{/if}
 

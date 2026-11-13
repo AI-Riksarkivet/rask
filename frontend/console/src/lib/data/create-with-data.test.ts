@@ -41,11 +41,13 @@ function captureFetch(): { seen: { url: string; init: RequestInit }[] } {
 }
 
 describe('createTableWithRows', () => {
-	it('posts the Arrow bytes to the catalog create door', async () => {
+	it("posts the Arrow bytes to the catalog create door under the write's key", async () => {
 		const { seen } = captureFetch();
 		const arrow = new Uint8Array([1, 2, 3]);
 
-		const res = await createTableWithRows({ table: 'acme-bronze$docs', arrow });
+		const key = '6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f60';
+
+		const res = await createTableWithRows({ table: 'acme-bronze$docs', arrow, key });
 
 		expect(res.ok).toBe(true);
 		// Asserted, not optional-chained: if no request left at all, THAT is the failure to report.
@@ -59,6 +61,8 @@ describe('createTableWithRows', () => {
 			'application/vnd.apache.arrow.stream',
 		);
 		expect(Array.from(call.init.body as Uint8Array)).toEqual([1, 2, 3]);
+		// A resend of the same rows carries the same key, so the catalog creates the table once (LH-577).
+		expect(new Headers(call.init.headers).get('idempotency-key')).toBe(key);
 	});
 
 	it('surfaces an upstream refusal instead of flattening it', async () => {
@@ -73,6 +77,7 @@ describe('createTableWithRows', () => {
 		const res = await createTableWithRows({
 			table: 'acme-bronze$docs',
 			arrow: new Uint8Array([1]),
+			key: '6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f61',
 		});
 
 		expect(res).toEqual({ ok: false, status: 403, detail: 'no' });

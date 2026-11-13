@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { catalogListing } from './doors';
+import { catalogJSON, catalogListing } from './doors';
 
 /** A catalog that answers each listing request with the next of `pages`, recording the URLs it was asked. */
 function catalogAnswering(pages: unknown[]) {
@@ -47,4 +47,20 @@ describe('catalogListing', () => {
 			]);
 		},
 	);
+});
+
+describe('catalogJSON', () => {
+	it("gives a read a poll's timeout and a write none, so a slow write is never cut off and called not applied (LH-577)", async () => {
+		const signals: Record<string, AbortSignal | null | undefined> = {};
+		vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+			signals[init?.method ?? 'GET'] = init?.signal;
+			return new Response('{}', { status: 200 });
+		});
+
+		await catalogJSON('/management/v1/me');
+		await catalogJSON('/v1/table/a$t/drop', { method: 'POST', body: '{}' });
+
+		expect(signals.GET).toBeInstanceOf(AbortSignal);
+		expect(signals.POST).toBeUndefined();
+	});
 });

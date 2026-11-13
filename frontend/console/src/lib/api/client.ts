@@ -14,6 +14,10 @@ import * as v from 'valibot';
 /** Per-request timeout — a hung backend must not stack poll ticks. */
 export const FETCH_TIMEOUT_MS = 8000;
 
+/** A write's timeout: an Arrow append the catalog commits slowly is still waited for, since a write given up on may
+ *  land anyway, and the person is then told only that it is not confirmed ([[LH-577]]). */
+export const WRITE_TIMEOUT_MS = 120_000;
+
 // AbortSignal.timeout needs Safari 16+/Chrome 103+; vite transpiles syntax, not APIs — on an older
 // browser the missing function would throw inside a fetcher's catch and the app would silently render
 // permanently "offline". Feature-detect with an AbortController fallback.
@@ -92,6 +96,12 @@ export interface UpstreamRequest {
 	upstream: string;
 }
 
+/** Whether a request only reads: a GET or HEAD, which is what a request naming no method is. */
+function isRead(init: RequestInit | undefined): boolean {
+	const method = (init?.method ?? 'GET').toUpperCase();
+	return method === 'GET' || method === 'HEAD';
+}
+
 /** One upstream call → the `ApiResult` union. Never throws. */
 export async function upstreamJSON(req: UpstreamRequest): Promise<ApiResult<unknown>> {
 	const { base, path, init, upstream } = req;
@@ -100,6 +110,9 @@ export async function upstreamJSON(req: UpstreamRequest): Promise<ApiResult<unkn
 	let res: Response;
 	try {
 		res = await doFetch(`${base}${path}`, {
+			// A read gives up at a poll's timeout; a write is never cut off by one, since a write given up on may land
+			// anyway, and the page would tell the person it was not applied.
+			...(isRead(init) ? { signal: timeoutSignal(FETCH_TIMEOUT_MS) } : {}),
 			...init,
 			headers: {
 				...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
@@ -192,26 +205,38 @@ export async function requestBinary(
 	}
 }
 
-/** BYTES UP, JSON ACK DOWN — the shape every data-plane write (an Arrow body, a `{version}` ack) has. */
+/** BYTES UP, JSON ACK DOWN — the shape every data-plane write (an Arrow body, a `{version}` ack) has.
+ *
+ * Waited for up to {@link WRITE_TIMEOUT_MS}. `idempotencyKey` makes a resend converge: the catalog answers a key it has
+ * seen with that attempt's response instead of writing again, so a write that is retried after no answer keeps the key
+ * it was first sent with. A write with no answer is `status: 0`, whose detail says it is not confirmed. */
 export async function requestBytes(
 	apiBase: string,
 	path: string,
 	body: BodyInit,
-	contentType = 'application/vnd.apache.arrow.stream',
+	options: { contentType?: string; idempotencyKey?: string } = {},
 ): Promise<ApiResult<unknown>> {
+	const { contentType = 'application/vnd.apache.arrow.stream', idempotencyKey } = options;
 	try {
 		const res = await authorizedFetch(`${apiBase}/${path}`, {
 			method: 'POST',
-			headers: { 'content-type': contentType },
+			headers: {
+				'content-type': contentType,
+				...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
+			},
 			body,
-			signal: timeoutSignal(FETCH_TIMEOUT_MS),
+			signal: timeoutSignal(WRITE_TIMEOUT_MS),
 		});
 		const payload: unknown = await res.json().catch(() => ({}));
 		if (!res.ok)
 			return { ok: false, status: res.status, detail: detailFrom(payload, `HTTP ${res.status}`) };
 		return { ok: true, data: payload };
 	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
+		return {
+			ok: false,
+			status: 0,
+			detail: `no answer came (${String(err)})`,
+		};
 	}
 }
 

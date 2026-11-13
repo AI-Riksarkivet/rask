@@ -32,7 +32,7 @@ from pathlib import Path
 import pytest
 
 from lakehouse import records
-from lakehouse.idempotency import PREFIX, InFlightError, KeyBinding, Replay, claim, reclaim, record_outcome, release
+from lakehouse.idempotency import PREFIX, InFlightError, KeyBinding, Replay, TakenOver, claim, reclaim, record_outcome, release
 from lakehouse.storage_options import StorageOptions
 
 
@@ -78,7 +78,7 @@ class TestAnAttemptStillRunningIsNotAReplay:
 
         with pytest.raises(InFlightError):
             claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="late")
-        assert rival == [None], "the rival's takeover must run, alone"
+        assert [type(taken) for taken in rival] == [TakenOver], "the rival's takeover must run, alone, told it took over a lapsed attempt"
 
     def test_reclaiming_does_not_lose_the_outcome_the_first_attempt_then_writes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The abandoned attempt may not be dead, only slow. Whichever finishes writes the outcome, and

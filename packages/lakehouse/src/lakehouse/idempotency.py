@@ -148,6 +148,18 @@ class Replay(BaseModel):
     body: JsonValue = None
 
 
+class TakenOver(BaseModel):
+    """This attempt holds the key, taken over from one that held it past its lease and never answered.
+
+    That attempt may have written before it was lost, so a door whose operation is not safe to run twice looks for its
+    write before writing again; ``since`` is when that attempt claimed the key, on the store's clock.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    since: datetime
+
+
 class Reclaimed(BaseModel):
     """What one reclaim did."""
 
@@ -185,8 +197,9 @@ def claim(
     binding: KeyBinding,
     attempt: str,
     lease: timedelta = LEASE,
-) -> Replay | None:
-    """Claim ``key`` for ``binding``'s operation as ``attempt``. ``None`` means proceed; a :class:`Replay` means answer with it.
+) -> Replay | TakenOver | None:
+    """Claim ``key`` for ``binding``'s operation as ``attempt``. ``None`` means proceed; a :class:`Replay` means answer with it;
+    a :class:`TakenOver` means proceed, after an attempt that may have written and never answered.
 
     `scope` separates callers — a key is the CALLER's, so one string from two tenants is two different
     operations and must not collide. An attempt that held the key past ``lease`` without answering is taken over, and
@@ -202,7 +215,8 @@ def claim(
         lease: How long an unanswered claim holds the key, on the store's clock.
 
     Returns:
-        ``None`` when this attempt holds the key, or the answer an earlier attempt recorded.
+        ``None`` when this attempt holds the key, :class:`TakenOver` when it took the key over from an attempt whose lease
+        ran out unanswered, or the answer an earlier attempt recorded.
 
     Raises:
         ValueError: The key or the scope is not one this module writes.
@@ -236,7 +250,8 @@ def claim(
             records.replace_json(root_uri, storage_options, record_key, claimed, etag=stored.etag)
         except records.RecordChangedError:
             continue
-        return None
+        # A released key was given back before its attempt wrote anything; a lapsed one may have written.
+        return TakenOver(since=current.claimed_at) if current.state == "in_flight" else None
     raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
@@ -363,6 +378,7 @@ __all__ = [
     "KeyReusedError",
     "Reclaimed",
     "Replay",
+    "TakenOver",
     "claim",
     "reclaim",
     "record_outcome",

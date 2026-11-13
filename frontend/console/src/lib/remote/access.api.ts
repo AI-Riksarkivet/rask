@@ -21,7 +21,6 @@ import {
 	type ListUsersResult,
 	type SimulateResult,
 	type Tuple,
-	type TuplesPage,
 } from '../access';
 import { timeBoxLabel } from '../access/time-box.ts';
 
@@ -58,52 +57,32 @@ const TupleInputSchema = v.object({
 	condition: v.optional(v.nullable(TupleConditionSchema)),
 });
 
-const TupleFilterSchema = v.object({
-	objectType: v.optional(v.string()),
-	user: v.optional(v.string()),
-	object: v.optional(v.string()),
-	pageSize: v.optional(v.number()),
-	continuation: v.optional(v.string()),
-});
-
-/** One filtered page of tuples (the Inspector's per-object read). */
-export const fetchTuples = query(
-	TupleFilterSchema,
-	async (filter): Promise<ApiResult<TuplesPage>> => {
-		const q = new URLSearchParams();
-		if (filter.objectType) q.set('object_type', filter.objectType);
-		if (filter.user) q.set('user', filter.user);
+/** Every tuple the filter matches, page by page to the store's last, or to `MAX_GRAPH_PAGES` (`truncated`). One page
+ *  is never the whole answer: the door pages, so a reader that stopped at the first would show part of an object's
+ *  grants as all of them. */
+export async function everyTuple(filter: {
+	object?: string;
+}): Promise<ApiResult<{ tuples: Tuple[]; truncated: boolean }>> {
+	const tuples: Tuple[] = [];
+	let continuation: string | null = null;
+	for (let page = 0; page < MAX_GRAPH_PAGES; page++) {
+		const q = new URLSearchParams({ page_size: '100' });
 		if (filter.object) q.set('object', filter.object);
-		if (filter.pageSize) q.set('page_size', String(filter.pageSize));
-		if (filter.continuation) q.set('continuation', filter.continuation);
-		const qs = q.toString();
-		return parsed(
-			await catalogJSON(`/management/v1/access/tuples${qs ? `?${qs}` : ''}`),
-			TuplesPageSchema,
-		);
-	},
-);
+		if (continuation) q.set('continuation', continuation);
+		const result = parsed(await catalogJSON(`/management/v1/access/tuples?${q}`), TuplesPageSchema);
+		if (!result.ok) return result;
+		tuples.push(...result.data.tuples);
+		continuation = result.data.continuation;
+		if (!continuation) return { ok: true, data: { tuples, truncated: false } };
+	}
+	return { ok: true, data: { tuples, truncated: true } };
+}
 
-/** The WHOLE tuple store — the canvas's resting graph. The page loop runs here. */
-export const fetchStore = query(
-	async (): Promise<ApiResult<{ tuples: Tuple[]; truncated: boolean }>> => {
-		const tuples: Tuple[] = [];
-		let continuation: string | null = null;
-		for (let page = 0; page < MAX_GRAPH_PAGES; page++) {
-			const q = new URLSearchParams({ page_size: '100' });
-			if (continuation) q.set('continuation', continuation);
-			const result = parsed(
-				await catalogJSON(`/management/v1/access/tuples?${q}`),
-				TuplesPageSchema,
-			);
-			if (!result.ok) return result;
-			tuples.push(...result.data.tuples);
-			continuation = result.data.continuation;
-			if (!continuation) return { ok: true, data: { tuples, truncated: false } };
-		}
-		return { ok: true, data: { tuples, truncated: true } };
-	},
-);
+/** The WHOLE tuple store — the canvas's resting graph. */
+export const fetchStore = query(async () => everyTuple({}));
+
+/** Every tuple stored on one object — the Inspector's per-node read. */
+export const fetchObjectTuples = query(v.string(), async (object) => everyTuple({ object }));
 
 /** Grant: write one raw tuple. Estate-admin gated by the catalog; on success the active `fetchStore`
  *  instances are refreshed in the SAME flight (single-flight mutation), so the canvas that issued the

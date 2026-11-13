@@ -13,6 +13,8 @@ conformance on 54 routed operations — a worse defect than the one being fixed.
 
 from __future__ import annotations
 
+from datetime import timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
@@ -39,6 +41,10 @@ def _rows(n: int = 3) -> bytes:
 
 def _versions(client: TestClient, tid: str) -> Any:
     return client.post(f"/v1/table/{tid}/describe", json={}).json()
+
+
+def _version(client: TestClient, tid: str) -> int:
+    return int(client.post(f"/v1/table/{tid}/describe", json={"load_detailed_metadata": True}).json()["version"])
 
 
 def _keyed_post_paths(app: Any) -> tuple[set[str], set[str]]:
@@ -180,6 +186,68 @@ class TestTheDestructiveDoorsConvergeToo:
         assert real_ns_client.post("/v1/table/db$other/describe", json={}).status_code == 200, "the refused drop must leave the table"
 
 
+class TestARetriedAppendLandsOnce:
+    """[[LH-577]] An append is the write a caller most often gives up on and sends again: the console aborts a slow one,
+    and the catalog may have committed it. Under one key the second send answers the first's response and appends
+    nothing, whatever bytes it carries; a key the append has not used is another append."""
+
+    def test_the_same_key_appends_once_and_answers_the_first_response(self, real_ns_client: TestClient) -> None:
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/db$grown/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
+        before = _version(real_ns_client, "db$grown")
+        keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f67"}
+
+        first = real_ns_client.post("/v1/table/db$grown/insert?mode=append", content=_rows(2), headers=keyed)
+        assert first.status_code == 200, first.text
+        again = real_ns_client.post("/v1/table/db$grown/insert?mode=append", content=_rows(5), headers=keyed)
+        other = real_ns_client.post(
+            "/v1/table/db$grown/insert?mode=append", content=_rows(1), headers={**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f68"}
+        )
+
+        assert (again.status_code, again.json()) == (200, first.json()), again.text
+        assert other.status_code == 200, other.text
+        counted = real_ns_client.post("/v1/table/db$grown/count_rows", json={})
+        assert (_version(real_ns_client, "db$grown"), counted.text) == (before + 2, "6"), "a replayed append appended again"
+
+    def test_an_append_whose_answer_was_lost_past_the_lease_is_found_in_its_commit(self, real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The answer of an append can be lost after it committed (its pod ended, or a fault after the commit), and a resend
+        past the claim's lease takes the key over. Run again, the append would land twice: the commit carries the key,
+        so the takeover finds it there and answers with it."""
+        from catalog.api import idempotency as keyed_doors
+        from lakehouse import idempotency
+
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/db$lost/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
+        before = _version(real_ns_client, "db$lost")
+        keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f69"}
+
+        async def lost(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("the pod ended before the answer was recorded")
+
+        with monkeypatch.context() as during:
+            during.setattr(keyed_doors.Converge, "remember", lost)
+            with pytest.raises(RuntimeError, match="the pod ended"):
+                real_ns_client.post("/v1/table/db$lost/insert?mode=append", content=_rows(2), headers=keyed)
+        monkeypatch.setattr(keyed_doors.idempotency, "claim", partial(idempotency.claim, lease=timedelta(0)))
+        again = real_ns_client.post("/v1/table/db$lost/insert?mode=append", content=_rows(2), headers=keyed)
+
+        assert (again.status_code, again.json()) == (200, {"num_inserted_rows": 2, "version": before + 1}), again.text
+        counted = real_ns_client.post("/v1/table/db$lost/count_rows", json={})
+        assert (_version(real_ns_client, "db$lost"), counted.text) == (before + 1, "5"), "the append ran again after its lease"
+
+    def test_the_key_names_one_append_on_one_ref(self, real_ns_client: TestClient) -> None:
+        """The same key on another mode or another ref is another operation, refused rather than answered with this one."""
+        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
+        assert real_ns_client.post("/v1/table/db$moded/create", content=_rows(3), headers=ARROW_STREAM).status_code == 200
+        keyed = {**ARROW_STREAM, "Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f6a"}
+        assert real_ns_client.post("/v1/table/db$moded/insert?mode=append", content=_rows(2), headers=keyed).status_code == 200
+
+        crossed = real_ns_client.post("/v1/table/db$moded/insert?mode=overwrite", content=_rows(1), headers=keyed)
+
+        assert (crossed.status_code, crossed.json().get("code")) == (400, 13), crossed.text
+        assert real_ns_client.post("/v1/table/db$moded/count_rows", json={}).text == "5"
+
+
 class TestEveryTableDoorThatMintsOrRetiresConverges:
     """`create`/`drop`/`rename` were the first three; these are the rest of the same amplifier.
 
@@ -195,6 +263,7 @@ class TestEveryTableDoorThatMintsOrRetiresConverges:
             "/v1/table/{id}/deregister",
             "/v1/table/{id}/register",
             "/v1/table/{id}/restore",
+            "/v1/table/{id}/insert",
         }
         keyed, _ = _keyed_post_paths(real_ns_client.app)
 

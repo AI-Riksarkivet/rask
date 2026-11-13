@@ -21,6 +21,10 @@ type Body = Record<string, unknown>;
 
 const TABLE = 'db1%24t'; // the id as it reaches the catalog: encodeURIComponent('db1$t')
 
+/** The console's write timeout (`WRITE_TIMEOUT_MS`, `src/lib/api/client.ts`), and a wait past a poll's 8 s inside it. */
+const WRITE_TIMEOUT_MS = 120_000;
+const PAST_A_POLLS_TIMEOUT_MS = 30_000;
+
 const DESCRIBE = {
 	version: 3,
 	location: 's3://lance-catalog/db1$t',
@@ -216,22 +220,47 @@ test('restore needs the version TYPED before it posts {version} (#64/#113)', asy
 	await expect.poll(() => bodyOf(page, `/v1/table/${TABLE}/restore`)).toEqual({ version: 2 });
 });
 
-test('insert-rows form encodes JSON to an Arrow-IPC body and posts to /insert (#64)', async ({
+test('an insert the catalog answers too late is not confirmed, and its retry sends the same key (#64, LH-577)', async ({
 	page,
 }) => {
-	// The insert keeps its bytes route (Arrow IPC in), so it is still a BROWSER call — page.route sees
-	// it, and the body must be non-empty binary, never JSON.
-	let insertPostBytes = 0;
-	await page.route('**/api/catalog/v1/table/*/insert*', (route) => {
-		insertPostBytes = route.request().postDataBuffer()?.length ?? 0;
-		return json(route, { transaction_id: 'tx1' });
+	// The insert keeps its bytes route (Arrow IPC in), so it is a BROWSER call that page.route sees. The stand-in
+	// catalog commits each request on arrival and answers a key it has seen with that key's first answer, as the
+	// catalog's insert door does; the first answer is held past the console's write timeout, which the page's clock
+	// runs out without the test waiting for it.
+	await page.clock.install();
+	const sent: { key: string | null; bytes: number }[] = [];
+	const appended = new Map<string, { num_inserted_rows: number; version: number }>();
+	let held: Route | undefined;
+	await page.route('**/api/catalog/v1/table/*/insert*', async (route) => {
+		const key = route.request().headers()['idempotency-key'] ?? null;
+		sent.push({ key, bytes: route.request().postDataBuffer()?.length ?? 0 });
+		const answer = appended.get(key ?? '') ?? { num_inserted_rows: 1, version: 4 + appended.size };
+		if (key) appended.set(key, answer);
+		if (sent.length === 1) {
+			held = route;
+			return;
+		}
+		await json(route, answer);
 	});
 	await page.goto('/catalog/tables/db1%24t');
 	const section = page.locator('section', { hasText: 'Insert rows' });
 	await section.locator('textarea.ins').fill('[{ "id": 9, "name": "z" }]');
 	await section.getByRole('button', { name: 'Insert' }).click();
-	await expect.poll(() => insertPostBytes).toBeGreaterThan(0);
+	await expect.poll(() => sent.length).toBe(1);
+
+	// Past a poll's timeout the write is still waited for; past the write's own it is not confirmed.
+	await page.clock.runFor(PAST_A_POLLS_TIMEOUT_MS);
+	await expect(section.getByRole('button', { name: '…' })).toBeVisible();
+	await page.clock.runFor(WRITE_TIMEOUT_MS);
+	await expect(section).toContainText('Not confirmed');
+	await held?.abort().catch(() => undefined);
+	await section.getByRole('button', { name: 'Retry' }).click();
 	await expect(section).toContainText('Inserted 1 row');
+
+	expect(sent.map((request) => request.bytes > 0)).toEqual([true, true]);
+	expect(sent[0]?.key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+	expect(sent[1]?.key).toBe(sent[0]?.key);
+	expect([...appended.values()]).toEqual([{ num_inserted_rows: 1, version: 4 }]);
 });
 
 test('the catalog builds and compacts nothing: no index-build or compact control (#587)', async ({

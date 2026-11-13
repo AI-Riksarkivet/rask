@@ -6,12 +6,15 @@
 	// instance never survives a navigation — a draft typed on table A cannot land on B.
 	import { insertRows } from '../catalog';
 	import { parseJsonRows, rowsToArrow } from '../json-rows';
+	import { WriteKey } from '../write-key.svelte';
 
 	let { table, onchanged }: { table: string; onchanged: () => Promise<void> } = $props();
 
 	let insertJson = $state('');
 	let insertBusy = $state(false);
 	let insertMsg = $state<{ ok: boolean; text: string } | null>(null);
+	// One key per batch, kept while an unanswered insert of it is retried, so the catalog appends it once (LH-577).
+	const writeKey = new WriteKey();
 
 	async function runInsert(): Promise<void> {
 		if (insertBusy || !insertJson.trim()) return;
@@ -28,7 +31,8 @@
 			// Browser-side Arrow-IPC encode → the catalog's Arrow-body insert, which casts the batch to the
 			// table's schema; a batch it cannot cast is the catalog's honest error, surfaced below.
 			const arrow = rowsToArrow(rows);
-			const res = await insertRows({ table, arrow });
+			const res = await insertRows({ table, arrow, key: writeKey.take(insertJson) });
+			writeKey.settle(res);
 			if (res.ok) {
 				insertMsg = {
 					ok: true,
@@ -42,6 +46,11 @@
 				insertMsg = {
 					ok: false,
 					text: 'Denied: inserting rows needs writer access (can_write_data).',
+				};
+			} else if (writeKey.pending(insertJson)) {
+				insertMsg = {
+					ok: false,
+					text: `Not confirmed: the rows may have been appended. Retry sends the same insert, which the catalog appends once. (${res.detail})`,
 				};
 			} else {
 				insertMsg = { ok: false, text: res.detail };
@@ -64,9 +73,9 @@
 	></textarea>
 	<div class="ins-row">
 		<button class="btn" disabled={insertBusy || !insertJson.trim()} onclick={runInsert}>
-			{insertBusy ? '…' : 'Insert'}
+			{insertBusy ? '…' : writeKey.pending(insertJson) ? 'Retry' : 'Insert'}
 		</button>
-		{#if insertMsg}<span class="ins-msg" class:okmsg={insertMsg.ok} class:error={!insertMsg.ok}
+		{#if insertMsg}<span class={['ins-msg', { okmsg: insertMsg.ok, error: !insertMsg.ok }]}
 				>{insertMsg.text}</span
 			>{/if}
 	</div>

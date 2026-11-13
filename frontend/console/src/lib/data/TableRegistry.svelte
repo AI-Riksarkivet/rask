@@ -32,6 +32,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { createTableWithRows } from './catalog';
+	import { WriteKey } from './write-key.svelte';
 	import { parseJsonRows, rowsToArrow } from './json-rows';
 	import { missingFieldsHint } from '#lib/form-hint.ts';
 	import { declareTable, fetchTables } from './remote/catalog.api';
@@ -83,6 +84,8 @@
 	let declName = $state('');
 	let declLocation = $state(''); // optional — empty means the catalog picks the location
 	let declRows = $state(''); // optional — a JSON array of row objects turns this into a create
+	// Kept while an unanswered create of the same table and rows is retried, so the catalog creates it once (LH-577).
+	const createKey = new WriteKey();
 	let declBusy = $state(false);
 	let declMsg = $state<{ ok: boolean; text: string } | null>(null);
 	const hasRows = $derived(declRows.trim().length > 0);
@@ -119,6 +122,11 @@
 			declMsg = {
 				ok: false,
 				text: `Denied: ${verb === 'create' ? 'creating' : 'declaring'} in ${ns} needs create access (can_create_table).`,
+			};
+		else if (status === 0 && verb === 'create')
+			declMsg = {
+				ok: false,
+				text: `Not confirmed: the catalog did not answer, so the table may have been created. Creating again sends the same request, which the catalog applies once. (${detail})`,
 			};
 		else if (status === 0)
 			declMsg = { ok: false, text: `Catalog unreachable — the ${verb} was not applied.` };
@@ -181,7 +189,12 @@
 			// Browser-side Arrow-IPC encode: the inferred schema BECOMES the table's schema on a create,
 			// so whole numbers are written as integers (`rowsToArrow`).
 			const arrow = rowsToArrow(rows);
-			const res = await createTableWithRows({ table: `${ns}$${name}`, arrow });
+			const res = await createTableWithRows({
+				table: `${ns}$${name}`,
+				arrow,
+				key: createKey.take(JSON.stringify([ns, name, declRows])),
+			});
+			createKey.settle(res);
 			if (res.ok) {
 				declMsg = {
 					ok: true,
@@ -451,7 +464,7 @@
 		</form>
 	{/if}
 	{#if declMsg}
-		<div class="banner" class:ok={declMsg.ok} class:fail={!declMsg.ok}>{declMsg.text}</div>
+		<div class={['banner', { ok: declMsg.ok, fail: !declMsg.ok }]}>{declMsg.text}</div>
 	{/if}
 
 	{#if unauthorized}

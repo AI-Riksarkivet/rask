@@ -27,6 +27,7 @@ from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Any, Final, NamedTuple, cast
 
 import lance
@@ -114,7 +115,7 @@ from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
-from catalog.core.run_context import AUTHOR_PROPERTY, OPERATION_PROPERTY
+from catalog.core.run_context import AUTHOR_PROPERTY, IDEMPOTENCY_KEY_PROPERTY, OPERATION_PROPERTY
 from catalog.core.vending import classified_columns, labelled_fields
 from catalog.services import changes, commit_authors, committed_files, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
@@ -2657,6 +2658,35 @@ def delete_from_table(
             table, so, transaction_properties, captured(table, so, lambda handle: handle.delete(predicate), branch=req.branch), branch=req.branch
         )
     return DeleteFromTableResponse(version=version)
+
+
+#: How far before a lapsed attempt's claim its commit is looked for: the commit's time is the pod's clock and the claim's
+#: the store's, so the search starts this much earlier than the claim, wider than any skew between them.
+_CLOCK_SKEW = timedelta(minutes=10)
+
+
+def committed_under_key(table: table_claims.DoorTable, so: StorageOptions, *, branch: str | None, mark: str, since: datetime) -> InsertIntoTableResponse | None:
+    """The append an earlier attempt under the key ``mark`` names committed on ``branch``, or ``None`` when it committed none.
+
+    For a key taken over from an attempt whose lease ran out unanswered ([[LH-577]]): it may have committed and been lost
+    before it recorded its answer, and an append run again would land twice. Its commit carries the key
+    (:data:`IDEMPOTENCY_KEY_PROPERTY`), so the versions committed since that attempt claimed the key are read, newest
+    first, until one older than the claim, and the one carrying the key is answered as that append was: its version and
+    the rows its new fragments hold. Lance keeps a version's transaction until a cleanup removes it, and a version
+    committed minutes ago is far inside any retention.
+    """
+    dataset = table.open(so, branch=branch)
+    earliest = since - _CLOCK_SKEW
+    for entry in reversed(dataset.versions()):
+        if committed_at(entry) < earliest:
+            return None
+        version = int(entry["version"])
+        transaction = dataset.read_transaction(version)
+        if transaction is None or (transaction.transaction_properties or {}).get(IDEMPOTENCY_KEY_PROPERTY) != mark:
+            continue
+        added = getattr(transaction.operation, "fragments", None) or []
+        return InsertIntoTableResponse(version=version, num_inserted_rows=sum(int(fragment.physical_rows or 0) for fragment in added))
+    return None
 
 
 def insert_into_table(

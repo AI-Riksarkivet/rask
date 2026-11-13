@@ -6,12 +6,15 @@
 	import { Button } from '@rask/ui/button';
 	import { createTableWithRows } from '../catalog';
 	import { parseJsonRows, rowsToArrow } from '../json-rows';
+	import { WriteKey } from '../write-key.svelte';
 
 	let { table, onwritten }: { table: string; onwritten: () => Promise<void> } = $props();
 
 	let rowsJson = $state('');
 	let busy = $state(false);
 	let problem = $state<string | null>(null);
+	// Kept while an unanswered first write of the same rows is retried, so the catalog creates the table once (LH-577).
+	const writeKey = new WriteKey();
 
 	async function write(): Promise<void> {
 		if (busy || !rowsJson.trim()) return;
@@ -30,12 +33,15 @@
 		}
 		busy = true;
 		try {
-			const res = await createTableWithRows({ table, arrow });
+			const res = await createTableWithRows({ table, arrow, key: writeKey.take(rowsJson) });
+			writeKey.settle(res);
 			if (res.ok) {
 				rowsJson = '';
 				await onwritten();
 			} else if (res.status === 403) {
 				problem = 'Denied: the first write needs create access (can_create_table) here.';
+			} else if (writeKey.pending(rowsJson)) {
+				problem = `Not confirmed: the table may have been written. Writing again sends the same request, which the catalog applies once. (${res.detail})`;
 			} else {
 				problem = res.detail;
 			}

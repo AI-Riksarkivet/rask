@@ -69,7 +69,8 @@ export type TableDetail = {
 export type CatalogResult<T> = ApiResult<T>;
 
 const requestJSON = (path: string, init?: RequestInit) => request(CATALOG_API, path, init);
-const requestBytes = (path: string, body: BodyInit) => requestBytesRaw(CATALOG_API, path, body);
+const requestBytes = (path: string, body: BodyInit, idempotencyKey: string) =>
+	requestBytesRaw(CATALOG_API, path, body, { idempotencyKey });
 
 const enc = encodeURIComponent;
 
@@ -141,10 +142,12 @@ export const fetchTableHistory = async (
 };
 
 /** A write of Arrow-IPC rows (built in the browser via apache-arrow) into one table. The bytes are
- *  not a schema-validated value, so the two row writes are declared `unchecked`. */
+ *  not a schema-validated value, so the two row writes are declared `unchecked`. `key` is the write's
+ *  Idempotency-Key, which a retry of the same rows sends again (`WriteKey`). */
 interface RowsWrite {
 	table: string;
 	arrow: Uint8Array;
+	key: string;
 }
 
 /** The FIRST write of a table — create it FROM Arrow-IPC rows (built in the browser via apache-arrow).
@@ -161,8 +164,8 @@ interface RowsWrite {
 export const createTableWithRows = command(
 	({ table }: RowsWrite) => `Create table ${table} with rows`,
 	'unchecked',
-	async ({ table, arrow }: RowsWrite) =>
-		requestBytes(`v1/table/${enc(table)}/create`, arrow as BodyInit),
+	async ({ table, arrow, key }: RowsWrite) =>
+		requestBytes(`v1/table/${enc(table)}/create`, arrow as BodyInit, key),
 );
 
 /** #64 data-plane row insert — append Arrow-IPC rows (built in the browser via apache-arrow). Writer-gated
@@ -171,8 +174,8 @@ export const createTableWithRows = command(
 export const insertRows = command(
 	({ table }: RowsWrite) => `Insert rows into table ${table}`,
 	'unchecked',
-	async ({ table, arrow }: RowsWrite) =>
-		requestBytes(`v1/table/${enc(table)}/insert?mode=append`, arrow as BodyInit),
+	async ({ table, arrow, key }: RowsWrite) =>
+		requestBytes(`v1/table/${enc(table)}/insert?mode=append`, arrow as BodyInit, key),
 );
 
 // Schema evolution (#74: add / rename / drop / re-type a column, the field- and table-level property

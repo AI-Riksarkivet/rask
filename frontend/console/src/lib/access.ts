@@ -36,7 +36,6 @@ export const TuplesPageSchema = v.object({
 	tuples: v.array(TupleSchema),
 	continuation: v.nullable(v.string()),
 });
-export type TuplesPage = v.InferOutput<typeof TuplesPageSchema>;
 
 export const AccessModelSchema = v.object({
 	dsl: v.string(), // the checked-in model.fga text

@@ -50,6 +50,9 @@ JOB_PROPERTY: Final = "rask.job"
 INPUTS_PROPERTY: Final = "rask.inputs"
 AUTHOR_PROPERTY: Final = "rask.author"
 OPERATION_PROPERTY: Final = "rask.operation"
+#: The caller's Idempotency-Key, by its scope, on a keyed append's commit: the record a takeover of the key reads to find
+#: an append that landed and was never answered ([[LH-577]]). The catalog's own; no stock commit may carry it.
+IDEMPOTENCY_KEY_PROPERTY: Final = "rask.idempotency_key"
 
 #: Every ``rask.*`` transaction property a stock client's commit may carry.
 PROPERTIES: Final = frozenset({RUN_ID_PROPERTY, JOB_NAMESPACE_PROPERTY, JOB_PROPERTY, INPUTS_PROPERTY, AUTHOR_PROPERTY})

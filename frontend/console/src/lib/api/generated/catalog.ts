@@ -3800,6 +3800,12 @@ export interface paths {
          *     (ADR 0099, [[LH-415]]).
          *
          *     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
+         *
+         *     An ``Idempotency-Key`` makes a resent append converge ([[LH-577]]): a caller that gave up on a slow append, which may
+         *     have committed, sends it again under the same key and is answered the first attempt's response, nothing appended a
+         *     second time. The key names one append, its mode and its ref included. Its commit carries the key, so a resend that
+         *     takes the key over from an attempt lost unanswered past its lease finds that attempt's commit and answers with it
+         *     rather than appending again. Optional, as on every keyed door (:mod:`catalog.api.idempotency`).
          */
         post: operations["insert_into_table_v1_table__id__insert_post"];
         delete?: never;
@@ -17571,6 +17577,7 @@ export interface operations {
             };
             header?: {
                 authorization?: string | null;
+                "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
             path: {

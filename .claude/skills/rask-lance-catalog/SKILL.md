@@ -733,6 +733,15 @@ governing their data. The project-scoped surface is the console's project page, 
 
 ## Gotchas
 
+- **An `Idempotency-Key` converges a resent write; it is optional on every keyed door** (`catalog.api.idempotency`,
+  `lakehouse.idempotency`): create, drop, rename, deregister, register, restore and insert. A key is one operation on one
+  object (the door, and for an insert its mode and ref, and the object's canonical id), answered with its first response.
+  A claim unanswered past `LEASE` (300 s) is taken over, and the claim says so (`TakenOver`): an append run again would
+  land twice, so the insert door stamps the key on its commit (`rask.idempotency_key`, by the caller's scope, a property
+  no stock commit may carry) and a takeover reads the ref's versions since that claim for it, answering with the commit
+  it finds ([[LH-577]], `dataplane.committed_under_key`). The insert records its answer right after its commit, before
+  the lineage emit, so a failure after the commit is answered on resend rather than run again.
+
 - **`update_table_schema_metadata` MERGES — the spec text ("Replace schema metadata") is wrong about
   every backend.** Probed against a real `dir` backend: posting `{owner}` over `{owner, tier}` leaves
   `tier` standing. So omitting a key cannot remove it, and the spec's request model types `metadata` as

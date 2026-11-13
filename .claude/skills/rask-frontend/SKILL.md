@@ -186,6 +186,14 @@ every estate:
 `#lib/doors.ts::catalogJSON` is the catalog's door over it. The result is the shared `ApiResult` union: 0 unreachable, n
 answered-n with the upstream's `{detail}`, 502 contract drift (a payload that fails its valibot schema).
 
+**A read gives up, a write is waited for** ([[LH-577]]). `upstreamJSON` gives a GET or HEAD the poll's 8 s
+(`FETCH_TIMEOUT_MS`) and a write none of its own; `requestBytes`, the Arrow row writes, waits `WRITE_TIMEOUT_MS` (120 s)
+and sends the write's `Idempotency-Key`. A write that got no answer (status 0) may have landed, so a page says it is
+NOT CONFIRMED, never that it was not applied. Each row-writing form holds a `WriteKey` (`#lib/data/write-key.svelte.ts`):
+one key per batch, kept while an unanswered (0), conflicting (409) or failed (5xx) write of the same rows is retried,
+so the catalog applies it once, and a new one once the write is settled or the rows change; the form's button reads
+Retry while one is held.
+
 **`#lib/reads.svelte.ts` is the data layer**: `query` (a cached, refreshable read), `query.live` (a cursor that
 advances), and `command` (a write), in the browser. Every `*.api.ts` module (`#lib/remote/`, `#lib/data/remote/`,
 `#lib/admin/remote/`, `#lib/lineage/remote/`, `#lib/live/`, `#lib/storage/remote/`) declares its reads and writes with

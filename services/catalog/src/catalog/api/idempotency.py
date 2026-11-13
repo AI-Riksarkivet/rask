@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -84,6 +85,14 @@ class Converge(BaseModel):
     #: This request's attempt at the key: the claim it gives back is only its own.
     attempt: str = ""
     replay: idempotency.Replay | None = None
+    #: Set when this attempt took the key over from one that lapsed unanswered: when that attempt claimed it, on the
+    #: store's clock. A door that must not run twice looks for that attempt's write first.
+    taken_over_since: datetime | None = None
+
+    @property
+    def mark(self) -> str | None:
+        """What a door stamps on its commit under this key, so a takeover can find the commit (``None`` without a key)."""
+        return None if self.key is None else f"{self.scope}/{self.key}"
 
     async def release_if_refused(self, exc: BaseException) -> None:
         """Give the claim back when ``exc`` is a refusal (a 4xx of the spec's taxonomy), which the keyed doors raise
@@ -139,7 +148,7 @@ async def begin(registry_root: str, storage_options: StorageOptions, scope: str,
     key = key.lower()
     attempt = uuid4().hex
     try:
-        replay = await run_in_threadpool(
+        claimed = await run_in_threadpool(
             idempotency.claim,
             registry_root,
             storage_options,
@@ -154,7 +163,11 @@ async def begin(registry_root: str, storage_options: StorageOptions, scope: str,
         raise ConcurrentModificationError(str(exc)) from exc
     except idempotency.KeyRecordUnreadableError as exc:
         raise InternalError(str(exc)) from exc
-    return Converge(registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, attempt=attempt, replay=replay)
+    replay = claimed if isinstance(claimed, idempotency.Replay) else None
+    taken_over_since = claimed.since if isinstance(claimed, idempotency.TakenOver) else None
+    return Converge(
+        registry_root=registry_root, storage_options=storage_options, scope=scope, key=key, attempt=attempt, replay=replay, taken_over_since=taken_over_since
+    )
 
 
 class KeyedDoor(BaseModel):
