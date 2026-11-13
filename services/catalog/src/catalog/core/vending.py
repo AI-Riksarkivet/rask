@@ -45,7 +45,7 @@ from lakehouse import file_identities, history_fences, store_session
 from lakehouse.base_refs import decoded_path, location_within, normalise
 from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
-from lakehouse.features import BasePathRef
+from lakehouse.features import CREATE_FORMAT, BasePathRef, TableFileFormat, manifest_base_path_refs, table_file_format
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
@@ -627,6 +627,9 @@ class VendFacts(BaseModel):
     base_uris: tuple[str, ...] = ()
     #: Fields carrying :data:`CLASSIFICATION_KEY` on any ref of the table ([[LH-058]], [[LH-207]]).
     classified: tuple[str, ...] = ()
+    #: The ref's file version and stable-row-id setting, which a writer's fragments must match ([[LH-260]]); for a table
+    #: holding no committed version, the format its first ``version/create`` must carry.
+    file_format: TableFileFormat = CREATE_FORMAT
 
 
 def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str = "") -> VendFacts:
@@ -663,7 +666,6 @@ def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str
             not be read. Answering "no bases" here would vend without judging them, which the base judge exists to refuse.
         InternalError: The table holds a committed version that does not open.
     """
-    from lakehouse.features import manifest_base_path_refs
     from lakehouse.objectfs import same_store_uri
 
     ds = _open_vended_ref(location, storage_options, branch=branch)
@@ -680,6 +682,7 @@ def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str
         bases=refs,
         base_uris=uris,
         classified=classified_in_any_ref(ds, branch=branch),
+        file_format=table_file_format(ds),
     )
 
 

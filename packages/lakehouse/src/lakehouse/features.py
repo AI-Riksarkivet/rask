@@ -47,7 +47,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Final, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse import manifest_wire
 
@@ -263,6 +263,47 @@ class BasePathRef(BaseModel):
     #: which is what `shallow_clone` writes (lh279 p4). The catalog's base record carries it for an
     #: operator reading the record, and decides nothing on it.
     name: str | None = None
+
+
+#: The detailed-metadata keys a table's file format is answered under ([[LH-260]]): the platform's reserved ``rask.*``
+#: prefix, which no caller writes, so they stay apart from the table's own schema metadata.
+DATA_STORAGE_VERSION_KEY: Final = "rask.data_storage_version"
+STABLE_ROW_IDS_KEY: Final = "rask.stable_row_ids"
+
+
+class FormattedDataset(Protocol):
+    """What a ``lance.LanceDataset`` answers of its file format, off the manifest it is open at."""
+
+    @property
+    def data_storage_version(self) -> str: ...
+
+    @property
+    def has_stable_row_ids(self) -> bool: ...
+
+
+class TableFileFormat(BaseModel):
+    """What a writer's files must match for a commit to be admitted: the ref's data file version and whether its rows
+    carry stable row ids (``version/create`` refuses a fragment at another version, ``client_fragments``)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    data_storage_version: str
+    stable_row_ids: bool
+
+    def as_metadata(self) -> dict[str, str]:
+        """The two values as DescribeTable's detailed ``metadata`` answers them."""
+        return {DATA_STORAGE_VERSION_KEY: self.data_storage_version, STABLE_ROW_IDS_KEY: "true" if self.stable_row_ids else "false"}
+
+
+#: The one format the catalog creates every table at, and the one a table's first ``version/create`` must carry: both are
+#: create-time settings in pylance, and a table holding no committed version is answered this ([[LH-260]]).
+CREATE_FILE_VERSION: Final = "2.2"
+CREATE_FORMAT: Final = TableFileFormat(data_storage_version=CREATE_FILE_VERSION, stable_row_ids=True)
+
+
+def table_file_format(ds: FormattedDataset) -> TableFileFormat:
+    """The file format of the ref ``ds`` is open at, as pylance answers it."""
+    return TableFileFormat(data_storage_version=ds.data_storage_version, stable_row_ids=ds.has_stable_row_ids)
 
 
 def manifest_base_path_refs(ds: ManifestCarrier) -> list[BasePathRef]:

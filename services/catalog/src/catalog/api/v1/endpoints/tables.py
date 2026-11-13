@@ -104,6 +104,7 @@ from lakehouse import base_registry, location_claims, object_records, protection
 from lakehouse.clone_endings import CloneEnding
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.control_events import CatalogControlEvent, ControlAction
+from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
@@ -717,6 +718,8 @@ def _load_or_judge_declared(response: DescribeTableResponse, table: DoorTable, s
             if dataplane.holds_a_version(str(response.location), so):
                 raise
             response.is_only_declared = True
+            # The only thing a declared table's detail holds: the format its first `version/create` must carry.
+            response.metadata = CREATE_FORMAT.as_metadata()
             return
     response.is_only_declared = False
     _load_detailed_metadata(response, dataset)
@@ -728,7 +731,10 @@ def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.Lanc
     ``load_detailed_metadata`` "must include all detailed metadata such as `version`, `schema`, and `stats`"
     (`lance_docs/ns_catalog/spec.yaml` DescribeTableRequest); the stats are ``TableBasicStats``, which Lance's
     ``dataset_stats`` reads off the manifest the handle already holds. ``metadata`` is the table's user metadata, read
-    from the same handle, so a table property a caller writes through ``schema_metadata/update`` is read back here.
+    from the same handle, so a table property a caller writes through ``schema_metadata/update`` is read back here, and
+    the table's file format (`lakehouse.features.DATA_STORAGE_VERSION_KEY`, `STABLE_ROW_IDS_KEY`): ``metadata`` is the
+    spec's map for "the information of the table [that] requires loading the table", where ``properties`` is what the
+    namespace manages.
     """
     stats = dataset.stats.dataset_stats()
     loaded = DescribeTableResponse.model_validate(
@@ -741,9 +747,9 @@ def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.Lanc
     response.version = loaded.version
     response.var_schema = loaded.var_schema
     response.stats = loaded.stats
-    metadata = dataplane.user_schema_metadata(dataset.schema)
-    if metadata:
-        response.metadata = metadata
+    # The table's own schema metadata, then its file format under the platform's reserved keys, which no caller writes
+    # ([[LH-260]]): a client staging files for `version/create` must write them at this version.
+    response.metadata = {**dataplane.user_schema_metadata(dataset.schema), **table_file_format(dataset).as_metadata()}
 
 
 #: The spec gives `exists` a 200 with NO `content:` block — *"Success, no content"* — so a conforming

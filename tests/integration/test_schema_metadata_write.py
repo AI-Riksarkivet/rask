@@ -20,6 +20,7 @@ import pyarrow.ipc as ipc
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_metadata import build_lineage_metadata
+from lakehouse.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -47,10 +48,11 @@ def _create(client: TestClient, table: str, *, stamp_lineage: bool = False) -> N
 
 
 def _properties(client: TestClient, table: str) -> dict[str, str]:
-    """The table's user-visible properties, read back the way the console reads them."""
+    """The table's user-visible properties, read back the way the console reads them: the detailed metadata without the
+    file format the catalog answers beside them ([[LH-260]])."""
     resp = client.post(f"/v1/table/lance_catalog$m1${table}/describe?load_detailed_metadata=true", json={})
     assert resp.status_code == 200, resp.text
-    return resp.json().get("metadata") or {}
+    return {key: value for key, value in (resp.json().get("metadata") or {}).items() if key not in (DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY)}
 
 
 def _location(client: TestClient, table: str) -> str:

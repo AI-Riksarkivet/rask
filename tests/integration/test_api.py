@@ -10,6 +10,7 @@ are exercised.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -30,6 +31,7 @@ from lance_namespace import (
 )
 
 from catalog.services.dataplane import CommitReadback
+from lakehouse.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
 from lakehouse.naming import UUID_PROPERTY
 
 
@@ -94,6 +96,22 @@ def test_create_table_passes_arrow_bytes_through(real_ns_client: TestClient) -> 
     assert ds.count_rows() == 3
     assert ds.data_storage_version == "2.2"  # the whole point of routing every create through the direct path
     assert ds.has_stable_row_ids
+
+
+def test_describe_answers_the_file_format_the_table_was_written_at(real_ns_client: TestClient, tmp_path: Path) -> None:
+    """A client writing fragments for `version/create` must match the table's file version and stable-row-id setting, and
+    learns both from the detailed metadata, which the spec says requires loading the table ([[LH-260]]). Registered at
+    2.1, a version the catalog never creates, so only the table's own manifest answers it (the register door refuses a
+    table without stable row ids)."""
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
+    lance.write_dataset(pa.table({"id": [1]}), str(tmp_path / "legacy"), data_storage_version="2.1", enable_stable_row_ids=True)
+    registered = real_ns_client.post("/v1/table/lance_catalog$db$legacy/register", json={"location": "legacy"})
+    assert registered.status_code == 200, registered.text
+
+    described = real_ns_client.post("/v1/table/lance_catalog$db$legacy/describe", json={"load_detailed_metadata": True})
+
+    detailed = described.json()["metadata"]
+    assert (described.status_code, detailed[DATA_STORAGE_VERSION_KEY], detailed[STABLE_ROW_IDS_KEY]) == (200, "2.1", "true"), described.text
 
 
 def _arrow_ipc(table: pa.Table) -> bytes:

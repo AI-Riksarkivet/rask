@@ -193,7 +193,7 @@ async def vend_credentials(
     # which is the precondition for masking rather than masking itself.
     if to_a_client and facts.classified:
         log.info("vend_server_mediated_classified_columns", extra={"location": location, "columns": list(facts.classified)})
-        return CredentialResponse(mode="server_mediated")
+        return CredentialResponse(mode="server_mediated", file_format=facts.file_format)
     # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). Every base here is
     # already one the catalog sanctioned (above); what remains is whether the session policy can ADDRESS
     # it — `build_session_policy` grants each allowlisted base a `ListBase<n>`/`BaseObjects<n>` pair, so the
@@ -201,7 +201,7 @@ async def vend_credentials(
     # the catalog's own credential, which is what the server-mediated answer routes the caller to.
     if to_a_client and (missed := unsanctioned_bases(location, bases.bases, settings.multibase_data_base_list)):
         log.info("vend_server_mediated_unreachable_bases", extra={"location": location, "bases": list(missed)})
-        return CredentialResponse(mode="server_mediated")
+        return CredentialResponse(mode="server_mediated", file_format=facts.file_format)
     # A vend is a grant on the table its uuid identifies, so a table no uuid identifies is refused before anything is
     # minted ([[LH-534]]); the uuid also keys the records a maintain-tier vend reaches on the control root.
     table_uuid = table.resolved.require_uuid()
@@ -234,4 +234,4 @@ async def vend_credentials(
             tier=tier,
             door="credentials",
         )
-    return CredentialResponse(mode=mode, credentials=creds, location=location, read_version=facts.read_version)
+    return CredentialResponse(mode=mode, credentials=creds, location=location, read_version=facts.read_version, file_format=facts.file_format)

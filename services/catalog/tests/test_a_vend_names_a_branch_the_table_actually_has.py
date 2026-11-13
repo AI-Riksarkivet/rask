@@ -42,6 +42,7 @@ from catalog.api.v1.endpoints.credentials import vend_credentials
 from catalog.core.vending import ReclaimScope, VendedSession
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import location_claims
+from lakehouse.features import TableFileFormat
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage_options import StorageOptions
@@ -104,7 +105,8 @@ def _door(location: str) -> DoorTable:
 def table(tmp_path: Path) -> str:
     """A real Lance table with one real branch, because the door's question is what the DATASET has."""
     location = str(tmp_path / "t.lance")
-    lance.write_dataset(pa.table({"id": pa.array([1, 2, 3], pa.int64())}), location)
+    # At 2.1 without stable row ids: the shape the catalog never creates, so a vend answering its own defaults fails.
+    lance.write_dataset(pa.table({"id": pa.array([1, 2, 3], pa.int64())}), location, data_storage_version="2.1")
     lance.dataset(location).create_branch("work")
     return location
 
@@ -158,7 +160,9 @@ def test_a_vend_for_a_branch_the_table_DOES_have_is_served(table: str) -> None:
     response, vendor = _vend(table, "work")
 
     assert len(vendor.calls) == 1, "an existing branch was not vended for"
-    assert response.mode == "direct"
+    # The writer learns the ref's file version and stable-row-id setting from the vend ([[LH-260]]), since a fragment it
+    # writes at another version is refused at `version/create`.
+    assert (response.mode, response.file_format) == ("direct", TableFileFormat(data_storage_version="2.1", stable_row_ids=False))
 
 
 @pytest.mark.parametrize("main", [pytest.param("", id="absent"), pytest.param("main", id="named")])

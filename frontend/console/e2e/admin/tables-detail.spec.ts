@@ -31,7 +31,13 @@ const DESCRIBE = {
 	schema: {
 		fields: [{ name: 'id', type: 'int64', nullable: false, metadata: { unit: 'count' } }],
 	},
-	metadata: { owner: 'data-eng' }, // #74 tail — table-level schema metadata (properties editor seed)
+	// #74 tail — table-level schema metadata (properties editor seed), beside the file format the catalog answers under
+	// its reserved keys ([[LH-260]]), which no save may send back.
+	metadata: {
+		owner: 'data-eng',
+		'rask.data_storage_version': '2.2',
+		'rask.stable_row_ids': 'true',
+	},
 };
 
 const MANIFESTS = [

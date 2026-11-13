@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from catalog.services.changes import ChangeKind
 from catalog.services.control_records import DeleteMode
 from lakehouse.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
+from lakehouse.features import TableFileFormat
 from lakehouse.maintenance_due import CompactionDue, IndexDue
 
 
@@ -815,6 +816,11 @@ class CredentialResponse(BaseModel):
     credentials: VendedCredentials | None = None
     location: str | None = None
     read_version: int | None = None
+    #: The vended ref's data file version and stable-row-id setting, which every file a writer stages must match, or
+    #: ``version/create`` refuses the commit ([[LH-260]]); for a table holding no committed version, the format its first
+    #: commit must carry. The table vend door answers it in every mode; a trash reclaim session, which writes nothing,
+    #: answers none.
+    file_format: TableFileFormat | None = None
 
 
 class TrashReleaseResponse(BaseModel):

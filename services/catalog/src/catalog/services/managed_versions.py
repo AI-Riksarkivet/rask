@@ -45,6 +45,7 @@ from catalog.core.vending import labelled_fields
 from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, row_digests, table_claims
 from lakehouse import base_registry, commit_records, commit_turns, features, file_identities
 from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.storage_options import StorageOptions
 
@@ -310,9 +311,6 @@ def _open(staged: StagedVersion, so: StorageOptions) -> lance.LanceDataset:
     return lance.dataset(staged.location, version=staged.detached_id, storage_options=so.in_clear() or None)
 
 
-#: The file version and row ids every table is created with (CLAUDE.md, "A Lance APPEND never names a file version").
-_CREATE_FILE_VERSION = "2.2"
-
 #: Manifest config a stock commit may not carry: Lance runs auto-cleanup inside the commit that finds it armed, which
 #: deletes versions ([[LH-245]]).
 _ARMED_CLEANUP_PREFIX = "lance.auto_cleanup."
@@ -384,9 +382,9 @@ def _refuse_changed_invariants(proposed: lance.LanceDataset, current: lance.Lanc
     """A create is 2.2 with stable row ids, and no later version changes either."""
     stable = bool(proposed.has_stable_row_ids)
     if current is None:
-        if proposed.data_storage_version != _CREATE_FILE_VERSION or not stable:
+        if table_file_format(proposed) != CREATE_FORMAT:
             raise InvalidInputError(
-                f"commit refused: a table is created at data_storage_version {_CREATE_FILE_VERSION} with stable row ids, "
+                f"commit refused: a table is created at data_storage_version {CREATE_FORMAT.data_storage_version} with stable row ids, "
                 f"not {proposed.data_storage_version} with stable row ids {stable}"
             )
         return

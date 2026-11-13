@@ -53,6 +53,8 @@
 	// `?tab=` deep-links a tab (the registry drawer's "access" jump uses it) and the tab bar now WRITES it,
 	// so a tab is linkable, reload-stable and back-button-able.
 	const TABS = ['overview', 'preview', 'history', 'access'];
+	/** The platform's metadata keys: the catalog answers them and refuses a caller's write of one. */
+	const RESERVED_PREFIX = 'rask.';
 	// DERIVED from the URL, not mirrored into it: the tab is a linkable, reload-stable, back-button-able
 	// piece of the address, and deriving it is the only way that cannot race. (Mirroring `tab` into the URL
 	// from an effect left the deep link at the mercy of effect order — on reload the mirror stripped
@@ -136,8 +138,16 @@
 	const policyUnavailable = $derived(partErrored(detail?.policy));
 	const schemaFields = $derived((detail?.describe.schema?.fields ?? []) as SchemaField[]);
 	// #74 tail — the table's schema-level metadata map (what schema_metadata/update sets), for the properties
-	// editor. `describe.metadata` is the current map; absent → an empty, still-editable map.
-	const tableMeta = $derived((detail?.describe.metadata ?? {}) as Record<string, string>);
+	// editor. `describe.metadata` is the current map; absent → an empty, still-editable map. The catalog answers the
+	// table's file format beside it under its reserved `rask.` keys, which no caller writes ([[LH-260]]): they are not
+	// the user's properties, and a save that sent one back would be refused whole.
+	const tableMeta = $derived(
+		Object.fromEntries(
+			Object.entries((detail?.describe.metadata ?? {}) as Record<string, string>).filter(
+				([key]) => !key.startsWith(RESERVED_PREFIX),
+			),
+		),
+	);
 	// #78 — `description` is the reserved property: the table's own prose. Rendered here READ-ONLY, under
 	// the name; editing it stays in the Properties section, so there is one editor and one door.
 	const tableDescription = $derived((tableMeta.description ?? '').trim());

@@ -4577,6 +4577,16 @@
               }
             ]
           },
+          "file_format": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableFileFormat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "location": {
             "anyOf": [
               {
@@ -11774,6 +11784,25 @@
           }
         },
         "title": "TableExistsRequest",
+        "type": "object"
+      },
+      "TableFileFormat": {
+        "description": "What a writer's files must match for a commit to be admitted: the ref's data file version and whether its rows\ncarry stable row ids (``version/create`` refuses a fragment at another version, ``client_fragments``).",
+        "properties": {
+          "data_storage_version": {
+            "title": "Data Storage Version",
+            "type": "string"
+          },
+          "stable_row_ids": {
+            "title": "Stable Row Ids",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "data_storage_version",
+          "stable_row_ids"
+        ],
+        "title": "TableFileFormat",
         "type": "object"
       },
       "TableVersion": {

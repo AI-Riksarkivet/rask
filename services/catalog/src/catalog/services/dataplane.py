@@ -136,7 +136,7 @@ from lakehouse import (
 from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
 from lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.control_prefixes import CONTROL_PREFIXES
-from lakehouse.features import manifest_base_path_refs
+from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
 from lakehouse.history_fences import HistoryWork
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
 from lakehouse.lancekit.versions import committed_at
@@ -449,13 +449,13 @@ def _write_blob(
             uri,
             mode=mode,
             storage_options=so.in_clear(),
-            data_storage_version="2.2",
+            data_storage_version=CREATE_FILE_VERSION,
             # #5a: durable row identity — ``_rowid`` stays constant across compaction (which rewrites
             # fragments and invalidates row ADDRESSES), gating the row-id index + row-version tracking
             # (``_row_*_at_version``) that field-level/temporal lineage rests on. CREATE-TIME-ONLY: an ordinary
             # write with it on does not migrate an existing dataset (`lance_docs/lance/format/table/row_id_lineage.md`
             # § Enabling Stable Row IDs), so it is set on every create and overwrite here.
-            enable_stable_row_ids=True,
+            enable_stable_row_ids=CREATE_FORMAT.stable_row_ids,
             initial_bases=initial_bases,
             target_bases=target_bases,
             allow_external_blob_outside_bases=allow_external,

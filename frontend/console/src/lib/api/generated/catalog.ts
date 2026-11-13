@@ -6228,6 +6228,7 @@ export interface components {
          */
         CredentialResponse: {
             credentials?: components["schemas"]["VendedCredentials"] | null;
+            file_format?: components["schemas"]["TableFileFormat"] | null;
             /** Location */
             location?: string | null;
             /** Mode */
@@ -9417,6 +9418,17 @@ export interface components {
              * @description Version of the table to check existence. If not specified, server should resolve it to the latest version.
              */
             version?: number | null;
+        };
+        /**
+         * TableFileFormat
+         * @description What a writer's files must match for a commit to be admitted: the ref's data file version and whether its rows
+         *     carry stable row ids (``version/create`` refuses a fragment at another version, ``client_fragments``).
+         */
+        TableFileFormat: {
+            /** Data Storage Version */
+            data_storage_version: string;
+            /** Stable Row Ids */
+            stable_row_ids: boolean;
         };
         /**
          * TableVersion
