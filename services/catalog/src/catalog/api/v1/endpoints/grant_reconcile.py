@@ -16,14 +16,17 @@ from __future__ import annotations
 
 from functools import partial
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
+from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import FgaClientDep, SettingsDep
+from catalog.api.dependencies import FgaClientDep, SettingsDep, namespace_for_table
 from catalog.api.security import CurrentToken
+from catalog.core.config import Settings
 from catalog.schemas import GhostRevokeRequest, GhostRevokeResponse, GrantCensusResponse, TenancyRebuildRequest, TenancyRebuildResponse
-from catalog.services import grant_reconcile, warehouses
+from catalog.services import grant_reconcile, table_claims, warehouses
+from lakehouse import location_claims
 from lakehouse.governed import fga
 
 
@@ -50,20 +53,42 @@ async def grant_census(settings: SettingsDep, client: FgaClientDep) -> GrantCens
 
 
 @management_router.post("/ghosts/revoke")
-async def revoke_ghost_grants(body: GhostRevokeRequest, settings: SettingsDep, client: FgaClientDep, token: CurrentToken) -> GhostRevokeResponse:
+async def revoke_ghost_grants(
+    body: GhostRevokeRequest, request: Request, settings: SettingsDep, client: FgaClientDep, token: CurrentToken
+) -> GhostRevokeResponse:
     """Revoke every grant on each object no registry names, as a drift report found them.
 
     Each object is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
-    record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop.
+    record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a
+    table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]).
     """
-    held = await run_in_threadpool(grant_reconcile.held_table_uuids, settings)
+    held = await run_in_threadpool(grant_reconcile.held_table_claims, settings)
     answer = GhostRevokeResponse()
     for obj in dict.fromkeys(body.objects):
-        if (reason := await run_in_threadpool(partial(grant_reconcile.ghost_refusal, settings, obj, held=held))) is not None:
+        claim = held.get(obj)
+        reason = await _claim_refusal(request, settings, claim) if claim is not None else None
+        if reason is None:
+            reason = await run_in_threadpool(partial(grant_reconcile.ghost_refusal, settings, obj))
+        if reason is not None:
             answer.refused[obj] = reason
             continue
         answer.revoked[obj] = await fga_deps.revoke_ghost_object(client, settings, obj, token=token)
     return answer
+
+
+async def _claim_refusal(request: Request, settings: Settings, claim: location_claims.LocationClaim) -> str | None:
+    """:func:`grant_reconcile.claim_refusal` on the store's clock, asking the claim's warehouse whether its table stands.
+
+    Raises:
+        ServiceUnavailableError: The backend could not tell whether the table stands.
+    """
+    store = table_claims.claim_store(settings)
+    now = await run_in_threadpool(location_claims.store_now, store, claim.location)
+    try:
+        ns = await namespace_for_table(request, settings, claim.segments)
+    except PermissionDeniedError:
+        return "the warehouse of the table its location claim records is deactivated"
+    return await run_in_threadpool(partial(grant_reconcile.claim_refusal, claim, now=now, stands=partial(table_claims.holder_stands, ns, store, claim)))
 
 
 @management_router.post("/tenancy/rebuild")

@@ -215,6 +215,18 @@ async def namespace_for_warehouse(request: Request, settings: Settings, warehous
     return await _catalog_at(request, settings, await require_active_warehouse(request, settings, warehouse_id))
 
 
+async def namespace_for_table(request: Request, settings: Settings, segments: list[str]) -> LanceNamespace:
+    """The directory catalog the table ``segments`` names lives in, for a caller holding a table's name (a location
+    claim's holder): its first segment's warehouse's, or the estate's own for a name of one segment.
+
+    Raises:
+        PermissionDeniedError: The warehouse is deactivated.
+    """
+    if len(segments) > 1:
+        return await namespace_for_warehouse(request, settings, segments[0])
+    return await estate_namespace(request, settings)
+
+
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
 
 

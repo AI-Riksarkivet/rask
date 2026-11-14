@@ -261,3 +261,43 @@ each point of the rename), `services/catalog/tests/test_a_rename_into_another_na
 (the doors that find a table standing, the table inheriting from both namespaces, the rival landed as the rename
 arrives, and both namespace cascades) and
 `tests/integration/test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py` (the warehouse delete).
+
+## Amendment, 2026-11-14: a table's grants are written before the table ([[LH-588]], #821)
+
+The residual this ADR's amendment of 2026-11-11 stated, a registered table whose registration died between its claim
+and its seed holding no tuple, is closed by changing the order of the two writes for every door that brings a table into
+being. Every `table` relation resolves through a direct tuple or `from parent`, so a table holding none denies every
+principal, its creator included.
+
+1. **Create and declare** write the table's grants (its owner, and its `parent` and `child` edges, under the uuid the
+   door minted) inside `dataplane.declare_table`, after the location's claim records that uuid and before the
+   `.lance-reserved` marker and the backend's row (`fga_deps.GrantsBeforeWrite`, handed in as `before_register`). A
+   create that writes into a table an earlier request declared, keeps a table under ExistOk, or overwrites one writes no
+   grant: that table holds its own. A create whose declaration lost the race to the name takes back the grants it wrote
+   for its own uuid (`take_back_unless_kept`), and a failed write takes them back unless a table stands under the uuid,
+   its rollback having failed (`take_back_unless_standing`). `fga_deps.link_an_unlinked_table` is removed: no door
+   leaves a table with no `parent` edge, so no door links one.
+2. **Register** mints its uuid and writes the grants before its native register (`fga_deps.seed_before_write`), takes
+   them back on its 409, on any other backend failure and on every refusal after it, and writes them again once its
+   claim records the uuid, the write that was its only one before.
+3. **The drift repair revokes grants alone.** `POST /management/v1/grants/ghosts/revoke` kept every table a held claim
+   records. It now keeps one only while the claim is within its `LEASE`, while a request has it fenced, or while its
+   table stands at the location or the trash keeps it (`grant_reconcile.claim_refusal`, timed on the store's clock), so
+   the grants a door killed after its grants and before its backend write leaves are revoked once the claim has
+   outlived the lease every take of the location already waits out.
+
+The comparison, not the justification: Lakekeeper `08b67d7` writes the grants before it commits the table
+(`crates/lakekeeper/src/server/tables.rs:546-573`), and leaves a failed commit's grants to its own cleanup.
+
+**Residual, stated.** A registration killed between its native register and its claim leaves a table no claim
+identifies ([[LH-534]]), reached only by the estate admin's deregister, and its grants, which no claim records, are
+revoked as a ghost's. The claim is keyed by the location as the backend resolved it, which only the native register
+makes known; this ADR's 2026-11-11 amendment records why the claim is not taken first. The state predates this
+amendment. A drift repair that revokes a registration's grants between its first seed and its claim is undone by
+the seed the door writes again once the claim holds the uuid; only a kill landing after that repair and before that
+second seed, two faults together, leaves an identified table without its grants. A door that fails once its table stands
+undoes the table first and takes the grants back only once it is gone (`fga_deps.undo_then_take_back`), so an undo
+that fails leaves the table with its grants.
+
+**Pinned by** `tests/integration/test_a_table_is_granted_before_it_is_written.py`: each door killed at its grant and at
+its backend write, on the real catalog and the real maintenance audit with drift repair armed.

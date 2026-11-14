@@ -13,6 +13,8 @@ Every function is BLOCKING IO; callers threadpool it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from catalog.core.config import Settings
@@ -27,21 +29,39 @@ def platform_objects(settings: Settings) -> frozenset[str]:
     return frozenset({settings.fga_root_object, settings.fga_default_warehouse_object})
 
 
-def held_table_uuids(settings: Settings) -> frozenset[str]:
-    """Every table uuid a held location claim records: a live table's, or a dropped one's the trash keeps a claim for.
+def held_table_claims(settings: Settings) -> dict[str, location_claims.LocationClaim]:
+    """Every held location claim recording a table's uuid, by the table's object (``table:<uuid>``): a live table's, a dropped one's the trash keeps
+    a claim for, or one a door took for a table it is writing or died writing.
 
     Raises:
         ValueError: A claim record cannot be read, which may be a live table's.
         botocore.exceptions.ClientError: The store refused the listing.
     """
     claims = location_claims.every_claim(table_claims.claim_store(settings))
-    return frozenset(claim.uuid for claim in claims if claim.released_at is None and claim.uuid)
+    return {fga.table_object(claim.uuid): claim for claim in claims if claim.released_at is None and claim.uuid}
 
 
-def ghost_refusal(settings: Settings, obj: str, *, held: frozenset[str]) -> str | None:
-    """Why ``obj``'s grants are not a ghost's, or ``None`` when no registry names the object.
+def claim_refusal(claim: location_claims.LocationClaim, *, now: datetime, stands: Callable[[], bool]) -> str | None:
+    """Why the grants of the table ``claim`` records are not a ghost's, or ``None`` when the claim keeps no table.
 
-    ``held`` is :func:`held_table_uuids`, read once for every candidate a call judges.
+    A door grants a table it brings into being once its location's claim records the uuid and before the backend
+    records the table ([[LH-588]]), so a claim whose table does not stand is either a door's at work, within the claim's
+    lease (the bound every take of the location already waits out), or a door's that died, whose grants grant nothing
+    and go. ``now`` is the store's clock; ``stands`` asks whether the table stands at the location, or the trash keeps it
+    there, and raises when it cannot tell.
+    """
+    if claim.within_lease(now):
+        return "a location claim records the table, taken within its lease: its door may still be writing it"
+    if claim.fenced_against(None, now):
+        return "a request is acting on the table its location claim records"
+    if stands():
+        return "a held location claim records the table, which stands there or which the trash keeps"
+    return None
+
+
+def ghost_refusal(settings: Settings, obj: str) -> str | None:
+    """Why ``obj``'s grants are not a ghost's, or ``None`` when no registry names the object; a table a held location
+    claim records is judged by :func:`claim_refusal` first.
 
     Raises:
         ValueError: A registry record cannot be read, which may be the object's.
@@ -54,8 +74,6 @@ def ghost_refusal(settings: Settings, obj: str, *, held: frozenset[str]) -> str 
             return f"the project record {key!r} names it" if projects.get_project(settings.registry_root, settings.storage_options(), key) else None
         case "warehouse":
             return f"the warehouse record {key!r} names it" if warehouses.get_warehouse(settings.registry_root, settings.storage_options(), key) else None
-        case "table" if key in held:
-            return "a held location claim records the table, so it stands or the trash keeps it"
         case "table":
             return "a trash record keeps the table for its undrop" if trash.keeps(settings.registry_root, settings.storage_options(), key) else None
         case _:

@@ -183,10 +183,11 @@ class TestThePublicDoor:
         assert not _is_registered(catalog, "lance_catalog$db$t")
 
     @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unstable", 400), ("compaction-config", 400), ("unreadable", 503), ("clean", 200)])
-    def test_a_refused_dataset_never_gains_an_owner_a_lineage_node_or_an_event(
+    def test_a_refused_dataset_keeps_no_owner_and_gains_no_lineage_node_or_event(
         self, catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch, case: str, status: int
     ) -> None:
-        """The judgement runs before the seed and both emits; the clean case proves the spies are wired.
+        """The judgement runs before both emits and the seed written again once the claim holds the uuid, and a refusal
+        takes back the seed written before the backend call ([[LH-588]]); the clean case proves the spies are wired.
 
         ``unstable`` is a dataset created without stable row ids: its `_rowid` is an address compaction
         rewrites and its change feed answers empty windows (`lance_docs/lance/format/table/row_id_lineage.md:73-83`).
@@ -220,14 +221,17 @@ class TestThePublicDoor:
         elif case == "unreadable":
             for manifest in (root / "t" / "_versions").iterdir():
                 manifest.write_bytes(b"not a manifest")
-        monkeypatch.setattr(fga_deps, "seed_ownership_or_compensate", _spy("seed"))
+        monkeypatch.setattr(fga_deps, "seed_ownership", _spy("seed"))
+        monkeypatch.setattr(fga_deps, "take_back_seed", _spy("taken back"))
         monkeypatch.setattr(announcing, "emit_write_event", _spy("lineage"))
         catalog.app.dependency_overrides[get_control_emitter] = _Control
 
         resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"})
 
         assert resp.status_code == status, resp.text
-        assert sorted(called) == (["control", "lineage", "seed"] if case == "clean" else []), called
+        # A dataset the door cannot read is refused at its clone sources' read, before any seed.
+        seeded = {"clean": ["control", "lineage", "seed", "seed"], "unreadable": []}
+        assert sorted(called) == seeded.get(case, ["seed", "taken back"]), called
         assert _is_registered(catalog, "lance_catalog$db$t") is (case == "clean"), "a refused registration must leave nothing attached"
 
     @pytest.mark.parametrize(("mix", "converged"), [(True, False), (False, True)])

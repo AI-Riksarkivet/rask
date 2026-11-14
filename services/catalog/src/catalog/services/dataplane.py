@@ -85,6 +85,7 @@ from lance_namespace import (
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
     NamespaceExistsRequest,
+    NamespaceNotFoundError,
     RegisterTableRequest,
     RestoreTableRequest,
     RestoreTableResponse,
@@ -584,6 +585,7 @@ def declare_table(
     claims: location_claims.ClaimStore | None,
     holder: str,
     table_uuid: str | None = None,
+    before_register: Callable[[str, str], None] | None = None,
 ) -> str:
     """Declare ``segments`` at ``<root>/<table uuid>``, where a table the catalog makes lives, and answer that location ([[LH-520]]).
 
@@ -594,12 +596,15 @@ def declare_table(
 
     1. the table's uuid is minted (``table_uuid``, when the caller minted it) and its location's claim taken under it,
        before any backend call, so the location is this table's before anything resolves to it;
-    2. the `.lance-reserved` marker is written at the location;
-    3. the ``__manifest`` row is recorded through RegisterTable's relative location. Measured on pylance 13.0.0, such a
+    2. ``before_register`` is handed the uuid and the location: a governed door writes the table's grants there, so they stand before the
+       table does ([[LH-588]]) and the claim already records the uuid they are held by, which keeps the drift repair
+       from revoking them while the table is being written;
+    3. the `.lance-reserved` marker is written at the location;
+    4. the ``__manifest`` row is recorded through RegisterTable's relative location. Measured on pylance 13.0.0, such a
        row answers ``is_only_declared`` until data lands, as the backend's own declaration does, and keeps no properties.
 
-    A failure after the claim removes the marker and releases the claim. ``claims`` is ``None`` for a caller outside
-    governance (a test building a fixture), which takes no claim.
+    A failure after the claim removes the marker and releases the claim; what ``before_register`` wrote is its caller's to
+    take back. ``claims`` is ``None`` for a caller outside governance (a test building a fixture), which takes no claim.
 
     Raises:
         InvalidInputError: ``segments`` names a table outside every namespace: the `dir` backend resolves a root-level
@@ -617,6 +622,8 @@ def declare_table(
         except location_claims.LocationHeldError:
             raise ConcurrentModificationError(f"the location minted for table {holder} is held by another table; retry to be given another") from None
     try:
+        if before_register is not None:
+            before_register(minted, location)
         _reserve(location, so)
         native.call(ns, "register_table", RegisterTableRequest(id=segments, location=minted))
     except Exception as exc:
@@ -629,6 +636,24 @@ def declare_table(
             raise TableAlreadyExistsError(f"a namespace already holds the id {'$'.join(segments)}; a table cannot be created there") from exc
         raise
     return _described_location(ns, segments, fallback=location)
+
+
+def stands_at(ns: LanceNamespace, segments: list[str], location: str) -> bool:
+    """Whether a table stands under ``segments`` at ``location``: the backend describes the name there, declared or
+    written. A describe that fails otherwise than with the name or its namespace absent answers that one may stand.
+
+    For a door judging its own failed write, where :func:`table_claims.holder_stands` judges a claim: the write's
+    rollback has released the claim, so there is no claim to judge, no trash keeps a table that was never written, and an
+    unreadable answer is read on the side that keeps the table's grants.
+    """
+    try:
+        found = _existing_location(ns, segments)
+    except NamespaceNotFoundError:
+        return False
+    except Exception as exc:  # noqa: BLE001 — an unreadable answer may be a table standing
+        log.warning("table_standing_unread", extra={"table": "$".join(segments), "location": location, "error": str(exc)[:300]})
+        return True
+    return found is not None and decoded_path(found) == decoded_path(location)
 
 
 def _namespace_holds(ns: LanceNamespace, segments: list[str]) -> bool:
@@ -694,6 +719,7 @@ def create_table(
     recorded_author: str | None = None,
     overwriting: table_claims.DoorTable | None = None,
     before_commit: Callable[[str], None] | None = None,
+    before_register: Callable[[str, str], None] | None = None,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -746,6 +772,10 @@ def create_table(
     ``before_commit`` is handed the uuid of the table about to be written, once its location's claim holds it and before
     the data's commit: a governed create records there what the commit declares it read ([[LH-541]]). A failure in it
     fails the create as a failed write does.
+
+    ``before_register`` is handed the uuid and location of a table this call brings into being, by :func:`declare_table`, before the
+    backend records it: a governed create writes the table's grants there ([[LH-588]]). It is not called for a table the
+    call finds under the name (written, or declared by an earlier request), which holds its own grants.
 
     Raises:
         ConcurrentModificationError: The table an ``Overwrite`` resolved changed since.
@@ -817,7 +847,9 @@ def create_table(
             before_commit=before_commit,
         )
 
-    location = declare_table(ns, so, segments, root=root, claims=None if registry is None else _claim_store(registry), holder=holder)
+    location = declare_table(
+        ns, so, segments, root=root, claims=None if registry is None else _claim_store(registry), holder=holder, before_register=before_register
+    )
     return _write_blob_into(
         ns,
         _named_by_its_uuid(table, location, registry),

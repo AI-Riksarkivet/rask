@@ -15,9 +15,10 @@ The steps, and the order, are exactly what the door ran, because the ORDER is th
 4. the pre-existence probe, and for an Overwrite of an existing table its owner-tier drop gate and
    its deletion-protection guard;
 5. the data-plane write, carrying the run the request's Context names in its transaction properties (the tier
-   judge refused a missing run and an unreadable input before the door ran);
-6. seed-with-compensation, which grants owner only on a table this request brought into being;
-7. the schema read-back, the lineage emit (``overwrite_table`` for an Overwrite of an existing table)
+   judge refused a missing run and an unreadable input before the door ran). A table this request brings into being is
+   granted inside it, once its location's claim records its uuid and before the backend records it ([[LH-588]]), and a
+   write that fails takes the grants back with the table;
+6. the schema read-back, the lineage emit (``overwrite_table`` for an Overwrite of an existing table)
    and, for a table this request brought into being, the control emit.
 
 **An Overwrite of an existing table is a new version of the same table** ([[LH-242]]). The spec's
@@ -28,12 +29,6 @@ grants (revoking them while the history they guard stays readable gave the overw
 took it from everyone else), its provenance (``provenance_guard.keep_provenance``) and its protection
 (a protected table refuses the Overwrite unless ``force=true``, as its drop does). The spec's "dropped"
 survives as the owner-tier ``can_drop`` gate: the tip's schema and rows are replaced.
-
-**Why this is a service module and not a second endpoint helper.** The compensation rules — never drop
-for ExistOk, never drop an Overwrite that replaced a table — are the highest-consequence decisions in
-the catalog, and while they lived in a handler the only way to exercise them was through an HTTP door;
-``test_compensation_matrix_never_drops_a_replaced_or_kept_table`` says so in its own docstring. Here
-they are callable directly.
 
 It imports ``catalog.api.fga_deps`` for the authorization seam, exactly as
 ``catalog.services.cascade_backfill`` already does: the guards are the estate's one implementation and
@@ -52,7 +47,6 @@ from lance_namespace import (
     ConcurrentModificationError,
     CreateTableResponse,
     DescribeTableRequest,
-    DropTableRequest,
     InvalidInputError,
     LanceNamespace,
     TableAlreadyExistsError,
@@ -74,24 +68,13 @@ from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane, native, provenance_namespace, table_bases, table_claims, table_inputs
-from lakehouse import base_registry, data_directories, location_claims
+from lakehouse import base_registry
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
-
-
-def compensation_allowed(mode: CreateMode, overwrote_existing: bool) -> bool:
-    """Whether a failed owner grant may compensate by DROPPING the table — only for a FRESH id.
-
-    Never for ExistOk (it may have KEPT a pre-existing table this request never wrote) and never for
-    an Overwrite that REPLACED an existing table (the id still holds the table's time-travel history;
-    dropping would escalate a transient FGA blip into irreversible data loss — review 2026-07-10).
-    Pure so the Overwrite arm is unit-testable (it needs FGA on, unreachable in the moto harness).
-    """
-    return mode is not CreateMode.EXIST_OK and not overwrote_existing
 
 
 def table_exists(ns: LanceNamespace, segments: list[str]) -> bool:
@@ -197,8 +180,7 @@ async def create_governed_table(
     ``mode``, ``shape`` and ``table`` arrive PARSED ONCE, by the door, which refuses a malformed one
     before its idempotency claim (``CreateMode.parse``, :func:`parse_create_shape`,
     ``dataplane.read_arrow_body``); four decisions below turn on
-    the mode — the pre-existence guards, the ownership seed, the schema read-back and the compensation
-    rule. ``run`` is the run the request's Context names, which the tier judge already judged: it is stamped
+    the mode: the pre-existence guards, the schema read-back and the announcements. ``run`` is the run the request's Context names, which the tier judge already judged: it is stamped
     into the commit and its inputs become the event's inputs. ``force`` releases deletion protection for an Overwrite of an existing table,
     and nothing else.
     """
@@ -257,6 +239,8 @@ async def create_governed_table(
         # The table asked about is the one overwritten ([[LH-530]]).
         overwriting = table_claims.DoorTable(ns, table_claims.claim_store(settings), overwritten, announces=provenance_namespace.announcer(segments, settings))
     operation = OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE
+    # The grants of a table this request brings into being are written before the backend records it ([[LH-588]]).
+    grants = fga_deps.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
@@ -286,87 +270,33 @@ async def create_governed_table(
         before_commit=table_inputs.recorder(
             settings.registry_root, settings.storage_options(), name=table_id, declared=await fga_deps.declared_inputs(resolver, run)
         ),
+        before_register=grants,
     )
     try:
-        response: CreateTableResponse = await run_in_threadpool(create)
-    except (TableAlreadyExistsError, ConcurrentModificationError):
-        # AN ExistOk THAT LOST THE RACE KEEPS THE WINNER'S TABLE. Two ExistOk creates in one pod both find no table at
-        # the probe, and the backend's put-if-not-exists answers the loser's add as a conflict; ExistOk asks for the
-        # table to exist, so the loser answers it as kept, and as kept it writes nothing and seeds no owner. A winner
-        # still between its declaration and its first write holds no version yet, and the conflict stands: a retry
-        # finds the table written.
-        if mode is not CreateMode.EXIST_OK or (kept := await run_in_threadpool(dataplane.kept_table, ns, so, segments)) is None:
-            raise
-        response, existok_kept_existing = kept, True
+        try:
+            response: CreateTableResponse = await run_in_threadpool(create)
+        except (TableAlreadyExistsError, ConcurrentModificationError):
+            # AN ExistOk THAT LOST THE RACE KEEPS THE WINNER'S TABLE. Two ExistOk creates in one pod both find no table
+            # at the probe, and the backend's put-if-not-exists answers the loser's add as a conflict; ExistOk asks for
+            # the table to exist, so the loser answers it as kept, and as kept it writes nothing and keeps no grant. A
+            # winner still between its declaration and its first write holds no version yet, and the conflict stands: a
+            # retry finds the table written.
+            if mode is not CreateMode.EXIST_OK or (kept := await run_in_threadpool(dataplane.kept_table, ns, so, segments)) is None:
+                raise
+            response, existok_kept_existing = kept, True
+    except Exception:
+        # A failed write is rolled back with its declaration, and so are its grants; a declaration whose rollback failed
+        # stands, and keeps them.
+        await grants.take_back_unless_standing(ns)
+        raise
 
-    # Make the caller owner of a table this request brought into being + link it to its parent so it
-    # inherits the cascade. An Overwrite of an existing table keeps every grant the table holds, the owner's
-    # included, and grants the overwriter nothing: it already cleared can_drop, and the table is not new.
-    # COMPENSATION (§4 dual-write): if the grant fails here (FGA outage → 503), the table exists on
-    # storage but has NO owner tuple — the client's retry would hit "already exists", stranding it
-    # forever. Best-effort delete what THIS request wrote so the retry starts clean — but ONLY for a
-    # FRESH id (review 2026-07-10): never for ExistOk (it may have KEPT a pre-existing table this
-    # request never wrote) and never when Overwrite REPLACED an existing table (the id still holds the
-    # prior incarnation's time-travel history — a compensating drop would escalate a transient FGA
-    # blip into irreversible loss; stranded-but-admin-recoverable beats destroyed). The compensation
-    # also REVOKES any tuples that did land (a grant can commit server-side while its response is
-    # lost; a stale owner tuple on a freed id silently grants its holder the NEXT table created there
-    # — the reused-id privilege bleed the real drop path also guards).
-    # Residual (documented): a process CRASH between the write and the grant still strands the table
-    # (no in-process compensation can cover it); the deeper fix is a declare→grant→write reorder.
-    # Seed ownership ONLY for a table THIS request actually created. An ExistOk that KEPT an already-existing
-    # table wrote nothing, and an Overwrite of one wrote a version of a table someone else brought into being,
-    # so granting the caller `owner` on either would seize it (audit: CRITICAL) — the existing owner (or the
-    # /declare-r of a declared-only table) keeps ownership. Skipping the seed also
-    # skips the compensation (there is nothing this request wrote to compensate).
     # The table's grants are held by the uuid its location's claim records: the one this create minted, or the kept
-    # table's own under ExistOk or an Overwrite (ADR 0173 §2, [[LH-524]]).
+    # table's own under ExistOk or an Overwrite (ADR 0173 §2, [[LH-524]]). Only a table this request brought into being
+    # was granted, before it was written ([[LH-588]]); one the request found standing holds its own grants and gains
+    # none, since granting the caller `owner` on it would seize it (audit: CRITICAL), and the grants written for a uuid
+    # it did not keep (a declaration that lost the race to the name) are taken back.
     table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), response.location or "", segments)
-
-    async def _undo_create() -> None:
-        await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
-        # The bytes are gone with the table, so its base record goes too: a record that outlives the
-        # manifest it describes would vouch for bases nothing declares. The fragments the write put in the table's data
-        # directories go before it ([[LH-286]]), and its location's claim goes with it.
-        if response.location:
-            await run_in_threadpool(
-                partial(data_directories.end_base_record, registry, response.location, uuid=table_uuid, storage_options=settings.storage_options())
-            )
-            await run_in_threadpool(partial(location_claims.release, table_claims.claim_store(settings), response.location, table_id, uuid=table_uuid))
-
-    # The revoke-then-drop pair moved into `seed_ownership_or_compensate` (diff2 F3) because it was
-    # ONE try block here: the revoke is an OpenFGA call, so on the outage this compensation exists
-    # for, it raised and the native drop never ran. Now they are independent best-effort steps and
-    # the drop — which needs no FGA — always gets its turn.
-    #
-    # A TABLE THIS REQUEST BROUGHT INTO BEING IS SEEDED; ONE IT ONLY FOUND IS LINKED WHERE IT HAS NO LINK. An
-    # ExistOk that KEPT an existing table, and an Overwrite of one, must not grant the caller `owner` — that is an
-    # ownership seizure, audited CRITICAL — but the table's `parent` edge is not an ownership question at all: it
-    # names where the table lives and confers nothing alone, and a table carrying none is out of every container
-    # grant's reach.
-    #
-    # Measured 2026-09-15: `ensure_stage_output` is describe-then-create-with-ExistOk, so once a table
-    # existed without an edge every later run kept it and it could never acquire one. Five of the cascade's
-    # own governed tiers held ZERO tuples — no owner, no parent — and `table.maintainer`/`owner`/every other
-    # relation resolve through `... from parent`: unmaintainable, ungrantable, unprotectable.
-    #
-    # So the kept table is linked, and only where it inherits from nowhere (`fga_deps.link_an_unlinked_table`,
-    # [[LH-586]]): one whose edge a rename moved ahead of its name keeps the edge where the rename put it.
-    # Compensation undoes what THIS request created, so only a new table's seed carries an `undo`.
-    seeding_a_new_table = not pre_existed and not existok_kept_existing
-    if seeding_a_new_table:
-        await fga_deps.seed_ownership_or_compensate(
-            client,
-            settings,
-            token,
-            resolver,
-            resource="table",
-            segments=segments,
-            uuid=table_uuid,
-            undo=_undo_create if compensation_allowed(mode, overwrote_existing) else None,
-        )
-    else:
-        await fga_deps.link_an_unlinked_table(client, settings, token, resolver, segments=segments, uuid=table_uuid)
+    await grants.take_back_unless_kept(table_uuid)
     # Record provenance authoritatively: the catalog knows the verified principal. Fire-and-forget
     # (after the response, best-effort) so the lineage service can never block/fail a create. The
     # canonical id names the lineage Dataset as the catalog names the table, and the event carries the table's uuid,

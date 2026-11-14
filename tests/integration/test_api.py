@@ -147,6 +147,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         recorded_author=None,
         overwriting=None,
         before_commit=None,
+        before_register=None,
     ) -> CreateTableResponse:
         seen["segments"] = segments
         seen["root"] = root  # [[LH-520]] where a table this create brings into being is declared under its uuid

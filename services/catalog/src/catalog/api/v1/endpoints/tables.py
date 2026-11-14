@@ -59,7 +59,6 @@ from catalog.api.dependencies import (
     NamespaceRootDep,
     ObjectUuidsDep,
     ResolvedTableDep,
-    Resolver,
     ResolverDep,
     SettingsDep,
     StorageOptionsDep,
@@ -355,13 +354,24 @@ async def declare_table(
     req.id = reconcile_body_id(segments, req.id)
     canonical = fga.canonical_object_id(segments)
     claims = table_claims.claim_store(settings)
-    # The table's uuid is minted with its location's claim, before anything grants or announces it (ADR 0173 §2, §5).
+    # The table's uuid is minted with its location's claim, before anything grants or announces it (ADR 0173 §2, §5),
+    # and its grants are written once the claim records it, before the backend records the table ([[LH-588]]).
     table_uuid = str(uuid4())
-    location = await run_in_threadpool(partial(dataplane.declare_table, ns, so, segments, root=root, claims=claims, holder=canonical, table_uuid=table_uuid))
+    grants = fga_deps.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
+    try:
+        location = await run_in_threadpool(
+            partial(dataplane.declare_table, ns, so, segments, root=root, claims=claims, holder=canonical, table_uuid=table_uuid, before_register=grants)
+        )
+    except Exception:
+        await grants.take_back_unless_standing(ns)
+        raise
 
     async def _undo_declare() -> None:
         await run_in_threadpool(native.call, ns, "drop_table", DropTableRequest(id=segments))
         await run_in_threadpool(location_claims.release, claims, location, canonical)
+
+    async def _take_back_declare() -> None:
+        await fga_deps.undo_then_take_back(client, settings, token, segments=segments, uuid=table_uuid, undo=_undo_declare, reason="not_announced")
 
     # What the declaration announces is filed once the location the backend describes it at is known, before its
     # ownership is seeded, so a door failing after that still announces it, and a store refusing the filing takes the
@@ -374,28 +384,17 @@ async def declare_table(
     )
     declared_event = _table_event(token, named, action="table_declared", table_uuid=table_uuid, name=canonical, extra={"location": location})
     async with _filed_or_undone(
-        announcer, door="declare_table", target=fga.table_object(table_uuid), announcements=[declared, declared_event], undo=_undo_declare
+        announcer, door="declare_table", target=fga.table_object(table_uuid), announcements=[declared, declared_event], undo=_take_back_declare
     ) as filing:
-        response = await _owned_and_vended(
-            ns,
-            so,
-            segments,
-            req,
-            location=location,
-            table_uuid=table_uuid,
-            undo=_undo_declare,
-            settings=settings,
-            vendor=vendor,
-            token=token,
-            client=client,
-            resolver=resolver,
+        response = await _vended_declaration(
+            ns, so, segments, req, location=location, table_uuid=table_uuid, undo=_undo_declare, settings=settings, vendor=vendor, token=token, client=client
         )
         await filing.send(declared)
         await filing.send(declared_event)
     return response
 
 
-async def _owned_and_vended(
+async def _vended_declaration(
     ns: LanceNamespace,
     so: StorageOptions,
     segments: list[str],
@@ -408,16 +407,11 @@ async def _owned_and_vended(
     vendor: CredentialVendor,
     token: Caller | None,
     client: OpenFgaClient | None,
-    resolver: Resolver,
 ) -> DeclareTableResponse:
-    """The declaration of ``segments`` at ``location`` as its declarer is answered: owned by them, with the credential they
-    write it with, ``undo`` taking the declaration back when the seed or the vend fails."""
+    """The declaration of ``segments`` at ``location`` as its declarer is answered, owned by them since before it was
+    recorded ([[LH-588]]), with the credential they write it with, ``undo`` taking the declaration and its grants back
+    when the vend fails (:func:`fga_deps.undo_then_take_back`: the table first, its grants once it is gone)."""
     response = DeclareTableResponse(location=location)
-    # A declared table holds NO data — the undo can never destroy bytes, so this door is the safest
-    # possible place to compensate and there was never a reason for it to be the riskiest. Without it a
-    # failed seed left a declared-only table that its declarer could not see, could not drop, and could
-    # not re-declare (native `AlreadyExists`), reserving the id against everyone, permanently (F3).
-    await fga_deps.seed_ownership_or_compensate(client, settings, token, resolver, resource="table", segments=segments, uuid=table_uuid, undo=undo)
     # The credential is part of the answer, so a vend that fails takes the declaration back with it, before
     # anything announces the table: a declared, owned table whose declarer was told it failed is one a retry
     # can only meet as AlreadyExists.
@@ -437,7 +431,7 @@ async def _owned_and_vended(
                 asked=req.vend_credentials is True,
             )
         except Exception:
-            await fga_deps.compensate_create(client, settings, token, resource="table", segments=segments, uuid=table_uuid, undo=undo, reason="vend_failed")
+            await fga_deps.undo_then_take_back(client, settings, token, segments=segments, uuid=table_uuid, undo=undo, reason="vend_failed")
             raise
     response.managed_versioning = True
     return response
@@ -1145,13 +1139,19 @@ async def register_table(
 ) -> RegisterTableResponse:
     """Register an existing table location at ``id`` via ``register_table``, refuse it when the location
     overlaps the control root, a configured base or another table, when the dataset there carries reader
-    flag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, then
-    seed the caller's FGA ownership and emit a REGISTER_TABLE marker (who attached it + where).
+    flag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, and emit a
+    REGISTER_TABLE marker (who attached it + where).
 
-    What the registration announces is filed once the dataset is admitted and before its ownership is seeded, the first
-    moment its location as the backend resolved it is known, so a door failing after that still announces it, and a
-    store refusing the filing detaches the registration ([[LH-576]]). A registration that dies before then is attached
-    and unowned: the drift report lists it under ``ungoverned_tables``."""
+    The table's grants are written under the uuid this request mints before the backend records it ([[LH-588]]), and
+    taken back by every refusal. A registration killed after its grants and before the backend call leaves the grants
+    alone, which the drift repair revokes. One killed between the backend call and the location's claim leaves a table
+    no claim identifies (``object_uuids.UnidentifiedObjectError``, [[LH-534]]), reached only by the estate admin's
+    deregister, whose grants no claim records and the drift repair revokes too: the claim is keyed by the location as
+    the backend resolved it, which only the registration makes known.
+
+    What the registration announces is filed once the dataset is admitted, the first moment its location as the backend
+    resolved it is known, so a door failing after that still announces it, and a store refusing the filing detaches the
+    registration ([[LH-576]])."""
     # `mode` WAS ACCEPTED AND NEVER READ. The generated model states two: "Create (default): the
     # operation fails with 409. Overwrite: the existing table registration is replaced with the new
     # registration." This door passes `body` straight to the backend, and the backend ignores the
@@ -1226,9 +1226,15 @@ async def register_table(
     asked: set[str] = set()
     if not registered_already:
         asked = await _require_clone_sources(client, settings, token, location=f"{root.rstrip('/')}/{body.location}", so=so, context=context)
+    # A new uuid for this table ([[LH-519]]), even where an earlier table's claim was released, and its grants under it,
+    # written before the backend records the table so it never stands without them ([[LH-588]]). A request that
+    # registers nothing takes them back: a refused registration changes nobody's access ([[LH-586]]).
+    table_uuid = str(uuid4())
+    await fga_deps.seed_before_write(client, settings, token, resolver, segments=segments, uuid=table_uuid)
     try:
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
+        await fga_deps.take_back_seed(client, settings, token, segments=segments, uuid=table_uuid, reason="not_registered")
         # A REFUSED REGISTRATION WRITES NO TUPLE ([[LH-586]], owner 2026-11-11). The spec gives this door two
         # modes — `Create` (409) and `Overwrite` — and no ExistOk, so the 409 is the answer, and a request that
         # is refused changes nobody's access: not an owner for its caller, and not the table's link to this
@@ -1311,6 +1317,9 @@ async def register_table(
                 await run_in_threadpool(base_registry.claim_bases, context.registry, registered, entries)
                 log.info("register_converged_base_record", extra={"table": id, "location": registered})
         raise
+    except Exception:
+        await fga_deps.take_back_seed(client, settings, token, segments=segments, uuid=table_uuid, reason="not_registered")
+        raise
 
     claims = table_claims.claim_store(settings)
     canonical = fga.canonical_object_id(segments)
@@ -1318,9 +1327,6 @@ async def register_table(
     # the body is stored re-encoded, so the body's spelling can decode to another key.
     stated_location = f"{root.rstrip('/')}/{body.location}"
     claimed_location = await run_in_threadpool(absolute_table_location, ns, segments, stated_location) or stated_location
-    # A new uuid for this table ([[LH-519]]), even where an earlier table's claim was released, minted before the claim
-    # records it so that the table's commit marks are kept under it first.
-    table_uuid = str(uuid4())
 
     async def _deregister() -> None:
         # DEREGISTER, never drop. Register ATTACHES bytes that already existed and are not ours to
@@ -1341,8 +1347,8 @@ async def register_table(
         await _free_location()
 
     # AFTER THE REGISTER, because only the backend knows which root a relative location resolves
-    # against and the overlap check must see this registration's own row; BEFORE THE SEED, so a refused
-    # dataset never gains an owner, a record entry, a lineage node or an event. The commit marks first, at
+    # against and the overlap check must see this registration's own row; BEFORE ANY RECORD, so a refused
+    # dataset gains no record entry, lineage node or event, and the grants written for it are taken back. The commit marks first, at
     # each ref's head ([[LH-550]]): every version the dataset holds now was committed past every door, and
     # the claim is what makes the table one the commit reconciler reads. Then the location's claim
     # ([[LH-204]]): a rename holding it, or a table a recoverable drop is keeping it for, refuses
@@ -1387,6 +1393,7 @@ async def register_table(
                     "remedy": "deregister it before retrying",
                 },
             ) from undo_exc
+        await fga_deps.take_back_seed(client, settings, token, segments=segments, uuid=table_uuid, reason="refused")
         raise
     location = verdict.location
 
@@ -1399,6 +1406,9 @@ async def register_table(
         await run_in_threadpool(partial(table_bases.release_admitted, admitted, clone_location=location, so=so, context=context))
         await _free_location()
 
+    async def _take_back_register() -> None:
+        await fga_deps.undo_then_take_back(client, settings, token, segments=segments, uuid=table_uuid, undo=_undo_register, reason="not_announced")
+
     named = NameResolves(segments=segments, uuid=table_uuid, held=True)
     # RESOLVED, not echoed — `response.location` is the caller's own relative path, which names nothing a
     # reader of the feed can open; the flag judgement above already resolved it.
@@ -1409,11 +1419,16 @@ async def register_table(
     )
     registered_event = _table_event(token, named, action="table_registered", table_uuid=table_uuid, name=canonical, extra={"location": location})
     async with _filed_or_undone(
-        announcer, door="register_table", target=fga.table_object(table_uuid), announcements=[registered, registered_event], undo=_undo_register
+        announcer, door="register_table", target=fga.table_object(table_uuid), announcements=[registered, registered_event], undo=_take_back_register
     ) as filing:
-        await fga_deps.seed_ownership_or_compensate(
-            client, settings, token, resolver, resource="table", segments=segments, uuid=table_uuid, undo=_undo_register
-        )
+        # The grants written before the backend call, written again now that the location's claim records their uuid: the
+        # drift repair revokes grants no claim records, and the claim is taken only after the backend resolved the
+        # location, so a repair landing between the two would have left the table without them.
+        try:
+            await fga_deps.seed_ownership(client, settings, token, resolver, resource="table", segments=segments, uuid=table_uuid)
+        except Exception:
+            await fga_deps.undo_then_take_back(client, settings, token, segments=segments, uuid=table_uuid, undo=_undo_register, reason="grant_failed")
+            raise
         # Admitted and owned: a clone's ending filed for the registration goes, its own end filing one from its record.
         await run_in_threadpool(partial(table_bases.settle_admitted, admitted, context=context))
         await filing.send(registered)

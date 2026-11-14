@@ -77,12 +77,17 @@ Two contracts stack here, and confusing them is how bugs happen:
   and the one it enters both (`_settle_an_unmoved_edge` takes the first away); one anywhere else refuses the rename
   409 code 14 with nothing moved. **A refused registration writes no tuple, and no door writes a second parent**
   ([[LH-586]], owner 2026-11-11): a RegisterTable answered 409 changes no grant, whatever its table lacks, and a
-  create that keeps a table, or its owner's Overwrite, links it to its name's namespace only where it inherits from
-  nowhere and grants its caller nothing (`fga_deps.link_an_unlinked_table`), so none puts the readers of the namespace
-  a rename left, or died leaving, back on the table. A registered table whose seed never ran holds no tuple: the
-  drift report lists it under `ungoverned_tables`, and the estate admin writes its `parent` and `child` edges at
-  `POST /management/v1/access/tuples`, after which its namespace's grants reach it (measured 2026-11-11). Pinned on a
-  real OpenFGA by
+  create that keeps a table, or its owner's Overwrite, writes no tuple either, so none puts the readers of the namespace
+  a rename left, or died leaving, back on the table. **A table's grants are written before the table** ([[LH-588]]):
+  create and declare write them (owner, `parent` and `child`, under the uuid the door minted) once the location's claim
+  records that uuid and before the backend records the table (`fga_deps.GrantsBeforeWrite`, the `before_register` of
+  `dataplane.declare_table`); register writes them before its native register and again once its claim records the
+  uuid (`fga_deps.seed_before_write`). Every refusal and failed write takes them back (`fga_deps.take_back_seed`), unless
+  a table stands under the uuid. A door killed between its grants and its backend write leaves grants alone, which the
+  drift repair revokes: the ghost door keeps a table's grants for a held claim only within its `LEASE`, while it is
+  fenced, or while its table stands or the trash keeps it (`grant_reconcile.claim_refusal`). Residual: a registration
+  killed between its native register and its claim leaves a table no claim identifies ([[LH-534]]). Pinned by
+  `tests/integration/test_a_table_is_granted_before_it_is_written.py`, and on a real OpenFGA by
   `services/catalog/tests/test_a_rename_into_another_namespace_needs_grant_authority_and_moves_the_parent_edge_whole.py`.
   A destructive drop or cascade refuses 409 while the claim names another
   live holder. **A door acts on the table its name resolved to** ([[LH-521]], ADR 0173 §7): the drop, deregister
@@ -324,8 +329,9 @@ holds one ALLOW naming the door that opened the read, or a DENY on each for a ca
 the missing project's 404. Pinned by `services/catalog/tests/test_a_project_is_read_by_those_its_list_shows_it_to.py`.
 
 Check order at every create door: **identity (401) → shape (`InvalidInput` 400, the warehouse rule above
-included) → parent exists (404) → authz (403) → conflict (409) → native write → tuples (`seed_ownership`) → events.** Guards
-run BEFORE `native.call` — rejecting after leaves a real Lance object with no authz parent.
+included) → parent exists (404) → authz (403) → conflict (409) → tuples → native write → events** for a table
+([[LH-588]]); a namespace's create door still writes its tuples (`seed_ownership_or_compensate`) after its native write.
+Guards run BEFORE `native.call` — rejecting after leaves a real Lance object with no authz parent.
 
 `project` and `warehouse` are **rask's objects, not spec objects** — their endpoints
 (`/management/v1/projects`, `/management/v1/warehouses`, `/management/v1/project/{id}/gate/*`, …) are ours, and the catalog's registry and

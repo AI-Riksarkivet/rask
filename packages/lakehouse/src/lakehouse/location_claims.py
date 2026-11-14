@@ -232,7 +232,7 @@ def read(store: ClaimStore, location: str) -> ClaimRead | None:
     return ClaimRead(claim=LocationClaim.model_validate(found.stored.record), etag=found.stored.etag)
 
 
-def _store_now(store: ClaimStore, location: str) -> datetime:
+def store_now(store: ClaimStore, location: str) -> datetime:
     """The store's clock now, read off the location's key: what a write acting on an earlier read stamps and judges by,
     since that read can be as old as the request that made it."""
     return records.read_json_at(store.control_root, store.storage_options, claim_key(location)).at
@@ -381,7 +381,7 @@ def hand_over(
         LocationHeldError: Another table holds the location.
         ClaimChangedError: The claim changed since ``read_as``.
     """
-    now = _store_now(store, location)
+    now = store_now(store, location)
     if read_as is None:
         held = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), claimed_at=now, token=token)
     else:
@@ -407,7 +407,7 @@ def fence(
         LocationHeldError: Another table holds the location.
         ClaimChangedError: The claim changed since ``read_as``, or another request is acting on ``table``.
     """
-    now = _store_now(store, location)
+    now = store_now(store, location)
     mark = ClaimFence(token=token, at=now)
     current = read_as.claim if read_as is not None else None
     if current is not None and current.fenced_against(token, now):

@@ -141,13 +141,13 @@ def _uuid(client: TestClient, ident: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# §4: create_table dual-write compensation — a failed owner grant must not strand the table
+# §4: a failed owner grant must not strand the table
 # --------------------------------------------------------------------------- #
 
 
 def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) -> None:
-    """Grant fails after the Lance write → the create 5xxs AND the table is deleted, so the client's
-    retry starts clean instead of hitting 'already exists' on a forever-ownerless table."""
+    """The grant fails before the backend records the table ([[LH-588]]) → the create 5xxs AND no table stands, so the
+    client's retry starts clean instead of hitting 'already exists' on a forever-ownerless table."""
     from lance_namespace import ServiceUnavailableError
 
     import catalog.api.v1.endpoints.data as data_ep
@@ -170,48 +170,6 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
     assert retried.status_code == 200, retried.text
 
 
-def test_create_existok_never_compensates_away_a_kept_table(moto_client: TestClient) -> None:
-    """ExistOk may have KEPT a pre-existing table this request never wrote — compensation deleting it
-    would destroy someone else's data. ExistOk is retry-safe end-to-end anyway (the retry links the
-    kept table again), so a kept table's failed link must never trigger the delete."""
-    from lance_namespace import ServiceUnavailableError
-
-    import catalog.api.v1.endpoints.data as data_ep
-
-    rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    assert _create(moto_client, "lance_catalog$keep$t", rows).status_code == 200
-
-    async def failing_link(*_a: object, **_kw: object) -> None:
-        raise ServiceUnavailableError("fga down mid-create")
-
-    with pytest.MonkeyPatch.context() as mp:  # dedicated context — never the fixture's instance
-        mp.setattr(data_ep.fga_deps, "link_an_unlinked_table", failing_link)
-        failed = _create(moto_client, "lance_catalog$keep$t", rows, "?mode=exist_ok")
-    assert failed.status_code == 503, failed.text
-    # the pre-existing table SURVIVED the failed ExistOk…
-    assert int(moto_client.post("/v1/table/lance_catalog$keep$t/count_rows", json={}).text) == 2
-    # …and the ExistOk retry heals (the link is tried again against the kept table).
-    healed = _create(moto_client, "lance_catalog$keep$t", rows, "?mode=exist_ok")
-    assert healed.status_code == 200, healed.text
-
-
-def test_compensation_matrix_never_drops_a_replaced_or_kept_table() -> None:
-    """The Overwrite-of-existing arm can't be driven in this harness (needs FGA on), so the decision
-    is a pure function and pinned here: compensation may drop ONLY a fresh-id create — never an
-    ExistOk (may have kept a table) and never an Overwrite that replaced one (its time-travel
-    history would be destroyed by a transient FGA blip — review 2026-07-10)."""
-    from catalog.core.modes import CreateMode
-    from catalog.services.table_create import compensation_allowed
-
-    # The door parses the wire `mode` ONCE and hands the enum down (catalog-api-16), so the raw
-    # spellings are driven through that same parser here instead of being re-listed beside it.
-    assert compensation_allowed(CreateMode.parse(None), overwrote_existing=False) is True  # plain create, fresh id
-    assert compensation_allowed(CreateMode.parse("overwrite"), overwrote_existing=False) is True  # fresh-id overwrite
-    assert compensation_allowed(CreateMode.parse("overwrite"), overwrote_existing=True) is False  # replaced a table
-    assert compensation_allowed(CreateMode.parse("exist_ok"), overwrote_existing=False) is False
-    assert compensation_allowed(CreateMode.parse("ExistOk"), overwrote_existing=False) is False
-
-
 # --------------------------------------------------------------------------- #
 # diff2 F3: RETRY CONVERGENCE — every create door, not just the Arrow one
 #
@@ -223,8 +181,8 @@ def test_compensation_matrix_never_drops_a_replaced_or_kept_table() -> None:
 # with neither written there is no inheritance path for any admin either), and permanently blocks
 # its own id against the retry that would repair it.
 #
-# `seed_ownership` is patched, NOT `seed_ownership_or_compensate`: the compensating seam is the code
-# under test, so stubbing it would assert nothing. The patch lands on the fga_deps module global,
+# `seed_ownership` is patched, NOT the door's seam around it (`seed_before_write`, `seed_ownership_or_compensate`): the
+# compensating seam is the code under test, so stubbing it would assert nothing. The patch lands on the fga_deps module global,
 # which is exactly what the seam's internal call resolves.
 # --------------------------------------------------------------------------- #
 
@@ -242,10 +200,9 @@ def _failing_seed_ctx(mp: pytest.MonkeyPatch) -> None:
 
 
 def test_declare_converges_after_a_failed_grant(moto_client: TestClient) -> None:
-    """DECLARE was bare native-then-seed. A failed grant left a declared-only table that its declarer
-    could not see, could not drop and could not re-declare (native `TableAlreadyExists`) — reserving
-    the id against everyone, permanently. The undo is unconditionally safe here: a declared table
-    holds no data, so nothing can be destroyed by removing it."""
+    """A declared-only table holding no grant is one its declarer cannot see, drop or declare again (native
+    `TableAlreadyExists`), reserving the id against everyone. The grant goes before the declaration's row
+    ([[LH-588]]), so a failed grant leaves no row, and the retry converges."""
     assert moto_client.post("/v1/namespace/lance_catalog$f3d/create", json={}).status_code == 200
     with pytest.MonkeyPatch.context() as mp:
         _failing_seed_ctx(mp)

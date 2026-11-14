@@ -14516,7 +14516,7 @@
     },
     "/management/v1/grants/ghosts/revoke": {
       "post": {
-        "description": "Revoke every grant on each object no registry names, as a drift report found them.\n\nEach object is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash\nrecord) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop.",
+        "description": "Revoke every grant on each object no registry names, as a drift report found them.\n\nEach object is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash\nrecord) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a\ntable a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]).",
         "operationId": "revoke_ghost_grants_management_v1_grants_ghosts_revoke_post",
         "parameters": [
           {
@@ -27538,7 +27538,7 @@
     },
     "/v1/table/{id}/register": {
       "post": {
-        "description": "Register an existing table location at ``id`` via ``register_table``, refuse it when the location\noverlaps the control root, a configured base or another table, when the dataset there carries reader\nflag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, then\nseed the caller's FGA ownership and emit a REGISTER_TABLE marker (who attached it + where).\n\nWhat the registration announces is filed once the dataset is admitted and before its ownership is seeded, the first\nmoment its location as the backend resolved it is known, so a door failing after that still announces it, and a\nstore refusing the filing detaches the registration ([[LH-576]]). A registration that dies before then is attached\nand unowned: the drift report lists it under ``ungoverned_tables``.",
+        "description": "Register an existing table location at ``id`` via ``register_table``, refuse it when the location\noverlaps the control root, a configured base or another table, when the dataset there carries reader\nflag 256, or when it declares a base nothing sanctions; record the bases it is admitted with, and emit a\nREGISTER_TABLE marker (who attached it + where).\n\nThe table's grants are written under the uuid this request mints before the backend records it ([[LH-588]]), and\ntaken back by every refusal. A registration killed after its grants and before the backend call leaves the grants\nalone, which the drift repair revokes. One killed between the backend call and the location's claim leaves a table\nno claim identifies (``object_uuids.UnidentifiedObjectError``, [[LH-534]]), reached only by the estate admin's\nderegister, whose grants no claim records and the drift repair revokes too: the claim is keyed by the location as\nthe backend resolved it, which only the registration makes known.\n\nWhat the registration announces is filed once the dataset is admitted, the first moment its location as the backend\nresolved it is known, so a door failing after that still announces it, and a store refusing the filing detaches the\nregistration ([[LH-576]]).",
         "operationId": "register_table_v1_table__id__register_post",
         "parameters": [
           {

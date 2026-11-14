@@ -18,10 +18,10 @@ own ([[LH-235]]):
   no further, its rename dead as it reached the backend, is finished by asking again, and so is the move of a table
   left inheriting from both namespaces; and a rival rename landed as this one arrives moves nothing, since the
   rename holds the claim until the table's edges are whole ([[LH-586]]);
-- a door that finds the table standing under the name it is asked for grants its caller nothing: a registration made
-  again is refused and writes no tuple at all, and a create that keeps the table, or its owner's Overwrite, writes only
-  the link of a table that inherits from nowhere, so none puts the readers of the namespace a rename left back on it,
-  and a create that loses the race to the name keeps the winner's table and owns none of it;
+- a door that finds the table standing under the name it is asked for writes no tuple: a registration made again is
+  refused, and a create that keeps the table, or its owner's Overwrite, links no table, so none puts the readers of the
+  namespace a rename left back on it, and a create that loses the race to the name keeps the winner's table and owns
+  none of it, the grants it wrote before its own declaration taken back ([[LH-588]]);
 - a rename landed inside a namespace cascade's removal of its table is refused, and the cascade removes what it
   listed, into the trash where the drop is recoverable; a table renamed out before its turn it leaves whole, and a
   table made since under a listed name it refuses.
@@ -458,8 +458,7 @@ def _a_rename_left_it_half_moved(scene: _Scene) -> set[tuple[str, str, str]]:
 
 
 def _it_inherits_from_nowhere(scene: _Scene) -> set[tuple[str, str, str]]:
-    """The table's link to the namespace it is named in is gone, as a create that died before its seed leaves it: the
-    link it lacks."""
+    """The table's link to the namespace it is named in is gone, a drift no door leaves: the link it lacks."""
     link = set(_edges(scene.table, scene.space("lance_catalog$open")))
     scene.estate.store.delete(*link)
     return link
@@ -487,10 +486,6 @@ def _nothing(_scene: _Scene, _lacking: set[tuple[str, str, str]]) -> set[tuple[s
     return set()
 
 
-def _the_link_it_lacks(_scene: _Scene, lacking: set[tuple[str, str, str]]) -> set[tuple[str, str, str]]:
-    return lacking
-
-
 def _the_winners_own(scene: _Scene, _lacking: set[tuple[str, str, str]]) -> set[tuple[str, str, str]]:
     """What the create that won the race wrote, read once the door answered: alice owns ``open$r``, linked to ``open``."""
     won = _object(scene.estate, "table", "lance_catalog$open$r")
@@ -503,9 +498,10 @@ _REGISTERED_AGAIN = ("/v1/table/lance_catalog$open$t/register", {"json": {"locat
 
 #: Each door that finds a table standing under the name it is asked for, and so brings none into being. A registration
 #: made again is refused, and a refused request writes no tuple, whatever the table lacks. A create that keeps the table
-#: and its owner's Overwrite answer 200, and write the link of a table that inherits from nowhere and nothing else: no
+#: and its owner's Overwrite answer 200 and write no tuple either: no link for a table that inherits from nowhere, no
 #: second parent on a table a rename left half-moved, and no ownership for the caller, not even where the table it keeps
-#: was made by a create that won the race to the name. bob only writes in `open`.
+#: was made by a create that won the race to the name, which bob's own grants, written before his declaration lost the
+#: race, do not outlast ([[LH-588]]). bob only writes in `open`.
 @pytest.mark.parametrize(
     ("caller", "path", "sent", "answer", "found", "adds"),
     [
@@ -517,7 +513,7 @@ _REGISTERED_AGAIN = ("/v1/table/lance_catalog$open$t/register", {"json": {"locat
             _ARROW,
             (200, None),
             _it_inherits_from_nowhere,
-            _the_link_it_lacks,
+            _nothing,
             id="a-create-keeping-a-table-that-inherits-from-nowhere",
         ),
         pytest.param(

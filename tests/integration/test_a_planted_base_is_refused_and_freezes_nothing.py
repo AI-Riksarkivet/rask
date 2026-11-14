@@ -1074,16 +1074,22 @@ def test_a_late_end_of_a_former_clone_keeps_the_record_of_the_clone_there_now(es
 
 
 def test_a_register_undone_with_a_tag_the_store_keeps_leaves_the_clones_location_held(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A registration whose ownership seed fails is undone tags first, as every other end of a clone is: a tag the store
-    will not delete leaves the location held, so no clone registered there next takes it while that tag stands."""
+    """A registration whose ownership seed fails once its claim is held is undone tags first, as every other end of a clone
+    is: a tag the store will not delete leaves the location held, so no clone registered there next takes it while that
+    tag stands. The seed the door writes before the backend call lands ([[LH-588]]); the one it writes again after the
+    claim fails."""
     from catalog.api import fga_deps
 
     bronze = estate.create("lance_catalog$db$bronze", fragments=3)
     clone = f"{estate.root}/silver"
     source = estate.open(bronze)
     source.shallow_clone(clone, source.version, storage_options=estate.key.in_clear())
+    seed, seeded = fga_deps.seed_ownership, [False]
 
-    async def _no_store(*_args: object, **_kwargs: object) -> None:
+    async def _no_store(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the seed's own arguments
+        if not seeded[0]:
+            seeded[0] = True
+            return await seed(*args, **kwargs)
         raise OSError("the authorization store did not take the grant")
 
     monkeypatch.setattr(fga_deps, "seed_ownership", _no_store)

@@ -45,7 +45,7 @@ from opentelemetry import metrics
 from pydantic import BaseModel, Field
 
 from catalog.api.cron import mount_cron
-from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, StorageOptionsDep, estate_namespace, namespace_for_warehouse
+from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, StorageOptionsDep, estate_namespace, namespace_for_table
 from catalog.core.commit_ids import commit_ids_of, tag_move_run_id
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
@@ -147,7 +147,7 @@ async def _live_tables(request: Request, settings: Settings) -> _LiveTables:
         if claim.uuid is None or not claim.segments or await run_in_threadpool(table_claims.kept_in_trash, store, claim):
             continue
         try:
-            ns = await namespace_for_warehouse(request, settings, claim.segments[0]) if len(claim.segments) > 1 else await estate_namespace(request, settings)
+            ns = await namespace_for_table(request, settings, claim.segments)
             described = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=claim.segments))
         except (TableNotFoundError, NamespaceNotFoundError):
             continue
