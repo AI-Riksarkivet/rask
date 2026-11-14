@@ -14,15 +14,16 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Self
 
-from pydantic import AfterValidator, AliasChoices, Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from lakehouse.governed.secrets import secret_store_configured
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import StoreTimeouts, lance_storage_options
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.signature_doors import SignatureDoorSettings
 from lakehouse.storage_options import StorageOptions
-from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_a_token, require_one_store_identity
+from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
 
 if TYPE_CHECKING:
@@ -399,17 +400,6 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: record ([[LH-593]]). A table under it is maintained when its bucket is a configured one.
     estate_warehouse_object: str = Field(default="warehouse:lance_catalog", validation_alias="RASK_FGA_DEFAULT_WAREHOUSE_OBJECT")
 
-    # --- Secret consumption from the Dapr secret store (OpenBao) — symmetric with catalog + lineage.
-    # When on, this service's signing key is read from the store, and its object-store identity is its ServiceAccount
-    # token, never a pair (`require_one_store_identity`).
-    secrets_from_dapr: bool = Field(default=False, alias="MAINTENANCE_SECRETS_FROM_DAPR")
-    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
-    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
-    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
-    #: (the one every service reads); the per-service alias stays FIRST so a single service can
-    #: still be moved on its own.
-    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MAINTENANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-
     #: THE CATALOG'S CREDENTIAL DOOR, the only source of a rewrite's credential ([[LH-219]]): each rewrite is signed by a
     #: `maintain`-tier credential scoped to its one table and expiring in 900 s ([[LH-473]]). Unset, or a catalog on
     #: `mode_b`, every rewrite is refused; maintenance's own session signs only its reads and its own records
@@ -421,7 +411,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: (`kubernetes~system:serviceaccount:<ns>:<sa>`, the chart's `lance.saSubject`), or the two name different principals.
     catalog_service_identity: str = Field(default="kubernetes~system:serviceaccount:default:rask-sa-maintenance", alias="MAINTENANCE_CATALOG_SERVICE_IDENTITY")
     #: THE IDENTITY THIS SERVICE SIGNS ITS LINEAGE EVENTS AS ([[LH-064]]), one variable on every signer
-    #: (`RASK_SIGNING_IDENTITY`). With `secrets_from_dapr` it decides whether the service signs at all: its private
+    #: (`RASK_SIGNING_IDENTITY`). With a secret store named (`RASK_SECRET_STORE_ADDR`) it decides whether the service signs at all: its private
     #: key is `signing-key-<its key name>` in the store (`signing_key_name`). When it signs, it is also the author the events stamp.
     signing_identity: str = Field(default="", alias="RASK_SIGNING_IDENTITY")
     #: This pod's projected service-account token for the catalog's doors (audience `rask-catalog`),
@@ -452,17 +442,17 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
 
     @model_validator(mode="after")
     def _one_store_identity(self) -> Self:
-        """Refuse a pair beside the token, a token sent to the public AWS STS, and the secret store on without a token."""
-        if self.secrets_from_dapr:
-            require_a_token(self.web_identity, prefix="MAINTENANCE")
+        """Refuse a pair beside the token, and a token sent to the public AWS STS."""
         require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="MAINTENANCE")
         return self
 
     @model_validator(mode="after")
     def _a_bus_needs_the_store(self) -> Self:
         """Refuse a bus address without the secret store: the worker's bus credential is read from the store alone."""
-        if self.nats_url and not self.secrets_from_dapr:
-            raise ValueError("MAINTENANCE_NATS_URL needs MAINTENANCE_SECRETS_FROM_DAPR: the worker's bus credential is read from the store, never env")
+        if self.nats_url and not secret_store_configured():
+            raise ValueError(
+                "MAINTENANCE_NATS_URL needs a secret store (RASK_SECRET_STORE_ADDR): the worker's bus credential is read from the store, never env"
+            )
         return self
 
     def s3_key_pair(self) -> S3KeyPair:

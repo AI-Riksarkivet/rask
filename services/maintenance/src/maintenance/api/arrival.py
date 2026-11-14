@@ -55,12 +55,12 @@ SUCCESS: Final = "SUCCESS"
 RETRY: Final = "RETRY"
 
 
-def _published_keys(request: Request, settings: MaintenanceSettings) -> PublishedKeys:
+def _published_keys(request: Request) -> PublishedKeys:
     """This app's key reader, built on first use and kept on the app so its cache outlives one delivery."""
     state = request.app.state
     keys: PublishedKeys | None = getattr(state, "published_keys", None)
     if keys is None:
-        keys = state.published_keys = PublishedKeys(published_key_fetch(settings.dapr_secret_store))
+        keys = state.published_keys = PublishedKeys(published_key_fetch())
     return keys
 
 
@@ -82,7 +82,7 @@ async def _judge_arrival(arrived: dict[str, Any], *, event_id: object, request: 
     mode = settings.signature_doors
     if mode is DoorMode.OFF:
         return DoorVerdict(act=True)
-    keys = _published_keys(request, settings)
+    keys = _published_keys(request)
     claim = signature_of(arrived)
     source = keys.for_event(claim.kid if claim else None)
     verdict = await run_in_threadpool(

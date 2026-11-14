@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, read_identity_token
+from lakehouse.governed.secrets import secret_store_configured
 from lakehouse.governed.store_credential import S3KeyPair, StoreCredentialUnavailableError
 from lakehouse.storage_options import DEFAULT_REGION, REGION, StorageOptions, object_client
 
@@ -185,12 +186,25 @@ def held_session(identity: WebIdentity) -> S3KeyPair:
 
 
 def key_pair_in_force(identity: WebIdentity | None, env_pair: S3KeyPair) -> S3KeyPair:
-    """What a service signs with: the session its token was exchanged for, or ``env_pair`` when it projects no token.
+    """What a process signs with: the session its token was exchanged for, or ``env_pair`` when it projects no token and
+    the chart named it no secret store.
+
+    A PROCESS WITH A SECRET STORE IS HANDED NO ENVIRONMENT PAIR. The store is what a deployment is given, and a pair
+    beside it would be a secret in a deployment's environment, so nothing signs with one there: not a service, which its
+    start already refuses (`require_env_pair`), and not a tool run beside it that never starts one. The pair is the
+    offline and Dagger lanes', which name no secret store (ADR 0170).
 
     Raises:
-        StoreCredentialUnavailableError: The service projects a token and holds no unexpired session (503).
+        StoreCredentialUnavailableError: The process projects a token and holds no unexpired session, or projects none
+            where a secret store is named (503).
     """
-    return env_pair if identity is None else held_session(identity)
+    if identity is not None:
+        return held_session(identity)
+    if secret_store_configured():
+        raise StoreCredentialUnavailableError(
+            "a process with a secret store (RASK_SECRET_STORE_ADDR) signs with its ServiceAccount token alone, and projects none"
+        )
+    return env_pair
 
 
 def require_one_store_identity(identity: WebIdentity | None, *, env_pair: S3KeyPair, prefix: str) -> None:
@@ -218,24 +232,17 @@ def require_one_store_identity(identity: WebIdentity | None, *, env_pair: S3KeyP
         raise ValueError(f"a key pair beside {token} is a second identity: this service signs only with sessions its token is exchanged for")
 
 
-def require_a_token(identity: WebIdentity | None, *, prefix: str) -> None:
-    """Refuse a service that reads its secrets from the secret store yet projects no token: its pair would be a secret in
-    the environment, so its store identity must be its ServiceAccount token.
-
-    Raises:
-        ValueError: The service projects no token.
-    """
-    if identity is None:
-        raise ValueError(f"with {prefix}_SECRETS_FROM_DAPR the object-store identity is the ServiceAccount token: set {prefix}_S3_WEB_IDENTITY_TOKEN_FILE")
-
-
 #: The acknowledgement a service needs before it signs with a static key pair from its environment.
 STATIC_KEY_ACKNOWLEDGEMENT: Final = "RASK_INSECURE_ALLOW_STATIC_STORE_KEY"
 
 
 def require_env_pair(settings: StoreIdentitySettings, *, prefix: str) -> None:
-    """Refuse to boot a service that projects no token unless both halves of its environment's pair are set, and an
-    operator acknowledged signing with them.
+    """Refuse to boot a service that projects no token unless the chart named it no secret store, both halves of its
+    environment's pair are set, and an operator acknowledged signing with them.
+
+    A SERVICE WITH A SECRET STORE SIGNS WITH ITS TOKEN ALONE, and no acknowledgement lifts that: the store is what a
+    deployment is given, and a pair beside it would be a secret in a deployment's environment. The pair is the offline
+    and Dagger lanes', which name no secret store (ADR 0170).
 
     An empty secret would fail every request with a `SignatureDoesNotMatch` rather than a startup error. The key id is
     refused too: any default for it would be the store's root account, whose credential reaches every tenant's bytes
@@ -245,8 +252,12 @@ def require_env_pair(settings: StoreIdentitySettings, *, prefix: str) -> None:
     Dagger lanes and the side stacks, which project no token. The chart renders no pair and no acknowledgement.
 
     Raises:
-        ValueError: A half of the pair is missing, or nobody acknowledged a static pair.
+        ValueError: The service has a secret store, a half of the pair is missing, or nobody acknowledged a static pair.
     """
+    if secret_store_configured():
+        raise ValueError(
+            f"a service with a secret store (RASK_SECRET_STORE_ADDR) signs with its ServiceAccount token alone: set {prefix}_S3_WEB_IDENTITY_TOKEN_FILE"
+        )
     env_pair = settings.env_pair
     if not env_pair.access_key_id:
         raise ValueError(f"{prefix}_S3_ACCESS_KEY_ID is required when the service projects no token ({prefix}_S3_WEB_IDENTITY_TOKEN_FILE)")

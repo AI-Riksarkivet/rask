@@ -12,7 +12,7 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 
 | Prerequisite | What rask renders against it |
 |---|---|
-| **External Secrets Operator** | the ExternalSecrets and SecretStore every pod without a sidecar takes its credentials from (§ 8) |
+| **External Secrets Operator** | the ExternalSecrets and SecretStore behind every credential a pod takes as a Kubernetes Secret (§ 8) |
 | **Dapr control plane** | the Components, Configurations, Resiliency and Subscriptions, and the sidecar annotations |
 | **NATS JetStream** | the stream Job that creates rask's streams, and one bus user per app (§ 7) |
 | **CloudNativePG operator** | a `Cluster` only with `age.cnpgCluster.enabled`; see [`CNPG-AGE.md`](CNPG-AGE.md) |
@@ -174,19 +174,20 @@ So: nothing to install for either.
 
 ## 5 · Secrets: the dev-mode fragility, and the operator plan (added 2026-07-14)
 
-**What we hit.** Driving the #4 outbox live meant a helm upgrade that (via an unrelated interrupted
-run) restarted the OpenBao pod. OpenBao runs `server -dev` → its KV store is **in memory**, so the
-restart wiped `secret/lance`. The `openbao-seed` Job that repopulates it is a **post-upgrade hook**,
-so it only fires on a helm release — not on a bare pod restart. Every new app pod's lifespan calls
-`apply_dapr_secrets` → Dapr's vault secretstore → `GET /v1.0/secrets/lance-secrets/lance` → **`500`**;
-the Dapr client retries with growing backoff, so uvicorn stays at "Waiting for application startup",
-never binds `:8000`, and daprd sits "waiting for application to listen" — a two-sided deadlock that
-reads like a crash but is a **missing secret**. Root-caused by running `apply_dapr_secrets` inside the
-stuck pod under a watchdog; fixed by re-running the seed (the chart's own hook) + recreating the pod.
+**What we hit (2026-07-14).** Driving the #4 outbox live meant a helm upgrade that (via an unrelated interrupted
+run) restarted the OpenBao pod. OpenBao then ran `server -dev`, its KV store **in memory**, so the restart
+wiped every secret, and the seed that repopulated it was a **post-upgrade hook**, which fires on a helm
+release and not on a bare pod restart. Every app then read its secrets through its sidecar at start, got
+**`500`** from it, and retried with growing backoff: uvicorn stayed at "Waiting for application startup"
+and never bound `:8000`, while daprd sat "waiting for application to listen", a two-sided wait that read
+like a crash and was a **missing secret**. Fixed by re-running the seed and recreating the pod.
 
 **Where it stands.** The seed runs beside the dev server and seeds an in-place restart again (§ 6,
 `chart/templates/openbao-seed.yaml`), so a bare pod restart needs no release. The dev store stays in memory: it is
-the openbao fixture, not for production. The chart renders no secret store ([[XC-149]]): production names the
+the openbao fixture, not for production. No service reads through a sidecar ([[XC-199]]): each logs in to the store
+itself before it serves, asks again for about two minutes, and then fails its start naming its role, so an empty or
+unreachable store shows as a start that failed on its login, never as a pod waiting on its sidecar. The chart renders
+no secret store ([[XC-149]]): production names the
 platform's Vault or OpenBao, whose operator owns unsealing, durability and rotation, and the External Secrets
 Operator is a prerequisite (docs/architecture/deployment.md, Prerequisite in production: the secret store).
 
@@ -197,8 +198,9 @@ holds two secrets per identity, named by its key (the signer's ServiceAccount na
 itself is that account's subject, `kubernetes~system:serviceaccount:<ns>:<sa>`): `signing-public-<key>` (field `keys`: comma-separated public NKEYs, current
 first, at most one previous) and `signing-key-<key>` (field `seed`: the NKEY user seed). A signer is Ready only
 while the kid of its own seed is in its list, so the list is always written before the seed it belongs to. Lineage
-reads lists only. The store enforces the same split: each sidecar logs in as its own ServiceAccount, and its role's
-policy reads only its own app's secrets (XC-165, ADR 0169), so reaching :8200 without a sidecar's login reads nothing.
+reads lists only. The store enforces the same split: each service, and its sidecar, logs in as its own ServiceAccount,
+and its role's policy reads only its own app's secrets (XC-165, ADR 0169, XC-199), so reaching :8200 without that login
+reads nothing.
 
 **The dev OpenBao (`openbao.enabled`) needs nothing from you.** Its `mint` init container generates a candidate
 pair per identity on a memory volume the server never mounts, and its `seed` container chooses one pair per identity
@@ -241,24 +243,40 @@ Rotation on the platform's store belongs to the parked production runbook. The s
 
 **Loss.** A dev OpenBao replacement with no outgoing pod to carry from (a deleted pod, a drained node) mints every
 identity afresh and the old public keys go with the old store. Events signed before the loss are refused once
-enforcement is on (acked and counted); every signer re-resolves within 5 minutes once its sidecar can read again.
+enforcement is on (acked and counted); every signer re-resolves within 5 minutes once the store admits its login again.
 
-**Every replacement logs every sidecar out, a surge one included.** The store's tokens live in memory with it, so the
-token each daprd got at boot through Kubernetes auth names nothing in the replacement, and every read through
-`lance-secrets` answers 500 (`ERR_SECRET_GET`, the store's `403 permission denied`). Measured 2026-11-07 on
-openbao/openbao:2.2.0 and daprd 1.19.0-rc.4: the fixture re-applied with a changed pod spec carried every signing pair
-and bus user over a surge, and the catalog's, lineage's and maintenance's reads still failed three minutes later, until
-`kubectl rollout restart deploy/rask-catalog deploy/rask-lineage deploy/rask-maintenance`; whether daprd's background
-renewal would have logged in again later is not measured. So apply a fixture
-change before the rask upgrade that rolls the Dapr pods, and restart every Dapr app after any other OpenBao replacement.
+**Every replacement invalidates every store token, a surge one included.** The store's tokens live in memory with it, so
+the token each service and each daprd holds names nothing in the replacement. A service reads under its own login
+(XC-199), and its loop has that token ask the store about itself every 15 s (`auth/token/lookup-self`, which the
+rendered policy grants): the replacement answers `403 permission denied`, the pass logs `secret_store_token_dropped`
+and logs in again, and reads are served again within one pass of the replacement admitting the login. Until then every
+read is refused and logged `secret_store_read_failed` (`lakehouse.governed.secrets`; held offline by
+`packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`, not yet measured against a
+replaced store on the estate). A sidecar reads the store only to resolve its components' secrets when it starts, and
+serves its app none, so its own token is as dead and nothing reads under it: the store's replacement alone restarts no
+pod. (Measured 2026-11-07 on openbao/openbao:2.2.0 and daprd 1.19.0-rc.4, while the services still read through their
+sidecars: the fixture re-applied with a changed pod spec carried every signing pair and bus user over a surge, and
+reads through `lance-secrets` still failed three minutes later, until the Dapr pods were restarted; whether daprd's
+background renewal would have logged in again later is not measured.)
 
-**Reading it back.** From an app's own sidecar, `GET /v1.0/secrets/lance-secrets/signing-key-<its key>` answers
-200 with a `seed` field, every other identity's key is refused, and `signing-public-<key>` answers 200 to that signer and
-to every verifier. Lineage's sidecar is refused every key. Each app's Dapr Configuration is named by the hash of its spec
-(`lance-config-<app>-<hash>`) and its pods name it in `dapr.io/config`, so an allow-list edit renames the object and rolls
-exactly the pods whose list changed. HotReload is off and Helm applies a Deployment before the Configuration it names:
-a pod that boots first finds no such object, its daprd exits and the kubelet restarts it until Helm has applied it, so
-no pod boots against the old list. During such an upgrade a rolled pod may show one daprd restart: that is the wait,
+During a surge two stores answer at the Service's address, and each refuses the other's tokens. A service whose pass
+logs in to one can then be refused, by the other, the question about the token it has just been issued: its loop logs
+`secret_store_token_cannot_ask_about_itself` once (the same line a role whose policy lost the
+`auth/token/lookup-self` grant produces) and logs in again at its next pass, so a login that landed on the store that
+then left is replaced within one more pass. Each further login the store refuses in turn waits twice the passes the
+last did (1, 3, 7, then 15, four minutes), and the store's first answer ends that. A replacement that mints a new bus
+root still needs the bus and the Dapr apps restarted (§ 7).
+
+**Reading it back.** Logged in to the store as an app's own account and role (a token from
+`kubectl create token <release>-sa-<app> --audience rask-openbao`, presented at `auth/kubernetes/login` as
+`<release>-<app>`), `signing-key-<its key>` reads with a `seed` field, every other identity's key is refused 403, and
+`signing-public-<key>` reads for that signer and for every verifier; lineage's role is refused every private key.
+`tests/e2e-py/test_each_app_reads_only_its_own_secrets.py` asks exactly this of a deployed estate. No sidecar serves its
+app a secret: `GET /v1.0/secrets/lance-secrets/<name>` from inside a pod answers 403 for every name. Each app's Dapr
+Configuration is named by the hash of its spec (`lance-config-<app>-<hash>`) and its pods name it in `dapr.io/config`, so
+a spec edit renames the object and rolls exactly the pods that load it. HotReload is off and Helm applies a Deployment
+before the Configuration it names: a pod that boots first finds no such object, its daprd exits and the kubelet restarts
+it until Helm has applied it, so no pod boots against the old spec. During such an upgrade a rolled pod may show one daprd restart: that is the wait,
 not a fault. Read a pod's Configuration from its `dapr.io/config`, not from the app-id.
 
 ## 7 · Bus credentials: one NATS user per app (XC-078)

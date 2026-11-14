@@ -81,12 +81,11 @@ class DaprDoorSettings(BaseSettings):
     #: Nothing in the render, the chart or a probe distinguished that from a configured door.
     allow_unauthenticated_dapr: bool = Field(default=False, alias="RASK_ALLOW_UNAUTHENTICATED_DAPR")
 
-    #: Resolve the expected token from the Dapr SECRET STORE rather than from the environment.
+    #: Resolve the expected token from the SECRET STORE rather than from the environment.
     #:
-    #: The estate rule is that a secret never travels through env — not process env, not a k8s Secret
-    #: via `secretKeyRef`, which is what `APP_API_TOKEN` is today for eleven deployments. A pod with a
-    #: sidecar already has the sanctioned path in it (`GET /v1.0/secrets/<store>/<key>`), so this is a
-    #: per-deployment switch onto it rather than new plumbing.
+    #: The estate rule is that a secret never travels through env: not process env, not a k8s Secret
+    #: via `secretKeyRef`. A lakehouse pod already reads its secret store as itself
+    #: (`lakehouse.governed.secrets`), so this is a per-deployment switch onto that read.
     #:
     #: A MODE, NOT A FALLBACK CHAIN. On, the store is the STRICT sole source and `APP_API_TOKEN` is not
     #: consulted at all — a chain would mean a store outage silently promoted a stale env value back to
@@ -94,9 +93,7 @@ class DaprDoorSettings(BaseSettings):
     #: is the same shape the S3 key pair takes (`lakehouse.governed.store_credential`).
     app_token_from_store: bool = Field(default=False, alias="RASK_APP_TOKEN_FROM_STORE")
 
-    #: Which secret holds it: the store is the one every service names, and the secret is the estate's one app token,
-    #: readable by exactly the apps with a Dapr door ([[XC-165]]).
-    secret_store: str = Field(default="lance-secrets", alias="RASK_SECRET_STORE")
+    #: Which secret holds it: the estate's one app token, readable by exactly the apps with a Dapr door ([[XC-165]]).
     secret_key: str = Field(default="dapr-app-token", alias="RASK_DAPR_SECRET_KEY")
     app_token_field: str = Field(default="token", alias="RASK_APP_TOKEN_FIELD")
     #: The token a rotation replaced, accepted beside the current one ([[XC-082]], ADR 0166). daprd reads its
@@ -130,12 +127,12 @@ def _read_app_tokens(read: StoreRead) -> dict[str, str]:
         SecretStoreUnreadable: The store did not answer.
         _NoCurrentToken: It answered without the current token, as it does before the seed lands.
     """
-    from lakehouse.governed.secrets import fetch_dapr_secret  # imported here, not at module scope: keeps this module import-light
+    from lakehouse.governed.secrets import read_secret  # imported here, not at module scope: keeps this module import-light
 
     current, previous = read.fields
-    bundle = fetch_dapr_secret(read.store, read.secret, retries=1)
+    bundle = read_secret(read.secret, retries=1)
     if not bundle:
-        raise SecretStoreUnreadable(f"secret store {read.store!r} unreadable")
+        raise SecretStoreUnreadable(f"the secret store did not serve {read.secret!r}")
     if not bundle.get(current):
         raise _NoCurrentToken(current)
     return {current: bundle[current], previous: bundle.get(previous, "")}
@@ -143,7 +140,7 @@ def _read_app_tokens(read: StoreRead) -> dict[str, str]:
 
 def _app_token_read(door: DaprDoorSettings) -> StoreRead:
     """The store read that holds ``door``'s current and previous tokens."""
-    return StoreRead(store=door.secret_store, secret=door.secret_key, fields=(door.app_token_field, door.app_token_previous_field))
+    return StoreRead(secret=door.secret_key, fields=(door.app_token_field, door.app_token_previous_field))
 
 
 def expected_app_tokens() -> tuple[str, ...]:
@@ -191,7 +188,7 @@ def missing_app_token_knob() -> str:
     if door.app_token_file is not None:
         return f"the app token file {door.app_token_file} holds no token"
     if door.app_token_from_store:
-        return f"{door.app_token_field!r} is absent from the Dapr secret store {door.secret_store}/{door.secret_key}"
+        return f"{door.app_token_field!r} is absent from the secret store's {door.secret_key}"
     return "APP_API_TOKEN is unset"
 
 
@@ -347,9 +344,9 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
             raise RuntimeError(f"the app token file {door.app_token_file} holds no token: the delivery route would otherwise be unauthenticated")
         return
     if door.app_token_from_store:
-        from lakehouse.governed.secrets import fetch_required_secrets  # imported here, not at module scope: keeps this module import-light
+        from lakehouse.governed.secrets import read_required_secret  # imported here, not at module scope: keeps this module import-light
 
-        bundle = fetch_required_secrets(door.secret_store, door.secret_key, require=door.app_token_field)
+        bundle = read_required_secret(door.secret_key, require=door.app_token_field)
         read = _app_token_read(door)
         current, previous = read.fields
         secret_cache.STORE_READS.get(read, lambda: {current: bundle[current], previous: bundle.get(previous, "")})
@@ -358,7 +355,7 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
         raise RuntimeError(
             "APP_API_TOKEN must be set when Dapr ingest is enabled — the delivery route would otherwise be "
             "unauthenticated. Wire dapr.io/app-token-secret + the APP_API_TOKEN env, or set "
-            "RASK_APP_TOKEN_FROM_STORE to take it from the Dapr secret store instead."
+            "RASK_APP_TOKEN_FROM_STORE to take it from the secret store instead."
         )
 
 

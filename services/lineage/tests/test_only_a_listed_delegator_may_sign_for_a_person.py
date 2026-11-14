@@ -8,8 +8,8 @@ on that signature with no grant re-derived ([[LH-551]]): the catalog authorized 
 revoked since, on its outputs or its inputs, takes nothing back. The commit reconciler's re-announcement of a lost one
 is the same: the catalog signs it only for the author it recorded authorizing the commit ([[LH-550]], ADR 0187).
 
-Driven through the registered `/lineage-events` route, FGA on. Public keys come from the sidecar's secret API,
-stood in for by respx; signatures are built by the root conftest's `EventSigner` from the wire format alone.
+Driven through the registered `/lineage-events` route, FGA on. Public keys come from the secret store, which the suite's
+double answers; signatures are built by the root conftest's `EventSigner` from the wire format alone.
 """
 
 from __future__ import annotations
@@ -19,9 +19,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, cast
 
-import httpx
 import pytest
-import respx
 from fastapi import FastAPI
 from openfga_sdk import OpenFgaClient
 from starlette.testclient import TestClient
@@ -29,12 +27,12 @@ from starlette.testclient import TestClient
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.signing_key import signing_public_secret
 from lineage.models import DatasetEvent
+from tests.secret_store_double import SecretStoreDouble
 
 
 CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver", "service-trainer", "dex~alice"
 #: A listed signer that is no delegator and signs its own runs, as the principal it is.
 PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
-SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 #: The uuids the catalog minted for the run's output, the table it read and the table a drop names, which its events carry
 #: in each dataset's `rask_lance` facet (ADR 0173 §10).
 EVENTS_UUID = "5d0f6a1e-8b2c-4f3d-9e7a-1c2b3d4e5f60"
@@ -101,7 +99,6 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], gover
     for key, value in {
         "APP_API_TOKEN": "the-estate-app-token",
         "LINEAGE_DAPR_ENABLED": "true",
-        "DAPR_HTTP_PORT": "3500",
         "RASK_FGA_ENABLED": "true",
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": "https://idp.invalid/dex",
@@ -136,7 +133,6 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], gover
     return TestClient(app), feed
 
 
-@respx.mock
 @pytest.mark.parametrize(
     ("case", "held", "governed", "status", "recorded"),
     [
@@ -151,6 +147,7 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], gover
 def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # noqa: PLR0913 - parametrized
     monkeypatch: pytest.MonkeyPatch,
     event_signer: Any,
+    secret_store: SecretStoreDouble,
     respx_allows_unused_routes: None,
     case: str,
     held: Callable[[str], bool],
@@ -161,8 +158,8 @@ def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # 
     client, feed = _door(monkeypatch, held=held, governed=governed)
     catalog, stage, unlisted, impostor, pipeline = (event_signer(name) for name in (CATALOG, STAGE, UNLISTED, CATALOG, PIPELINE))
     for signer in (catalog, stage, pipeline):
-        respx.get(f"{SECRETS}/{signing_public_secret(signer.identity)}").mock(return_value=httpx.Response(200, json={"keys": signer.public}))
-    unlisted_read = respx.get(f"{SECRETS}/signing-public-{UNLISTED}").mock(return_value=httpx.Response(200, json={"keys": unlisted.public}))
+        secret_store.hold(signing_public_secret(signer.identity), {"keys": signer.public})
+    unlisted_read = secret_store.hold(f"signing-public-{UNLISTED}", {"keys": unlisted.public})
     event = {
         "stage-for-a-person": lambda: stage.sign(_run(PERSON), on_behalf_of=PERSON),
         "catalog-for-a-person": lambda: catalog.sign(_run(PERSON), on_behalf_of=PERSON),

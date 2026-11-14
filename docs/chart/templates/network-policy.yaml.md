@@ -5,7 +5,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- range (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "openbao" | uniq) }}`
 
-The dev store's readers are the pods whose sidecar reads it, named by their component labels:
+The dev store's readers are the pods that log in to it (each service, and its sidecar for its components), named by their component labels:
 `lance.secretReaderComponents`, which is the secret-store component's scope (`lance.secretScopes`, where an app's id is
 its pods' component label) and maintenance's worker pods, which run under maintenance's app id and carry the label
 `maintenance-worker`. Derived from the scope, so this list and the scope of `lance-secrets` (dapr-component.yaml)
@@ -53,7 +53,7 @@ lineage under `auth.enabled`, reading the service-account issuer's discovery and
 store's pod (the openbao fixture's; its Kubernetes auth backend reviews ESO's logins), the Collector (`k8sattributes`
 reads pod metadata), the volume-snapshot CronJob (`kubectl`) and the Dapr dashboard; OpenFGA's are the tuple writers
 (`lance.fgaWriters`) and the model hook, the list its in-namespace ingress admits; the secret
-store's are the pods whose sidecar reads it (`lance.secretReaderComponents`, as the dev store's ingress lock); the
+store's are the pods that log in to it (`lance.secretReaderComponents`, as the dev store's ingress lock); the
 telemetry backend's is the Collector; the S3's are the pods holding a store session (`lance.objectStoreClients`), whose
 STS answers at addresses the same rules name; the IdP's are the doors verifying a person's token (`lance.tokenVerifiers`);
 the bus's are every pod whose daprd loads a pub/sub Component (`lance.secretReaderComponents`: each injected pod loads

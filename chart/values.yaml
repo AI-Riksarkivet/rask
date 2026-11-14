@@ -23,7 +23,8 @@ nameOverride: ""
 imagePullSecrets: []
 
 # NO CREDENTIAL IS A CHART VALUE ([[XC-004]]). Every secret the estate uses lives in the secret store and
-# reaches a pod from it: the Dapr secret store for a sidecar, an ExternalSecret for a pod without one.
+# reaches a pod from it: a lakehouse service reads its own under its own login to the store, its sidecar resolves its
+# components' through the Dapr secret store, and a pod that does neither gets an ExternalSecret.
 # The dev OpenBao's are generated in-cluster, one Secret each (templates/external-secrets.yaml, `<release>-dev-credential-<key>`);
 # a real deployment's are provisioned in the platform's store by its operator, and the render refuses a
 # credential passed as a value (templates/prod-credentials.yaml).
@@ -71,8 +72,8 @@ services:
     module: catalog.main:app
     # -- Container and Service port of the Lance catalog.
     port: 2333
-    # -- Dapr app-id of the catalog; also names its pubsub components and durable consumers.
-    daprAppId: catalog
+    # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id, pubsub components and durable consumers.
+    appId: catalog
     # -- Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.
     replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
   lineage:
@@ -80,8 +81,8 @@ services:
     module: lineage.main:app
     # -- Container and Service port of the lineage service.
     port: 8000
-    # -- Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron.
-    daprAppId: lineage
+    # -- Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id, its pubsub, DLQ and durable consumers and the scope of its relay cron.
+    appId: lineage
     # Safe to scale: the app's own pubsub component carries queueGroupName=lineage, so replicas form a
     # competing-consumer group (single delivery per event), and every record is idempotent anyway: an insert-only
     # merge on the event's key in the feed table lands a redelivery as nothing.
@@ -154,9 +155,9 @@ services:
       # -- Path the events are POSTed to under `url` (the transport's `endpoint`).
       endpoint: api/v1/lineage
       # The backend's API key is a secret in the estate's secret store, never a value: lineage reads it on every
-      # tick, so a rotated key needs no restart, and every other app's sidecar is denied it.
+      # tick under its own login, so a rotated key needs no restart, and the store refuses it to every other app's role.
       authSecret:
-        # -- Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none.
+        # -- Secret in the estate's secret store holding the backend's API key, sent as `Authorization: Bearer`: a secret name (lowercase letters, digits and `-`), since it is a path of lineage's store policy. Empty sends none.
         name: ""
         # -- Field of that secret the API key is under.
         key: api-key
@@ -380,7 +381,7 @@ security:
 # k3s's default kindnet/flannel does NOT enforce NetworkPolicy, so this is a no-op there — it is prod
 # hardening. When enabled: namespace default-deny Ingress+Egress, kube-dns egress allow (same change —
 # the audit's footgun), intra-namespace allows, api-server egress, and EXCLUSIVE client lists for the
-# guarded stores (the secret store ← the pods whose sidecar reads it ONLY, as the dev store's ingress or
+# guarded stores (the secret store ← the pods that log in to it ONLY, as the dev store's ingress or
 # as egress to the platform's; age-postgres ← its real clients; the object store ← the data plane). Default OFF;
 # flip in values-prod on a policy-enforcing CNI.
 # ⚠ Under default-deny, EVERY Job/CronJob pod template needs explicit component labels or the policy
@@ -827,8 +828,8 @@ maintenance:
     replicas: 2 # @schema type: integer; minimum: 1
     # -- Port a worker pod serves its probes on, for the kubelet and for its sidecar's health check, which lets the sidecar leave when the worker does.
     port: 8001 # @schema type: integer; minimum: 1
-  # -- Dapr app-id of the maintenance service; also names its durable consumer.
-  daprAppId: maintenance
+  # -- Maintenance's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id and durable consumer.
+  appId: maintenance
   # -- HTTP port of the maintenance container.
   port: 8000
   # -- Maximum request-body bytes on any maintenance route (MAINTENANCE_MAX_BODY_BYTES), one write event its lane is delivered; larger bodies get 413 before a byte is read.
@@ -866,7 +867,7 @@ maintenance:
     # -- The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue.
     storeEventsMaxBytes: 134217728 # @schema type: integer; minimum: 1
   # THE WRITE-EVENT LANE. On, maintenance subscribes `lineage.events.v1` (its own durable,
-  # `<daprAppId>-durable`) and puts the written table's pass on the work queue, where a pass already queued or running
+  # `<appId>-durable`) and puts the written table's pass on the work queue, where a pass already queued or running
   # for the table covers it. It schedules no rewrite: compaction and indexing are the user's job (ADR 0162). Off, a
   # table's pass comes from its birth, its schedule and the audit alone.
   # -- Subscribe the write-event lane: queue the written table's pass on each announced commit.
@@ -1886,7 +1887,7 @@ dex:
   # -- Port of the development Dex's Service.
   port: 5556
 
-# === The secret store the Dapr secret store and ESO read: the platform's, or the dev OpenBao fixture =====
+# === The secret store the services, their sidecars and ESO read: the platform's, or the dev OpenBao fixture =====
 # The chart renders no secret store ([[XC-149]], ADR 0153). Production names the platform's Vault or OpenBao; development
 # uses deploy/fixtures/openbao, an in-memory OpenBao that this chart's seed initializes and seeds.
 openbao:
@@ -1896,35 +1897,45 @@ openbao:
   port: 8200
   # -- A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id `<app>`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`; the render refuses an app id that is no Dapr id, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-<name>`, `signing-key-<name>`, `signing-public-<name>`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `<release>-<app>` is ESO's; and a ServiceAccount the lakehouse renders or `default`.
   externalReaders: {}
-  # EACH APP'S SIDECAR LOGS IN AS ITSELF ([[XC-165]]). The one `lance-secrets` component logs every sidecar in with the
-  # store's Kubernetes auth method (`externalSecrets.kubernetesAuthPath`), as the role `<release>-<app id>` (Dapr fills
-  # `{appID}` into a component's metadata), presenting a ServiceAccount token the kubelet projects for `audience` into
-  # daprd alone. Each role is bound to that app's own ServiceAccount, and its policy reads exactly the secrets the app and
-  # its components read (`lance.storeReads`): the dev store's seed writes both, and a platform store's operator creates
-  # them from the same render (the `policy-*.json` and `role-*.json` documents of `<release>-secret-store-identities`).
+  # EACH APP LOGS IN AS ITSELF ([[XC-165]], [[XC-199]]). Each lakehouse service logs in to the store with the store's
+  # Kubernetes auth method (`externalSecrets.kubernetesAuthPath`), as the role `<release>-<app id>`, presenting a
+  # ServiceAccount token the kubelet projects for `audience` into its pod, and reads its own secrets under the store token
+  # that login returns, which it holds in memory (`lakehouse.governed.secrets`), and takes one whose lease is a minute to
+  # an hour: a role with no `token_ttl` fails the service's start. Its sidecar logs in the same way, through
+  # the one `lance-secrets` component (Dapr fills `{appID}` into a component's metadata), only for the secrets its
+  # components resolve, and serves the app none. Each role is bound to that app's own ServiceAccount, and its policy reads
+  # exactly the secrets the app and its components read (`lance.storeReads`): the dev store's seed writes both, and a
+  # platform store's operator creates them from the same render (the `policy-*.json` and `role-*.json` documents of
+  # `<release>-secret-store-identities`).
   identity:
-    # -- Audience of the token projected into each sidecar for its store login; every app's role accepts only this one.
+    # -- Audience of the token projected into each pod for its store login; every app's role accepts only this one.
     audience: rask-openbao
-    # -- Lifetime of the store token a sidecar's login returns; daprd renews it in the background.
+    # -- Lifetime of the store token a login returns, from `1m` to `1h`, written as `<n>s`, `<n>m` or `<n>h`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it; daprd renews its own in the background.
     tokenTtl: 15m
-    # -- The longest a sidecar's store token lives; daprd then logs in again with its current projected token.
+    # -- The longest a renewed store token lives, at most `1h` and no shorter than `tokenTtl`, in the same forms; daprd then logs in again with its current projected token.
     tokenMaxTtl: 1h
-  # The platform's store is reached over TLS only: every sidecar sends the store's token to it, so the render refuses an
-  # http address. Its certificate must chain to a CA the sidecars and ESO trust by default; the chart names no CA bundle.
-  # -- The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.
+  # The platform's store is reached over TLS only: every service and every sidecar sends its tokens to it, so the render
+  # refuses an http address. Its certificate is checked against the CA `ca` names, or, with none named, against the public
+  # roots each reader ships with (the services' Python bundle, the sidecar's and ESO's images).
+  # -- The platform's Vault or OpenBao (https), which the services, the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.
   externalAddr: "" # e.g. https://vault.internal:8200
-  # Only the pods whose sidecar reads the store (every app the Dapr secret store is scoped to, `lance.secretScopes`) reach
-  # it, at the addresses the platform states: no URL derives the peers a CNI judges.
+  ca:
+    # -- The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and its sidecar and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`.
+    configMap: ""
+    # -- The key of `ca.configMap` that holds the CA certificate, in PEM.
+    key: ca.crt
+  # Only the pods that read the store (every app with a store role, `lance.secretReaderComponents`) reach it, at the
+  # addresses the platform states: no URL derives the peers a CNI judges.
   # -- NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false.
   egress: []
 
 # === Event signing keys ([[LH-064]]) ======================================================================
 # Every identity in `lance.signingIdentities` (the catalog and maintenance) signs the lineage it emits with its own Ed25519 key, so lineage holds public keys only and cannot
-# forge what it verifies. The store holds two secrets per identity, never two fields of one, because Dapr scopes a
-# secret by NAME and a per-app allow list can only name a whole secret. <key> is the signer's ServiceAccount name
+# forge what it verifies. The store holds two secrets per identity, never two fields of one, because the store's
+# policy grants by secret NAME and so can only grant a whole secret. <key> is the signer's ServiceAccount name
 # (`lance.signingKeys`); the identity is that account's subject (`lance.saSubject`), which no secret name can carry:
 #   signing-public-<key>   field `keys`  comma-separated public NKEYs, current first, at most one previous
-#   signing-key-<key>      field `seed`  the NKEY user seed, readable only by the sidecars of the identity's own app-id
+#   signing-key-<key>      field `seed`  the NKEY user seed, readable only under the identity's own store role
 # The field names stay disjoint from the fields a runtime-named reader requires (access_key, secret_key, token,
 # aws_access_key_id), so a warehouse record that names signing-key-<key> returns nothing.
 #
@@ -1950,12 +1961,12 @@ openbao:
 # keys go with the old store, so an event signed before the loss is refused once enforcement is on (acked and
 # counted); every signer re-resolves within 5 minutes and heals in place.
 #
-# THE ALLOW LISTS REACH A SIDECAR THROUGH THE NAME OF ITS CONFIGURATION. daprd reads its Configuration once, at boot
+# A CONFIGURATION REACHES A SIDECAR THROUGH ITS NAME. daprd reads its Configuration once, at boot
 # (HotReload is off), and Helm applies a Deployment before the dapr.io Configuration it names, so an edit made under an
 # unchanged name is loaded stale by any pod that boots in the gap, for the life of the pod, with every probe green.
 # Each per-app Configuration is therefore named `lance-config-<app>-<first 10 hex of the sha256 of its spec>`
 # (`lance.daprAppConfigName`; the object and the pod's `dapr.io/config` both take it from there) and no checksum
-# annotation exists: the rename is what rolls exactly the pods whose list changed. A pod that boots before Helm has
+# annotation exists: the rename is what rolls exactly the pods whose spec changed. A pod that boots before Helm has
 # applied the renamed object names one that does not exist yet, so daprd exits and the kubelet restarts it until it
 # does. Measured in the Dapr v1.18.1 source: pkg/runtime/config.go:252-254 returns the load error, and the default
 # configuration at :256-260 is reached only when no --config was given; cmd/daprd/app/app.go:119-121 is a
@@ -1965,7 +1976,7 @@ openbao:
 # (pkg/injector/patcher/sidecar_container.go:102-104, pkg/injector/service/pod_patch.go:133-148). Reference a
 # Configuration through the pod's `dapr.io/config`, never by a name built from the app-id.
 #
-# THE STORE HOLDS THE SAME LINE ([[XC-165]]): each sidecar logs in as its own ServiceAccount, and its role's policy reads
+# THE STORE HOLDS THE SAME LINE ([[XC-165]]): each service logs in as its own ServiceAccount, and its role's policy reads
 # `signing-key-<key>` only for the app that signs with it, so reaching :8200 without that app's login reads no private key.
 signing:
   # LINEAGE'S SWITCH. True renders LINEAGE_SIGNERS and LINEAGE_DELEGATORS (lance.signingIdentities, lance.delegatorIdentities),
@@ -2012,14 +2023,14 @@ signing:
   # -- Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there.
   provisioned: false
 
-# === external-secrets.io — the PREREQUISITE every pod without a sidecar takes its credentials through.
+# === external-secrets.io — the PREREQUISITE behind every credential a pod takes as a Kubernetes Secret.
 # The External Secrets Operator is platform-run and rask never installs it (owner, 2026-10-05): install it
 # on its own before the chart (docs/architecture/deployment.md § Prerequisites). A render for a cluster
 # that does not serve external-secrets.io/v1 fails naming it; a cluster-less render declares the APIs
 # with `--api-versions external-secrets.io/v1/ExternalSecret` (and
 # `generators.external-secrets.io/v1alpha1/Password` for the dev OpenBao's generated credentials).
 # templates/external-secrets.yaml creates a SecretStore (→ the store) and one ExternalSecret per Secret a
-# pod without a sidecar mounts. With the dev OpenBao (`openbao.enabled`) the seed this chart renders also provisions the auth half: the
+# pod mounts. With the dev OpenBao (`openbao.enabled`) the seed this chart renders also provisions the auth half: the
 # kubernetes auth backend, a policy granting READ on exactly the paths those ExternalSecrets name, and the
 # role below bound to the operator's ServiceAccount (measured 2026-09-08: without it every ExternalSecret
 # sat in SecretSyncedError). A platform store is provisioned by its operator.
@@ -2030,7 +2041,7 @@ externalSecrets:
   kvMount: secret # the Vault KV mount path
   # -- KV engine version of `kvMount` (`v1` or `v2`).
   kvVersion: "v2"
-  # -- Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every app's sidecar log in through.
+  # -- Mount path of the store's Kubernetes auth method, which ESO's SecretStore, every service and every sidecar log in through.
   kubernetesAuthPath: kubernetes # the Vault Kubernetes auth backend mount
   # -- Vault role the operator's ServiceAccount assumes; also names its read policy.
   role: lance-infra # the Vault role the operator's ServiceAccount assumes (also names its policy)

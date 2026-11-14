@@ -13,10 +13,10 @@ spec:
         maxRetries: 4
   targets:
     components:
-{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId) }}
+{{- $subscribers := list (dict "appId" .Values.services.lineage.appId) }}
 
 {{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}
-{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId) }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.appId) }}
 {{- end }}
 {{- range $subscribers }}
       {{ include "lance.subPubsub" (list $ .appId) }}:
@@ -35,6 +35,6 @@ scopes:
   - {{ .appId }}
 {{- end }}
 {{- if .Values.catalog.controlEmit }}
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 {{- end }}
 {{- end }}

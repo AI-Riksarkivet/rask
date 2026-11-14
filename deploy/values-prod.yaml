@@ -66,8 +66,8 @@ objectStore:
   #   - to: [{ipBlock: {cidr: 10.0.1.30/32}}]
   #     ports: [{protocol: TCP, port: 443}]
 
-# Network isolation: default-deny + DNS egress + the EXCLUSIVE secret-store egress (only the pods whose sidecar
-# reads the store reach its addresses, `openbao.egress`). The chart ships the full, correct impl (templates/network-policy.yaml);
+# Network isolation: default-deny + DNS egress + the EXCLUSIVE secret-store egress (only the pods that log in to
+# the store reach its addresses, `openbao.egress`). The chart ships the full, correct impl (templates/network-policy.yaml);
 # it was simply never enabled on the documented prod overlay — the security audit's headline gap. REQUIRES a
 # policy-enforcing CNI (Calico/Cilium): kind's default kindnet SILENTLY ignores NetworkPolicy, so this can't
 # be proven on the demo — verify with the negative-isolation probe (docs/KIND-RUNBOOK.md) on the real
@@ -118,7 +118,7 @@ backups:
 
 # --- Secrets: the platform's Vault or OpenBao ([[XC-149]]); the chart renders no secret store. The deployer names
 # it as `openbao.externalAddr` (https; the render refuses http) with `openbao.egress`, the NetworkPolicy rule reaching
-# its addresses for the pods whose sidecar reads it, and the render refuses either empty. No credential is a chart
+# its addresses for the pods that log in to it, and the render refuses either empty. No credential is a chart
 # value: the platform's operator provisions every field docs/architecture/deployment.md lists under Prerequisites,
 # and the External Secrets Operator, a prerequisite installed on its own, delivers them (templates/external-secrets.yaml). -----
 openbao:

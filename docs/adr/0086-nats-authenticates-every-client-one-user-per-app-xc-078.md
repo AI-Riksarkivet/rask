@@ -35,3 +35,10 @@ told of a grant, and an ingest run drained eleven units through ingest's own use
 readback checks are corrected beside their as-written verdicts: the readback could no longer read stream messages through
 nats-box, which now runs as `monitor` (the path was taken from the stage runners' logs instead), and the one DLQ entry
 after the flip is the readback's own zero-byte prefix marker, parked by ingest. Slice 1 (the doors) is the entry above.
+
+**Amended 2026-11-14 (#787, XC-199 step D2).** Every app's Dapr Configuration now denies the sidecar's secrets API
+whole, so no app reads any `nats-user-*`, its own included, through a sidecar. A pub/sub Component still resolves its
+app's `nats-user-<app>` through `lance-secrets`, under the sidecar's own login, which the store's policy bounds
+([ADR 0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md), amendment of the same day).
+The read-back of rev 269 ("every foreign credential refused at the secret API") was taken while apps still read through
+that API.

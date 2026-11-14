@@ -22,16 +22,16 @@ An edge that re-exposes them carries the auth itself, wired to that edge's own m
 
 ## `{{- $cfgRoot := . }}`
 
-ONE CONFIGURATION PER SCOPED APP-ID ([[XC-072]]), because Dapr's secret scoping has nowhere else to
-live: `spec.secrets.scopes` is a CONFIGURATION field, a sidecar may reference exactly one
-`dapr.io/config`, and Dapr's default for an unlisted store is ALLOW. A single shared Configuration
-can only say the same thing to everybody, which is the state this closes -- measured live
-2026-09-23, the `medallion-producer` pod read eight identities' credentials from its own sidecar.
+ONE CONFIGURATION PER SCOPED APP-ID ([[XC-072]]). Dapr's secret scoping has nowhere else to live:
+`spec.secrets.scopes` is a CONFIGURATION field, a sidecar may reference exactly one `dapr.io/config`, and
+Dapr's default for an unlisted store is ALLOW. Measured live 2026-09-23 under one shared Configuration that
+named no scope, the `medallion-producer` pod read eight identities' credentials from its own sidecar.
 
 THE SPEC BODY IS INCLUDED, NOT COPIED. HotReload, the tracing exporter and the metric-cardinality bound
 are each a measured decision made once above; a per-app copy would drift from
 `lance-tracing` silently and each sidecar would get whichever version its document carried.
 
-EACH APP'S SCOPE IS DENY-BY-DEFAULT, allowing exactly the secrets its code reads (`lance.daprAppSpec` over
-`lance.storeReads`, [[XC-165]]), and the store refuses the rest through the app's own login, so the Configuration is
-the first of two layers, not the only one.
+EACH APP'S SCOPE DENIES THE SIDECAR'S SECRETS API WHOLE (`lance.daprAppSpec`: `defaultAccess: deny` and no allow
+list, [[XC-165]], [[XC-199]]). No app reads a secret through its sidecar: a service reads under its own login to the
+store, whose policy names exactly its secrets (`lance.storeReads`). That policy is also all that bounds a sidecar's own
+login, since a Configuration's scope never binds a component's `secretKeyRef`.

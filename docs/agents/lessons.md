@@ -114,6 +114,9 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **Helm evaluates both arms of `ternary`, and `and` returns an operand, not a bool.** An arm that reads a key a values
   map lacks fails the render even when its condition is false, and `and $missing true` hands `ternary` a nil it refuses
   ("expected bool"); compute the arm inside an `if`, and default a flag (`| default false`) before testing it (XC-165).
-- **Re-applying the dev OpenBao logs every sidecar out.** A fixture change to its pod spec replaces the in-memory store,
-  each daprd keeps the token the old store issued, and every secret read was refused for the three minutes measured,
-  until the pod restarted, over a surge too (XC-164, 2026-11-07): apply the fixture before the rask upgrade, or restart the Dapr apps after it.
+- **Re-applying the dev OpenBao drops every store token.** A fixture change to its pod spec replaces the in-memory store,
+  and the replacement honours no token the old one issued, over a surge too. Since XC-199 a service asks the store about
+  its own token every 15 s and logs in again on the pass that finds it refused, and no app reads through a sidecar. The
+  three minutes of refused reads measured on 2026-11-07 (XC-164) were reads through daprd, which kept the old store's
+  token until its pod restarted; a service's own recovery is pinned offline and not yet measured on the estate. Restart
+  the Dapr apps only when the replacement minted a new bus root (docs/OPERATORS.md § 7).

@@ -740,8 +740,8 @@ class CreateWarehouseRequest(RequestBody):
     # key toward a host the caller chose. A respelling of the estate's endpoint is the estate's.
     #
     # NON-SECRET, and there is deliberately no credential beside it. Material never travels in a
-    # record; the estate resolves its S3 secret from the Dapr secret store, and a second store's key
-    # belongs behind that same door with the record naming a reference.
+    # record; the estate signs with its ServiceAccount token and holds no S3 key (ADR 0170), and a
+    # second store's key belongs in the secret store with the record naming a reference.
     endpoint: str | None = None
     #: What a drop under this warehouse does. Absent means unchanged on a re-POST, and the estate's
     #: `LANCE_TRASH_GRACE_DAYS` on a warehouse that never named one; `{"mode": "estate"}` returns a
@@ -771,7 +771,7 @@ class WarehouseResponse(BaseModel):
     # misconfiguration. None on records using the estate endpoint.
     endpoint: str | None = None
     # [[LH-067]] The NAME of the secret holding this warehouse's credential, never the credential, and
-    # safe to expose precisely because it is a reference: it identifies a key in the Dapr secret store,
+    # safe to expose precisely because it is a reference: it identifies a key in the secret store,
     # and holding it grants nothing without access to that store. No request sets it and no door reads
     # it ([[LH-205]]), which is why a record naming another store is refused rather than served.
     credential_ref: str | None = None

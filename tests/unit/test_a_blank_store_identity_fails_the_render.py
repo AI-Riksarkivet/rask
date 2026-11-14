@@ -19,7 +19,7 @@ from tests.unit.chart_render import REPO, render_chart_text
 
 
 #: Each identity the render refuses blank, by the value that names it: the store audience every workload's token is
-#: projected for, a workload's role, and the audience every sidecar's secret-store login is bound to.
+#: projected for, a workload's role, and the audience every pod's secret-store login is bound to.
 _IDENTITIES = ("objectStore.identity.audience", "objectStore.identity.roleArns.maintenance", "openbao.identity.audience")
 
 _BASE = ("--set", "image.localImages=true")

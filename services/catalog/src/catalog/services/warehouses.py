@@ -144,8 +144,8 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
 #: ``endpoint`` is OPTIONAL and non-secret ([[LH-067]]): the object-store address this warehouse's
 #: bucket lives at. Absent means the estate default, and the create door admits no other store
 #: ([[LH-205]], ``catalog.core.store_endpoint``). **No credential field belongs beside it** — material never travels in a record;
-#: the estate resolves its S3 secret from the Dapr secret store, and a second store's key belongs
-#: behind that same door with the record naming a reference.
+#: the estate signs with its ServiceAccount token and holds no S3 key (ADR 0170), and a second store's key belongs
+#: in the secret store with the record naming a reference.
 #:
 #: ``delete_mode`` and ``trash_grace_days`` are the warehouse's delete profile (ADR 0146), which its
 #: project's admin declares; a request naming one replaces both, so a hard profile keeps no grace.

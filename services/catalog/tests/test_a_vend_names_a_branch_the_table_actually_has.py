@@ -89,7 +89,6 @@ def _settings() -> SimpleNamespace:
         # [[LH-209]] What the judge holds a configured base against: governed roots and buckets. None here.
         root="",
         reserved_bucket_set=frozenset(),
-        dapr_secret_store="",
     )
 
 

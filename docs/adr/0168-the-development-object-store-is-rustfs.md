@@ -112,3 +112,11 @@ Four facts have changed since:
 - **The platform store is named by requirement, not product.** The audit's list (§ "What rask must demand of ANY
   platform store") and `rask-rustfs` § 8 are what a production store must meet; RustFS is the fixture that proves the
   list in development and CI.
+
+## Amendment (2026-11-14): each service logs in to the dev secret store itself
+
+Source: #787 (XC-199), step D2. Under § Consequences, "The dev secret store bounds that reach" now reads: each service
+logs in to the dev OpenBao as its own ServiceAccount and reads only its own secrets, and its sidecar logs in the same
+way only for the secrets its components resolve
+([ADR 0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md), amendment of the same day).
+The bound itself, one role and one policy per ServiceAccount, is unchanged.

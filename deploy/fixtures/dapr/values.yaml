@@ -46,8 +46,8 @@ dapr_sidecar_injector:
     limits: { memory: 128Mi }
   # FAIL-CLOSED sidecar injection. Dapr ships `Ignore`, which means the API server SILENTLY admits a pod unmutated
   # when the injector webhook is unreachable (a restart, an outage), and nothing ever recreates it: a
-  # CrashLoopBackOff restarts the container inside the same sidecar-less pod, and every governed app then dies on
-  # "secret unavailable from Dapr store … failing closed". `Fail` turns that silent drop into a REJECTED create,
+  # restart brings back the container inside the same sidecar-less pod, and every governed app in one then publishes
+  # nothing and takes no delivery and no tick. `Fail` turns that silent drop into a REJECTED create,
   # which the ReplicaSet controller retries until the injector is Ready.
   webhookFailurePolicy: Fail
   # …and this is what makes `Fail` safe. An unscoped fail-closed POD webhook would also block the injector's OWN pod

@@ -141,7 +141,7 @@ replacement without a surge would re-mint the signing pairs and the NATS root (O
 
 ## `bao kv put secret/postgres password=@"$G/postgres-password" >/dev/null`
 
-ONE SECRET PER READER SET ([[XC-165]]): a store and Dapr both grant by secret name, so a field of a shared bundle is read
+ONE SECRET PER READER SET ([[XC-165]]): the store grants by secret name, so a field of a shared bundle is read
 by everyone who may read the bundle. Each secret here has exactly the readers `lance.storeReads` and `lance.esoReads`
 give it, and two readers of one value read one secret, never a copy.
 
@@ -207,5 +207,5 @@ so everything it holds outside the documents is what git stopped declaring.
 ## `bao kv put secret/openbao-seeded pod="$HOSTNAME" >/dev/null`
 
 READY ONCE SEEDED: the seed container's readiness probe reads this key with the administrator token, so the Service
-routes a sidecar only to a store holding the whole seed, and a server restarted in place leaves the endpoints until it
+routes a reader only to a store holding the whole seed, and a server restarted in place leaves the endpoints until it
 is seeded again. The server's own probe reads `sys/health`, which needs no token.

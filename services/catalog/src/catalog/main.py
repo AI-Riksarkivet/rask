@@ -50,6 +50,7 @@ from lakehouse.control_emit import make_control_emitter
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.dapr_auth import assert_app_token_configured
 from lakehouse.governed.fga import dispose as fga_dispose
+from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
 from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
@@ -144,24 +145,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.settings = settings
     app.state.shutting_down = False
     app.state.startup_complete = False
-    # Fail closed if control eventing is on but the ingest route (api/dapr.py /control-events) would be
-    # unauthenticated: require_dapr_token silently no-ops on a blank APP_API_TOKEN, so an unset token with
-    # the subscription live is a misconfiguration a forged in-cluster POST could exploit — refuse to boot.
-    # The relay's cron route (api/control_relay.py) is a SECOND sidecar-delivered door on this app and
-    # carries the same guard, so its mount counts as "dapr enabled" here: a named binding with a blank
-    # token would make `require_dapr_token` no-op and leave a replay-every-staged-event door open.
-    # The erasure release tick (api/erasure_release.py) is a third, guarded the same way, and the promotion
-    # expiry (api/promotion_expiry.py), commit reconcile (api/commit_reconcile.py) and manifest reclaim
-    # (api/manifest_reclaim.py) ticks are the rest.
-    assert_app_token_configured(
-        dapr_enabled=settings.control_emit_enabled
-        or bool(settings.control_relay_binding_name)
-        or bool(settings.erasure_release_binding_name)
-        or bool(settings.promotion_expiry_binding_name)
-        or bool(settings.commit_reconcile_binding_name)
-        or bool(settings.manifest_reclaim_binding_name)
-        or bool(settings.declaration_converge_binding_name)
-    )
     # Q17-6 / §F2-2: the CODE default is anonymous and the chart flips it on, so a catalog started
     # any other way serves every route to anyone who can reach the port. Refused on the AMBIGUITY —
     # an operator declares which they meant. See `assert_authentication_configured`.
@@ -189,6 +172,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
     """Build what the catalog serves with onto ``app.state``, each piece's release pushed onto ``stack`` as it is built,
     and its background loops and tasks started on ``loops``."""
+    # THE CATALOG LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before anything below reads a secret, and refuses to
+    # start when the store never admits it, whichever secrets it goes on to read. A loop of `loops` then logs in again
+    # once half the store token's lease is used, or as soon as the store no longer honours it. Nothing for a stack with
+    # no secret store.
+    await stack.enter_async_context(secret_store_session(loops))
+    # Fail closed if control eventing is on but the ingest route (api/dapr.py /control-events) would be
+    # unauthenticated: require_dapr_token silently no-ops on a blank APP_API_TOKEN, so an unset token with
+    # the subscription live is a misconfiguration a forged in-cluster POST could exploit — refuse to boot.
+    # The relay's cron route (api/control_relay.py) is a SECOND sidecar-delivered door on this app and
+    # carries the same guard, so its mount counts as "dapr enabled" here: a named binding with a blank
+    # token would make `require_dapr_token` no-op and leave a replay-every-staged-event door open.
+    # The erasure release tick (api/erasure_release.py) is a third, guarded the same way, and the promotion
+    # expiry (api/promotion_expiry.py), commit reconcile (api/commit_reconcile.py) and manifest reclaim
+    # (api/manifest_reclaim.py) ticks are the rest.
+    # AFTER THE LOGIN ABOVE, AND OFF THE EVENT LOOP: with the token in the store this is a read with the boot's budget,
+    # made under the login the start already holds, so a store that never admits the catalog ends the start there.
+    await run_in_threadpool(
+        assert_app_token_configured,
+        dapr_enabled=settings.control_emit_enabled
+        or bool(settings.control_relay_binding_name)
+        or bool(settings.erasure_release_binding_name)
+        or bool(settings.promotion_expiry_binding_name)
+        or bool(settings.commit_reconcile_binding_name)
+        or bool(settings.manifest_reclaim_binding_name)
+        or bool(settings.declaration_converge_binding_name),
+    )
     # THE CATALOG HOLDS NO STORE KEY ([[XC-083]], ADR 0170). Its identity is the ServiceAccount token its pod projects
     # for the store's audience, exchanged here for a session (`AssumeRoleWithWebIdentity`), waiting out a store or a
     # provisioning hook still starting, and the boot FAILS CLOSED if none is issued; a background loop exchanges again
@@ -280,17 +289,11 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     async def _resolve_project(warehouse_id: str) -> str | None:
         return await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), warehouse_id)
 
-    signing = make_signing_holder(
-        secrets_from_dapr=settings.secrets_from_dapr,
-        identity=settings.signing_identity,
-        store=settings.dapr_secret_store,
-        load_key=SigningKey.from_seed,
-        parse_published=parse_published_keys,
-    )
+    signing = make_signing_holder(identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
     attach_signing(app, signing)
     # THE KEY EVERY COMMIT'S RUN ID IS DERIVED UNDER ([[LH-497]]): read from the store like the signing seed, or the empty
     # key for a stack with no store. Published for the gate, the readiness check and the reconciler.
-    commit_ids = make_commit_ids(secrets_from_dapr=settings.secrets_from_dapr, store=settings.dapr_secret_store)
+    commit_ids = make_commit_ids()
     setattr(app.state, COMMIT_IDS_STATE, commit_ids)
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
@@ -359,11 +362,8 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     #   * The grants are written ONCE, at warehouse-create, from `LANCE_FGA_MAINTAINERS` — a value that
     #     CHANGES. Adding a subject extends the list and every older warehouse is missing it, so that
     #     subject is refused on every existing tenant, in a log nobody watches.
-    #   * A hook Job was the first choice and cannot work here. With `secrets_from_dapr` the registry
-    #     read needs the S3 secret from the secret store, so the Job needs a Dapr sidecar — and a
-    #     sidecar keeps a Job from ever completing. Putting the secret in the Job's env instead is the
-    #     one thing the secret rule forbids. This process already holds both the secret and an FGA
-    #     client, so the work belongs here.
+    #   * A hook Job would need a store identity and an OpenFGA writer's token of its own, for one
+    #     registry read and one write this process already holds both for, so the work belongs here.
     #   * NOT awaited, so a slow or unreachable OpenFGA cannot delay readiness, and NOT fatal, because
     #     a grant that could not be re-asserted must not take the catalog down — it leaves the estate
     #     exactly as it was, which is the state this repairs, not a worse one.
@@ -398,8 +398,8 @@ def _dependencies(app: FastAPI, settings: Settings, bus_watchdog: BusWatchdog | 
         *openfga_dependency(app, required=True),
         *bus_dependency(bus_watchdog),
     ]
-    if settings.secrets_from_dapr and settings.signing_identity:
-        dependencies.append(secret_store_dependency(settings.dapr_secret_store, settings.signing_identity))
+    if secret_store_configured():
+        dependencies.append(secret_store_dependency())
     return dependencies
 
 

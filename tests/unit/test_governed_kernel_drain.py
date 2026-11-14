@@ -39,7 +39,7 @@ from openfga_sdk.client.models import ClientTuple
 from pydantic import BaseModel
 
 from lakehouse.exceptions import register_handlers
-from lakehouse.governed import fga, oidc, secrets
+from lakehouse.governed import fga, oidc
 from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
 from lakehouse.governed.deps import make_auth_deps
 from lakehouse.ns_errors import install_problem_handlers
@@ -350,59 +350,3 @@ def test_jwks_client_is_built_with_an_explicit_timeout(monkeypatch: pytest.Monke
     verifier._resolve("https://idp.example")
 
     assert captured["timeout"] == oidc.HTTP_FETCH_TIMEOUT_SECONDS
-
-
-# --------------------------------------------------------------------------- #
-# SKG-15 — a boot-blocking secret failure is loud, and never swallowed
-# --------------------------------------------------------------------------- #
-
-
-def test_secret_fetch_does_not_swallow_a_non_transport_fault(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SKG-15: `except Exception -> {}` turns a bug into "the store holds nothing".
-
-    An empty bundle is indistinguishable from a store that legitimately holds no keys, and the fetch
-    is on the boot path, so a defect here becomes a service that comes up unconfigured. Only the
-    failures the retry loop is ABOUT (transport / HTTP status) may be reported as an empty bundle.
-    """
-
-    def _boom(*_a: object, **_k: object) -> httpx.Response:
-        raise RuntimeError("a defect in the fetch path, not an unreachable store")
-
-    monkeypatch.setattr(secrets.httpx, "get", _boom)
-    with pytest.raises(RuntimeError):
-        secrets.fetch_dapr_secret("store", "key", retries=1, backoff=0.0)
-
-
-def test_exhausted_secret_fetch_logs_at_error(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """A boot-blocking failure is an ERROR: at WARNING it sits under the default alert threshold."""
-
-    def _unreachable(*_a: object, **_k: object) -> httpx.Response:
-        raise httpx.ConnectError("no sidecar")
-
-    monkeypatch.setattr(secrets.httpx, "get", _unreachable)
-    with caplog.at_level(logging.DEBUG, logger=secrets.__name__):
-        assert secrets.fetch_dapr_secret("store", "key", retries=1, backoff=0.0) == {}
-    failures = [r for r in caplog.records if r.message == "dapr_secret_fetch_failed"]
-    assert failures and failures[0].levelno == logging.ERROR
-
-
-# --------------------------------------------------------------------------- #
-# SKG-10 — the environment this kernel reads is declared, not grepped for
-# --------------------------------------------------------------------------- #
-
-
-def test_the_secret_fetch_uses_the_injected_sidecar_port(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SKG-10: 3500 was hard-coded, so a pod whose sidecar is elsewhere fetched from a closed port.
-
-    daprd injects `DAPR_HTTP_PORT`, and this puts the secret fetch on it instead of on a literal.
-    """
-    seen: list[str] = []
-
-    def _capture(url: str, *_a: object, **_k: object) -> httpx.Response:
-        seen.append(url)
-        return httpx.Response(200, json={"service-token-x": "v"}, request=httpx.Request("GET", url))
-
-    monkeypatch.setenv("DAPR_HTTP_PORT", "3999")
-    monkeypatch.setattr(secrets.httpx, "get", _capture)
-    assert secrets.fetch_dapr_secret("store", "key", retries=1, backoff=0.0) == {"service-token-x": "v"}
-    assert seen == ["http://localhost:3999/v1.0/secrets/store/key"]

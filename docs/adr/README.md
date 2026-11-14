@@ -170,8 +170,8 @@ with its client to that client's own repository.
 | [0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) | XC-082 | A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16) (reopened by 0199) |
 | [0167](0167-the-deployed-estate-is-driven-per-deploy-not-on-a-clock.md) | XC-033 | The deployed estate is driven per deploy, not on a clock; the e2e lane runs every module it can serve (2026-10-18) |
 | [0168](0168-the-development-object-store-is-rustfs.md) | XC-163 | The development and CI object store is RustFS; MinIO leaves the repo (2026-10-18) (superseded in part by 0196) |
-| [0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md) | XC-165 | Each app reads only its own secrets: every sidecar logs in to the store as its own ServiceAccount (2026-10-18) |
-| [0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md) | XC-083 | The catalog's store identity is its ServiceAccount: its own IO and every vend are sessions its token is exchanged for (2026-10-18) |
+| [0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md) | XC-165 | Each app reads only its own secrets: every sidecar logs in to the store as its own ServiceAccount (2026-10-18) (amended 2026-11-14, XC-199) |
+| [0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md) | XC-083 | The catalog's store identity is its ServiceAccount: its own IO and every vend are sessions its token is exchanged for (2026-10-18) (amended 2026-11-14, XC-199) |
 | [0171](0171-the-lakehouse-knows-no-annotation-tool.md) | XC-167 | The lakehouse knows no annotation tool: rask's annotator is a client with its own release, state and roles (2026-10-18) |
 | [0172](0172-a-location-claims-release-replaces-the-claim-it-read.md) | LH-458 | A location claim's release replaces the claim it read, and nothing deletes a `_locations/` record (2026-10-19) |
 | [0173](0173-tables-and-namespaces-are-keyed-by-a-minted-uuid.md) | LH-512 | Every table and namespace is keyed by a uuid the catalog mints; no name reaches a storage path, a credential's policy or an FGA object (2026-10-21) |

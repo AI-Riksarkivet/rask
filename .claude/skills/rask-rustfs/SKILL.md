@@ -87,9 +87,9 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   `secret/object-store-root`, which only ESO's store policy reads, and in a Secret of its own,
   `<release>-object-store-root`; `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows every
   path the chart hands a secret through. Every plane presents its ServiceAccount token instead, the backups
-  included. The dev OpenBao publishes no token: each app's sidecar logs in as
-  its own ServiceAccount and reads only its own secrets, and the store's administrator token is generated in-cluster and
-  held by its seed (ADR 0169).
+  included. The dev OpenBao publishes no token: each service logs in as
+  its own ServiceAccount and reads only its own secrets (its sidecar logs in the same way, for the secrets its components
+  resolve), and the store's administrator token is generated in-cluster and held by its seed (ADR 0169).
 - **An SSE-KMS vend names its key and grants its use** ([[LH-262]]): `vending.encryption.kmsKeyId` is the key ARN under
   web_identity vending (refused at boot otherwise), and each session policy grants `kms:Decrypt` on it at every tier and
   `kms:GenerateDataKey` at write and maintain, only through S3 (`kms:ViaService`); the key policy trusting the catalog's

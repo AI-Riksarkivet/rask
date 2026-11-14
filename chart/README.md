@@ -125,7 +125,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, and a real deployment refuses it. The chart renders no Dex. |
 | dex.port | int | `5556` | Port of the development Dex's Service. |
 | docs.enabled | bool | `false` | Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster. |
-| externalSecrets.kubernetesAuthPath | string | `"kubernetes"` | Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every app's sidecar log in through. |
+| externalSecrets.kubernetesAuthPath | string | `"kubernetes"` | Mount path of the store's Kubernetes auth method, which ESO's SecretStore, every service and every sidecar log in through. |
 | externalSecrets.kvMount | string | `"secret"` | Vault/OpenBao KV mount path the SecretStore reads from. |
 | externalSecrets.kvVersion | string | `"v2"` | KV engine version of `kvMount` (`v1` or `v2`). |
 | externalSecrets.namespace | string | `"external-secrets"` | Namespace of the External Secrets Operator ServiceAccount the Vault role is bound to. |
@@ -149,10 +149,10 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | lifecycle.sidecarBlockShutdownSeconds | int | `20` | Seconds the Dapr sidecar keeps running after SIGTERM to flush acks; must lie between preStopSeconds and the grace period. |
 | lifecycle.teardownSeconds | int | `10` | Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this. |
 | lifecycle.terminationGracePeriodSeconds | int | `40` | Pod grace period in seconds; must be at least preStop + sidecar drain + 5 s buffer. |
+| maintenance.appId | string | `"maintenance"` | Maintenance's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id and durable consumer. |
 | maintenance.arrivalDlqTopic | string | `"dlq.maintenance.arrival"` | Dead-letter topic of the write-event lane, for deliveries that exhaust their retries; set only with `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure. |
 | maintenance.arrivalEnabled | bool | `true` | Subscribe the write-event lane: queue the written table's pass on each announced commit. |
 | maintenance.controlEmit | bool | `false` | Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default. |
-| maintenance.daprAppId | string | `"maintenance"` | Dapr app-id of the maintenance service; also names its durable consumer. |
 | maintenance.discoveryMaxDepth | int | `3` | How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge. |
 | maintenance.driftRepair | bool | `false` | Revoke OpenFGA tuples whose object no registry names (ghost projects/warehouses/tables); deletes tuples only. Off by default. |
 | maintenance.driftRepairDryRun | bool | `true` | Plan and report drift repair without deleting any tuple. Defaults true. |
@@ -235,13 +235,15 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | observability.lanceLog | string | `"warn,lance::events::file_audit=info,lance::events::dataset_events=info"` | `LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off. |
 | observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
 | observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
+| openbao.ca.configMap | string | `""` | The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and its sidecar and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`. |
+| openbao.ca.key | string | `"ca.crt"` | The key of `ca.configMap` that holds the CA certificate, in PEM. |
 | openbao.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false. |
 | openbao.enabled | bool | `true` | This estate uses the development store (deploy/fixtures/openbao, Service `<release>-openbao`): in memory, initialized and seeded by the scripts this chart renders (`<release>-openbao-seed`), its administrator token generated in-cluster. A real deployment refuses it. False reads the platform's store at `externalAddr`. |
-| openbao.externalAddr | string | `""` | The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`. |
+| openbao.externalAddr | string | `""` | The platform's Vault or OpenBao (https), which the services, the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`. |
 | openbao.externalReaders | object | `{}` | A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id `<app>`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`; the render refuses an app id that is no Dapr id, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-<name>`, `signing-key-<name>`, `signing-public-<name>`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `<release>-<app>` is ESO's; and a ServiceAccount the lakehouse renders or `default`. |
-| openbao.identity.audience | string | `"rask-openbao"` | Audience of the token projected into each sidecar for its store login; every app's role accepts only this one. |
-| openbao.identity.tokenMaxTtl | string | `"1h"` | The longest a sidecar's store token lives; daprd then logs in again with its current projected token. |
-| openbao.identity.tokenTtl | string | `"15m"` | Lifetime of the store token a sidecar's login returns; daprd renews it in the background. |
+| openbao.identity.audience | string | `"rask-openbao"` | Audience of the token projected into each pod for its store login; every app's role accepts only this one. |
+| openbao.identity.tokenMaxTtl | string | `"1h"` | The longest a renewed store token lives, at most `1h` and no shorter than `tokenTtl`, in the same forms; daprd then logs in again with its current projected token. |
+| openbao.identity.tokenTtl | string | `"15m"` | Lifetime of the store token a login returns, from `1m` to `1h`, written as `<n>s`, `<n>m` or `<n>h`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it; daprd renews its own in the background. |
 | openbao.port | int | `8200` | Port of the development store's Service. |
 | openfga.authn.method | string | `"oidc"` | Subchart passthrough: OpenFGA API authentication method; `oidc` admits only projected ServiceAccount tokens. |
 | openfga.authn.oidc.audience | string | `"rask-openfga"` | Token audience OpenFGA requires; templates/openfga-authn.yaml refuses a render unless it equals `lance.openfgaAudience` (rask-openfga). |
@@ -278,15 +280,15 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | security.infraContexts.enabled | bool | `false` | Applies pinned runAsUser/fsGroup securityContexts to the infra pods (the AGE Postgres). Off by default. |
 | security.readOnlyRootFilesystem | bool | `true` | Read-only root filesystem for every first-party app container; each gets a writable /tmp emptyDir. |
 | security.tmpSizeLimit | string | `"2Gi"` | sizeLimit of each app's /tmp emptyDir (upload spool, Lance spill, OTel queue); stops one pod filling the node's disk. |
-| services.catalog.daprAppId | string | `"catalog"` | Dapr app-id of the catalog; also names its pubsub components and durable consumers. |
+| services.catalog.appId | string | `"catalog"` | The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id, pubsub components and durable consumers. |
 | services.catalog.module | string | `"catalog.main:app"` | uvicorn import path the catalog Deployment runs (templates/services.yaml). |
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
 | services.catalog.replicas | int | `1` | Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count. |
-| services.lineage.daprAppId | string | `"lineage"` | Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron. |
+| services.lineage.appId | string | `"lineage"` | Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id, its pubsub, DLQ and durable consumers and the scope of its relay cron. |
 | services.lineage.deliveriesInFlight | int | `64` | How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `maxAckPending`). |
 | services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a consumer's outage it survives. 0 is unbounded. |
 | services.lineage.forward.authSecret.key | string | `"api-key"` | Field of that secret the API key is under. |
-| services.lineage.forward.authSecret.name | string | `""` | Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none. |
+| services.lineage.forward.authSecret.name | string | `""` | Secret in the estate's secret store holding the backend's API key, sent as `Authorization: Bearer`: a secret name (lowercase letters, digits and `-`), since it is a path of lineage's store policy. Empty sends none. |
 | services.lineage.forward.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting lineage to the graph backend at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment that sets `url`. |
 | services.lineage.forward.endpoint | string | `"api/v1/lineage"` | Path the events are POSTed to under `url` (the transport's `endpoint`). |
 | services.lineage.forward.url | string | `""` | Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. https on a real deployment: the render refuses an http one. |

@@ -11,8 +11,8 @@ facets for both would prove they agree with the fixture. The signature is made b
 the door is checked for conformance and not against the code that signs.
 
 THE DOOR'S REAL FUNCTION, driven as the bus drives it: `enforce_bus_authz` takes the parsed model AND the arrived mapping, and
-the arrived mapping is the one the signature covers. Public keys are read where the door reads them, through the Dapr secret
-API, stood in for by respx. FGA is off, so the signature is what answers.
+the arrived mapping is the one the signature covers. Public keys are read where the door reads them, from the secret store,
+which the suite's double answers. FGA is off, so the signature is what answers.
 
 TWO SHAPES, because they are genuinely different: self-signed (maintenance), and a declared delegation (the
 catalog, acting for the person it authenticated).
@@ -25,9 +25,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
 
-import httpx
 import pytest
-import respx
 from lance_namespace import PermissionDeniedError
 
 from lakehouse.governed import fga
@@ -35,12 +33,12 @@ from lakehouse.governed.decider import OpenFgaDecider
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import UnverifiedEventError, parse_event
+from tests.secret_store_double import SecretStoreDouble
 
 
 #: The person the catalog acts for, as the principal key their Dex connector maps to.
 PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
 CATALOG = "service-catalog"
-SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 #: Fixed, so an event is the same document on every run: a signature over a generated id would still verify, and a failure
 #: would be unreadable against a body that changed underneath it.
 RUN_ID = "0198e0f2-1b2c-7a3d-8e4f-5a6b7c8d9e0f"
@@ -106,26 +104,28 @@ async def _drive(event: dict[str, Any], settings: LineageSettings) -> None:
     await fga_deps.enforce_bus_authz(parsed, request, settings, event)
 
 
-@respx.mock
 @pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS])
 @pytest.mark.asyncio
-async def test_the_door_admits_what_this_producer_signs(name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any) -> None:
+async def test_the_door_admits_what_this_producer_signs(  # noqa: PLR0913 — parametrized
+    name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any, secret_store: SecretStoreDouble
+) -> None:
     """IF THIS IS RED the producer and the door disagree about the document, and every sweep or catalog write from
     that service is refused at the bus: an ack that discards the event, and on the outbox drain the deletion of its only copy."""
     signer = event_signer(identity)
-    respx.get(f"{SECRETS}/signing-public-{identity}").mock(return_value=httpx.Response(200, json={"keys": signer.public}))
+    secret_store.hold(f"signing-public-{identity}", {"keys": signer.public})
     event = signer.sign(builder(on_behalf_of or identity), on_behalf_of=on_behalf_of)
 
     await _drive(event, _settings({identity}, {CATALOG}))
 
 
-@respx.mock
 @pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS])
 @pytest.mark.asyncio
-async def test_a_peers_key_is_refused_for_the_same_event(name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any) -> None:
+async def test_a_peers_key_is_refused_for_the_same_event(  # noqa: PLR0913 — parametrized
+    name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any, secret_store: SecretStoreDouble
+) -> None:
     """The control, per producer. Without it every admission above is equally consistent with a door that admits everything."""
     published, peer = event_signer(identity), event_signer(identity)
-    respx.get(f"{SECRETS}/signing-public-{identity}").mock(return_value=httpx.Response(200, json={"keys": published.public}))
+    secret_store.hold(f"signing-public-{identity}", {"keys": published.public})
     event = peer.sign(builder(on_behalf_of or identity), on_behalf_of=on_behalf_of)
 
     with pytest.raises(UnverifiedEventError) as refused:

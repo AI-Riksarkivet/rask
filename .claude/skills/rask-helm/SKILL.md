@@ -247,7 +247,7 @@ for zero trust."*
 |---|---|
 | `env: valueFrom: secretKeyRef` marked ✅ "secrets from secretKeyRef" | **Not approved.** Whether an ESO-written Secret delivered this way satisfies the rule is backlog XC-002, awaiting a ruling. Default: a working secret never enters process env. |
 | `helm-secrets` / SOPS: encrypted secrets in a values file | **No.** A chart value never carries a secret, encrypted or not. A record NAMES a secret. |
-| `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from the secret store (the platform's Vault or OpenBao; the dev OpenBao fixture) via the Dapr secret store or ESO. |
+| `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from the secret store (the platform's Vault or OpenBao; the dev OpenBao fixture): a service reads its own under its own login, its sidecar resolves its components' through the Dapr secret store, and every other pod gets an ExternalSecret. |
 | a literal `value:` in a Job's env for a credential | **No** — readable by anyone with `get jobs`; a pod mounts a secret as a file ([[XC-004]]), and a workload's object-store identity is no secret at all but its projected ServiceAccount token ([[XC-084]]). |
 | Docker-based chart tooling | **Dagger.** `dagger call charts` runs the chart gate. |
 
@@ -314,9 +314,12 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   The pod is the openbao fixture's ([[XC-131]]); its `mint` and `seed` run the scripts rask renders into
   `<release>-openbao-seed`, and a change rask makes to them reaches the running seed in place (it mints a pair for any
   new identity, issues the bus users again under the same root, and seeds again), so a rask upgrade replaces no store. A change to the fixture's own pod spec does replace it, and the replacement
-  logs every Dapr sidecar out (every read refused for the three minutes measured, until the pod restarted, a surge
-  included; 2026-11-07): apply
-  such a fixture change before the rask upgrade that rolls the Dapr pods, or restart them after it (docs/OPERATORS.md § 6).
+  honours no token the old store issued, a surge included. A service asks the store about its own token every 15 s and
+  logs in again on the pass that finds it refused, so it reads again within a pass of the replacement admitting it
+  ([[XC-199]], `lakehouse.governed.secrets`; pinned offline by
+  `packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`, not yet measured on the
+  estate). A sidecar resolved its components' secrets when it started and serves its app none, so the store's
+  replacement alone restarts no pod; one that minted a new bus root does (below, docs/OPERATORS.md § 6 and § 7).
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
   key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519
   pair (`signing-public-<key name>`, then `signing-key-<key name>`) over from the outgoing pod
@@ -356,13 +359,15 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   and a pod that boots before the new object exists fails closed (daprd exits on a missing named
   Configuration, Dapr v1.18.1 `pkg/runtime/config.go:252-254`; the injector reads none) and starts once Helm
   has applied it. Read a pod's Configuration from its `dapr.io/config`, never by a name built from the app-id.
-  The gates: `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` (who may read which secret, at
-  the Dapr scope and at the store) and
+  The gates: `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` (who may read which secret: no
+  app through its sidecar, whose Configuration denies the secrets API whole, and each role exactly its own at the store) and
   `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py` (the name follows the spec).
 - **The chart renders no secret store; production names the platform's** ([[XC-149]]): `openbao.enabled` means the
   estate uses the dev OpenBao fixture (a real deployment refuses it), and off it the render requires `openbao.externalAddr`
-  (https only: every sidecar logs in to it with its pod's ServiceAccount token) and, under `networkPolicy.enabled`,
-  `openbao.egress`, a rule admitting exactly the pods `lance.secretScopes` names. Setting both is refused. The dev store's
+  (https only: every service and every sidecar logs in to it with its pod's ServiceAccount token; a store under a
+  private CA names it in `openbao.ca.configMap`, which reaches the services, the sidecars and ESO) and, under
+  `networkPolicy.enabled`, `openbao.egress`, a rule admitting exactly the pods `lance.secretScopes` names. Setting both is
+  refused. The dev store's
   seed stays rask's (owner, 2026-10-16): only rask's values know what to seed.
 - **Every endpoint the platform serves outside the namespace is one row of `lance.platformEgress`** ([[XC-202]]): its
   egress value, what it reaches, the components that dial it, and when it is required (the API server, OpenFGA, the
@@ -373,12 +378,16 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   or a `/0` peer. The development stores' ingress admits exactly their callers from the same helpers
   (`lance.objectStoreClients`, `lance.busClients`), plus each fixture's own Job and, on the bus, the development object store's server, which publishes each change on `store.events`.
 - **Who reads which secret is one table, `lance.storeReads`** ([[XC-165]], ADR 0169): per app, its ServiceAccount, the
-  secrets its code reads (its Configuration's `allowedSecrets`, deny by default) and the ones its components resolve.
-  The one `lance-secrets` component logs each sidecar in with Kubernetes auth as `<release>-{appID}` (Dapr fills
-  `{appID}` per sidecar; Dapr 1.19 is the floor), with a token projected for `openbao.identity.audience` into daprd alone
-  (`lance.storeIdentity`); each role's policy reads exactly that app's reads. The roles and policies render in every
+  secrets its code reads and the ones its sidecar's components resolve. Each service logs in to the store ITSELF
+  ([[XC-199]], `lakehouse.governed.secrets`): Kubernetes auth as its role `<release>-<app>`, which `lance.secretStoreEnv`
+  names in its environment (`RASK_SECRET_STORE_ADDR`, `_ROLE`, `_AUTH_MOUNT`, `_KV_MOUNT`, `_TOKEN_FILE`), with a token
+  projected for `openbao.identity.audience` into its own container. Its sidecar logs in to the same role through the one
+  `lance-secrets` component (`<release>-{appID}`, Dapr 1.19 is the floor), only for its components' secrets, and its
+  Configuration denies the sidecar's secrets API whole, so no secret is served through a sidecar. The table does not hang
+  on `dapr.enabled`: only the app token, the components' bus users and maintenance's work-queue user do. Each role's
+  policy reads exactly that app's reads (`lance.storeIdentity` mounts the token). The roles and policies render in every
   mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform
-  store's operator creates. A new secret a service reads is a row there, or its read is refused at both layers.
+  store's operator creates. A new secret a service reads is a row there, or the store's policy refuses its read.
   A client's sidecar reads through the same table from `openbao.externalReaders` (`<app>: {serviceAccount, secrets}`,
   supplied from the client's own repository, empty by default), and it is an allowlist: an external reader `<app>` may hold only
   `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`. The render refuses an app id that is

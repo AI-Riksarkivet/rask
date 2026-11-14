@@ -6,7 +6,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `{{- if not (.Capabilities.APIVersions.Has "external-secrets.io/v1/ExternalSecret") }}`
 
 THE EXTERNAL SECRETS OPERATOR IS A PREREQUISITE ([[XC-004]]; owner, 2026-10-05: platform-run, rask never
-installs it). Every Secret a pod without a sidecar mounts is written here from the store, and no credential
+installs it). Every Kubernetes Secret a pod mounts is written here from the store, and no credential
 is a chart value, so with no operator nothing would deliver one: the render refuses rather than installing
 a release whose pods wait on Secrets nobody creates. `.Capabilities` is the cluster's own answer on an
 install or upgrade; a cluster-less render states the target with `--api-versions`.
@@ -39,7 +39,7 @@ since removing the owner would garbage-collect the Secret.
 
 ## `name: {{ include "lance.fullname" . }}-infra-credentials`
 
-THE INFRA TIER'S SECRET, for the pods without a sidecar that need the AGE password: the AGE server, OpenFGA and its
+THE INFRA TIER'S SECRET, for the pods that do not log in to the store and need the AGE password: the AGE server, OpenFGA and its
 migrate Job, each of which mounts it as a file and takes nothing from it through env ([[XC-081]]). It carries
 `postgres-password` (the server's `POSTGRES_PASSWORD_FILE`) and `openfga-config.yaml`, OpenFGA's config file with the
 datastore DSN assembled from that password, which `openfga run` and `openfga migrate` read from `/etc/openfga`

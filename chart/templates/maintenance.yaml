@@ -7,7 +7,7 @@
 {{- include "lance.allocatorEnv" (list $root) | nindent 0 }}
 {{- include "lance.fileAuditEnv" (list $root) | nindent 0 }}
 {{- if include "lance.otelEnabled" $root }}
-{{- include "lance.otelEnv" (list $root .Values.maintenance.daprAppId) | nindent 0 }}
+{{- include "lance.otelEnv" (list $root .Values.maintenance.appId) | nindent 0 }}
 {{- end }}
 - { name: MAINTENANCE_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
 - { name: MAINTENANCE_MAX_BODY_BYTES, value: {{ .Values.maintenance.maxBodyBytes | int64 | quote }} }
@@ -15,10 +15,10 @@
 - { name: MAINTENANCE_READ_ONLY, value: {{ required "readOnlyWindow is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.readOnlyWindow | quote }} }
 - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
 - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
-{{- with include "lance.signingEnv" (list $root .Values.maintenance.daprAppId) }}{{ . | nindent 0 }}{{- end }}
+{{- with include "lance.signingEnv" (list $root .Values.maintenance.appId) }}{{ . | nindent 0 }}{{- end }}
 {{- if .Values.dapr.enabled }}
 
-{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 0 }}
+{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.appId) | nindent 0 }}
 {{- include "lance.busEnv" $root | nindent 0 }}
 {{- end }}
 {{- if $root.Values.maintenance.vendWriteCredentials }}
@@ -35,7 +35,7 @@
 {{- end }}
 {{- if .Values.maintenance.lineageEmit }}
 - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
-- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.daprAppId) | quote }} }
+- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.appId) | quote }} }
 - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
 - { name: MAINTENANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $root | quote }} }
 {{- if .Values.services.lineage.outbox.enabled }}
@@ -59,7 +59,7 @@
 - { name: MAINTENANCE_DISCOVERY_MAX_DEPTH, value: {{ hasKey .Values.maintenance "discoveryMaxDepth" | ternary .Values.maintenance.discoveryMaxDepth 3 | quote }} }
 {{- if .Values.maintenance.controlEmit }}
 - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
-- { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.daprAppId | quote }} }
+- { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.appId | quote }} }
 {{- end }}
 - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
 {{- if .Values.dapr.enabled }}
@@ -91,7 +91,7 @@
 - { name: MAINTENANCE_MIN_VERSIONS_TO_EXPIRE, value: {{ required "maintenance.minVersionsToExpire is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.minVersionsToExpire | quote }} }
 - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
 {{- include "lance.objectStoreSessionEnv" (list $root "MAINTENANCE" "maintenance") | nindent 0 }}
-- { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }
+{{- include "lance.secretStoreEnv" (list $root .Values.maintenance.appId) | nindent 0 }}
 - { name: MAINTENANCE_S3_BUCKET, value: {{ .Values.objectStore.bucket | quote }} }
 
 
@@ -113,6 +113,7 @@
 volumeMounts:
   {{- include "lance.tmpMount" . | nindent 2 }}
   {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 2 }}
+  {{- include "lance.storeIdentity" (list . .Values.maintenance.appId "mounts") | nindent 2 }}
 {{- end -}}
 
 {{- if .Values.maintenance.enabled }}
@@ -134,7 +135,7 @@ spec:
     metadata:
       annotations:
         {{- if .Values.dapr.enabled }}
-        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port) | nindent 8 }}
+        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.appId $port) | nindent 8 }}
         {{- end }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
@@ -173,7 +174,7 @@ spec:
           {{- include "lance.maintenanceVolumes" . | nindent 10 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
-        {{- include "lance.storeIdentity" (list $root .Values.maintenance.daprAppId "volumes") | nindent 8 }}
+        {{- include "lance.storeIdentity" (list $root .Values.maintenance.appId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
 {{- if .Values.dapr.enabled }}
 {{- $worker := required "maintenance.worker is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.worker }}
@@ -201,7 +202,7 @@ spec:
   template:
     metadata:
       annotations:
-        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $probes $block) | nindent 8 }}
+        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.appId $probes $block) | nindent 8 }}
         dapr.io/enable-app-health-check: "true"
         dapr.io/app-health-check-path: "/livez"
         dapr.io/app-health-probe-interval: "2"
@@ -241,7 +242,7 @@ spec:
           {{- include "lance.maintenanceVolumes" . | nindent 10 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
-        {{- include "lance.storeIdentity" (list $root .Values.maintenance.daprAppId "volumes") | nindent 8 }}
+        {{- include "lance.storeIdentity" (list $root .Values.maintenance.appId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
 {{- end }}
 ---

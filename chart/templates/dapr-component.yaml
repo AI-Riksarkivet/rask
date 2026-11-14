@@ -13,13 +13,13 @@ spec:
   metadata:
     - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
     - { name: name, value: "lance-dapr" }
-    {{- with include "lance.natsCreds" (list . .Values.services.catalog.daprAppId) }}{{ . | nindent 4 }}{{- end }}
+    {{- with include "lance.natsCreds" (list . .Values.services.catalog.appId) }}{{ . | nindent 4 }}{{- end }}
 {{- include "lance.natsAuth" . }}
 scopes:
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 
 {{- if and .Values.maintenance.enabled .Values.maintenance.lineageEmit (not .Values.maintenance.arrivalEnabled) }}
-{{- include "lance.publishPubsub" (list . (include "lance.subPubsub" (list . .Values.maintenance.daprAppId)) .Values.maintenance.daprAppId) }}
+{{- include "lance.publishPubsub" (list . (include "lance.subPubsub" (list . .Values.maintenance.appId)) .Values.maintenance.appId) }}
 {{- end }}
 {{- if .Values.catalog.controlEmit }}
 ---
@@ -38,21 +38,21 @@ spec:
     - { name: durableName, value: "catalog-control-{podName}" }
     - { name: deliverPolicy, value: "new" }
     {{- include "lance.brokerWindows" . | nindent 4 }}
-    {{- with include "lance.natsCreds" (list . .Values.services.catalog.daprAppId) }}{{ . | nindent 4 }}{{- end }}
+    {{- with include "lance.natsCreds" (list . .Values.services.catalog.appId) }}{{ . | nindent 4 }}{{- end }}
 {{- include "lance.natsAuth" . }}
 scopes:
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 
 {{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}
-{{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.daprAppId) .Values.maintenance.daprAppId) }}
+{{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.appId) .Values.maintenance.appId) }}
 {{- end }}
 
 {{- end }}
 
-{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}
+{{- $subscribers := list (dict "appId" .Values.services.lineage.appId "deliverPolicy" "all") }}
 
 {{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}
-{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId "deliverPolicy" "new") }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.appId "deliverPolicy" "new") }}
 {{- end }}
 
 {{- range $subscribers }}
@@ -70,7 +70,7 @@ spec:
     - { name: name, value: "lance-dapr-{{ .appId }}" }
     - { name: queueGroupName, value: {{ .appId | quote }} }
     - { name: deliverPolicy, value: {{ .deliverPolicy | quote }} }
-    {{- if eq .appId $.Values.services.lineage.daprAppId }}
+    {{- if eq .appId $.Values.services.lineage.appId }}
     - { name: concurrencyMode, value: "parallel" }
     - { name: maxAckPending, value: {{ required "services.lineage.deliveriesInFlight is required" $.Values.services.lineage.deliveriesInFlight | quote }} }
     {{- end }}
@@ -87,24 +87,24 @@ scopes:
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: {{ include "lance.subPubsub" (list . .Values.services.lineage.daprAppId) }}-dlq
+  name: {{ include "lance.subPubsub" (list . .Values.services.lineage.appId) }}-dlq
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   type: pubsub.jetstream
   version: v1
   metadata:
     - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
-    - { name: name, value: "lance-dapr-{{ .Values.services.lineage.daprAppId }}-dlq" }
-    - { name: queueGroupName, value: "{{ .Values.services.lineage.daprAppId }}-dlq" }
+    - { name: name, value: "lance-dapr-{{ .Values.services.lineage.appId }}-dlq" }
+    - { name: queueGroupName, value: "{{ .Values.services.lineage.appId }}-dlq" }
     - { name: deliverPolicy, value: "new" }
-    - { name: durableName, value: "{{ .Values.services.lineage.daprAppId }}-dlq-durable" }
+    - { name: durableName, value: "{{ .Values.services.lineage.appId }}-dlq-durable" }
     - { name: ackWait, value: "720s" }
     - { name: maxDeliver, value: "3" }
     - { name: backOff, value: "720s,720s" }
-    {{- with include "lance.natsCreds" (list . .Values.services.lineage.daprAppId) }}{{ . | nindent 4 }}{{- end }}
+    {{- with include "lance.natsCreds" (list . .Values.services.lineage.appId) }}{{ . | nindent 4 }}{{- end }}
 {{- include "lance.natsAuth" . }}
 scopes:
-  - {{ .Values.services.lineage.daprAppId }}
+  - {{ .Values.services.lineage.appId }}
 {{- end }}
 ---
 apiVersion: dapr.io/v1alpha1
@@ -120,10 +120,13 @@ spec:
     - { name: vaultAuthMethod, value: kubernetes }
     - { name: vaultKubernetesRole, value: {{ include "lance.storeRole" (list . "{appID}") | quote }} }
     - { name: vaultKubernetesMountPath, value: {{ .Values.externalSecrets.kubernetesAuthPath | quote }} }
-    - { name: vaultServiceAccountTokenPath, value: /var/run/secrets/rask/openbao/token }
+    - { name: vaultServiceAccountTokenPath, value: {{ include "lance.storeTokenFile" . }} }
     - { name: enginePath, value: {{ .Values.externalSecrets.kvMount | quote }} }
     - { name: vaultKVUsePrefix, value: "false" }
     - { name: skipVerify, value: "false" }
+    {{- if include "lance.storeCaConfigMap" . }}
+    - { name: caCert, value: {{ include "lance.storeCaFile" . }} }
+    {{- end }}
 scopes:
 {{- range (splitList "," (include "lance.secretScopes" .) | compact) }}
   - {{ . }}
@@ -142,7 +145,7 @@ spec:
   metadata:
     - { name: schedule, value: {{ .Values.catalog.commitReconcile.schedule | quote }} }
 scopes:
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 {{- end }}
 ---
 {{- if and .Values.dapr.enabled .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
@@ -157,7 +160,7 @@ spec:
   metadata:
     - { name: schedule, value: {{ .Values.catalog.controlOutbox.schedule | quote }} }
 scopes:
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 {{- end }}
 ---
 {{- if .Values.dapr.enabled }}
@@ -172,7 +175,7 @@ spec:
   metadata:
     - { name: schedule, value: {{ .Values.catalog.erasure.schedule | quote }} }
 scopes:
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 {{- end }}
 ---
 {{- if .Values.dapr.enabled }}
@@ -187,7 +190,7 @@ spec:
   metadata:
     - { name: schedule, value: {{ required "catalog.declarationConverge.schedule is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.declarationConverge.schedule | quote }} }
 scopes:
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 {{- end }}
 ---
 {{- if .Values.dapr.enabled }}
@@ -202,7 +205,7 @@ spec:
   metadata:
     - { name: schedule, value: {{ required "catalog.manifestReclaim.schedule is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.schedule | quote }} }
 scopes:
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 {{- end }}
 ---
 {{- if .Values.dapr.enabled }}
@@ -217,7 +220,7 @@ spec:
   metadata:
     - { name: schedule, value: {{ .Values.catalog.promotion.schedule | quote }} }
 scopes:
-  - {{ .Values.services.catalog.daprAppId }}
+  - {{ .Values.services.catalog.appId }}
 {{- end }}
 ---
 {{- if and .Values.dapr.enabled .Values.services.lineage.relay.enabled }}
@@ -234,5 +237,5 @@ spec:
   metadata:
     - { name: schedule, value: {{ .Values.services.lineage.relay.schedule | quote }} }
 scopes:
-  - {{ .Values.services.lineage.daprAppId }}
+  - {{ .Values.services.lineage.appId }}
 {{- end }}

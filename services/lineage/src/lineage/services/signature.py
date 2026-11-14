@@ -1,11 +1,11 @@
 """Verifying the signature an event carries against the public keys its signer publishes ([[LH-064]]).
 
 The bus door authenticates the sidecar that delivered an event, never the producer that wrote it, so the author
-stamped inside is a claim until a signature proves it. A producer signs with an Ed25519 key only its own sidecar can
+stamped inside is a claim until a signature proves it. A producer signs with an Ed25519 key only its own store role can
 read; lineage holds PUBLIC keys only, so a compromised lineage can admit or refuse events and cannot forge one.
 
-WHAT THIS MODULE OWNS is the part the library leaves to each service: this pod's Dapr sidecar as the place each
-identity's published list is read from (`lakehouse.lineage.keys.PublishedKeys` caches and paces the reads, through
+WHAT THIS MODULE OWNS is the part the library leaves to each service: the secret store, read under this service's own
+login, as the place each identity's published list is read from (`lakehouse.lineage.keys.PublishedKeys` caches and paces the reads, through
 `lakehouse.governed.signing_key.published_key_fetch`, the read every verifying door shares), and turning the library's
 outcomes into the three answers a door needs.
 `lakehouse.lineage.signing.verify_signature` owns what a valid signature is.
@@ -45,17 +45,17 @@ log = logging.getLogger(__name__)
 _MAX_REASON_CHARS: Final = 300
 
 
-def dapr_published_keys(store: str, *, clock: Callable[[], float] = time.monotonic) -> PublishedKeys:
-    """The kit's key reader, reading each identity's list through THIS pod's Dapr sidecar from secret store ``store``."""
-    return PublishedKeys(published_key_fetch(store), clock=clock)
+def store_published_keys(*, clock: Callable[[], float] = time.monotonic) -> PublishedKeys:
+    """The kit's key reader, reading each identity's list from the secret store under THIS process's own login."""
+    return PublishedKeys(published_key_fetch(), clock=clock)
 
 
-def _published_keys(request: Request, settings: LineageSettings) -> PublishedKeys:
+def _published_keys(request: Request) -> PublishedKeys:
     """This process's key reader, built on first use and kept on the app so its cache outlives one delivery."""
     state = request.app.state
     keys: PublishedKeys | None = getattr(state, "published_keys", None)
     if keys is None:
-        keys = state.published_keys = dapr_published_keys(settings.dapr_secret_store)
+        keys = state.published_keys = store_published_keys()
     return keys
 
 
@@ -90,7 +90,7 @@ async def verify_arrived_event(arrived: Mapping[str, Any], request: Request, set
     signing = settings.signing
     if not signing.enforced:
         return None
-    keys = _published_keys(request, settings)
+    keys = _published_keys(request)
     claim = signature_of(arrived)
     try:
         verified = await run_in_threadpool(

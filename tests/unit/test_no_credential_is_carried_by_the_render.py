@@ -88,7 +88,7 @@ def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
         ),
         pytest.param(
             ("--set-string", "openbao.externalAddr=http://vault.example.com:8200"),
-            'openbao.externalAddr is "http://vault.example.com:8200": every sidecar sends the store\'s token to it',
+            'openbao.externalAddr is "http://vault.example.com:8200": every service and every sidecar sends its ServiceAccount token',
             id="the-platforms-secret-store-over-http",
         ),
     ],

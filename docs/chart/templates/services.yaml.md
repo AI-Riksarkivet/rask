@@ -80,12 +80,13 @@ The STS endpoint is the store's own, where RustFS and Ceph RGW serve STS. Always
 catalog's token to the public AWS STS, and the catalog refuses to boot (`Settings._validate_store_identity`). An AWS
 deployment needs its regional STS endpoint here, for which the chart has no value yet.
 
-## `- { name: LANCE_SECRETS_FROM_DAPR, value: "true" }`
+## `{{- include "lance.secretStoreEnv" (list $root .Values.services.catalog.appId) | nindent 12 }}`
 
-The catalog's secrets (its signing key, a data base's credential reference) come ONLY from the Dapr secret store, read
-at boot and again on a TTL (ADR 0166); none is in pod env. With it on, the catalog refuses to boot without its store
-token (`Settings._validate_store_identity`), so no key pair can stand in for its ServiceAccount. Needs the
-lance-secrets component (scoped to catalog).
+THE CATALOG LOGS IN TO THE SECRET STORE AS ITSELF ([[XC-199]]). The store's address, its role `<release>-catalog`, the
+mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its secrets (its signing key, its
+commit-id key, the app token its Dapr doors check) come ONLY from the store, read under the process's own login at boot
+and again on a TTL (ADR 0166). None is in pod env, and none is read through its sidecar. Lineage's Deployment carries
+the same include for its own role.
 
 ## `- { name: LANCE_VENDING_MODE, value: {{ .Values.vending.mode | quote }} }`
 
@@ -152,7 +153,7 @@ guard silently no-ops and any pod could inject fabricated change-events into eve
 buffer. Same secret + pattern as the lineage and maintenance apps; the catalog
 lifespan also asserts it is set when control eventing is on (fail-closed, not silently open).
 
-## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.daprAppId) | nindent 12 }}`
+## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}`
 
 Same rule as maintenance's: this verifies the header the SIDECAR
 stamps, so without one there is nothing to verify and the Secret is not rendered.
@@ -255,7 +256,7 @@ cluster route sends public traffic here through the Gateway's data plane, so wit
 `X-Forwarded-For` every anonymous request carries the data plane's address and the rate limiter keys
 the whole public estate as one client.
 
-## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}`
+## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}`
 
 Explicit APP_API_TOKEN (recommended k8s approach) so require_dapr_token can verify the
 `dapr-api-token` header the sidecar stamps on delivery → forged direct POSTs are 403'd.
@@ -284,8 +285,8 @@ Durable /events feed retention in days of ARRIVAL time (0 = unbounded), pruned o
 
 The forwarder (ADR 0158): the relay tick sends every recorded event, as standard OpenLineage over the HTTP transport, to
 `<url>/<endpoint>`; an empty URL forwards nothing. The API key is never a value: `LINEAGE_FORWARD_API_KEY_SECRET` names
-the secret in the Dapr secret store lineage reads it from on every tick, and only lineage's Configuration allows it and
-only lineage's store login reads it (`lance.storeReads`).
+the secret in the secret store, which lineage reads under its own login on every tick, and only lineage's store role
+reads it (`lance.storeReads`).
 
 ## `- { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.dap...`
 
@@ -305,7 +306,8 @@ DLQ backlog.
 
 ## `- { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }`
 
-Bound the DaprClient gRPC deadline (the SDK env) — covers the boot-time secret-store fetch.
+Bound every unary call the Dapr client makes to the sidecar (the SDK env). A publish carries a tighter bound of its
+own (`lakehouse.dapr_publish`), and no secret is read through the sidecar.
 
 ## `- { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }`
 

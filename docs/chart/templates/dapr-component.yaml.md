@@ -60,7 +60,7 @@ DLQ stream (`dlq.>`), and `CatalogControlLaneDeadLettering` pages on the sidecar
 The control topic's other publisher, on its own component and so as its own NATS user: maintenance's #79 purge
 announcements. A publisher a component does not scope is refused by its sidecar, silently.
 
-## `{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}`
+## `{{- $subscribers := list (dict "appId" .Values.services.lineage.appId "deliverPolicy" "all") }}`
 
 One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
 app's replicas a competing-consumer group (single delivery per app — without it every replica gets
@@ -83,7 +83,7 @@ no author) are ACKED and counted rather than parked, because nothing can change 
 park would write a duplicate per replay. A named PERSON who lacks a grant still parks: a tuple can be
 written and the same event then succeeds.
 
-## `{{- if eq .appId $.Values.services.lineage.daprAppId }}`
+## `{{- if eq .appId $.Values.services.lineage.appId }}`
 
 LINEAGE'S SUBSCRIPTION DELIVERS IN PARALLEL ([[LH-533]]). Unset, the JetStream component hands its app
 one message at a time (components-contrib v1.19.0, `pubsub/jetstream/metadata.go:63-65`): measured on the
@@ -142,10 +142,11 @@ resiliency-mode values the nats-stream-job's durable-drift reconcile expects (EX
 this component only renders when resiliency is on, which is also the only time LINEAGE_DLQ_TOPIC
 exists.
 
-Dapr secret store fronting the dev OpenBao or the platform's Vault or OpenBao (Vault-API compatible). Apps
-read secrets via their sidecar (GET /v1.0/secrets/lance-secrets/<name>) instead of plaintext env — the
-secret-handling fix. The chart renders no store ([[XC-149]]): it names the dev fixture's (`openbao.enabled`)
-or the platform's (`openbao.externalAddr`), and the apps read either one through this component.
+Dapr secret store fronting the dev OpenBao or the platform's Vault or OpenBao (Vault-API compatible), for the secrets a
+sidecar's own components resolve by `secretKeyRef` (each pub/sub component's bus user). No app reads a secret through
+it ([[XC-199]]): each service logs in to the store itself (`lakehouse.governed.secrets`), and every per-app Configuration
+denies the sidecar's secrets API whole (`lance.daprAppSpec`). The chart renders no store ([[XC-149]]): it names the dev
+fixture's (`openbao.enabled`) or the platform's (`openbao.externalAddr`).
 
 ## `- { name: vaultAuthMethod, value: kubernetes }`
 
@@ -161,15 +162,22 @@ both scoped to one app and short-lived.
 ONE COMPONENT, ONE ROLE PER APP. Dapr fills `{appID}` into any component's metadata when the sidecar starts
 (`pkg/runtime/meta/meta.go:96-97`, 1.18.1 and 1.19.0-rc.4; documented as templated metadata values), so every app's
 sidecar logs in to `<release>-<its own app id>`, a role bound to that app's ServiceAccount whose policy reads exactly its
-app's secrets (`lance.storeReads`). The store refuses the rest whatever the Configuration says, and a pod that claimed
-another app's id would still present its own account's token, which that app's role does not admit. Every other
-component keeps naming this one store (`auth.secretStore: lance-secrets`) and every service its one store name.
+app's secrets (`lance.storeReads`). The app's own process logs in to the same role, named in its environment
+(`lance.secretStoreEnv`). The store refuses the rest, and a pod that claimed another app's id would still present its own
+account's token, which that app's role does not admit. Every other component keeps naming this one store
+(`auth.secretStore: lance-secrets`).
 
-## `- { name: vaultServiceAccountTokenPath, value: /var/run/secrets/rask/openbao/token }`
+## `- { name: vaultServiceAccountTokenPath, value: {{ include "lance.storeTokenFile" . }} }`
 
-The token daprd logs in with, which the pod projects for `openbao.identity.audience` and mounts into daprd alone
-(`lance.storeIdentity`): the app container cannot log in past its own sidecar's Configuration. The file is re-read on
-every login, so the kubelet's rotation reaches it.
+The token daprd logs in with, which the pod projects for `openbao.identity.audience` and mounts into daprd and into the
+app's own container at this one path (`lance.storeTokenFile`, mounted by `lance.storeIdentity`): both are the pod's one
+identity under one policy. The file is re-read on every login, so the kubelet's rotation reaches it.
+
+## `- { name: caCert, value: {{ include "lance.storeCaFile" . }} }`
+
+Rendered only where `openbao.ca.configMap` names the platform store's private CA: the file the sidecar mounts from that
+ConfigMap (`lance.storeCaFile`, mounted by `lance.storeIdentity`), which the component checks the store's certificate against (components-contrib
+`secretstores/hashicorp/vault/vault.go`, `caCert`: a path to a PEM file, read at e90662b02d70).
 
 ## `- { name: vaultKVUsePrefix, value: "false" }`
 
@@ -186,8 +194,8 @@ else); the dev store is plain http, where the setting has nothing to verify, and
 ONE derivation, in `lance.secretScopes`, because this list has other readers:
 `lance.appTokenEnv` decides whether a workload takes its app-API token from this store or
 through the environment, and it decides by membership HERE. Restating the computation would
-let the two agree at review and diverge later — a pod pointed at a store its app-id cannot
-reach gets ERR_SECRET_STORES_NOT_CONFIGURED and fails closed at boot.
+let the two agree at review and diverge later — a pod told to take its app token from a store it
+was named no address for fails its start closed.
 
 ## `{{- if .Values.dapr.enabled }}`
 

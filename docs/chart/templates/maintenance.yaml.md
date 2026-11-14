@@ -21,9 +21,10 @@ longer than a request.
 
 The worker pods: `python -m maintenance.worker`, a process of its own and not a web app's lifespan, one worker per
 replica on the shared work queue (ADR 0198). A pass that hangs ends its own replica and never the write-event lane's,
-and the two Deployments scale apart (`maintenance.worker.replicas`). Rendered only with Dapr on: the worker reads its
-bus credential and its signing key through the sidecar. RollingUpdate with no pod unavailable: the queue holds one task
-per table and hands it to one worker at a time, so a surge pod shares the work and repeats none.
+and the two Deployments scale apart (`maintenance.worker.replicas`). Rendered only with Dapr on: the bus its work queue
+is on is named to the pod only then, and what a pass emits is published through its sidecar. Its bus credential and its
+signing key it reads from the secret store under its own login. RollingUpdate with no pod unavailable: the queue holds
+one task per table and hands it to one worker at a time, so a surge pod shares the work and repeats none.
 
 ## `terminationGracePeriodSeconds: {{ $grace }}`
 
@@ -49,7 +50,7 @@ only this pod has one: it subscribes to nothing. Held by `tests/unit/test_sideca
 Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
 symmetric with the lineage service (the audit's consistency fix).
 
-## `{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 0 }}`
+## `{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.appId) | nindent 0 }}`
 
 Gated on the sidecar because that is what it VERIFIES — the token exists to check the
 `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
@@ -94,7 +95,7 @@ Rendered on and off, so each process reads the chart's decision rather than its 
 and the signature door settings (`lance.doorEnv`, the `/maintenance-arrival` door) render only with the lane on,
 because only then is the route registered.
 
-## `- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.daprAppId) | quote }} }`
+## `- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.appId) | quote }} }`
 
 The PER-SUBSCRIBER component, not the shared broadcast one. `queueGroupName` lives on the
 COMPONENT, so subscribing through `pubsub.name` gives every replica every event instead of
@@ -192,8 +193,9 @@ component (dapr-component.yaml): one the sidecar is not scoped to refuses the pu
 MAINTENANCE'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-084]], ADR 0170). The pod projects a token for
 `objectStore.identity.audience` beside its `rask-catalog` one (the `lance.identityTokens` mount below), and maintenance
 exchanges it through STS `AssumeRoleWithWebIdentity` for the sessions its own reads and records sign with
-(`lakehouse.store_session`). It holds no key pair: with `MAINTENANCE_SECRETS_FROM_DAPR` on it refuses to boot without
-the token, and refuses a pair beside it (`lakehouse.store_session.require_one_store_identity`).
+(`lakehouse.store_session`). It holds no key pair: the chart renders none and no acknowledgement of one, without which a
+service with no token refuses to boot (`lakehouse.store_session.require_env_pair`), and a pair beside the token is
+refused (`require_one_store_identity`).
 
 THE SESSION READS HISTORY, NEVER DATA, AND WRITES ONLY ITS OWN RECORDS ([[LH-575]]). Its canned policy
 (`lance.objectStorePolicy`, component `maintenance`, rendered into `<release>-object-store-identities`; each grant in
@@ -217,11 +219,12 @@ catalog vend:
   (`POST .../release`, `DELETE ...`). Every trash door asks `can_reclaim_trash`, which only the `reclaimer` estate role
   `lance.fgaEstateRoles` declares for maintenance's ServiceAccount opens.
 
-## `- { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }`
+## `{{- include "lance.secretStoreEnv" (list $root .Values.maintenance.appId) | nindent 0 }}`
 
-Maintenance's signing key comes ONLY from the secret store, read at boot and again while the service runs
-([[XC-082]], ADR 0166); never in pod env. With it on, its store identity must be the ServiceAccount token above, so no
-key pair can stand in for it. Fails closed.
+MAINTENANCE LOGS IN TO THE SECRET STORE AS ITSELF ([[XC-199]]). The store's address, its role `<release>-maintenance`, the
+mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its signing key and its work queue's
+bus credential come ONLY from the store, read under the process's own login at boot and again while it runs ([[XC-082]],
+ADR 0166), never from pod env and never through its sidecar. A store that does not serve them fails the start closed.
 
 ## `{{- $extra := list }}`
 

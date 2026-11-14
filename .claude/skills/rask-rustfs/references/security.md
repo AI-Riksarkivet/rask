@@ -195,9 +195,10 @@ entry; an open design choice.
 - [ ] Pod uid/gid/fsGroup 10001, read-only root, drop ALL, no SA token.
 - [ ] NetworkPolicy admits only the components holding a store credential on 9000.
 - [ ] The provisioning hook (`chart/templates/object-store-provisioning.yaml`) is the only root holder besides the store and its dev seeder (the root's own OpenBao
-      secret, denied to every Dapr app, and its own Kubernetes Secret); no `admin:*`, no `s3:ForceDelete*`, no table
-      actions in any rask policy. In development the dev OpenBao reads the root to ESO's login alone: each app's
-      sidecar logs in as its own ServiceAccount and reads only its own secrets, and no token is published (ADR 0169).
+      secret, denied to every app's role, and its own Kubernetes Secret); no `admin:*`, no `s3:ForceDelete*`, no table
+      actions in any rask policy. In development the dev OpenBao reads the root to ESO's login alone: each service, and
+      its sidecar for its components, logs in as its own ServiceAccount and reads only its own secrets, and no token is
+      published (ADR 0169).
 - [ ] Image pinned by digest at a GA tag.
 
 ## Platform store checklist

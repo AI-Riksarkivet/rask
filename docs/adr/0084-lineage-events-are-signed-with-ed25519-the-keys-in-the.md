@@ -33,3 +33,11 @@ unreadable store, and the replacement OpenBao never becomes Ready. From Rev A un
 no admitting signature (the rev-262 catalog signed under an identity env commit 1 no longer renders, and the contract
 kept the shortcut off at Rev B); no table was dropped in that window: the LINEAGE stream holds only canary events and
 two table creates between Rev A and Rev C (seq 16188 to 16197).
+
+**Amended 2026-11-14 (#787, XC-199 step D2).** Keys stay in the store and verifiers still read public keys only. The
+delivery path changed: no key is read through a sidecar's secret API. Each signer reads its seed, and each verifier a
+published list, under its own login to the store (`lakehouse.governed.secrets`;
+[ADR 0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md), amendment of the same day), and
+every app's Dapr Configuration denies the sidecar's secrets API whole. Key custody (C6) is therefore the store's claim
+alone: an identity's private key is read only under its own role, whose policy is the only one that grants it. The live
+read-backs above were taken on the sidecar path.

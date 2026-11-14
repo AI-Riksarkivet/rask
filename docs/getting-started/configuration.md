@@ -3,8 +3,9 @@
 rask is configured through environment variables, read by each service's
 `Settings` (pydantic-settings, through the `lakehouse` library) from the process environment.
 In-cluster, the chart renders them from `chart/values.yaml` into each Deployment's `env`, and every
-credential reaches a pod from the secret store (the Dapr secret store, or an
-ExternalSecret), never as a chart value. A local `.env` is git-ignored and never committed.
+credential reaches a pod from the secret store (a service's own login to it, the Dapr secret
+store for its sidecar's components, or an ExternalSecret), never as a chart value. A local `.env`
+is git-ignored and never committed.
 
 ## Identity and authorization (every governed service)
 

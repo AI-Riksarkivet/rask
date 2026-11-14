@@ -199,7 +199,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.busClients" -}}
-{{- toJson (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "nats-stream") -}}
+{{- toJson (append (ternary (splitList "," (include "lance.secretReaderComponents" .) | compact) list .Values.dapr.enabled) "nats-stream") -}}
 {{- end -}}
 
 {{- define "lance.platformEgress" -}}
@@ -261,7 +261,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "lance.platformStoreAddr" -}}
 {{- $addr := required "openbao.enabled is false, so the secret store is the platform's: set openbao.externalAddr to its Vault or OpenBao (https; docs/architecture/deployment.md, Prerequisites)" .Values.openbao.externalAddr -}}
 {{- if not (hasPrefix "https://" $addr) -}}
-{{- fail (printf "openbao.externalAddr is %q: every sidecar sends the store's token to it, so the platform's secret store is reached over https only" $addr) -}}
+{{- fail (printf "openbao.externalAddr is %q: every service and every sidecar sends its ServiceAccount token and its store token to it, so the platform's secret store is reached over https only" $addr) -}}
 {{- end -}}
 {{- $addr -}}
 {{- end -}}
@@ -901,10 +901,14 @@ activeDeadlineSeconds: 1800
 {{- required "objectStore.identity.audience names the audience every lakehouse workload's store token is projected for, which the store trusts as its identity provider's client; no workload holds a store key (ADR 0170)" .Values.objectStore.identity.audience -}}
 {{- end -}}
 
+{{- define "lance.secretNamePattern" -}}^[a-z0-9][a-z0-9-]{0,252}${{- end -}}
+
 {{- define "lance.storeReads" -}}
 {{- $v := .Values -}}{{- $root := . -}}
 {{- $reads := dict -}}
-{{- if $v.dapr.enabled -}}
+{{- with $v.services.lineage.forward.authSecret.name }}{{- if not (regexMatch (include "lance.secretNamePattern" $root) (toString .)) }}{{- fail (printf "services.lineage.forward.authSecret.name: %q is no secret name (a path or a wildcard would widen lineage's store policy)" (toString .)) }}{{- end }}{{- end -}}
+{{- $dapr := $v.dapr.enabled -}}
+{{- $door := ternary (list "dapr-app-token") list $dapr -}}
 {{- $sa := printf "%s-sa-" (include "lance.fullname" .) -}}
 {{- $doors := ne (($v.signing).doors | toString) "off" -}}
 {{- $everySigner := list -}}
@@ -912,10 +916,10 @@ activeDeadlineSeconds: 1800
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token" "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
-  (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
+  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat $door (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" $dapr)
+  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat $door (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" $dapr) -}}
 {{- if $v.maintenance.enabled -}}
-{{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "dapr-app-token" "nats-user-maintenance-worker") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat $door (ternary (list "nats-user-maintenance-worker") list $dapr) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (and $dapr (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit)))) -}}
 {{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}
@@ -926,7 +930,7 @@ activeDeadlineSeconds: 1800
 {{- end -}}
 {{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "openbao-seeded" "commit-id-key" "otel-collector-export" "object-store-root" "postgres" "dapr-app-token") -}}
 {{- range $reads }}{{- $held = concat $held .api .components }}{{- end -}}
-{{- $lakehouseApps := list $v.services.catalog.daprAppId $v.services.lineage.daprAppId $v.maintenance.daprAppId -}}
+{{- $lakehouseApps := list $v.services.catalog.appId $v.services.lineage.appId $v.maintenance.appId -}}
 {{- $external := $v.openbao.externalReaders | default dict -}}
 {{- range $app, $reader := $external -}}
 {{- if not (regexMatch "^[a-z][a-z0-9-]{0,62}$" $app) }}{{- fail (printf "openbao.externalReaders: %q is no Dapr app id" $app) }}{{- end -}}
@@ -943,11 +947,10 @@ activeDeadlineSeconds: 1800
 {{- if has $account (append (include "lance.serviceAccounts" $root | fromJsonArray) "default") }}{{- fail (printf "openbao.externalReaders.%s.serviceAccount: %q is the lakehouse's own ServiceAccount or the namespace's shared default: a reader's role binds an identity of its own" $app $account) }}{{- end -}}
 {{- if not ($reader).secrets }}{{- fail (printf "openbao.externalReaders.%s.secrets names no secret: a reader with no read is no reader" $app) }}{{- end -}}
 {{- range $reader.secrets }}
-{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,252}$" (toString .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is no secret name (a path or a wildcard would widen the store policy)" $app (toString .)) }}{{- end -}}
+{{- if not (regexMatch (include "lance.secretNamePattern" $root) (toString .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is no secret name (a path or a wildcard would widen the store policy)" $app (toString .)) }}{{- end -}}
 {{- if not (or (eq . (printf "nats-user-%s" $app)) (hasPrefix $own .) (hasPrefix "signing-public-" .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is not the reader's own: a reader holds only nats-user-%s, names of its own (%s<name>) and signing-public-<name>" $app . $app $own) }}{{- end -}}
 {{- end -}}
 {{- $_ := set $reads $app (dict "sa" $reader.serviceAccount "api" ($reader.secrets | uniq | sortAlpha) "components" list) -}}
-{{- end -}}
 {{- end -}}
 {{- toJson $reads -}}
 {{- end -}}
@@ -976,19 +979,68 @@ activeDeadlineSeconds: 1800
 {{- define "lance.storeIdentity" -}}
 {{- $root := index . 0 -}}{{- $appId := index . 1 -}}{{- $part := index . 2 -}}
 {{- if hasKey (include "lance.storeReads" $root | fromJson) $appId -}}
+{{- $ca := include "lance.storeCaConfigMap" $root -}}
 {{- if eq $part "annotation" }}
-dapr.io/volume-mounts: "openbao-identity:/var/run/secrets/rask/openbao"
+dapr.io/volume-mounts: "openbao-identity:{{ dir (include "lance.storeTokenFile" $root) }}{{ if $ca }},secret-store-ca:{{ dir (include "lance.storeCaFile" $root) }}{{ end }}"
+{{- else if eq $part "mounts" }}
+- { name: openbao-identity, mountPath: {{ dir (include "lance.storeTokenFile" $root) }}, readOnly: true }
+{{- if $ca }}
+- { name: secret-store-ca, mountPath: {{ dir (include "lance.storeCaFile" $root) }}, readOnly: true }
+{{- end }}
 {{- else }}
 - name: openbao-identity
   projected:
     sources:
-      - serviceAccountToken: { path: token, audience: {{ include "lance.storeAudience" $root | quote }}, expirationSeconds: 600 }
+      - serviceAccountToken: { path: {{ base (include "lance.storeTokenFile" $root) }}, audience: {{ include "lance.storeAudience" $root | quote }}, expirationSeconds: 600 }
+{{- if $ca }}
+- name: secret-store-ca
+  configMap:
+    name: {{ $ca | quote }}
+    items: [{ key: {{ $root.Values.openbao.ca.key | quote }}, path: {{ base (include "lance.storeCaFile" $root) }} }]
+{{- end }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.storeTokenSeconds" -}}
+{{- $name := index . 0 -}}{{- $value := index . 1 | toString -}}
+{{- if not (regexMatch "^(0|[1-9][0-9]{0,4})[smh]?$" $value) }}{{- fail (printf "openbao.identity.%s is %q: write it as <n>s, <n>m or <n>h, a number of five digits at most with no leading zero, the forms this chart reads as the store does and can hold to the hour a store token lives at most" $name $value) }}{{- end -}}
+{{- $seconds := mul (regexFind "^[0-9]+" $value | int) (get (dict "s" 1 "m" 60 "h" 3600) (regexFind "[smh]$" $value | default "s")) -}}
+{{- if lt $seconds 1 }}{{- fail (printf "openbao.identity.%s is %q: a role with no lifetime of its own issues tokens at the store's default, which is weeks" $name $value) }}{{- end -}}
+{{- if lt $seconds 60 }}{{- fail (printf "openbao.identity.%s is %q: a store token lives at least a minute, the least that leaves a service's loop a pass to log in again before the token is used up, and a service refuses a login with a shorter lease" $name $value) }}{{- end -}}
+{{- if gt $seconds 3600 }}{{- fail (printf "openbao.identity.%s is %q: a store token lives at most an hour (ADR 0169), and a service refuses a login with a longer lease" $name $value) }}{{- end -}}
+{{- $seconds -}}
+{{- end -}}
+
+{{- define "lance.storeTokenFile" -}}/var/run/secrets/rask/openbao/token{{- end -}}
+
+{{- define "lance.storeCaFile" -}}/etc/rask/secret-store-ca/ca.crt{{- end -}}
+
+{{- define "lance.storeCaConfigMap" -}}
+{{- $ca := .Values.openbao.ca | default dict -}}
+{{- if $ca.configMap -}}
+{{- if .Values.openbao.enabled }}{{- fail "openbao.ca names the CA of the platform's secret store, and openbao.enabled reads the development store, which serves plain HTTP inside the namespace: unset one of them" }}{{- end -}}
+{{- if not $ca.key }}{{- fail "openbao.ca.key names the key of the ConfigMap openbao.ca.configMap that holds the CA certificate" }}{{- end -}}
+{{- $ca.configMap -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.secretStoreEnv" -}}
+{{- $root := index . 0 -}}{{- $appId := index . 1 -}}
+{{- if hasKey (include "lance.storeReads" $root | fromJson) $appId -}}
+- { name: RASK_SECRET_STORE_ADDR, value: {{ include "lance.vaultAddr" $root | quote }} }
+- { name: RASK_SECRET_STORE_ROLE, value: {{ include "lance.storeRole" (list $root $appId) | quote }} }
+- { name: RASK_SECRET_STORE_AUTH_MOUNT, value: {{ $root.Values.externalSecrets.kubernetesAuthPath | quote }} }
+- { name: RASK_SECRET_STORE_KV_MOUNT, value: {{ $root.Values.externalSecrets.kvMount | quote }} }
+- { name: RASK_SECRET_STORE_TOKEN_FILE, value: {{ include "lance.storeTokenFile" $root }} }
+{{- if include "lance.storeCaConfigMap" $root }}
+- { name: RASK_SECRET_STORE_CA_FILE, value: {{ include "lance.storeCaFile" $root }} }
 {{- end }}
 {{- end -}}
 {{- end -}}
 
 {{- define "lance.storeAudience" -}}
-{{- required "openbao.identity.audience names the audience each sidecar's store token is projected for; a role bound to none admits any token its ServiceAccount holds" .Values.openbao.identity.audience -}}
+{{- required "openbao.identity.audience names the audience each pod's store token is projected for; a role bound to none admits any token its ServiceAccount holds" .Values.openbao.identity.audience -}}
 {{- end -}}
 
 {{- define "lance.secretScopes" -}}
@@ -997,7 +1049,7 @@ dapr.io/volume-mounts: "openbao-identity:/var/run/secrets/rask/openbao"
 
 {{- define "lance.secretReaderComponents" -}}
 {{- $apps := splitList "," (include "lance.secretScopes" .) | compact -}}
-{{- if and .Values.maintenance.enabled (has .Values.maintenance.daprAppId $apps) -}}
+{{- if and .Values.maintenance.enabled (has .Values.maintenance.appId $apps) -}}
 {{- $apps = append $apps "maintenance-worker" -}}
 {{- end -}}
 {{- $apps | uniq | sortAlpha | join "," -}}
@@ -1066,12 +1118,6 @@ dapr.io/volume-mounts: "openbao-identity:/var/run/secrets/rask/openbao"
     scopes:
       - storeName: lance-secrets
         defaultAccess: deny
-        {{- with (get (include "lance.storeReads" $cfgRoot | fromJson) $app).api }}
-        allowedSecrets:
-          {{- range . }}
-          - {{ . }}
-          {{- end }}
-        {{- end }}
 {{- end -}}
 
 {{- define "lance.daprAppConfigName" -}}
@@ -1079,8 +1125,8 @@ dapr.io/volume-mounts: "openbao-identity:/var/run/secrets/rask/openbao"
 {{- end -}}
 
 {{- define "lance.signers" -}}
-{{- $v := .Values -}}{{- $s := list (dict "id" (include "lance.saSubject" (list . "catalog")) "key" (printf "%s-sa-catalog" (include "lance.fullname" .)) "app" $v.services.catalog.daprAppId "role" "catalog") -}}
-{{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" (include "lance.saSubject" (list . "maintenance")) "key" (printf "%s-sa-maintenance" (include "lance.fullname" .)) "app" $v.maintenance.daprAppId "role" "maintenance") }}{{- end -}}
+{{- $v := .Values -}}{{- $s := list (dict "id" (include "lance.saSubject" (list . "catalog")) "key" (printf "%s-sa-catalog" (include "lance.fullname" .)) "app" $v.services.catalog.appId "role" "catalog") -}}
+{{- if $v.maintenance.enabled }}{{- $s = append $s (dict "id" (include "lance.saSubject" (list . "maintenance")) "key" (printf "%s-sa-maintenance" (include "lance.fullname" .)) "app" $v.maintenance.appId "role" "maintenance") }}{{- end -}}
 {{- toJson $s -}}
 {{- end -}}
 

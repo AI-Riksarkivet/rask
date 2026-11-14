@@ -690,9 +690,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         for doc in docs
         if doc.get("kind") == "Deployment" and any("RASK_SIGNING_IDENTITY" in chart_render.env_of(c) for c in doc["spec"]["template"]["spec"]["containers"])
     }
-    assert signers and signers <= admitted, (
-        f"the OpenBao lock does not admit the signers {sorted(signers - admitted)}: their sidecars cannot read their own keys"
-    )
+    assert signers and signers <= admitted, f"the OpenBao lock does not admit the signers {sorted(signers - admitted)}: they cannot read their own keys"
     [server] = [c for c in pod["containers"] if c["name"] == "openbao"]
     assert server["readinessProbe"]["httpGet"] == {"path": "/v1/sys/health", "port": 8200}, f"the server's readiness is {server['readinessProbe']}"
     assert container["readinessProbe"]["exec"]["command"] == ["bao", "kv", "get", "-field=pod", _SENTINEL], (

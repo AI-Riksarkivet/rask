@@ -33,7 +33,6 @@ def _settings() -> Any:
         lineage_emit_enabled=True,
         allow_external_blobs=False,
         external_blob_base_list=[],
-        dapr_secret_store="",
         # [[XC-104]] The door holds the body to this once its compressed buffers inflate.
         max_body_bytes=256 * 1024 * 1024,
         # [[LH-279]] Where the create records the bases it registers; the write is faked here.

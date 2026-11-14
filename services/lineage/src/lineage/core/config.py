@@ -13,7 +13,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Self
 
-from pydantic import AfterValidator, AliasChoices, Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.settings import GovernedAuthSettings
@@ -21,7 +21,7 @@ from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.storage_options import StorageOptions, on_s3
-from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_a_token, require_one_store_identity
+from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
 
 class Signing(BaseSettings):
@@ -86,7 +86,7 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     forward_url: str = Field(default="", alias="LINEAGE_FORWARD_URL")
     #: The path events are POSTed to under `forward_url`, the transport's `endpoint`.
     forward_endpoint: str = Field(default="api/v1/lineage", alias="LINEAGE_FORWARD_ENDPOINT")
-    #: The secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty
+    #: The secret in lineage's secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty
     #: sends none. Read on every relay tick, so a rotated key is taken without a restart.
     forward_api_key_secret: str = Field(default="", alias="LINEAGE_FORWARD_API_KEY_SECRET")
     #: The field of that secret the key is under.
@@ -150,17 +150,6 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     # oldest-first means nothing starves behind a steady arrival rate. 0 = unbounded (not recommended).
     outbox_drain_limit: int = Field(default=500, alias="LINEAGE_OUTBOX_DRAIN_LIMIT")
 
-    # --- Secret consumption from the Dapr secret store (OpenBao), symmetric with the catalog. When on, lineage's
-    # forwarder key and signers' public keys are read from the store, and its object-store identity is its
-    # ServiceAccount token, never a pair (`require_one_store_identity`).
-    secrets_from_dapr: bool = Field(default=False, alias="LINEAGE_SECRETS_FROM_DAPR")
-    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
-    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
-    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
-    #: (the one every service reads); the per-service alias stays FIRST so a single service can
-    #: still be moved on its own.
-    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LINEAGE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-
     # --- Feed retention, in DAYS of arrival time (the estate's own `received_at`, never the
     # producer-supplied eventTime). 0 = unbounded. Pruned once per relay tick, never on the ingest path.
     #
@@ -197,9 +186,7 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
 
     @model_validator(mode="after")
     def _one_store_identity(self) -> Self:
-        """Refuse a store identity that is doubled, missing where the secret store is on, or sent to AWS's STS."""
-        if self.secrets_from_dapr:
-            require_a_token(self.web_identity, prefix="LINEAGE")
+        """Refuse a store identity that is doubled or sent to AWS's STS."""
         require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="LINEAGE")
         return self
 

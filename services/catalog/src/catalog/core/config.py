@@ -14,7 +14,7 @@ import re
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 
-from pydantic import AfterValidator, AliasChoices, Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.principal import PrincipalKey
@@ -25,7 +25,7 @@ from lakehouse.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.signature_doors import SignatureDoorSettings
 from lakehouse.storage_options import StorageOptions, on_s3
-from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_a_token, require_one_store_identity
+from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
 
 if TYPE_CHECKING:
@@ -58,7 +58,7 @@ class LanceSessionCaps(BaseSettings):
     only when an unrelated module had already put those variables in the environment — the suite's
     result depended on collection order. The alternative fix was to hand the suite fake credentials,
     which would have taught it to be comfortable with a credential arriving through the environment.
-    The estate's rule is that a secret reaches a workload from ESO, the Dapr secret store or STS and
+    The estate's rule is that a secret reaches a workload from ESO, the secret store or STS and
     never from env, so a test harness that needs one to open a local file is the wrong shape to
     normalise.
 
@@ -238,7 +238,7 @@ class CatalogControlBusSettings(BaseSettings):
 
 
 class CatalogDaprSettings(BaseSettings):
-    """Which Dapr components this catalog addresses, and where its secrets come from.
+    """Which Dapr component and topic this catalog publishes its lineage on.
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
@@ -246,16 +246,6 @@ class CatalogDaprSettings(BaseSettings):
     every one of its fields, aliases and defaults.
     """
 
-    # Secret consumption — when on, every secret the catalog reads is the Dapr secret store's (OpenBao): its signing key
-    # and its app token, never plaintext env, and a store miss FAILS CLOSED (no env
-    # fallback). Its object-store identity is then its ServiceAccount token (`s3_web_identity_token_file`), which the
-    # validator below requires: no key pair of the catalog's own is in the store either.
-    secrets_from_dapr: bool = Field(default=False, alias="LANCE_SECRETS_FROM_DAPR")
-    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
-    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
-    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name; the
-    #: per-service alias stays FIRST so a single service can still be moved on its own.
-    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
     # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
     dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
@@ -428,7 +418,7 @@ class CatalogAuthzSettings(BaseSettings):
     """
 
     #: THE IDENTITY THIS CATALOG SIGNS THE LINEAGE IT EMITS AS ([[LH-064]]), one variable on every signer
-    #: (`RASK_SIGNING_IDENTITY`). With `secrets_from_dapr` it decides whether the catalog signs at all: its private
+    #: (`RASK_SIGNING_IDENTITY`). With a secret store named (`RASK_SECRET_STORE_ADDR`) it decides whether the catalog signs at all: its private
     #: key is `signing-key-<its key name>` in the store (`signing_key_name`). Empty is an estate with no store to sign from, and it emits
     #: unsigned. On the estate it is the catalog's own service-account subject
     #: (`kubernetes~system:serviceaccount:<ns>:<sa>`), the subject its signed events are authored as.
@@ -476,7 +466,7 @@ class Settings(
     # every alias below silently gained an un-namespaced twin (a field named `address` would
     # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
-    # deliberately-bare ones (RASK_SECRET_STORE) still land.
+    # deliberately-bare ones (RASK_SIGNING_IDENTITY) still land.
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", alias_generator=env_alias("LANCE"), extra="ignore")
 
@@ -641,14 +631,13 @@ class Settings(
     def _validate_store_identity(self) -> Self:
         """Fail closed on a store identity that is absent, doubled, or would send the token to the public AWS STS.
 
-        The three refusals every lakehouse service shares are `require_one_store_identity`'s. A web-identity vend
-        exchanges the catalog's own token, so it needs one. With no token, the lifespan refuses a half pair
+        The two refusals every lakehouse service shares are `require_one_store_identity`'s. A web-identity vend
+        exchanges the catalog's own token, so it needs one. With no token, the lifespan refuses a half pair, a pair
+        nobody acknowledged, and any pair where the chart named a secret store
         (`lakehouse.store_session.require_env_pair`).
         """
         if self.vending_mode == "web_identity" and self.s3_web_identity_token_file is None:
             raise ValueError("LANCE_VENDING_MODE=web_identity exchanges the catalog's own token: set LANCE_S3_WEB_IDENTITY_TOKEN_FILE")
-        if self.secrets_from_dapr:
-            require_a_token(self.web_identity, prefix="LANCE")
         require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="LANCE")
         return self
 
@@ -670,7 +659,7 @@ class Settings(
         THE ENDPOINT IS NOT OVERRIDABLE, and that is the [[LH-205]] invariant stated as a signature: these
         properties carry the estate's own credential, so the only store they may address is the estate's.
         A warehouse record naming another store is refused before a connection is built
-        (``catalog.core.store_endpoint``); its credential would belong behind the Dapr secret store
+        (``catalog.core.store_endpoint``); its credential would belong in the secret store
         with the record naming a reference, and no door consumes one yet.
 
         The ``storage.`` properties are :meth:`storage_options` in clear, at the call that connects: the ``dir`` namespace

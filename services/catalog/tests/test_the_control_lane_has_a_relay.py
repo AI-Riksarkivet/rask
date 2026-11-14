@@ -26,32 +26,32 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import httpx
 import pytest
-import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from catalog.core.config import Settings
 from catalog.core.control_signing import control_sign
-from lakehouse import outbox
+from lakehouse import outbox, store_session
 from lakehouse.control_emit import DaprControlEmitter
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent
 from lakehouse.dapr_publish import MAX_PAYLOAD_BYTES
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
+from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
+from tests.secret_store_double import SecretStoreDouble
 
 
 BINDING = "catalog-control-relay-cron"
 CATALOG = "service-catalog"
-SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 #: Written by something that is NOT the catalog: `user:admin` granting alice `owner` on a table, which rings alice's bell.
 FORGED_GRANT: dict[str, Any] = {
@@ -105,6 +105,31 @@ def _settings(control_uri: str, *, lineage_uri: str = "") -> Settings:
     )
 
 
+@pytest.fixture
+def deployed_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[[str], Settings]:
+    """The settings of a catalog the chart named a secret store, by its control outbox: it signs with the session its
+    token was exchanged for and is handed no key pair (ADR 0170). The session is held here, with no STS asked."""
+    token = tmp_path / "rask-object-store-token"
+    token.write_text("projected\n")
+    sessions = store_session.SessionCache()
+    monkeypatch.setattr(store_session, "SESSIONS", sessions)
+    # A pair another test left in this process's environment would stand beside the token, which the settings refuse.
+    monkeypatch.delenv("LANCE_S3_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("LANCE_S3_SECRET_ACCESS_KEY", raising=False)
+
+    def _deployed(control_uri: str) -> Settings:
+        settings = Settings(
+            s3_web_identity_token_file=token, s3_sts_endpoint="http://object-store:9000", control_outbox_uri=control_uri, control_relay_binding_name=BINDING
+        )
+        identity = settings.web_identity
+        assert identity is not None, "the catalog holds no web identity, so it would sign with no session"
+        session = S3KeyPair(access_key_id="CATALOGSESSION", secret_access_key=SecretStr("test-only"), session_token=SecretStr("test-only"))
+        sessions.hold(identity, session, asked_at=sessions.now(), lifetime_seconds=3600)
+        return settings
+
+    return _deployed
+
+
 def _relay_app(settings: Settings, publisher: object, *, signing: SigningKeyHolder[SigningKey] | None = None) -> FastAPI:
     """A bare app carrying ONLY the relay router, so the route's own path is what is under test.
 
@@ -123,30 +148,25 @@ def _relay_app(settings: Settings, publisher: object, *, signing: SigningKeyHold
     return app
 
 
-def _catalog_key(pair: Any | None) -> SigningKeyHolder[SigningKey]:
-    """The catalog's signing key holder: resolved from the sidecar's secret API when `pair` is given, else never resolved."""
-    holder = SigningKeyHolder(identity=CATALOG, store="lance-secrets", load_key=SigningKey.from_seed, parse_published=parse_published_keys)
+def _catalog_key(secret_store: SecretStoreDouble, pair: Any | None) -> SigningKeyHolder[SigningKey]:
+    """The catalog's signing key holder: resolved from the secret store when `pair` is given, else never resolved."""
+    holder = SigningKeyHolder(identity=CATALOG, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
     if pair is not None:
-        with respx.mock:
-            respx.get(f"{SECRETS}/signing-key-{CATALOG}").mock(return_value=httpx.Response(200, json={"seed": pair.seed}))
-            respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=httpx.Response(200, json={"keys": pair.public}))
-            assert holder.resolve(), "precondition: the catalog's key must resolve"
+        secret_store.hold(f"signing-key-{CATALOG}", {"seed": pair.seed})
+        secret_store.hold(f"signing-public-{CATALOG}", {"keys": pair.public})
+        assert holder.resolve(), "precondition: the catalog's key must resolve"
     return holder
 
 
-@contextmanager
-def _sidecar_serving_the_catalogs_keys(status: int | None, pair: Any | None = None) -> Generator[None]:
-    """The catalog's sidecar answering a read of `signing-public-<catalog>` with `status`, listing `pair`'s key on a 200.
+def _store_serving_the_catalogs_keys(secret_store: SecretStoreDouble, status: int | None, pair: Any | None = None) -> int:
+    """Have the secret store answer a read of `signing-public-<catalog>` with `status`, listing `pair`'s key on a 200,
+    and answer how often that list was read before.
 
     None is a catalog that does not sign, which reads no keys.
     """
     if status is None:
-        yield
-        return
-    with respx.mock:
-        body = {"keys": pair.public} if pair is not None else None
-        respx.get(f"{SECRETS}/signing-public-{CATALOG}").mock(return_value=httpx.Response(status, json=body))
-        yield
+        return 0
+    return secret_store.hold(f"signing-public-{CATALOG}", secret_store.held({"keys": pair.public}) if pair is not None else httpx.Response(status)).call_count
 
 
 async def _stage(uri: str, event: CatalogControlEvent, *, signing: SigningKeyHolder[SigningKey] | None = None) -> str:
@@ -227,7 +247,11 @@ async def test_the_relay_REPUBLISHES_a_staged_table_published(tmp_path: Path) ->
     ],
 )
 async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_was_staged(
-    tmp_path: Path, event_signer: Any, monkeypatch: pytest.MonkeyPatch, forge: Callable[[Any, Any], dict[str, Any]]
+    tmp_path: Path,
+    event_signer: Any,
+    secret_store: SecretStoreDouble,
+    deployed_settings: Callable[[str], Settings],
+    forge: Callable[[Any, Any], dict[str, Any]],
 ) -> None:
     """An object staged by anything but this catalog is retired unpublished; what the catalog staged goes out as staged.
 
@@ -237,16 +261,16 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
     `event_id`, the key every subscriber dedupes on and the id of its envelope, under which the stream stores a copy of
     an event it already holds once.
     """
-    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     uri = f"file://{tmp_path}/control-outbox"
     pair = event_signer(CATALOG)
-    signing = _catalog_key(pair)
+    signing = _catalog_key(secret_store, pair)
     outbox.stage_event(uri, StorageOptions(), "forged", json.dumps(forge(pair, event_signer)))
     _staged_before_everything_else(tmp_path, "forged")
     genuine = await _stage(uri, _published_event(), signing=signing)
     recorder = _Recorder()
 
-    with _sidecar_serving_the_catalogs_keys(200, pair), TestClient(_relay_app(_settings(uri), recorder, signing=signing)) as client:
+    _store_serving_the_catalogs_keys(secret_store, 200, pair)
+    with TestClient(_relay_app(deployed_settings(uri), recorder, signing=signing)) as client:
         report = client.post(f"/{BINDING}").json()
         delivered = [json.loads(published["data"]) for published in recorder.published]
         staged = json.loads(genuine)
@@ -265,21 +289,29 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
     ],
 )
 async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
-    tmp_path: Path, event_signer: Any, monkeypatch: pytest.MonkeyPatch, bus: type[_Blip] | type[_Recorder], keys: int | None
+    tmp_path: Path,
+    event_signer: Any,
+    secret_store: SecretStoreDouble,
+    deployed_settings: Callable[[str], Settings],
+    bus: type[_Blip] | type[_Recorder],
+    keys: int | None,
 ) -> None:
     """Publish BEFORE drop: dropping first would destroy the only durable copy on a bus still down. And verify before
-    publish: a key list the sidecar cannot serve says nothing about a signature, so the event neither goes out unverified
+    publish: a key list the store cannot serve says nothing about a signature, so the event neither goes out unverified
     nor is retired as a forgery; it waits, staged, for a tick that can read the keys."""
-    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     uri = f"file://{tmp_path}/control-outbox"
-    signing = None if keys is None else _catalog_key(event_signer(CATALOG))
+    signing = None if keys is None else _catalog_key(secret_store, event_signer(CATALOG))
     await _stage(uri, _published_event(), signing=signing)
     publisher = bus()
 
-    with _sidecar_serving_the_catalogs_keys(keys), TestClient(_relay_app(_settings(uri), publisher, signing=signing)) as client:
+    read_before = _store_serving_the_catalogs_keys(secret_store, keys)
+    with TestClient(_relay_app(deployed_settings(uri), publisher, signing=signing)) as client:
         response = client.post(f"/{BINDING}")
         assert (response.json()["republished"], publisher.published) == (0, []), "the relay delivered an event it may not deliver yet"
         assert list(outbox.list_events(uri, StorageOptions())), "the relay dropped a staged event it never delivered"
+    if keys is not None:
+        # One attempt a tick: a key list the store cannot serve is asked for again by the next tick, never waited on.
+        assert secret_store.hold(f"signing-public-{CATALOG}", httpx.Response(keys)).call_count == read_before + 1
 
 
 @pytest.mark.asyncio

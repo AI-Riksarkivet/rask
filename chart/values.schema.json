@@ -561,7 +561,7 @@
             "type": "object",
             "properties": {
                 "kubernetesAuthPath": {
-                    "description": "Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every app's sidecar log in through.",
+                    "description": "Mount path of the store's Kubernetes auth method, which ESO's SecretStore, every service and every sidecar log in through.",
                     "type": "string"
                 },
                 "kvMount": {
@@ -701,6 +701,10 @@
         "maintenance": {
             "type": "object",
             "properties": {
+                "appId": {
+                    "description": "Maintenance's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id and durable consumer.",
+                    "type": "string"
+                },
                 "arrivalDlqTopic": {
                     "description": "Dead-letter topic of the write-event lane, for deliveries that exhaust their retries; set only with `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.",
                     "type": "string"
@@ -712,10 +716,6 @@
                 "controlEmit": {
                     "description": "Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.",
                     "type": "boolean"
-                },
-                "daprAppId": {
-                    "description": "Dapr app-id of the maintenance service; also names its durable consumer.",
-                    "type": "string"
                 },
                 "discoveryMaxDepth": {
                     "description": "How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge.",
@@ -1328,6 +1328,19 @@
         "openbao": {
             "type": "object",
             "properties": {
+                "ca": {
+                    "type": "object",
+                    "properties": {
+                        "configMap": {
+                            "description": "The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and its sidecar and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`.",
+                            "type": "string"
+                        },
+                        "key": {
+                            "description": "The key of `ca.configMap` that holds the CA certificate, in PEM.",
+                            "type": "string"
+                        }
+                    }
+                },
                 "egress": {
                     "description": "NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false.",
                     "type": "array"
@@ -1337,7 +1350,7 @@
                     "type": "boolean"
                 },
                 "externalAddr": {
-                    "description": "The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.",
+                    "description": "The platform's Vault or OpenBao (https), which the services, the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.",
                     "type": "string"
                 },
                 "externalReaders": {
@@ -1348,15 +1361,15 @@
                     "type": "object",
                     "properties": {
                         "audience": {
-                            "description": "Audience of the token projected into each sidecar for its store login; every app's role accepts only this one.",
+                            "description": "Audience of the token projected into each pod for its store login; every app's role accepts only this one.",
                             "type": "string"
                         },
                         "tokenMaxTtl": {
-                            "description": "The longest a sidecar's store token lives; daprd then logs in again with its current projected token.",
+                            "description": "The longest a renewed store token lives, at most `1h` and no shorter than `tokenTtl`, in the same forms; daprd then logs in again with its current projected token.",
                             "type": "string"
                         },
                         "tokenTtl": {
-                            "description": "Lifetime of the store token a sidecar's login returns; daprd renews it in the background.",
+                            "description": "Lifetime of the store token a login returns, from `1m` to `1h`, written as `\u003cn\u003es`, `\u003cn\u003em` or `\u003cn\u003eh`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it; daprd renews its own in the background.",
                             "type": "string"
                         }
                     }
@@ -1877,8 +1890,8 @@
                 "catalog": {
                     "type": "object",
                     "properties": {
-                        "daprAppId": {
-                            "description": "Dapr app-id of the catalog; also names its pubsub components and durable consumers.",
+                        "appId": {
+                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id, pubsub components and durable consumers.",
                             "type": "string"
                         },
                         "module": {
@@ -1898,8 +1911,8 @@
                 "lineage": {
                     "type": "object",
                     "properties": {
-                        "daprAppId": {
-                            "description": "Dapr app-id of lineage; also names its pubsub, DLQ and durable consumers and scopes its relay cron.",
+                        "appId": {
+                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id, its pubsub, DLQ and durable consumers and the scope of its relay cron.",
                             "type": "string"
                         },
                         "deliveriesInFlight": {
@@ -1921,7 +1934,7 @@
                                             "type": "string"
                                         },
                                         "name": {
-                                            "description": "Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none.",
+                                            "description": "Secret in the estate's secret store holding the backend's API key, sent as `Authorization: Bearer`: a secret name (lowercase letters, digits and `-`), since it is a path of lineage's store policy. Empty sends none.",
                                             "type": "string"
                                         }
                                     }

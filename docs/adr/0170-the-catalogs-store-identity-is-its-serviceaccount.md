@@ -1,6 +1,6 @@
 # 0170. The catalog's store identity is its ServiceAccount: its own IO and every vend are sessions its token is exchanged for (2026-10-18)
 
-**Status:** accepted. Amends [ADR 0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) (the catalog holds no
+**Status:** accepted; amended 2026-11-14 (XC-199 step D2, below). Amends [ADR 0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) (the catalog holds no
 key pair in the secret store; lineage and maintenance still do) and [ADR 0168](0168-the-development-object-store-is-rustfs.md)
 § Decision 2 (the development store trusts the cluster's ServiceAccount issuer). Source: XC-083 (#204), started by the
 owner with `/implement #204`, and two owner rulings of 2026-10-18 through the multi-question tool: the provisioning hook
@@ -122,3 +122,16 @@ audience, an expired token, a forged one and another issuer's are each refused.
   deletes nothing; the catalog's role no longer reads the secret, and the user it names is removed. A fresh install from
   git holds none.
 - **The store holds one temporary user per session**, as for every vend: the catalog's own IO adds one per half hour.
+
+## Amendment (2026-11-14): a named secret store is what marks a deployment
+
+Source: #787 (XC-199), step D2. Decision 4 refused "a catalog reading its secrets from the store without its token", and
+read that off `LANCE_SECRETS_FROM_DAPR`, a switch that is gone: a service now logs in to the store itself, and the store
+the chart names it (`RASK_SECRET_STORE_ADDR`) is what says it is a deployment.
+
+A process with a secret store signs with its ServiceAccount token alone. `lakehouse.store_session.key_pair_in_force`,
+the one place a key pair is handed out, hands none to such a process, so no path signs with one: not a service, and not
+a tool run beside it. Each service's start refuses the pair before it serves as well (`require_env_pair`), whatever
+acknowledgement its environment carries. The settings no longer carry the refusal, so a settings object can still be
+built without credentials, as the offline suites build them. The environment pair remains the offline and Dagger
+lanes', which name no secret store.

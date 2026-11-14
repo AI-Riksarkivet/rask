@@ -7,9 +7,8 @@ simply be deleted, because `DaprDoorSettings()` is constructed per request and r
 each time, so nothing a lifespan resolved could ever reach the door.
 
 THE ACCESSOR IS THE WHOLE BLOCKER, and it is one mode switch: `RASK_APP_TOKEN_FROM_STORE` points the
-resolver at the bundle the pod's own sidecar already serves. A pod with a sidecar needs no new
-plumbing for this — `lance-secrets` is scoped to every app-id that guards a Dapr door (measured
-2026-09-15 against the live Component).
+resolver at the secret the process reads from its store as itself (`lakehouse.governed.secrets`), which
+the store's policy grants every app that guards a Dapr door.
 
 WHY A MODE AND NOT A FALLBACK CHAIN. Reading env when the store misses would mean a store outage
 silently promotes a stale environment value back to authoritative — the precise failure the rule is
@@ -22,6 +21,7 @@ from __future__ import annotations
 import logging
 
 import pytest
+import respx
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
@@ -29,6 +29,7 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from lakehouse.governed import secret_cache
 from lakehouse.governed.dapr_auth import assert_app_token_configured, expected_app_tokens, require_dapr_token
 from lakehouse.ns_errors import install_problem_handlers
+from tests.secret_store_double import SecretStoreDouble
 
 
 @pytest.fixture(autouse=True)
@@ -38,24 +39,13 @@ def _store_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
 
 
-def _store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str] | None) -> list[tuple[str, str]]:
-    """Stand in for the sidecar's secret store; returns the calls it received.
-
-    Patched at `lakehouse.governed.secrets.fetch_dapr_secret` rather than on `dapr_auth`, because
-    that is where the door's read imports it from at call time — patching the consuming module would
-    leave the real fetch in place and every test here would fail against a store that is not there.
-    """
-    calls: list[tuple[str, str]] = []
-
-    def _fetch(store: str, key: str, **_: object) -> dict[str, str]:
-        calls.append((store, key))
-        return bundle if bundle is not None else {}
-
-    monkeypatch.setattr("lakehouse.governed.secrets.fetch_dapr_secret", _fetch)
-    return calls
+def _store(secret_store: SecretStoreDouble, bundle: dict[str, str] | None) -> respx.Route:
+    """Have the store hold the app token's secret as ``bundle``, or answer no read of it (``None``, a sealed store); the
+    read's route, which counts the reads made."""
+    return secret_store.hold("dapr-app-token", bundle if bundle is not None else secret_store.refused(503, "Vault is sealed"))
 
 
-def test_the_store_is_the_SOLE_source(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_store_is_the_SOLE_source(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
     """In store mode the environment is not consulted — not even as a fallback.
 
     The two values are deliberately BOTH present and different: a resolver that preferred env, or
@@ -63,7 +53,7 @@ def test_the_store_is_the_SOLE_source(monkeypatch: pytest.MonkeyPatch) -> None:
     would notice.
     """
     monkeypatch.setenv("APP_API_TOKEN", "from-the-env")
-    _store(monkeypatch, {"token": "from-the-store"})
+    _store(secret_store, {"token": "from-the-store"})
 
     with pytest.raises(PermissionDeniedError, match="invalid or missing"):
         require_dapr_token(dapr_api_token="from-the-env", dapr_caller_app_id="")
@@ -71,7 +61,7 @@ def test_the_store_is_the_SOLE_source(monkeypatch: pytest.MonkeyPatch) -> None:
     require_dapr_token(dapr_api_token="from-the-store", dapr_caller_app_id="")
 
 
-def test_a_bundle_without_the_field_refuses_rather_than_falling_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_bundle_without_the_field_refuses_rather_than_falling_back_to_env(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
     """THE fallback-chain case, and the only shape that exposes one.
 
     A chain is invisible while the store answers — it only fires on a MISS — so a test where the
@@ -84,7 +74,7 @@ def test_a_bundle_without_the_field_refuses_rather_than_falling_back_to_env(monk
     operator believes they removed is how a "migrated" service stays on the banned path unnoticed.
     """
     monkeypatch.setenv("APP_API_TOKEN", "from-the-env")
-    _store(monkeypatch, {"unrelated-field": "irrelevant"})
+    _store(secret_store, {"unrelated-field": "irrelevant"})
 
     with pytest.raises(PermissionDeniedError, match="not configured"):
         require_dapr_token(dapr_api_token="from-the-env", dapr_caller_app_id="")
@@ -92,7 +82,7 @@ def test_a_bundle_without_the_field_refuses_rather_than_falling_back_to_env(monk
         require_dapr_token(dapr_api_token="anything", dapr_caller_app_id="")
 
 
-def test_an_UNREADABLE_store_is_an_outage_not_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_UNREADABLE_store_is_an_outage_not_a_refusal(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
     """503, not 403 — and never an open door.
 
     The distinction is operational rather than cosmetic: a 403 tells the sidecar its credential was
@@ -100,10 +90,12 @@ def test_an_UNREADABLE_store_is_an_outage_not_a_refusal(monkeypatch: pytest.Monk
     estate's absent-vs-unreadable rule, at the one seam where getting it wrong drops deliveries.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    _store(monkeypatch, None)
+    reads = _store(secret_store, None)
 
     with pytest.raises(ServiceUnavailableError):
         require_dapr_token(dapr_api_token="anything", dapr_caller_app_id="")
+    # One attempt: a delivery is waiting on this read, and the boot's budget of retries would hold its worker for minutes.
+    assert reads.call_count == 1
 
 
 class _Clock:
@@ -127,7 +119,7 @@ def _a_process(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_the_app_token_rotates_across_a_restart_with_no_403(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_app_token_rotates_across_a_restart_with_no_403(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
     """[[XC-082]] A rotation writes the new token as current and keeps the old one as previous, and no delivery is refused.
 
     daprd reads its token from the ESO-synced Kubernetes Secret once, when its pod starts, so the running sidecar
@@ -137,14 +129,13 @@ def test_the_app_token_rotates_across_a_restart_with_no_403(monkeypatch: pytest.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
     clock = _Clock()
-    bundle = {"token": "old"}
-    calls = _store(monkeypatch, bundle)
+    reads = _store(secret_store, {"token": "old"})
     running = _a_process(monkeypatch, clock)
     assert running.post("/delivered", headers={"dapr-api-token": "old"}).status_code == 200
 
-    bundle.update({"token": "new", "previous": "old"})
+    _store(secret_store, {"token": "new", "previous": "old"})
     assert running.post("/delivered", headers={"dapr-api-token": "old"}).status_code == 200
-    assert len(calls) == 1, f"the store was read {len(calls)} times inside the TTL"
+    assert reads.call_count == 1, f"the store was read {reads.call_count} times inside the TTL"
     clock.now += secret_cache.SECRET_TTL_SECONDS
     answers = {token: running.post("/delivered", headers={"dapr-api-token": token}).status_code for token in ("old", "new")}
     restarted = _a_process(monkeypatch, clock)
@@ -155,47 +146,42 @@ def test_the_app_token_rotates_across_a_restart_with_no_403(monkeypatch: pytest.
     assert (forged.status_code, forged.headers["content-type"]) == (403, "application/problem+json"), forged.text
 
 
-def test_the_boot_assertion_reads_the_store_too(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_boot_assertion_reads_the_store_too(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
     """A service that asserts at boot must assert against the source it will authenticate against.
 
     Reading env here while the door reads the store would let a store-mode pod pass its own startup
     check and then refuse every delivery it receives.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    _store(monkeypatch, {"token": "from-the-store"})
+    _store(secret_store, {"token": "from-the-store"})
 
     assert_app_token_configured(dapr_enabled=True)
 
     # What boot read is what the door first answers from. The sidecar's first calls to a started app are its
     # subscription read and its binding pre-flights, each asked once and a refusal taken as "none" until the pod
     # restarts, so a store that stops answering between boot and those calls must not cost the door its token.
-    _store(monkeypatch, None)
+    _store(secret_store, None)
     require_dapr_token("from-the-store")
 
-    _store(monkeypatch, {"unrelated-field": "irrelevant"})
+    _store(secret_store, {"unrelated-field": "irrelevant"})
     with pytest.raises(RuntimeError, match="failing closed"):
         assert_app_token_configured(dapr_enabled=True)
 
 
 def test_env_mode_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The eleven deployments still on env must not change behaviour when this ships.
+    """A deployment on env reads its token there, and reads no store.
 
-    The store stub raises if it is reached, so this also pins that env mode issues NO sidecar call —
-    a resolver that read the store first and fell back would be caught here rather than in production.
+    This process is configured with no secret store, and a read of one raises, so this also pins that env mode makes
+    no store read: a resolver that read the store first and fell back would fail here rather than in production.
     """
     monkeypatch.setenv("RASK_APP_TOKEN_FROM_STORE", "false")
     monkeypatch.setenv("APP_API_TOKEN", "from-the-env")
-
-    def _never(*_: object, **__: object) -> dict[str, str]:
-        raise AssertionError("env mode must not touch the secret store")
-
-    monkeypatch.setattr("lakehouse.governed.secrets.fetch_dapr_secret", _never)
 
     assert expected_app_tokens() == ("from-the-env",)
     require_dapr_token(dapr_api_token="from-the-env", dapr_caller_app_id="")
 
 
-def test_a_LATE_seed_heals_without_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_LATE_seed_heals_without_a_restart(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
     """The tokens are cached, and a cached successful MISS would outlive the thing that caused it.
 
     The live ordering makes this reachable rather than theoretical: the chart's OpenBao seed Job and
@@ -204,12 +190,11 @@ def test_a_LATE_seed_heals_without_a_restart(monkeypatch: pytest.MonkeyPatch) ->
     request, exactly as an unreadable one is, rather than remembered as holding no token.
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    bundle: dict[str, str] = {"unrelated-field": "irrelevant"}
-    monkeypatch.setattr("lakehouse.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: dict(bundle))
+    _store(secret_store, {"unrelated-field": "irrelevant"})
 
     with pytest.raises(PermissionDeniedError, match="not configured"):
         require_dapr_token(dapr_api_token="seeded-later", dapr_caller_app_id="")
 
-    bundle["token"] = "seeded-later"
+    _store(secret_store, {"unrelated-field": "irrelevant", "token": "seeded-later"})
 
     require_dapr_token(dapr_api_token="seeded-later", dapr_caller_app_id="")

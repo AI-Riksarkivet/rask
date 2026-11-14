@@ -19,18 +19,15 @@ import json
 from types import SimpleNamespace
 from typing import Any, cast
 
-import httpx
-import respx
-
 from lakehouse import outbox
 from lakehouse.storage_options import StorageOptions
 from lineage.api import relay_cron
 from lineage.core.config import LineageSettings, Signing
+from tests.secret_store_double import SecretStoreDouble
 
 
 IDENTITY = "service-medallion"
 RUN_ID = "0198e0f2-1b2c-7a3d-8e4f-000000000002"
-SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
 def _wire() -> dict[str, Any]:
@@ -57,11 +54,12 @@ class _Repo:
         self.ingested.append(event.run.run_id)
 
 
-@respx.mock
-def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_staged_bytes(tmp_path: Any, event_signer: Any) -> None:
+def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_staged_bytes(
+    tmp_path: Any, event_signer: Any, secret_store: SecretStoreDouble
+) -> None:
     uri = f"file://{tmp_path}/outbox"
     signer = event_signer(IDENTITY)
-    respx.get(f"{SECRETS}/signing-public-{IDENTITY}").mock(return_value=httpx.Response(200, json={"keys": signer.public}))
+    secret_store.hold(f"signing-public-{IDENTITY}", {"keys": signer.public})
     outbox.stage_event(uri, StorageOptions(), RUN_ID, json.dumps(signer.sign(_wire())))
     settings = LineageSettings.model_validate({"outbox_uri": uri, "signing": Signing(signers=frozenset({IDENTITY}), delegators=frozenset())})
     repo = _Repo()

@@ -11,7 +11,7 @@
 #   (1) default-deny Ingress+Egress for every pod in the namespace;
 #   (2) the kube-dns egress allow ships IN THIS SAME FILE (default-deny egress without it bricks
 #       name resolution — the audit's named footgun);
-#   (3) targeted allows for the guarded stores (the secret store ← the pods whose sidecar reads it,
+#   (3) targeted allows for the guarded stores (the secret store ← the pods that log in to it,
 #       as ingress on the dev store and egress to the platform's; age-postgres:5432 ← its real clients; the object store:9000 ← the data plane; nats ← 4222 intra-namespace
 #       only, other ports closed) — every OTHER pod gets plain intra-namespace ingress,
 #       EXCLUDING the guarded stores so the targeted lists stay exclusive (NetworkPolicies are
@@ -143,7 +143,7 @@ spec:
         - podSelector: {}
 {{- if .Values.openbao.enabled }}
 ---
-# (3b) openbao:8200, the development store (the openbao fixture's pod): only the pods whose sidecar reads it, by their
+# (3b) openbao:8200, the development store (the openbao fixture's pod): only the pods that log in to it, by their
 # component labels (`lance.secretReaderComponents`: the apps the lance-secrets component is scoped to, and maintenance's
 # worker pods, which run under maintenance's app id with a label of their own), and the store's own pods, whose seed
 # reads the outgoing pod through the Service. External-secrets

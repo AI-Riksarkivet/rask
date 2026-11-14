@@ -144,16 +144,25 @@ Don't redo any of it in a suite. At import, before collection builds any app, th
 On request the root `conftest.py` also serves the identity and authorization plane for real: `sa_issuer` and
 `dex_issuer` (loopback issuers that mint tokens), `openfga` (the pinned OpenFGA server in memory, one per xdist worker,
 failing the test when the binary is missing) and `openfga_store` (a fresh store on it holding the bundled model, with
-`write()` for seeding tuples as the catalog's declaration does).
+`write()` for seeding tuples as the catalog's declaration does). `secret_store` configures the test's process for a
+secret store as the chart's env does and answers the store's HTTP API in the shapes measured on the development OpenBao:
+the login, each secret a test has it hold, and a token's question about itself (`lookup`), which a test answers 403 to
+have the store drop the token (`tests/secret_store_double.py`; `references/fixtures.md` § A service app). Read a
+route's `call_count` while its router answers: stopping a respx router rolls back the calls of every route it held when
+it started.
 
 It also resets the process-global state the `lakehouse` library and its `dapr` dependency keep. It makes bare
 `@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the
 `respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it bounds the Dapr sidecar
 handshake to 1 s, gives the test a fresh cache of secret-store reads
-(`lakehouse.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its own clock),
-writes the projected service-account token files the catalog's and lineage's doors read, and sets `LANCE_AUTO_MIGRATION`
-to `false` as every app build does for its process (`lakehouse.lance_app`), restoring it after. A new fixture guarding
-such state goes there too, so every suite in the repository gets it.
+(`lakehouse.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its own clock) and a
+process that has logged in to no secret store (`lakehouse.governed.secrets.forget_secret_store`), writes the projected
+service-account token files the catalog's and lineage's doors read and the one a process logs in to its secret store
+with, and sets `LANCE_AUTO_MIGRATION` to `false` as every app build does for its process (`lakehouse.lance_app`),
+restoring it after. A new fixture guarding such state goes there too, so every suite in the repository gets it. The
+repository root is on the import path through pytest's own `pythonpath` setting, so a helper the suites share
+(`tests.secret_store_double`, `tests.loopback`) resolves under one name from every member's tests and from the root
+conftest.
 
 ## What stands in for what
 

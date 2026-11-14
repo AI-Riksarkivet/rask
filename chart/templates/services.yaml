@@ -17,7 +17,7 @@ spec:
     metadata:
       annotations:
         {{- if .Values.dapr.enabled }}
-        {{- include "rask.daprAnnotations" (list $root .Values.services.catalog.daprAppId .Values.services.catalog.port) | nindent 8 }}
+        {{- include "rask.daprAnnotations" (list $root .Values.services.catalog.appId .Values.services.catalog.port) | nindent 8 }}
         {{- end }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
@@ -77,8 +77,8 @@ spec:
 
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             {{- include "lance.objectStoreSessionEnv" (list $root "LANCE" "catalog") | nindent 12 }}
-            - { name: LANCE_SECRETS_FROM_DAPR, value: "true" }
-            {{- with include "lance.signingEnv" (list $root .Values.services.catalog.daprAppId) }}{{ . | nindent 12 }}{{- end }}
+            {{- include "lance.secretStoreEnv" (list $root .Values.services.catalog.appId) | nindent 12 }}
+            {{- with include "lance.signingEnv" (list $root .Values.services.catalog.appId) }}{{ . | nindent 12 }}{{- end }}
             - { name: LANCE_S3_REGION, value: "us-east-1" }
             - { name: LANCE_S3_VIRTUAL_HOSTED, value: "false" }
             - { name: LANCE_VENDING_MODE, value: {{ .Values.vending.mode | quote }} }
@@ -147,7 +147,7 @@ spec:
 
             {{- if .Values.dapr.enabled }}
 
-{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.daprAppId) | nindent 12 }}
+{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}
             {{- end }}
             {{- end }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
@@ -169,12 +169,13 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
             - { name: declaration, mountPath: /etc/rask/declaration, readOnly: true }
+            {{- include "lance.storeIdentity" (list $root .Values.services.catalog.appId "mounts") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "catalog") | nindent 12 }}
             {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
             {{- include "lance.identityTokens" (list "mounts" (include "lance.objectStoreAudience" .)) | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
-        {{- include "lance.storeIdentity" (list $root .Values.services.catalog.daprAppId "volumes") | nindent 8 }}
+        {{- include "lance.storeIdentity" (list $root .Values.services.catalog.appId "volumes") | nindent 8 }}
         - name: declaration
           configMap:
             name: {{ include "lance.fullname" . }}-catalog-declaration
@@ -210,7 +211,7 @@ spec:
     metadata:
       annotations:
         {{- if .Values.dapr.enabled }}
-        {{- include "rask.daprAnnotations" (list $root .Values.services.lineage.daprAppId .Values.services.lineage.port) | nindent 8 }}
+        {{- include "rask.daprAnnotations" (list $root .Values.services.lineage.appId .Values.services.lineage.port) | nindent 8 }}
         {{- end }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
@@ -252,14 +253,14 @@ spec:
             {{- end }}
             {{- if .Values.dapr.enabled }}
 
-{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}
+{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}
             {{- include "lance.busEnv" $root | nindent 12 }}
             {{- end }}
             - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: RASK_CATALOG_IDENTITY_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
             - { name: LINEAGE_PROVENANCE_NAMESPACE, value: {{ include "lance.provenanceNamespace" $root | quote }} }
             - { name: LINEAGE_CATALOG_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
-            - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
+            {{- include "lance.secretStoreEnv" (list $root .Values.services.lineage.appId) | nindent 12 }}
             - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }
             - { name: LINEAGE_MAX_BODY_BYTES, value: {{ .Values.services.lineage.maxBodyBytes | int64 | quote }} }
             - { name: LINEAGE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.services.lineage.requestDeadlineSeconds | quote }} }
@@ -272,11 +273,11 @@ spec:
             - { name: LINEAGE_FORWARD_API_KEY_FIELD, value: {{ .authSecret.key | quote }} }
             {{- end }}
             - { name: LINEAGE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
-            - { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.daprAppId) | quote }} }
+            - { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.appId) | quote }} }
             - { name: LINEAGE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.dapr.resiliency.enabled }}
             - { name: LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events" }
-            - { name: LINEAGE_DLQ_PUBSUB, value: "{{ include "lance.subPubsub" (list $root .Values.services.lineage.daprAppId) }}-dlq" }
+            - { name: LINEAGE_DLQ_PUBSUB, value: "{{ include "lance.subPubsub" (list $root .Values.services.lineage.appId) }}-dlq" }
             {{- end }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
             {{- if .Values.services.lineage.relay.enabled }}
@@ -308,10 +309,11 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 12 }}
+            {{- include "lance.storeIdentity" (list $root .Values.services.lineage.appId "mounts") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "lineage") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
-        {{- include "lance.storeIdentity" (list $root .Values.services.lineage.daprAppId "volumes") | nindent 8 }}
+        {{- include "lance.storeIdentity" (list $root .Values.services.lineage.appId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "lineage") | nindent 8 }}
 ---

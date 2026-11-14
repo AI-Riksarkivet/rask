@@ -446,8 +446,8 @@ def _attested(verified: VerifiedSignature | None, settings: LineageSettings) -> 
     (`LINEAGE_DELEGATORS`, derived from the identities the chart mints keys for), so the name trusted here cannot differ
     from the name the catalog signs under. A `rask_signature` merely PRESENT proves nothing and is not read here: where
     signing is not enforced ``verified`` is None, and an unsigned event, or one signed by any other identity, keeps the
-    full check. The signing key's reach bounds the attestation: only the catalog's own sidecar may read its private key,
-    at the Dapr scope and at the store, where the catalog's login is the only one whose policy grants it (ADR 0169).
+    full check. The signing key's reach bounds the attestation: only the catalog's own login to the store may read its
+    private key, since its role's policy is the only one that grants it (ADR 0169).
     """
     return verified is not None and verified.identity in settings.signing.delegators
 

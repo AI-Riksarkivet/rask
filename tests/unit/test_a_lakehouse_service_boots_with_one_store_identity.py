@@ -1,29 +1,31 @@
-"""A lakehouse service's fail-closed store identity ([[XC-083]], [[XC-084]], ADR 0170): a service that would hold a key pair
-where the secret store is on, hold a second identity, or hand its token to the wrong STS refuses to boot."""
+"""A lakehouse service's fail-closed store identity ([[XC-083]], [[XC-084]], ADR 0170): a service that would hold a second
+identity, or hand its token to the wrong STS, refuses to boot, and one the chart named a secret store is handed no key
+pair to sign with."""
 
 from __future__ import annotations
 
 import pytest
-from pydantic_settings import BaseSettings
 
 from catalog.core.config import Settings
+from lakehouse.governed.store_credential import StoreCredentialUnavailableError
 from lineage.core.config import LineageSettings
 from maintenance.core.config import MaintenanceSettings
 
 
+@pytest.mark.usefixtures("secret_store")
 @pytest.mark.parametrize(
-    ("settings", "prefix"),
-    [
-        pytest.param(Settings, "LANCE", id="catalog"),
-        pytest.param(LineageSettings, "LINEAGE", id="lineage"),
-        pytest.param(MaintenanceSettings, "MAINTENANCE", id="maintenance"),
-    ],
+    "settings",
+    [pytest.param(Settings, id="catalog"), pytest.param(LineageSettings, id="lineage"), pytest.param(MaintenanceSettings, id="maintenance")],
 )
-def test_a_service_reading_its_secrets_from_the_store_refuses_a_key_pair(settings: type[BaseSettings], prefix: str) -> None:
-    """On the estate every service reads its secrets from the store, and its store identity is then its ServiceAccount
-    token: a key pair beside it would be a static key in its environment."""
-    with pytest.raises(ValueError, match=f"set {prefix}_S3_WEB_IDENTITY_TOKEN_FILE"):
-        settings.model_validate({"secrets_from_dapr": True, "s3_access_key_id": "x", "s3_secret_access_key": "x"})
+def test_a_service_the_chart_named_a_secret_store_is_handed_no_key_pair(
+    settings: type[Settings] | type[LineageSettings] | type[MaintenanceSettings],
+) -> None:
+    """On the estate every service has a secret store, and its store identity is then its ServiceAccount token: a key
+    pair in its environment signs nothing, whatever acknowledgement stands beside it."""
+    built = settings.model_validate({"s3_access_key_id": "x", "s3_secret_access_key": "x"})
+
+    with pytest.raises(StoreCredentialUnavailableError, match="signs with its ServiceAccount token alone"):
+        built.s3_key_pair()
 
 
 @pytest.mark.parametrize(

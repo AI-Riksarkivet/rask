@@ -7,7 +7,7 @@ reaches that sidecar, so the actor an event names is a claim until its signature
 forgery is acknowledged and reaches no feed, while the signed event delivered after it still reaches it.
 
 Driven over HTTP through the catalog's own routes: the subscription `register_control_dapr` mounts and the feed's poll
-door. The keys are read through the sidecar's secret API, which respx answers.
+door. The keys are read from the secret store, which the suite's double answers.
 """
 
 from __future__ import annotations
@@ -15,21 +15,19 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from typing import Any
 
-import httpx
 import pytest
-import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from catalog.core.config import Settings, get_settings
 from catalog.core.control_buffer import ControlEventBuffer
 from lakehouse.governed.signing_key import signing_public_secret
+from tests.secret_store_double import SecretStoreDouble
 
 
 CATALOG = "kubernetes~system:serviceaccount:default:rask-sa-catalog"
 MAINTENANCE = "kubernetes~system:serviceaccount:default:rask-sa-maintenance"
-APP_TOKEN = "sidecar-token"
-SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
+APP_TOKEN = "the-estate-app-token"
 
 #: Deletes warehouse `wh-acme`: fed to the console, it tells every reader the warehouse is gone.
 FORGED_DELETE: dict[str, Any] = {
@@ -64,13 +62,15 @@ def _signed_by_a_signer_whose_role_is_not_this_actions(_catalog: Any, maintenanc
 
 
 @pytest.fixture
-def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any) -> Iterator[tuple[TestClient, Any, Any]]:
-    """A catalog app carrying the subscription and the feed, and both signers."""
+def lane(
+    monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: SecretStoreDouble, respx_allows_unused_routes: None
+) -> Iterator[tuple[TestClient, Any, Any]]:
+    """A catalog app carrying the subscription and the feed, and both signers, each one's key list held by the store: a
+    test reads only the lists of the signers its events name."""
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "s")
     monkeypatch.setenv("LANCE_CONTROL_EMIT_ENABLED", "true")
     monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     get_settings.cache_clear()
     catalog, maintenance = event_signer(CATALOG), event_signer(MAINTENANCE)
     settings = Settings.model_validate(
@@ -92,12 +92,11 @@ def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any) -> Iterator[tuple[T
     app.include_router(events.router)
     app.dependency_overrides[get_settings] = lambda: settings
     app.state.control_buffer = ControlEventBuffer(maxsize=16)
+    for signer in (catalog, maintenance):
+        secret_store.hold(signing_public_secret(signer.identity), {"keys": signer.public})
     try:
-        with respx.mock(assert_all_called=False) as sidecar:
-            for signer in (catalog, maintenance):
-                sidecar.get(f"{SECRETS}/{signing_public_secret(signer.identity)}").mock(return_value=httpx.Response(200, json={"keys": signer.public}))
-            with TestClient(app) as client:
-                yield client, catalog, maintenance
+        with TestClient(app) as client:
+            yield client, catalog, maintenance
     finally:
         get_settings.cache_clear()
 

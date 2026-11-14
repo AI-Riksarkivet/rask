@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Final
 
 from fastapi import FastAPI, Request
 
-from lakehouse.governed.secrets import fetch_dapr_secret
+from lakehouse.governed.secrets import read_secret, secret_store_configured
 from lakehouse.governed.signing_key import SigningKeyUnavailableError
 from lakehouse.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
@@ -97,10 +97,9 @@ def _keyed_uuid(key: bytes, fields: tuple[str, ...]) -> str:
 
 
 class CommitIdKeyHolder:
-    """The catalog's ``commit-id-key``, read through its own sidecar and re-read until held, then every five minutes."""
+    """The catalog's ``commit-id-key``, read under its own login to the store and re-read until held, then every five minutes."""
 
-    def __init__(self, *, store: str) -> None:
-        self._store = store
+    def __init__(self) -> None:
         self._key: bytes | None = None
         self._reason = "the commit id key has not been resolved yet"
         self._task: asyncio.Task[None] | None = None
@@ -126,12 +125,12 @@ class CommitIdKeyHolder:
         return key
 
     def resolve(self) -> bool:
-        """Read the key once; answer whether one is held. Blocking: one sidecar read.
+        """Read the key once; answer whether one is held. Blocking: one store read.
 
         A key once held is kept, through a store outage and through a changed value alike: it is never rotated, and
         an id derived under another key would announce every unconfirmed commit a second time.
         """
-        text = fetch_dapr_secret(self._store, KEY_SECRET, retries=1).get(KEY_FIELD, "").strip()
+        text = read_secret(KEY_SECRET, retries=1).get(KEY_FIELD, "").strip()
         try:
             key = bytes.fromhex(text)
         except ValueError:
@@ -184,9 +183,9 @@ class UnkeyedCommitIds:
 type CommitIds = CommitIdKeyHolder | UnkeyedCommitIds
 
 
-def make_commit_ids(*, secrets_from_dapr: bool, store: str) -> CommitIds:
-    """The key holder for a catalog reading its store, else the empty key."""
-    return CommitIdKeyHolder(store=store) if secrets_from_dapr else UnkeyedCommitIds()
+def make_commit_ids() -> CommitIds:
+    """The key holder for a catalog the chart named a secret store, else the empty key."""
+    return CommitIdKeyHolder() if secret_store_configured() else UnkeyedCommitIds()
 
 
 def commit_ids_of(app: FastAPI) -> CommitIds:

@@ -28,7 +28,7 @@ import httpx
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from lakehouse.governed.secrets import fetch_required_secrets
+from lakehouse.governed.secrets import fits_a_header, read_required_secret
 from lineage.core import metrics
 from lineage.core.config import LineageSettings
 from lineage.services.provenance import FeedWindow, ProvenanceStore
@@ -62,19 +62,23 @@ def follower(settings: LineageSettings) -> str:
 
 
 async def _authorization(settings: LineageSettings) -> dict[str, str]:
-    """The bearer the backend asks for, read from the secret store on every tick, so a rotated key needs no restart."""
+    """The bearer the backend asks for, read from the secret store on every tick, so a rotated key needs no restart.
+
+    Raises:
+        RuntimeError: The store did not serve the key, or holds one no HTTP header carries. The tick fails closed, and
+            the key is in neither case named: the client would quote one it cannot send in its error, which
+            `_send` reports as the reason a tick stalled.
+    """
     if not settings.forward_api_key_secret:
         return {}
     bundle = await run_in_threadpool(
-        fetch_required_secrets,
-        settings.dapr_secret_store,
-        settings.forward_api_key_secret,
-        require=settings.forward_api_key_field,
-        timeout=2.0,
-        retries=1,
-        backoff=0.1,
+        read_required_secret, settings.forward_api_key_secret, require=settings.forward_api_key_field, timeout=2.0, retries=1, backoff=0.1
     )
-    return {"Authorization": f"Bearer {bundle[settings.forward_api_key_field]}"}
+    # Less the newline a key seeded from a file ends with.
+    key = bundle[settings.forward_api_key_field].strip()
+    if not fits_a_header(key):
+        raise RuntimeError(f"secret {settings.forward_api_key_secret!r} holds a key no HTTP header carries as it stands: failing closed")
+    return {"Authorization": f"Bearer {key}"}
 
 
 async def _send(window: FeedWindow, settings: LineageSettings, client: httpx.AsyncClient, url: str, mark: int) -> tuple[int, ForwardOutcome]:

@@ -2,7 +2,7 @@
 
 A verifier needs the keys its signer publishes: the identity's published list, field `keys`, current key first. Every door
 that verifies reads them the same way, so the reader is one class and only HOW a list is fetched differs between services. That
-is the `fetch` callable a caller injects: a service reads through its own Dapr sidecar and its own secret store
+is the `fetch` callable a caller injects: a service reads from the secret store under its own login
 (`lakehouse.governed.signing_key.published_key_fetch`, under the name `signing_public_secret` gives the list).
 
 `fetch(identity)` answers the fields of the list that identity publishes, or `{}` when it could not be read. An unreadable list and an absent one
@@ -70,7 +70,7 @@ class PublishedKeys:
     only after checking it against the signer set, so they are bounded by that set. The one thing keyed by the event's
     own text, the key ids it names, is a bounded memory under each identity (`MAX_UNKNOWN_KEY_IDS`).
 
-    `fetch` BLOCKS (a sidecar's secret API is a blocking HTTP call), so an async door verifies in a worker thread.
+    `fetch` BLOCKS (a read of the secret store is a blocking HTTP call), so an async door verifies in a worker thread.
     """
 
     def __init__(self, fetch: Callable[[str], Mapping[str, str]], *, clock: Callable[[], float] = time.monotonic) -> None:

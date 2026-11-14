@@ -14,8 +14,8 @@ be made is a withheld event and never a failed pass; maintenance stages no contr
 
 The first two claims are driven through what the worker's process starts with (`maintenance.runtime`) behind the
 fleet's own probes, so the key reaches the emitters the way it does in the cluster: the secret store, the holder, the
-emitters and their author. The sidecar's secret API is answered by respx,
-its publish is a recording stand-in, and the store session is exchanged at moto's STS.
+emitters and their author. The secret store is answered by the suite's double, the sidecar's publish is a recording
+stand-in, and the store session is exchanged at moto's STS.
 """
 
 from __future__ import annotations
@@ -29,9 +29,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import httpx
 import pytest
-import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.secret_store_double import SecretStoreDouble
 
 from lakehouse.control_emit import emit_control
 from lakehouse.governed.signing_key import SigningKeyHolder, signing_ready_check
@@ -52,7 +52,6 @@ if TYPE_CHECKING:
 IDENTITY = "kubernetes~system:serviceaccount:rask:rask-sa-maintenance"
 #: The name its key pair is stored under (`signing_key_name`): the account's name.
 KEY_NAME = "rask-sa-maintenance"
-SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 #: The uuids the catalog minted for `acme$events` and for `acme`.
 UUIDS = DatasetUuids(table_uuid="0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f", namespace_uuid="3f2e1d0c-4b5a-4968-8776-a5b4c3d2e1f0")
 
@@ -86,24 +85,21 @@ type Boot = Callable[[httpx.Response, httpx.Response], TestClient]
 
 
 @pytest.fixture
-def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, moto_url: str, tmp_path: Path) -> Iterator[Boot]:
+def boot(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble, respx_allows_unused_routes: None, moto_url: str, tmp_path: Path) -> Iterator[Boot]:
     """Start what the worker's process stands on, with signing configured, behind the probes it serves: `boot(seed, keys)`
     answers the running client.
 
-    Its store identity is a projected token exchanged at moto's STS, as the deployed service's is: with the secret store
-    on, a service holds no key pair.
+    Its object-store identity is a projected token exchanged at moto's STS, as the deployed service's is.
     """
     token = tmp_path / "projected-rask-object-store-token"
     token.write_text("projected-for-rask-object-store")
     env = {
-        "MAINTENANCE_SECRETS_FROM_DAPR": "true",
         "MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(token),
         "MAINTENANCE_S3_STS_ENDPOINT": moto_url,
         "RASK_SIGNING_IDENTITY": IDENTITY,
         "MAINTENANCE_CATALOG_SERVICE_IDENTITY": IDENTITY,
         "MAINTENANCE_LINEAGE_EMIT_ENABLED": "true",
         "MAINTENANCE_CONTROL_EMIT_ENABLED": "true",
-        "DAPR_HTTP_PORT": "3500",
     }
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -134,9 +130,8 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, moto
     with ExitStack() as stack:
 
         def _boot(seed: httpx.Response, keys: httpx.Response) -> TestClient:
-            stack.enter_context(respx.mock)
-            respx.get(f"{SECRETS}/signing-key-{KEY_NAME}").mock(return_value=seed)
-            respx.get(f"{SECRETS}/signing-public-{KEY_NAME}").mock(return_value=keys)
+            secret_store.hold(f"signing-key-{KEY_NAME}", seed)
+            secret_store.hold(f"signing-public-{KEY_NAME}", keys)
             return stack.enter_context(TestClient(worker))
 
         yield _boot
@@ -194,7 +189,7 @@ def test_every_event_the_service_emits_is_authored_and_signed_as_the_service(
     boot: Boot, event_signer: Any, kind: str, signed: tuple[str, str, str, DatasetUuids]
 ) -> None:
     pair = event_signer(IDENTITY)
-    client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}))
+    client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}))
 
     _emit(client, kind)
 
@@ -214,7 +209,7 @@ def test_a_maintenance_without_its_key_emits_nothing_and_is_not_ready(boot: Boot
 
 
 def test_an_emitter_refuses_a_key_for_an_identity_it_does_not_stamp_as_its_author() -> None:
-    holder = SigningKeyHolder(identity=IDENTITY, store="lance-secrets", load_key=SigningKey.from_seed, parse_published=parse_published_keys)
+    holder = SigningKeyHolder(identity=IDENTITY, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
 
     with pytest.raises(ValueError, match="signer that is not its event's author"):
         DaprMaintenanceEmitter(

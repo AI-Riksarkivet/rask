@@ -71,7 +71,8 @@ Dapr's sidecar injector is a MUTATING WEBHOOK, and its MutatingWebhookConfigurat
 `failurePolicy: Ignore` by default: a pod created while the injector is unreachable (a restart, an
 outage) is SILENTLY admitted unmutated and comes up with NO daprd container at all. Nothing recreates
 that pod — a CrashLoopBackOff restarts the container inside the SAME pod, which will never gain a
-sidecar — so the app crash-loops forever on "secret unavailable from Dapr store … failing closed".
+sidecar — so the app in it publishes nothing and takes no delivery and no tick, which only a sidecar brings, for
+as long as that pod lives.
 
 Fix, in the control plane rask runs against (a prerequisite; deploy/fixtures/dapr/values.yaml in
 development): `failurePolicy: Fail`, scoped by an `objectSelector` to pods carrying this LABEL. Fail-closed
@@ -133,7 +134,7 @@ render under this same `dapr.enabled` condition.
 DERIVED FROM `lance.secretScopes`, the same list that decides the Component's own `scopes:`, so
 a new consumer added there gets its Configuration without a second edit here. The same membership
 mounts the pod's store token into daprd (`lance.storeIdentity`): a sidecar the component is scoped
-to always has the projected token it logs in with.
+to always has the projected token it logs in with, as its app's own container has.
 
 ## `{{- define "lance.daprOtlpTarget" -}}`
 
@@ -180,7 +181,7 @@ VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks)
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
   resources.{default,<component>} · objectStore.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
-  services.{catalog,lineage}.{port,daprAppId} · services.lineage.relay.bindingName
+  services.{catalog,lineage}.{port,appId} · services.lineage.relay.bindingName
 `objectStore.bucket` (singular) is the one that is easy to lose: rask's values ship `objectStore.buckets` (a
 LIST) and lance's templates read `objectStore.bucket` (a STRING) — both must exist.
 ---------------------------------------------------------------------------------------------------
@@ -335,8 +336,8 @@ THE PLATFORM'S STORE IS NAMED, AND OVER TLS ([[XC-149]]). The chart renders no s
 `openbao.enabled` off the address is required: a render that names no store would leave every
 `secretKeyRef` resolving against Kubernetes Secrets the chart never declares (each bus user's `jwt` and `seedKey`,
 `lance.natsCreds`).
-An http address is refused because every sidecar presents the store's token to it, in the clear
-otherwise; the dev store alone is http, inside the namespace.
+An http address is refused because every service and every sidecar presents its ServiceAccount token and its store
+token to it, in the clear otherwise; the dev store alone is http, inside the namespace.
 
 ## `{{- define "lance.vaultAddrFQDN" -}}`
 
@@ -538,8 +539,8 @@ precisely about a comment not being a mechanism.
 
 ## `startupProbe:`
 
-startupProbe gates liveness+readiness until boot completes: the FastAPI lifespan (Dapr secret fetch
-~80s worst case + AGE pool + DDL + FGA provision) runs BEFORE uvicorn accepts connections, so nothing
+startupProbe gates liveness+readiness until boot completes: the FastAPI lifespan (the secret store login,
+asked again for about two minutes while the store does not admit the pod, + FGA provision) runs BEFORE uvicorn accepts connections, so nothing
 answers /livez during boot. Without this, liveness (armed ~70s in) SIGKILLs a still-initializing pod
 into CrashLoopBackOff exactly when a dependency is already slow. 30×10s = 300s boot budget, then the
 fast liveness/readiness cadence takes over. (prod-readiness P1)
@@ -930,17 +931,36 @@ identity provider's (`deploy/fixtures/rustfs` `identityProvider.clientId`, which
 `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds equal). `required`: a blank audience would
 leave every workload no identity at the store, and no workload holds a key pair to fall back to.
 
+## `{{- define "lance.secretNamePattern" -}}^[a-z0-9][a-z0-9-]{0,252}${{- end -}}`
+
+WHAT A SECRET NAME IS, written once: lowercase letters, digits and `-`, one path segment. A name becomes a path of a
+store policy (`lance.storePolicy`) and a segment of the path a service reads, so a wildcard or a `/` in one would widen
+the policy it lands in. The render holds every name an overlay supplies to it (a client reader's `secrets`, the
+forwarder's `authSecret.name`), and the services refuse to read any other (`lakehouse.governed.secrets`).
+
+## `{{- with $v.services.lineage.forward.authSecret.name }}{{- if not (regexMatch (include "lance.secretNamePattern" $root) (toString .)) }}`
+
+The one secret name the lakehouse's own table takes from an overlay. It goes into lineage's policy as written, so `*`
+there would let lineage read every secret in the store: refused at the render, before a policy document carries it.
+
 ## `{{- define "lance.storeReads" -}}`
 
 WHO READS WHAT FROM THE STORE, ONE TABLE ([[XC-165]], ADR 0169): app id -> {its ServiceAccount, `api` (the secrets its
-code reads through its sidecar), `components` (the secrets its own components resolve: its bus user)}. Every place that decides a read is a view of it: the app's Configuration
-allows `api` (`lance.daprAppSpec`), its store role's policy grants `api` and `components` (the seed's
-`policy-<release>-<app>.json`), and an app with neither reads nothing, so it gets no store at all
-(`lance.secretScopes`). Two lists that agreed when written are how a read gets refused at runtime, or granted past
-its owner, so nothing restates it.
+code reads under its own login to the store, `lakehouse.governed.secrets`), `components` (the secrets its sidecar's own
+components resolve: its bus user)}. Every place that decides a read is a view of it: its store role's policy grants
+`api` and `components` (the seed's `policy-<release>-<app>.json`), its environment names that role
+(`lance.secretStoreEnv`), and an app with neither reads nothing, so it gets no store at all (`lance.secretScopes`). Two
+lists that agreed when written are how a read gets refused at runtime, or granted past its owner, so nothing restates
+it.
 
-The split is by READER SET, because a store and Dapr both grant by secret name: a secret two apps read is one secret
-both name (`dapr-app-token`, a signer's public key), never a copy, so a rotation writes one place. The verifier
+THE STORE'S READERS DO NOT HANG ON THE SIDECAR ([[XC-199]]). A service reads its own secrets whatever carries the bus, so
+its role, its policy and its login render with `dapr.enabled` off. Only what a sidecar itself needs follows that
+switch: the app token its Dapr doors check, each component's bus user, and maintenance's work-queue user, which the
+worker the same switch renders reads. Pinned by
+`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
+
+The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
+(`dapr-app-token`, a signer's public key), never a copy, so a rotation writes one place. The verifier
 lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
 `signing.doors`), and a signer reads its own pair. The pub/sub condition restates `dapr-component.yaml`'s, so
 `tests/unit/test_a_dapr_component_names_a_secret_something_can_resolve.py` checks, over every overlay CI deploys, that
@@ -964,9 +984,9 @@ SecretStore, `lance.natsFiles`) name, under the same conditions that render them
 
 ## `{{- define "lance.storeRole" -}}`
 
-`<release>-<app id>`: the store role each sidecar logs in as. The component names it with Dapr's `{appID}` tag, so
-one component serves every app and each sidecar fills in its own id; the release prefix keeps two releases apart in
-one platform store.
+`<release>-<app id>`: the store role an app and its sidecar log in as. The app's environment names it outright
+(`lance.secretStoreEnv`); the component names it with Dapr's `{appID}` tag, so one component serves every app and each
+sidecar fills in its own id. The release prefix keeps two releases apart in one platform store.
 
 ## `{{- define "lance.storePolicy" -}}`
 
@@ -976,34 +996,87 @@ no metadata, no write.
 
 ## `{{- define "lance.storeIdentity" -}}`
 
-The token a sidecar logs in with, for an app that reads the store: the pod asks the kubelet for a ServiceAccount
-token for `openbao.identity.audience` (600 s, rotated by the kubelet, bound to the pod) and `dapr.io/volume-mounts`
-mounts it into daprd ALONE, at the path the component names in `vaultServiceAccountTokenPath`. No app container
-mounts it, so an app's code cannot log in past its sidecar's Configuration. Both halves render from the one
-membership, because an annotation naming a volume the pod lacks is a pod the API server refuses.
+The token an app and its sidecar log in with, for an app that reads the store: the pod asks the kubelet for a
+ServiceAccount token for `openbao.identity.audience` (600 s, rotated by the kubelet, bound to the pod). The `mounts` part
+puts it in the app's own container and `dapr.io/volume-mounts` in daprd, at the one path the component names in
+`vaultServiceAccountTokenPath` and the app's environment in `RASK_SECRET_STORE_TOKEN_FILE`: both logins are the pod's
+one identity, under one role and one policy. Every part renders from the one membership, because an annotation naming a
+volume the pod lacks is a pod the API server refuses.
+
+With `openbao.ca.configMap` named, the same three parts carry the platform store's CA: the volume `secret-store-ca` (that
+ConfigMap's key under the file name of `lance.storeCaFile`), mounted into the app and into daprd at that file's directory.
+
+## `{{- define "lance.storeTokenSeconds" -}}`
+
+A STORE TOKEN'S LIFETIME, HELD TO A MINUTE AT LEAST AND AN HOUR AT MOST ([[XC-199]], ADR 0169). Reads one of
+`openbao.identity.tokenTtl` and `tokenMaxTtl` as seconds and fails the render on a lifetime past an hour, on one under a
+minute (a service's loop logs in again at half its token's life and looks every 15 s, so a shorter one leaves it no
+certain pass to do that in), on none at all (a role with no lifetime of its own issues tokens at the store's default,
+which is weeks), and on a form it cannot read (it reads `<n>s`, `<n>m`, `<n>h` and a bare number of seconds, each of
+five digits at most with no leading zero: Helm reads `05000` as octal 2560 where the store reads 5000, a product past
+64 bits wraps around to a small one, and the role document carries the value as written). A service refuses a
+login whose lease is outside that range (`lakehouse.governed.secrets`), so a role the render let through would start no
+pod: the refusal belongs where git declares the role. The template that calls it (secret-store-identities.yaml) also
+refuses a `tokenMaxTtl` under the `tokenTtl`, since the store would then issue the shorter one and the role would not be
+the one git declares. The role documents keep the value as it was written.
+
+## `{{- define "lance.storeTokenFile" -}}/var/run/secrets/rask/openbao/token{{- end -}}`
+
+Where a pod's projected store token is, written once: the volume's file name and its mount in the app and in daprd
+(`lance.storeIdentity`), the app's `RASK_SECRET_STORE_TOKEN_FILE` (`lance.secretStoreEnv`) and the sidecar component's
+`vaultServiceAccountTokenPath` all derive from it, so the two logins cannot come to read two files. The app holds no
+path of its own: `lakehouse.governed.secrets` refuses a store named without one.
+
+## `{{- define "lance.storeCaFile" -}}/etc/rask/secret-store-ca/ca.crt{{- end -}}`
+
+Where a platform store's CA is in a pod, written once: the ConfigMap volume's file name and its mount
+(`lance.storeIdentity`), the app's `RASK_SECRET_STORE_CA_FILE` and the sidecar component's `caCert` derive from it.
+
+## `{{- define "lance.storeCaConfigMap" -}}`
+
+The ConfigMap holding the CA a platform store's certificate chains to, or nothing where none is named
+(`openbao.ca`). A CA is public, so a ConfigMap carries it and the platform's own tooling may write it; each of the
+store's three readers is handed it by name: the services (`RASK_SECRET_STORE_CA_FILE`, since Python checks a certificate
+against the bundle it ships with, never the node's), the sidecar's component (`caCert`) and ESO's SecretStore
+(`caProvider`). Refused beside `openbao.enabled`: the development store serves plain HTTP inside the namespace, so a CA
+named there would say a store is verified that is not.
+
+## `{{- define "lance.secretStoreEnv" -}}`
+
+WHERE AN APP'S SECRET STORE IS, AND WHO IT LOGS IN AS ([[XC-199]]). The store's address (`lance.vaultAddr`), the app's own
+role (`lance.storeRole`), the Kubernetes auth mount and the KV mount ESO's SecretStore and the sidecar's component name
+too (`externalSecrets.kubernetesAuthPath`, `externalSecrets.kvMount`), and the path of the projected token
+(`lance.storeTokenFile`). A service that is given the address logs in to the store before it serves and fails its start
+closed when the store never admits it, reads every secret under that login, and signs and keys its commit ids from what
+it reads there (`lakehouse.governed.secrets`). Its object-store identity is then its ServiceAccount token alone: its
+start refuses a key pair in its environment (`lakehouse.store_session.require_env_pair`), and nothing in the process
+signs with one (`key_pair_in_force`). Rendered for exactly the apps `lance.storeReads` lists, so a pod told a store
+always has a role there.
 
 ## `{{- define "lance.storeAudience" -}}`
 
-The one audience a sidecar's store login is bound to, read by the projected token (`lance.storeIdentity`) and by every
+The one audience a pod's store login is bound to, read by the projected token (`lance.storeIdentity`) and by every
 app's role (secret-store-identities.yaml). A blank one fails the render: a role with no audience admits any token of its
-ServiceAccount, so the login would no longer be daprd's alone.
+ServiceAccount, so a token projected for another door would log in to the store.
 
 ## `{{- define "lance.secretScopes" -}}`
 
-The app-ids `lance-secrets` admits: every app with a read in `lance.storeReads`. It has several readers that must
-not drift: the Component's `scopes:` is what daprd enforces, `lance.appTokenEnv` below decides a pod's credential
-path from the same membership, the per-app Configuration and the store token's volume follow it, and the
-NetworkPolicy admits exactly these apps' pods to the store (`lance.secretReaderComponents`). A pod told to read the store while its app-id is absent from
-`scopes:` gets ERR_SECRET_STORES_NOT_CONFIGURED and fails closed at boot.
+The app-ids that read the secret store: every app with a read in `lance.storeReads`. It has several readers that
+must not drift: the Component's `scopes:` names the sidecars that load `lance-secrets` for their components,
+`lance.appTokenEnv` below decides a pod's credential path from the same membership, the per-app Configuration, the
+store token's volume and the service's own store settings (`lance.secretStoreEnv`) follow it, and the NetworkPolicy
+admits exactly these apps' pods to the store (`lance.secretReaderComponents`). One membership decides them all, so no
+pod is told to read a store it was named no address, role or token for: such a read fails the pod's start closed.
 
 Usage: {{ splitList "," (include "lance.secretScopes" .) }}
 
 ## `{{- define "lance.secretReaderComponents" -}}`
 
-The component labels of the pods whose sidecar reads the store, for the NetworkPolicies that admit them: the scope
-above, where an app's id is its pods' component label, and `maintenance-worker`, the label of maintenance's worker pods,
-which run under maintenance's app id (ADR 0198's amendment of 2026-11-10) and so appear in no scope of their own. A
-policy that ranged the scope alone would lock the worker's sidecar out of the store, and its start would fail closed.
+The component labels of the pods that dial the store (each service logs in to it, and its sidecar does for its
+components), for the NetworkPolicies that admit them: the scope above, where an app's id is its pods' component label,
+and `maintenance-worker`, the label of maintenance's worker pods, which run under maintenance's app id (ADR 0198's
+amendment of 2026-11-10) and so appear in no scope of their own. A policy that ranged the scope alone would lock the
+worker out of the store, and its start would fail closed.
 
 ## `{{- define "lance.appTokenEnv" -}}`
 
@@ -1012,9 +1085,8 @@ A workload's app-API-token credential: the STORE when the pod can reach it, the 
 THE ENV ROW IS THE BANNED PATH AND THIS IS WHERE IT ENDS. `APP_API_TOKEN` as a `secretKeyRef` is a
 Kubernetes Secret injected as an environment variable, which the estate's rule refuses outright
 (owner, verbatim: *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
-trust."*). A pod that already carries a Dapr sidecar and is in `lance.secretScopes` has the sanctioned
-path IN it — `GET /v1.0/secrets/lance-secrets/lance` — so what ships here is which source to read,
-which is configuration, while the value stays in OpenBao. `expected_app_tokens()` is the one accessor
+trust."*). A pod in `lance.secretScopes` reads its secret store as itself (`lance.secretStoreEnv`), so what
+ships here is which source to read, which is configuration, while the value stays in OpenBao. `expected_app_tokens()` is the one accessor
 all three doors go through (`require_dapr_token`, `service_principal`,
 `assert_app_token_configured`), so the switch moves every door on the pod together.
 
@@ -1193,21 +1265,15 @@ One app-id's Dapr Configuration spec: the Configuration object and its name (`la
 
 ## `defaultAccess: deny`
 
-DENY BY DEFAULT ([[XC-165]]): the app's code reads exactly the secrets `lance.storeReads` lists for it as `api`, and
-nothing a later secret adds. Dapr applies this scope only to the app-facing secrets API (`pkg/api/universal/
-secrets.go:35`, `IsSecretAllowed`, the same in 1.18.1 and 1.19.0-rc.4); a component resolving its own `secretKeyRef`
-goes straight to the store with the sidecar's login (`pkg/runtime/processor/secret/secret.go:162-170`), so a bus user's
-credential is resolved for the component and never served to the app. What the store itself refuses is
-the role's policy, the second layer, which holds even for a request that never asks the sidecar.
+DENY, AND ALLOW NONE ([[XC-165]], [[XC-199]]): no app reads a secret through its sidecar, since each logs in to the store
+itself, so the sidecar's secrets API serves the app, and anything else on the pod's loopback, nothing. Dapr applies this
+scope only to the app-facing secrets API (`pkg/api/universal/secrets.go:35`, `IsSecretAllowed`, the same in 1.18.1 and
+1.19.0-rc.4); a component resolving its own `secretKeyRef` goes straight to the store with the sidecar's login
+(`pkg/runtime/processor/secret/secret.go:162-170`), so a bus user's credential is resolved for the component. What the
+store itself refuses is the role's policy, which holds for every login.
 
 Every secret a reader names is known at render. A data base holds no credential of its own ([[LH-286]]),
 and a warehouse record's `credential_ref` is consumed by no door ([[LH-205]]).
-
-## `allowedSecrets:`
-
-Rendered only when the app reads something itself. An app whose components alone read the store gets a deny-by-default scope with no list, which Dapr reads as every secret refused; a bare
-`allowedSecrets:` over an empty range would be YAML null, which the CRD refuses (measured 2026-09-24 with
-`deniedSecrets`).
 
 ## `{{- define "lance.daprAppConfigName" -}}`
 

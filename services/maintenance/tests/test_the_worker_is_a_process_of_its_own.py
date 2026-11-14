@@ -26,7 +26,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-import respx
+from tests.secret_store_double import SecretStoreDouble
 
 from lakehouse.lifecycle import mark_draining, mark_started
 from maintenance import service, worker
@@ -36,7 +36,6 @@ from maintenance.services.queue import TaskQueue
 
 #: The bus the deployed settings name, which nothing here answers.
 _BUS = "nats://bus:4222"
-_SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
 def _free_port() -> int:
@@ -94,10 +93,10 @@ def test_a_worker_with_no_bus_to_take_tasks_from_does_not_start() -> None:
         asyncio.run(asyncio.wait_for(worker.run(settings, asyncio.Event()), timeout=20))
 
 
-def test_a_worker_in_a_read_only_window_takes_no_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moto_url: str, respx_allows_unused_routes: None) -> None:
+def test_a_worker_in_a_read_only_window_takes_no_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moto_url: str, secret_store: SecretStoreDouble) -> None:
     """It starts, answers ready and holds until it is stopped, dialling no bus: the bus here never answers, so a worker
     that reached for it would still be starting when stopped. Its settings are the deployed service's: a projected token
-    exchanged at moto's STS, and its bus credential read from the store, which a worker that never dials never reads."""
+    exchanged at moto's STS, and a secret store it never logs in to, since a worker that dials no bus reads no credential."""
     dialled: list[str] = []
 
     async def _bus(url: str, credentials: str, *, name: str) -> TaskQueue:
@@ -109,16 +108,14 @@ def test_a_worker_in_a_read_only_window_takes_no_task(tmp_path: Path, monkeypatc
     (token := tmp_path / "token").write_text("a projected token")
     monkeypatch.setenv("MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE", str(token))
     monkeypatch.setenv("MAINTENANCE_S3_STS_ENDPOINT", moto_url)
-    settings = MaintenanceSettings.model_validate({"s3_bucket": "b", "nats_url": _BUS, "secrets_from_dapr": True, "read_only": True})
+    settings = MaintenanceSettings.model_validate({"s3_bucket": "b", "nats_url": _BUS, "read_only": True})
 
     async def _run() -> bool:
         stop = asyncio.Event()
         asyncio.get_running_loop().call_later(1.0, stop.set)
         return await asyncio.wait_for(worker.run(settings, stop), timeout=20)
 
-    with respx.mock as sidecar:
-        sidecar.get(f"{_SECRETS}/nats-user-maintenance-worker").mock(return_value=httpx.Response(200, json={"jwt": "eyJ.jwt", "seed": "SUASEED"}))
-        assert (asyncio.run(_run()), dialled) == (True, [])
+    assert (asyncio.run(_run()), dialled, secret_store.login.call_count) == (True, [], 0)
 
 
 async def _never_starts(_settings: MaintenanceSettings, _stop: asyncio.Event, _started: asyncio.Event) -> None:

@@ -170,8 +170,8 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
 
     Dapr's injector is a mutating webhook shipping `failurePolicy: Ignore`: a pod created while the injector is
     unreachable is SILENTLY admitted with no daprd container, and nothing recreates it (a CrashLoopBackOff restarts
-    the container inside the same pod), so every governed app dies on "secret unavailable from Dapr store … failing
-    closed". The Dapr control plane is a prerequisite ([[XC-128]]) whose injector fails closed, scoped by an
+    the container inside the same pod), so every governed app in one publishes nothing and takes no delivery and no
+    tick. The Dapr control plane is a prerequisite ([[XC-128]]) whose injector fails closed, scoped by an
     `objectSelector` to the `dapr.io/enabled` LABEL (deploy/fixtures/dapr; read back on the live webhook), and rask's
     chart stamps that label. An annotation without the label is never sent to the webhook, so the pod is silently
     un-injected again: every pod template carrying the annotation must carry the label.
@@ -366,7 +366,7 @@ def test_the_worker_reads_the_bus_credential_the_user_table_issues_whatever_its_
     none at its start and fails closed."""
     renamed = (
         "--set",
-        "maintenance.daprAppId=maint",
+        "maintenance.appId=maint",
         "--set-json",
         'nats.auth.users.maint={"publish":["lineage.events.v1","probe.maint"],"subscribe":["_INBOX.>"]}',
     )
@@ -574,7 +574,7 @@ def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_pla
     """[[XC-132]], [[XC-149]]: OpenFGA, the Postgres behind OpenFGA and the Dapr state store, and the secret store are the
     platform's in production, which names each (ADR 0153). The production render runs no workload or identity of any of
     them and holds no object of the secret store. Every FGA client, Postgres client and secret reader dials the named
-    endpoint, the pods whose sidecar reads the store are the pods admitted to it and no others, and no credential rides
+    endpoint, the pods that log in to the secret store are the pods admitted to it and no others, and no credential rides
     along in an env value: the FGA token is a projected file and the Postgres password the store's `postgres-password`,
     both by reference."""
     fga, pg, store = "https://fga.platform.example", "pg.platform.example", "https://vault.platform.example:8200"
@@ -896,7 +896,7 @@ def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
 
 def _written_secrets(docs: list[dict]) -> dict[str, set[str]]:
     """Each Secret the render creates, with its keys: a chart-rendered Secret, or the target an
-    ExternalSecret writes ([[XC-004]]: every credential reaches a pod without a sidecar that way)."""
+    ExternalSecret writes ([[XC-004]]: every credential a pod takes as a Kubernetes Secret reaches it that way)."""
     written: dict[str, set[str]] = {}
     for d in docs:
         if d.get("kind") == "Secret":

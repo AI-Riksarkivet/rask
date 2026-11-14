@@ -98,7 +98,7 @@ asks `$JS.API.CONSUMER.INFO` itself: error 10014 is a consumer that does not exi
 one read, and anything else (a timeout during a leader move, a refusal, no server) is retried five times, 3 s apart,
 then fails the Job with that durable left in place; `backoffLimit` runs it again.
 
-## `LIN="{{ .Values.services.lineage.daprAppId }}-durable"`
+## `LIN="{{ .Values.services.lineage.appId }}-durable"`
 
 LINEAGE'S DURABLE IS HELD TO ITS IN-FLIGHT BOUND ([[LH-533]]). `services.lineage.deliveriesInFlight` is the
 durable's `max_ack_pending`, the one config field the chart sets beyond `max_deliver` and `backoff`, and a

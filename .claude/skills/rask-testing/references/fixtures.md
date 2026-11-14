@@ -25,10 +25,23 @@ Every service builds `app` at module import. Pick the fixture by how settings re
 1. `monkeypatch.setenv` every variable the service needs to build and boot. For the catalog that
    includes both S3 keys, even on the `dir` backend: with no projected token
    (`LANCE_S3_WEB_IDENTITY_TOKEN_FILE`), the lifespan refuses to boot without both halves of the pair
-   (`lakehouse.store_session.require_env_pair`, shared by catalog, lineage and maintenance). With
-   `*_SECRETS_FROM_DAPR` on, a service's store identity is its projected token exchanged at STS
-   (`*_S3_STS_ENDPOINT`), a key pair beside it is refused, and the sidecar's secret API serves only
-   the signing keys: answer it with respx, and the STS exchange and the store with a moto server
+   (`lakehouse.store_session.require_env_pair`, shared by catalog, lineage and maintenance). A service
+   given a projected token signs with sessions exchanged at STS (`*_S3_STS_ENDPOINT`), and a key pair
+   beside it is refused. A service that reads a secret (its signing key, a signer's published keys, its
+   bus credential) logs in to its secret store itself: request the root conftest's `secret_store`
+   (a `tests.secret_store_double.SecretStoreDouble`, the type to annotate it with), which sets the store's
+   env as the chart does and answers the store's API for the length of the test, and have it hold each
+   secret the test's process reads (`secret_store.hold(name, fields)`, which answers the read's route for
+   counting calls or replacing its answers; a read of one it holds none of fails the test, and so does
+   a secret held that nothing read, unless the test takes `respx_allows_unused_routes`). No test writes
+   the store's address or its answer's shape itself. A service's START under `secret_store` logs in to it
+   first (`secret_store_session`), and a process under it is handed no key pair, acknowledged or
+   not, as a pod is (`lakehouse.store_session.key_pair_in_force`): a test whose code signs an
+   object-store request, or only builds its storage options, projects the service's token and holds its
+   session (`store_session.SESSIONS.hold`, as
+   `tests/integration/test_a_store_credential_is_in_clear_only_at_the_call_that_signs.py` does) or
+   exchanges it at a moto STS. The process has ONE secret-store session, so a test that runs two services
+   in one process cannot give only one of them a store. Answer the STS exchange and the object store with a moto server
    (`services/catalog/tests/conftest.py::two_stores` for the catalog,
    `services/maintenance/tests/test_maintenance_signs_what_it_emits.py` for maintenance, on its suite's `moto_url`).
    A maintenance pass that rewrites a table asks the catalog's maintain-tier door first ([[LH-219]]), and one that

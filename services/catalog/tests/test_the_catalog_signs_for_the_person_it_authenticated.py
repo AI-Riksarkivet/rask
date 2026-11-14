@@ -10,8 +10,8 @@ so they are signed with no delegation.
 
 DRIVEN THROUGH THE REAL APP over HTTP, on a real `dir` namespace, because the claim spans the whole wiring: the secret
 store, the lifespan that builds the holder, the emitters it is handed, and the door that stamps the author. A test of an
-emitter alone passes with a lifespan that never gives it a key. The sidecar's secret API is answered by respx and its
-publish is a recording stand-in, so what the verifier sees is exactly what the catalog put on the bus.
+emitter alone passes with a lifespan that never gives it a key. The secret store is answered by the suite's double and
+the sidecar's publish is a recording stand-in, so what the verifier sees is exactly what the catalog put on the bus.
 
 A SIGNER WITHOUT ITS KEY TAKES NO WRITE IT WOULD ANNOUNCE. A write's announcement is signed after its Lance commit, so a
 catalog that cannot sign refuses the write first, ServiceUnavailable, and commits nothing it could not announce
@@ -35,7 +35,6 @@ import httpx
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-import respx
 from fastapi.testclient import TestClient
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -56,6 +55,7 @@ from lakehouse.governed.principal import Principal
 from lakehouse.governed.signing_key import signing_key_name
 from lakehouse.lineage import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
 from lakehouse.storage_options import StorageOptions
+from tests.secret_store_double import SecretStoreDouble
 
 
 #: The catalog's own service account, whose principal it signs as on the estate (`lance.saSubject`).
@@ -63,7 +63,6 @@ CATALOG_ACCOUNT = "system:serviceaccount:default:rask-sa-catalog"
 CATALOG = f"kubernetes~{CATALOG_ACCOUNT}"
 #: The principal of a person the dev Dex's password connector reports, under the idp id `local` maps to.
 PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
-SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 LINEAGE_TOPIC = "lineage.events.v1"
 #: The namespace the catalog keeps lineage's tables in, as the chart names it (`services.lineage.provenanceNamespace`).
@@ -122,7 +121,7 @@ def _control_verdict(event: dict[str, Any], public: str) -> tuple[str, str | Non
     return verified.identity, verified.on_behalf_of
 
 
-type Boot = Callable[[httpx.Response, httpx.Response, object], TestClient]
+type Boot = Callable[[httpx.Response, httpx.Response | None, object], TestClient]
 
 
 @pytest.fixture
@@ -131,8 +130,11 @@ def control_outbox(tmp_path: Path) -> str:
 
 
 @pytest.fixture
-def boot(tmp_path: Path, control_outbox: str, two_stores: Any, monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[Boot]:  # noqa: ANN401 — conftest.TwoStores
-    """Boot the real catalog with signing configured: `boot(seed, keys, token)` answers the running client.
+def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
+    tmp_path: Path, control_outbox: str, two_stores: Any, secret_store: SecretStoreDouble, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Boot]:
+    """Boot the real catalog with signing configured: `boot(seed, keys, token)` answers the running client. `keys` is
+    None where the catalog reads no published list (it stops at a seed the store does not serve).
 
     The order is the one `tests/integration/conftest.py::real_ns_client` documents: env, then the settings cache, then
     the app imported inside the fixture. `token` is what the catalog's door resolves for the caller: a subject, or None
@@ -144,7 +146,6 @@ def boot(tmp_path: Path, control_outbox: str, two_stores: Any, monkeypatch: pyte
     env = {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": str(tmp_path / "warehouse"),
-        "LANCE_SECRETS_FROM_DAPR": "true",
         "LANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(projected),
         "LANCE_S3_STS_ENDPOINT": two_stores.url,
         "LANCE_S3_ASSUME_ROLE_ARN": two_stores.role_on(two_stores.estate_bucket),
@@ -155,7 +156,6 @@ def boot(tmp_path: Path, control_outbox: str, two_stores: Any, monkeypatch: pyte
         "LANCE_CONTROL_OUTBOX_URI": control_outbox,
         "LANCE_PROVENANCE_NAMESPACE": PROVENANCE,
         "APP_API_TOKEN": "the-estate-app-token",
-        "DAPR_HTTP_PORT": "3500",
     }
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -171,12 +171,12 @@ def boot(tmp_path: Path, control_outbox: str, two_stores: Any, monkeypatch: pyte
     get_settings.cache_clear()
     with ExitStack() as stack:
 
-        def _boot(seed: httpx.Response, keys: httpx.Response, token: object) -> TestClient:
-            stack.enter_context(respx.mock)
-            respx.get(f"{SECRETS}/signing-key-{signing_key_name(CATALOG)}").mock(return_value=seed)
-            respx.get(f"{SECRETS}/signing-public-{signing_key_name(CATALOG)}").mock(return_value=keys)
-            # The key every announcement's run id is derived under ([[LH-497]]), read through the same sidecar.
-            respx.get(f"{SECRETS}/commit-id-key").mock(return_value=httpx.Response(200, json={"key": "ab" * 32}))
+        def _boot(seed: httpx.Response, keys: httpx.Response | None, token: object) -> TestClient:
+            secret_store.hold(f"signing-key-{signing_key_name(CATALOG)}", seed)
+            if keys is not None:
+                secret_store.hold(f"signing-public-{signing_key_name(CATALOG)}", keys)
+            # The key every announcement's run id is derived under ([[LH-497]]), read from the same store.
+            secret_store.hold("commit-id-key", {"key": "ab" * 32})
             namespace = connect("dir", {"root": str(tmp_path / "warehouse")})
             main.app.dependency_overrides[get_namespace] = lambda: namespace
             main.app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
@@ -206,7 +206,7 @@ def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_
 ) -> None:
     subject = caller.subject
     pair = event_signer(CATALOG)
-    client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}), caller)
+    client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), caller)
 
     _write_a_table_and_a_row(client)
 
@@ -224,7 +224,7 @@ def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_
 
 def test_a_write_nobody_authenticated_is_announced_unsigned_and_its_control_events_signed_as_the_catalog(boot: Boot, event_signer: Any) -> None:
     pair = event_signer(CATALOG)
-    client = boot(httpx.Response(200, json={"seed": pair.seed}), httpx.Response(200, json={"keys": pair.public}), None)
+    client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), None)
 
     _write_a_table_and_a_row(client)
 
@@ -300,7 +300,7 @@ def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(
 ) -> None:
     """A write it would announce is refused before it commits, so the table stays at its version and a namespace is never
     made; lineage's own write under the provenance namespace, which it never announces, is served."""
-    client = boot(httpx.Response(500), httpx.Response(404), _person(PERSON))
+    client = boot(httpx.Response(500), None, _person(PERSON))
     if version is not None:
         _made_natively(tmp_path / "warehouse", table)
 

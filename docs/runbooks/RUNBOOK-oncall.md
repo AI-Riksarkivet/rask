@@ -28,7 +28,7 @@ fixture's) or a user report — not a page.
 | Symptom | Jump to |
 |---|---|
 | Everything returns 503 / auth failures across the board | [OpenFGA down](#openfga-down--503-everywhere) |
-| App pods stuck `0/1` "waiting for application startup" after a restart/drain | [The secret store sealed](#the-secret-store-sealed--boot-deadlock) |
+| App pods stay `0/1` and restart about every two minutes after a restart/drain | [The secret store sealed](#the-secret-store-sealed--no-app-starts) |
 | A pod `CrashLoopBackOff` shortly after boot | [Slow boot / startupProbe](#crashloop-on-boot) |
 | lineage `/readyz` = 503 with `"catalog": "unavailable"` in `components`, pod `NotReady` | [Lineage not ready](#lineage-not-ready--catalog-unreachable) |
 | A lakehouse pod restarts with exit code 70, a `background_work_ended` CRITICAL line before it | [A process ended itself](#a-process-ended-itself-exit-70) |
@@ -69,27 +69,31 @@ up — OpenFGA stores tuples in the `rask-age` Postgres.
 **Act.** Wait for reschedule / scale it back up; if the datastore is the real cause, see
 [AGE down](#age-postgres-down--fga). Never "fix" a fail-closed 503 by disabling auth in prod.
 
-## The secret store sealed → boot deadlock
+## The secret store sealed → no app starts
 
-**Symptom.** After a node drain / pod restart, app pods hang `0/1` at "waiting for application startup"; the
-startupProbe eventually restarts them, looping.
+**Symptom.** After a node drain / pod restart, app pods stay `0/1`: each start waits about two minutes at "waiting for
+application startup", ends on `the secret store gave this process no usable login as its role ...`, and the kubelet
+restarts the container, looping.
 
-**Cause.** The platform's store (`openbao.externalAddr`) is sealed or unreachable. Apps consume secrets fail-closed
-via Dapr **at startup** (the ~80s secret fetch), so while the store is sealed every app pod blocks on boot — the
-documented two-sided deadlock. Unsealing it, and auto-unseal, are the platform's ([[XC-149]]); the dev OpenBao
-fixture is in memory and never sealed.
+**Cause.** The platform's store (`openbao.externalAddr`) is sealed or unreachable. Each service logs in to the store
+itself **before it serves** and reads its secrets there, fail-closed: its start asks again for about two minutes and
+then fails, naming its role (`the secret store gave this process no usable login as its role ...`), so while the store
+is sealed every app pod fails its start and is restarted. Unsealing it, and auto-unseal, are the platform's
+([[XC-149]]); the dev OpenBao fixture is in memory and never sealed.
 
 **Diagnose.** The store's status from the platform (`bao status` or `vault status` against `openbao.externalAddr`)
 → `Sealed: true`.
 
-**Act.** The platform unseals its store, then the app pods complete boot on their next startupProbe cycle (no
-manual app restart needed — the 300s budget covers it).
+**Act.** The platform unseals its store, then each app pod logs in on its next start (the kubelet restarts it by
+itself, with a back-off of five minutes at most; `kubectl rollout restart` is sooner). A pod that was already serving
+rides through on the secrets it holds and logs in again by itself.
 
 ## CrashLoop on boot
 
 **Symptom.** An app pod restarts repeatedly shortly after scheduling; logs show the lifespan never finishing.
 
-**Cause.** The FastAPI lifespan (Dapr secret fetch ~80s worst case + FGA provision; on lineage, creating its
+**Cause.** The FastAPI lifespan (the secret store login, asked again for about two minutes while the store does not
+admit the pod, + FGA provision; on lineage, creating its
 provenance tables through the catalog, retried until the catalog answers) runs **before** uvicorn serves. The
 `startupProbe` gives 300s for this; if boot exceeds it, a dependency is genuinely stuck — usually the secret store sealed
 (above), OpenFGA unreachable, or, for lineage, the catalog (`lineage_provenance_tables_not_ready` WARN lines).
@@ -151,8 +155,8 @@ canonical form or its signature is not canonical base64url. `unsigned` and `sign
 genuine signer produces either.
 
 **Diagnose.** The log line carries `run_id` (or `dataset` for a catalog change), the claimed `identity` and the `reason`.
-Compare the signer's key id with the keys its identity publishes: `GET /v1.0/secrets/lance-secrets/signing-public-<identity>`
-through any sidecar allowed to read it, field `keys`, current key first. An outage reads differently: the key list could not
+Compare the signer's key id with the keys its identity publishes: the store's `signing-public-<identity>`, field `keys`,
+current key first, read as any verifier's own account (docs/OPERATORS.md § 6, Reading it back). An outage reads differently: the key list could not
 be read, so lineage answers RETRY (`lineage_signature_keys_unavailable`) and refuses nothing.
 
 **Act.** A signer whose key is not listed: restart it so it re-resolves its key, and after a store re-mint restart every
@@ -201,8 +205,8 @@ non-zero depth means the relay isn't draining — usually the lineage service or
 rising with the depth means the store refuses a publisher's deletes of events it delivered: nothing is lost, since the
 relay re-delivers and drops each copy, but every staged event is delivered twice until the publisher's delete grant on
 the outbox prefix is mended. On the catalog's
-control lane (`service.name` catalog), `control_relay_keys_unavailable` lines mean its sidecar cannot read
-`signing-public-<catalog identity>`, so nothing staged is delivered until it can; `control_outbox_unverifiable` lines
+control lane (`service.name` catalog), `control_relay_keys_unavailable` lines mean the catalog cannot read
+`signing-public-<catalog identity>` from the secret store, so nothing staged is delivered until it can; `control_outbox_unverifiable` lines
 mean something other than the catalog wrote under `_control_outbox`: treat that as a forgery
 (§ A bus door refusing events).
 
@@ -444,7 +448,7 @@ object store, lineage records through the catalog, and a pod whose secret store 
 it answered (`status`, `code`). Then its readiness (`kubectl get pods`) and the dependency's section:
 [OpenFGA down](#openfga-down--503-everywhere), [Object store down](#object-store-down--data-plane),
 [Lineage not ready](#lineage-not-ready--catalog-unreachable),
-[The secret store sealed](#the-secret-store-sealed--boot-deadlock).
+[The secret store sealed](#the-secret-store-sealed--no-app-starts).
 
 **Act.** Restore the dependency.
 

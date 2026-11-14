@@ -13,6 +13,7 @@ from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 
 from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.dapr_auth import assert_app_token_configured
@@ -39,21 +40,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     _disarm_drain = arm_drain_on_sigterm(app)
     try:
         settings = get_settings()
-        # Fail closed if behind a Dapr sidecar but the app-token is unset: the write-event route would otherwise be an
-        # open forged-commit path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
-        assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
         # Every background loop of this process is supervised: one that ends unasked ends the process (ADR 0203).
-        async with Supervisor() as loops, standing(app, settings, loops), _lanes_queue(settings) as task_queue:
-            app.state.task_queue = task_queue
-            # Reported and never gating: the lane's deliveries come from the sidecar, which no readiness answer turns away.
-            app.state.health = reported_health(settings, task_queue)
-            app.state.health.watch(loops)
-            app.state.startup_complete = True
-            try:
-                yield
-            finally:
-                app.state.shutting_down = True
-                await loops.stop()
+        async with Supervisor() as loops, standing(app, settings, loops):
+            # Fail closed if behind a Dapr sidecar but the app-token is unset: the write-event route would otherwise be
+            # an open forged-commit path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
+            # AFTER THE LOGIN `standing` MAKES, AND OFF THE EVENT LOOP: with the token in the store this is a read with
+            # the boot's budget, made under that login, so a store that never admits maintenance ends the start there.
+            await run_in_threadpool(assert_app_token_configured, dapr_enabled=settings.dapr_enabled)
+            async with _lanes_queue(settings) as task_queue:
+                app.state.task_queue = task_queue
+                # Reported and never gating: the lane's deliveries come from the sidecar, which no readiness answer turns away.
+                app.state.health = reported_health(settings, task_queue)
+                app.state.health.watch(loops)
+                app.state.startup_complete = True
+                try:
+                    yield
+                finally:
+                    app.state.shutting_down = True
+                    await loops.stop()
     finally:
         _disarm_drain()
 

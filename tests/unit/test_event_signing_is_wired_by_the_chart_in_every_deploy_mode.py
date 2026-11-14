@@ -228,18 +228,24 @@ def _loaded_configurations(docs: tuple[dict, ...]) -> dict[str, tuple[str, dict]
     return loaded
 
 
-def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod_cannot_load_a_stale_one() -> None:
-    before = _loaded_configurations(chart_render.render(*DEFAULT_ARGS))
-    probe = ("--set", "services.lineage.forward.authSecret.name=probe-forward-auth")
-    after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *probe))
+@pytest.mark.parametrize(
+    ("overlay", "edits"),
+    [
+        # The sidecars' trace sampling is part of every Configuration's spec.
+        pytest.param(("--set-string", "observability.samplingRate=0.25"), True, id="a-value-in-every-spec"),
+        # A secret an app reads is in no Configuration: each denies its sidecar's secrets API whole.
+        pytest.param(("--set", "services.lineage.forward.authSecret.name=probe-forward-auth"), False, id="a-value-in-no-spec"),
+    ],
+)
+def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod_cannot_load_a_stale_one(overlay: tuple[str, ...], edits: bool) -> None:
+    telemetry = ("--set", "observability.enabled=true", "--set-string", "observability.export.endpoint=http://otlp.example:4318")
+    before = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *telemetry))
+    after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *telemetry, *overlay))
 
     assert before.keys() == after.keys() and len(before) >= 3, f"the pods that name a Configuration are {sorted(before)}"
     edited = {pod for pod in before if before[pod][1] != after[pod][1]}
     renamed = {pod for pod in before if before[pod][0] != after[pod][0]}
-    # The forwarder's credential is denied in every per-app Configuration but lineage's, which reads it.
-    assert edited and edited != before.keys(), (
-        f"the overlay must edit some Configurations and leave others, or one direction below measures nothing: {sorted(edited)}"
-    )
+    assert edited == (before.keys() if edits else set()), f"the overlay edited {sorted(edited)}, so one direction below measures nothing"
     # Helm applies a Deployment before the Configuration it names and daprd reads that Configuration once, at boot: a pod that boots in
     # between loads whatever already sits under its name. Under a new name there is nothing to load, and daprd exits until Helm applies it.
     assert not edited - renamed, (

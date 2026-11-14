@@ -89,3 +89,12 @@ at each use.
   refuses the deliveries of a sidecar still presenting it, once the TTL passes.
 - The media plane's own process-lifetime caches (`service_kit.media.config._store_secret`, the viewer's per-store
   credentials) are not changed: that plane is outside Phase 1.
+
+## Amendment (2026-11-14): the read is the service's own
+
+Source: #787 (XC-199), step D2. Decisions 1 and 3 stand: a value read from the store is held for a jittered TTL and read
+again, in `lakehouse.governed.secret_cache`. Who reads changed. A service reads the store under its own login
+(`lakehouse.governed.secrets`; [ADR 0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md),
+amendment of the same day) and never through its sidecar's secrets API, so the boot-time read the Context names
+(`apply_dapr_secrets`) and decision 2's `*_DAPR_SECRET_S3_ID_FIELD` and `*_DAPR_SECRET_S3_FIELD` settings name code that
+is gone; ADR 0170 and ADR 0197 had already taken every service's S3 key pair out of the store.

@@ -20,7 +20,7 @@ app's sidecar delivered an event, and every app the bus lets publish reaches tha
 names is a claim until its ``rask_signature`` proves it. The event is verified with the control doors' own rule,
 against the identities of the role ``control_signer_role`` names for its action (``RASK_CONTROL_SIGNER_ROLES``),
 under ``RASK_SIGNATURE_DOORS``: ``enforce`` acknowledges a refusal and buffers and evicts nothing for it, ``observe``
-acts as ``off`` and counts what it would refuse, and keys the sidecar cannot serve are a retry, since they say nothing
+acts as ``off`` and counts what it would refuse, and keys the secret store cannot serve are a retry, since they say nothing
 about the signature. A refusal is counted in ``catalog.signature.refused``.
 """
 
@@ -83,7 +83,7 @@ async def _screen(arrived: dict[str, Any], event: CatalogControlEvent, request: 
         return None
     signers = settings.control_signer_roles.get(control_signer_role(event.action), frozenset())
     claim = control_signature_of(arrived)
-    source = published_keys(request, settings).for_event(claim.kid if claim else None)
+    source = published_keys(request).for_event(claim.kid if claim else None)
     verdict = await run_in_threadpool(
         judge, lambda: verify_control_signature(arrived, source=source, signers=signers, delegators=settings.event_delegators), mode
     )

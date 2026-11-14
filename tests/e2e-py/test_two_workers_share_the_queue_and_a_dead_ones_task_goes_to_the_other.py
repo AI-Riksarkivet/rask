@@ -79,10 +79,8 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
-import httpx
 import pytest
 import pytest_asyncio
-import respx
 from measured_metrics import Measured
 from nats.aio.msg import Msg
 from nats_auth_rig import VALUES_ENV, Broker, Client, Credential, Link, Mint, Permissions, Tools, Violation, issue, mint, run_stream_job, violations
@@ -94,6 +92,7 @@ from pydantic import BaseModel, SecretStr
 
 from lakehouse import location_claims, store_session
 from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.governed import secrets
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.supervision import EndProcess, end_process
 from maintenance.core.config import MaintenanceSettings
@@ -115,6 +114,7 @@ from maintenance.services.queue import (
     sample_queue,
 )
 from maintenance.services.store_events import StoreEvents
+from tests.secret_store_double import SecretStoreDouble
 from tests.unit.chart_render import DEFAULT_ARGS, nats_users, render
 
 
@@ -364,14 +364,18 @@ def _the_bus(tmp_path: Path, extra: dict[str, Permissions] | None = None) -> tup
 
 
 def _replica_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broker: Broker) -> MaintenanceSettings:
-    """A replica's settings as the service reads them, reaching its secrets in the store with its ServiceAccount token as
-    the pod does, and the store session its lifespan exchanges that token for already held: no test here reads an object."""
+    """A replica's settings as the service reads them: a secret store it logs in to as itself, an object-store identity
+    that is its ServiceAccount token as the pod's is, and the store session its lifespan exchanges that token for already
+    held: no test here reads an object."""
     (token := tmp_path / "token").write_text("a projected token")
     monkeypatch.setenv("MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE", str(token))
     monkeypatch.setenv("MAINTENANCE_S3_STS_ENDPOINT", "http://store.example:9000")
+    # Where a replica's secret store is said to be; the suite's double answers there (`_start_replica`).
+    monkeypatch.setenv("RASK_SECRET_STORE_ADDR", SecretStoreDouble.ADDRESS)
+    monkeypatch.setenv("RASK_SECRET_STORE_ROLE", SecretStoreDouble.ROLE)
     settings = MaintenanceSettings.model_validate(
         {
-            **{"s3_bucket": "b", "nats_url": broker.url, "secrets_from_dapr": True, "drain_seconds": 5},
+            **{"s3_bucket": "b", "nats_url": broker.url, "drain_seconds": 5},
             **{"task_heartbeat_seconds": _HEARTBEAT, "task_ack_wait_seconds": _ACK_WAIT, "task_max_deliver": _MAX_DELIVER},
         }
     )
@@ -388,10 +392,15 @@ def _replica_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broker: B
 async def _start_replica(stack: AsyncExitStack, settings: MaintenanceSettings, worker: Credential, *, end: EndProcess = end_process) -> TaskQueue:
     """A replica started as the service starts it (`tasks.running_worker`), its bus credential read from a stand-in of the
     store's secrets API, run until ``stack`` closes; the queue it runs on. Every task it is handed runs nothing."""
-    with respx.mock(assert_all_called=True) as store:
-        secret = f"http://localhost:3500/v1.0/secrets/{settings.dapr_secret_store}/{settings.nats_credentials_secret}"
-        store.get(secret).mock(return_value=httpx.Response(200, json={"jwt": worker.jwt, "seed": worker.seed()}))
+    # Each replica logs in for itself, as each pod does: the process's one session is forgotten first.
+    secrets.forget_secret_store()
+    store = SecretStoreDouble()
+    credential = store.hold(settings.nats_credentials_secret, {"jwt": worker.jwt, "seed": worker.seed()})
+    with store.router:
         lane = await stack.enter_async_context(tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), end=end))
+        # Read while the router answers: stopping it rolls each route's calls back to what they were when it started.
+        asked = (store.login.call_count, credential.call_count)
+    assert asked == (1, 1), "the replica did not read its bus credential under a login of its own"
     assert lane is not None, "the replica started with no bus"
     return lane
 

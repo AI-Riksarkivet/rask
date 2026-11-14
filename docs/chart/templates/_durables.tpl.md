@@ -23,7 +23,7 @@ a test rather than being deleted at the next release.
 The CONDITIONALS must match the components' own, which is why each branch below names the same guard
 its component carries rather than a convenient approximation.
 
-## `{{- $names := list (printf "%s-durable" .Values.services.lineage.daprAppId) -}}`
+## `{{- $names := list (printf "%s-durable" .Values.services.lineage.appId) -}}`
 
 Lineage's own subscriber, unconditional like its component ([[LH-303]]): durable so a NATS restart
 cannot unsubscribe it. Left out of this set, the orphan pass would delete it on every release and

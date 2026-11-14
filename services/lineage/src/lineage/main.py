@@ -14,6 +14,7 @@ from typing import Final
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.admission import judge_before_the_body
 from lakehouse.bus_watchdog import BusWatchdog, start_bus_watchdog
@@ -21,6 +22,7 @@ from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.dapr_auth import assert_app_token_configured
 from lakehouse.governed.fga import dispose as fga_dispose
+from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import secret_store_dependency
 from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
@@ -69,11 +71,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # shutting_down, so k8s pulls the pod from rotation during boot and graceful drain.
     app.state.startup_complete = False
     app.state.shutting_down = False
-    # Fail closed if ANY sidecar-delivered route mounts — the pub/sub ingest (dapr_enabled) OR the relay
-    # cron binding — but the app-api-token is unset: either route would otherwise be an unauthenticated
-    # forgery path (the audit's 'blanked token' residual + its cron-route follow-up: the two flags can
-    # diverge, so the assert must cover both mounts). No-op in dev (both off).
-    assert_app_token_configured(dapr_enabled=settings.dapr_enabled or bool(settings.relay_binding_name))
     # Q17-6 / §F2-2: the CODE default is anonymous while the chart flips auth ON, so a service
     # started any other way serves every route to whoever reaches the port. Refused on the
     # AMBIGUITY — an operator declares which they meant. See `assert_authentication_configured`.
@@ -104,6 +101,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
     """Build what lineage serves with onto ``app.state``, each piece's release pushed onto ``stack`` as it is built, and
     its background loops started on ``loops``."""
+    # LINEAGE LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before it serves, and refuses to start when the store
+    # never admits it: with no key of its own to read it would otherwise ask the store nothing until the first event it
+    # has to verify. A loop of `loops` then logs in again once half the store token's lease is used, or as soon as the
+    # store no longer honours it. Nothing for a stack with no secret store.
+    await stack.enter_async_context(secret_store_session(loops))
+    # Fail closed if ANY sidecar-delivered route mounts — the pub/sub ingest (dapr_enabled) OR the relay
+    # cron binding — but the app-api-token is unset: either route would otherwise be an unauthenticated
+    # forgery path (the audit's 'blanked token' residual + its cron-route follow-up: the two flags can
+    # diverge, so the assert must cover both mounts). No-op in dev (both off).
+    # AFTER THE LOGIN ABOVE, AND OFF THE EVENT LOOP: with the token in the store this is a read with the boot's budget,
+    # made under the login the start already holds, so a store that never admits lineage ends the start there.
+    await run_in_threadpool(assert_app_token_configured, dapr_enabled=settings.dapr_enabled or bool(settings.relay_binding_name))
     # LINEAGE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its outbox drain signs with a session its ServiceAccount token is
     # exchanged for, here at boot, failing the boot closed if none is issued, then again once half the session's life is
     # used. With no token (the offline and Dagger lanes) an outbox on the store is drained under the environment's pair,
@@ -166,8 +175,8 @@ def _dependencies(app: FastAPI, settings: LineageSettings, store: ProvenanceStor
     ]
     if settings.outbox_on_the_store:
         dependencies.append(store_dependency(settings.outbox_uri, partial(storage_options, settings), required=False))
-    if settings.secrets_from_dapr and settings.signing.signers:
-        dependencies.append(secret_store_dependency(settings.dapr_secret_store, min(settings.signing.signers)))
+    if secret_store_configured():
+        dependencies.append(secret_store_dependency())
     return dependencies
 
 

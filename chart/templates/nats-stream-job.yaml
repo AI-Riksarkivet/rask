@@ -251,7 +251,7 @@ spec:
                   fi
                 done
               done
-              LIN="{{ .Values.services.lineage.daprAppId }}-durable"
+              LIN="{{ .Values.services.lineage.appId }}-durable"
               EXP_MACK="{{ required "services.lineage.deliveriesInFlight is required" .Values.services.lineage.deliveriesInFlight }}"
               mack_of() { info=$(consumer_of LINEAGE "$LIN") || return 1; echo "$info" | sed -n 's/.*"max_ack_pending":\(-\{0,1\}[0-9]*\).*/\1/p'; }
               mack=$(mack_of) || exit 1

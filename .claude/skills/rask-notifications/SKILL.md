@@ -113,7 +113,13 @@ event = attach_signature(event, key=holder.key(), identity=holder.identity)
 # Staged, then published in the envelope derived from the event (`lakehouse.cloud_events.lineage_envelope`): its `id` is
 # the event's identity and state, the message id the stream deduplicates on, so a relay's copy is stored once.
 await outbox.publish_with_outbox(
-    client, lineage_envelope(event), outbox_uri=outbox_uri, storage_options=storage_options, pubsub_name="pubsub", topic_name="lineage.events.v1", timeout_seconds=5.0
+    client,
+    lineage_envelope(event),
+    outbox_uri=outbox_uri,
+    storage_options=storage_options,
+    pubsub_name="pubsub",
+    topic_name="lineage.events.v1",
+    timeout_seconds=5.0,
 )
 ```
 

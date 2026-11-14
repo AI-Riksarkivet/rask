@@ -10,7 +10,7 @@ outage the outbox exists for. Measured on ef9d1e8e with the real emitter and the
 Staged the way the catalog stages it: its real builder's DatasetEvent, signed as the catalog on behalf of the person it
 authenticated, left in the outbox when the publish fails, and read back through the doors' own discriminator, so the producer
 and the relay cannot disagree unseen. The relay verifies that signature against the key the catalog publishes (served here by
-respx at the sidecar's address), so every test below reaches its assertion through a verified event; the signature is made by the
+the suite's secret-store double), so every test below reaches its assertion through a verified event; the signature is made by the
 root conftest's `EventSigner`, which writes the wire format from the contract alone.
 """
 
@@ -20,23 +20,22 @@ import asyncio
 import json
 import os
 import uuid
-from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
 
-import httpx
 import pytest
-import respx
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, TransactionNotFoundError, UnsupportedOperationError
+from pydantic import SecretStr
 
 from catalog.core.lineage_emit import INSERT, build_write_event
-from lakehouse import outbox, outbox_metrics
+from lakehouse import outbox, outbox_metrics, store_session
 from lakehouse.governed import fga
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lineage.signing import signature_of
 from lakehouse.lineage_events import DatasetUuids, event_identity
 from lakehouse.openlineage import run_id_for
@@ -46,10 +45,10 @@ from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
 from lineage.services.provenance import feed_key
+from tests.secret_store_double import SecretStoreDouble
 
 
 _CATALOG = "service-catalog"
-_SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 _AUTHOR = "dex~alice"
 _TABLE = "gov$bronze"
 
@@ -106,20 +105,33 @@ class _Repo:
 
 
 @pytest.fixture
-def catalog(event_signer: Any, respx_allows_unused_routes: None) -> Iterator[Any]:
-    """The catalog's signing identity, its public key served where the Dapr sidecar serves a secret."""
+def catalog(event_signer: Any, secret_store: SecretStoreDouble, respx_allows_unused_routes: None) -> Any:  # noqa: ANN401 — the root conftest's `EventSigner`
+    """The catalog's signing identity, its public key held by the secret store. A test whose event is refused or poison
+    before its signature is judged never reads that key."""
     signer = event_signer(_CATALOG)
-    with respx.mock:
-        respx.get(f"{_SECRETS}/signing-public-{_CATALOG}").mock(return_value=httpx.Response(200, json={"keys": signer.public}))
-        yield signer
+    secret_store.hold(f"signing-public-{_CATALOG}", {"keys": signer.public})
+    return signer
 
 
 def _person(name: str) -> PersonPrincipal:
     return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=0, iat=0))
 
 
+@pytest.fixture(autouse=True)
+def _a_session_cache_of_the_tests_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The store session `_settings` holds for lineage ends with the test that asked for it, and no key pair another test
+    left in this process's environment stands beside lineage's token."""
+    monkeypatch.setattr(store_session, "SESSIONS", store_session.SessionCache())
+    monkeypatch.delenv("LINEAGE_S3_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("LINEAGE_S3_SECRET_ACCESS_KEY", raising=False)
+
+
 def _settings(tmp_path: Path, *, fga_enabled: bool, signers: frozenset[str] = frozenset({_CATALOG})) -> LineageSettings:
-    """Signing enforced, the catalog the one delegator and `signers` the identities that may sign, as the chart renders it."""
+    """Signing enforced, the catalog the one delegator and `signers` the identities that may sign, as the chart renders it,
+    and lineage's store identity its projected token with the session it was exchanged for held, as the deployed
+    service's is (ADR 0170): a process with a secret store is handed no key pair."""
+    token = tmp_path / "rask-object-store-token"
+    token.write_text("projected\n")
     auth = {
         "oidc_enabled": True,
         "oidc_issuer": "https://dex.example",
@@ -128,14 +140,21 @@ def _settings(tmp_path: Path, *, fga_enabled: bool, signers: frozenset[str] = fr
         "fga_store_id": "s",
         "fga_model_id": "m",
     }
-    return LineageSettings.model_validate(
+    settings = LineageSettings.model_validate(
         {
             "outbox_uri": str(tmp_path / "outbox"),
             "fga_enabled": fga_enabled,
             "signing": Signing(signers=signers, delegators=frozenset({_CATALOG})),
+            "s3_web_identity_token_file": str(token),
+            "s3_sts_endpoint": "http://object-store:9000",
             **(auth if fga_enabled else {}),
         }
     )
+    identity = settings.web_identity
+    assert identity is not None, "lineage holds no web identity, so it would sign with no session"
+    session = S3KeyPair(access_key_id="LINEAGESESSION", secret_access_key=SecretStr("test-only"), session_token=SecretStr("test-only"))
+    store_session.SESSIONS.hold(identity, session, asked_at=store_session.SESSIONS.now(), lifetime_seconds=3600)
+    return settings
 
 
 def _create_event(signer: Any, *, author: str = _AUTHOR) -> dict[str, Any]:  # noqa: ANN401 - the conftest's EventSigner
@@ -297,13 +316,13 @@ def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(tmp_path
     ],
 )
 def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any, by_the_catalog: bool, drained: int
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any, secret_store: SecretStoreDouble, by_the_catalog: bool, drained: int
 ) -> None:
     """The catalog revokes a table's grants in the request that drops it, so a drop delivered after the revoke asks FGA about a
     table nobody may write. A drop whose signature verifies as a delegator is the catalog's attestation that it enforced `can_drop`,
     and is admitted without the grant; a drop any other listed signer signed still needs it."""
     other = event_signer("service-bronze-to-silver")
-    respx.get(f"{_SECRETS}/signing-public-{other.identity}").mock(return_value=httpx.Response(200, json={"keys": other.public}))
+    secret_store.hold(f"signing-public-{other.identity}", {"keys": other.public})
     settings = _settings(tmp_path, fga_enabled=True, signers=frozenset({_CATALOG, other.identity}))
     author = _AUTHOR if by_the_catalog else other.identity
     event = build_write_event(
@@ -462,13 +481,15 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "the undeletable poison should wait for the next tick"
 
 
-def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any) -> None:
+def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any, secret_store: SecretStoreDouble
+) -> None:
     """A staged copy of a create the feed already holds byte-for-byte (published, then the stager's own
     delete failed) is a redelivery, even when its author has since lost the grant. It is signed by a listed signer that
     is no delegator, which the gate checks in full, so the refusal it meets is what the replay answers. The feed keys a
     static change by its derived id, never by a run id it does not have."""
     other = event_signer("service-bronze-to-silver")
-    respx.get(f"{_SECRETS}/signing-public-{other.identity}").mock(return_value=httpx.Response(200, json={"keys": other.public}))
+    secret_store.hold(f"signing-public-{other.identity}", {"keys": other.public})
     settings = _settings(tmp_path, fga_enabled=True, signers=frozenset({_CATALOG, other.identity}))
     _, staged_json = _stage_a_create(settings, other, author=other.identity)
     _arm_gate(monkeypatch, writer="dex~somebody-else")

@@ -16,7 +16,7 @@ Driven through the registered `/lineage-events` route, with the key reader's clo
 redelivery are crossed without waiting, and the bound shrunk to one key id so a second one pushes the first out. One event is built
 per signing key, so delivering a key's event again is the sidecar's redelivery of it. A delivery's clock time is when its
 verification began, so deliveries at one instant are verifications that overlap, and a store that hangs moves the clock on by the
-read's timeout. The sidecar's secret API is stood in for by respx, and the signatures are built by the root conftest's
+read's timeout. The secret store is the suite's double, and the signatures are built by the root conftest's
 `EventSigner` from the wire format alone.
 """
 
@@ -28,18 +28,16 @@ from typing import Any
 
 import httpx
 import pytest
-import respx
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from lakehouse.governed.signing_key import KEY_READ_TIMEOUT_SECONDS
 from lakehouse.lineage.keys import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS
-from lineage.services.signature import dapr_published_keys
+from lineage.services.signature import store_published_keys
+from tests.secret_store_double import SecretStoreDouble
 
 
 SIGNER = "service-maintenance"
-STORE = "lance-secrets"
-SECRETS = f"http://localhost:3500/v1.0/secrets/{STORE}"
 
 #: What the door did with one delivery: asked for it again, acked it as refused with nothing recorded, or recorded it.
 RETRIED, REFUSED, RECORDED = "retried", "refused", "recorded"
@@ -98,7 +96,6 @@ def _outcome(answered: dict[str, Any], newly_recorded: bool) -> str:
     return f"unexpected answer {answered}"
 
 
-@respx.mock
 @pytest.mark.parametrize(
     ("published_now", "deliveries", "reads_of_the_store"),
     [
@@ -153,6 +150,7 @@ def _outcome(answered: dict[str, Any], newly_recorded: bool) -> str:
 def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_expires(
     monkeypatch: pytest.MonkeyPatch,
     event_signer: Any,
+    secret_store: SecretStoreDouble,
     published_now: str | None,
     deliveries: list[tuple[float, str, str]],
     reads_of_the_store: int,
@@ -162,7 +160,6 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
     for key, value in {
         "APP_API_TOKEN": "the-estate-app-token",
         "LINEAGE_DAPR_ENABLED": "true",
-        "DAPR_HTTP_PORT": "3500",
         "LINEAGE_SIGNERS": json.dumps([SIGNER]),
         "LINEAGE_DELEGATORS": json.dumps([]),
     }.items():
@@ -181,10 +178,10 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
     feed = _Feed()
     app.state.provenance = feed
     clock = _Clock()
-    app.state.published_keys = dapr_published_keys(STORE, clock=clock)
+    app.state.published_keys = store_published_keys(clock=clock)
     signers = {name: event_signer(SIGNER) for name in RUN_IDS}
     events = {name: signer.sign(_event(RUN_IDS[name])) for name, signer in signers.items()}
-    published = respx.get(f"{SECRETS}/signing-public-{SIGNER}").mock(return_value=httpx.Response(200, json={"keys": signers["old"].public}))
+    published = secret_store.hold(f"signing-public-{SIGNER}", {"keys": signers["old"].public})
     client = TestClient(app)
     headers = {"dapr-api-token": "the-estate-app-token"}
     primed = client.post("/lineage-events", json={"data": signers["old"].sign(_event(PRIMER))}, headers=headers)
@@ -197,7 +194,7 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
 
         published.mock(side_effect=_hangs_then_fails)
     else:
-        published.mock(return_value=httpx.Response(200, json={"keys": ",".join(signers[name].public for name in published_now.split(","))}))
+        published.mock(return_value=secret_store.held({"keys": ",".join(signers[name].public for name in published_now.split(","))}))
 
     outcomes: list[str] = []
     for at, signed_with, _ in deliveries:

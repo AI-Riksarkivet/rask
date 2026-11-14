@@ -1,4 +1,4 @@
-"""Reads of the Dapr secret store, each served for a bounded, jittered time ([[XC-082]], ADR 0166).
+"""Reads of the secret store, each served for a bounded, jittered time ([[XC-082]], ADR 0166).
 
 A STORE THE PODS NEVER RE-READ MAKES A ROTATION AN OUTAGE: a credential replaced in OpenBao is still the one every
 running pod signs with, until a restart, and once the old one is revoked every call under it fails. So every value read
@@ -13,8 +13,8 @@ confirming is dropped when its TTL passes, and a field the store does not hold i
 rather than remembered as absent.
 
 SINGLE-FLIGHT PER READ. Concurrent callers that find one read missing or expired wait on one load rather than each
-asking the store. A read is keyed on the store, the secret AND the fields asked for, and holds only those fields: the
-`lance` bundle carries every service's credential, and this process keeps no more of it than it uses.
+asking the store. A read is keyed on the secret AND the fields asked for, and holds only those fields: this process
+keeps no more of a secret than it uses.
 """
 
 from __future__ import annotations
@@ -39,18 +39,17 @@ _JITTER: Final = secrets.SystemRandom()
 
 
 class StoreRead(BaseModel):
-    """One read of the secret store: these fields of this secret, from this store."""
+    """One read of the process's secret store: these fields of this secret."""
 
     model_config = ConfigDict(frozen=True)
 
-    store: str
     secret: str
     fields: tuple[str, ...]
 
 
 class _Entry(BaseModel):
     """What one read returned, each value ``SecretStr`` so a repr, a log line or an error that echoes the entry carries
-    none of them ([[LH-543]]): the store's fields are a service's own key pair and the Dapr app tokens. Only
+    none of them ([[LH-543]]): the store's fields are a service's own key pair and the app tokens. Only
     :meth:`SecretCache.peek` and a load hand them out, to the caller that asked."""
 
     model_config = ConfigDict(frozen=True)

@@ -17,8 +17,8 @@ grants, so a new subchart that binds a secret-reading role to `default` fails he
 having listed it.
 
 ONE TEST PER CLOSES-WHEN CLAUSE a render can see: the grants, and one SA per service. The third,
-every sidecar still loading lance-secrets, is read back on the deployed estate; that the dev store a
-sidecar reads is seeded before it serves is `test_the_dev_openbao_is_seeded_by_its_own_pod.py`.
+every sidecar still loading lance-secrets, is read back on the deployed estate; that the dev store its
+readers log in to is seeded before it serves is `test_the_dev_openbao_is_seeded_by_its_own_pod.py`.
 
 MUTATION-CHECKED 2026-10-11 ([[XC-128]]; again with [[XC-130]]). With a template binding a `secrets: get` Role to SA `default` added to the
 chart, the grants test fails in every overlay on `RoleBinding/<name> grants ['secrets'] to SA default` and the

@@ -10,9 +10,9 @@ at once and each took out a whole stack on the server-side apply:
     Component.dapr.io "lance-statestore" is invalid:
     auth: Invalid value: "null": auth in body must be of type object: "null"
 
-`deniedSecrets` is `all - mine`, so a verifier that owns every identity denies nothing. `auth` holds
-one `secretStore` line gated on `lance.secretsViaDapr`. Both render, both lint clean, and every gate
-that reads the PARSED value sees "absent" — which is what they mean, to everything but the CRD.
+The first was a list computed as `all - mine` for an app that owned every identity, the second a block
+whose one line sat behind a guard that was off. Both rendered, both linted clean, and every gate
+that reads the PARSED value saw "absent" — which is what they meant, to everything but the CRD.
 
 ONE OVERLAY IS NOT COVERAGE, and that is the other half of the lesson. The first cut of this gate
 rendered the local-development overlay, found the two `deniedSecrets` and reported the class clean.

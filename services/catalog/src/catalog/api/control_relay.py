@@ -74,7 +74,7 @@ log = logging.getLogger(__name__)
 
 #: Checks one staged control event as THIS catalog's: answers what its signature established, and raises
 #: `SignatureError` for an event this catalog did not sign and `KeySourceUnavailableError` while the keys it publishes
-#: cannot be read. Blocking, since a key read is a call to the sidecar.
+#: cannot be read. Blocking, since a key read is a call to the secret store.
 type StagedVerifier = Callable[[Mapping[str, Any]], VerifiedSignature]
 
 #: Bounds what an event's own text puts on a log line: a staged object's key and action, or a delivered event's claimed
@@ -140,7 +140,7 @@ def get_control_publisher(request: Request) -> object | None:
 ControlPublisherDep = Annotated[object | None, Depends(get_control_publisher)]
 
 
-def published_keys(request: Request, settings: Settings) -> PublishedKeys:
+def published_keys(request: Request) -> PublishedKeys:
     """This app's one key reader, built on first use and kept on the app so its cache outlives one delivery or tick.
 
     Shared by the relay and the control lane's subscription (`api/dapr.py`): one reader per app, so both read the keys
@@ -149,24 +149,24 @@ def published_keys(request: Request, settings: Settings) -> PublishedKeys:
     state = request.app.state
     keys: PublishedKeys | None = getattr(state, "published_keys", None)
     if keys is None:
-        keys = state.published_keys = PublishedKeys(published_key_fetch(settings.dapr_secret_store))
+        keys = state.published_keys = PublishedKeys(published_key_fetch())
     return keys
 
 
-async def get_staged_verifier(request: Request, settings: SettingsDep) -> StagedVerifier | None:
+async def get_staged_verifier(request: Request) -> StagedVerifier | None:
     """The check a staged object passes before it goes out, or ``None`` for a catalog that does not sign.
 
     Signed by THIS catalog and nobody else: the identity of the holder the lifespan attached is the only signer and the
     only delegator, so a person actor verifies only under the delegation this catalog declares for the person it
-    authenticated. Checked against the keys that identity publishes, through this pod's sidecar and the catalog's secret
-    store. Whether the holder has resolved its own private key does not matter here, since the relay signs nothing.
+    authenticated. Checked against the keys that identity publishes, read from the secret store under the catalog's own
+    login. Whether the holder has resolved its own private key does not matter here, since the relay signs nothing.
 
     `async def` although it awaits nothing, so the key reader is built on the event loop and two first ticks share one.
     """
     holder: SigningKeyHolder[SigningKey] | None = getattr(request.app.state, SIGNING_STATE, None)
     if holder is None:
         return None
-    keys = published_keys(request, settings)
+    keys = published_keys(request)
     own = frozenset({holder.identity})
 
     def verify(envelope: Mapping[str, Any]) -> VerifiedSignature:

@@ -1,10 +1,10 @@
 """A signer's own private signing key: read from the secret store, held only while it is published ([[LH-064]]).
 
 Each signing identity owns an Ed25519 pair in the store, under the identity's KEY NAME (`signing_key_name`): the seed
-sits in `signing-key-<name>` (field `seed`) and only that identity's own sidecar may read it; the public half sits in
+sits in `signing-key-<name>` (field `seed`) and only that identity's own store role may read it; the public half sits in
 `signing-public-<name>` (field `keys`, the current key first) and every verifier reads it. On the estate an identity is
 a service-account subject (`kubernetes~system:serviceaccount:<ns>:<sa>`), the subject its events are authored as, and its
-key name is the account's name. A signer resolves its seed through its own sidecar, derives the public
+key name is the account's name. A signer resolves its seed under its own login to the store, derives the public
 key from it, and signs only while that key is listed.
 
 READY MEANS LISTED, NOT MERELY READABLE. A verifier refuses an event signed with a key its identity does not publish,
@@ -38,11 +38,10 @@ from contextlib import suppress
 from functools import partial
 from typing import TYPE_CHECKING, Final, Protocol
 
-import httpx
 from fastapi import FastAPI, Request
 
 from lakehouse.governed.principal import Principal
-from lakehouse.governed.secrets import fetch_dapr_secret, secret_store_answers
+from lakehouse.governed.secrets import read_secret, secret_store_answers, secret_store_configured
 from lakehouse.health import Dependency
 from lakehouse.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
@@ -66,17 +65,14 @@ KEYS_FIELD: Final = "keys"
 #: The longest a ready signer goes between resolutions. A store that was re-minted is noticed within this bound.
 MAX_REFRESH_SECONDS: Final = 300.0
 
-#: A key name becomes part of a secret name and so of a sidecar URL path, an OpenBao path and a shell word: only a
-#: DNS-label-like name is read.
+#: A key name becomes part of a secret name and so of the store's path and a shell word: only a DNS-label-like name is
+#: read.
 _KEY_NAME: Final = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 #: The bound on one verifier's read of a published key list. ONE attempt, and short: verification sits on the delivery
-#: path of every signed event, and the boot-time retry `fetch_dapr_secret` defaults to (about two minutes) would hold a
-#: worker that long per event through a store blip. An outage is answered RETRY instead, and the sidecar's redelivery is
-#: the retry.
+#: path of every signed event, and the boot-time budget `read_secret` defaults to (about two minutes) would hold a
+#: worker that long per event through a store blip. An outage is answered RETRY instead, and the redelivery is the retry.
 KEY_READ_TIMEOUT_SECONDS: Final = 2.0
-#: The bound on the health watch's read of the secret store, inside the watch's own budget for it.
-_SECRET_STORE_READ_SECONDS: Final = 2.0
 
 
 class SigningKeyUnavailableError(RuntimeError):
@@ -123,49 +119,44 @@ def signing_key_name(identity: str) -> str:
 
 
 def signing_key_secret(identity: str) -> str:
-    """The secret holding `identity`'s private seed. Dapr grants by secret name, so this name is what is scoped."""
+    """The secret holding `identity`'s private seed. The store's policies grant by secret name, so this name is what is scoped."""
     return f"signing-key-{signing_key_name(identity)}"
 
 
 def signing_public_secret(identity: str) -> str:
-    """The secret holding `identity`'s published public keys. Never denied to any sidecar."""
+    """The secret holding `identity`'s published public keys, which every verifier's role reads."""
     return f"signing-public-{signing_key_name(identity)}"
 
 
-def secret_store_dependency(store: str, identity: str) -> Dependency:
-    """The secret store as a dependency `/readyz` reports and never gates on (ADR 0203), read for ``identity``'s published
-    key list, which no sidecar is denied: a service rides through the store's outage on the keys it already holds. Each
-    read goes out on one client, held while the store is watched and closed with the watch."""
-    sidecar = httpx.AsyncClient(timeout=_SECRET_STORE_READ_SECONDS)
-    return Dependency(
-        name="secret-store", read=partial(secret_store_answers, sidecar, store, signing_public_secret(identity)), required=False, close=sidecar.aclose
-    )
+def secret_store_dependency() -> Dependency:
+    """The secret store as a dependency `/readyz` reports and never gates on (ADR 0203): whether the store still honours
+    this process's own login, by the store's answer about its token. A service rides through the store's outage on the
+    keys it already holds. The blocking question runs on the event loop's own executor, never on the request threads a
+    sync door is lent."""
+    return Dependency(name="secret-store", read=partial(asyncio.to_thread, secret_store_answers), required=False)
 
 
-def published_key_fetch(store: str) -> Callable[[str], Mapping[str, str]]:
-    """The read a verifier's `lakehouse.lineage.keys.PublishedKeys` takes: an identity's published list through THIS pod's sidecar.
+def published_key_fetch() -> Callable[[str], Mapping[str, str]]:
+    """The read a verifier's `lakehouse.lineage.keys.PublishedKeys` takes: an identity's published list (its
+    `signing-public-<name>`, `signing_public_secret`) from the store, under THIS process's own login.
 
-    One attempt bounded by `KEY_READ_TIMEOUT_SECONDS`. A secret the sidecar cannot serve answers ``{}``, which the
+    One attempt bounded by `KEY_READ_TIMEOUT_SECONDS`. A secret the store does not serve answers ``{}``, which the
     reader turns into `KeySourceUnavailableError`, so the door answers RETRY rather than refusing an honest event.
-
-    Args:
-        store: The Dapr secret store holding every identity's `signing-public-<name>` (`signing_public_secret`).
     """
 
     def fetch(identity: str) -> dict[str, str]:
-        return fetch_dapr_secret(store, signing_public_secret(identity), timeout=KEY_READ_TIMEOUT_SECONDS, retries=1)
+        return read_secret(signing_public_secret(identity), timeout=KEY_READ_TIMEOUT_SECONDS, retries=1)
 
     return fetch
 
 
 class SigningKeyHolder[KeyT: SigningKeyLike]:
-    """One service's own signing key, resolved through its own Dapr sidecar and held only while it is listed."""
+    """One service's own signing key, resolved under its own login to the store and held only while it is listed."""
 
     def __init__(
         self,
         *,
         identity: str,
-        store: str,
         load_key: Callable[[str], KeyT],
         parse_published: Callable[[str], Sequence[str]],
         refresh_seconds: float = MAX_REFRESH_SECONDS,
@@ -175,7 +166,6 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
 
         Args:
             identity: The identity this service signs as, as the chart names it.
-            store: The Dapr secret store holding the pair.
             load_key: Turns the stored seed text into a key, raising `ValueError` or `TypeError` for text that is no
                 seed (`lakehouse.lineage.SigningKey.from_seed`).
             parse_published: Turns the stored `keys` text into the public NKEYs it lists
@@ -191,7 +181,6 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         if not 0 < retry_seconds <= refresh_seconds <= MAX_REFRESH_SECONDS:
             raise ValueError(f"the intervals must satisfy 0 < retry <= refresh <= {MAX_REFRESH_SECONDS}s, got {retry_seconds}s and {refresh_seconds}s")
         self._identity = identity
-        self._store = store
         self._load_key = load_key
         self._parse_published = parse_published
         self._refresh_seconds = refresh_seconds
@@ -226,7 +215,7 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         return key
 
     def resolve(self) -> bool:
-        """Read the seed and the published list once and settle on the outcome. Blocking: one sidecar read each.
+        """Read the seed and the published list once and settle on the outcome. Blocking: one store read each.
 
         A single attempt per read, not the boot retry budget: the loop calls this again soon, and a pass that blocked
         for minutes would hold readiness at whatever it last said.
@@ -234,14 +223,14 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         Returns:
             Whether the signer is ready after this pass.
         """
-        seed = fetch_dapr_secret(self._store, signing_key_secret(self._identity), retries=1).get(SEED_FIELD, "")
+        seed = read_secret(signing_key_secret(self._identity), retries=1).get(SEED_FIELD, "")
         if not seed.strip():
             return self._settle(None, "the signing key cannot be read from the secret store")
         try:
             key = self._load_key(seed)
         except (TypeError, ValueError) as exc:
             return self._settle(None, f"the stored seed is not a signing key ({exc})")
-        published = fetch_dapr_secret(self._store, signing_public_secret(self._identity), retries=1).get(KEYS_FIELD, "")
+        published = read_secret(signing_public_secret(self._identity), retries=1).get(KEYS_FIELD, "")
         if key.public_nkey not in self._parse_published(published):
             return self._settle(None, f"key {key.kid} is not in {self._identity}'s published list")
         return self._settle(key, "")
@@ -290,21 +279,19 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
 
 def make_signing_holder[KeyT: SigningKeyLike](
     *,
-    secrets_from_dapr: bool,
     identity: str,
-    store: str,
     load_key: Callable[[str], KeyT],
     parse_published: Callable[[str], Sequence[str]],
 ) -> SigningKeyHolder[KeyT] | None:
     """The holder for a service that signs, or None for one that does not.
 
-    A service signs when its secret store is wired and the chart named the identity it signs as
+    A service signs when the chart named it a secret store (`secret_store_configured`) and the identity it signs as
     (`RASK_SIGNING_IDENTITY`). A stack with no store has no key to read, and a service without an identity has no
     name to publish under: both emit exactly what they emit without signing.
     """
-    if not (secrets_from_dapr and identity):
+    if not (secret_store_configured() and identity):
         return None
-    return SigningKeyHolder(identity=identity, store=store, load_key=load_key, parse_published=parse_published)
+    return SigningKeyHolder(identity=identity, load_key=load_key, parse_published=parse_published)
 
 
 def attach_signing(app: FastAPI, holder: SigningStatus | None) -> None:

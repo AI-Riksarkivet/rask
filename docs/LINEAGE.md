@@ -147,9 +147,9 @@ overlapping ticks need no lock (`lineage/api/relay_cron.py`):
    cursor in `lance_catalog$provenance$cursors` keyed by the endpoint URL. The cursor moves by a conditional merge
    (`source.seq > target.seq`), so a slower replica's tick never moves it back. A 400, 413 or 422 refuses that one
    event, which is counted and passed; any other non-2xx answer or a transport error stops the tick at the last event
-   the backend took, and the next tick resumes there. `forward.authSecret.{name,key}` names an API key in the Dapr
-   secret store, read on every tick so a rotated key needs no restart, and denied to every other app's sidecar. An
-   empty URL forwards nothing.
+   the backend took, and the next tick resumes there. `forward.authSecret.{name,key}` names an API key in the estate's
+   secret store, which lineage reads under its own login on every tick, so a rotated key needs no restart, and which the
+   store's policy grants to lineage's role alone. An empty URL forwards nothing.
 3. **Prune the feed** past `services.lineage.eventsRetentionDays` (default 7, by arrival time; 0 keeps everything). With a
    forward URL set, no row after the forwarder's cursor is pruned, however old: a backend that cannot take events for
    longer than the retention holds the feed until it does, and each tick it stalls counts on
@@ -235,7 +235,7 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   `<service>_signature_would_refuse_total`.
 - **The previous-key window.** Each identity publishes `signing-public-<identity>` with its current key first and at
   most one previous key. An event signed just before a rotation verifies while the previous key is listed, and lineage
-  reads a list through its own sidecar and caches a successful read for 60 s. Provisioning, rotation and loss of the
+  reads a list from the secret store under its own login and caches a successful read for 60 s. Provisioning, rotation and loss of the
   keys: [OPERATORS.md](OPERATORS.md) § 6.
 
 ## Code shape

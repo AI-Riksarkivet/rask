@@ -644,7 +644,8 @@ class ModelHistoryTooLongError(Exception):
 
 #: How long a booting service waits for its store and its image's model before failing closed. It runs
 #: inside the fleet's startup budget (`lance.appProbes`: 30 x 10 s) beside the lifespan's other steps,
-#: the Dapr secret fetch alone up to ~80 s, so the budget has to hold this deadline plus those steps.
+#: the secret store login alone up to about two minutes while the store does not admit the pod, so the budget has to
+#: hold this deadline plus those steps.
 RESOLVE_DEADLINE_SECONDS: Final = 120.0
 
 

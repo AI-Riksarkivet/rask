@@ -18,6 +18,7 @@ without credentials — the same split the secret half already uses.
 from __future__ import annotations
 
 import pytest
+from tests.secret_store_double import SecretStoreDouble
 
 from maintenance.core.config import MaintenanceSettings
 
@@ -61,3 +62,22 @@ async def test_boot_refuses_a_whole_static_pair_nobody_acknowledged(monkeypatch:
     with pytest.raises(ValueError, match="RASK_INSECURE_ALLOW_STATIC_STORE_KEY"):
         async with service.lifespan(FastAPI()):
             pass
+
+
+@pytest.mark.asyncio
+async def test_boot_refuses_an_acknowledged_pair_where_the_chart_named_a_secret_store(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
+    """A service with a secret store is a deployment, and a deployment signs with its ServiceAccount token alone: the
+    acknowledgement that lets the offline lanes sign with a pair does not lift that (ADR 0170)."""
+    from fastapi import FastAPI
+
+    from maintenance import service
+
+    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", s3_access_key_id="rask-maintenance", s3_secret_access_key="scoped-secret")
+    monkeypatch.setattr(service, "get_settings", lambda: settings)
+    monkeypatch.setattr(service, "arm_drain_on_sigterm", lambda _app: lambda: None)
+
+    with pytest.raises(ValueError, match="signs with its ServiceAccount token alone: set MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE"):
+        async with service.lifespan(FastAPI()):
+            pass
+
+    assert secret_store.login.call_count == 1

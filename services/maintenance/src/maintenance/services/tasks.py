@@ -19,7 +19,7 @@ from typing import Final, get_args
 from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.control_emit import ControlEmitter
-from lakehouse.governed.secrets import fetch_required_secrets
+from lakehouse.governed.secrets import read_required_secret
 from lakehouse.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
@@ -92,9 +92,9 @@ async def connected_queue(settings: MaintenanceSettings) -> AsyncGenerator[TaskQ
     if not settings.nats_url:
         yield None
         return
-    secret = await run_in_threadpool(fetch_required_secrets, settings.dapr_secret_store, settings.nats_credentials_secret, require="seed")
+    secret = await run_in_threadpool(read_required_secret, settings.nats_credentials_secret, require="seed")
     if not secret.get("jwt"):
-        raise RuntimeError(f"secret 'jwt' unavailable from Dapr store {settings.dapr_secret_store!r}/{settings.nats_credentials_secret!r} — failing closed")
+        raise RuntimeError(f"secret {settings.nats_credentials_secret!r} gave this process no 'jwt': failing closed (the secret store is the sole source)")
     queue = await TaskQueue.connect(settings.nats_url, creds_document(jwt=secret["jwt"], seed=secret["seed"]), name="maintenance")
     try:
         yield queue

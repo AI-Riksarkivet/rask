@@ -1,6 +1,7 @@
 # 0169. Each app reads only its own secrets: every sidecar logs in to the store as its own ServiceAccount (2026-10-18)
 
-**Status:** accepted. Resolves the dev-store reach ADR 0168 names under "The dev secret store bounds that reach".
+**Status:** accepted; amended 2026-11-14 (XC-199 step D2, below: each service logs in to the store itself). Resolves the
+dev-store reach ADR 0168 names under "The dev secret store bounds that reach".
 Source: owner, 2026-10-18, on XC-165 (#659): "Its own row, next", then "Widen XC-165" (the per-app secret-store
 identities and the dev store's root token are this row's), then three rulings through the multi-question tool: Dapr
 1.19's Kubernetes auth as the identity mechanism, a one-time carry for the live store, and one shared app-API token.
@@ -87,3 +88,60 @@ made that so.
   ESO is one identity for every pod without a sidecar (AGE, OpenFGA, the zones, the backups). The dev store speaks
   plain http inside the cluster; production refuses anything but https. Inside a pod, the app reaches its own
   sidecar's API unauthenticated: the pod is Dapr's unit of trust.
+
+## Amendment (2026-11-14): each service logs in to the store itself
+
+Source: #787 (XC-199, the lakehouse runs without Dapr), step D2, which the owner started with `/implement #787`. The one
+ADR that supersedes the Dapr records is that row's last step; until it lands, this is what decisions 2 to 4 say.
+
+A service reads its own secrets under its own login. It presents the token its pod projects for `rask-openbao` at the
+store's Kubernetes auth method, as the role `<release>-<app id>` decision 3 already binds to its ServiceAccount, and
+holds the store token that returns in memory (`lakehouse.governed.secrets`). The role, its binding, its audience and its
+policy stand as decided and admit that login unchanged.
+
+- **Decision 2.** Each app's Configuration is `defaultAccess: deny` with no `allowedSecrets`: no secret is served through
+  a sidecar's secrets API. A sidecar's own login still resolves its components' `secretKeyRef`s (a bus user), which a
+  Configuration's scope never bound.
+- **Decision 3.** The projected token is mounted into the app's container as well as into daprd. A service logs in
+  before it serves and fails its start closed when the store never admits it, logs in again once half its token's lease
+  is used, and keeps the held token for nine tenths of the lease while a login is refused; it never renews one. While
+  the loop is passing, only the start and the loop log in: a read that finds the login used up is not served until a
+  pass has made the next one, so a store that is failing, or the API server behind its token review, is asked once a
+  pass and never once a read. A read logs in itself only where no loop has made a pass for a minute (a tool, or a
+  process whose loop was stopped or has stalled). It
+  takes a token whose lease is a minute to the hour this decision bounds a store token at. A role written with no
+  `token_ttl` issues one at the store's default of weeks, and under a minute the loop that keeps the login, which looks
+  every 15 s and logs in again at half the lease, is sure of no pass to do it in before the token is used up: the
+  service's start fails closed on either. The render refuses an `openbao.identity.tokenTtl` or `tokenMaxTtl` outside
+  that range, a `tokenMaxTtl` under the `tokenTtl`, and a number written with a leading zero or more than five digits
+  (Helm reads the first as octal and wraps past 64 bits on the second, where the store reads both as written), so git
+  cannot declare a role its pods refuse (owner, 2026-11-14, for the hour; the minute,
+  the order of the two and the one reading of a number follow from the loop and the render). daprd goes on renewing its
+  own.
+- **A refused secret is the store's answer, and the store says whether a token is dead** (owner, 2026-11-14). The store
+  answers 403 both to a token it dropped and to a secret the policy does not name, so a reader never logs in on a
+  refusal. The token asks the store about itself (`auth/token/lookup-self`, which each rendered policy already
+  grants; the roles carry no `default` policy). A service's start asks it of the login it has just made; a login the
+  store refuses the question is dropped and made again at the start's next attempt, and the start fails closed when
+  none is answered within its budget, so no service runs under a policy without the grant. Its loop asks it every 15 s
+  and logs in again on the pass that finds the token refused. When the store refuses the login that pass made as well
+  (the grant was withdrawn, or a replacement store answers beside the one it replaces and the login landed on the one
+  that is leaving), the next pass logs in again at once, and each further login the store refuses in turn waits twice
+  the passes the last did, fifteen at most, until the store answers one; a login the lease asks for meanwhile counts as
+  one of that row. The readiness report asks the same question at every probe and, while the loop is passing, logs in
+  for none. Three review rounds had each found a hole in a reader-side guess at what a 403 meant, which is why the
+  guess is gone; a fourth found that one refusal of a fresh token had switched the question off for the life of the
+  process, a fifth that a start went on asking about a login a replaced store had already dropped, and a sixth that a
+  login the lease asked for was followed by another a pass later. So a refusal is answered with a new login unless the
+  store has just refused the last one, a login the loop makes while such a row is open counts in it, and nothing
+  remembers a refusal past the store's next answer.
+- **Decision 4.** `lance.storeReads` no longer hangs on `dapr.enabled`: every role, policy and network path renders
+  with or without a sidecar, and only the app token's read, the components' bus users and maintenance's work-queue user
+  follow it. The one secret name an overlay supplies to the table (`services.lineage.forward.authSecret.name`) is held to
+  the secret-name pattern, since it is a path of lineage's policy.
+- **A platform store under a private CA** is named once (`openbao.ca.configMap`) and handed to all three readers: the
+  services, since Python checks a certificate against the bundle it ships with, the sidecar's component and ESO.
+
+Measured on the dev OpenBao as the catalog's own account, 2026-11-13: a login answers a token and a 900 s lease; a read
+answers the fields at `data.data`; a secret the policy does not name answers 403 whether or not it exists; a role the
+store does not hold answers 400; a wrong account 403.

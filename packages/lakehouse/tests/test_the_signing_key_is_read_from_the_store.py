@@ -2,12 +2,12 @@
 
 A verifier refuses an event signed with a key its identity does not publish and acknowledges the refusal, so a signer
 that kept signing with an unlisted key would destroy every event it emits while every probe stayed green. The holder
-therefore reads the seed and the published list through its own sidecar, is ready only while the derived key is listed,
+therefore reads the seed and the published list under its own login to the store, is ready only while the derived key is listed,
 holds no key at all otherwise, and keeps re-resolving so a store that is re-minted or seeded late is followed without a
 restart.
 
-DRIVEN AGAINST THE SIDECAR'S SECRET API, which respx answers over the real `fetch_dapr_secret`: the claim is what the
-holder does with each answer the sidecar can give (a value, a 500, a 404, an empty field), so the answers are the inputs.
+DRIVEN AGAINST THE STORE'S HTTP API, which respx answers over the real `read_secret`: the claim is what the holder does
+with each answer the store can give (a value, a 500, an empty field), so the answers are the inputs.
 The holder's key constructor and list parser are plain stand-ins here, so each answer is the only input; the services'
 suites build the holder with the real two (`services/maintenance/tests/test_the_sweep_signs_what_it_emits.py`).
 """
@@ -16,23 +16,21 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Iterator
 
 import httpx
 import pytest
-import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, signing_ready_check
+from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, make_signing_holder, signing_ready_check
 from lakehouse.lifecycle import mark_started
 from lakehouse.probes import make_probes_router
 from lakehouse.supervision import Supervisor
+from tests.secret_store_double import SecretStoreDouble
 
 
 IDENTITY = "service-test"
-SIDECAR = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
 class _Key(BaseModel):
@@ -58,7 +56,6 @@ def _parse_published(field: str) -> list[str]:
 def _holder(*, refresh_seconds: float = 300.0, retry_seconds: float = 15.0) -> SigningKeyHolder[_Key]:
     return SigningKeyHolder(
         identity=IDENTITY,
-        store="lance-secrets",
         load_key=_load_key,
         parse_published=_parse_published,
         refresh_seconds=refresh_seconds,
@@ -67,15 +64,16 @@ def _holder(*, refresh_seconds: float = 300.0, retry_seconds: float = 15.0) -> S
 
 
 def _found(field: str, value: str) -> httpx.Response:
-    return httpx.Response(200, json={field: value})
+    """The store's answer to a read of a secret holding ``field``."""
+    return SecretStoreDouble.held({field: value})
 
 
 class _Store:
-    """The sidecar's two answers for this identity, changeable between reads."""
+    """The store's two answers for this identity, changeable between reads."""
 
-    def __init__(self) -> None:
-        self.seed = respx.get(f"{SIDECAR}/signing-key-{IDENTITY}")
-        self.keys = respx.get(f"{SIDECAR}/signing-public-{IDENTITY}")
+    def __init__(self, double: SecretStoreDouble) -> None:
+        self.seed = double.hold(f"signing-key-{IDENTITY}", httpx.Response(500))
+        self.keys = double.hold(f"signing-public-{IDENTITY}", httpx.Response(500))
 
     def serve(self, seed: httpx.Response, keys: httpx.Response) -> None:
         self.seed.mock(return_value=seed)
@@ -83,10 +81,10 @@ class _Store:
 
 
 @pytest.fixture
-def store(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[_Store]:
-    monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
-    with respx.mock:
-        yield _Store()
+def store(secret_store: SecretStoreDouble, respx_allows_unused_routes: None) -> _Store:
+    """The store holding both of the identity's secrets. A signer that cannot use its seed never asks for its key list,
+    so one of the two may go unread."""
+    return _Store(secret_store)
 
 
 def _held_kid(holder: SigningKeyHolder[_Key]) -> str | None:
@@ -111,6 +109,21 @@ def test_a_signer_holds_a_key_only_while_its_identity_lists_it(store: _Store, se
     ready = holder.resolve()
 
     assert (ready, holder.ready, _held_kid(holder)) == (kid is not None, kid is not None, kid)
+    # One attempt a pass: a signer that cannot read its seed is asked again by its loop, never held by a boot's budget.
+    assert store.seed.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("store_named", "identity"),
+    [pytest.param(False, IDENTITY, id="an-identity-and-no-secret-store"), pytest.param(True, "", id="a-secret-store-and-no-identity")],
+)
+def test_a_service_with_no_secret_store_or_no_identity_signs_nothing(request: pytest.FixtureRequest, store_named: bool, identity: str) -> None:
+    """A stack with no store has no key to read, and a service with no identity no name to publish under: neither builds a
+    holder, so each emits what it emits unsigned."""
+    if store_named:
+        request.getfixturevalue("secret_store")
+
+    assert make_signing_holder(identity=identity, load_key=_load_key, parse_published=_parse_published) is None
 
 
 @pytest.mark.asyncio
@@ -177,7 +190,6 @@ def test_a_holder_refuses_an_identity_and_intervals_it_could_not_honour(identity
     with pytest.raises(ValueError, match=r"signing identity|intervals"):
         SigningKeyHolder(
             identity=identity,
-            store="lance-secrets",
             load_key=_load_key,
             parse_published=_parse_published,
             refresh_seconds=refresh_seconds,

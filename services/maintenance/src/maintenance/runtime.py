@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.bus_watchdog import start_bus_watchdog
 from lakehouse.control_emit import ControlEmitter, ControlSign, make_control_emitter
+from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency
 from lakehouse.health import Dependency, HealthWatch, store_dependency
 from lakehouse.lance_metrics import instrument_lance_if_available
@@ -43,8 +44,8 @@ def reported_health(settings: MaintenanceSettings, queue: TaskQueue | None) -> H
     dependencies = [store_dependency(settings.resolved_control_root, settings.storage_options, required=False)]
     if queue is not None:
         dependencies.append(Dependency(name="bus", read=queue.answering, required=False))
-    if settings.secrets_from_dapr and settings.signing_identity:
-        dependencies.append(secret_store_dependency(settings.dapr_secret_store, settings.signing_identity))
+    if secret_store_configured():
+        dependencies.append(secret_store_dependency())
     return HealthWatch(dependencies)
 
 
@@ -78,9 +79,14 @@ def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
 
 @asynccontextmanager
 async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[None]:
-    """The store session and the bus watchdog, for either process, their loops on ``loops``, stopped on the way out."""
+    """The secret store's login, the object store's session and the bus watchdog, for either process, their loops on
+    ``loops``, stopped on the way out."""
     async with AsyncExitStack() as stack:
         instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
+        # MAINTENANCE LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before it serves or takes a task, and its start
+        # fails when the store never admits it. A loop of `loops` then logs in again once half the store token's lease
+        # is used, or as soon as the store no longer honours it. Nothing for a stack with no secret store.
+        await stack.enter_async_context(secret_store_session(loops))
         # MAINTENANCE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its identity at the store is the ServiceAccount token its
         # pod projects for the store's audience, exchanged here for a session before the first read, failing the start
         # closed if none is issued, then exchanged again once half the session's life is used. Its own reads and records
@@ -114,13 +120,7 @@ async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supe
         # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), or None for a stack with no store or no identity. It is also the
         # author every event stamps, which the emitter checks at construction: a verifier refuses a signer that is not
         # its event's author.
-        signing = make_signing_holder(
-            secrets_from_dapr=settings.secrets_from_dapr,
-            identity=settings.signing_identity,
-            store=settings.dapr_secret_store,
-            load_key=SigningKey.from_seed,
-            parse_published=parse_published_keys,
-        )
+        signing = make_signing_holder(identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
         attach_signing(app, signing)
         lineage = make_emitter(
             enabled=settings.lineage_emit_enabled,

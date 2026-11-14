@@ -6,8 +6,8 @@ one whose signature does not verify are refused: acked so the sidecar never rede
 A public-key source lineage cannot read is an outage, so the delivery is retried rather than refused.
 
 Driven through the registered `/lineage-events` route with the production wiring, FGA off so only the signature decides.
-The signer's public keys are read through the sidecar's secret API, stood in for by respx at the address the Dapr
-sidecar serves; the signatures are built by the root conftest's `EventSigner` from the wire format alone. Every reason
+The signer's public keys are read from the secret store, which the suite's double answers; the signatures are built by
+the root conftest's `EventSigner` from the wire format alone. Every reason
 series of the refusal counter exists at 0 from the moment the door is registered, so the alert's `rate()` sees the first
 refusal as an increase; the counter is read through a real in-memory reader.
 """
@@ -22,15 +22,14 @@ from typing import Any, cast, get_args
 
 import httpx
 import pytest
-import respx
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from lakehouse.lineage.signing import RefusalReason
+from tests.secret_store_double import SecretStoreDouble
 
 
 SIGNER = "service-bronze-to-silver"
-SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
 
 
 @pytest.fixture
@@ -109,7 +108,6 @@ def door(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]]
     for key, value in {
         "APP_API_TOKEN": "the-estate-app-token",
         "LINEAGE_DAPR_ENABLED": "true",
-        "DAPR_HTTP_PORT": "3500",
         "LINEAGE_SIGNERS": json.dumps([SIGNER, "service-catalog"]),
         "LINEAGE_DELEGATORS": json.dumps(["service-catalog"]),
     }.items():
@@ -128,7 +126,6 @@ def door(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]]
     return TestClient(app), feed
 
 
-@respx.mock
 @pytest.mark.parametrize(
     ("case", "status", "recorded"),
     [
@@ -141,6 +138,7 @@ def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
     door: tuple[TestClient, _Feed],
     refusals: Callable[[], dict[str, int]],
     event_signer: Any,
+    secret_store: SecretStoreDouble,
     respx_allows_unused_routes: None,
     case: str,
     status: str,
@@ -148,8 +146,7 @@ def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
 ) -> None:
     client, feed = door
     signer = event_signer(SIGNER)
-    published = respx.get(f"{SECRETS}/signing-public-{SIGNER}")
-    published.mock(return_value=httpx.Response(500) if case == "store-down" else httpx.Response(200, json={"keys": signer.public}))
+    secret_store.hold(f"signing-public-{SIGNER}", httpx.Response(500) if case == "store-down" else secret_store.held({"keys": signer.public}))
     event = _event() if case == "unsigned" else signer.sign(_event())
     if case == "tampered":
         event["outputs"] = [{"namespace": "gold", "name": "acme-gold$events"}]

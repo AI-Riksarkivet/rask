@@ -11,9 +11,9 @@ release, before rask's (`make k3s-up`).
 
 The chart takes **no credential as a value** ([[XC-004]]). Every secret lives in a store (the platform's
 Vault or OpenBao in production, the dev OpenBao fixture in development; the next section) and reaches a pod
-from it: through the Dapr secret store for a pod with a sidecar, and through an ExternalSecret for one
-without. So the **External Secrets Operator is a prerequisite**, platform-run like the store, and rask never
-installs it.
+from it: a lakehouse service reads its own under its own login to the store, its sidecar resolves its components'
+secrets through the Dapr secret store, and a pod that does neither gets an ExternalSecret. So the **External Secrets
+Operator is a prerequisite**, platform-run like the store, and rask never installs it.
 Install it on its own release first, at the version `deploy/fixtures/external-secrets/fixture.env` names (the one
 rask is tested against; that fixture is also the development install `make k3s-up` runs).
 
@@ -25,18 +25,25 @@ credentials ESO's Password generator creates in-cluster). A credential passed as
 ## Prerequisite in production: the secret store
 
 The chart renders no secret store ([[XC-149]], ADR 0153). `deploy/values-prod.yaml` sets `openbao.enabled: false`,
-and the deployer names the platform's Vault or OpenBao as `openbao.externalAddr`, over https: every sidecar sends the
-store's token to it, so the render refuses an http address. Its certificate must chain to a CA the sidecars and ESO
-trust by default; the chart names no CA bundle. Under the production NetworkPolicy, `openbao.egress` states the
-store's addresses, and the rule admits only the pods whose sidecar reads it (the apps `lance.secretScopes` lists).
-The render refuses either one empty.
+and the deployer names the platform's Vault or OpenBao as `openbao.externalAddr`, over https: every service and every
+sidecar sends its tokens to it, so the render refuses an http address. Its certificate is checked against public roots,
+or, for a store under a private CA, against the CA the ConfigMap `openbao.ca.configMap` holds, which the chart mounts
+into each service and its sidecar and names to ESO's SecretStore. Under the production NetworkPolicy, `openbao.egress`
+states the store's addresses, and the rule admits only the pods that read it (the apps `lance.secretScopes` lists). The
+render refuses either one empty.
 
 Two kinds of identity read it, each through the store's Kubernetes auth method at `externalSecrets.kubernetesAuthPath`
-([[XC-165]], ADR 0169). Each app's sidecar logs in as its own ServiceAccount: the one Dapr secret store `lance-secrets`
-(`secretstores.hashicorp.vault`, KV v2 under `externalSecrets.kvMount`) names the role `<release>-{appID}`, which Dapr
-fills with the sidecar's own app id, and presents a token the kubelet projects for `openbao.identity.audience`
-(`rask-openbao`) into daprd alone, so no store token exists to deliver or rotate. This needs Dapr 1.19 or later, the first
-whose Vault store logs in with Kubernetes auth and renews its session (components-contrib#4448). ESO's SecretStore
+([[XC-165]], ADR 0169). Each app logs in as its own ServiceAccount, to the role `<release>-<app id>`, presenting a token
+the kubelet projects for `openbao.identity.audience` (`rask-openbao`) into its pod, so no store token exists to deliver
+or rotate. The service itself logs in for the secrets its code reads (KV v2 under `externalSecrets.kvMount`), holds the
+store token that returns in memory and logs in again inside its lifetime, or as soon as the store answers that it no
+longer honours that token ([[XC-199]], `lakehouse.governed.secrets`). It takes a token whose lease is a minute to an
+hour, and the render refuses an `openbao.identity.tokenTtl` or `tokenMaxTtl` outside that range. Each role's policy
+grants its token the question about itself (`auth/token/lookup-self`, as the rendered policy documents do): a service
+asks it of the login it has just made, and its start fails closed while the store refuses it. Its
+sidecar logs in to the same role through the one Dapr secret store `lance-secrets` (`secretstores.hashicorp.vault`,
+which names the role `<release>-{appID}`), only for the secrets its components resolve. This needs Dapr 1.19 or later,
+the first whose Vault store logs in with Kubernetes auth and renews its session (components-contrib#4448). ESO's SecretStore
 `<release>-vault` logs in as the role `externalSecrets.role`, bound to ESO's ServiceAccount.
 
 THE ROLES AND POLICIES THE PLATFORM'S STORE MUST HOLD. The chart renders them in every mode, as the documents the dev
@@ -44,9 +51,11 @@ store's seed applies (`<release>-secret-store-identities`, keys `role-<name>.jso
 one role per app that reads the store, `<release>-<app id>`, bound to that app's ServiceAccount in the release's namespace,
 taking only the projected audience, and holding one policy that reads exactly the secrets the app and its components read
 (`lance.storeReads`), plus ESO's role and its policy, which reads exactly the secrets the chart's ExternalSecrets name. A
-role a sidecar cannot log in to fails that sidecar's start closed. Each app's Dapr Configuration denies its code every
-secret but its own (`allowedSecrets`), so a component's secret (a bus user) is read by the sidecar's
-login and never served to the app.
+role a sidecar cannot log in to fails that sidecar's start closed. A service logs in to the store before it serves,
+whichever secrets it goes on to read, and one the store never admits fails its own start closed once its boot budget
+(about two minutes) is spent; with the store named it also refuses to start on an object-store key pair, which no
+acknowledgement lifts. Each app's Dapr Configuration denies its sidecar's secrets API whole, so no secret is served
+through a sidecar.
 
 THE SECRETS THE STORE MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
 unprovisioned secret is a fail-closed outage at first use, not a fallback. Each secret has exactly the readers it is for:
@@ -84,7 +93,7 @@ its environment.
 
 ## Prerequisite: the Dapr control plane
 
-rask's services talk to each other, publish and subscribe, hold actors and read secrets through Dapr sidecars, so a
+rask's services publish and subscribe on the bus and take their timed ticks through Dapr sidecars, so a
 **Dapr control plane is a prerequisite** (ADR 0153), installed once per cluster by the platform, as Dapr documents,
 in `dapr-system`. The chart renders only rask's own Dapr objects (Components, Configurations, Resiliency,
 Subscriptions) and the sidecar annotations; with `dapr.enabled` on it refuses to render for a cluster that does not

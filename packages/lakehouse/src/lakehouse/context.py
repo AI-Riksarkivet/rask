@@ -106,7 +106,7 @@ class DiagnosticFormatter(logging.Formatter):
     Secrets are the standing hazard of a tail like this, and the rule that keeps them out is the same
     one that governs `extra=` itself: a secret's NAME may be recorded, never its value. Audited at the
     time of writing across every `extra=` in `services/` and `packages/` — the only credential-shaped
-    keys are two `{"secret": secret}` object-store paths, both of which hold the Dapr secret's name.
+    keys are two `{"secret": secret}` object-store paths, both of which hold the secret's name.
     `services/maintenance/tests/test_the_rewrite_is_signed_by_a_scoped_credential.py`
     asserts on the whole record for exactly this reason.
     """

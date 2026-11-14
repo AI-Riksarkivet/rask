@@ -284,6 +284,10 @@ testpaths = ["packages/*/tests", "services/*/tests", "tests/unit", "tests/integr
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when
 # somebody wants it, against a denominator that is now correct (see [tool.coverage.run] below).
 addopts = "--import-mode=importlib"
+# THE REPOSITORY ROOT, IMPORTABLE, before any conftest is: a helper the suites share (`tests.secret_store_double`,
+# `tests.loopback`) resolves under one name from every member's tests and from the root conftest, which importlib mode
+# puts nothing on the path for.
+pythonpath = ["."]
 # A parametrize over an empty list is a collection error, never a skip: a test whose cases come off a walk (the routes,
 # the rendered chart) that finds nothing asserts nothing, and as a skip it reads as one more line in the summary. Measured
 # 2026-10-31 over all 5,083 collected tests: one module hit it, the maintenance-verb owner gate, whose walk found no route.

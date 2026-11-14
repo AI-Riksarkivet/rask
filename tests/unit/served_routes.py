@@ -33,8 +33,8 @@ print(json.dumps({"paths": paths, "deliveries": sorted(deliveries)}))
 """
 
 
-#: The app answers its subscription read to its sidecar's token alone, and the rendered pod reads that token from the
-#: secret store through the sidecar; the probe has neither, so it names a token of its own for the read.
+#: The app answers its subscription read to its sidecar's token alone, and the rendered pod reads that token from its
+#: secret store; the probe has neither a sidecar nor a store, so it names a token of its own for the read.
 _SIDECAR_TOKEN = {"RASK_APP_TOKEN_FROM_STORE": "false", "APP_API_TOKEN": "probe"}
 
 

@@ -44,7 +44,8 @@ import pytest
 import respx
 from dapr.conf import settings as dapr_settings
 
-from lakehouse.governed import secret_cache
+from lakehouse.governed import secret_cache, secrets
+from tests.secret_store_double import SecretStoreDouble
 
 
 #: The OTLP variables a CI harness may inject. `OTEL_EXPORTER_OTLP_ENDPOINT` is the one Dagger sets
@@ -137,8 +138,8 @@ def _no_harness_telemetry() -> None:
 
 # ── THE PROCESS-GLOBAL STATE THE LAKEHOUSE AND ITS DAPR SDK KEEP, RESET PER TEST ─────────────────────────────────────
 # Each fixture below guards state a lakehouse module or its `dapr` dependency keeps across a process: every test gets
-# its own cache of secret-store reads and the token files a pod's kubelet projects, Dapr's sidecar handshake is bounded,
-# and respx's bare `@respx.mock` is strict.
+# its own cache of secret-store reads, no session with a secret store, and the token files a pod's kubelet projects,
+# Dapr's sidecar handshake is bounded, and respx's bare `@respx.mock` is strict.
 
 #: How long any test may let Dapr's sidecar handshake run. The SDK's own default is 60 s, and where there is no sidecar
 #: nothing is cached, so every unstubbed Dapr client construction (`DaprClient`, its HTTP client) pays it again: CI run
@@ -201,18 +202,55 @@ def _a_fresh_secret_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_held_secret_store_session() -> Iterator[None]:
+    """Give each test a process that has logged in to no secret store.
+
+    The process's one session holds a store token for most of its lease and the settings it was opened with, so one
+    test's login would otherwise serve the next test's reads, and a test asserting what the store is asked would pass or
+    fail by collection order. Forgotten after the test as well, which closes the session's connections.
+    """
+    secrets.forget_secret_store()
+    yield
+    secrets.forget_secret_store()
+
+
+@pytest.fixture(autouse=True)
 def _projected_identity_tokens(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Give each test the token files the kubelet projects into a pod, one per door ([[LH-220]]).
+    """Give each test the token files the kubelet projects into a pod: one per door ([[LH-220]]), and the secret store's.
 
     A service authenticates to the catalog's and lineage's doors with the token projected for that audience, read
-    afresh on every call, and a call whose file is absent is not sent. So a test that drives such a call reads a file
-    the way the pod does, at the path the settings name. The contents are opaque: the door under test is a double, or a
-    real verifier minted its own token.
+    afresh on every call, and a call whose file is absent is not sent; it logs in to its secret store with the token
+    projected for the store's audience, read at each login. So a test that drives such a call reads a file the way the
+    pod does, at the path the settings name. The contents are opaque: the door under test is a double, or a real
+    verifier minted its own token.
     """
     for door in PROJECTED_TOKEN_DOORS:
         path = tmp_path / f"projected-rask-{door}-token"
         path.write_text(f"projected-for-rask-{door}")
         monkeypatch.setenv(f"RASK_{door.upper()}_IDENTITY_TOKEN_FILE", str(path))
+    store_token = tmp_path / "projected-secret-store-token"
+    store_token.write_text("projected-for-the-secret-store")
+    monkeypatch.setenv("RASK_SECRET_STORE_TOKEN_FILE", str(store_token))
+
+
+@pytest.fixture
+def secret_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[SecretStoreDouble]:
+    """Configure this test's process for a secret store, as the chart's env configures a pod, and answer that store for
+    the length of the test. The projected token the process logs in with is `_projected_identity_tokens`'s.
+
+    A process under it is handed no key pair, as a pod is (`lakehouse.store_session.key_pair_in_force`): a test whose
+    code signs an object-store request here projects the service's token and holds or exchanges its session.
+
+    STRICT, as a bare `@respx.mock` is: a secret the test had the store hold and nothing read fails the test, unless it
+    takes `respx_allows_unused_routes`.
+    """
+    monkeypatch.setenv("RASK_SECRET_STORE_ADDR", SecretStoreDouble.ADDRESS)
+    monkeypatch.setenv("RASK_SECRET_STORE_ROLE", SecretStoreDouble.ROLE)
+    double = SecretStoreDouble()
+    with double.router:
+        yield double
+    if "respx_allows_unused_routes" not in request.fixturenames:
+        assert not double.unread(), f"the store held secrets this test never read: {double.unread()}"
 
 
 @pytest.fixture(autouse=True)
