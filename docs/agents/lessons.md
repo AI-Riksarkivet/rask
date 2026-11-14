@@ -118,5 +118,7 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
   and the replacement honours no token the old one issued, over a surge too. Since XC-199 a service asks the store about
   its own token every 15 s and logs in again on the pass that finds it refused, and no app reads through a sidecar. The
   three minutes of refused reads measured on 2026-11-07 (XC-164) were reads through daprd, which kept the old store's
-  token until its pod restarted; a service's own recovery is pinned offline and not yet measured on the estate. Restart
-  the Dapr apps only when the replacement minted a new bus root (docs/OPERATORS.md § 7).
+  token until its pod restarted. A service's own recovery, measured 2026-11-14 on helm rev 8 with
+  `kubectl rollout restart deploy/rask-openbao`: all six pods logged `secret_store_token_dropped` and logged in again
+  within 6 s of the replacement being Ready, and none restarted or left Ready. Restart the Dapr apps only when the
+  replacement minted a new bus root (docs/OPERATORS.md § 7).

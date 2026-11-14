@@ -249,23 +249,32 @@ enforcement is on (acked and counted); every signer re-resolves within 5 minutes
 the token each service and each daprd holds names nothing in the replacement. A service reads under its own login
 (XC-199), and its loop has that token ask the store about itself every 15 s (`auth/token/lookup-self`, which the
 rendered policy grants): the replacement answers `403 permission denied`, the pass logs `secret_store_token_dropped`
-and logs in again, and reads are served again within one pass of the replacement admitting the login. Until then every
-read is refused and logged `secret_store_read_failed` (`lakehouse.governed.secrets`; held offline by
-`packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`, not yet measured against a
-replaced store on the estate). A sidecar reads the store only to resolve its components' secrets when it starts, and
-serves its app none, so its own token is as dead and nothing reads under it: the store's replacement alone restarts no
-pod. (Measured 2026-11-07 on openbao/openbao:2.2.0 and daprd 1.19.0-rc.4, while the services still read through their
-sidecars: the fixture re-applied with a changed pod spec carried every signing pair and bus user over a surge, and
-reads through `lance-secrets` still failed three minutes later, until the Dapr pods were restarted; whether daprd's
-background renewal would have logged in again later is not measured.)
+and logs in again, and reads are served again within one pass of the replacement admitting the login. Until then a
+read that reaches the store (one whose value has passed its 300 to 600 s in `lakehouse.governed.secret_cache`) is
+refused and logged `secret_store_read_failed`, and readiness reports `secret-store: unavailable` as `degraded`, which
+keeps the pod in rotation (`lakehouse.governed.secrets`; held offline by
+`packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`). Measured 2026-11-14 on helm
+rev 8 (openbao/openbao:2.2.0, daprd 1.19.0-rc.4; `kubectl rollout restart deploy/rask-openbao` at 10:33:00 UTC): the
+replacement was Ready 21 s later with every signing pair and bus user carried (18 of the store's 20 secrets
+byte-identical, the other two the seed's own marker and the re-packed archive of the same bus root), each of the six
+lakehouse pods logged `secret_store_token_dropped` and `secret_store_logged_in` on its first pass after that (1 to 6 s
+later, 22 to 27 s after the restart), no pod restarted or left Ready, the catalog's `/readyz` answered `degraded` for
+5 s, and no read was refused in the five minutes watched. A sidecar reads the store only to resolve its components'
+secrets when it starts, and serves its app none, so its own token is as dead and nothing reads under it: the store's
+replacement alone restarts no pod. In the same drill the store listed one more login per pod, made 21 to 69 s after
+the restart and logged by no service: each daprd logging in again by itself. (Measured 2026-11-07 on the same images,
+while the services still read through their sidecars: the fixture re-applied with a changed pod spec carried every
+signing pair and bus user over a surge, and reads through `lance-secrets` still failed three minutes later, until the
+Dapr pods were restarted.)
 
 During a surge two stores answer at the Service's address, and each refuses the other's tokens. A service whose pass
 logs in to one can then be refused, by the other, the question about the token it has just been issued: its loop logs
 `secret_store_token_cannot_ask_about_itself` once (the same line a role whose policy lost the
 `auth/token/lookup-self` grant produces) and logs in again at its next pass, so a login that landed on the store that
 then left is replaced within one more pass. Each further login the store refuses in turn waits twice the passes the
-last did (1, 3, 7, then 15, four minutes), and the store's first answer ends that. A replacement that mints a new bus
-root still needs the bus and the Dapr apps restarted (§ 7).
+last did (1, 3, 7, then 15, four minutes), and the store's first answer ends that. The drill of 2026-11-14 did not
+meet this case: the outgoing pod left the Service as the replacement joined it, and each service logged in once. A
+replacement that mints a new bus root still needs the bus and the Dapr apps restarted (§ 7).
 
 **Reading it back.** Logged in to the store as an app's own account and role (a token from
 `kubectl create token <release>-sa-<app> --audience rask-openbao`, presented at `auth/kubernetes/login` as

@@ -317,8 +317,9 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   honours no token the old store issued, a surge included. A service asks the store about its own token every 15 s and
   logs in again on the pass that finds it refused, so it reads again within a pass of the replacement admitting it
   ([[XC-199]], `lakehouse.governed.secrets`; pinned offline by
-  `packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`, not yet measured on the
-  estate). A sidecar resolved its components' secrets when it started and serves its app none, so the store's
+  `packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`, and measured on the estate
+  2026-11-14, helm rev 8: after `kubectl rollout restart deploy/rask-openbao` all six pods logged in again 22 to 27 s
+  later, none restarted or left Ready, and readiness answered `degraded` for 5 s). A sidecar resolved its components' secrets when it started and serves its app none, so the store's
   replacement alone restarts no pod; one that minted a new bus root does (below, docs/OPERATORS.md § 6 and § 7).
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
   key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519
