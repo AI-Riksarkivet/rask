@@ -7,7 +7,7 @@ GreptimeDB store, not mocks:
 
   1. Durable provenance                    — the create's event landed on lineage's feed (the pipeline actually works)
   2. The custom domain metric in GreptimeDB — lineage_events_processed_total by lance_lineage_outcome went UP
-  3. A distributed trace in GreptimeDB      — ONE trace spans catalog → Dapr publish → lineage → its feed write
+  3. A distributed trace in GreptimeDB      — ONE trace spans catalog → its publish on the bus → lineage → its feed write
   4. Logs in GreptimeDB                      — apps (OTLP) + infra (Collector filelog) → opentelemetry_logs
 
 Run (port-forward the three services first), or `make e2e-obs`:
@@ -123,7 +123,7 @@ def _gt_promql_sum(query: str) -> float:
 
 
 def _create_table(table_id: str, namespace: str, auth: dict[str, str], trace_id: str) -> None:
-    """Create a namespace + table via the catalog — the action that emits a lineage event over Dapr — the table's create
+    """Create a namespace + table via the catalog — the action the catalog announces on the bus — the table's create
     carried in the trace `trace_id` names (a W3C `traceparent`, which the services' instrumentation continues)."""
     requests.post(f"{CATALOG}/v1/table/{table_id}/drop", headers=auth, timeout=30)
     requests.post(f"{CATALOG}/v1/namespace/{namespace}/drop", headers=auth, timeout=30)
@@ -184,7 +184,10 @@ def test_custom_metric_incremented(pipeline_run: dict[str, Any]) -> None:
 
 
 def test_distributed_trace_spans_catalog_to_lineage(pipeline_run: dict[str, Any]) -> None:
-    """3. The create's own trace spans catalog → Dapr publish → lineage → its feed write — true distributed tracing.
+    """3. The create's own trace spans catalog → its publish on the bus → lineage → its feed write — true distributed tracing.
+
+    The publish is the catalog's own span (`lakehouse.bus`, named `publish <topic>`), and the envelope carries its
+    `traceparent` to the subscriber, so lineage's delivery joins the same trace.
 
     Read off the trace the create's `traceparent` names, never the newest trace that spans both services: lineage
     writes its feed through the catalog's doors, so each relay tick spans catalog and lineage with no publish in it.
@@ -197,7 +200,7 @@ def test_distributed_trace_spans_catalog_to_lineage(pipeline_run: dict[str, Any]
 
     spans = _eventually(joined_trace)
     span_names = {name for _, name in spans}
-    assert any("PublishEvent" in n for n in span_names), f"no Dapr publish span in {span_names}"
+    assert "publish lineage.events.v1" in span_names, f"the catalog's publish on the lineage topic is not a span of the trace: {span_names}"
     assert any("/lineage-events" in n for n in span_names), f"no lineage subscriber span in {span_names}"
 
 
