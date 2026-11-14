@@ -320,8 +320,10 @@ read-only window holds every timer on purpose and does not page.
 - no line at all: the loop is not running. A loop that ends ends its process (exit 70,
   [A process ended itself](#a-process-ended-itself-exit-70)), so look for restarts.
 
-Read the record as the store holds it, with the service's own session:
-`kubectl exec deploy/rask-catalog -c catalog -- python -c "from catalog.core.config import get_settings as g; from lakehouse import records; s=g(); print(records.read_json(s.registry_root, s.storage_options(), '_timers/<timer>.json'))"`.
+Read the record as the store's operator (`_timers/<timer>.json` in the control bucket): `window` is when the last
+claimed window began and `by` the pod that claimed it. The same reading is in the telemetry store without touching the
+bucket: `time() - max by (timer) (timer_last_claimed_seconds)` is the age of each timer's newest window, and
+`sum by (timer, outcome) (increase(timer_turns_total[15m]))` says how each replica's turns ended.
 
 **Act.** A store outage clears on its own: the first window after it is claimed and run, and every tick is
 level-triggered, so nothing is lost but time. A record that does not read as a claim is deleted by an operator at the
