@@ -1,6 +1,6 @@
 """THE lakehouse's app factory — one assembly for catalog, lineage and maintenance.
 
-Routers mount at the root under each service's own paths (``/v1/...``, ``/events``, a cron binding's ``/<name>``),
+Routers mount at the root under each service's own paths (``/v1/...``, ``/events``),
 config is each service's own ``*Settings``, and every layer a request passes through is installed here, in one order.
 
 docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints

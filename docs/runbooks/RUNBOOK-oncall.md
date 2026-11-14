@@ -43,6 +43,7 @@ fixture's) or a user report — not a page.
 | `CatalogCommitsReannounced`, `CatalogCommitsUnauthored` or `CatalogCommitReconcileBlocked` firing | [Committed versions re-announced](#committed-versions-re-announced) |
 | `CatalogManifestReclaimFailing` firing, `manifest_reclaim_failed` WARN logs | [A root's namespace index is not reclaimed](#a-roots-namespace-index-is-not-reclaimed) |
 | `CatalogDeclarationNotConverging` firing, `declaration_converge_failed` WARN or `declaration_unreadable` ERROR logs | [The estate is not what git declares](#the-estate-is-not-what-git-declares) |
+| `LakehouseTimerStopped` firing, `timer_claim_unread` WARN or `timer_work_failed` ERROR logs | [A timer has stopped](#a-timer-has-stopped) |
 | `ErasureDerivedAfterRelease` or `ErasureLateDerivedUnwatched` firing | [A table derived from an erased table found after the release](#a-table-derived-from-an-erased-table-found-after-the-release) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | `LanceObjectStoreThrottled` or `LanceObjectStoreRetriesHigh` firing: writes and passes slow, nothing failing yet | [The object store throttles or retries](#the-object-store-throttles-or-retries) |
@@ -242,7 +243,7 @@ version and an operation. `CatalogCommitsUnauthored` (critical): `commit_unautho
 versions.
 
 **Cause.** The commit is the outbox (LH-497). The catalog records the caller it authorized every commit for, a catalog
-door's commit names its operation, and the catalog's reconcile cron (`catalog-commit-reconcile-cron`) announces every version older than
+door's commit names its operation, and the catalog's reconcile timer (`catalog-commit-reconcile`) announces every version older than
 `catalog.commitReconcile.graceSeconds` that lineage's feed holds no row for. A re-announced version is a write whose own
 announcement was lost between its commit and its staging: a catalog restart mid-write, or a lineage emit failing before
 the outbox staged it (`CatalogLineageEmitFailing` beside it). An unauthored one is a version the catalog recorded no
@@ -278,7 +279,7 @@ content is not trusted.
 `declaration_converge_failed` WARN logs carry that object and the error, on at least three ticks within fifteen minutes.
 
 **Cause.** The catalog converges the projects, warehouses and service grants the chart's `catalog.declared` values
-declare, on its `catalog-declaration-converge-cron` tick (XC-213, ADR 0206). One object's failure leaves every other
+declare, on its `catalog-declaration-converge` timer (XC-213, ADR 0206). One object's failure leaves every other
 object to the same tick, so the alert names exactly what the estate does not hold as declared.
 
 **Diagnose.** The log's error says which:
@@ -298,13 +299,41 @@ object to the same tick, so the alert names exactly what the estate does not hol
 on its own. Never make the declared object at its door instead: a project or warehouse git declares refuses a change
 there, and one made by hand before git declared it is taken over as it stands.
 
+## A timer has stopped
+
+**Symptom.** `LakehouseTimerStopped` (warning) names a timer (`catalog-control-relay`, `catalog-erasure-release`,
+`catalog-promotion-expiry`, `catalog-commit-reconcile`, `catalog-manifest-reclaim`, `catalog-declaration-converge` or
+`lineage-relay`): the newest window any replica saw claimed began more than three of the timer's periods ago, or every turn
+the timer took in fifteen minutes found its claim unreadable.
+
+**Cause.** Each timer is a loop in every replica of its service. Once a window, each replica reads the timer's record
+under the control root (`_timers/<timer>.json`) and tries the one conditional write that claims the window; the
+replica whose write lands runs the tick (XC-199). A timer stops when no replica can read or write that record. A
+read-only window holds every timer on purpose and does not page.
+
+**Diagnose.** In the service's log (`kubectl logs deploy/rask-catalog -c catalog`, or `rask-lineage`):
+
+- `timer_claim_unread` WARN, with the error: the object store did not answer, the service's store session was refused
+  (see [Object store down](#object-store-down--data-plane)), or the record does not read as a claim.
+- `timer_work_failed` ERROR, with a traceback: the tick itself raises. Its window stays claimed, so this does not page
+  here; the tick's own alert does (the outbox, the reconcile, the reclaim, the converge).
+- no line at all: the loop is not running. A loop that ends ends its process (exit 70,
+  [A process ended itself](#a-process-ended-itself-exit-70)), so look for restarts.
+
+Read the record as the store holds it, with the service's own session:
+`kubectl exec deploy/rask-catalog -c catalog -- python -c "from catalog.core.config import get_settings as g; from lakehouse import records; s=g(); print(records.read_json(s.registry_root, s.storage_options(), '_timers/<timer>.json'))"`.
+
+**Act.** A store outage clears on its own: the first window after it is claimed and run, and every tick is
+level-triggered, so nothing is lost but time. A record that does not read as a claim is deleted by an operator at the
+store; the next turn makes it again.
+
 ## A root's namespace index is not reclaimed
 
 **Symptom.** `CatalogManifestReclaimFailing` (warning) names a root, and the catalog's `manifest_reclaim_failed` WARN logs
 carry the root and the error, from the same root on at least two ticks within half an hour.
 
 **Cause.** Every namespace operation writes a root's `__manifest` again as a new version, and only the catalog's
-`catalog-manifest-reclaim-cron` tick removes the versions older than `catalog.manifestReclaim.retainSeconds` (LH-251,
+`catalog-manifest-reclaim` tick removes the versions older than `catalog.manifestReclaim.retainSeconds` (LH-251,
 ADR 0185). While it fails on a root, that root's index keeps every version again, so a describe or a listing there slows
 as the history grows, and a namespace or table dropped there stays readable in the history.
 
@@ -489,7 +518,8 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
 - `LineageOutboxNotDraining` (critical): staged events exist and the relay has drained or refused none for 15 minutes.
   First check: lineage's pod and log, then the bus.
 - `LineageOutboxBacklogAging` (warning): the oldest staged event is older than 300 s while nothing is refused. First
-  check: the relay tick's log on lineage, and whether `lineage-relay-cron` still fires (`kubectl logs … -c daprd`).
+  check: the relay tick's log on lineage, and whether the `lineage-relay` timer still claims its windows
+  (`LakehouseTimerStopped`, `timer_claim_unread` on lineage).
 - `LineageOutboxEventsRefused` (warning): the relay refused staged events (no grant for their author, no signature a
   listed signer's key verifies, or nothing a grant could repair) and recorded each in the refusals table before retiring
   it. Not retryable: the outbox door of `lineage_events_processed_total` gives each one's class; check the producer's
@@ -506,6 +536,12 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
 - `LineageIngestDiscardingUnrepairable` (warning): events that can never be recorded (no parse, no author, another
   subject's run, or only ungoverned outputs) are acked on the bus, kept in the refusals table from the outbox, and
   counted by door. First check: which producer publishes or stages them.
+
+**Timers** (see also [A timer has stopped](#a-timer-has-stopped)):
+
+- `LakehouseTimerStopped` (warning): a timer of the catalog or lineage has claimed no window for three of its periods
+  and no read-only window holds it, so its tick runs on no replica. First check: the service's `timer_claim_unread` WARN
+  lines (the object store, or the service's session at it), then `timer_work_failed` for a tick that raises.
 
 **Catalog:**
 

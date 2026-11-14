@@ -612,10 +612,14 @@ securityContext:
 
 {{- define "lance.objectStorePolicy.lineage" -}}
 {{- $control := .Values.objectStore.bucket -}}
-{{- toJson (list
+{{- $statements := list
   (dict "Sid" "FindTheBucket" "Effect" "Allow" "Action" (list "s3:GetBucketLocation") "Resource" (list (printf "arn:aws:s3:::%s" $control)))
   (dict "Sid" "ListItsOwnOutbox" "Effect" "Allow" "Action" (list "s3:ListBucket") "Resource" (list (printf "arn:aws:s3:::%s" $control)) "Condition" (dict "StringLike" (dict "s3:prefix" (list "_lineage_outbox" "_lineage_outbox/" "_lineage_outbox/*"))))
-  (dict "Sid" "DrainItsOwnOutboxAndNothingElse" "Effect" "Allow" "Action" (list "s3:GetObject" "s3:DeleteObject") "Resource" (list (printf "arn:aws:s3:::%s/_lineage_outbox" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control)))) -}}
+  (dict "Sid" "DrainItsOwnOutboxAndNothingElse" "Effect" "Allow" "Action" (list "s3:GetObject" "s3:DeleteObject") "Resource" (list (printf "arn:aws:s3:::%s/_lineage_outbox" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control))) -}}
+{{- if .Values.services.lineage.relay.enabled -}}
+{{- $statements = append $statements (dict "Sid" "ClaimItsOwnTimersWindows" "Effect" "Allow" "Action" (list "s3:GetObject" "s3:PutObject") "Resource" (list (printf "arn:aws:s3:::%s/_timers/lineage-relay.json" $control))) -}}
+{{- end -}}
+{{- toJson $statements -}}
 {{- end -}}
 
 {{- /* Each governed bucket's event configuration is read by the hourly audit (`maintenance.services.bucket_events`): the
@@ -895,7 +899,6 @@ activeDeadlineSeconds: 1800
 {{- $reads := dict -}}
 {{- with $v.services.lineage.forward.authSecret.name }}{{- if not (regexMatch (include "lance.secretNamePattern" $root) (toString .)) }}{{- fail (printf "services.lineage.forward.authSecret.name: %q is no secret name (a path or a wildcard would widen lineage's store policy)" (toString .)) }}{{- end }}{{- end -}}
 {{- $dapr := $v.dapr.enabled -}}
-{{- $door := ternary (list "dapr-app-token") list $dapr -}}
 {{- $sa := printf "%s-sa-" (include "lance.fullname" .) -}}
 {{- $doors := ne (($v.signing).doors | toString) "off" -}}
 {{- $everySigner := list -}}
@@ -903,8 +906,8 @@ activeDeadlineSeconds: 1800
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat $door (ternary (list (printf "nats-user-%s" $v.services.catalog.appId)) list $dapr) (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))))
-  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat $door (ternary (list (printf "nats-user-%s" $v.services.lineage.appId)) list $dapr) (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce)))) -}}
+  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat (ternary (list (printf "nats-user-%s" $v.services.catalog.appId)) list $dapr) (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))))
+  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat (ternary (list (printf "nats-user-%s" $v.services.lineage.appId)) list $dapr) (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce)))) -}}
 {{- if $v.maintenance.enabled -}}
 {{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat (ternary (list "nats-user-maintenance-worker") list $dapr) (ternary (list (printf "nats-user-%s" $v.maintenance.appId)) list (and $dapr (or $v.maintenance.lineageEmit $v.maintenance.controlEmit))) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled)))) -}}
 {{- end -}}
@@ -1048,17 +1051,6 @@ dapr.io/volume-mounts: "openbao-identity:{{ dir (include "lance.storeTokenFile" 
 {{- if not (and $.Values.maintenance.enabled (eq . $.Values.maintenance.appId)) }}{{- $apps = append $apps . }}{{- end -}}
 {{- end -}}
 {{- join "," $apps -}}
-{{- end -}}
-
-{{- define "lance.appTokenEnv" -}}
-{{- $root := index . 0 -}}{{- $appId := index . 1 -}}
-{{- if has $appId (splitList "," (include "lance.secretScopes" $root)) -}}
-- { name: RASK_APP_TOKEN_FROM_STORE, value: "true" }
-{{- else -}}
-- name: APP_API_TOKEN
-  valueFrom:
-    secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
-{{- end -}}
 {{- end -}}
 
 {{- define "lance.allocatorEnv" -}}

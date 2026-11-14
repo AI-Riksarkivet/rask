@@ -98,7 +98,6 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 | `GET /tables/{name}/derived?depth=` | Every table derived from `name`, nearest first |
 | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The outbox's at-risk events: list them, replay one |
 | `GET /admin/dlq/parked`, `POST /admin/dlq/parked/{run_id}/replay` | The bus deliveries the ingest lane parked in the refusals table: list them by run, re-present a run's (the estate admin's) |
-| `POST /lineage-relay-cron` | Dapr cron binding that drives the relay tick (sidecar only) |
 | `GET /livez` | Liveness |
 
 **Intake.** The author is stamped from the verified bearer token, overwriting any `rask_author` facet the body carries, and
@@ -129,22 +128,25 @@ until each derived table holds an obligation following it (ADR 0178).
 **Authz.** Two layers, the same the catalog applies to `describe table`: OIDC (a valid bearer verified against Dex,
 else 401) and OpenFGA (`can_get_metadata` on `table:<uuid>`, else 403; feed rows naming a dataset the caller cannot see
 are dropped). Lineage reads the shared OpenFGA store and writes no tuple. Both layers are off in the code defaults and
-on in the chart (`RASK_OIDC_ENABLED`, `RASK_FGA_ENABLED`). The relay tick's route verifies the Dapr app token,
-which only the sidecar stamps: the cluster route publishes `/api/lineage` onto lineage's root, but a request through
-the Gateway reaches the app port directly and never carries that token, so the route refuses it. The service refuses
-to boot if it would mount without the token. The bus transport has no route: lineage pulls its consumer on its own
+on in the chart (`RASK_OIDC_ENABLED`, `RASK_FGA_ENABLED`). The relay tick has no route: it runs on a timer inside the
+process. The bus transport has no route either: lineage pulls its consumer on its own
 connection to the bus, as its own bus user.
 
 ## The relay tick
 
-A Dapr `bindings.cron` component (chart `services.lineage.relay.{enabled,bindingName,schedule}`, binding
-`lineage-relay-cron`, `@every 30s`) POSTs to the relay route on every replica's sidecar. Every step is idempotent, so
-overlapping ticks need no lock (`lineage/api/relay_cron.py`):
+Lineage's own fixed timer runs the tick (chart `services.lineage.relay.{enabled,periodSeconds}`, timer
+`lineage-relay`, every 30 s; `lineage/api/relay.py`, on `lakehouse.timers`). Every replica runs the timer's loop, and
+once a window each reads the claim record `_timers/lineage-relay.json` under the control root (`LINEAGE_TIMER_ROOT`)
+and tries one conditional write that claims the window; the store lets one land, and that replica runs the tick, so it
+runs once a window whatever the replica count. The timer needs only the object store and the catalog, never the bus:
+the relay is what records events while the bus is away. Through a read-only window the timer is held, and the first
+window after it does the work. Every step is idempotent besides, so a tick that outlasts its window and overlaps the
+next needs no lock:
 
 1. **Drain the outbox.** Producers stage each event under `_lineage_outbox` before publishing it; the tick records
    each survivor, re-publishes it and deletes it, oldest first and bounded per tick. An event governance refuses is
-   recorded to `lance_catalog$provenance$refusals` before its staged object is deleted. Lineage's object-store grant is only this
-   prefix (list, get, delete).
+   recorded to `lance_catalog$provenance$refusals` before its staged object is deleted. Lineage's object-store grant is this
+   prefix (list, get, delete) and its timer's claim record (get, put), nothing else.
 2. **Forward.** Every recorded event, as standard OpenLineage over the HTTP transport, is POSTed to
    `services.lineage.forward.url` + `endpoint` (default `api/v1/lineage`), at least once and in feed order, from a
    cursor in `lance_catalog$provenance$cursors` keyed by the endpoint URL. The cursor moves by a conditional merge
@@ -248,5 +250,5 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
 - `lineage/services/provenance.py`: `ProvenanceStore`, the feed, edge list, refusals and cursors over the catalog's doors.
 - `lineage/services/forward.py`: the forwarder. `lineage/services/{consumer,staged,signature}.py`: shared intake.
 - `lineage/api/v1/endpoints/{ingest,events,tables,dlq}.py`: the HTTP doors; `lineage/api/ingest_lane.py`: the bus
-  transport's handling and park; `lineage/api/relay_cron.py`: the sidecar-only cron route;
+  transport's handling and park; `lineage/api/relay.py`: the relay tick and its timer;
   `lineage/api/{security,fga_deps}.py`: authn and authz.

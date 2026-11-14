@@ -3,7 +3,7 @@
 The declaration is the file the chart renders from its values and the catalog mounts. A tick creates what it names and
 corrects what drifted, through the functions the doors call, so an install from git holds its tenants with no call to
 any door. Driven on the deployed shape: the real app with authorization on (a loopback Dex, a real OpenFGA store of the
-test's own) over an S3 store, the tick delivered as the sidecar delivers it.
+test's own) over an S3 store, the tick run on the app's own event loop as the catalog's timer runs it.
 """
 
 from __future__ import annotations
@@ -13,21 +13,22 @@ import logging
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import boto3
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
 from moto.server import ThreadedMotoServer
 
-from catalog.api.declaration_converge import mount_declaration_converge
+from catalog.api import declaration_converge
+from catalog.api.ticks import Tick
 from catalog.services import warehouses
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 
 
-TICK = "catalog-declaration-converge-cron"
 ESTATE_BUCKET = "estate"
 CONNECTOR, IDP = "local", "dex"
 #: A pipeline's service account: the kind of principal a declaration grants, never a person.
@@ -52,11 +53,11 @@ class Estate:
         """Replace the declaration, as a reconcile of the chart's ConfigMap does."""
         self._declaration.write_text(json.dumps(declared))
 
-    def tick(self) -> dict[str, Any]:
-        """One delivery of the cron binding; the tick's own answer."""
-        answer = self.client.post(f"/{TICK}")
-        assert answer.status_code == 200, answer.text
-        return answer.json()
+    def tick(self) -> declaration_converge.ConvergeTick:
+        """One converge tick on the catalog app's own event loop, as its timer runs one; what the tick did."""
+        app = cast(FastAPI, self.client.app)
+        assert self.client.portal is not None, "the converge ticks inside the app's lifespan"
+        return self.client.portal.call(declaration_converge.tick, Tick(app, app.state.settings))
 
     def bearer(self, user_id: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._dex.mint(user_id, connector=CONNECTOR, audience='lance-catalog')}"}
@@ -77,7 +78,7 @@ def store_url() -> Iterator[str]:
 
 @contextmanager
 def _catalog(store_url: str, declaration: Path, monkeypatch: pytest.MonkeyPatch, governed: dict[str, str]) -> Generator[TestClient]:
-    """The catalog over an emptied S3 store, ``declaration`` mounted (empty) and its tick served, under ``governed``'s auth settings."""
+    """The catalog over an emptied S3 store, ``declaration`` mounted (empty), under ``governed``'s auth settings."""
     s3 = boto3.resource("s3", endpoint_url=store_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     for bucket in s3.buckets.all():
         bucket.objects.all().delete()
@@ -100,11 +101,8 @@ def _catalog(store_url: str, declaration: Path, monkeypatch: pytest.MonkeyPatch,
     get_settings.cache_clear()
     from catalog.main import app
 
-    mounted = len(app.router.routes)
-    mount_declaration_converge(app, TICK)
     with TestClient(app) as client:
         yield client
-    del app.router.routes[mounted:]
     get_settings.cache_clear()
 
 
@@ -228,7 +226,7 @@ def test_a_warehouse_whose_establish_failed_is_completed_by_the_next_tick_and_th
     ticks = [estate.tick() for _ in range(3)]
 
     made = estate.client.post("/v1/namespace/acme$sales/create", json={}, headers=estate.bearer("alice"))
-    assert [(tick["converged"], tick["failed"]) for tick in ticks] == [(["project:acme"], ["warehouse:acme"]), (["warehouse:acme"], []), ([], [])]
+    assert [(tick.converged, tick.failed) for tick in ticks] == [(["project:acme"], ["warehouse:acme"]), (["warehouse:acme"], []), ([], [])]
     assert (made.status_code, (estate.record("acme") or {}).get("managed_by")) == (200, "git"), made.text
 
 
@@ -241,7 +239,7 @@ def test_a_warehouse_git_declares_in_another_project_than_it_stands_in_is_left_a
 
     answer = estate.tick()
 
-    assert (answer["converged"], answer["failed"], estate.record("shared")) == ([], ["warehouse:shared"], before)
+    assert (answer.converged, answer.failed, estate.record("shared")) == ([], ["warehouse:shared"], before)
 
 
 def test_a_paged_root_listing_shows_every_warehouse_the_caller_sees(estate: Estate) -> None:
@@ -312,7 +310,7 @@ def test_a_tick_on_an_estate_as_declared_changes_nothing(estate: Estate, caplog:
 
     answer = estate.tick()
 
-    assert (answer["converged"], answer["grants_written"], answer["grants_revoked"], answer["failed"]) == ([], 0, 0, [])
+    assert (answer.converged, answer.grants_written, answer.grants_revoked, answer.failed) == ([], 0, 0, [])
     assert (_declared_writes(caplog), estate.store.tuples()) == ([], held)
 
 
@@ -357,7 +355,7 @@ def test_an_estate_admin_whose_successor_could_not_be_granted_keeps_the_estate(e
     answer = estate.tick()
 
     held = {(user, relation, obj) for user, relation, obj in estate.store.tuples() if obj in (ROOT, ESTATE_WAREHOUSE) and relation in ("admin", "owner")}
-    assert (answer["grants_revoked"], held) == (0, {(alice, "admin", ROOT), (alice, "owner", ESTATE_WAREHOUSE)})
+    assert (answer.grants_revoked, held) == (0, {(alice, "admin", ROOT), (alice, "owner", ESTATE_WAREHOUSE)})
 
 
 def test_a_machine_role_git_stopped_declaring_is_taken_from_the_release_and_one_granted_elsewhere_stands(estate: Estate) -> None:
@@ -388,7 +386,7 @@ def test_a_declaration_granting_what_it_may_not_converges_nothing(estate: Estate
 
     answer = estate.tick()
 
-    assert (answer["converged"], answer["failed"], estate.record("acme")) == ([], ["declaration"], None)
+    assert (answer.converged, answer.failed, estate.record("acme")) == ([], ["declaration"], None)
 
 
 def test_a_tick_corrects_a_declared_warehouse_that_drifted(estate: Estate) -> None:
@@ -399,7 +397,7 @@ def test_a_tick_corrects_a_declared_warehouse_that_drifted(estate: Estate) -> No
 
     answer = estate.tick()
 
-    assert (answer["converged"], (estate.record("acme") or {}).get("status")) == (["warehouse:acme"], "active")
+    assert (answer.converged, (estate.record("acme") or {}).get("status")) == (["warehouse:acme"], "active")
 
 
 def test_a_grant_removed_from_git_is_revoked_and_one_made_at_a_door_stands(estate: Estate) -> None:
@@ -438,7 +436,7 @@ def test_a_project_removed_from_git_is_released_and_keeps_its_data(estate: Estat
     answer = estate.tick()
 
     project = estate.client.get("/management/v1/projects/acme", headers=alice).json()
-    assert (sorted(answer["released"]), answer["grants_revoked"], answer["failed"]) == (["project:acme", "warehouse:acme"], 0, [])
+    assert (sorted(answer.released), answer.grants_revoked, answer.failed) == (["project:acme", "warehouse:acme"], 0, [])
     assert (fga.user_object(f"{IDP}~alice"), "admin", "project:acme") in estate.store.tuples()
     assert (project["managed_by"], (estate.record("acme") or {}).get("managed_by")) == ("self", None)
     assert estate.client.get("/v1/namespace/acme$sales/table/list", headers=alice).json()["tables"] == ["t"]

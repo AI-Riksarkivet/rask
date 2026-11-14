@@ -100,7 +100,7 @@ flowchart LR
 Code layout (where each concern lives). The catalog service is a uv workspace member, so its
 package sits under `services/catalog/src/catalog/`, layered into `api/` (routes/deps/security),
 `core/` (config + infra), and `services/` (business logic). The cross-service modules
-(`secrets`, `dapr_auth`, `fga`, `oidc`, `audit`, `exceptions`) live in the **`lakehouse`** library, and every service
+(`secrets`, `fga`, `oidc`, `audit`, `exceptions`, `timers`) live in the **`lakehouse`** library, and every service
 imports them as `from lakehouse.X` (the governed subset under `lakehouse.governed`); only catalog, lineage and
 maintenance import it:
 
@@ -245,7 +245,7 @@ gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 | Medallion model + tests (bronze/silver/gold + persona roles) | ✅ done (model + `model.fga.yaml`) |
 | Tier movement (bronze→silver→gold) | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog runs the publish-time quality gate, and the ADR 0156 tier rules are tracked in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) |
 | `project` type + 3-axis governance (teams × projects × tiers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
-| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), Dapr cron bindings drive lineage's relay tick and the catalog's six ticks, and NATS JetStream, the one bus (ADR 0199), carries the internal events |
+| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), lineage's relay tick and the catalog's six ticks are fixed timers in each service's own process, each window claimed by one conditional write on the control root (`lakehouse.timers`), and NATS JetStream, the one bus (ADR 0199), carries the internal events |
 | Lineage (authenticated OpenLineage intake, the commit feed and table-level edges as catalog-governed Lance tables, a forwarder to a bring-your-own graph backend; producer-side emitter) | ✅ service built & deployed; read-side authz implemented (see §9, `docs/LINEAGE.md`) |
 | OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-observability`-verified |
 

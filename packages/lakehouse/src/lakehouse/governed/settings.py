@@ -285,10 +285,6 @@ def assert_authentication_configured(*, oidc_enabled: bool, insecure_allow_unaut
     naming auth. What is actually indefensible is that "off because I meant it" and "off because
     nothing set it" look identical, so an operator resolves it by saying which they meant. No-op once
     either is true.
-
-    A sibling of `dapr_auth.assert_app_token_configured` on purpose — same shape, same reasoning,
-    called from the same place in each service's boot. A second shape for one class of problem is how
-    one of them ends up wrong.
     """
     if oidc_enabled or insecure_allow_unauthenticated:
         return

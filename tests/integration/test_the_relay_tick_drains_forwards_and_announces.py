@@ -1,14 +1,10 @@
-"""The relay tick answers only its sidecar's cron binding, at the binding's exact name (ADR 0158).
+"""The relay tick drains the lineage outbox, forwards the feed to the graph backend and prunes it (ADR 0158).
 
-The tick drains the lineage outbox, prunes the feed and forwards it to the graph backend, so a caller who could drive
-it could re-publish whatever is staged and push the feed out on demand. The route is mounted only when the chart names
-a binding, and answers Dapr's discovery pre-flight and a POST only with the app token, which the sidecar stamps on
-both (measured on daprd 1.19.0-rc.4, 2026-11-13): an anonymous 2xx on the pre-flight would tell any peer that reaches
-the port which bindings the estate runs. Driven through lineage's router over the real store in a live catalog (`lineage_app`), with a recording
-graph backend, so a refused tick is seen to forward nothing.
+Driven over the real store in a live catalog (`lineage_app`), with a recording graph backend: the tick runs on the
+lineage app's own event loop, as its timer runs it, and its report carries every count, zero or not.
 
-Through a read-only window (`LINEAGE_READ_ONLY`, rendered from the chart's one `readOnlyWindow`) the tick is answered and
-does nothing: it drains, prunes and forwards nothing, and says it paused, so the next tick after the window does the work.
+Through a read-only window (`LINEAGE_READ_ONLY`, rendered from the chart's one `readOnlyWindow`) the relay's timer is
+held: it claims no window and runs nothing, so the first window after the window ends does the work.
 
 The drain is a door to the feed like the bus and the HTTP ingest, and a refusal there is as final: recorded in the
 refusals table and retired. So a refusal it records moves `lineage.events.processed` under the outcome every door
@@ -18,13 +14,14 @@ A staged event the drain records is announced again before its staged copy goes:
 no subscriber, and a publish that fails must find the object still there for the next tick. It goes out on the
 connection lineage's own start opened, under the id its producer's publish carried, so a stream that already holds
 the event stores the copy once ([[XC-199]]). Driven through lineage's own app and lifespan, where that connection is
-made and handed to the tick.
+made and handed to the tick, and where the relay's timer is started: with a period set, the tick runs with no call
+from outside the process.
 """
 
 from __future__ import annotations
 
 import json
-import logging
+import time
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,17 +29,17 @@ from typing import cast, override
 
 import httpx
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lakehouse import outbox
 from lakehouse.bus import BusUnavailableError
-from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
+from lakehouse.timers import Outcome, Timer
 from lineage import main
+from lineage.api import relay
 from lineage.core.config import get_settings
 from tests.bus_double import BusDouble, session_holding
-from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineage, graph_backend, live_catalog, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, graph_backend, live_catalog, relay_tick, run_event
 
 
 _TABLE = "lance_catalog$acme-silver$pages"
@@ -61,32 +58,9 @@ def _declared(catalog_url: str, table: str) -> str:
         return str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"])
 
 
-def test_the_app_mounts_the_tick_only_when_a_binding_names_it() -> None:
-    bare, mounted = FastAPI(), FastAPI()
-    install_problem_handlers(bare, logging.getLogger(__name__))
-    install_problem_handlers(mounted, logging.getLogger(__name__))
-
-    assert (main.mount_relay_cron(bare, None), main.mount_relay_cron(bare, ""), main.mount_relay_cron(mounted, RELAY)) == (False, False, True)
-    assert (TestClient(bare).options(f"/{RELAY}").status_code, TestClient(mounted).options(f"/{RELAY}").status_code) == (404, 200)
-
-
-def test_the_discovery_preflight_answers_only_its_sidecar_and_only_at_the_binding_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    sidecar = {"dapr-api-token": "s3cret"}
-    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, set()) as lineage:
-        answers = (lineage.options(f"/{RELAY}", headers=sidecar), lineage.options(f"/{RELAY}"), lineage.options("/other-binding", headers=sidecar))
-
-    assert (answers[0].json(), answers[1].status_code, answers[2].status_code) == ({"status": "ok"}, 403, 404)
-
-
-@pytest.mark.parametrize(("read_only", "forwarded"), [pytest.param(False, 1, id="outside-a-window"), pytest.param(True, 0, id="through-a-read-only-window")])
-def test_a_tick_forwards_only_with_the_sidecars_token_and_outside_a_read_only_window(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_only: bool, forwarded: int
-) -> None:
+def test_a_tick_forwards_the_feed_and_reports_every_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every count is in the report when it is zero: a count that appears only when it did something makes "nothing
     happened" and "the step never ran" the same observation."""
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    monkeypatch.setenv("LINEAGE_READ_ONLY", str(read_only).lower())
     run = run_event("1d3c5a07-0000-4000-8000-000000000593", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=[_TABLE])
     with graph_backend() as (graph, url):
         monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
@@ -94,20 +68,17 @@ def test_a_tick_forwards_only_with_the_sidecars_token_and_outside_a_read_only_wi
             granted = {("dex~alice", "can_write_data", f"table:{_declared(catalog_url, _TABLE)}")}
             with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
                 assert lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: "dex~alice"}).status_code == 201
-                refused = [lineage.post(f"/{RELAY}").status_code, lineage.post(f"/{RELAY}", headers={"dapr-api-token": "wrong"}).status_code]
-                sent_while_refused = len(graph.received)
-                tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
+                tick = relay_tick(lineage)
 
-    assert (refused, sent_while_refused, len(graph.received)) == ([403, 403], 0, forwarded)
-    assert tick.json() == {
-        "paused": read_only,
+    assert len(graph.received) == 1
+    assert tick.model_dump() == {
         "outbox_drained": 0,
         "outbox_stranded": 0,
         "outbox_refused": 0,
         "outbox_refusals_recorded": 0,
         "pruned_events": 0,
         "parks_retired": 0,
-        "forwarded": forwarded,
+        "forwarded": 1,
         "forward_refused": 0,
         "forward_stalled": None,
     }
@@ -150,40 +121,28 @@ def test_a_tick_counts_a_refusal_it_records_as_every_door_counts_it(
 ) -> None:
     """A staged event no listed signer signed, refused by the bus door's own gate as the tick drains it."""
     outbox_uri = f"file://{tmp_path}/outbox"
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     monkeypatch.setenv("LINEAGE_OUTBOX_URI", outbox_uri)
     monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps(["service-catalog"]))
     unsigned = run_event("1d3c5a07-0000-4000-8000-000000000573", "COMPLETE", "2026-11-12T10:00:00+00:00", outputs=[_TABLE])
     outbox.stage_event(outbox_uri, StorageOptions(), unsigned["run"]["runId"], json.dumps(unsigned))
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, set()) as lineage:
-        tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
+        tick = relay_tick(lineage)
 
-    assert (tick.json()["outbox_refused"], tick.json()["outbox_refusals_recorded"], processed()) == (1, 1, {("signature_refused", "outbox"): 1})
+    assert (tick.outbox_refused, tick.outbox_refusals_recorded, processed()) == (1, 1, {("signature_refused", "outbox"): 1})
 
 
 @contextmanager
-def _lineage_as_its_pod_starts_it(catalog_url: str, outbox_uri: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+def _lineage_as_its_pod_starts_it(catalog_url: str, outbox_uri: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch, **env: str) -> Generator[TestClient]:
     """Lineage's own app under its own lifespan, recording into the catalog at ``catalog_url`` and draining the outbox at
-    ``outbox_uri``, with ``bus`` where the connection its start opens would be.
-
-    The app is built when its module is imported, from the environment of that moment, so the tick is mounted here as
-    the module mounts it for a pod whose environment names the binding, and taken off again after."""
-    for name, value in {
-        "LINEAGE_CATALOG_URL": catalog_url,
-        "LINEAGE_OUTBOX_URI": outbox_uri,
-        "LINEAGE_RELAY_BINDING_NAME": RELAY,
-        "APP_API_TOKEN": "s3cret",
-    }.items():
+    ``outbox_uri``, with ``bus`` where the connection its start opens would be, and ``env`` besides."""
+    for name, value in {"LINEAGE_CATALOG_URL": catalog_url, "LINEAGE_OUTBOX_URI": outbox_uri, **env}.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(main, "bus_session", session_holding(bus))
     get_settings.cache_clear()
-    built = list(main.app.router.routes)
-    main.mount_relay_cron(main.app, get_settings().relay_binding_name)
     try:
         with TestClient(main.app) as lineage:
             yield lineage
     finally:
-        main.app.router.routes[:] = built
         get_settings.cache_clear()
 
 
@@ -215,11 +174,42 @@ def test_a_tick_announces_a_staged_event_on_the_services_own_connection_and_drop
 
     bus = _Bus(failing=failing)
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, _lineage_as_its_pod_starts_it(catalog_url, outbox_uri, bus, monkeypatch) as lineage:
-        tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
+        tick = relay_tick(lineage)
 
-    assert (tick.json()["outbox_drained"], tick.json()["outbox_stranded"]) == (drained, stranded), tick.text
+    assert (tick.outbox_drained, tick.outbox_stranded) == (drained, stranded), tick
     assert [(taken.topic, taken.message_id) for taken in bus.sent] == sent
     assert [taken.event for taken in bus.sent] == [event] * len(sent)
     assert (staged_at_each_publish, [key for key, _ in outbox.list_events(outbox_uri, StorageOptions())]) == ([1], left), (
         "the staged copy went before the bus took the event, or stayed after it had"
     )
+
+
+def test_the_relay_runs_on_lineages_own_timer_with_no_call_from_outside(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With a period in git, lineage's start keeps the relay's timer, and a staged event reaches the bus and leaves the
+    outbox with nothing calling the tick."""
+    outbox_uri = f"file://{tmp_path}/outbox"
+    event = run_event(_RUN, "COMPLETE", "2026-11-14T10:00:00+00:00", outputs=[_TABLE])
+    outbox.stage_event(outbox_uri, StorageOptions(), _STAGED_AS, json.dumps(event))
+    bus = BusDouble()
+    timer_env = {"LINEAGE_RELAY_PERIOD_SECONDS": "0.2", "LINEAGE_TIMER_ROOT": str(tmp_path / "timers")}
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, _lineage_as_its_pod_starts_it(catalog_url, outbox_uri, bus, monkeypatch, **timer_env):
+        deadline = time.monotonic() + 30
+        while (not bus.sent or list(outbox.list_events(outbox_uri, StorageOptions()))) and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    assert [(taken.topic, taken.message_id) for taken in bus.sent] == [("lineage.events.v1", _STAGED_AS)]
+    assert list(outbox.list_events(outbox_uri, StorageOptions())) == [], "the staged copy outlived the event's delivery"
+
+
+def test_through_a_read_only_window_the_relays_timer_is_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The window writes nothing: the relay's timer claims no window and runs no tick until the window ends."""
+    timer_env = {"LINEAGE_READ_ONLY": "true", "LINEAGE_RELAY_PERIOD_SECONDS": "60", "LINEAGE_TIMER_ROOT": str(tmp_path / "timers")}
+    with (
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        _lineage_as_its_pod_starts_it(catalog_url, f"file://{tmp_path}/outbox", BusDouble(), monkeypatch, **timer_env) as lineage,
+    ):
+        timer = cast(Timer, getattr(main.app.state, relay.RELAY_TIMER_STATE))
+        assert lineage.portal is not None
+        turn = lineage.portal.call(timer.turn)
+
+    assert turn.outcome == Outcome.HELD

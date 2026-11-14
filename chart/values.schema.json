@@ -230,10 +230,6 @@
                 "commitReconcile": {
                     "type": "object",
                     "properties": {
-                        "bindingName": {
-                            "description": "Name of the commit-reconcile Dapr cron Component; also the catalog's LANCE_COMMIT_RECONCILE_BINDING_NAME and the route it serves.",
-                            "type": "string"
-                        },
                         "graceSeconds": {
                             "description": "Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it.",
                             "type": "integer"
@@ -242,9 +238,10 @@
                             "description": "Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays.",
                             "type": "integer"
                         },
-                        "schedule": {
-                            "description": "Dapr cron schedule on which the catalog announces every committed version lineage's feed lacks.",
-                            "type": "string"
+                        "periodSeconds": {
+                            "description": "Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`).",
+                            "type": "integer",
+                            "minimum": 1
                         }
                     }
                 },
@@ -255,30 +252,24 @@
                 "controlOutbox": {
                     "type": "object",
                     "properties": {
-                        "bindingName": {
-                            "description": "Name of the control relay's Dapr cron Component; also the catalog's LANCE_CONTROL_RELAY_BINDING_NAME and the route it serves. Must stay one string.",
-                            "type": "string"
-                        },
                         "enabled": {
-                            "description": "Stage control events in a durable S3 outbox and run the relay cron that drains it; carries `table_published` to its subscribers. Requires `controlEmit`.",
+                            "description": "Stage control events in a durable S3 outbox and run the relay timer that drains it; carries `table_published` to its subscribers. Requires `controlEmit`.",
                             "type": "boolean"
                         },
-                        "schedule": {
-                            "description": "Dapr cron schedule of the control outbox relay; bounds how long a control event stays undelivered after a bus outage.",
-                            "type": "string"
+                        "periodSeconds": {
+                            "description": "Seconds between two ticks of the control outbox relay (`LANCE_CONTROL_RELAY_PERIOD_SECONDS`); bounds how long a control event stays undelivered after a bus outage.",
+                            "type": "integer",
+                            "minimum": 1
                         }
                     }
                 },
                 "declarationConverge": {
                     "type": "object",
                     "properties": {
-                        "bindingName": {
-                            "description": "Name of the declaration-converge Dapr cron Component; also the catalog's LANCE_DECLARATION_CONVERGE_BINDING_NAME and the route it serves.",
-                            "type": "string"
-                        },
-                        "schedule": {
-                            "description": "Dapr cron schedule on which the catalog converges the estate onto `catalog.declared`; lateness only delays a declared change.",
-                            "type": "string"
+                        "periodSeconds": {
+                            "description": "Seconds between two ticks of the timer on which the catalog converges the estate onto `catalog.declared` (`LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS`); lateness only delays a declared change.",
+                            "type": "integer",
+                            "minimum": 1
                         }
                     }
                 },
@@ -310,10 +301,6 @@
                 "erasure": {
                     "type": "object",
                     "properties": {
-                        "bindingName": {
-                            "description": "Name of the erasure-release Dapr cron Component; also the catalog's LANCE_ERASURE_RELEASE_BINDING_NAME and the route it serves.",
-                            "type": "string"
-                        },
                         "deadlineDays": {
                             "description": "Days after an erasure obligation is recorded that it is due; an obligation still open past it is shown overdue (LANCE_ERASURE_DEADLINE_DAYS). Required.",
                             "type": "integer"
@@ -322,27 +309,25 @@
                             "description": "Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required.",
                             "type": "integer"
                         },
-                        "schedule": {
-                            "description": "Dapr cron schedule on which due erasure pin releases run; lateness only costs time.",
-                            "type": "string"
+                        "releasePeriodSeconds": {
+                            "description": "Seconds between two ticks of the timer that runs due erasure pin releases (`LANCE_ERASURE_RELEASE_PERIOD_SECONDS`); lateness only costs time.",
+                            "type": "integer",
+                            "minimum": 1
                         }
                     }
                 },
                 "manifestReclaim": {
                     "type": "object",
                     "properties": {
-                        "bindingName": {
-                            "description": "Name of the manifest-reclaim Dapr cron Component; also the catalog's LANCE_MANIFEST_RECLAIM_BINDING_NAME and the route it serves.",
-                            "type": "string"
+                        "periodSeconds": {
+                            "description": "Seconds between two ticks of the timer that removes each root's `__manifest` versions past retainSeconds (`LANCE_MANIFEST_RECLAIM_PERIOD_SECONDS`); lateness only keeps history longer.",
+                            "type": "integer",
+                            "minimum": 1
                         },
                         "retainSeconds": {
                             "description": "Seconds a `__manifest` version is kept before the reclaim removes it (LANCE_MANIFEST_RETAIN_SECONDS); a dropped id stays readable in the history this long, and the catalog rebuilds each namespace connection after a quarter of it.",
                             "type": "integer",
                             "minimum": 0
-                        },
-                        "schedule": {
-                            "description": "Dapr cron schedule on which each root's `__manifest` versions past retainSeconds are removed; lateness only keeps history longer.",
-                            "type": "string"
                         }
                     }
                 },
@@ -366,13 +351,10 @@
                 "promotion": {
                     "type": "object",
                     "properties": {
-                        "bindingName": {
-                            "description": "Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves.",
-                            "type": "string"
-                        },
-                        "schedule": {
-                            "description": "Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time.",
-                            "type": "string"
+                        "expiryPeriodSeconds": {
+                            "description": "Seconds between two ticks of the timer that expires promotion holds past their review deadline (`LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS`); lateness only costs time.",
+                            "type": "integer",
+                            "minimum": 1
                         }
                     }
                 },
@@ -663,7 +645,7 @@
                     "type": "integer"
                 },
                 "sidecarBlockShutdownSeconds": {
-                    "description": "Seconds the Dapr sidecar keeps running after SIGTERM, so a cron tick still in its handler is answered; must lie between preStopSeconds and the grace period.",
+                    "description": "Seconds the Dapr sidecar keeps running after SIGTERM; must lie between preStopSeconds and the grace period.",
                     "type": "integer"
                 },
                 "teardownSeconds": {
@@ -1615,7 +1597,7 @@
             }
         },
         "readOnlyWindow": {
-            "description": "Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its cron ticks, maintenance's worker takes no task, and lineage's relay pauses. Flipping it rolls the three services.",
+            "description": "Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its timers, maintenance's worker takes no task, and lineage's relay is held. Flipping it rolls the three services.",
             "type": "boolean"
         },
         "resources": {
@@ -1849,7 +1831,7 @@
                     "type": "object",
                     "properties": {
                         "appId": {
-                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id and the scope of its cron bindings.",
+                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id.",
                             "type": "string"
                         },
                         "module": {
@@ -1870,7 +1852,7 @@
                     "type": "object",
                     "properties": {
                         "appId": {
-                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id and the scope of its relay cron.",
+                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id.",
                             "type": "string"
                         },
                         "deliveriesInFlight": {
@@ -1965,17 +1947,14 @@
                         "relay": {
                             "type": "object",
                             "properties": {
-                                "bindingName": {
-                                    "description": "Name of the relay cron binding; the sidecar POSTs to /\u003cbindingName\u003e.",
-                                    "type": "string"
-                                },
                                 "enabled": {
-                                    "description": "Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled.",
+                                    "description": "Runs the relay's timer in each lineage replica: it drains the lineage outbox, forwards the feed and prunes it.",
                                     "type": "boolean"
                                 },
-                                "schedule": {
-                                    "description": "Schedule of the relay tick (Dapr cron syntax, e.g. `@every 30s` or a cron expression).",
-                                    "type": "string"
+                                "periodSeconds": {
+                                    "description": "Seconds between two relay ticks (`LINEAGE_RELAY_PERIOD_SECONDS`); one replica runs each tick.",
+                                    "type": "integer",
+                                    "minimum": 1
                                 }
                             }
                         },

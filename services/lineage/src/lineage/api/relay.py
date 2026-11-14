@@ -1,12 +1,12 @@
-"""The relay tick — a Dapr cron binding drains the lineage outbox, forwards the feed and prunes it (ADR 0158).
+"""The relay tick: drain the lineage outbox, forward the feed and prune it (ADR 0158).
 
-A ``bindings.cron`` component POSTs to ``/<binding-name>`` on a schedule; OPTIONS is Dapr's binding-discovery
-pre-flight. Guarded by ``require_dapr_token`` so only the sidecar's cron may drive it. The schedule + binding
-name live in the chart, not app code (no scheduler thread here). Blocking object-store reads run in the
-threadpool.
+It runs on lineage's own timer (:func:`start_relay`): a loop of this process on the period git gives it, each window
+claimed on the control root, so the tick runs once a window whatever the replica count (`lakehouse.timers`). Never a
+schedule on the bus: the relay exists for the bus being away, recording what producers staged on the object store, so
+its timer depends on nothing but that store. Blocking object-store reads run in the threadpool. Through a read-only
+window the timer is held, and the first window after it drains, prunes and forwards.
 
-EVERY STEP IS IDEMPOTENT, so a tick needs no cluster-wide lock. The cron fires on every replica's sidecar,
-and two ticks overlapping is safe: a drained event is recorded under its feed key (a second record lands no
+EVERY STEP IS IDEMPOTENT besides, so a tick that outlasts its window and overlaps the next is safe: a drained event is recorded under its feed key (a second record lands no
 row), re-published at least once as the topic already promises, and deleted (a second delete finds nothing);
 two prunes delete the same rows once; two forwards send an event at least once, as the forwarder promises, and
 neither moves the cursor back (`lineage.services.forward`).
@@ -17,23 +17,23 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import suppress
-from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel
 
 from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus
-from lakehouse.governed.dapr_auth import add_binding_preflight, require_dapr_token
 from lakehouse.storage_options import StorageOptions
-from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
+from lakehouse.supervision import Supervisor
+from lakehouse.timers import Timer
 from lineage.api.fga_deps import enforce_bus_authz
-from lineage.core.config import storage_options
+from lineage.core.config import LineageSettings, storage_options
 from lineage.core.metrics import Door, record_outcome, refusal_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload
 from lineage.services.forward import follower, forward
+from lineage.services.provenance import ProvenanceStore
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 
 
@@ -69,8 +69,6 @@ class DrainOutcome(BaseModel):
 class RelayReport(BaseModel):
     """One relay tick: what the drain did, how many feed rows retention removed, and what the forwarder sent."""
 
-    #: The tick did nothing, since the lakehouse is in its read-only window (``LINEAGE_READ_ONLY``).
-    paused: bool = False
     outbox_drained: int = 0
     outbox_stranded: int = 0
     outbox_refused: int = 0
@@ -84,7 +82,7 @@ class RelayReport(BaseModel):
     forward_stalled: str | None = None
 
 
-async def _prune_old_events(provenance: ProvenanceDep, settings: SettingsDep) -> int:
+async def _prune_old_events(provenance: ProvenanceStore, settings: LineageSettings) -> int:
     """Feed retention — drop rows RECEIVED longer ago than the budget; 0 days keeps everything.
 
     ON THE TICK, NOT THE INGEST PATH: the feed's hottest path must not pay for a retention delete per event.
@@ -108,26 +106,49 @@ async def _prune_old_events(provenance: ProvenanceDep, settings: SettingsDep) ->
     return pruned
 
 
-async def _on_cron(
-    request: Request,
-    provenance: ProvenanceDep,
-    settings: SettingsDep,
-    publisher: PublisherDep,
-    _: Annotated[None, Depends(require_dapr_token)],
-) -> dict[str, Any]:
-    """One relay tick, triggered by a Dapr cron tick: drain the outbox, forward the feed, then prune what retention and the forwarder release.
+#: The relay timer's name, which its claim record and its metrics carry.
+RELAY_TIMER = "lineage-relay"
+#: Where the app keeps the relay's timer, when git gives it a period.
+RELAY_TIMER_STATE = "relay_timer"
 
-    Best-effort per the cron contract: each step degrades to a warning, so the tick's report reaches the
-    caller either way. Through a read-only window it does nothing and says so: answered 2xx, the sidecar counts no
-    failed delivery, and every step is idempotent, so the first tick after the window does the work.
+
+def start_relay(app: FastAPI, settings: LineageSettings, loops: Supervisor) -> None:
+    """Keep the relay's timer on a loop of ``loops`` when git gives it a period, and publish it on ``app.state``.
+
+    Called once the feed, the gate and the bus a tick works with are on ``app.state``; stopped with the other loops.
     """
-    if settings.read_only:
-        log.info("lineage_relay_tick_paused_for_read_only_window")
-        return RelayReport(paused=True).model_dump()
+    if not settings.relay_period_seconds:
+        return
+
+    async def work() -> None:
+        await tick(app, settings)
+
+    timer = Timer(
+        RELAY_TIMER,
+        period=settings.relay_period_seconds,
+        work=work,
+        root=settings.timer_root,
+        storage_options=lambda: storage_options(settings),
+        held=lambda: settings.read_only,
+        # The tick measures the outbox's backlog, so a replica another ran the window of drops its own snapshot.
+        elsewhere=outbox_metrics.forget_backlog,
+    )
+    setattr(app.state, RELAY_TIMER_STATE, timer)
+    loops.keep(f"timer-{RELAY_TIMER}", timer.run)
+
+
+async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
+    """One relay tick: drain the outbox, forward the feed, then prune what retention and the forwarder release.
+
+    Each step degrades to a warning, so one step's failure leaves the others to this tick and the report says what
+    each did.
+    """
+    provenance: ProvenanceStore = app.state.provenance
+    publisher: Bus | None = getattr(app.state, "bus", None)
     report = RelayReport()
     if settings.outbox_uri:
         try:
-            outcome = await _drain_outbox(request, provenance, settings, storage_options(settings), publisher)
+            outcome = await _drain_outbox(app, provenance, settings, storage_options(settings), publisher)
             report.outbox_drained, report.outbox_stranded, report.outbox_refused = outcome.drained, outcome.stranded, outcome.refused
             report.outbox_refusals_recorded = outcome.recorded
         except Exception as exc:
@@ -136,7 +157,7 @@ async def _on_cron(
         report.parks_retired = await provenance.retire_recovered_parks()
     except Exception as exc:
         log.warning("lineage_parks_retire_failed", extra={"error": str(exc)})
-    client = getattr(request.app.state, "forward_client", None)
+    client = getattr(app.state, "forward_client", None)
     if settings.forward_url and client is not None:
         try:
             forwarded = await forward(provenance, settings, client)
@@ -147,10 +168,12 @@ async def _on_cron(
     # AFTER THE FORWARD, so a row this tick delivered past its retention goes in this tick rather than the next.
     report.pruned_events = await _prune_old_events(provenance, settings)
     log.info("lineage_relay_tick", extra=report.model_dump())
-    return report.model_dump()
+    return report
 
 
-async def _drain_outbox(request: Request, provenance: ProvenanceDep, settings: SettingsDep, opts: StorageOptions, publisher: Bus | None = None) -> DrainOutcome:
+async def _drain_outbox(
+    app: FastAPI, provenance: ProvenanceStore, settings: LineageSettings, opts: StorageOptions, publisher: Bus | None = None
+) -> DrainOutcome:
     """Re-ingest + delete every staged lineage event (#4) — the full-event recovery half of the outbox.
 
     An unparseable (poison) object is dropped so it can't wedge the drain. A well-formed event is parsed
@@ -161,7 +184,7 @@ async def _drain_outbox(request: Request, provenance: ProvenanceDep, settings: S
     PER-EVENT ISOLATION. One event the feed refuses must not decide anything about the others: the failure is
     caught around a SINGLE event's work, counted as STRANDED and named, and the object is deliberately left
     staged for the next tick. Without it one un-ingestable event stranded every other staged event — measured
-    live 2026-09-07, with the tick still answering 200 and depth climbing.
+    live 2026-09-07, with every tick completing and depth climbing.
 
     STRANDED IS NOT POISON. Poison is unparseable and is dropped; a stranded event is intact and is RETRIED,
     because dropping on a non-validation error destroys the event's only durable copy.
@@ -207,7 +230,7 @@ async def _drain_outbox(request: Request, provenance: ProvenanceDep, settings: S
             # so a stager refused at the bus could stage instead. It authorizes AS the subject the producer
             # stamped, over THE STAGED BYTES (the signature covers what the producer wrote).
             arrived = json.loads(event_json)
-            await enforce_bus_authz(event, request.app, settings, arrived)
+            await enforce_bus_authz(event, app, settings, arrived)
             await provenance.record(event)
             # RE-PUBLISH, then drop. Recording alone repairs the feed and leaves every SUBSCRIBER unaware:
             # maintenance's arrival consumer and a notifier on the bus hear of a recovered event only this way.
@@ -257,11 +280,3 @@ async def _drain_outbox(request: Request, provenance: ProvenanceDep, settings: S
     if drained or stranded or refused:
         log.info("lineage_outbox_drained", extra={"drained": drained, "stranded": stranded, "refused": refused})
     return DrainOutcome(drained=drained, stranded=stranded, refused=refused, recorded=recorded)
-
-
-def build_relay_cron_router(binding_name: str) -> APIRouter:
-    """Register the relay tick's route at the exact binding name the sidecar delivers to (POST tick, OPTIONS ack)."""
-    router = APIRouter()
-    router.add_api_route(f"/{binding_name}", _on_cron, methods=["POST"], tags=["relay"])
-    add_binding_preflight(router, binding_name)
-    return router

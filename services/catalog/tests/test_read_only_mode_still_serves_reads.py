@@ -9,19 +9,24 @@ matches, from a READ allowlist. An action nobody has classified, and a request m
 DELETE, PUT and PATCH are writes whatever they name. A path's last segment can be a name a caller chose
 (`DELETE /management/v1/projects/list`), so the path text never classifies a request: only the route it matches does.
 
-The catalog's cron ticks write too (an erasure release deletes tags and branches, the manifest reclaim deletes
-versions), and Dapr delivers them at the pod root, outside both mounts. Through a window each tick is answered 200 and
-does nothing, so Dapr counts no failed delivery and the next tick after the window does the work.
+The catalog's timers write too (an erasure release deletes tags and branches, the manifest reclaim deletes versions),
+and they run inside the process, behind no mount. Through a window every timer is held: it claims no window and runs
+nothing, so the first window after the window ends does the work.
 """
 
 from __future__ import annotations
 
-import importlib
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from catalog.api.timers import TIMERS_STATE
+from lakehouse.timers import Outcome, Timer
 
 
 #: Reads served as POST, on both mounts: the spec puts the action in the path, and rask's management doors
@@ -53,22 +58,34 @@ WRITES = [
 ]
 
 
-@pytest.fixture
-def read_only_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
-    """The real catalog app with `LANCE_MAINTENANCE_READ_ONLY=true`, its namespace a local `dir` root."""
-    monkeypatch.setenv("LANCE_REST_IMPL", "dir")
-    monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "test")
-    monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "test")
-    monkeypatch.setenv("LANCE_MAINTENANCE_READ_ONLY", "true")
+@contextmanager
+def _catalog_in_a_window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **env: str) -> Generator[TestClient]:
+    """The real catalog app with `LANCE_MAINTENANCE_READ_ONLY=true`, its namespace a local `dir` root, and ``env`` besides."""
+    for name, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": str(tmp_path),
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        "LANCE_MAINTENANCE_READ_ONLY": "true",
+        **env,
+    }.items():
+        monkeypatch.setenv(name, value)
     from catalog.core.config import get_settings
 
     get_settings.cache_clear()
     from catalog.main import app
 
-    with TestClient(app, raise_server_exceptions=False) as client:
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            yield client
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.fixture
+def read_only_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
+    with _catalog_in_a_window(monkeypatch, tmp_path) as client:
         yield client
-    get_settings.cache_clear()
 
 
 @pytest.mark.parametrize(("method", "path"), READS)
@@ -84,45 +101,18 @@ def test_a_request_that_WRITES_is_refused_through_the_window(read_only_catalog: 
     assert response.headers.get("Retry-After"), dict(response.headers)
 
 
-#: Every cron binding the catalog mounts, each at the name the chart gives its Component.
-CRON_TICKS = {
-    "LANCE_CONTROL_RELAY_BINDING_NAME": "catalog-control-relay-cron",
-    "LANCE_ERASURE_RELEASE_BINDING_NAME": "catalog-erasure-release-cron",
-    "LANCE_PROMOTION_EXPIRY_BINDING_NAME": "catalog-promotion-expiry-cron",
-    "LANCE_COMMIT_RECONCILE_BINDING_NAME": "catalog-commit-reconcile-cron",
-    "LANCE_MANIFEST_RECLAIM_BINDING_NAME": "catalog-manifest-reclaim-cron",
+#: Every catalog timer's period, each set: a timer runs only where git gives it a period.
+TIMER_PERIODS = {
+    f"LANCE_{timer}_PERIOD_SECONDS": "60"
+    for timer in ("CONTROL_RELAY", "ERASURE_RELEASE", "PROMOTION_EXPIRY", "COMMIT_RECONCILE", "MANIFEST_RECLAIM", "DECLARATION_CONVERGE")
 }
 
 
-@pytest.fixture
-def read_only_catalog_with_its_ticks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
-    """The real catalog app in a window, with every cron tick mounted: the ticks are mounted at import from the binding
-    names, so the module is reloaded with them, and reloaded again without them once the test is done."""
-    import catalog.main
-    from catalog.core.config import get_settings
+def test_every_catalog_timer_is_held_through_the_window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    with _catalog_in_a_window(monkeypatch, tmp_path, **TIMER_PERIODS) as client:
+        timers: dict[str, Timer] = getattr(cast(FastAPI, client.app).state, TIMERS_STATE)
+        assert client.portal is not None
+        turns = {name: client.portal.call(timer.turn).outcome for name, timer in timers.items()}
 
-    for name, value in {
-        "LANCE_REST_IMPL": "dir",
-        "LANCE_REST_ROOT": str(tmp_path),
-        "LANCE_S3_ACCESS_KEY_ID": "test",
-        "LANCE_S3_SECRET_ACCESS_KEY": "test",
-        "LANCE_MAINTENANCE_READ_ONLY": "true",
-        "APP_API_TOKEN": "sidecar",
-        **CRON_TICKS,
-    }.items():
-        monkeypatch.setenv(name, value)
-    get_settings.cache_clear()
-    try:
-        with TestClient(importlib.reload(catalog.main).app, raise_server_exceptions=False) as client:
-            yield client
-    finally:
-        monkeypatch.undo()
-        get_settings.cache_clear()
-        importlib.reload(catalog.main)
-        get_settings.cache_clear()
-
-
-@pytest.mark.parametrize("binding", list(CRON_TICKS.values()))
-def test_a_cron_tick_does_nothing_through_the_window(read_only_catalog_with_its_ticks: TestClient, binding: str) -> None:
-    tick = read_only_catalog_with_its_ticks.post(f"/{binding}", headers={"dapr-api-token": "sidecar"})
-    assert (tick.status_code, tick.json()) == (200, {"skipped": True}), tick.text
+    assert turns == dict.fromkeys(turns, Outcome.HELD)
+    assert len(turns) == len(TIMER_PERIODS)

@@ -6,7 +6,7 @@ every pinning tag is deleted and every pinning branch, with its descendants, is 
 head. There is no door that cancels or extends it: an erasure that can be blocked is not an erasure.
 
 **THE RELEASE IS DURABLE STATE WITH A DUE TIME, not a timer.** One record per release on the control root
-(``_erasure_releases/<id>.json``), written before anyone is told, read by a cron tick that releases what is due.
+(``_erasure_releases/<id>.json``), written before anyone is told, read by the tick that releases what is due.
 A restart loses nothing, and a tick that comes late releases late, which costs only time.
 
 **WHERE EACH BRANCH COMES BACK IS RECORDED BEFORE ANY BRANCH GOES.** A branch has no update operation, so its
@@ -23,8 +23,8 @@ the subtree. Leaf-first deletes, top-down recreates: each pinning root from main
 its recreated parent (``a1b_child_branch_release.py``). The descendants' own commits are lost; their owners had
 the grace period to copy them out (owner, 2026-10-10).
 
-**ONE CLAIM PER RELEASE ACROSS REPLICAS.** A cron binding fires on every replica, so a tick claims a record by
-an ETag-guarded write (:func:`lakehouse.records.mutate_json`) carrying a lease; a replica that
+**ONE CLAIM PER RELEASE ACROSS REPLICAS.** A tick that outlasts its window can overlap the next on another replica, so
+a tick claims a record by an ETag-guarded write (:func:`lakehouse.records.mutate_json`) carrying a lease; a replica that
 loses the write, or finds the lease live, leaves the record alone.
 
 **THE PREDICATE IS NEVER STORED.** It names the subject, and a record on the control root would be one more

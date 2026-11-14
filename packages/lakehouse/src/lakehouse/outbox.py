@@ -12,7 +12,7 @@ publish never lands — the object survives and the lineage service's relay tick
 idempotently and deletes it, with inputs, author and columnLineage all preserved.
 
 NARROWED HERE, CLOSED BY THE VERSION LOG. A crash between the commit and the stage loses this event, and the
-catalog's reconcile cron finds the committed version the feed lacks and announces it from the version log, under the
+catalog's commit reconcile finds the committed version the feed lacks and announces it from the version log, under the
 run id the commit derives, so a late copy of this event lands no second row (``catalog.api.commit_reconcile``,
 [[LH-497]]). A stage that fails is counted and the call degrades to a plain publish.
 

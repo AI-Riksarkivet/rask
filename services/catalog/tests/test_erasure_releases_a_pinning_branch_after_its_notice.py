@@ -10,18 +10,19 @@ another branch is cut from, so it takes the subtree leaf-first and recreates it 
 and ``deeper`` from ``work`` (ADR 0138, ``a1b_child_branch_release.py`` on branch
 ``prototype/lance-erasure-and-commit-door``), and a tick cut short is finished at the reference it recorded.
 
-Driven through the erasure doors and the release's cron door on one app, against real pylance on ``tmp_path``: the
-claim is the whole path a person sees, from the notice to an erasure that completes.
+Driven through the erasure doors on one app, with the release's tick run on that app's event loop as its timer runs it,
+against real pylance on ``tmp_path``: the claim is the whole path a person sees, from the notice to an erasure that
+completes.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import lance
 import lance_namespace
@@ -32,9 +33,10 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
 
-from catalog.api import erasure_release as release_door
+from catalog.api import erasure_release as release_tick
 from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options
 from catalog.api.security import authenticate
+from catalog.api.ticks import Tick
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
@@ -54,7 +56,6 @@ from lakehouse.storage_options import StorageOptions
 
 _PREDICATE = "pii = 'alice'"
 _TABLE_ID = ["db", "subjects"]
-_BINDING = "catalog-erasure-release-cron"
 _NOTICE = "erasure_release_scheduled"
 
 
@@ -115,19 +116,21 @@ class _Clock:
         return self.now
 
 
+type Release = Callable[[], release_tick.ErasureReleaseTick]
+
+
 @contextmanager
-def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _Recorder, clock: _Clock) -> Generator[TestClient]:
+def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _Recorder, clock: _Clock) -> Generator[tuple[TestClient, Release]]:
+    """The erasure doors on one app, and the release's tick over that app, judged by ``clock`` and announced on ``emitter``."""
     settings = Settings(
         s3_access_key_id="k",
         s3_secret_access_key="s",
         LANCE_CONTROL_ROOT=str(tmp_path / "control"),
         LANCE_ERASURE_RELEASE_GRACE_DAYS=grace_days,
-        LANCE_ERASURE_RELEASE_BINDING_NAME=_BINDING,
     )
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.router)
-    release_door.mount_erasure_release(application, _BINDING)
 
     table = f"table:{_table_uuid(ns, tmp_path)}"
 
@@ -145,7 +148,12 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
     application.dependency_overrides[door.get_table_owners] = lambda: _owners
     application.dependency_overrides[get_clock] = lambda: clock
     with TestClient(application, raise_server_exceptions=False) as client:
-        yield client
+
+        def release() -> release_tick.ErasureReleaseTick:
+            assert client.portal is not None, "the release ticks inside the app's lifespan"
+            return client.portal.call(release_tick.tick, Tick(application, settings, clock=clock, control=cast(Any, emitter)))
+
+        yield client, release
 
 
 def _branches(ns: LanceNamespace) -> dict[str, tuple[str | None, int]]:
@@ -168,7 +176,7 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
     emitter, clock = _Recorder(), _Clock()
 
-    with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as client:
+    with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as (client, run_release):
         obligation = _record(client)
         erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
         verified = _verify(client, obligation)
@@ -184,11 +192,11 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
         ]
 
         clock.now = due - timedelta(seconds=1)
-        assert client.post(f"/{_BINDING}").status_code == 200
+        run_release()
         assert "trained" in open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list(), "nothing is released before the deadline"
 
         clock.now = due + timedelta(seconds=1)
-        assert client.post(f"/{_BINDING}").status_code == 200
+        run_release()
         again = _verify(client, _record(client))
 
     assert (again["report"]["complete"], again["report"]["residual_versions"], again["report"]["release"]) == (True, [], None), again["report"]["surfaces"]
@@ -210,7 +218,7 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
     obligation released, so that verification leaves it open and names the pin."""
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
     emitter, clock = _Recorder(), _Clock()
-    with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as client:
+    with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as (client, _run_release):
         obligation = _record(client)
         erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
         earlier = erasure_release.new_release(
@@ -264,13 +272,13 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
     )
     erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), release)
 
-    with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as client:
+    with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as (_client, run_release):
         recorded = open_by_name(ns, StorageOptions(), _TABLE_ID).version
         if dies_in == "recreate":
             _dies_once(monkeypatch, lance.LanceDataset, "create_branch", after=0)
         else:
             _dies_once(monkeypatch, type(open_by_name(ns, StorageOptions(), _TABLE_ID).branches), "delete", after=1)
-        client.post(f"/{_BINDING}")
+        run_release()
         expected = {"work": (None, recorded), "deeper": ("work", recorded)}
         if dies_in == "deletes":
             assert set(_branches(ns)) == {"work"}, "the first tick deleted the leaf and died before its parent"
@@ -279,7 +287,7 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
         else:
             assert _branches(ns) == {}, "the first tick deleted the subtree and died before recreating it"
         open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("zed"))
-        assert client.post(f"/{_BINDING}").status_code == 200
+        run_release()
 
     assert _branches(ns) == expected
 
@@ -306,10 +314,10 @@ def test_a_release_waits_while_a_reclaim_holds_the_tables_history(tmp_path: Path
     branches, tags = _branches(ns), open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()
     TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table_uuid).take(HistoryWork.RECLAIM)
 
-    with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as client:
-        tick = client.post(f"/{_BINDING}")
+    with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as (_client, run_release):
+        tick = run_release()
 
-    assert tick.status_code == 200, tick.text
+    assert tick.changed == 0, tick
     assert (_branches(ns), open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()) == (branches, tags), (
         "the release changed refs while a reclaim held the history"
     )

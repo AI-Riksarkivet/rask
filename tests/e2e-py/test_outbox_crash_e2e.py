@@ -40,7 +40,6 @@ from datetime import UTC, datetime
 
 import pytest
 import requests
-from credentials import Credential, credential
 from liveness import skip_unless_live
 from outbox_probe import bearer, owned_output_table, table_uuids
 from store_identity import store_options
@@ -54,8 +53,6 @@ from lakehouse.storage_options import StorageOptions
 
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
-DAPR_TOKEN = credential(Credential.DAPR_TOKEN)
-BINDING = os.environ.get("LANCE_E2E_RELAY_BINDING", "lineage-relay-cron")
 OUTBOX_URI = os.environ.get("LANCE_E2E_OUTBOX_URI", "s3://lance-catalog/_lineage_outbox")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 
@@ -136,8 +133,8 @@ def _so() -> StorageOptions:
 
 @pytest.fixture(scope="module")
 def lineage() -> str:
-    if not LINEAGE or not DAPR_TOKEN:
-        pytest.skip("set LANCE_E2E_LINEAGE_URL and the run's dapr-token credential (deployed stack, outbox enabled)")
+    if not LINEAGE:
+        pytest.skip("set LANCE_E2E_LINEAGE_URL (deployed stack, outbox enabled)")
     skip_unless_live(f"{LINEAGE}/livez", what="lineage")
     return LINEAGE
 
@@ -204,28 +201,17 @@ def _staged_keys_for(run_id: str) -> list[str]:
     return [key for key, _ in outbox.list_events(OUTBOX_URI, _so()) if key.startswith(f"{run_id}@")]
 
 
-def _drive_the_relay(lineage: str, run_id: str, *, budget_seconds: float = 420.0, gap: float = 10.0) -> bool:
-    """Wait for the relay to recover this run, nudging it along the way.
+def _await_the_relay(run_id: str, *, budget_seconds: float = 420.0, gap: float = 5.0) -> bool:
+    """Wait for the relay's own timer to recover this run: whether its staged object left the outbox within the budget.
 
-    THE CLAIM UNDER TEST IS THE OUTCOME, NOT THE CALLER. "A SIGKILLed producer loses nothing" is a
-    statement about the event reaching the feed; whether this POST or the cron's own tick did the
-    work is not a property the estate has or needs. `lineage-relay-cron` fires on every replica's
-    sidecar and every step of a tick is idempotent, so another tick may drain this run first: this call
-    then reports `outbox_drained: 0` and the empty outbox is what says the run left.
-
-    A TIMEOUT IS NOT A FAILURE EITHER. A tick that drains a backlog can outlive the HTTP read timeout and
-    keeps running server-side after the client gives up, so the outbox is what to watch.
+    THE CLAIM UNDER TEST IS THE OUTCOME. "A SIGKILLed producer loses nothing" is a statement about the event reaching
+    the feed, and the relay runs on lineage's own timer with no door to drive it by, so the outbox is what to watch:
+    the tick that drains this run removes its object, and the feed row the caller reads next is the recovery.
     """
     deadline = time.monotonic() + budget_seconds
     while time.monotonic() < deadline:
-        try:
-            resp = requests.post(f"{lineage}/{BINDING}", headers={"dapr-api-token": DAPR_TOKEN}, timeout=gap)
-            if resp.status_code == 200 and resp.json().get("outbox_drained", 0) >= 1:
-                return True
-        except requests.exceptions.ReadTimeout:
-            pass  # the tick is still running server-side; the object is what to watch, not this socket
         if not _staged_keys_for(run_id):
-            return True  # another tick drained it; §4b decides whether it landed where it had to
+            return True
         time.sleep(gap)
     return False
 
@@ -278,13 +264,13 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     assert not _feed_rows(lineage, run_id), "the run reached the feed without the relay — test is vacuous"
 
     # 4. The relay recovers it.
-    drained = _drive_the_relay(lineage, run_id)
+    drained = _await_the_relay(run_id)
     assert drained, (
         "the relay never drained this run within its budget, or an estate that enforces signing refused an event this harness "
         f"{'signed' if key is not None else 'could not sign (no seed for ' + SIGNING_IDENTITY + ': set LANCE_E2E_SIGNING_SEED)'}"
     )
 
-    # 4b. ...into the feed. `outbox_drained` only proves the relay COUNTED it; the feed row is the recovery.
+    # 4b. ...into the feed. The object leaving the outbox only proves a tick took it; the feed row is the recovery.
     assert _feed_rows(lineage, run_id), f"SIGKILLed producer's run {run_id} never reached the /events feed — its provenance was LOST"
 
     # 5. ...and cleans up, so the object cannot be re-ingested forever.

@@ -31,6 +31,8 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
+from lakehouse.timers import claim_key
+from lineage.api.relay import RELAY_TIMER
 from tests.unit.test_invariants import _helm_template
 
 
@@ -144,3 +146,26 @@ def maintenance() -> dict:
 )
 def test_maintenance_reads_the_estate_and_writes_only_its_own_records(maintenance: dict, action: str, bucket: str, key: str, granted: bool) -> None:
     assert allowed(maintenance, action=action, bucket=bucket, key=key) is granted
+
+
+# ---- lineage's relay timer ------------------------------------------------------------------------
+
+#: The one key lineage's relay claims its windows at, as the timer itself names it.
+_RELAY_CLAIM = claim_key(RELAY_TIMER)
+
+
+@pytest.mark.parametrize(
+    ("relay", "action", "key", "granted"),
+    [
+        pytest.param("true", "s3:GetObject", _RELAY_CLAIM, True, id="reads-its-own-claim"),
+        pytest.param("true", "s3:PutObject", _RELAY_CLAIM, True, id="claims-its-own-windows"),
+        pytest.param("true", "s3:PutObject", claim_key("catalog-control-relay"), False, id="claims-no-catalog-timer"),
+        pytest.param("true", "s3:PutObject", "_locations/table-x.json", False, id="writes-no-record"),
+        pytest.param("true", "s3:DeleteObject", _RELAY_CLAIM, False, id="deletes-no-claim"),
+        pytest.param("false", "s3:PutObject", _RELAY_CLAIM, False, id="claims-nothing-with-the-relay-off"),
+    ],
+)
+def test_lineage_may_claim_its_relays_windows_and_write_nothing_else(relay: str, action: str, key: str, granted: bool) -> None:
+    policy = _policy(_helm_template(f"services.lineage.relay.enabled={relay}"), "lineage")
+
+    assert allowed(policy, action=action, bucket=CONTROL_BUCKET, key=key) is granted

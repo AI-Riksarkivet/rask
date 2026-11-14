@@ -124,11 +124,14 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     #: would stall the tick — the relay failing hardest exactly when a backlog means it matters most, which is the
     #: same failure the bounded drain was introduced to avoid.
     publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_PUBLISH_TIMEOUT_SECONDS")
-    # The relay tick: a Dapr cron binding POSTs to /<name> on a schedule, and the tick drains the outbox,
-    # prunes the feed and forwards to the configured graph backend. Empty = the route isn't mounted.
-    relay_binding_name: str = Field(default="", alias="LINEAGE_RELAY_BINDING_NAME")
+    # Seconds between two ticks of the relay, which drains the outbox, forwards to the configured graph backend and
+    # prunes the feed, on lineage's own timer (`lineage/api/relay.py`). 0 = no relay.
+    relay_period_seconds: float = Field(default=0, ge=0, alias="LINEAGE_RELAY_PERIOD_SECONDS")
+    # The control root the relay's timer claims each window under (`lakehouse.timers`), so one replica runs each tick.
+    # Required with a period: a relay that could not claim would run on every replica.
+    timer_root: str = Field(default="", alias="LINEAGE_TIMER_ROOT")
     # The lakehouse's read-only window, rendered from the chart's one `readOnlyWindow` with the catalog's and maintenance's:
-    # the relay tick is answered and does nothing through it, so the next tick after the window drains, prunes and forwards.
+    # the relay's timer is held through it, so the first window after it drains, forwards and prunes.
     read_only: bool = Field(default=False, alias="LINEAGE_READ_ONLY")
 
     # --- The outbox the relay drains: object storage the producers stage to and this service deletes from.
@@ -187,10 +190,22 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
         require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="LINEAGE")
         return self
 
+    @model_validator(mode="after")
+    def _a_relay_claims_its_windows(self) -> Self:
+        """Refuse a relay period with no root to claim its windows under."""
+        if self.relay_period_seconds and not self.timer_root:
+            raise ValueError("LINEAGE_RELAY_PERIOD_SECONDS is set and LINEAGE_TIMER_ROOT is empty: the relay's timer claims each window under a control root")
+        return self
+
     @property
     def outbox_on_the_store(self) -> bool:
-        """Whether the outbox the relay drains is on the object store, the one thing lineage signs store requests for."""
+        """Whether the outbox the relay drains is on the object store."""
         return on_s3(self.outbox_uri)
+
+    @property
+    def signs_store_requests(self) -> bool:
+        """Whether lineage signs object-store requests at all: for an outbox it drains, or a timer it claims, there."""
+        return self.outbox_on_the_store or on_s3(self.timer_root)
 
     def s3_key_pair(self) -> S3KeyPair:
         """What the outbox is reached with: the session lineage's token was exchanged for, or the environment's pair.

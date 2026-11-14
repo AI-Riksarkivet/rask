@@ -43,7 +43,7 @@ from typing import Final
 import pytest
 import respx
 
-from lakehouse.governed import secret_cache, secrets
+from lakehouse.governed import secrets
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -98,19 +98,6 @@ _strip_harness_otlp()
 # refusal — or wants auth genuinely ON — still decides for itself; the suite proving this guard
 # depends on exactly that.
 os.environ.setdefault("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
-
-# THE SAME DECLARATION, for the same control one layer down. `require_dapr_token` refuses a door with
-# no `APP_API_TOKEN` to compare against: a guard that cannot authenticate must not admit. Many
-# suites drive a cron tick's route — the relays, the reconcile, the expiry and reclaim ticks —
-# to exercise what the HANDLER does, and configure no token because the door is not what they are
-# testing. That is "open because I meant it", and it is declared here rather than left implicit.
-#
-# It costs nothing in coverage, because the door has its own tests and they decide this variable for
-# themselves: `test_the_app_token_can_arrive_without_the_environment.py` `delenv`s it, which `setdefault`
-# leaves it free to do. The DEPLOYMENT half is gated separately by
-# `test_every_dapr_door_has_a_token_to_check.py`, reading the render — so a service that ships with no
-# token to check is caught there, not hidden here.
-os.environ.setdefault("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
 
 # THE SAME DECLARATION, for the store identity. `require_env_pair` refuses to sign with a static key pair nobody
 # acknowledged, since a deployment's store identity is its ServiceAccount token. The suites boot services on a pair
@@ -181,17 +168,6 @@ def _lance_reads_commit_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     the test and restores the environment at teardown, whatever a build wrote.
     """
     monkeypatch.setenv("LANCE_AUTO_MIGRATION", "false")
-
-
-@pytest.fixture(autouse=True)
-def _a_fresh_secret_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Give each test its own process-global cache of secret-store reads.
-
-    It holds what a store double answered for up to ten minutes, so one test's answer would otherwise be the next
-    test's, and a test asserting what the store is asked would pass or fail by collection order. A test that drives the
-    TTL replaces it again with a cache on its own clock.
-    """
-    monkeypatch.setattr(secret_cache, "STORE_READS", secret_cache.SecretCache())
 
 
 @pytest.fixture(autouse=True)

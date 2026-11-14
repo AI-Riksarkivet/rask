@@ -157,8 +157,7 @@ asked for again by the lane that met it, on the numbers that lane names (`lakeho
    - **The object store** (the RustFS fixture in development) — the S3 data plane. Down → no Lance read/write.
    - **The secret store / OpenFGA / Dex** — one pod each in development (the store and Dex are fixtures; production
      names the platform's). The store sealed: a signer drops its key within one re-read (300 s) and the catalog refuses
-     every write it would announce, and every other secret a pod holds expires 300 to 600 s after the store last
-     confirmed it (ADR 0166). OpenFGA down: every governed door answers 503 code 17. Dex down: a door that still holds
+     every write it would announce, and a bus credential is read again at the next connect. OpenFGA down: every governed door answers 503 code 17. Dex down: a door that still holds
      its key set accepts the tokens it verifies for up to 300 s, and one that must fetch the key set answers 503 code 17.
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).
@@ -208,8 +207,13 @@ chart and live-verified on kind.
   `USER` — uid 10001 — so the kubelet can verify non-root at admission), drop **ALL**
   capabilities, no privilege escalation, `seccompProfile: RuntimeDefault`, and `readOnlyRootFilesystem`
   with a writable `/tmp` emptyDir for scratch (`lance.securityContext`, `security.readOnlyRootFilesystem`).
-- **A relay tick needs no lock.** The relay cron fires on every lineage replica's sidecar, and every step is
-  idempotent (`lineage/api/relay_cron.py`): a drained event is recorded under its feed key, so a second record
+- **A timer's tick runs once a window.** Every replica of the catalog and of lineage runs each of its fixed timers'
+  loops, and one conditional write of the timer's claim record under the control root (`_timers/<timer>.json`,
+  `lakehouse.timers`) picks the replica that runs the window's tick, as Lance picks one writer of a version. A window is
+  named by when it began on the store's clock, so no two pods' clocks are compared. A timer whose claims stop moving
+  pages (`LakehouseTimerStopped`).
+- **A relay tick that overlaps the next needs no lock.** Every step of lineage's relay is idempotent
+  (`lineage/api/relay.py`): a drained event is recorded under its feed key, so a second record
   lands no row; two prunes delete the same rows once; the forwarder's cursor moves only forward, so a slower
   replica's tick never undoes a faster one's.
 

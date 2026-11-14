@@ -5,7 +5,8 @@ A SERVICE LOGS IN TO THE STORE AS ITSELF ([[XC-199]]). The chart names the store
 that token at the store's Kubernetes auth method, as the role bound to its own ServiceAccount, and holds the store token
 the login returns in memory: never in the environment, never on a volume. Each secret is read under it
 (`GET <kv mount>/data/<name>`, KV v2): at start with a budget that waits out a store still being seeded and fails closed
-when it never serves, and again while the process runs, through `lakehouse.governed.secret_cache` (ADR 0166).
+when it never serves, and again while the process runs, by the holder of each secret on its own period
+(`lakehouse.governed.signing_key`).
 
 THE LOGIN IS MADE AT START AND KEPT BY A LOOP: MADE AGAIN, NEVER RENEWED. A service logs in before it serves and refuses
 to start when the store gives it no usable login (`secret_store_session`). A store token lives its role's `token_ttl` (15

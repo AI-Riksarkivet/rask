@@ -99,7 +99,7 @@ trap cleanup EXIT
 step() { echo; echo "==> $*"; }
 
 # --------------------------------------------------------------------------------------------------
-step "1/9 chart deps + the images the render schedules (built while the cluster comes up)"
+step "1/8 chart deps + the images the render schedules (built while the cluster comes up)"
 # EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
 # build` needs each one even when the component is disabled, and a hand-written list is a second copy
 # of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
@@ -172,7 +172,7 @@ build_image() {
   done <<<"$SIDE_LOADED" ) >"$IMAGE_DIR/build.log" 2>&1 & BUILD_PID=$!
 PF_PIDS+=("$BUILD_PID")
 
-step "2/9 cluster + platform fixtures"
+step "2/8 cluster + platform fixtures"
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config deploy/kind/kind-config.yaml --wait 180s
 # THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). Without it every helm and kubectl call below inherits
 # whatever the environment has, and `scripts/helm.sh` defaults that to the LIVE k3s estate — so this
@@ -191,7 +191,7 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # seed scripts are rask's), so fixtures.sh does not wait for them.
 "$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex openbao
 
-step "3/9 side-load the images"
+step "3/8 side-load the images"
 wait "$BUILD_PID" || { cat "$IMAGE_DIR/build.log"; echo "!! an image build failed (log above)" >&2; exit 1; }
 grep '^>> ' "$IMAGE_DIR/build.log" || true
 # A kept build whose dockerfile has since changed is never asked for again; drop it so the kept set stays this run's.
@@ -228,7 +228,7 @@ STORE_PORT="$(kubectl get svc "$RELEASE-rustfs" -o jsonpath='{.spec.ports[?(@.na
 [ -n "$NODE_IP" ] && [ -n "$STORE_PORT" ] || { echo "!! no node address ($NODE_IP) or store NodePort ($STORE_PORT) to vend" >&2; exit 2; }
 HELM_SET+=(--set-string vending.endpoint="http://$NODE_IP:$STORE_PORT")
 
-step "4/9 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry OFF, no client)"
+step "4/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance ON, telemetry OFF, no client)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
 # helm's order is: apply manifests → (--wait) block until every resource is Ready → run post-install hooks.
 # The OpenFGA schema migration WAS a post-install hook, and the OpenFGA server cannot become Ready until its
@@ -316,7 +316,7 @@ print(f"   {checked} running containers serve the images this run built")
 }
 check_fresh
 
-step "5/9 port-forward the services the suites talk to"
+step "5/8 port-forward the services the suites talk to"
 # A FORWARD FOLLOWS ITS SERVICE'S READY POD. `kubectl port-forward` binds to one pod for its life, and when that pod goes
 # the forward can stay up and drop every connection it accepts (measured on this lane: `RemoteDisconnected` on every call
 # through lineage's forward once a drill had scaled lineage down and back). Criterion 5's drills restart the pods behind
@@ -359,7 +359,7 @@ done
 echo "   catalog=$c lineage=$l dex=$d"
 [ "$c" = "200" ] && [ "$l" = "200" ] && [ "$d" = "200" ] || { echo "!! services never became ready"; exit 1; }
 
-step "6/9 mint the suites' own store identity"
+step "6/8 mint the suites' own store identity"
 # NO ROOT PAIR LEAVES THE STORE ([[XC-081]]). The #3-B data buckets are the provisioning hook's (`catalog.multibase.dataBases`,
 # which scripts/stack_values.sh declares), and a suite reaches the store as `rask-e2e-suites` through a token it exchanges
 # at the store's STS.
@@ -367,7 +367,7 @@ step "6/9 mint the suites' own store identity"
 STORE_TOKEN="$(suites_store_token "$RELEASE")" || { echo "!! could not mint a store token for rask-e2e-suites"; exit 1; }
 keep store-token "$STORE_TOKEN"
 
-step "7/9 mint Dex tokens + build the tenant through the catalog's doors"
+step "7/8 mint Dex tokens + build the tenant through the catalog's doors"
 mint() { password_grant http://localhost:5556/dex/token rask-web lance-catalog-secret "openid email federated:id audience:server:client_id:rask-lakehouse" "$1" password; }
 ALICE="$(mint alice@example.com)"
 [ -n "$ALICE" ] || { echo "!! Dex issued no token"; exit 1; }
@@ -433,12 +433,7 @@ door "$ALICE" POST /management/v1/warehouses "{\"id\":\"$WAREHOUSE\",\"project\"
 door "$ALICE" POST "/v1/namespace/$WAREHOUSE\$mbns/create" '{"mode":"exist_ok"}' 200 || exit 1
 echo "   project $PROJECT > warehouse $WAREHOUSE > namespace $WAREHOUSE\$mbns"
 
-step "8/9 the outbox suite's Dapr app token"
-DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
-[ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
-keep dapr-token "$DAPR_TOKEN"
-
-step "9/9 run the guarded e2e suites against the live stack"
+step "8/8 run the guarded e2e suites against the live stack"
 export LANCE_E2E_S3=http://localhost:9900
 # The CAS suite reads LANCE_E2E_S3_ENDPOINT (a DIFFERENT name). It was never exported, so all 3 CAS tests
 # skipped on every run — the suite named in the goal has, until now, never actually executed.
@@ -468,7 +463,6 @@ export LANCE_E2E_BASE_A="$BASE_A"
 export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 export LANCE_E2E_CONTROL_OUTBOX_URI="s3://lance-catalog/_control_outbox"
-export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 # Phase 1's criteria: the bus they read and publish on, and the release whose ServiceAccounts sign.
 export LANCE_E2E_NATS_URL=nats://localhost:4222
 export LANCE_E2E_RELEASE="$RELEASE"

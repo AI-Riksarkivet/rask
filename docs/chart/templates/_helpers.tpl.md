@@ -28,7 +28,7 @@ move the Deployments but not those, splitting the estate the moment release name
 Install under any other release name and the two planes diverge — keep them equal.
 
 LABELS: `rask.labels` emits app.kubernetes.io/name=rask, `lance.labels` emits =lance-ns. Kept distinct on
-purpose: rask-labelled pods (the catalog's crons, the OpenFGA hooks, the issuer mirror) carry {name,instance,component}
+purpose: rask-labelled pods (the console, the OpenFGA hooks, the issuer mirror) carry {name,instance,component}
 while lance Services select on {component,instance} only (services.yaml). Different `name` values are what
 guarantee a rask selector can never adopt a lance pod inside the shared release.
 =====================================================================================================
@@ -54,8 +54,8 @@ THIS helper, and the maintenance worker's pod renders none (it runs no sidecar),
   - enabled / app-id / app-port / log-level (the original rask surface)
   - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
   - app-token-secret → the shared <release>-dapr-app-token Secret (ESO-written, external-secrets.yaml,
-    same dapr.enabled gate, so the reference can never dangle): Dapr injects APP_API_TOKEN and stamps
-    `dapr-api-token` on delivered requests → sidecar-only routes reject forged direct POSTs
+    same dapr.enabled gate, so the reference can never dangle); no service reads or checks it, since no
+    sidecar delivers anything to its app
   - the daprd resource bounds + disable-builtin-k8s-secret-store (+ optional seccomp) via
     lance.daprSidecarResources
   - dapr.io/config: lance-tracing — UNCONDITIONAL. The object always renders (the tracing STANZA
@@ -70,8 +70,7 @@ Dapr's sidecar injector is a MUTATING WEBHOOK, and its MutatingWebhookConfigurat
 `failurePolicy: Ignore` by default: a pod created while the injector is unreachable (a restart, an
 outage) is SILENTLY admitted unmutated and comes up with NO daprd container at all. Nothing recreates
 that pod — a CrashLoopBackOff restarts the container inside the SAME pod, which will never gain a
-sidecar — so the app in it takes no cron tick, which only a sidecar brings, for
-as long as that pod lives.
+sidecar, and it stays without one for as long as that pod lives.
 
 Fix, in the control plane rask runs against (a prerequisite; deploy/fixtures/dapr/values.yaml in
 development): `failurePolicy: Fail`, scoped by an `objectSelector` to pods carrying this LABEL. Fail-closed
@@ -97,15 +96,14 @@ plane back into unparsed logfmt with no gate firing.
 daprd loads its Components once, at boot (HotReload is off), and only a changed pod spec starts a rollout, so an edit to
 one would otherwise reach a sidecar only when something else restarted its pod, which no reconcile does ([[LH-305]],
 [[XC-164]]). Each sidecar's pod carries a digest of every Component its sidecar loads (those scoped to its app, and any
-with no scopes), read from `dapr-component.yaml`, which renders every Component (`lance-secrets` and the cron bindings),
+with no scopes), read from `dapr-component.yaml`, which renders every Component (`lance-secrets`),
 so an edit rolls exactly the pods whose sidecar loads it, as a Configuration's hash-named object does. That template
 renders nothing else: the digest includes it whole, so a Deployment in it would include itself.
 
 ## `dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) |...`
 
 THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. The kubelet SIGTERMs every container at
-once, and daprd's own default block is 5 s, while the app is still inside its preStop sleep: a cron
-tick still in its handler would end with an answer no sidecar is left to carry.
+once, and daprd's own default block is 5 s, while the app is still inside its preStop sleep.
 Derived from the same `lifecycle` block that feeds preStop and the grace period, so the three
 numbers cannot drift — see the arithmetic in values.yaml.
 
@@ -175,7 +173,7 @@ VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks)
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.topic ·
   resources.{default,<component>} · objectStore.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
-  services.{catalog,lineage}.{port,appId} · services.lineage.relay.bindingName
+  services.{catalog,lineage}.{port,appId} · services.lineage.relay.periodSeconds
 `objectStore.bucket` (singular) is the one that is easy to lose: rask's values ship `objectStore.buckets` (a
 LIST) and lance's templates read `objectStore.bucket` (a STRING) — both must exist.
 ---------------------------------------------------------------------------------------------------
@@ -735,7 +733,8 @@ component's statements are a define of their own, `lance.objectStorePolicy.<comp
 with none fails the render as an undefined template.
 
 - `catalog`: the whole data plane it governs, buckets included, since every vend is a session policy narrowed from it.
-- `lineage`: list, get and delete under `<control bucket>/_lineage_outbox/` and nothing else: the one outbox it drains.
+- `lineage`: list, get and delete under `<control bucket>/_lineage_outbox/`, the one outbox it drains, and get and put on
+  exactly `<control bucket>/_timers/lineage-relay.json`, its relay timer's claim record.
 - `maintenance`: `ListAllMyBuckets`; list and `GetBucketLocation` on every bucket; get on each table's history and no
   data ([[LH-575]]): `_versions/*.manifest`, `_refs/*.json` and `_transactions/*.txn` under any key, each root's
   `__manifest/` index, and the bare `_versions`, `tree` and `_mem_wal` keys, which pyarrow HEADs before it lists a
@@ -758,6 +757,16 @@ with none fails the render as an undefined template.
 - `backup-pg`: list, write and prune under `<control bucket>/_backups/pg/`.
 - `backup-control-root`: read the control-root record prefixes it copies, and write and prune under
   `backups.controlRoot.dest`.
+
+## `{{- $statements = append $statements (dict "Sid" "ClaimItsOwnTimersWindows" "Effect" "Allow" "Action" (list "s3:...`
+
+Lineage's relay is a fixed timer (`lakehouse.timers`): each replica reads the timer's claim record and tries one
+conditional write that claims the window, and the replica whose write lands runs the tick. Get and put on that one key
+are all the claim needs; no list and no delete, and no other timer's record, so a lineage pod can neither claim nor
+block a catalog timer's window. Rendered only with `services.lineage.relay.enabled`, so a lineage that runs no relay
+holds no write at the store. A store answers the read of a missing key as forbidden to an identity that may not list
+(S3 does), which the timer takes as no claim: its create-if-absent write is the store's answer to whether one exists.
+Pinned by `tests/unit/test_scoped_policies_reach_runtime_minted_warehouses.py`.
 
 ## `{{- define "lance.objectStoreSessionEnv" -}}`
 
@@ -950,13 +959,12 @@ with no read gets no store at all (`lance.secretScopes`). Two lists that agreed 
 refused at runtime, or granted past its owner, so nothing restates it.
 
 A service reads its own secrets whatever carries the bus, so its role, its policy and its login render with
-`dapr.enabled` off ([[XC-199]]). What follows that switch is what it renders a reader for: the app token the cron
-ticks' routes check (`dapr-app-token`), and the bus users a process reads for itself, since the same switch names each
-service its bus (`lance.busEnv`) and renders maintenance's worker (its work-queue user, `nats-user-maintenance-worker`).
+`dapr.enabled` off ([[XC-199]]). What follows that switch is what it renders a reader for: the bus users a process reads
+for itself, since the same switch names each service its bus (`lance.busEnv`) and renders maintenance's worker (its work-queue user, `nats-user-maintenance-worker`).
 Pinned by `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 
 The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
-(`dapr-app-token`, a signer's public key), never a copy, so a rotation writes one place. The verifier
+(a signer's public key), never a copy, so a rotation writes one place. The verifier
 lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
 `signing.doors`), and a signer reads its own pair. A service's read of its bus user restates when its process opens a
 connection: under `dapr.enabled`, the catalog and lineage each (each publishes or pulls on its own), maintenance's
@@ -1061,7 +1069,7 @@ ServiceAccount, so a token projected for another door would log in to the store.
 
 The app-ids that read the secret store: every app with a read in `lance.storeReads`. It has several readers that
 must not drift: `lance.sidecarScopes` below narrows it to the apps whose pods run a sidecar, for the Component's
-`scopes:` and the per-app Configurations, `lance.appTokenEnv` below decides a pod's credential path from the same membership, the per-app Configuration, the
+`scopes:` and the per-app Configurations, the per-app Configuration a sidecar runs under (`rask.daprAnnotations`), the
 store token's volume and the service's own store settings (`lance.secretStoreEnv`) follow it, and the NetworkPolicy
 admits exactly these apps' pods to the store (`lance.secretReaderComponents`). One membership decides them all, so no
 pod is told to read a store it was named no address, role or token for: such a read fails the pod's start closed.
@@ -1084,30 +1092,6 @@ The apps of `lance.secretScopes` whose pods run a sidecar: every one but mainten
 `dapr.io/*` annotation and so has no sidecar to load a Component or a Configuration. It scopes `lance-secrets`
 (dapr-component.yaml) and decides which per-app Configurations render (observability.yaml). A scope naming an app no
 sidecar runs for would render a Configuration nothing references.
-
-## `{{- define "lance.appTokenEnv" -}}`
-
-A workload's app-API-token credential: the STORE when the pod can reach it, the env row when it cannot.
-
-THE ENV ROW IS THE BANNED PATH AND THIS IS WHERE IT ENDS. `APP_API_TOKEN` as a `secretKeyRef` is a
-Kubernetes Secret injected as an environment variable, which the estate's rule refuses outright
-(owner, verbatim: *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
-trust."*). A pod in `lance.secretScopes` reads its secret store as itself (`lance.secretStoreEnv`), so what
-ships here is which source to read, which is configuration, while the value stays in OpenBao. `expected_app_tokens()` is the one accessor
-all three doors go through (`require_dapr_token`, `service_principal`,
-`assert_app_token_configured`), so the switch moves every door on the pod together.
-
-THE FALLBACK IS NOT A FALLBACK CHAIN, and the distinction matters because the rule bans those too. It
-is a RENDER-TIME branch on a fact that is fixed at deploy: either there is a Vault to read and this
-app-id may read it, or there is not. The pod gets exactly one credential path and no runtime choice
-between them — `expected_app_tokens()` reads the store or reads env, never one then the other.
-
-A pod OUTSIDE the scope list still gets the env row on purpose. Flipping it without adding its app-id
-to `lance.secretScopes` would make `assert_app_token_configured` fail its boot fetch and crash-loop
-the service: loud, but a service down. Widening the scope is the fix; this branch is what keeps the
-two edits from being separable.
-
-Usage: {{- include "lance.appTokenEnv" (list $root "catalog") | nindent 12 }}
 
 ## `{{- define "lance.allocatorEnv" -}}`
 
@@ -1373,5 +1357,5 @@ The rows mirror the gates of the templates that render each backend: catalog and
 
 A new door a service mounts at its root is a path in its row; the gate in
 `tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` fails until it is, and fails on a path that
-reaches only the pod's probes or a cron tick. A client's own prefixes are not rows: its
+reaches only the pod's probes. A client's own prefixes are not rows: its
 release publishes them with an HTTPRoute of its own.

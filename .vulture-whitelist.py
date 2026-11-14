@@ -11,7 +11,6 @@ and a NEW dead symbol stands out immediately. That is the whole point: keep the 
 
 The categories held here, all verified by reading the call site:
   · FastAPI route handlers / exception handlers  — invoked by the router, never by name.
-  · Dapr pub-sub + cron handlers — invoked by the sidecar.
   · pydantic `model_config` + `@model_validator` / `@field_validator` methods — invoked by pydantic.
   · pydantic MODEL FIELDS on response/claims schemas — "used" via serialization, not by name.
   · Test hooks and unittest.mock attributes (return_value / side_effect).
@@ -120,7 +119,6 @@ _._assert_all_called  # unused attribute (conftest.py:156)
 respx_allows_unused_routes  # unused function (conftest.py:160)
 _._assert_all_called  # unused attribute (conftest.py:169)
 _._assert_all_called  # unused attribute (conftest.py:173)
-_a_fresh_secret_cache  # unused function (conftest.py:177)
 _projected_identity_tokens  # unused function (conftest.py:188)
 _inner  # unused function (packages/lakehouse/tests/test_shared_body_cap.py:32)
 _echo  # unused function (packages/lakehouse/tests/test_shared_body_cap.py:36)
@@ -128,7 +126,6 @@ occurred_at  # unused variable (packages/lakehouse/src/lakehouse/control_events.
 erase_subject  # unused function (services/catalog/src/catalog/api/v1/endpoints/erasure.py:92)
 overdue  # unused variable (services/catalog/src/catalog/services/erasure_obligations.py:78)
 oldest_seq  # unused variable (services/lineage/src/lineage/schemas.py:45)
-paused  # unused variable (services/lineage/src/lineage/api/relay_cron.py:71)
 forgotten  # unused variable (services/maintenance/src/maintenance/services/committed_files.py:47)
 deleting_by  # unused variable (services/catalog/src/catalog/services/control_records.py, ProjectRecord: read by the key DELETING_BY)
 put_policy  # unused function (packages/lakehouse/src/lakehouse/maintenance_policies.py: the seeding write tests arrange a stored policy with)

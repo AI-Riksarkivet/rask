@@ -159,10 +159,10 @@ response reports the mode so an operator can see every pod is read-only before a
 **What rask does.** The catalog's read-only mode refuses every mutating request, the write and maintain tiers of the
 vend door included, with a 503 whose problem slug is `maintenance` and a 60 s `Retry-After`
 (`services/catalog/src/catalog/api/maintenance_mode.py`). It is switched by the chart's one `readOnlyWindow`
-([[LH-572]]), rendered as `LANCE_MAINTENANCE_READ_ONLY` on the catalog, which also holds its cron ticks and vends no
+([[LH-572]]), rendered as `LANCE_MAINTENANCE_READ_ONLY` on the catalog, which also holds its timers and vends no
 spec-door credential above the read tier, as `MAINTENANCE_READ_ONLY` on maintenance, whose worker then holds without
 connecting to the bus so every task stays queued with its deliveries unspent (`maintenance/worker.py::_held`), and as
-`LINEAGE_READ_ONLY` on lineage, whose relay tick then does nothing. A window is a commit and its end a revert; each
+`LINEAGE_READ_ONLY` on lineage, whose relay timer is then held. A window is a commit and its end a revert; each
 flip rolls the three Deployments.
 
 **Proposal.** The window the chart declares is the one above. What is left is a window the chart did not declare
@@ -235,7 +235,7 @@ order (`lakekeeper-events-kafka/src/lib.rs:120-149`). Delivery is at most once e
 
 **What rask does.** Better on every guarantee. The catalog stages each event in an object-store outbox before it
 publishes, delivery into the feed is at least once, lineage records each event once by its key, a crash before the stage
-is closed by the reconcile cron from the table's version log, and every event's identity is derived, never minted
+is closed by the reconcile timer from the table's version log, and every event's identity is derived, never minted
 (`docs/COMMIT-EVENTS.md:150-180`, `:277-292`; `packages/lakehouse/src/lakehouse/outbox.py:1-20`). Bus credentials come
 from the secret store, never the environment (`tasks.py:81-84`). Readers order one table's writes by
 `rask_lance.version`, not by arrival (`COMMIT-EVENTS.md:176-177`).
@@ -288,7 +288,7 @@ recheck a day later.
   has the same with `max_msgs_per_subject: 1`, `discard_new_per_subject` and an expected-last-sequence publish
   (`queue.py:175-191`, `nats-stream-job.yaml:120`).
 - **Enqueueing in the catalog's own transaction** (`lakekeeper/src/service/tasks/mod.rs:1110-1142`): atomic with the
-  drop, at the price of a relational catalog database. rask's announcement, outbox, reconcile cron and hourly audit reach
+  drop, at the price of a relational catalog database. rask's announcement, outbox, reconcile timer and hourly audit reach
   the same end without one (ADR 0198, `COMMIT-EVENTS.md:150-170`).
 - **Cancelling a task on undrop or warehouse delete** (`mod.rs:419-436`, `mod.rs:1181-1207`): rask re-reads the record
   when the task runs and acts on what it finds (`trash_task.py:1-9`), which needs no transactional cancel.

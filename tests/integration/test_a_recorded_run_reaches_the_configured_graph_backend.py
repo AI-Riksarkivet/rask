@@ -10,8 +10,8 @@ sends nothing again. The feed's retention waits for the forwarder: a row older t
 backend has not taken it, and goes on the tick that delivered it.
 
 Driven over real sockets: lineage's router behind its real authentication gate records into a live catalog, its
-relay tick runs through the real route behind the sidecar-token guard, and the backend is a live OpenLineage
-endpoint that records what it is sent.
+relay tick runs on the app's own event loop as its timer runs it, and the backend is a live OpenLineage endpoint that
+records what it is sent.
 """
 
 from __future__ import annotations
@@ -24,11 +24,10 @@ from typing import Self, override
 import httpx
 import pytest
 
-from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, GraphBackend, governed_lineage, graph_backend, live_catalog, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, GraphBackend, governed_lineage, graph_backend, live_catalog, relay_tick, run_event
 
 
 _TABLE = "lance_catalog$acme-silver$pages"
-_SIDECAR = {"dapr-api-token": "s3cret"}
 _ALICE = "dex~alice"
 #: A client holding `event_reader`, which reads the event feed under its own service account.
 _READER = "kubernetes~system:serviceaccount:rask:rask-sa-a-notifier"
@@ -67,7 +66,6 @@ def test_a_run_reaches_the_backend_once_across_an_outage_longer_than_the_feeds_r
 ) -> None:
     graph, url = backend
     monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
-    monkeypatch.setenv("APP_API_TOKEN", _SIDECAR["dapr-api-token"])
     run = run_event("1d3c5a07-0000-4000-8000-000000000592", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=[_TABLE])
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
         granted = {(_ALICE, "can_write_data", f"table:{_declared(catalog_url, _TABLE)}"), (_READER, "can_read_event_feed", "estate:rask")}
@@ -77,16 +75,16 @@ def test_a_run_reaches_the_backend_once_across_an_outage_longer_than_the_feeds_r
                 posted = lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: _ALICE})
             projected = lineage.get("/events/projection", params={"since": 0}, headers={SUBJECT_HEADER: _READER}).json()
             graph.down = True
-            while_down = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
+            while_down = relay_tick(lineage)
             graph.down = False
-            once_up = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
-            after = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
+            once_up = relay_tick(lineage)
+            after = relay_tick(lineage)
 
     assert posted.status_code == 201, posted.text
     assert [(row["event"]["run"]["runId"], row["event"]["run"]["facets"]["rask_author"]["sub"]) for row in projected["events"]] == [
         (run["run"]["runId"], _ALICE)
     ]
-    assert [(tick["forwarded"], tick["forward_stalled"], tick["pruned_events"]) for tick in (while_down, once_up, after)] == [
+    assert [(tick.forwarded, tick.forward_stalled, tick.pruned_events) for tick in (while_down, once_up, after)] == [
         (0, "HTTP 503", 0),
         (1, None, 1),
         (0, None, 0),

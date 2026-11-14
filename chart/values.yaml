@@ -1,7 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # One system installs from this file: the lance-ns lakehouse (catalog + lineage + maintenance), governance (Dex OIDC +
-# OpenFGA), the NATS event fabric, the Dapr cron bindings, OpenBao, and the OTel-first observability tier. It renders no client of the
+# OpenFGA), the NATS event fabric, OpenBao, and the OTel-first observability tier. It renders no client of the
 # lakehouse: each reaches it by reference from its own release (XC-175, XC-188).
 #
 # Merge rule applied throughout (plan P4, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): rask's chart is the BASE and every rask key is preserved;
@@ -42,11 +42,11 @@ docs:
 
 # THE LAKEHOUSE'S READ-ONLY WINDOW, for a migration that needs nothing written while it runs (flip on, migrate, flip
 # off). One value, rendered into every service's own setting: the catalog (LANCE_MAINTENANCE_READ_ONLY) refuses every
-# write at its doors with 503 + Retry-After, vends no credential above the read tier and answers its cron ticks doing
+# write at its doors with 503 + Retry-After, vends no credential above the read tier and holds its timers, each claiming and running
 # nothing; maintenance's worker (MAINTENANCE_READ_ONLY) takes no task, leaving each queued; lineage (LINEAGE_READ_ONLY)
-# answers its relay tick doing nothing. Reads are served throughout. It reaches a pod as env, so flipping it rolls the
+# holds its relay's timer. Reads are served throughout. It reaches a pod as env, so flipping it rolls the
 # catalog, lineage and maintenance Deployments.
-# -- Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its cron ticks, maintenance's worker takes no task, and lineage's relay pauses. Flipping it rolls the three services.
+# -- Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its timers, maintenance's worker takes no task, and lineage's relay is held. Flipping it rolls the three services.
 readOnlyWindow: false
 
 # Per-service definitions: the lakehouse apps (catalog, lineage), rendered by templates/services.yaml, which reads
@@ -72,7 +72,7 @@ services:
     module: catalog.main:app
     # -- Container and Service port of the Lance catalog.
     port: 2333
-    # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id and the scope of its cron bindings.
+    # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id.
     appId: catalog
     # -- Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.
     replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
@@ -81,7 +81,7 @@ services:
     module: lineage.main:app
     # -- Container and Service port of the lineage service.
     port: 8000
-    # -- Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id and the scope of its relay cron.
+    # -- Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id.
     appId: lineage
     # Safe to scale: every replica pulls the one durable consumer `lineage-ingest`, so each event is delivered to one
     # of them, and every record is idempotent anyway: an insert-only merge on the event's key in the feed table lands a
@@ -127,18 +127,18 @@ services:
     # namespace at its access door as its own identity ([[LH-563]]); this chart names no such job.
     # -- Versions maintenance keeps of each provenance table: the namespace's keep-last-N policy, written by the catalog at boot (`LANCE_PROVENANCE_RETAIN_VERSIONS`). Null declares none.
     provenanceRetainVersions: 20
-    # The relay tick: a Dapr cron binding POSTs to /<bindingName> on `schedule`. Each tick drains the outbox
-    # (records and re-publishes every event a producer staged but never saw acknowledged), prunes the feed past
-    # eventsRetentionDays, and forwards the feed to the graph backend `forward.url` names. Every step is
-    # idempotent, so overlapping ticks and several replicas need no lock. Render-gated on dapr.enabled.
-    # Every 30 s: the forwarder is the graph backend's only feed, so the schedule bounds how far behind the graph runs.
+    # The relay tick, on lineage's own timer: a loop in each replica, each window claimed by one conditional write
+    # under the control root (`_timers/lineage-relay.json`), so the tick runs once a window whatever the replica
+    # count. Each tick drains the outbox (records and re-publishes every event a producer staged but never saw
+    # acknowledged), forwards the feed to the graph backend `forward.url` names, and prunes the feed past
+    # eventsRetentionDays. It needs the object store and the catalog, never the bus: the relay is what records events
+    # while the bus is away. Every 30 s: the forwarder is the graph backend's only feed, so the period bounds how far
+    # behind the graph runs.
     relay:
-      # -- Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled.
+      # -- Runs the relay's timer in each lineage replica: it drains the lineage outbox, forwards the feed and prunes it.
       enabled: true
-      # -- Name of the relay cron binding; the sidecar POSTs to /<bindingName>.
-      bindingName: lineage-relay-cron
-      # -- Schedule of the relay tick (Dapr cron syntax, e.g. `@every 30s` or a cron expression).
-      schedule: "@every 30s"
+      # -- Seconds between two relay ticks (`LINEAGE_RELAY_PERIOD_SECONDS`); one replica runs each tick.
+      periodSeconds: 30 # @schema type: integer; minimum: 1
     # The transactional outbox: producers stage each lineage event to s3://<objectStore.bucket>/_lineage_outbox
     # BEFORE the fire-and-forget publish, and the relay drains any survivor (a crash between the Lance commit
     # and the publish), recording the FULL event. Staging and draining are one mechanism: the outbox without
@@ -334,7 +334,7 @@ lifecycle:
   preStopSeconds: 5
   # -- Pod grace period in seconds; must be at least preStop + `sidecarBlockShutdownSeconds` + 5 s buffer.
   terminationGracePeriodSeconds: 40
-  # -- Seconds the Dapr sidecar keeps running after SIGTERM, so a cron tick still in its handler is answered; must lie between preStopSeconds and the grace period.
+  # -- Seconds the Dapr sidecar keeps running after SIGTERM; must lie between preStopSeconds and the grace period.
   sidecarBlockShutdownSeconds: 20
   # -- Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed.
   maintenanceTerminationGracePeriodSeconds: 120
@@ -672,7 +672,7 @@ catalog:
   # from this lane, so a lost event is a publication nobody downstream ever hears of. A 5s publish timeout
   # during a NATS blip lost such an event outright with every pod green.
   #
-  # THE PREFIX MUST DIFFER FROM `_lineage_outbox`. Lineage's reconcile cron parses every object in its
+  # THE PREFIX MUST DIFFER FROM `_lineage_outbox`. Lineage's relay parses every object in its
   # own prefix as an OpenLineage RunEvent and DELETES what it cannot parse, so pointing this lane at
   # that prefix destroys the staged control events instead of relaying them. The catalog refuses to boot
   # on equal prefixes rather than trusting this comment.
@@ -680,19 +680,13 @@ catalog:
   # Cost is one S3 PUT + DELETE per catalog MUTATION (not per row) against the already-provisioned
   # objectStore.bucket. Requires catalog.controlEmit (nothing stages when emission is off).
   controlOutbox:
-    # -- Stage control events in a durable S3 outbox and run the relay cron that drains it; carries `table_published` to its subscribers. Requires `controlEmit`.
+    # -- Stage control events in a durable S3 outbox and run the relay timer that drains it; carries `table_published` to its subscribers. Requires `controlEmit`.
     enabled: true
-    # ONE STRING: the Dapr Component's name (catalog-control-relay-cron.yaml), the app's
-    # LANCE_CONTROL_RELAY_BINDING_NAME, and the route the catalog serves at its pod root. Dapr delivers
-    # an input binding to the route matching the COMPONENT NAME, so a second literal anywhere is a cron
-    # that ticks into a 404 while both halves look right in isolation.
-    # -- Name of the control relay's Dapr cron Component; also the catalog's LANCE_CONTROL_RELAY_BINDING_NAME and the route it serves. Must stay one string.
-    bindingName: catalog-control-relay-cron
-    # Bounds how long a control event stays undelivered after a bus outage. Tighter than lineage's 300s sweep
+    # Bounds how long a control event stays undelivered after a bus outage. Tighter than the commit reconcile
     # because that one re-reads Lance manifests estate-wide while this one is a LIST over a prefix that
     # is empty in the healthy case.
-    # -- Dapr cron schedule of the control outbox relay; bounds how long a control event stays undelivered after a bus outage.
-    schedule: "@every 60s"
+    # -- Seconds between two ticks of the control outbox relay (`LANCE_CONTROL_RELAY_PERIOD_SECONDS`); bounds how long a control event stays undelivered after a bus outage.
+    periodSeconds: 60 # @schema type: integer; minimum: 1
   # ADR 0163 (LH-493): an erasure is an obligation a bring-your-own job fulfils; the catalog records it with this
   # deadline and shows it overdue once the deadline passes, and nothing in the catalog acts on it. GDPR asks for
   # erasure "without undue delay and in any event within one month" (Art. 12(3)).
@@ -704,35 +698,23 @@ catalog:
     deadlineDays: 30
     # -- Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required.
     releaseGraceDays: 7
-    # ONE STRING, as for controlOutbox: the Component (catalog-erasure-release-cron.yaml), the app's
-    # LANCE_ERASURE_RELEASE_BINDING_NAME and the route at the catalog's pod root.
-    # -- Name of the erasure-release Dapr cron Component; also the catalog's LANCE_ERASURE_RELEASE_BINDING_NAME and the route it serves.
-    bindingName: catalog-erasure-release-cron
     # How late a due release may run; late costs only time, so this is loose.
-    # -- Dapr cron schedule on which due erasure pin releases run; lateness only costs time.
-    schedule: "@every 300s"
+    # -- Seconds between two ticks of the timer that runs due erasure pin releases (`LANCE_ERASURE_RELEASE_PERIOD_SECONDS`); lateness only costs time.
+    releasePeriodSeconds: 300 # @schema type: integer; minimum: 1
   # ADR 0156 C1 (LH-466): a publish the project's quality gate holds waits for a can_promote holder until the
-  # project's declared review_hours pass; this cron expires the holds nobody answered, and `published` stays.
+  # project's declared review_hours pass; this timer expires the holds nobody answered, and `published` stays.
   promotion:
-    # ONE STRING, as for controlOutbox: the Component (catalog-promotion-expiry-cron.yaml), the app's
-    # LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route at the catalog's pod root.
-    # -- Name of the promotion-expiry Dapr cron Component; also the catalog's LANCE_PROMOTION_EXPIRY_BINDING_NAME and the route it serves.
-    bindingName: catalog-promotion-expiry-cron
     # A tick lists the open holds, an empty prefix in the healthy case, so it is cheap at this cadence.
-    # -- Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time.
-    schedule: "@every 60s"
+    # -- Seconds between two ticks of the timer that expires promotion holds past their review deadline (`LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS`); lateness only costs time.
+    expiryPeriodSeconds: 60 # @schema type: integer; minimum: 1
   # LH-497: the commit is the outbox. A write's announcement is made after its commit, and a crash between the commit
-  # and the staging of its event loses it; this cron reads each table's version log after its mark and announces every
+  # and the staging of its event loses it; this timer reads each table's version log after its mark and announces every
   # committed version lineage's feed lacks, under the run id derived from the commit, and pages on each find.
   commitReconcile:
-    # ONE STRING, as for controlOutbox: the Component (catalog-commit-reconcile-cron.yaml), the app's
-    # LANCE_COMMIT_RECONCILE_BINDING_NAME and the route at the catalog's pod root.
-    # -- Name of the commit-reconcile Dapr cron Component; also the catalog's LANCE_COMMIT_RECONCILE_BINDING_NAME and the route it serves.
-    bindingName: catalog-commit-reconcile-cron
     # A tick reads every table's versions after its mark, so it runs less often than the relays; it must run well
     # inside maintenance.olderThanDays, since a version cleanup reclaimed is one it can no longer read.
-    # -- Dapr cron schedule on which the catalog announces every committed version lineage's feed lacks.
-    schedule: "@every 600s"
+    # -- Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`).
+    periodSeconds: 600 # @schema type: integer; minimum: 1
     # -- Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it.
     graceSeconds: 600
     # The feed prunes rows past services.lineage.eventsRetentionDays, so a version older than that may be on no row while
@@ -755,24 +737,16 @@ catalog:
     # -- Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:<id>` or `warehouse:<id>`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:<namespace>:<name>`). The catalog revokes a grant removed from here, and only one it wrote from here.
     grants: []
   declarationConverge:
-    # ONE STRING, as for controlOutbox: the Component (in dapr-component.yaml), the app's
-    # LANCE_DECLARATION_CONVERGE_BINDING_NAME and the route at the catalog's pod root.
-    # -- Name of the declaration-converge Dapr cron Component; also the catalog's LANCE_DECLARATION_CONVERGE_BINDING_NAME and the route it serves.
-    bindingName: catalog-declaration-converge-cron
     # A tick that finds the estate as declared costs one registry read per declared object and one tuple read per
     # object granted on, so it runs often enough that a change to the declaration lands within a minute or two.
-    # -- Dapr cron schedule on which the catalog converges the estate onto `catalog.declared`; lateness only delays a declared change.
-    schedule: "@every 60s"
+    # -- Seconds between two ticks of the timer on which the catalog converges the estate onto `catalog.declared` (`LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS`); lateness only delays a declared change.
+    periodSeconds: 60 # @schema type: integer; minimum: 1
   # LH-251: every namespace operation writes the `dir` backend's namespace index (`<root>/__manifest`) again as a new
-  # version, and the backend reclaims none of them; this cron removes each root's versions older than retainSeconds.
+  # version, and the backend reclaims none of them; this timer removes each root's versions older than retainSeconds.
   manifestReclaim:
-    # ONE STRING, as for controlOutbox: the Component (catalog-manifest-reclaim-cron.yaml), the app's
-    # LANCE_MANIFEST_RECLAIM_BINDING_NAME and the route at the catalog's pod root.
-    # -- Name of the manifest-reclaim Dapr cron Component; also the catalog's LANCE_MANIFEST_RECLAIM_BINDING_NAME and the route it serves.
-    bindingName: catalog-manifest-reclaim-cron
     # A tick lists each root's index versions, so it runs no more often than the history needs bounding.
-    # -- Dapr cron schedule on which each root's `__manifest` versions past retainSeconds are removed; lateness only keeps history longer.
-    schedule: "@every 600s"
+    # -- Seconds between two ticks of the timer that removes each root's `__manifest` versions past retainSeconds (`LANCE_MANIFEST_RECLAIM_PERIOD_SECONDS`); lateness only keeps history longer.
+    periodSeconds: 600 # @schema type: integer; minimum: 1
     # A dropped namespace or table stays readable in the index's history this long, and the catalog builds each
     # namespace connection again after a quarter of it, so no connection holds a version the reclaim removed.
     # -- Seconds a `__manifest` version is kept before the reclaim removes it (LANCE_MANIFEST_RETAIN_SECONDS); a dropped id stays readable in the history this long, and the catalog rebuilds each namespace connection after a quarter of it.
@@ -1514,8 +1488,9 @@ nats:
 # The control plane (operator, sentry, placement, scheduler, sidecar injector) is a PREREQUISITE the platform runs
 # once per cluster (ADR 0153), in development the deploy/fixtures/dapr release. The chart renders only rask's own
 # Dapr objects and the sidecar annotations, and refuses to render with `enabled` on when the cluster does not serve
-# dapr.io/v1alpha1. A sidecar delivers the catalog's and lineage's cron ticks and nothing else: every event is
-# published and taken on the service's own connection to the bus, and the maintenance worker runs no sidecar.
+# dapr.io/v1alpha1. A sidecar delivers nothing to the catalog or lineage: every event is published and taken on the
+# service's own connection to the bus, each fixed timer is a loop of the service's own process, and the maintenance
+# worker runs no sidecar.
 dapr:
   # -- Use Dapr: inject a daprd sidecar into the catalog's and lineage's pods and render rask's Components and Configurations. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. Each service is named its bus (`RASK_BUS_URL`, `RASK_BUS_USER`), and the maintenance worker rendered, under this switch too, so off, none publishes or takes a delivery.
   enabled: true
@@ -1539,8 +1514,8 @@ dapr:
   # -- Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`.
   sidecarRestricted: false
   # The Dapr app-API token is not a value: it is the store's `dapr-app-token`, written by ESO into
-  # `<release>-dapr-app-token` for the injector (templates/external-secrets.yaml). Dapr stamps it as
-  # `dapr-api-token` on every cron tick it delivers, so a tick's route rejects a forged request.
+  # `<release>-dapr-app-token` for the injector (templates/external-secrets.yaml), which hands it to each sidecar. No
+  # service reads or checks it: no sidecar delivers anything to a service.
   # The Dapr dashboard, a web UI over the Dapr resources (components, subscriptions, configurations, the control plane).
   # A development tool: it authenticates nobody and its ClusterRole reads every pod and its log in the cluster, so a real
   # deployment refuses it (templates/prod-credentials.yaml) and deploy/values-local.yaml turns it on.
@@ -1872,8 +1847,8 @@ openbao:
   # Kubernetes auth method (`externalSecrets.kubernetesAuthPath`), as the role `<release>-<app id>`, presenting a
   # ServiceAccount token the kubelet projects for `audience` into its pod, and reads its own secrets under the store token
   # that login returns, which it holds in memory (`lakehouse.governed.secrets`), and takes one whose lease is a minute to
-  # an hour: a role with no `token_ttl` fails the service's start. Where a sidecar runs (the catalog's and lineage's, for
-  # their cron ticks) it logs in the same way, through the one `lance-secrets` component (Dapr fills `{appID}` into a
+  # an hour: a role with no `token_ttl` fails the service's start. Where a sidecar runs (the catalog's and
+  # lineage's) it logs in the same way, through the one `lance-secrets` component (Dapr fills `{appID}` into a
   # component's metadata), resolves nothing, since no component of this chart names a secret, and serves the app none.
   # Each role is bound to that app's own ServiceAccount, and its policy reads exactly the secrets the app reads
   # (`lance.storeReads`): the dev store's seed writes both, and a

@@ -137,9 +137,9 @@ Don't redo any of it in a suite. At import, before collection builds any app, th
 
 - strips the OTLP endpoint, header and protocol variables a harness injects (Dagger sets
   `OTEL_EXPORTER_OTLP_ENDPOINT` for its own telemetry), and strips them again once per session;
-- sets `RASK_INSECURE_ALLOW_UNAUTHENTICATED=true` and `RASK_ALLOW_UNAUTHENTICATED_DAPR=true` with
-  `setdefault`, so an app builds with auth off unless a test turns it on. A test of those guards
-  removes the variable with `monkeypatch.delenv` or passes the value to the guard directly.
+- sets `RASK_INSECURE_ALLOW_UNAUTHENTICATED=true` with `setdefault`, so an app builds with auth off unless a test
+  turns it on. A test of that guard removes the variable with `monkeypatch.delenv` or passes the value to the guard
+  directly.
 
 On request the root `conftest.py` also serves the identity and authorization plane for real: `sa_issuer` and
 `dex_issuer` (loopback issuers that mint tokens), `openfga` (the pinned OpenFGA server in memory, one per xdist worker,
@@ -153,9 +153,7 @@ it started.
 
 It also resets the process-global state the `lakehouse` library keeps. It makes bare
 `@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the
-`respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it gives the test a fresh cache of
-secret-store reads
-(`lakehouse.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its own clock) and a
+`respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it gives the test a
 process that has logged in to no secret store (`lakehouse.governed.secrets.forget_secret_store`), writes the projected
 service-account token files the catalog's and lineage's doors read and the one a process logs in to its secret store
 with, and sets `LANCE_AUTO_MIGRATION` to `false` as every app build does for its process (`lakehouse.lance_app`),
@@ -175,6 +173,7 @@ from the root conftest.
 | Outbound HTTPX                | `respx` (`services/maintenance/tests/test_a_table_the_catalog_does_not_govern_is_left_alone.py`)            |
 | NATS JetStream                | a real broker through Dagger (`references/fixtures.md` § NATS); the `nats-auth` lane brings its own         |
 | A service's connection to the bus, when what it publishes, or what it does with a delivery, is the claim | `tests.bus_double.BusDouble`, held by the service's lifespan through `session_holding` in place of `lakehouse.bus.bus_session`: each publish still passes `publish_event` (its size guard, trace and timeout) and is kept in `.sent`; `failing=` is a bus that does not take it, and `down` a connection that is away. It also hands a delivery to the service's own handling, run on the service's loop (`client.portal.call(...)` under a `TestClient`): `await bus.deliver(consumer, envelope, attempt=)` hands it to the lane the service consumes under that consumer's name and answers the `Settlement` the seam's own rule (`lakehouse.bus_delivery.judged`) gives, and `await bus.broadcast(subject, envelope)` hands it to the service's follow of that subject and raises what the handling raises. What a broker does with a connection (its permission table, a session it ends, a duplicate it stores once, a message it delivers again after a delay) is the seam's own tests' and the `nats-auth` lane's |
+| A timer's tick, when what one tick does is the claim | no route and no clock: under `with TestClient(app) as client:` call the tick on the app's loop, the catalog's as `client.portal.call(module.tick, Tick(app, settings, clock=..., control=...))` (`catalog.api.ticks.Tick`; `clock` judges a due time, `control` is the emitter it announces on) and lineage's as `client.portal.call(relay.tick, app, settings)`. Whether one replica claims a window is the timer's own test's claim (`packages/lakehouse/tests/test_a_timer_runs_once_per_window_whatever_the_replica_count.py`) |
 | OpenFGA, authz not the claim  | `RASK_FGA_ENABLED` / `RASK_OIDC_ENABLED` left at their default, off; with FGA off the checker allows everything. Where a route needs a named subject or a decision, override that service's `current_subject` / `get_checker` |
 | OpenFGA, authz is the claim   | a real OpenFGA in the offline suite: root `conftest.py::openfga_store`, a store of the test's own on the pinned server, and for the catalog `services/catalog/tests/conftest.py::governed_catalog` (`references/fixtures.md` § The catalog with authorization on). Beyond one service: the model's `.fga.yaml` suite (`make fga-test`), a real Dex and OpenFGA via `dagger call governance-chain`, or on a deployed estate criterion 2's principal × door matrix (`tests/e2e-py/test_the_catalog_is_correct.py`). A live leg that is refused asserts through `tests/e2e-py/refusals.py::assert_refused`: the status and the spec code (`lance_namespace.ErrorCode`), what the door could change read before and after, and no name in the body the caller did not send. Fake the client only for a transport or fail-closed leg |
 | The chart                     | `tests/unit/chart_render.py`: `references/fixtures.md` § The chart                                          |

@@ -344,7 +344,7 @@ medium (one model per action); low risk.
   (`services/catalog/src/catalog/api/maintenance_mode.py:1-12`), which is the GitOps form; a per-process runtime flag is
   live-only state.
 - **Cache TTL jitter** (`crates/lakekeeper/src/service/cache_ttl.rs:1-25`). rask jitters its secret, FGA-model and decider
-  caches (`secret_cache.py`, `fga.py`, `decider.py`).
+  caches (`fga.py`, `decider.py`).
 - **Cross-replica cache invalidation by change log, evicting everything on a gap**
   (`crates/lakekeeper/src/service/cache_invalidation/mod.rs:1-4`, `receiver.rs`). rask evicts on the control broadcast
   through a durable per replica (ADR 0182); the binding it caches is immutable and the warehouse status is read live

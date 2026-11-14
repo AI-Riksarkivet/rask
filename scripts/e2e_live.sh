@@ -103,9 +103,6 @@ PUBLISHER="$(mint publisher@rask.internal)"
 printf '   alice=%s…\n' "${ALICE:0:18}"
 
 step "3/4 reading the estate's own secrets"
-# From the Dapr app-token Secret, never from a values file: the token the sidecar stamps is the one
-# the doors verify, and any other copy is a guess.
-keep dapr-token "$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
 # THE SUITES' OWN STORE IDENTITY ([[XC-081]]): a token the suites exchange at the store's STS, never the store's root pair.
 . "$(dirname "$0")/suites_store_token.sh"
 minted="$(suites_store_token "$RELEASE")" || fail "could not mint a store token for rask-e2e-suites (is deploy/values-e2e-suites.yaml in the release?)"
@@ -180,7 +177,6 @@ export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 # The control lane's outbox, read off the deployed catalog container: criterion 5's drills hold it drained.
 CONTROL_OUTBOX="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="LANCE_CONTROL_OUTBOX_URI")].value}' 2>/dev/null || true)"
 [ -z "$CONTROL_OUTBOX" ] || export LANCE_E2E_CONTROL_OUTBOX_URI="$CONTROL_OUTBOX"
-export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
 # The store's pair rides as the files above, never as AWS_*: a pair in the environment is every client's ambient
 # credential, so a vended session missing a key would silently sign as the root.
 export LANCE_E2E_S3_BUCKET="${LANCE_E2E_S3_BUCKET:-lance-catalog}"

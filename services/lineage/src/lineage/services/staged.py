@@ -1,6 +1,6 @@
 """A staged outbox object read back and re-announced — ONE copy of each step for every reader.
 
-The relay tick (`api/relay_cron._drain_outbox`) and the DLQ view and replay
+The relay tick (`api/relay._drain_outbox`) and the DLQ view and replay
 (`api/v1/endpoints/dlq`) read the same staged bytes, and the relay and the replay both hand a recovered
 event on to the bus. Separate copies would let one path drop as poison what another ingests, or tell
 subscribers what another withholds, unseen.

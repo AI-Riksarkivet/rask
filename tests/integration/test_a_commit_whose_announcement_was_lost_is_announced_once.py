@@ -3,7 +3,7 @@
 The catalog announces a write after its commit, and a crash between the commit and the staging of its event loses the
 announcement while the version stays committed. Here the loss is real rather than simulated: the catalog announces over
 HTTP through a gate that refuses every event while it is down, so each write's own announcement fails and nothing is
-staged. One tick of the catalog's reconcile cron then finds each version from the table's version log and announces it,
+staged. One tick of the catalog's reconcile then finds each version from the table's version log and announces it,
 under the run id derived from the commit, so the write's own announcement, delivered late, lands no second row.
 
 A re-announcement is signed only for the author the catalog recorded authorizing the commit ([[LH-550]]), the caller its
@@ -59,12 +59,11 @@ from lance_namespace import DescribeTableRequest, DescribeTableResponse, Interna
 from lakehouse import manifest_wire
 from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.version_retention import manifest_version
-from tests.integration.lineage_app import live_catalog, live_lineage, serve
+from tests.integration.lineage_app import catalog_tick, live_catalog, live_lineage, serve
 from tests.loopback import free_port
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-_TICK = "catalog-commit-reconcile-cron"
 
 
 def _rows(start: int, stop: int) -> bytes:
@@ -202,11 +201,10 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
             live_catalog(tmp_path / "catalog", monkeypatch, **env) as catalog_url,
             httpx.Client(base_url=catalog_url, headers=alice, timeout=60) as catalog,
         ):
-            # Mounted as the chart's binding name mounts it at boot (`main.py`), on the app this worker already imported.
-            from catalog.main import app
 
-            if not any(getattr(route, "path", None) == f"/{_TICK}" for route in app.routes):
-                commit_reconcile.mount_commit_reconcile(app, _TICK)
+            def reconcile() -> commit_reconcile.CommitReconcileTick:
+                return catalog_tick(catalog_url, commit_reconcile.tick)
+
             assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
             # The gate is down, so each write's own announcement is lost after its commit.
             assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
@@ -244,7 +242,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                     return describe
 
                 outage = InternalError('IO { source: Generic { store: "S3", source: RetryError { inner: Status { status: 503 } } } }')
-                unannounced: list[dict[str, Any]] = []
+                unannounced: list[commit_reconcile.CommitReconcileTick] = []
                 for described, error, events in (
                     (["lance_catalog", "provenance", "events"], outage, ["commit_reconcile_feed_unreadable"]),
                     (["lance_catalog", "db", "t"], outage, ["commit_reconcile_table_unreadable"]),
@@ -252,7 +250,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 ):
                     monkeypatch.setattr(DirectoryNamespace, "describe_table", failing(described, error))
                     with caplog.at_level(logging.ERROR, logger="catalog.api.commit_reconcile"):
-                        unannounced.append(catalog.post(f"/{_TICK}").json())
+                        unannounced.append(reconcile())
                     monkeypatch.setattr(DirectoryNamespace, "describe_table", real_describe)
                     logged = [
                         (record.getMessage(), "503" in str(getattr(record, "error", "")))
@@ -261,9 +259,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                     ]
                     assert logged == [(event, True) for event in events], logged
                     caplog.clear()
-                assert [(tick["skipped"], tick["reannounced"], tick["unreadable"]) for tick in unannounced] == [(True, 0, 1), (False, 0, 1), (False, 0, 0)], (
-                    unannounced
-                )
+                assert [(tick.skipped, tick.reannounced, tick.unreadable) for tick in unannounced] == [(True, 0, 1), (False, 0, 1), (False, 0, 0)], unannounced
 
                 # A retained version the store fails to open once: the tick keeps the ref's mark, and skips nothing for it.
                 real_checkout = lance.LanceDataset.checkout_version
@@ -276,12 +272,11 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
 
                 location_of_t = str(catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]).rstrip("/").rsplit("/", 1)[-1]
                 monkeypatch.setattr(lance.LanceDataset, "checkout_version", unreadable_once)
-                blocked = catalog.post(f"/{_TICK}")
-                assert (blocked.json()["reannounced"], blocked.json()["unreadable"]) == (0, 1), blocked.json()
+                blocked = reconcile()
+                assert (blocked.reannounced, blocked.unreadable) == (0, 1), blocked
 
-                tick = catalog.post(f"/{_TICK}")
-                assert tick.status_code == 200, tick.text
-                assert tick.json()["reannounced"] == 3, tick.json()
+                tick = reconcile()
+                assert tick.reannounced == 3, tick
                 assert _commits(_follow(lineage), "lance_catalog$db$t") == [
                     ("lance_catalog$db$t", "create_table", "1", author),
                     ("lance_catalog$db$t", "insert", "2", author),
@@ -301,9 +296,9 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                     real_forget(*args, **kwargs)
 
                 monkeypatch.setattr(commit_records, "forget_author", refused_for_version_2)
-                again = catalog.post(f"/{_TICK}")
+                again = reconcile()
                 monkeypatch.setattr(commit_records, "forget_author", real_forget)
-                assert (again.json()["reannounced"], again.json()["unreadable"]) == (0, 0), again.json()
+                assert (again.reannounced, again.unreadable) == (0, 0), again
                 # The record the store kept holds main's mark below its version, so the next tick reads it and forgets it.
                 settings = get_settings()
                 control, control_so = settings.registry_root, settings.storage_options()
@@ -362,9 +357,9 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                     return real_read(dataset, version)
 
                 monkeypatch.setattr(lance.LanceDataset, "read_transaction", unreadable_transaction)
-                past_every_door = catalog.post(f"/{_TICK}")
+                past_every_door = reconcile()
                 monkeypatch.setattr(lance.LanceDataset, "read_transaction", real_read)
-                assert (past_every_door.json()["reannounced"], past_every_door.json()["unauthored"]) == (0, 3), past_every_door.json()
+                assert (past_every_door.reannounced, past_every_door.unauthored) == (0, 3), past_every_door
                 assert recorded_second() is None
                 assert _commits(_follow(lineage), "lance_catalog$db$t") == [
                     ("lance_catalog$db$t", "create_table", "1", author),
@@ -380,8 +375,8 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 assert (raised.status_code, raised.json()["version"] is not None) == (200, True), raised.text
                 lance.dataset(location).update_config({FLOOR_KEY: "1"})
                 lance.dataset(location).delete_config_keys(["lance.auto_cleanup.interval"])
-                configs = catalog.post(f"/{_TICK}")
-                assert (configs.json()["reannounced"], configs.json()["unauthored"]) == (0, 1), configs.json()
+                configs = reconcile()
+                assert (configs.reannounced, configs.unauthored) == (0, 1), configs
                 assert len(_commits(_follow(lineage), "lance_catalog$db$t")) == 4
 
                 # A dataset written outside the catalog, registered, then written through the catalog while the gate is
@@ -399,10 +394,8 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 assert catalog.post("/v1/table/lance_catalog$db$registered/insert", content=_rows(4, 5), headers=_ARROW).status_code == 200
                 gate.lineage = lineage_url
 
-                after_register = catalog.post(f"/{_TICK}")
-                assert (after_register.json()["reannounced"], after_register.json()["unauthored"], after_register.json()["unreadable"]) == (1, 0, 0), (
-                    after_register.json()
-                )
+                after_register = reconcile()
+                assert (after_register.reannounced, after_register.unauthored, after_register.unreadable) == (1, 0, 0), after_register
                 assert _commits(_follow(lineage), "lance_catalog$db$registered") == [("lance_catalog$db$registered", "insert", "3", author)]
                 # Lineage recorded every event above in the provenance namespace through the catalog's doors, and none of
                 # those writes is announced, so none keeps an author record.
@@ -416,18 +409,18 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 lost = [event for event in gate.refused if _publications([{"event": event}], "lance_catalog$db$t")]
                 assert len(lost) == 1, gate.refused
                 gate.lineage = lineage_url
-                republished = catalog.post(f"/{_TICK}")
-                assert (republished.json()["reannounced"], republished.json()["unauthored"]) == (1, 0), republished.json()
+                republished = reconcile()
+                assert (republished.reannounced, republished.unauthored) == (1, 0), republished
                 assert _publications(_follow(lineage), "lance_catalog$db$t") == [(3, author)]
                 late = lineage.post("/api/v1/lineage", json=lost[0], headers=alice)
                 assert late.status_code == 201, late.text
                 assert _publications(_follow(lineage), "lance_catalog$db$t") == [(3, author)]
                 # A publication the feed holds is not announced again, nor is a retry of it, which moves nothing.
-                assert catalog.post(f"/{_TICK}").json()["reannounced"] == 0
+                assert reconcile().reannounced == 0
                 retried = catalog.post("/management/v1/table/lance_catalog$db$t/publish", json={"version": 3, "key_column": "id"})
                 assert (retried.status_code, retried.json()["published"]) == (200, True), retried.text
-                after_the_retry = catalog.post(f"/{_TICK}").json()
-                assert (after_the_retry["reannounced"], after_the_retry["unauthored"]) == (0, 0), after_the_retry
+                after_the_retry = reconcile()
+                assert (after_the_retry.reannounced, after_the_retry.unauthored) == (0, 0), after_the_retry
 
                 # `published` moved straight at the store, past every door: counted unauthored once, announced for nobody,
                 # and the record of the publication before it forgotten.
@@ -436,12 +429,12 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 unreadable_mover = Path(control) / commit_records.AUTHORS_PREFIX / uuid_of_t / "tags" / "published" / "9.json"
                 unreadable_mover.parent.mkdir(parents=True, exist_ok=True)
                 unreadable_mover.write_text("not a record")
-                held_back = catalog.post(f"/{_TICK}").json()
+                held_back = reconcile()
                 unreadable_mover.unlink()
-                assert (held_back["unauthored"], held_back["unreadable"]) == (0, 1), held_back
-                past_the_tag_door = catalog.post(f"/{_TICK}")
-                assert (past_the_tag_door.json()["reannounced"], past_the_tag_door.json()["unauthored"]) == (0, 1), past_the_tag_door.json()
-                assert catalog.post(f"/{_TICK}").json()["unauthored"] == 0
+                assert (held_back.unauthored, held_back.unreadable) == (0, 1), held_back
+                past_the_tag_door = reconcile()
+                assert (past_the_tag_door.reannounced, past_the_tag_door.unauthored) == (0, 1), past_the_tag_door
+                assert reconcile().unauthored == 0
                 assert _publications(_follow(lineage), "lance_catalog$db$t") == [(3, author)]
                 assert commit_records.tag_movers(control, control_so, uuid_of_t, tag="published") == []
 
@@ -453,7 +446,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 assert (again.status_code, again.json()["published"]) == (200, True), again.text
                 lost_again = [event for event in gate.refused if _publications([{"event": event}], "lance_catalog$db$t")][1:]
                 gate.lineage = lineage_url
-                assert catalog.post(f"/{_TICK}").json()["reannounced"] == 1
+                assert reconcile().reannounced == 1
                 assert lineage.post("/api/v1/lineage", json=lost_again[0], headers=alice).status_code == 201
                 assert _publications(_follow(lineage), "lance_catalog$db$t") == [(3, author), (3, author)]
 
@@ -467,7 +460,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 _stamped_behind(
                     catalog.post("/v1/table/lance_catalog$db$late/describe", json={"vend_credentials": False}).json()["location"], 2, timedelta(days=2)
                 )
-                assert catalog.post(f"/{_TICK}").json()["reannounced"] == 1
+                assert reconcile().reannounced == 1
                 assert _commits(_follow(lineage), "lance_catalog$db$late") == [
                     ("lance_catalog$db$late", "create_table", "1", author),
                     ("lance_catalog$db$late", "insert", "2", author),

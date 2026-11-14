@@ -345,9 +345,9 @@ read-only maintenance gate (`catalog/api/maintenance_mode.py`) refuses writes on
 the ROUTE it matches, never by its path text, since a name can spell a read action (`DELETE /management/v1/projects/list`):
 GET, HEAD and OPTIONS read, DELETE, PUT and PATCH write, and a POST reads only when its route's last literal segment is a
 listed read action (the vend door at the read tier alone); a POST matching no route writes. Through the window the spec
-vend doors vend at most the read tier (`fga_deps.spec_vend_tier`), and the catalog's cron ticks at the pod root are
-answered 200 `{"skipped": true}` without running (`catalog.api.cron.ticks_of`: each mount records its tick, so a tick
-mounted is a tick held). The chart's one `readOnlyWindow` renders the flag into the catalog, maintenance's worker and lineage's relay
+vend doors vend at most the read tier (`fga_deps.spec_vend_tier`), and every one of the catalog's timers is held: it
+claims nothing and runs nothing, and the first window after the read-only window does the work (`catalog.api.timers`,
+`lakehouse.timers`). The chart's one `readOnlyWindow` renders the flag into the catalog, maintenance's worker and lineage's relay
 alike ([[LH-572]]). The same classification
 refuses every write the catalog would announce while it holds no signing key (`catalog/api/signing_gate.py`, [[XC-095]]):
 503 code 17 before the commit, since an announcement signed after the commit could not be made; only a data write under
@@ -439,7 +439,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   table's uuid, the ref, its incarnation and the version (`catalog.core.commit_ids`), and its `eventTime` is the
   commit's own time, so every announcement of one commit is one run on lineage's feed. Keyed because lineage binds a
   run id to its first author for ever (LIN-5) and any writer may post any run id: a predictable id would let one
-  table's writer suppress another's announcements. The `catalog-commit-reconcile-cron` tick
+  table's writer suppress another's announcements. The `catalog-commit-reconcile` timer's tick
   (`catalog.api.commit_reconcile`) lists every held location claim whose name still describes to it, reads each ref's
   versions after its mark (`_commit_marks/`) older than `LANCE_COMMIT_RECONCILE_GRACE_SECONDS`, looks each up on
   `lance_catalog$provenance$events` by the table's uuid, ref and version (so a renamed table is not announced again), and announces
@@ -481,8 +481,9 @@ roll. The models are `catalog.services.declaration` (`Declaration`, `DeclaredPro
 relation the model does not admit for a principal on that type (`fga.admits`). People's other grants, namespaces and
 tables are never declared.
 
-- **The tick** is `catalog-declaration-converge-cron` (`catalog.api.declaration_converge`, `mount_cron`, `@every 60s`),
-  one at a time per process. It converges projects, then warehouses, then releases what git stopped declaring, then
+- **The tick** runs on the catalog's `catalog-declaration-converge` timer (`catalog.api.declaration_converge`,
+  `catalog.declarationConverge.periodSeconds`, 60 s), once a window whatever the replica count: each replica's loop
+  claims the window on the control root and only the replica whose claim landed runs it (`lakehouse.timers`). It converges projects, then warehouses, then releases what git stopped declaring, then
   grants, each object in `_attempt`, so one failure is logged (`declaration_converge_failed`), counted
   (`catalog.declaration_converge.failed`, by `lance.catalog.object`) and leaves the rest; a file that cannot be read as a
   declaration converges and releases nothing (`declaration_unreadable`). A tick that changed or failed anything logs
@@ -528,7 +529,7 @@ tables are never declared.
   writes OpenFGA: only the catalog and the model hook hold a `rask-openfga` token.
 
 Pinned by `tests/integration/test_the_catalog_converges_what_git_declares.py` (the real app, a real OpenFGA, moto, the
-tick delivered as the sidecar delivers it), `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`
+tick run on the app's loop as its timer runs it), `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`
 (the render: the default project `default`, administered by `auth.bootstrapAdmin` when it names no admin, and the
 estate's admin and roles) and, live,
 `tests/e2e-py/test_the_estate_is_what_git_declares.py`. `docs/OPERATORS.md` § 2 is the operator's procedure.
@@ -825,8 +826,8 @@ governing their data. The project-scoped surface is the console's project page, 
   a day out, for every live table holding neither a check's schedule nor a queued check. Each runs once per firing, on one replica
   whatever the replica count: its schedule fires on a subject of its own, and the queue holds one task per subject. The
   two share one claim (`queue._claim_key`, `reconcile`), since each repairs the estate from a report of its own: they
-  never run at once, and the scan fires off the hour so it rarely waits. Maintenance has no Dapr cron binding; the
-  chart's seven are the catalog's six and lineage's relay (`chart/templates/dapr-component.yaml`).
+  never run at once, and the scan fires off the hour so it rarely waits. Maintenance runs no fixed timer; the estate's
+  seven are the catalog's six and lineage's relay (`lakehouse.timers`, `catalog.api.timers`, `lineage.api.relay`).
 - **OpenFGA rejects a bare-type Read.** `read_tuples(obj="project:")` with no user is HTTP 400
   (*"the object id and user cannot be empty"*), and the wrapper reports it as
   `ServiceUnavailableError` — so it presents as a permanent outage on a healthy server. To enumerate
@@ -1208,7 +1209,7 @@ governing their data. The project-scoped surface is the console's project page, 
   settles an obligation and `ErasureReport.pinned_by` is non-empty, the verification door writes a release record
   under the obligation's id (`catalog.services.erasure_release`, `_erasure_releases/<id>.json` on the control root)
   BEFORE it tells anyone, then emits one targeted `erasure_release_scheduled` per person (the obligation's requester,
-  table owners). The `catalog-erasure-release-cron` tick claims a due record by an ETag-guarded lease, RECORDS each
+  table owners). The `catalog-erasure-release` timer's tick claims a due record by an ETag-guarded lease, RECORDS each
   branch's recreate reference before deleting any, deletes the tags and the branch subtree leaf-first (re-read live,
   so a branch cut during the grace period goes too) and recreates it top-down from main's head. No door cancels or
   extends one, and protection does not block it (ADR 0150). With every head clean, what a settled release names is
@@ -1395,7 +1396,7 @@ governing their data. The project-scoped surface is the console's project page, 
   root lists it on `GET /management/v1/promotions`, and the tag `rask.held` pins it against cleanup. A `can_promote`
   holder answers on `POST /management/v1/table/{id}/promotion/approve` (`published` moves to it) or
   `.../promotion/reject` (main is restored to the published version as a new commit); a hold unanswered after the
-  gate's `review_hours` expires on `catalog-promotion-expiry-cron`. Every move of `published` emits a `publish_table`
+  gate's `review_hours` expires on the `catalog-promotion-expiry` timer. Every move of `published` emits a `publish_table`
   lineage run, which a notifier delivers to the project's watchers (`docs/COMMIT-EVENTS.md`), and the spec's tag doors refuse
   `published` and every `rask.` tag (400): each publish pins its candidate under a `rask.publishing.<token>` tag of its own, and ends another's older than a day (`publication.STALE_PIN_AGE`); a publish another overtook while it gated, `published` moved to or past its version, is refused 409 code 14 rather than moving it back; and a rejection while main holds a commit after the held version is refused 409 code 14, the hold staying open (ADR 0161, amended 2026-11-12), while a retried rejection finds the restore it already made (`promotions.restore_made`), so nothing else moves it. A governed row needs no column (C9, [[LH-477]]): `source_rowid`
   is an opt-in the publish door holds to uint64 stable row ids, and `stage` and `lineage` are the writer's.
@@ -1519,7 +1520,7 @@ governing their data. The project-scoped surface is the console's project page, 
   names, so no name reaches it; reported, never gating the purge) reads each root's `__manifest` rows for that reason.
 - **`__manifest` is the catalog's to reclaim, and its connections are why** ([[LH-251]], ADR 0185). Every namespace
   operation rewrites a root's index whole as a new version, and the backend's rewrite skips `lance.auto_cleanup.*`, so
-  nothing but `catalog-manifest-reclaim-cron` (`catalog.api.manifest_reclaim`) bounds it: Lance's own
+  nothing but the `catalog-manifest-reclaim` timer (`catalog.api.manifest_reclaim`) bounds it: Lance's own
   `cleanup_old_versions(older_than=catalog.manifestReclaim.retainSeconds)` on the catalog's root and every registered
   warehouse's. A root it keeps failing on pages (`CatalogManifestReclaimFailing`, counted on
   `catalog.manifest_reclaim.failed` by root). Maintenance never touches it: a pass runs on a table a claim names, and `discovery` skips `__` directories. A `dir` connection reloads by

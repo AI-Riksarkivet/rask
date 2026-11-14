@@ -194,7 +194,7 @@ provisioned by its operator and attested by `signing.provisioned`).
   (`templates/catalog-declaration.yaml`, key `declaration.json`, built by `lance.declaration` in `_helpers.tpl`). The
   catalog mounts it as a VOLUME at `/etc/rask/declaration` (`LANCE_DECLARATION_FILE`), never through env, so a changed
   declaration reaches the running pod with no roll (the kubelet refreshes the file), and the
-  `catalog-declaration-converge-cron` tick (`catalog.declarationConverge`, `@every 60s`) converges the estate onto it.
+  `catalog-declaration-converge` timer (`catalog.declarationConverge.periodSeconds`, 60 s) converges the estate onto it.
   Read a declared change back on the catalog (`managed_by: "git"` on the project or warehouse read, the
   `declaration_converged` log line), not on the Deployment's revision: none moves. `docs/OPERATORS.md` § 2 is the
   procedure. Pinned by `tests/unit/test_the_chart_declares_the_tenants_the_catalog_converges.py`.
@@ -387,8 +387,7 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   same role through the one `lance-secrets` component (`<release>-{appID}`, Dapr 1.19 is the floor) and resolve no
   secret, since no product Component names one; the maintenance worker runs no sidecar, so `lance.sidecarScopes` leaves
   it out of the component's scopes; and every Configuration denies the sidecar's secrets API whole, so no secret is
-  served through a sidecar. The table does not hang on `dapr.enabled`: only the app token (the catalog's and lineage's,
-  for their cron tick routes), each service's own bus user (`nats-user-<app>`, which its code reads for its own
+  served through a sidecar. The table does not hang on `dapr.enabled`: only each service's own bus user (`nats-user-<app>`, which its code reads for its own
   connection) and maintenance's work-queue user do. Each role's
   policy reads exactly that app's reads (`lance.storeIdentity` mounts the token). The roles and policies render in every
   mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform

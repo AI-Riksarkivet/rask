@@ -97,8 +97,7 @@ def _authenticated(request: Request, settings: Settings, bearer: str | None) -> 
 
     The service-account verifier is chosen by the token's unverified ``iss`` and then checks the
     signature, audience and expiry; every account in the cluster whose token carries this door's audience
-    authenticates, as its own subject, and is authorized by its tuples alone. ``dapr-api-token`` is not
-    read here: it proves a sidecar delivered a request and names nobody.
+    authenticates, as its own subject, and is authorized by its tuples alone.
     """
     if not settings.oidc_enabled:
         return None

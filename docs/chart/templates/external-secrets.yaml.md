@@ -70,11 +70,9 @@ NATS fixture writes nats-box's `monitor` creds and the server's operator-mode an
 
 ## `apiVersion: external-secrets.io/v1`
 
-THE DAPR APP-API TOKEN, for the injector. A pod annotated `dapr.io/app-token-secret: <this>` has daprd
-stamp it as `dapr-api-token` on every cron tick, and the app compares it with the store's `dapr-app-token`
-(`RASK_APP_TOKEN_FROM_STORE`) or with `APP_API_TOKEN` (`lance.appTokenEnv`). Both read the one store field,
-so the two sides agree by construction. Gated on either consumer: `dapr.enabled` (the annotation) or
-`auth.enabled` (the env row), so neither reference can dangle. A rotation reaches a sidecar only when its
-pod restarts, since the injector reads the Secret at pod creation (docs/OPERATORS.md).
+THE DAPR APP-API TOKEN, for the injector. A pod annotated `dapr.io/app-token-secret: <this>` has the injector hand
+it to its sidecar; no service reads or checks it, since no sidecar delivers anything to its app. Gated on
+`dapr.enabled` or `auth.enabled`, so the annotation's reference cannot dangle. A rotation reaches a sidecar only when
+its pod restarts, since the injector reads the Secret at pod creation (docs/OPERATORS.md).
 
 A third party's credential, provisioned in the store by the operator (values.yaml `secrets`).

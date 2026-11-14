@@ -20,20 +20,16 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
 from starlette.middleware import Middleware
 
-from catalog.api.commit_reconcile import mount_commit_reconcile
 from catalog.api.control_lane import STREAM as CONTROL_STREAM
 from catalog.api.control_lane import TOPIC as CONTROL_TOPIC
 from catalog.api.control_lane import ControlLane, create_signature_refused_series
-from catalog.api.control_relay import attach_published_keys, mount_control_relay
-from catalog.api.declaration_converge import mount_declaration_converge
-from catalog.api.erasure_release import mount_erasure_release
+from catalog.api.control_relay import attach_published_keys
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
-from catalog.api.manifest_reclaim import mount_manifest_reclaim
 from catalog.api.path_reading import PathReadingMiddleware
-from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.api.security import authenticate, judge
 from catalog.api.signing_gate import signing_gate_middleware
+from catalog.api.timers import start_timers
 from catalog.api.v1.router import api_router
 from catalog.core import base_judge
 from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
@@ -49,7 +45,6 @@ from lakehouse.admission import judge_before_the_body
 from lakehouse.bus import Bus, bus_session
 from lakehouse.control_emit import make_control_emitter
 from lakehouse.governed.auth_lifespan import attach_auth
-from lakehouse.governed.dapr_auth import assert_app_token_configured
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
@@ -178,23 +173,6 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # once half the store token's lease is used, or as soon as the store no longer honours it. Nothing for a stack with
     # no secret store.
     await stack.enter_async_context(secret_store_session(loops))
-    # Fail closed if a cron tick's route mounts, which this pod's Dapr sidecar delivers, but the app-api-token is unset:
-    # a start that fails says so at once, where the door's own refusal (`require_dapr_token`) would answer every tick 403
-    # with the pod Ready. The ticks are the control relay's (api/control_relay.py), the erasure release's
-    # (api/erasure_release.py), the promotion expiry's (api/promotion_expiry.py), the commit reconcile's
-    # (api/commit_reconcile.py), the manifest reclaim's (api/manifest_reclaim.py) and the declaration converge's
-    # (api/declaration_converge.py).
-    # AFTER THE LOGIN ABOVE, AND OFF THE EVENT LOOP: with the token in the store this is a read with the boot's budget,
-    # made under the login the start already holds, so a store that never admits the catalog ends the start there.
-    await run_in_threadpool(
-        assert_app_token_configured,
-        dapr_enabled=bool(settings.control_relay_binding_name)
-        or bool(settings.erasure_release_binding_name)
-        or bool(settings.promotion_expiry_binding_name)
-        or bool(settings.commit_reconcile_binding_name)
-        or bool(settings.manifest_reclaim_binding_name)
-        or bool(settings.declaration_converge_binding_name),
-    )
     # THE CATALOG HOLDS NO STORE KEY ([[XC-083]], ADR 0170). Its identity is the ServiceAccount token its pod projects
     # for the store's audience, exchanged here for a session (`AssumeRoleWithWebIdentity`), waiting out a store or a
     # provisioning hook still starting, and the boot FAILS CLOSED if none is issued; a background loop exchanges again
@@ -376,6 +354,11 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         app.state.readiness_facts = {"namespace": str(namespace.namespace_id())}
     app.state.health = HealthWatch(_dependencies(app, settings, bus))
     app.state.health.watch(loops)
+    # THE CATALOG'S FIXED TIMERS ([[XC-199]]), started last, once everything a tick works with is on `app.state`: the
+    # control relay, the erasure release, the promotion expiry, the commit reconcile, the manifest reclaim and the
+    # declaration converge, each a loop of `loops` on the period git gives it, each window claimed on the control root
+    # so a tick runs once whatever the replica count (`catalog.api.timers`).
+    start_timers(app, settings, loops)
 
 
 def _follow_control_events(app: FastAPI, settings: Settings, bus: Bus | None, loops: Supervisor) -> None:
@@ -435,30 +418,6 @@ app = build_lance_service_app(
     inner_middleware=[maintenance_middleware, signing_gate_middleware],
     outer_middleware=[Middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes), Middleware(PathReadingMiddleware)],
 )
-# THE CRON TICKS BELOW are mounted at the pod root, outside both gated mounts, and `maintenance_middleware` holds every
-# one of them through a read-only window, answering it 2xx without running it: each mount records its tick
-# (`catalog.api.cron.ticks_of`), so a tick mounted is a tick held.
-# THE CONTROL LANE'S RELAY (POST /<binding name> at the pod root, on the chart's cron schedule): drain
-# LANCE_CONTROL_OUTBOX_URI and re-publish what a bus outage left staged. Without it the staging that
-# `make_control_emitter` already does above is a durable copy nothing ever reads — and `table_published`
-# is the ONLY thing that wakes silver->gold, so a NATS blip ends the cascade with every pod green.
-# Mounted only when the chart names a binding, exactly like lineage's reconcile route.
-mount_control_relay(app, _settings.control_relay_binding_name)
-# ADR 0138: release an erasure's pinning tags and branches when the notice's grace period ends (POST /<binding
-# name> at the pod root). Mounted only when the chart names the binding, like the relay.
-mount_erasure_release(app, _settings.erasure_release_binding_name)
-# ADR 0156 C1: expire promotion holds nobody answered before their review deadline (POST /<binding name> at the
-# pod root). Mounted only when the chart names the binding, like the relay.
-mount_promotion_expiry(app, _settings.promotion_expiry_binding_name)
-# [[LH-497]]: announce every committed version lineage's feed lacks, from the version log (POST /<binding name> at the
-# pod root). Mounted only when the chart names the binding, like the relay.
-mount_commit_reconcile(app, _settings.commit_reconcile_binding_name)
-# [[LH-251]]: reclaim each root's `__manifest` versions past their retention (POST /<binding name> at the pod root).
-# Mounted only when the chart names the binding, like the relay.
-mount_manifest_reclaim(app, _settings.manifest_reclaim_binding_name)
-# [[XC-213]]: converge the estate's projects, warehouses and service grants onto what git declares (POST /<binding
-# name> at the pod root). Mounted only when the chart names the binding, like the relay.
-mount_declaration_converge(app, _settings.declaration_converge_binding_name)
 # Every door that authenticates its caller does so from the request's headers before its body is read
 # (`lakehouse.admission`): a caller with no token is refused before a byte is buffered, and never takes a write seat.
 judge_before_the_body(app, gate=authenticate, judge=judge)

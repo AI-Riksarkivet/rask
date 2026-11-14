@@ -4,7 +4,7 @@ Rejects mutating requests on both mounts — the spec's ``/v1`` and rask's ``/ma
 ``503 + Retry-After`` while
 ``LANCE_MAINTENANCE_READ_ONLY`` is set — for zero-downtime model/schema
 migration windows (flip on, migrate, flip off). Health and read endpoints stay available, and the catalog's
-cron ticks, delivered at the pod root, are answered and do nothing. Default OFF, so this is a no-op unless
+timers are held, each claiming and running nothing (`catalog.api.timers`). Default OFF, so this is a no-op unless
 explicitly enabled. The chart renders the flag from its one `readOnlyWindow` value, which also holds maintenance's
 worker and lineage's relay, so one value in git puts the whole lakehouse in the window.
 
@@ -24,7 +24,6 @@ from fastapi.routing import iter_route_contexts
 from lance_namespace import ErrorCode
 from starlette.routing import Match
 
-from catalog.api.cron import ticks_of
 from catalog.core import vending
 from catalog.core.config import Settings
 from lakehouse.ns_errors import problem_body
@@ -148,26 +147,17 @@ def maintenance_response() -> JSONResponse:
     )
 
 
-def _held_tick_response() -> JSONResponse:
-    """The answer to a cron tick through a window: a 2xx, so the sidecar counts no failed delivery, and a tick that did
-    nothing, as a tick that finds another one running says."""
-    return JSONResponse(status_code=200, content={"skipped": True})
-
-
 async def maintenance_middleware(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
-    """Short-circuit mutating requests on every catalog mount with 503, and hold every cron tick, when read-only is on."""
+    """Short-circuit mutating requests on every catalog mount with 503 when read-only is on."""
     settings: Settings | None = getattr(request.app.state, "settings", None)
     if settings is None or not settings.maintenance_read_only:
         return await call_next(request)
     # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
     # would end the path there ([[LH-526]]).
     path: str = request.scope["path"]
-    if request.method == "POST" and path in ticks_of(request.app):
-        log.info("cron_tick_held_for_read_only_window", extra={"binding": path.lstrip("/")})
-        return _held_tick_response()
     if path.startswith(GATED_MOUNTS) and is_mutating(request):
         return maintenance_response()
     return await call_next(request)

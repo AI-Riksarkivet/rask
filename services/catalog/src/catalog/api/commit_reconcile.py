@@ -1,4 +1,4 @@
-"""The cron tick that announces every committed version lineage's feed lacks: the commit is the outbox ([[LH-497]]).
+"""The tick that announces every committed version lineage's feed lacks: the commit is the outbox ([[LH-497]]).
 
 A write is announced after its commit (`catalog.core.lineage_emit`), and a crash between the commit and the staging of
 its event loses the announcement while the version stays committed, so a pipeline following ``/events?since=`` never
@@ -21,31 +21,26 @@ found only since, is listed on the obligation and counted on ``catalog.erasure.l
 that could not read what it judges counts ``catalog.erasure.late_derived_unwatched``, which pages too. It needs no commit
 feed, so it runs whether or not lineage has created one.
 
-**Delivered at the POD ROOT**, as ``POST /<component name>``, so the Component's name,
-``LANCE_COMMIT_RECONCILE_BINDING_NAME`` and the served path are one string. Guarded by ``require_dapr_token``: an open
-door here would let anything that reaches the port make the catalog walk the estate.
-
-`bindings.cron` fires on every replica, and two replicas reconciling at once announce a found version twice, which the
-derived run id lands once on the feed; a mark one writes lower than another's costs a re-read, never a skipped version.
+It runs on the catalog's own timer (`catalog.api.timers`), once a window whatever the replica count. A tick that
+overlaps another all the same (one that outlasts its window) announces a found version twice, which the derived run id
+lands once on the feed; a mark one writes lower than another's costs a re-read, never a skipped version.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Callable
 from datetime import UTC, timedelta
 from functools import partial
-from typing import Annotated
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import DescribeTableRequest, LanceNamespace, NamespaceNotFoundError, PermissionDeniedError, TableNotFoundError
 from opentelemetry import metrics
 from pydantic import BaseModel, Field
 
-from catalog.api.cron import mount_cron
-from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, StorageOptionsDep, estate_namespace, namespace_for_table
+from catalog.api.dependencies import ObjectUuids, estate_namespace, namespace_for_table
+from catalog.api.ticks import Tick
 from catalog.core.commit_ids import commit_ids_of, tag_move_run_id
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
@@ -55,7 +50,6 @@ from lakehouse import location_claims
 from lakehouse.base_refs import decoded_path
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.dapr_auth import require_dapr_token
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
 
@@ -100,9 +94,6 @@ _unauthored = _meter.create_counter(
 #: How much earlier than the oldest commit looked for the feed is read: a row is received after its commit, never
 #: before, but the store's clock and the catalog's may disagree.
 _FEED_SLACK = timedelta(minutes=10)
-
-#: One tick at a time per process: a second arriving while one runs would only re-read what it reads.
-_tick_lock = asyncio.Lock()
 
 
 class CommitReconcileTick(BaseModel):
@@ -258,78 +249,72 @@ async def _reannounce_publication(
     )
 
 
-async def _on_cron(
-    request: Request,
-    settings: SettingsDep,
-    so: StorageOptionsDep,
-    clock: ClockDep,
-    _: Annotated[None, Depends(require_dapr_token)],
-) -> CommitReconcileTick:
+async def tick(ctx: Tick) -> CommitReconcileTick:
     """Announce every committed version past the grace that lineage's feed lacks."""
-    if _tick_lock.locked() or not commit_ids_of(request.app).ready:
+    request, settings, so, clock = ctx.request, ctx.settings, ctx.storage_options, ctx.clock
+    if not commit_ids_of(request.app).ready:
         return CommitReconcileTick(skipped=True)
     emitter: LineageEmitter = request.app.state.lineage_emitter
-    async with _tick_lock:
-        estate = await estate_namespace(request, settings)
-        late_derived = await _watch_released(settings, estate, so)
+    estate = await estate_namespace(request, settings)
+    late_derived = await _watch_released(settings, estate, so)
+    try:
+        feed = await run_in_threadpool(_feed_location, settings, estate)
+    except Exception as exc:  # noqa: BLE001 — a feed this tick cannot read is read by the next; nothing is announced without it
+        log.error("commit_reconcile_feed_unreadable", extra={"error": str(exc)[:300]})
+        _unreadable.add(1)
+        return CommitReconcileTick(skipped=True, unreadable=1, late_derived=late_derived)
+    if feed is None:
+        return CommitReconcileTick(skipped=True, late_derived=late_derived)
+    live = await _live_tables(request, settings)
+    tables = live.tables
+    now = clock().astimezone(UTC)
+    reannounced = unauthored = 0
+    unreadable = live.unreadable
+    for table in tables:
         try:
-            feed = await run_in_threadpool(_feed_location, settings, estate)
-        except Exception as exc:  # noqa: BLE001 — a feed this tick cannot read is read by the next; nothing is announced without it
-            log.error("commit_reconcile_feed_unreadable", extra={"error": str(exc)[:300]})
-            _unreadable.add(1)
-            return CommitReconcileTick(skipped=True, unreadable=1, late_derived=late_derived)
-        if feed is None:
-            return CommitReconcileTick(skipped=True, late_derived=late_derived)
-        live = await _live_tables(request, settings)
-        tables = live.tables
-        now = clock().astimezone(UTC)
-        reannounced = unauthored = 0
-        unreadable = live.unreadable
-        for table in tables:
-            try:
-                found = await run_in_threadpool(
-                    partial(
-                        commit_reconcile.reconcile_table,
-                        settings,
-                        so,
-                        segments=table.segments,
-                        location=table.location,
-                        table_uuid=str(table.uuids.table_uuid),
-                        feed=feed,
-                        now=now,
-                        publication_run_id=_publication_run_id(request, str(table.uuids.table_uuid)),
-                    )
+            found = await run_in_threadpool(
+                partial(
+                    commit_reconcile.reconcile_table,
+                    settings,
+                    so,
+                    segments=table.segments,
+                    location=table.location,
+                    table_uuid=str(table.uuids.table_uuid),
+                    feed=feed,
+                    now=now,
+                    publication_run_id=_publication_run_id(request, str(table.uuids.table_uuid)),
                 )
-            except Exception as exc:  # noqa: BLE001 — one table this tick cannot read must not stop the others
-                log.error("commit_reconcile_table_failed", extra={"table": table.segments, "error": str(exc)[:300]})
-                _unreadable.add(1)
-                unreadable += 1
-                continue
-            if found.unreadable:
-                _unreadable.add(len(found.unreadable))
-                unreadable += len(found.unreadable)
-            for scan in found.scans:
-                for commit in scan.missing:
-                    await _announce(emitter, request, settings, so, table, commit)
-                    _reannounced.add(1, {"lance.catalog.operation": commit.operation})
-                    log.warning(
-                        "commit_reannounced",
-                        extra={"table": table.segments, "version": commit.version, "branch": commit.branch, "operation": commit.operation},
-                    )
-                if scan.unauthored:
-                    _unauthored.add(len(scan.unauthored))
-                    log.error("commit_unauthored", extra={"table": table.segments, "versions": list(scan.unauthored), "branch": scan.branch})
-                reannounced += len(scan.missing)
-                unauthored += len(scan.unauthored)
-            if found.publication is not None:
-                await _reannounce_publication(emitter, request, settings, table, found.publication)
-                _reannounced.add(1, {"lance.catalog.operation": PUBLISH_TABLE})
-                log.warning("publication_reannounced", extra={"table": table.segments, "version": found.publication.version})
-                reannounced += 1
-            if found.unauthored_publication is not None:
-                _unauthored.add(1, {"lance.catalog.operation": PUBLISH_TABLE})
-                log.error("publication_unauthored", extra={"table": table.segments, "version": found.unauthored_publication})
-                unauthored += 1
+            )
+        except Exception as exc:  # noqa: BLE001 — one table this tick cannot read must not stop the others
+            log.error("commit_reconcile_table_failed", extra={"table": table.segments, "error": str(exc)[:300]})
+            _unreadable.add(1)
+            unreadable += 1
+            continue
+        if found.unreadable:
+            _unreadable.add(len(found.unreadable))
+            unreadable += len(found.unreadable)
+        for scan in found.scans:
+            for commit in scan.missing:
+                await _announce(emitter, request, settings, so, table, commit)
+                _reannounced.add(1, {"lance.catalog.operation": commit.operation})
+                log.warning(
+                    "commit_reannounced",
+                    extra={"table": table.segments, "version": commit.version, "branch": commit.branch, "operation": commit.operation},
+                )
+            if scan.unauthored:
+                _unauthored.add(len(scan.unauthored))
+                log.error("commit_unauthored", extra={"table": table.segments, "versions": list(scan.unauthored), "branch": scan.branch})
+            reannounced += len(scan.missing)
+            unauthored += len(scan.unauthored)
+        if found.publication is not None:
+            await _reannounce_publication(emitter, request, settings, table, found.publication)
+            _reannounced.add(1, {"lance.catalog.operation": PUBLISH_TABLE})
+            log.warning("publication_reannounced", extra={"table": table.segments, "version": found.publication.version})
+            reannounced += 1
+        if found.unauthored_publication is not None:
+            _unauthored.add(1, {"lance.catalog.operation": PUBLISH_TABLE})
+            log.error("publication_unauthored", extra={"table": table.segments, "version": found.unauthored_publication})
+            unauthored += 1
     log.info(
         "commit_reconcile_tick",
         extra={"tables": len(tables), "reannounced": reannounced, "unauthored": unauthored, "unreadable": unreadable, "late_derived": late_derived},
@@ -350,8 +335,3 @@ async def _watch_released(settings: Settings, estate: LanceNamespace, so: Storag
         _late_derived.add(len(late.tables))
         log.error("erasure_late_derived", extra={"obligation": late.obligation_id, "tables": late.tables})
     return sum(len(late.tables) for late in found)
-
-
-def mount_commit_reconcile(app: FastAPI, binding_name: str) -> bool:
-    """Mount the tick at ``POST /<binding_name>``; nothing when the chart names no binding. Whether it was mounted."""
-    return mount_cron(app, binding_name, _on_cron, tag="commit-reconcile")

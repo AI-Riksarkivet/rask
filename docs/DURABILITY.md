@@ -68,8 +68,8 @@ the apps at the external endpoint:
 > `values-prod.yaml` EXTERNALIZE block shows the full set.
 >
 > No credential is a chart value ([[XC-004]]): the render refuses one by name, and a real deployment
-> with the dev OpenBao is refused. Every credential, the app token that authenticates every
-> sidecar-delivered route included, comes from the store through ESO, a prerequisite.
+> with the dev OpenBao is refused. Every credential comes from the store, through ESO (a prerequisite) or the
+> service's own login to it.
 
 ## Data lifecycle — what's permanent vs transient
 The S3 store is permanent **infrastructure**; the *data within it* has a lifecycle:

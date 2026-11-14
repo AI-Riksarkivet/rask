@@ -3,7 +3,7 @@
 A ``dir`` root keeps its namespaces and tables as rows of the ``__manifest`` Lance table
 (``lance_docs/ns_catalog/catalog/dir/index.md`` § V2: Manifest), and every namespace operation rewrites it as a new
 version that nothing in the backend reclaims (measured on pylance 13.0.0: one version per operation, a dropped id
-readable at latest - 1). The catalog, its only writer, reclaims each root's history on its own cron tick with Lance's
+readable at latest - 1). The catalog, its only writer, reclaims each root's history on its own timer with Lance's
 ``cleanup_old_versions``, and a connection it holds is never older than that history's retention allows, because the
 backend reloads a held ``__manifest`` by probing only the version after it (lance v13.0.0
 ``rust/lance-namespace-impls/src/dir/manifest.rs``, ``DatasetConsistencyWrapper``).
@@ -14,10 +14,11 @@ from __future__ import annotations
 import importlib.util
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import lance
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, DropNamespaceRequest, connect
 from pydantic import BaseModel, ConfigDict
@@ -25,7 +26,8 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse.storage_options import StorageOptions
 
 
-BINDING = "catalog-manifest-reclaim-cron"
+if TYPE_CHECKING:
+    from catalog.api.manifest_reclaim import ManifestReclaimTick
 
 
 class Catalog(BaseModel):
@@ -50,21 +52,27 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Catalog
         "LANCE_MANIFEST_RETAIN_SECONDS": "0",
     }.items():
         monkeypatch.setenv(key, value)
-    from catalog.api.manifest_reclaim import mount_manifest_reclaim
     from catalog.core.config import get_settings
     from catalog.services import warehouses
 
     get_settings.cache_clear()
     from catalog.main import app
 
-    routes = list(app.router.routes)
-    mount_manifest_reclaim(app, BINDING)
     warehouses.put_warehouse(str(estate), StorageOptions(), {"id": "tenant", "bucket": "tenant", "project": "p", "root_uri": str(warehouse)})
     warehouses.ensure_catalog_row(connect("dir", {"root": str(warehouse)}), "tenant")
     with TestClient(app) as client:
         yield Catalog(client=client, estate=str(estate), warehouse=str(warehouse))
-    app.router.routes[:] = routes
     get_settings.cache_clear()
+
+
+def _reclaim(catalog: Catalog) -> ManifestReclaimTick:
+    """One reclaim tick on the catalog app's own event loop, as its timer runs one."""
+    from catalog.api import manifest_reclaim
+    from catalog.api.ticks import Tick
+    from catalog.core.config import get_settings
+
+    assert catalog.client.portal is not None, "the reclaim ticks inside the app's lifespan"
+    return catalog.client.portal.call(manifest_reclaim.tick, Tick(cast(FastAPI, catalog.client.app), get_settings()))
 
 
 @pytest.fixture
@@ -123,9 +131,8 @@ def test_the_reclaim_keeps_each_roots_history_bounded_and_the_catalog_reads_the_
         tenant.create_namespace(CreateNamespaceRequest(id=["tenant", name]))
     tenant.drop_namespace(DropNamespaceRequest(id=["tenant", "w_gone"]))
 
-    tick = catalog.client.post(f"/{BINDING}")
+    _reclaim(catalog)
 
-    assert tick.status_code == 200, tick.text
     assert {root: len(_versions(root)) for root in (catalog.estate, catalog.warehouse)} == {catalog.estate: 1, catalog.warehouse: 1}
     assert [v for v in _versions(catalog.estate) if "lance_catalog$gone" in _object_ids(catalog.estate, v)] == []
     assert [v for v in _versions(catalog.warehouse) if "tenant$w_gone" in _object_ids(catalog.warehouse, v)] == []
@@ -135,7 +142,7 @@ def test_the_reclaim_keeps_each_roots_history_bounded_and_the_catalog_reads_the_
 
 
 def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(catalog: Catalog, failed_roots: Callable[[], dict[str, int]], tmp_path: Path) -> None:
-    """A root whose index Lance cannot open fails alone: the tick still answers, reclaims every other root, and counts
+    """A root whose index Lance cannot open fails alone: the tick still completes, reclaims every other root, and counts
     the failure under that root, which is what pages once the same root keeps failing."""
     from catalog.services import warehouses
 
@@ -147,10 +154,9 @@ def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(catalog
     for name in ("one", "two"):
         tenant.create_namespace(CreateNamespaceRequest(id=["tenant", name]))
 
-    tick = catalog.client.post(f"/{BINDING}")
+    tick = _reclaim(catalog)
 
-    assert tick.status_code == 200, tick.text
-    assert (tick.json()["failed"], [done["root"] for done in tick.json()["reclaimed"]], failed_roots()) == (
+    assert (tick.failed, [done.root for done in tick.reclaimed], failed_roots()) == (
         1,
         [catalog.estate, catalog.warehouse],
         {str(broken): 1},

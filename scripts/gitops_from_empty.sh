@@ -30,7 +30,7 @@ REPO_URL="http://rask-charts.$REPO_NAMESPACE.svc.cluster.local"
 # ── Phase 2's one changed input: merged into the Application's values (a JSON merge patch). ─────────────────────────
 CHANGE='
 nats: { streamMaxAgeSeconds: 259200 }
-catalog: { commitReconcile: { schedule: "@every 660s" } }
+catalog: { commitReconcile: { periodSeconds: 660 } }
 maintenance: { vendWriteCredentials: false }
 '
 # ── What CHANGE must converge to, one function each (defined under "Checks" below). ─────────────────────────────────
@@ -145,7 +145,7 @@ check_lineage_max_age() {
   [ "$age" = 259200000000000 ]
 }
 
-# (b) The catalog loads the commit-reconcile cron Component at start (HotReload is off), so every catalog pod must be one
+# (b) The catalog reads the commit reconcile's period from its environment at start, so every catalog pod must be one
 # created after the change; terminating pods are listed and not counted.
 check_catalog_restarted() {
   local pods

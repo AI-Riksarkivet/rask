@@ -115,7 +115,7 @@ def publication_originator(claimed: str, token: Caller | None) -> str:
     visibility at delivery, so the worst a forged claim achieves is a row in the inbox of someone who
     can already read the run's outputs.
 
-    `""` when nobody is named — a reconcile, a backfill or a cron sweep genuinely has no person behind
+    `""` when nobody is named — a reconcile, a backfill or a timer's tick genuinely has no person behind
     it, and the honest answer is silence. Per the skill, a state change naming nobody is
     UNDELIVERABLE, not under-delivered, and an empty or role-shaped address is strictly worse than
     none because it looks delivered.

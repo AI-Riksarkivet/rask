@@ -467,7 +467,7 @@ def _etag(claim: ClaimRead | None) -> str | None:
 
 
 def door_table(ns: LanceNamespace, store: ClaimStore, segments: list[str], *, announces: Callable[[str], bool]) -> DoorTable:
-    """The table ``segments`` names now, for a reader that resolves it outside a request's door (a cron acting on a record),
+    """The table ``segments`` names now, for a reader that resolves it outside a request's door (a tick acting on a record),
     whose writes the emitter judges by ``announces``."""
     return DoorTable(ns, store, resolve(ns, store, segments), announces=announces)
 

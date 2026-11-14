@@ -15,7 +15,7 @@ import asyncio
 import logging
 import threading
 import time
-from collections.abc import AsyncGenerator, Generator, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -38,12 +38,14 @@ from tests.integration.openfga_grants import Grants
 
 
 if TYPE_CHECKING:
+    from catalog.api.ticks import Tick
+    from lineage.api.relay import RelayReport
     from lineage.services.provenance import ProvenanceStore
 
 #: The header a test names the caller's principal key in; lineage's `authenticate` is overridden to read it.
 SUBJECT_HEADER = "x-test-subject"
-#: The relay tick's binding name, which `governed_lineage` mounts the tick at, as the chart names it.
-RELAY = "lineage-relay-cron"
+#: The event loop each app :func:`serve` serves runs on, by the base URL it answers at.
+_SERVED_ON: dict[str, asyncio.AbstractEventLoop] = {}
 
 
 @contextmanager
@@ -102,11 +104,27 @@ def serve(app: FastAPI, port: int = 0) -> Generator[str]:
         if not thread.is_alive() or time.monotonic() > deadline:
             raise RuntimeError("uvicorn did not start")
         time.sleep(0.05)
+    url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
+    _SERVED_ON[url] = server.servers[0].get_loop()
     try:
-        yield f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
+        yield url
     finally:
+        del _SERVED_ON[url]
         server.should_exit = True
         thread.join(timeout=30)
+
+
+def catalog_tick[R](catalog_url: str, tick: Callable[[Tick], Awaitable[R]], *, timeout: float = 120) -> R:
+    """One ``tick`` of the catalog :func:`live_catalog` serves at ``catalog_url``, run on that server's own event loop with
+    the catalog's settings, as the catalog's timer runs it; answers what the tick reports."""
+    from catalog.api.ticks import Tick
+    from catalog.core.config import get_settings
+    from catalog.main import app
+
+    async def run() -> R:
+        return await tick(Tick(app, get_settings()))
+
+    return asyncio.run_coroutine_threadsafe(run(), _SERVED_ON[catalog_url]).result(timeout=timeout)
 
 
 class GraphBackend:
@@ -144,10 +162,9 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
 
     The caller is the principal a request names by key in :data:`SUBJECT_HEADER`: a `kubernetes~` key is a service
     principal, any other a person, as a verified token would prove either; OpenFGA answers from ``granted`` (held as ``app.state.grants``, so a test can write a tuple mid-flow), whose
-    subjects are principal keys. The relay tick is mounted at :data:`RELAY` behind its sidecar-token guard,
-    with the forward client lineage's lifespan builds when a graph backend is configured.
+    subjects are principal keys. The app holds the forward client lineage's lifespan builds when a graph backend is
+    configured, so :func:`relay_tick` runs the relay over it.
     """
-    from lineage.api.relay_cron import build_relay_cron_router
     from lineage.api.security import authenticate
     from lineage.api.v1.router import api_router
     from lineage.core.config import get_settings
@@ -186,7 +203,6 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     app = FastAPI(lifespan=lifespan)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(api_router)
-    app.include_router(build_relay_cron_router(RELAY))
     app.dependency_overrides[authenticate] = caller
     grants = Grants()
     grants.allowed = {(user_object(subject), relation, obj) for subject, relation, obj in granted}
@@ -200,6 +216,15 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
             yield client
     finally:
         get_settings.cache_clear()
+
+
+def relay_tick(lineage: TestClient) -> RelayReport:
+    """One relay tick over the app ``lineage`` serves, run on that app's own event loop, as its timer runs one."""
+    from lineage.api import relay
+    from lineage.core.config import get_settings
+
+    assert lineage.portal is not None, "the relay ticks inside the app's lifespan"
+    return lineage.portal.call(relay.tick, cast(FastAPI, lineage.app), get_settings())
 
 
 def ensure_tables(store: ProvenanceStore, *, deadline_seconds: float = 30.0) -> None:

@@ -1,4 +1,4 @@
-"""The CONTROL lane's relay — the cron tick that re-publishes staged ``catalog.control.v1`` events.
+"""The CONTROL lane's relay — the tick that re-publishes staged ``catalog.control.v1`` events.
 
 ``BusControlEmitter.emit`` stages every control event to ``LANCE_CONTROL_OUTBOX_URI`` before it
 publishes and drops it only on ack, so a NATS blip leaves the event durable rather than gone. This is
@@ -33,38 +33,28 @@ topic it never reached. That makes the producer the right host: the catalog alre
 publish the topic. Any other service would have to be given all three, and a
 second copy of "which prefix does the control lane stage to" is how the two ends drift apart.
 
-**WHY A CRON BINDING, NOT THE JOBS API.** ``.claude/skills/rask-dapr`` records the 2026-08-28 ruling:
-recurring scan-and-converge is a cron binding, and the Jobs API is refused for it. This is convergence
-work by the same test — level-triggered, idempotent, self-healing, late-is-free. The schedule is
-Component config in the chart, so this module keeps no scheduler thread and nothing to drain at
-shutdown.
-
-**Delivered at the POD ROOT.** A Dapr input binding arrives as ``POST /<component name>``, never under a
-prefix, and this app's routers already mount at the root (``lakehouse.lance_app``). The Component's
-name, ``LANCE_CONTROL_RELAY_BINDING_NAME`` and the served path are ONE string — see
-:func:`catalog.api.cron.mount_cron`.
+**ON THE CATALOG'S OWN TIMER** (`catalog.api.timers`), never a schedule on the bus: the relay exists for the bus
+being away, so its tick must depend on nothing but the store the events are staged on. It is convergence work,
+level-triggered, idempotent, self-healing and late-is-free, and it runs once a window whatever the replica count.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from collections.abc import Callable, Mapping
-from typing import Annotated, Any, Final
+from typing import Any, Final
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from catalog.api.cron import mount_cron
-from catalog.api.dependencies import SettingsDep
+from catalog.api.ticks import Tick
 from catalog.core.config import Settings
 from lakehouse import outbox, outbox_metrics
 from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the control relay is a registered publish site
 from lakehouse.cloud_events import CloudEvent, control_envelope
 from lakehouse.control_events import CONTROL_TOPIC
-from lakehouse.governed.dapr_auth import require_dapr_token
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
 from lakehouse.lineage import SigningKey
 from lakehouse.lineage.keys import PublishedKeys
@@ -94,17 +84,6 @@ _STAGED_OBJECT: Final = TypeAdapter(dict[str, Any])
 #: and an unused setting is one more thing the chart can render wrong.
 DRAIN_LIMIT = 500
 
-#: Single-flight for THIS PROCESS. Dapr's cron binding has no overlap protection, so a tick that
-#: outruns its period is delivered anyway and two passes would list the same objects.
-#:
-#: Deliberately NOT a cluster-wide lock, and the catalog may run several replicas. Two replicas racing
-#: this prefix costs a duplicate PUBLISH, never a lost or corrupted event: `list_events` skips an object
-#: another drain has already removed, and every consumer of this topic is built for at-least-once —
-#: the ring buffer dedupes on `event_id`, and the cascade's deterministic instance id dedupes the work
-#: (see `_republish`). Buying cross-replica exclusion would mean a distributed lock component, which the
-#: estate has an open ruling against adopting while its API is Alpha.
-_relay_lock = asyncio.Lock()
-
 
 class ControlRelayReport(BaseModel):
     """One tick's findings — the response body and the shape its log line counts."""
@@ -121,9 +100,6 @@ class ControlRelayReport(BaseModel):
     #: The pass stopped because the keys this catalog publishes could not be read, or a key id could not be decided yet:
     #: everything still staged waits, because the relay publishes only what it verified.
     keys_unavailable: bool = False
-    #: A tick that found another pass already running on this replica.
-    skipped: bool = False
-    reason: str = ""
 
 
 def get_control_publisher(request: Request) -> Bus | None:
@@ -134,9 +110,6 @@ def get_control_publisher(request: Request) -> Bus | None:
     a backlog accruing on a mis-wired deployment is visible instead of silently unmeasured.
     """
     return getattr(request.app.state, "bus", None)
-
-
-ControlPublisherDep = Annotated[Bus | None, Depends(get_control_publisher)]
 
 
 def attach_published_keys(app: FastAPI) -> None:
@@ -174,9 +147,6 @@ async def get_staged_verifier(request: Request) -> StagedVerifier | None:
         return verify_control_signature(envelope, source=keys.for_event(claim.kid if claim else None), signers=own, delegators=own)
 
     return verify
-
-
-StagedVerifierDep = Annotated[StagedVerifier | None, Depends(get_staged_verifier)]
 
 
 def bounded(text: str) -> str:
@@ -297,22 +267,9 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
     return report
 
 
-async def _on_cron(
-    settings: SettingsDep,
-    publisher: ControlPublisherDep,
-    verify: StagedVerifierDep,
-    _: Annotated[None, Depends(require_dapr_token)],
-) -> ControlRelayReport:
-    """One relay tick, driven by the Dapr cron binding.
-
-    Guarded by ``require_dapr_token`` so only the sidecar's cron may drive it: an unauthenticated door
-    here would let anything that can reach the port replay every staged control event on demand.
-    """
-    if _relay_lock.locked():
-        log.info("control_relay_skipped_overlap")
-        return ControlRelayReport(skipped=True, reason="another control relay pass is in progress")
-    async with _relay_lock:
-        report = await _drain(settings, publisher, verify)
+async def tick(ctx: Tick) -> ControlRelayReport:
+    """One relay tick: verify and republish what is staged, oldest first."""
+    report = await _drain(ctx.settings, get_control_publisher(ctx.request), await get_staged_verifier(ctx.request))
     if report.poison_dropped:
         log.warning("control_outbox_poison", extra={"dropped": report.poison_dropped})
     log.info(
@@ -326,13 +283,3 @@ async def _on_cron(
         },
     )
     return report
-
-
-def mount_control_relay(app: FastAPI, binding_name: str) -> bool:
-    """Mount the relay when a binding name is configured; report whether it was.
-
-    Opt-in like lineage's reconcile route: an unnamed binding means a deployment that stages nothing
-    (or has no sidecar), and mounting an always-live cron door for it would add a replay surface with
-    no component behind it.
-    """
-    return mount_cron(app, binding_name, _on_cron, tag="control-relay")

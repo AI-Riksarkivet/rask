@@ -5,7 +5,7 @@ the project's gate passes the version. When the project's declared gate has revi
 the door records a HOLD instead: one record per table under ``_promotions/`` on the control root, with the held
 version pinned by the tag :data:`HOLD_TAG` so version cleanup cannot collect it while it waits. A ``can_promote``
 holder answers it: approval moves ``published`` to the held version, rejection restores main to the published
-one. A hold nobody answers expires on the catalog's cron, and ``published`` stays where it was.
+one. A hold nobody answers expires on the catalog's expiry timer, and ``published`` stays where it was.
 
 **ONE HOLD PER TABLE, ON ITS NEWEST HELD VERSION.** Main is linear, so a newer version carries the older one's
 changes: a newer breaching publish replaces the open hold, and a publication that moves ``published`` to or past

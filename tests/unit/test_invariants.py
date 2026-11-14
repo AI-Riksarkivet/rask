@@ -739,7 +739,7 @@ _READ_ONLY_ENV_BY_COMPONENT: dict[str, str] = {
 
 @pytest.mark.parametrize(("window", "rendered"), [pytest.param((), "false", id="default-off"), pytest.param(("readOnlyWindow=true",), "true", id="on")])
 def test_the_one_read_only_window_reaches_every_lakehouse_service(window: tuple[str, ...], rendered: str) -> None:
-    """One value in git puts the whole lakehouse in a read-only window: the catalog's doors and cron ticks, maintenance's
+    """One value in git puts the whole lakehouse in a read-only window: the catalog's doors and timers, maintenance's
     worker and lineage's relay each read it from their own env, so a window set for one alone leaves the others writing."""
     docs = _rendered_docs(*window)
 
@@ -904,7 +904,7 @@ def test_the_catalog_STAGES_its_write_announcement_into_the_prefix_the_relay_DRA
     publish does not merely under-report provenance, the downstream run silently never happens.
 
     THE PREFIX EQUALITY IS THE LOAD-BEARING HALF. Staging is only durable because
-    `lineage/api/reconcile_cron.py` drains `LINEAGE_OUTBOX_URI` and re-publishes what it finds; a catalog
+    `lineage/api/relay.py` drains `LINEAGE_OUTBOX_URI` and re-publishes what it finds; a catalog
     staging anywhere else would write objects that nothing on the estate ever reads, which looks exactly
     like durability and is not.
     """

@@ -19,7 +19,7 @@ fail a catalog write. Two transports sit behind the same :class:`LineageEmitter`
   provenance namespace's ``refusals`` table, ERROR-logged and counted, for the estate admin to replay
   (``lineage.api.ingest_lane``, docs/RESILIENCE.md). With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
   object-store outbox (``lakehouse.outbox``) before the publish, which narrows the loss window
-  to commit→stage; the catalog's reconcile cron announces a version whose event a crash in that window lost,
+  to commit→stage; the catalog's commit reconcile announces a version whose event a crash in that window lost,
   from the version log (``catalog.api.commit_reconcile``, [[LH-497]]).
 
 A versioned announcement's run id is derived from its commit (:mod:`catalog.core.commit_ids`), and its ``eventTime`` is
@@ -869,7 +869,7 @@ class BusEmitter(_BaseLineageEmitter):
             event = self._signed(event)
             # STAGED, then published, then dropped on ack (#4). The emit is inline-awaited and
             # best-effort AFTER the Lance write commits, so an unstaged event is lost to a crash between the
-            # write and the publish until the reconcile cron finds the version the feed lacks ([[LH-497]]); a
+            # write and the publish until the commit reconcile finds the version the feed lacks ([[LH-497]]); a
             # user's pipeline reads this announcement off lineage's `GET /events` to start its next hop, so
             # staging keeps that wait to a crash between the commit and the stage.
             #

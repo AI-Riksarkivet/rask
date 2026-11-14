@@ -40,12 +40,8 @@ import pyarrow.ipc as ipc
 import pytest
 
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
-from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, live_lineage, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, catalog_tick, governed_lineage, live_catalog, live_lineage, run_event
 from tests.loopback import free_port
-
-
-#: The commit reconciler's binding name, which its tick is mounted at as the chart names it.
-_TICK = "catalog-commit-reconcile-cron"
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -307,11 +303,6 @@ def test_a_table_lineage_records_after_the_release_from_a_run_before_it_is_liste
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
         httpx.Client(base_url=lineage_url, timeout=60) as lineage,
     ):
-        from catalog.main import app
-
-        # Mounted as the chart's binding name mounts it at boot (`main.py`), on a copy of the routes the test gives back.
-        monkeypatch.setattr(app.router, "routes", list(app.router.routes))
-        commit_reconcile.mount_commit_reconcile(app, _TICK)
         assert catalog.post("/v1/namespace/lance_catalog$acme-bronze/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$acme-bronze$events/create", content=_rows(), headers=_ARROW).status_code == 200
         uuid_of = {
@@ -327,7 +318,7 @@ def test_a_table_lineage_records_after_the_release_from_a_run_before_it_is_liste
         )
         assert lineage.post("/api/v1/lineage", json=_stamped(outside, uuid_of)).status_code == 201
 
-        ticks = [catalog.post(f"/{_TICK}").json()["late_derived"] for _ in range(2)]
+        ticks = [catalog_tick(catalog_url, commit_reconcile.tick).late_derived for _ in range(2)]
         listed = catalog.get("/management/v1/erasures").json()["obligations"]
 
     assert (ticks, counted.added) == ([1, 0], [1])

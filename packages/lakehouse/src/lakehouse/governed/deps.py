@@ -37,9 +37,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 # TWO TAXONOMIES ON PURPOSE, AND THE SPLIT IS THE 4xx/5xx LINE (SKG-05).
 #
-# The 401 is `lance_namespace`'s, matching this package's other three modules (`fga.py` raises its
-# `ServiceUnavailableError`, `oidc.py` its `UnauthenticatedError`, `dapr_auth.py` its
-# `PermissionDeniedError`) and matching THIS function's own other outcome: a bad bearer already left
+# The 401 is `lance_namespace`'s, matching this package's other modules (`fga.py` raises its
+# `ServiceUnavailableError`, `oidc.py` its `UnauthenticatedError`) and matching THIS function's own other outcome: a bad bearer already left
 # here as a lance `UnauthenticatedError` raised inside `verify`, so a MISSING bearer leaving as a
 # fleet `DomainError` meant one dependency answering two adjacent cases in two envelopes — only one
 # of which carries the numeric `code` a Lance-Namespace client parses.

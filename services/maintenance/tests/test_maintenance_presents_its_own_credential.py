@@ -47,7 +47,7 @@ def test_each_vend_presents_the_token_the_kubelet_last_wrote_and_no_claimed_name
 
     sent = [call.request.headers for call in door.calls]
     assert [headers.get("authorization") for headers in sent] == ["Bearer sa-token-one", "Bearer sa-token-two"]
-    assert all("x-lance-service-identity" not in headers and "dapr-api-token" not in headers for headers in sent)
+    assert all("x-lance-service-identity" not in headers for headers in sent)
 
 
 @respx.mock

@@ -70,8 +70,6 @@ CATALOG = f"kubernetes~{CATALOG_ACCOUNT}"
 PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 LINEAGE_TOPIC = "lineage.events.v1"
-#: The control relay's cron binding, as the chart names it (`catalog.controlOutbox.bindingName`).
-RELAY = "catalog-control-relay-cron"
 #: The namespace the catalog keeps lineage's tables in, as the chart names it (`services.lineage.provenanceNamespace`).
 PROVENANCE = "lance_catalog$provenance"
 
@@ -159,7 +157,6 @@ def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
         "RASK_BUS_USER": "catalog",
         "LANCE_CONTROL_OUTBOX_URI": control_outbox,
         "LANCE_PROVENANCE_NAMESPACE": PROVENANCE,
-        "APP_API_TOKEN": "the-estate-app-token",
     }
     for name, value in env.items():
         monkeypatch.setenv(name, value)
@@ -189,20 +186,6 @@ def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
 
         yield _boot
     get_settings.cache_clear()
-
-
-@pytest.fixture
-def relay(boot: Boot) -> Iterator[str]:
-    """The path of the control relay's tick on the catalog's app. The app is built when its module is imported, from the
-    environment of that moment, so the tick is mounted here as the module mounts it for a pod whose environment names
-    the binding, and taken off again after. After ``boot``, which sets the environment the module is imported under."""
-    from catalog import main
-    from catalog.api.control_relay import mount_control_relay
-
-    built = list(main.app.router.routes)
-    assert mount_control_relay(main.app, RELAY), "the relay's route did not mount"
-    yield f"/{RELAY}"
-    main.app.router.routes[:] = built
 
 
 def _write_a_table_and_a_row(client: TestClient) -> None:
@@ -281,8 +264,13 @@ def test_a_control_event_the_catalog_announced_reaches_the_feed_of_the_replica_f
 
 
 def test_a_control_event_the_bus_did_not_take_is_delivered_by_the_relay_as_the_catalog_signed_it(
-    boot: Boot, relay: str, bus: BusDouble, control_outbox: str, event_signer: Any
+    boot: Boot, bus: BusDouble, control_outbox: str, event_signer: Any
 ) -> None:
+    from catalog import main
+    from catalog.api import control_relay
+    from catalog.api.ticks import Tick
+    from catalog.core.config import get_settings
+
     pair = event_signer(CATALOG)
     client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), _person(PERSON))
 
@@ -290,11 +278,12 @@ def test_a_control_event_the_bus_did_not_take_is_delivered_by_the_relay_as_the_c
     assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     staged = [json.loads(body) for _key, body in outbox.list_events(control_outbox, StorageOptions())]
     bus.failing = None
-    tick = client.post(relay, headers={"dapr-api-token": "the-estate-app-token"})
+    assert client.portal is not None, "the catalog's lifespan is not running, so its relay has nothing to tick with"
+    tick = client.portal.call(control_relay.tick, Tick(main.app, get_settings()))
 
     assert [(event["action"], _control_verdict(event, pair.public)) for event in staged] == [("namespace_created", (CATALOG, f"user:{PERSON}"))]
     assert [(sent.topic, sent.message_id, sent.event) for sent in bus.sent] == [(CONTROL_TOPIC, staged[0]["event_id"], staged[0])]
-    assert (tick.json()["republished"], list(outbox.list_events(control_outbox, StorageOptions()))) == (1, []), tick.text
+    assert (tick.republished, list(outbox.list_events(control_outbox, StorageOptions()))) == (1, []), tick
 
 
 def test_the_catalogs_readiness_shows_the_state_of_the_connection_it_publishes_on(boot: Boot, event_signer: Any) -> None:

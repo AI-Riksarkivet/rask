@@ -148,9 +148,8 @@ give it, and two readers of one value read one secret, never a copy.
 
 ## `bao kv put secret/dapr-app-token token=@"$G/dapr-app-token" >/dev/null`
 
-THE APP-API TOKEN, so a pod can authenticate its Dapr doors without the value passing through its environment
-(`RASK_APP_TOKEN_FROM_STORE`). ESO writes the same field into the `dapr-app-token` Secret daprd stamps the header from,
-so the two agree by construction. One estate-wide token, read by the apps with a Dapr door and by ESO.
+THE APP-API TOKEN the injector hands each sidecar. ESO alone reads it, writing it into the `<release>-dapr-app-token`
+Secret the sidecar annotation names; no service reads or checks it. One estate-wide token.
 
 ## `bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \`
 

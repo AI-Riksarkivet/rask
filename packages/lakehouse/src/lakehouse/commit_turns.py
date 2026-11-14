@@ -190,7 +190,7 @@ class _Answer(BaseModel):
 
 class _SharedReads:
     """Each table's live turns as the last read of its record found them, for every waiter of the table in the process,
-    in the shape of :class:`lakehouse.governed.secret_cache.SecretCache`: one waiter reads, the waiters queued behind
+    shared between them: one waiter reads, the waiters queued behind
     its read take its answer, and so does every waiter until :data:`_SHARED_READ_SECONDS` after the store answered. The
     process's write of a table's record clears that table's view, and a read of it in flight across the write keeps
     nothing, so no waiter of the process acts on a view from before the process's own write, and a write of another

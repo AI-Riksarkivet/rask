@@ -17,7 +17,7 @@ The fix is ONE ``lance.Session`` per process, capped explicitly:
   rows through the session while a new session raised "Not found". A read that is EVIDENCE of what
   storage holds opens on a session nothing has read through (the catalog's ``fresh_lance_session``).
 - ``lance.Session`` is thread-safe (verified: 8 threads × 50 open+checkout, zero errors), which
-  the maintenance service needs — its sweep and reconcile crons hold separate locks and overlap.
+  the maintenance worker needs — its lanes run passes that overlap.
 
 NOT a dataset-handle cache. A cached handle pins a version (the
 right trade for a read-only corpus); per-tick reopens are CORRECT for a mutating service — what

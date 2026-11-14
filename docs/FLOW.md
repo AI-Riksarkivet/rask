@@ -80,7 +80,7 @@ judges them.
 - **Recovery:** `restore_table` rolls a dataset to any retained Lance version; the feed records the version each
   write produced.
 - **Drift:** a crash between the Lance commit and the catalog's outbox stage loses that write's announcement; the
-  catalog's commit reconciler (`catalog-commit-reconcile-cron`) reads each table's version log after its mark and
+  catalog's commit reconciler (the `catalog-commit-reconcile` timer) reads each table's version log after its mark and
   announces every committed version lineage's feed lacks (LH-497, #641).
 
 → [`LINEAGE.md`](LINEAGE.md), [`DURABILITY.md`](DURABILITY.md)

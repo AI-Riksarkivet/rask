@@ -13,9 +13,8 @@ and "auth off because nothing set it" are indistinguishable today, and only the 
 vulnerability. So the refusal fires on that ambiguity alone, and an operator resolves it by saying
 which one they meant.
 
-MODELLED ON `assert_app_token_configured`, deliberately: same module, same shape, same reasoning —
-fail closed at startup rather than serve an unauthenticated door, and no-op once the feature is
-properly configured. A second shape for the same class of problem is how one of them ends up wrong.
+A STARTUP REFUSAL: the service fails closed when it starts rather than serve an unauthenticated door,
+and the check is a no-op once the feature is properly configured.
 """
 
 from __future__ import annotations

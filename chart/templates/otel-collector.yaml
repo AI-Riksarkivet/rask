@@ -158,7 +158,7 @@ data:
             parse_to: attributes
             severity:
               parse_from: attributes.level
-      # Dapr sidecar metrics (:9090), the cron bindings' tick counts among them. Discover dapr.io/enabled pods, scrape
+      # Dapr sidecar metrics (:9090). Discover dapr.io/enabled pods, scrape
       # the dapr-metrics port only (the container port NAME), so app ports don't produce duplicate targets.
       prometheus:
         config:

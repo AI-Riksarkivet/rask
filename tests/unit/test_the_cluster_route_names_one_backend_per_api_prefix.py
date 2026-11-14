@@ -10,7 +10,7 @@ template value. A client's route is its own release's (ADR 0155, ADR 0171).
 A render that still names a gateway object keeps a second router in the request path.
 
 The route publishes each service's doors by name, never its whole root: a prefix over the root also publishes every
-route the pod answers for its own platform (the kubelet's probes and the cron ticks its sidecar delivers), and every
+route the pod answers for its own platform (the kubelet's probes), and every
 route the service mounts later. Which routes a service mounts follows the env its pod is
 rendered with, so the gate boots each app under that env and holds the published set to what it mounts less those.
 An `/api/*` path no rule names falls to the console's `/`, whose server answers it 404.
@@ -89,7 +89,7 @@ def test_each_public_prefix_reaches_its_service_through_the_cluster_route_and_no
     assert leftovers == []
 
 
-#: What a pod answers for its platform alone, beside its cron ticks: the kubelet's probes.
+#: What a pod answers for its platform alone: the kubelet's probes.
 _PLATFORM_ROUTES = frozenset({"/livez", "/readyz"})
 
 
@@ -106,11 +106,6 @@ def test_the_route_publishes_each_door_the_service_mounts_and_nothing_only_its_p
     [template] = [d["spec"]["template"] for d in product if d.get("kind") == "Deployment" and d["metadata"]["name"] == deployment]
     env = {e["name"]: e["value"] for e in template["spec"]["containers"][0]["env"] if "value" in e}
     served_by_pod = served(module, env)
-    # Dapr delivers a cron binding's tick to POST /<component name> on each app the component is scoped to.
-    app_id = template["metadata"]["annotations"]["dapr.io/app-id"]
-    ticks = {
-        f"/{d['metadata']['name']}" for d in product if d.get("kind") == "Component" and d["spec"]["type"] == "bindings.cron" and app_id in d.get("scopes", [])
-    }
     # The internal prefix each rule lands on: its rewrite, or the public match less the prefix the service strips itself.
     landings = {
         match: rewrite if rewrite is not None else match.removeprefix(env.get("LANCE_PUBLIC_PATH_PREFIX", ""))
@@ -121,9 +116,7 @@ def test_the_route_publishes_each_door_the_service_mounts_and_nothing_only_its_p
     published = {path for path in served_by_pod if any(_reaches(landing, path) for landing in landings.values())}
     dead = sorted(match for match, landing in landings.items() if not any(_reaches(landing, path) for path in served_by_pod))
 
-    assert sorted(published) == sorted(served_by_pod - _PLATFORM_ROUTES - ticks), (
-        "the route publishes a path only the pod should answer, or leaves a door unpublished"
-    )
+    assert sorted(published) == sorted(served_by_pod - _PLATFORM_ROUTES), "the route publishes a path only the pod should answer, or leaves a door unpublished"
     assert dead == [], "a rule publishes a prefix the service mounts nothing under"
 
 

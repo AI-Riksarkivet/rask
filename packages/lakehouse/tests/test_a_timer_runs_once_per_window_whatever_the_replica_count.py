@@ -1,0 +1,216 @@
+"""A fixed timer's work runs once per window however many replicas run its loop ([[XC-199]]).
+
+Each replica's loop claims the window on the control root with one conditional write, and the store lets one land. Two
+:class:`lakehouse.timers.Timer` on one root stand for two replicas of a service; the root is a local directory, where the
+conditional write is the operating system's (`lakehouse.records`). A test waits for a window exactly as long as the
+timer's own turn says the next one is away.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections import Counter
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from time import monotonic
+from typing import Any, NoReturn
+
+import pytest
+from botocore.exceptions import ClientError
+
+from lakehouse import records
+from lakehouse.storage_options import StorageOptions
+from lakehouse.timers import Outcome, Timer, Turn, claim_key
+
+
+PERIOD = 0.3
+
+
+def _replica(root: Path, ran: list[str], *, name: str = "relay", holder: str, period: float = PERIOD, held: bool = False, fails: bool = False) -> Timer:
+    async def work() -> None:
+        ran.append(holder)
+        if fails:
+            raise OSError("the store did not answer")
+
+    return Timer(name, period=period, work=work, root=str(root), storage_options=StorageOptions, held=lambda: held, holder=holder)
+
+
+async def _next_window(timer: Timer, after: Turn) -> Turn:
+    """The timer's first turn in the window after ``after``'s: the loop's own waiting, bounded.
+
+    A wait is measured on the monotonic clock and a window on the wall clock, so a turn taken exactly when the wait ends
+    can still find the old window; the loop then waits what that turn says, as this does.
+    """
+    deadline = monotonic() + 10
+    turn = after
+    while monotonic() < deadline:
+        await asyncio.sleep(turn.wait)
+        turn = await timer.turn()
+        if turn.window != after.window:
+            return turn
+    raise AssertionError(f"no new window within the deadline: {turn}")
+
+
+@pytest.mark.asyncio
+async def test_two_replicas_of_one_timer_run_each_window_once(tmp_path: Path) -> None:
+    ran: list[str] = []
+    one, two = _replica(tmp_path, ran, holder="pod-1"), _replica(tmp_path, ran, holder="pod-2")
+    runs_of: Counter[str] = Counter()
+    for _ in range(4):
+        turns = await asyncio.gather(one.turn(), two.turn(), one.turn(), two.turn())
+        for turn in turns:
+            if turn.outcome is Outcome.RAN:
+                assert turn.window is not None
+                runs_of[turn.window.isoformat()] += 1
+        await asyncio.sleep(max(turn.wait for turn in turns))
+
+    assert len(runs_of) >= 3, "the windows went by unclaimed"
+    assert set(runs_of.values()) == {1}, f"a window's work ran more than once: {runs_of}"
+    assert len(ran) == len(runs_of)
+
+
+@pytest.mark.asyncio
+async def test_a_replica_that_finds_the_window_claimed_drops_what_only_the_claimer_knows(tmp_path: Path) -> None:
+    ran: list[str] = []
+    dropped: list[str] = []
+
+    async def work() -> None:
+        ran.append("pod-2")
+
+    one = _replica(tmp_path, ran, holder="pod-1", period=600)
+    two = Timer("relay", period=600, work=work, root=str(tmp_path), storage_options=StorageOptions, elsewhere=lambda: dropped.append("pod-2"), holder="pod-2")
+
+    first = await one.turn()
+    second = await two.turn()
+
+    assert (first.outcome, second.outcome) == (Outcome.RAN, Outcome.ELSEWHERE)
+    assert (ran, dropped) == (["pod-1"], ["pod-2"])
+    assert 0 < second.wait <= 600
+
+
+def _forbidden(*_: object) -> NoReturn:
+    """What S3 answers a read of a key to an identity that may not list its bucket, whether or not the key exists."""
+    answer: Any = {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403, "HTTPHeaders": {}}}
+    raise ClientError(answer, "GetObject")
+
+
+@pytest.mark.asyncio
+async def test_a_store_that_answers_a_missing_claim_as_forbidden_still_takes_the_first_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list[str] = []
+    monkeypatch.setattr(records, "read_json_at", _forbidden)
+
+    first = await _replica(tmp_path, ran, holder="pod-1", period=600).turn()
+    second = await _replica(tmp_path, ran, holder="pod-2", period=600).turn()
+
+    monkeypatch.undo()
+    stored = records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
+    assert (first.outcome, second.outcome) == (Outcome.RAN, Outcome.UNREAD), "a claim that exists and cannot be read is a fault, never another replica's window"
+    assert ran == ["pod-1"]
+    assert stored is not None
+    assert stored[0]["by"] == "pod-1"
+
+
+@pytest.mark.asyncio
+async def test_a_claim_of_the_next_window_by_a_store_clock_a_little_ahead_is_left_alone(tmp_path: Path) -> None:
+    """A store's front ends may differ by a second at a boundary: the replica reading the one behind finds the next
+    window claimed, and running over that claim would run two windows twice."""
+    ran: list[str] = []
+    period = 600
+    following = datetime.fromtimestamp((datetime.now(UTC).timestamp() // period + 1) * period, UTC).isoformat()
+    claim = {"timer": "relay", "window": following, "claimed_at": following, "by": "pod-2"}
+    records.create_json(str(tmp_path), StorageOptions(), claim_key("relay"), claim)
+
+    turn = await _replica(tmp_path, ran, holder="pod-1", period=period).turn()
+
+    stored = records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
+    assert turn.outcome is Outcome.ELSEWHERE
+    assert ran == []
+    assert stored is not None
+    assert stored[0] == claim
+
+
+@pytest.mark.asyncio
+async def test_a_claim_dated_more_than_a_period_after_the_stores_own_time_is_claimed_over(tmp_path: Path) -> None:
+    ran: list[str] = []
+    ahead = (datetime.now(UTC) + timedelta(days=1)).isoformat()
+    records.create_json(str(tmp_path), StorageOptions(), claim_key("relay"), {"timer": "relay", "window": ahead, "claimed_at": ahead, "by": "a-clock-ahead"})
+
+    turn = await _replica(tmp_path, ran, holder="pod-1", period=600).turn()
+
+    assert turn.outcome is Outcome.RAN
+    assert ran == ["pod-1"]
+
+
+@pytest.mark.asyncio
+async def test_timers_of_different_names_claim_apart(tmp_path: Path) -> None:
+    ran: list[str] = []
+    relay, expiry = _replica(tmp_path, ran, holder="relay", period=600), _replica(tmp_path, ran, name="expiry", holder="expiry", period=600)
+
+    outcomes = [(await relay.turn()).outcome, (await expiry.turn()).outcome]
+
+    assert outcomes == [Outcome.RAN, Outcome.RAN]
+    assert sorted(ran) == ["expiry", "relay"]
+
+
+@pytest.mark.asyncio
+async def test_a_held_timer_claims_nothing_and_runs_nothing(tmp_path: Path) -> None:
+    ran: list[str] = []
+
+    turn = await _replica(tmp_path, ran, holder="pod-1", held=True).turn()
+
+    assert turn.outcome is Outcome.HELD
+    assert ran == []
+    assert records.read_json(str(tmp_path), StorageOptions(), claim_key("relay")) is None
+
+
+@pytest.mark.asyncio
+async def test_work_that_fails_keeps_the_timer_and_runs_again_next_window(tmp_path: Path) -> None:
+    ran: list[str] = []
+    timer = _replica(tmp_path, ran, holder="pod-1", fails=True)
+
+    failed = await timer.turn()
+    again = await _next_window(timer, failed)
+
+    assert (failed.outcome, again.outcome) == (Outcome.FAILED, Outcome.FAILED)
+    assert ran == ["pod-1", "pod-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_period_changed_in_git_is_due_at_its_own_next_window(tmp_path: Path) -> None:
+    """The claim names its window by when it began, so a claim made under another period is judged on the store's clock,
+    never on a count of windows of another length."""
+    ran: list[str] = []
+    short = await _replica(tmp_path, ran, holder="pod-1", period=0.2).turn()
+    assert short.outcome is Outcome.RAN
+
+    turn = await _next_window(_replica(tmp_path, ran, holder="pod-1", period=0.4), short)
+
+    assert turn.outcome is Outcome.RAN
+
+
+@pytest.mark.asyncio
+async def test_a_claim_that_cannot_be_read_runs_nothing_and_is_read_again_within_the_period(tmp_path: Path) -> None:
+    ran: list[str] = []
+    (tmp_path / claim_key("relay")).parent.mkdir(parents=True)
+    (tmp_path / claim_key("relay")).write_text("not json")
+
+    turn = await _replica(tmp_path, ran, holder="pod-1", period=600).turn()
+
+    assert turn.outcome is Outcome.UNREAD
+    assert ran == []
+    assert 0 < turn.wait < 600
+
+
+@pytest.mark.asyncio
+async def test_the_loop_takes_turn_after_turn_until_it_is_cancelled(tmp_path: Path) -> None:
+    ran: list[str] = []
+    loop = asyncio.create_task(_replica(tmp_path, ran, holder="pod-1", period=0.1).run())
+
+    deadline = monotonic() + 5
+    while len(ran) < 3 and monotonic() < deadline:
+        await asyncio.sleep(0.02)
+    loop.cancel()
+    await asyncio.gather(loop, return_exceptions=True)
+
+    assert len(ran) >= 3
+    assert loop.cancelled()

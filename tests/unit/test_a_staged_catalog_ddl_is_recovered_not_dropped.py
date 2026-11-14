@@ -41,7 +41,7 @@ from lakehouse.lineage.signing import signature_of
 from lakehouse.lineage_events import DatasetUuids, event_identity
 from lakehouse.openlineage import run_id_for
 from lakehouse.storage_options import StorageOptions
-from lineage.api import fga_deps, relay_cron
+from lineage.api import fga_deps, relay
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
@@ -203,8 +203,8 @@ def _without_signature(staged_json: str) -> dict[str, Any]:
     return doc
 
 
-def _drain(settings: LineageSettings, repo: _Repo, publisher: BusDouble) -> relay_cron.DrainOutcome:
-    return asyncio.run(relay_cron._drain_outbox(_request(), cast("Any", repo), settings, StorageOptions(), publisher))
+def _drain(settings: LineageSettings, repo: _Repo, publisher: BusDouble) -> relay.DrainOutcome:
+    return asyncio.run(relay._drain_outbox(_request().app, cast("Any", repo), settings, StorageOptions(), publisher))
 
 
 def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
@@ -351,7 +351,7 @@ def test_a_create_whose_ingest_fails_is_stranded_and_the_run_behind_it_still_dra
     settings = _settings(tmp_path, fga_enabled=False)
     key, _ = _stage_a_create(settings, catalog)
     run_id = _stage_a_run_behind(settings, key)
-    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _admit)
+    monkeypatch.setattr(relay, "enforce_bus_authz", _admit)
     repo = _CreateDoorDown()
 
     outcome = _drain(settings, repo, BusDouble())
@@ -388,7 +388,7 @@ def _refusing(key: str, settings: LineageSettings) -> Any:  # noqa: ANN401 — t
     assert refused_json is not None
     refused_doc = json.loads(refused_json[1])
 
-    async def gate(_event: object, _request: object, _settings: object, arrived: dict[str, Any]) -> None:
+    async def gate(_event: object, _app: object, _settings: object, arrived: dict[str, Any]) -> None:
         if arrived == refused_doc:
             raise PermissionDeniedError("can_write_data required")
 
@@ -402,7 +402,7 @@ def test_a_refusal_whose_record_fails_stays_staged_and_the_tick_goes_on(tmp_path
     event. The verdict stands and is counted; the object stays staged until its record lands."""
     settings = _settings(tmp_path, fga_enabled=False)
     key, run_id = _stage_a_refusable_first(settings, kind, catalog)
-    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refusing(key, settings))
+    monkeypatch.setattr(relay, "enforce_bus_authz", _refusing(key, settings))
     repo = _RefusalLedgerDown()
 
     outcome = _drain(settings, repo, BusDouble())
@@ -418,7 +418,7 @@ def test_a_refusal_whose_retirement_fails_is_recorded_and_the_tick_goes_on(tmp_p
     """The other half of the same try: the record lands, the delete raises, and the next event still drains."""
     settings = _settings(tmp_path, fga_enabled=False)
     key, run_id = _stage_a_refusable_first(settings, "create", catalog)
-    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refusing(key, settings))
+    monkeypatch.setattr(relay, "enforce_bus_authz", _refusing(key, settings))
     real_drop = outbox.drop_event
 
     def drop(uri: str, opts: StorageOptions, dropped: str) -> None:
@@ -441,7 +441,7 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
     settings = _settings(tmp_path, fga_enabled=False)
     _stage_a_create(settings, catalog)
     hostile = _stage_hostile_first(settings, _HOSTILE["bigint"])
-    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _admit)
+    monkeypatch.setattr(relay, "enforce_bus_authz", _admit)
     real_drop = outbox.drop_event
 
     def drop(uri: str, opts: StorageOptions, key: str) -> None:
@@ -478,9 +478,9 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
 
     repo = _FeedHoldsIt()
     state = SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), provenance=repo, published_keys=store_published_keys())
-    request = SimpleNamespace(app=SimpleNamespace(state=state))
+    app = SimpleNamespace(state=state)
 
-    outcome = asyncio.run(relay_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, StorageOptions(), BusDouble()))
+    outcome = asyncio.run(relay._drain_outbox(cast("Any", app), cast("Any", repo), settings, StorageOptions(), BusDouble()))
 
     assert (outcome.drained, outcome.refused) == (1, 0), f"a redelivered create was filed as lost provenance: {outcome}"
     assert repo.refusals == []

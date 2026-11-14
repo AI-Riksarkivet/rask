@@ -169,12 +169,6 @@ def broken_provider(request: pytest.FixtureRequest) -> Iterator[_BrokenProvider]
         server.server_close()
 
 
-@pytest.fixture(autouse=True)
-def _no_service_token_in_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every door reads `APP_API_TOKEN` from the process too; a developer's shell must not choose the branch under test."""
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-
-
 def _client(door: _Door, provider: _BrokenProvider) -> TestClient:
     app = FastAPI()
     register_handlers(app)

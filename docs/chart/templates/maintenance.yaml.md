@@ -16,8 +16,8 @@ queue (ADR 0198). It takes its tasks, its fired schedules, the store's change ev
 `maintenance.arrivalEnabled`, the commit announcements off the bus on its queue connection (bus user
 `maintenance-worker`), and serves nothing but its probes. Rendered only with `dapr.enabled`: the bus is named to the
 pod only then, for its work queue and for the connection it publishes what a pass emits on. Its bus credentials and its
-signing key it reads from the secret store under its own login. The pod carries no `dapr.io/*` annotation or label: it
-takes no cron tick, its schedules being NATS message schedules on its own work queue. RollingUpdate with no pod
+signing key it reads from the secret store under its own login. The pod carries no `dapr.io/*` annotation or label: its
+schedules are NATS message schedules on its own work queue. RollingUpdate with no pod
 unavailable: the queue holds one task per table and hands it to one worker at a time, so a surge pod shares the work and
 repeats none.
 
@@ -74,8 +74,8 @@ data-directory files removed), so a dropped publish loses the record of the one 
 actually deleted bytes — the graph then shows a dataset whose files changed with nothing
 saying what changed them.
 
-The SAME prefix the catalog names, because `lineage`'s relay tick (its own Dapr cron
-binding, `lineage.api.relay_cron`) is the only thing that reads it. A private prefix here
+The SAME prefix the catalog names, because `lineage`'s relay tick (its own fixed timer,
+`lineage.api.relay`) is the only thing that reads it. A private prefix here
 would stage objects nothing ever collects, which reads as durability and is not.
 
 ## `- { name: MAINTENANCE_TRASH_PURGE_ENABLED, value: {{ hasKey .Values.maintenance "trashPurge" | ternary .Val...`

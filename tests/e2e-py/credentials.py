@@ -24,7 +24,6 @@ class Credential(StrEnum):
     #: A TokenRequest for the suites' own store identity, `rask-e2e-suites`, at the audience the store trusts; a suite
     #: exchanges it at the store's STS for a session under that identity's policy (`correctness.store_options`).
     STORE_TOKEN = "store-token"
-    DAPR_TOKEN = "dapr-token"
     #: A bearer of the estate's admin, who administers the scenario's project.
     TOKEN = "token"
     #: The secret of the confidential sign-in client the live lanes' password grant presents.

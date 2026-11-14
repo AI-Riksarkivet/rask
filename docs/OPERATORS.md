@@ -13,7 +13,7 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 | Prerequisite | What rask renders against it |
 |---|---|
 | **External Secrets Operator** | the ExternalSecrets and SecretStore behind every credential a pod takes as a Kubernetes Secret (§ 8) |
-| **Dapr control plane** | the secret-store Component `lance-secrets`, the cron binding Components, the Configurations, and the sidecar annotations of the catalog's and lineage's pods, whose sidecars deliver their cron ticks |
+| **Dapr control plane** | the secret-store Component `lance-secrets`, the Configurations, and the sidecar annotations of the catalog's and lineage's pods, whose sidecars deliver nothing to their apps |
 | **NATS JetStream** | the stream Job that declares rask's streams and durable consumers, and one bus user per app (§ 7) |
 | **CloudNativePG operator** | a `Cluster` only with `age.cnpgCluster.enabled`; see [`CNPG-AGE.md`](CNPG-AGE.md) |
 | **The OTel backend** | the Collector's export endpoint and headers; the store, dashboards and alerting are the platform's |
@@ -51,8 +51,9 @@ The chart renders the lists into the ConfigMap `<release>-catalog-declaration` (
 catalog mounts as a volume at `/etc/rask/declaration` (`LANCE_DECLARATION_FILE`), so a change reaches a running pod with
 no roll.
 
-**The tick.** The Dapr cron Component `catalog-declaration-converge-cron` (`catalog.declarationConverge`, every 60 s by
-default) delivers to the catalog, which reads the mounted file and converges onto it in order: projects, then
+**The tick.** The catalog's fixed timer `catalog-declaration-converge` (`catalog.declarationConverge.periodSeconds`,
+every 60 s by default) runs in every replica and one replica claims each window on the control root
+(`lakehouse.timers`); that replica reads the mounted file and converges onto it in order: projects, then
 warehouses, then what git stopped declaring, then grants (`catalog/api/declaration_converge.py`). It makes what is
 missing and corrects what drifted (a warehouse's bucket, delete profile, status and protection; a project's
 protection) through the same functions the doors call, so each change is audited and announced as a door's is, its
@@ -142,8 +143,7 @@ boot-ordering foot-gun, nothing more, and it would be the platform's operator, n
 
 **Dapr — already covered, nothing to adopt.** Dapr's control plane *is* an operator
 (`dapr-operator`, sidecar-injector, placement, sentry — helm-installed here, already running on
-rask), and rask's Dapr objects are declarative: `Component` CRs (the secret store `lance-secrets` and the cron
-bindings) with per-app scoping. The bus is not wired through Dapr: the stream Job declares its streams and consumers,
+rask), and rask's Dapr objects are declarative: a `Component` CR (the secret store `lance-secrets`) with per-app scoping. The bus is not wired through Dapr: the stream Job declares its streams and consumers,
 and that is the NACK row above, not a Dapr gap. Also pinned (python-infrastructure
 skill + #115 review): **Dapr Workflow stays un-adopted** — every multi-step path we have
 (bytes-then-commit registration) is token-keyed idempotent, so JetStream's
@@ -250,7 +250,7 @@ the token each service and each daprd holds names nothing in the replacement. A 
 (XC-199), and its loop has that token ask the store about itself every 15 s (`auth/token/lookup-self`, which the
 rendered policy grants): the replacement answers `403 permission denied`, the pass logs `secret_store_token_dropped`
 and logs in again, and reads are served again within one pass of the replacement admitting the login. Until then a
-read that reaches the store (one whose value has passed its 300 to 600 s in `lakehouse.governed.secret_cache`) is
+read that reaches the store (a holder reading its key again, as the signing key's does every 300 s) is
 refused and logged `secret_store_read_failed`, and readiness reports `secret-store: unavailable` as `degraded`, which
 keeps the pod in rotation (`lakehouse.governed.secrets`; held offline by
 `packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`). Measured 2026-11-14 on helm
@@ -398,11 +398,10 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
      restart `rask-rustfs` for `object-store-secret-key`. RustFS signs every STS session token with the root secret, so
      rotating root invalidates every outstanding session at once: every workload's own and every vended one. Clients
      re-vend, and a long write in flight fails.
-  4. Restart the consumers at once: OpenFGA reads its mounted config file and the injector's app token at start,
+  4. Restart the consumers at once: OpenFGA reads its mounted config file, and a sidecar the injector's app token, at start,
      so nothing rolls on its own. AGE: OpenFGA (its migrate Job and the backup CronJob read it at their next run).
      The root: the catalog, lineage and maintenance, whose store sessions the old root signed and which exchange a new
-     one at boot rather than at half a session's life. The app token: the catalog and lineage, whose sidecars deliver their cron ticks (an app
-     token rotated as below refuses no tick in between).
+     one at boot rather than at half a session's life. The app token: the catalog and lineage, whose sidecars take it at pod creation.
   5. Read it back by refusal: one `ListBuckets` signed with the old root answers 403 `SignatureDoesNotMatch`, and the
      AGE role refuses the old password over the pod's own IP (`password authentication failed`). The image trusts
      loopback, so a login from 127.0.0.1 succeeds with any password and proves nothing. Measured 2026-11-07, rotating
@@ -416,12 +415,7 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   ServiceAccount's subject, `system:serviceaccount:<namespace>:<release>-sa-<component>`, as
   `<release>-object-store-identities` declares it: the provisioning hook writes it on the dev store, and a platform
   store's owner provisions it.
-- **Rotating the Dapr app token, with no refused cron tick (ADR 0166).** A tick's route accepts the `token` and the `previous`
-  field of the secret `dapr-app-token`, and daprd keeps the token its pod started with.
-  1. `bao kv put secret/dapr-app-token previous=<the current token> token=<the new token>`, then
-     wait ten minutes, so every door holds both before any sidecar can start with the new one: a daprd that
-     restarts on its own after the sync would otherwise present a token its door does not hold yet.
+- **Rotating the Dapr app token.** No service reads or checks it, so a rotation refuses nothing in between.
+  1. Write the new `token` field of the secret `dapr-app-token` (dev: delete its Secret and reconcile, as above).
   2. Force-sync the `<release>-dapr-app-token` ExternalSecret and wait for Ready.
-  3. `kubectl rollout restart` every sidecar Deployment, so each daprd starts with the new token.
-  4. Once every sidecar has restarted, clear the previous token (`bao kv patch secret/dapr-app-token previous=`).
-     The doors stop accepting it within ten minutes; clearing it earlier refuses a sidecar still presenting it.
+  3. `kubectl rollout restart` the catalog's and lineage's Deployments, so each daprd starts with the new token.

@@ -6,19 +6,21 @@ writes and revokes the tuples it asks for. Every change goes through the functio
 is audited and announced as a door's is, authored by the declaration. The catalog is the reconciler because it is
 already the authorization store's only client: converging adds no workload and no identity.
 
+It runs on the catalog's own timer (`catalog.api.timers`), once a window whatever the replica count; a tick that
+overlaps another all the same repeats idempotent writes (conditional registry records, a grant record created once,
+tuple writes that ignore duplicates).
+
 One object's failure is logged and counted and leaves every other object to this tick; the next tick tries again.
 A declaration that cannot be read converges nothing and releases nothing.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import Annotated
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError
 from openfga_sdk import OpenFgaClient
@@ -26,10 +28,10 @@ from opentelemetry import metrics
 from pydantic import BaseModel, Field
 
 from catalog.api import announcing, fga_deps
-from catalog.api.announcing import Announcer, AnnouncerDep
-from catalog.api.cron import mount_cron
+from catalog.api.announcing import Announcer, get_announcer
 from catalog.api.declared import DECLARATION
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep, VendorDep
+from catalog.api.dependencies import ObjectUuids, Resolver, get_fga_client, get_vendor
+from catalog.api.ticks import Tick
 from catalog.api.v1.endpoints import projects as project_doors
 from catalog.api.v1.endpoints import warehouses as warehouse_doors
 from catalog.core.config import Settings
@@ -42,7 +44,6 @@ from catalog.services.declaration import Declaration, DeclaredProject, DeclaredW
 from lakehouse import protection
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.governed import fga
-from lakehouse.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)
@@ -52,10 +53,6 @@ _failed = metrics.get_meter(__name__).create_counter(
     unit="1",
     description="Objects of the mounted declaration a converge tick could not make or correct; the next tick tries again.",
 )
-#: Where the app keeps the lock that runs one tick at a time in this process, so a tick that outlasts its schedule is
-#: not run twice over. Set by :func:`mount_declaration_converge`.
-_LOCK = "declaration_converge_lock"
-
 _PROTECTED_BY = ProtectionChange(protected=True, by=DECLARATION.actor)
 _UNPROTECTED_BY = ProtectionChange(protected=False, by=DECLARATION.actor)
 
@@ -313,33 +310,21 @@ def _spec_drifted(record: dict[str, str], declared: DeclaredWarehouse) -> bool:
     return (record.get("bucket"), held_mode, record.get(warehouses.TRASH_GRACE_DAYS)) != (declared.bucket or declared.id, mode, grace)
 
 
-async def _on_cron(
-    request: Request,
-    settings: SettingsDep,
-    client: FgaClientDep,
-    control: ControlEmitterDep,
-    announcer: AnnouncerDep,
-    vendor: VendorDep,
-    _: Annotated[None, Depends(require_dapr_token)],
-) -> ConvergeTick:
+async def tick(ctx: Tick) -> ConvergeTick:
     """Converge the estate's tenants onto the mounted declaration; a deployment that mounts none converges nothing."""
-    lock: asyncio.Lock = getattr(request.app.state, _LOCK)
-    if not settings.declaration_file or lock.locked():
+    request, settings = ctx.request, ctx.settings
+    if not settings.declaration_file:
         return ConvergeTick(skipped=True)
-    async with lock:
-        try:
-            declared = await run_in_threadpool(declaration.load, settings.declaration_file)
-        except declaration.DeclarationUnreadableError:
-            log.error("declaration_unreadable", extra={"path": settings.declaration_file}, exc_info=True)
-            _failed.add(1, {"lance.catalog.object": "declaration"})
-            return ConvergeTick(failed=["declaration"])
-        tick = await _Converger(request, settings, client=client, control=control, announcer=announcer, vendor=vendor).run(declared)
-    if tick.converged or tick.released or tick.grants_written or tick.grants_revoked or tick.failed:
-        log.info("declaration_converged", extra=tick.model_dump())
-    return tick
-
-
-def mount_declaration_converge(app: FastAPI, binding_name: str) -> bool:
-    """Mount the tick at the exact binding name when one is configured; report whether it was."""
-    setattr(app.state, _LOCK, asyncio.Lock())
-    return mount_cron(app, binding_name, _on_cron, tag="declaration-converge")
+    try:
+        declared = await run_in_threadpool(declaration.load, settings.declaration_file)
+    except declaration.DeclarationUnreadableError:
+        log.error("declaration_unreadable", extra={"path": settings.declaration_file}, exc_info=True)
+        _failed.add(1, {"lance.catalog.object": "declaration"})
+        return ConvergeTick(failed=["declaration"])
+    client = get_fga_client(request)
+    # A door's announcer, for a change no caller made: the tick's scope carries no originator and no bearer.
+    announcer = get_announcer(request, settings, client, Resolver(request, settings), ctx.control, ObjectUuids(request, settings))
+    converged = await _Converger(request, settings, client=client, control=ctx.control, announcer=announcer, vendor=get_vendor(request)).run(declared)
+    if converged.converged or converged.released or converged.grants_written or converged.grants_revoked or converged.failed:
+        log.info("declaration_converged", extra=converged.model_dump())
+    return converged

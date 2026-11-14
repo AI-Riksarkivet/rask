@@ -60,7 +60,7 @@ Every service builds `app` at module import. Pick the fixture by how settings re
 
 `cache_clear()` reaches only what is read per request. What the module reads at import stays as the
 first importer left it: the module-level `_settings` in `services/catalog/src/catalog/main.py` fixes
-the docs and audit switches, the control-relay binding, the body cap and the write-concurrency cap. A
+the docs and audit switches, the body cap and the write-concurrency cap. A
 test of one of those needs `importlib.reload`.
 
 The sibling fixture `::client` has the same order over a `MagicMock(spec=LanceNamespace)`. It serves

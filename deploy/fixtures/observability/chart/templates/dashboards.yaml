@@ -391,7 +391,7 @@ data:
       "kind": "Dashboard",
       "metadata": { "name": "messaging", "project": "rask" },
       "spec": {
-        "display": { "name": "rask Messaging \u2014 pub/sub, cron and service invocation", "description": "Every series here is already collected and was read by nothing: publish failures, undeliverable drops, five cron bindings and the per-upstream latency the estate otherwise lacks." },
+        "display": { "name": "rask Messaging \u2014 pub/sub, timers and service invocation", "description": "Publish failures, undeliverable drops, each fixed timer's turns and the per-upstream latency." },
         "duration": "6h",
         "panels": {
           "egress": {
@@ -412,13 +412,13 @@ data:
                 "query": "sum by (lance_bus_consumer, lance_bus_outcome) (rate(bus_deliveries_total[5m]))", "seriesNameFormat": {{ "{{lance_bus_consumer}} {{lance_bus_outcome}}" | quote }} } } } } ]
             }
           },
-          "cron": {
+          "timers": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Cron binding ticks", "description": "Five rendered bindings, all measured and previously read by nobody. The sidecar's counter survives an app that is crash-looping, which a first-party tick counter would not." },
+              "display": { "name": "Timer turns", "description": "Each fixed timer's turns by how they ended: one replica runs a window (ran) and the others find it claimed (elsewhere); held is a read-only window, unread a claim the store did not answer." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (component, success) (rate(dapr_component_input_binding_count_total[15m]))", "seriesNameFormat": {{ "{{component}} success={{success}}" | quote }} } } } } ]
+                "query": "sum by (timer, outcome) (rate(timer_turns_total[15m]))", "seriesNameFormat": {{ "{{timer}} {{outcome}}" | quote }} } } } } ]
             }
           },
           "invocation": {
@@ -450,7 +450,7 @@ data:
               "items": [
                 { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/egress" } },
                 { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/ingress" } },
-                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/cron" } },
+                { "x": 0, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/timers" } },
                 { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/invocation" } },
                 { "x": 0, "y": 16, "width": 24, "height": 8, "content": { "$ref": "#/spec/panels/silentLoss" } }
               ]

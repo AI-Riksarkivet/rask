@@ -26,7 +26,7 @@ STAGING AN EVENT IS NOT A WAY AROUND THE GATE PUBLISHING ONE HAS TO CLEAR. Four 
 relay. The outbox is writable by the producers that stage there through the vended outbox credential
 (ingest, maintenance, medallion), so a relay that ingested unchecked would let a stager that cannot get
 an event past the bus door stage it instead. The relay calls the SAME `enforce_bus_authz`, which
-authorizes AS the subject the producer stamped, the only principal a cron tick has; a second copy of
+authorizes AS the subject the producer stamped, the only principal a tick has; a second copy of
 "may you record this" is how the two doors would drift.
 """
 
@@ -44,7 +44,7 @@ from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse import outbox
 from lakehouse.openlineage import run_id_for
 from lakehouse.storage_options import StorageOptions
-from lineage.api import relay_cron
+from lineage.api import relay
 from lineage.core.config import LineageSettings
 
 
@@ -92,8 +92,8 @@ def _settings(uri: str) -> Any:  # noqa: ANN401 — a stand-in for the drain's s
 
 
 def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
-    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
-    return asyncio.run(relay_cron._drain_outbox(request, cast("Any", _Repo()), _settings(uri), StorageOptions()))
+    app = cast("Any", SimpleNamespace(state=SimpleNamespace()))
+    return asyncio.run(relay._drain_outbox(app, cast("Any", _Repo()), _settings(uri), StorageOptions()))
 
 
 def _governed_settings(outbox_uri: str) -> LineageSettings:
@@ -128,7 +128,7 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
         steps.append("drop")
         real_drop(*args)
 
-    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refuse)
+    monkeypatch.setattr(relay, "enforce_bus_authz", _refuse)
     monkeypatch.setattr(outbox, "drop_event", _drop)
 
     uri = f"file://{tmp_path}/_lineage_outbox"
@@ -141,8 +141,8 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
         async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
             steps.append("record")
 
-    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
-    outcome = asyncio.run(relay_cron._drain_outbox(request, cast("Any", _OrderRepo()), _governed_settings(uri), StorageOptions()))
+    app = cast("Any", SimpleNamespace(state=SimpleNamespace()))
+    outcome = asyncio.run(relay._drain_outbox(app, cast("Any", _OrderRepo()), _governed_settings(uri), StorageOptions()))
 
     assert (outcome.refused, outcome.stranded, outcome.drained) == (1, 0, 0), (
         f"a refusal must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening: {outcome}"
@@ -158,7 +158,7 @@ def test_a_TRANSIENT_failure_still_strands(tmp_path: Any, monkeypatch: pytest.Mo
     async def _blow_up(*_args: object, **_kwargs: object) -> None:
         raise TimeoutError("the feed did not answer")
 
-    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _blow_up)
+    monkeypatch.setattr(relay, "enforce_bus_authz", _blow_up)
     uri = f"file://{tmp_path}/_lineage_outbox"
     _staged(uri, author="e2e", run="bronze$transient", token="transient-probe")
 
@@ -180,7 +180,7 @@ def test_one_refusal_does_not_decide_anything_about_the_others(tmp_path: Any, mo
         if any("refused" in name for name in names):
             raise PermissionDeniedError("can_write_data required to amend run")
 
-    monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refuse_one)
+    monkeypatch.setattr(relay, "enforce_bus_authz", _refuse_one)
     uri = f"file://{tmp_path}/_lineage_outbox"
     _staged(uri, author="e2e", run="bronze$refused", token="refused-probe")
     _staged(uri, author="alice", run="bronze$fine", token="fine-probe")

@@ -153,7 +153,7 @@ an outside source, and so is a dataset under another catalog's `lance-namespace:
   publishing; from there, delivery into the feed is at least once, and lineage records each event once
   (an insert-only merge on the row's key), so a redelivery lands no second row.
 - A crash between the Lance commit and the stage loses that announcement, not the write: the catalog recorded the
-  caller it authorized the commit for and the commit names its operation, and the catalog's reconcile cron (`catalog.commitReconcile`, every 10 minutes by default) announces
+  caller it authorized the commit for and the commit names its operation, and the catalog's reconcile timer (`catalog.commitReconcile`, every 10 minutes by default) announces
   every committed version older than `catalog.commitReconcile.graceSeconds` that the feed holds no row for, from the
   table's version log (LH-497). A write's run id is derived from its commit (the table's uuid, ref, ref incarnation and
   version, keyed by a secret only the catalog holds), so the write's own announcement and a re-announcement are one
@@ -166,10 +166,10 @@ an outside source, and so is a dataset under another catalog's `lance-namespace:
   looked at from its register on (LH-550): the versions it held then were committed past the catalog, so none is
   announced, whatever author it names, and the register's own `register_table` event is the one the feed carries.
 - A publication is recovered the same way (LH-552, [ADR 0188](adr/0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md)):
-  the reconcile cron reads the version each table's `published` tag names and when the tag moved there, and when the feed
+  the reconcile timer reads the version each table's `published` tag names and when the tag moved there, and when the feed
   holds no `publish_table` for that move, announces it for the person the catalog recorded moving the tag. A tag moved past the catalog's doors names no
   such person: it is counted unauthored, which pages, and never announced. Only the version the tag names now is looked
-  for, so a publication the tag moved past before the cron ran is not announced; the newer one is.
+  for, so a publication the tag moved past before the reconcile ran is not announced; the newer one is.
 - A table's lifecycle markers (a declare, a register, a rename, a drop, a deregister, an undrop) and the control
   events the doors that change grants, roles, projects and principals send are filed on the control root before their
   change ([ADR 0205](adr/0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md)). A door

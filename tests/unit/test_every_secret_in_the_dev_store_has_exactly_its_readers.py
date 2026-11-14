@@ -61,9 +61,8 @@ STORE_POD: Final = "Deployment/rask-openbao"
 #: The KV v2 data path a policy grants a secret by.
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
-#: The apps a sidecar delivers cron ticks to, each checking the app token the sidecar stamps on a tick.
-_DOORS: Final = frozenset({"catalog", "lineage"})
-_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in _DOORS)
+#: The pods a sidecar is injected into, each handed the app token by the injector; no app reads it from the store.
+_SIDECARS: Final = frozenset({"Deployment/rask-catalog", "Deployment/rask-lineage"})
 _POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "CronJob/rask-pg-backup"})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
@@ -71,7 +70,7 @@ _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 #: secret -> {"store": identities whose login reads it, "pods": workloads given it by ESO}. A "dapr" entry would be an app
 #: whose sidecar API serves it the secret, and no secret has one.
 EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
-    "dapr-app-token": {"store": _DOORS | {"eso"}, "pods": _SIDECARS},
+    "dapr-app-token": {"store": frozenset({"eso"}), "pods": _SIDECARS},
     "signing-key-rask-sa-catalog": {"store": frozenset({"catalog"})},
     # The key the catalog derives every announcement's run id under ([[LH-497]]): the catalog's alone.
     "commit-id-key": {"store": frozenset({"catalog"})},

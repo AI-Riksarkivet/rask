@@ -54,6 +54,8 @@ ANNOUNCEMENT_INTENTS: Final = "_announcement_intents"
 COMMIT_TURNS: Final = "_commit_turns"
 HISTORY_FENCES: Final = "_history_fences"
 IDEMPOTENCY: Final = "_idempotency"
+#: The window each fixed timer last claimed, one record a timer (``lakehouse.timers``).
+TIMERS: Final = "_timers"
 
 #: The namespace backend's own index of a root: a Lance dataset, not a record (``lance-dir.md``).
 NAMESPACE_INDEX: Final = "__manifest"
@@ -94,8 +96,8 @@ QUEUE_PREFIXES: Final[frozenset[str]] = frozenset({LINEAGE_OUTBOX, CONTROL_OUTBO
 """The outboxes and the announcements filed for them: a restore would publish events the estate already acted on, so a
 queue's recovery is to be empty."""
 
-LEASE_PREFIXES: Final[frozenset[str]] = frozenset({COMMIT_TURNS, HISTORY_FENCES, IDEMPOTENCY})
-"""The records that lapse: a restored one would hold a turn, a fence or an answer whose time has passed."""
+LEASE_PREFIXES: Final[frozenset[str]] = frozenset({COMMIT_TURNS, HISTORY_FENCES, IDEMPOTENCY, TIMERS})
+"""The records that lapse: a restored one would hold a turn, a fence, an answer or a timer's window whose time has passed."""
 
 CONTROL_PREFIXES: Final[frozenset[str]] = RECORD_PREFIXES | QUEUE_PREFIXES | LEASE_PREFIXES | {NAMESPACE_INDEX, STAGING, BACKUPS}
 """Every segment that holds the estate's own state, which no table's location crosses."""

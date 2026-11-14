@@ -88,7 +88,7 @@ One policy per service the cluster route publishes, ranged from the same `rask.a
 data plane lives in the platform's namespace, so the source is unrestricted; the bound is
 the PORT: only the app port is admitted, and daprd's ports on the same pod stay intra-namespace. That is
 safe because every one of these services authenticates each request itself, and a request through the
-Gateway reaches the app port directly, never carrying a sidecar's app token.
+Gateway reaches the app port directly.
 
 ## `name: {{ include "lance.fullname" . }}-edge-console`
 

@@ -17,7 +17,7 @@ import json
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import httpx
@@ -25,11 +25,13 @@ import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
 
+from catalog.api import promotion_expiry
 from catalog.api.dependencies import get_clock, get_namespace
-from catalog.api.promotion_expiry import mount_promotion_expiry
+from catalog.api.ticks import Tick
 from catalog.core.config import Settings, get_settings
 from catalog.core.lineage_emit import make_emitter
 from catalog.services import object_uuids, promotions, table_claims, warehouses
@@ -332,10 +334,6 @@ def test_without_can_promote_a_caller_can_neither_decide_a_hold_nor_move_publish
     assert (estate.rows("published"), estate.rows(), estate.holds()) == (4, 12, [(TABLE, 2, 1, ["row_count_delta"])])
 
 
-#: The expiry cron's Component name, which the chart also hands the catalog as the route it serves.
-BINDING = "catalog-promotion-expiry-cron"
-
-
 class _Clock:
     def __init__(self) -> None:
         self.now = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
@@ -344,17 +342,23 @@ class _Clock:
         return self.now
 
 
+type Sweep = Callable[[Callable[[], datetime]], promotion_expiry.PromotionExpiryTick]
+
+
 @pytest.fixture
-def sweep(estate: Estate) -> Iterator[Callable[[], httpx.Response]]:
-    """The expiry cron mounted on the catalog as the chart names it, ticked on demand."""
-    app = estate.client.app
-    routes = list(app.router.routes)
-    mount_promotion_expiry(app, BINDING)
-    yield lambda: estate.client.post(f"/{BINDING}")
-    app.router.routes[:] = routes
+def sweep(estate: Estate) -> Sweep:
+    """The expiry's tick over the catalog app, run on demand on its event loop as its timer runs it, judged by a clock."""
+    app = cast(FastAPI, estate.client.app)
+    settings = app.dependency_overrides[get_settings]()
+
+    def tick(clock: Callable[[], datetime]) -> promotion_expiry.PromotionExpiryTick:
+        assert estate.client.portal is not None, "the expiry ticks inside the app's lifespan"
+        return estate.client.portal.call(promotion_expiry.tick, Tick(app, settings, clock=clock))
+
+    return tick
 
 
-def test_a_hold_nobody_answers_is_expired_by_the_sweep(estate: Estate, sweep: Callable[[], httpx.Response]) -> None:
+def test_a_hold_nobody_answers_is_expired_by_the_sweep(estate: Estate, sweep: Sweep) -> None:
     """Held version 2 waits the gate's 72-hour review: a tick inside the window leaves it, the first tick past it
     expires the hold and unpins the version, and `published` and main stay as they were."""
     clock = _Clock()
@@ -363,12 +367,12 @@ def test_a_hold_nobody_answers_is_expired_by_the_sweep(estate: Estate, sweep: Ca
     assert estate.publish(2)["held"] is True
     assert lance.dataset(estate.location()).tags.list()["rask.held"]["version"] == 2
     clock.now += timedelta(hours=71)
-    assert sweep().json()["expired"] == 0
+    assert sweep(clock).expired == 0
 
     clock.now += timedelta(hours=2)
-    ticked = sweep()
+    ticked = sweep(clock)
 
-    assert (ticked.status_code, ticked.json()["expired"]) == (200, 1)
+    assert ticked.expired == 1
     assert estate.holds() == []
     assert "rask.held" not in lance.dataset(estate.location()).tags.list()
     assert (estate.rows("published"), estate.rows()) == (4, 12)

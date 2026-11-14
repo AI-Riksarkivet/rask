@@ -14,13 +14,11 @@ from typing import Final
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.admission import judge_before_the_body
 from lakehouse.bus import Bus, bus_session
 from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.auth_lifespan import attach_auth
-from lakehouse.governed.dapr_auth import assert_app_token_configured
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
@@ -33,6 +31,7 @@ from lakehouse.schemas.health import Readiness
 from lakehouse.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
 from lineage.api.ingest_lane import IngestLane, lane
+from lineage.api.relay import start_relay
 from lineage.api.security import authenticate, judge
 from lineage.api.v1.router import api_router
 from lineage.core.config import LineageSettings, get_settings, storage_options
@@ -107,18 +106,13 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # has to verify. A loop of `loops` then logs in again once half the store token's lease is used, or as soon as the
     # store no longer honours it. Nothing for a stack with no secret store.
     await stack.enter_async_context(secret_store_session(loops))
-    # Fail closed if the relay tick's route mounts, which this pod's Dapr sidecar delivers, but the app-api-token is
-    # unset: a start that fails says so at once, where the door's own refusal (`require_dapr_token`) would answer every
-    # tick 403 with the pod Ready. No-op where no binding is named.
-    # AFTER THE LOGIN ABOVE, AND OFF THE EVENT LOOP: with the token in the store this is a read with the boot's budget,
-    # made under the login the start already holds, so a store that never admits lineage ends the start there.
-    await run_in_threadpool(assert_app_token_configured, dapr_enabled=bool(settings.relay_binding_name))
     # LINEAGE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its outbox drain signs with a session its ServiceAccount token is
     # exchanged for, here at boot, failing the boot closed if none is issued, then again once half the session's life is
-    # used. With no token (the offline and Dagger lanes) an outbox on the store is drained under the environment's pair,
-    # refused here when either half is missing: the drain's boto3 would otherwise sign with whatever its default chain finds.
+    # used; its relay's timer claims each window with the same session. With no token (the offline and Dagger lanes) an
+    # outbox or a timer on the store is reached under the environment's pair, refused here when either half is missing:
+    # boto3 would otherwise sign with whatever its default chain finds.
     store_session = await start_store_session(settings.web_identity, session_name="lineage", duration_seconds=settings.s3_session_seconds, loops=loops)
-    if store_session is None and settings.outbox_on_the_store:
+    if store_session is None and settings.signs_store_requests:
         require_env_pair(settings, prefix="LINEAGE")
     if store_session is not None:
         stack.push_async_callback(store_session.stop)
@@ -154,6 +148,8 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # catalog takes to open the feed, which a one-second probe cannot wait for.
     app.state.health = HealthWatch(_dependencies(app, settings, store))
     app.state.health.watch(loops)
+    # THE RELAY'S TIMER ([[XC-199]]), started last, once everything a tick works with is on `app.state`.
+    start_relay(app, settings, loops)
 
 
 def _take_deliveries(app: FastAPI, settings: LineageSettings, bus: Bus | None, loops: Supervisor) -> None:
@@ -208,21 +204,6 @@ app = build_lance_service_app(
 )
 
 
-def mount_relay_cron(target: FastAPI, binding_name: str | None) -> bool:
-    """Mount the relay tick's route iff a cron binding names it; return whether it mounted.
-
-    A named function (not inline module-level wiring) so the unit tier can drive the PRODUCTION
-    mount decision both ways.
-    """
-    if not binding_name:
-        return False
-    from lineage.api.relay_cron import build_relay_cron_router
-
-    target.include_router(build_relay_cron_router(binding_name))
-    return True
-
-
-mount_relay_cron(app, get_settings().relay_binding_name)
 # Every door that authenticates its caller does so from the request's headers before its body is read
 # (`lakehouse.admission`): the intake's JSON body is never read, let alone parsed, for a caller with no token.
 judge_before_the_body(app, gate=authenticate, judge=judge)

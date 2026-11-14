@@ -11,7 +11,7 @@ deployed estate 2026-09-10 by staging two probe events and reading the strand:
 
 The chart's policy is not the bug. Its statement is named `DrainItsOwnOutboxAndNothingElse` and grants
 exactly `s3:DeleteObject` on `*/_lineage_outbox/*`, and nothing in lineage's policy grants `PutObject`
-anywhere, because the only bytes lineage changes are these deletes. Widening the policy would grant a
+under the outbox, because the only bytes lineage changes there are these deletes. Widening the policy would grant a
 capability the service has no code to use AND leave a delete path that writes; the mechanism is what
 was wrong.
 

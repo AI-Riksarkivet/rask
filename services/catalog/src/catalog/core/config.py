@@ -220,14 +220,9 @@ class CatalogControlBusSettings(BaseSettings):
     #: delivered mutation into a 500 — so unstaged, a NATS blip loses the event with every pod green.
     #: Staged, the event survives to be re-published.
     control_outbox_uri: str = Field(default="", alias="LANCE_CONTROL_OUTBOX_URI")
-    #: The cron binding that DRAINS `control_outbox_uri` — `catalog/api/control_relay.py`. Empty = the
-    #: relay route is not mounted (staging still happens; nothing republishes it).
-    #:
-    #: THIS STRING IS THE ROUTE. Dapr delivers an input binding to `POST /<component name>` at the pod
-    #: ROOT, so the Component's `metadata.name`, this value and the served path are one string; a
-    #: component named one thing and a route mounted at another is a cron that ticks into a 404 while
-    #: both halves look right in isolation. Pinned by `tests/unit/test_the_control_lane_relay_is_wired.py`.
-    control_relay_binding_name: str = Field(default="", alias="LANCE_CONTROL_RELAY_BINDING_NAME")
+    #: Seconds between two ticks of the relay that drains `control_outbox_uri` (`catalog/api/control_relay.py`), on the
+    #: catalog's own timer (`catalog/api/timers.py`). 0 = no relay: staging still happens, and nothing republishes it.
+    control_relay_period_seconds: float = Field(default=0, ge=0, alias="LANCE_CONTROL_RELAY_PERIOD_SECONDS")
 
 
 class CatalogLineageSettings(BaseSettings):
@@ -311,18 +306,16 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: undue delay and in any event within one month" (Art. 12(3)). An owner-set chart value; an obligation still open past
     #: it is shown overdue, and nothing in the catalog acts on it.
     erasure_deadline_days: int = Field(default=30, ge=1, alias="LANCE_ERASURE_DEADLINE_DAYS")
-    #: The cron binding that releases what is due (`catalog/api/erasure_release.py`). The Component's name,
-    #: this value and the served path are one string, as for the control relay. Empty = no release route, so a
-    #: deployment without the Component schedules releases that nothing performs: the chart renders both.
-    erasure_release_binding_name: str = Field(default="", alias="LANCE_ERASURE_RELEASE_BINDING_NAME")
-    #: The cron binding that expires promotion holds past their review deadline (`catalog/api/promotion_expiry.py`,
-    #: ADR 0156 C1). One string with the Component's name and the served path, as for the erasure release. Empty =
-    #: no expiry route, so a hold waits until it is decided: the chart renders both.
-    promotion_expiry_binding_name: str = Field(default="", alias="LANCE_PROMOTION_EXPIRY_BINDING_NAME")
-    #: The cron binding that announces every committed version lineage's feed lacks (`catalog/api/commit_reconcile.py`,
-    #: [[LH-497]]). One string with the Component's name and the served path, as for the erasure release. Empty = no
-    #: reconcile route, so an announcement lost between a commit and its staging is never made: the chart renders both.
-    commit_reconcile_binding_name: str = Field(default="", alias="LANCE_COMMIT_RECONCILE_BINDING_NAME")
+    #: Seconds between two ticks of the timer that releases what is due (`catalog/api/erasure_release.py`). 0 = no
+    #: timer, so a deployment schedules releases that nothing performs: the chart sets it.
+    erasure_release_period_seconds: float = Field(default=0, ge=0, alias="LANCE_ERASURE_RELEASE_PERIOD_SECONDS")
+    #: Seconds between two ticks of the timer that expires promotion holds past their review deadline
+    #: (`catalog/api/promotion_expiry.py`, ADR 0156 C1). 0 = no timer, so a hold waits until it is decided.
+    promotion_expiry_period_seconds: float = Field(default=0, ge=0, alias="LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS")
+    #: Seconds between two ticks of the timer that announces every committed version lineage's feed lacks
+    #: (`catalog/api/commit_reconcile.py`, [[LH-497]]). 0 = no timer, so an announcement lost between a commit and its
+    #: staging is never made.
+    commit_reconcile_period_seconds: float = Field(default=0, ge=0, alias="LANCE_COMMIT_RECONCILE_PERIOD_SECONDS")
     #: How old a version is before the reconciler looks for its announcement: the inline publish and the outbox relay
     #: deliver a commit's own announcement within it, so a younger one is still in flight, not lost.
     commit_reconcile_grace_seconds: int = Field(default=600, ge=0, alias="LANCE_COMMIT_RECONCILE_GRACE_SECONDS")
@@ -330,10 +323,10 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: than that may have had its row pruned, and announcing it again would put a write back on the feed it left. Kept
     #: inside lineage's `eventsRetentionDays` by the chart.
     commit_reconcile_horizon_seconds: int = Field(default=86400, ge=1, alias="LANCE_COMMIT_RECONCILE_HORIZON_SECONDS")
-    #: The cron binding that reclaims each root's ``__manifest`` history (`catalog/api/manifest_reclaim.py`, [[LH-251]]).
-    #: One string with the Component's name and the served path, as for the erasure release. Empty = no reclaim route,
-    #: so every namespace operation's version of the index is kept: the chart renders both.
-    manifest_reclaim_binding_name: str = Field(default="", alias="LANCE_MANIFEST_RECLAIM_BINDING_NAME")
+    #: Seconds between two ticks of the timer that reclaims each root's ``__manifest`` history
+    #: (`catalog/api/manifest_reclaim.py`, [[LH-251]]). 0 = no timer, so every namespace operation's version of the
+    #: index is kept.
+    manifest_reclaim_period_seconds: float = Field(default=0, ge=0, alias="LANCE_MANIFEST_RECLAIM_PERIOD_SECONDS")
     #: How old a ``__manifest`` version is before the reclaim removes it, and so how long a dropped namespace or table
     #: stays readable in the index's history. It also bounds how long the catalog holds a namespace connection
     #: (:attr:`connection_max_age_seconds`), which is what makes removing old versions safe for a connection.
@@ -364,9 +357,9 @@ class CatalogDeclarationSettings(BaseSettings):
     #: values into a ConfigMap this catalog mounts (`catalog/services/declaration.py`). Empty = nothing is declared,
     #: and every tenant is made at its doors.
     declaration_file: str = Field(default="", alias="LANCE_DECLARATION_FILE")
-    #: The cron binding that converges the estate onto that declaration (`catalog/api/declaration_converge.py`). One
-    #: string with the Component's name and the served path, as for the erasure release. Empty = no converge route.
-    declaration_converge_binding_name: str = Field(default="", alias="LANCE_DECLARATION_CONVERGE_BINDING_NAME")
+    #: Seconds between two ticks of the timer that converges the estate onto that declaration
+    #: (`catalog/api/declaration_converge.py`). 0 = no timer, so a declaration is mounted and never converged.
+    declaration_converge_period_seconds: float = Field(default=0, ge=0, alias="LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS")
 
 
 class CatalogVendingSettings(BaseSettings):
@@ -680,7 +673,7 @@ class Settings(
     def _validate_outbox_prefixes(self) -> Self:
         """Refuse to boot with the two lanes sharing one outbox prefix.
 
-        Not a tidiness rule. `lineage/api/reconcile_cron.py` drains the lineage prefix by parsing every
+        Not a tidiness rule. `lineage/api/relay.py` drains the lineage prefix by parsing every
         staged object as an OpenLineage `RunEvent`; a `CatalogControlEvent` cannot validate, so that
         drain classifies it POISON and DELETES it. Sharing the prefix therefore does not give the
         control lane a relay — it hands the control lane's only durable copy to something that destroys

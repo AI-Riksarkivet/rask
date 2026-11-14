@@ -30,14 +30,13 @@ from lakehouse.bus_delivery import Outcome, Settlement
 from lakehouse.governed import fga
 from lakehouse.governed.fga import user_object
 from tests.bus_double import BusDouble
-from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineage, live_catalog, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, relay_tick, run_event
 
 
 _TABLE = "lance_catalog$acme-silver$parked"
 _RUN = "run-parked"
 _ADMIN = "dex~root"
 _AUTHOR = "dex~alice"
-_TOKEN = {"dapr-api-token": "s3cret"}
 _REPLAY = f"/admin/dlq/parked/{_RUN}/replay"
 
 
@@ -86,7 +85,6 @@ def _governed(monkeypatch: pytest.MonkeyPatch, table: str) -> None:
 
 @contextmanager
 def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[_Estate]:
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
         table = f"table:{_declared(catalog_url, _TABLE)}"
         _governed(monkeypatch, table)
@@ -150,8 +148,8 @@ def test_the_relay_tick_retires_a_kept_park_the_feed_holds(tmp_path: Path, monke
         parked = estate.deliver({"id": "evt-complete", "data": _event("COMPLETE", table, outputs=True)})
         lineage.app.state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
         ingested = lineage.post("/api/v1/lineage", json=_event("COMPLETE", table, outputs=True), headers={SUBJECT_HEADER: _AUTHOR})
-        tick = lineage.post(f"/{RELAY}", headers=_TOKEN)
+        tick = relay_tick(lineage)
         left = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
 
     assert (parked, ingested.status_code) == (Settlement(outcome=Outcome.PARKED), 201), ingested.text
-    assert (tick.json()["parks_retired"], left.json()) == (1, {"runs": {}})
+    assert (tick.parks_retired, left.json()) == (1, {"runs": {}})

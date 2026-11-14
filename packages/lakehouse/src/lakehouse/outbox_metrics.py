@@ -107,14 +107,16 @@ _poison_dropped = _meter.create_counter(
 _depth: float = 0.0
 _oldest_age_seconds: float = 0.0
 _gauges_registered = False
+#: Whether this process measured the backlog on the relay's last window: only the replica that ran the tick did.
+_measured = False
 
 
 def _observe_depth(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
-    return [metrics.Observation(_depth)]
+    return [metrics.Observation(_depth)] if _measured else []
 
 
 def _observe_oldest_age(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
-    return [metrics.Observation(_oldest_age_seconds)]
+    return [metrics.Observation(_oldest_age_seconds)] if _measured else []
 
 
 def _register_gauges() -> None:
@@ -195,6 +197,19 @@ def observe_backlog(depth: int, oldest_age_seconds: float) -> None:
     when non-zero would alert forever after a single transient spike.
     """
     _register_gauges()  # first observation = the measuring process; only it exports the series
-    global _depth, _oldest_age_seconds
+    global _depth, _oldest_age_seconds, _measured
     _depth = float(depth)
     _oldest_age_seconds = float(oldest_age_seconds)
+    _measured = True
+
+
+def forget_backlog() -> None:
+    """Report no backlog from this process until it measures one again.
+
+    The relay's timer runs each tick on one replica, so the replica that ran the last one holds the truth and every
+    other replica's snapshot is from an older window: one that measured a backlog during an outage would report it for
+    as long as others won the windows since, over a prefix long drained. A replica that finds the window another's
+    calls this, and the series it exported ends.
+    """
+    global _measured
+    _measured = False

@@ -114,7 +114,7 @@ spec:
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
             - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }
-            - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }
+            - { name: LANCE_CONTROL_RELAY_PERIOD_SECONDS, value: {{ required "catalog.controlOutbox.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.controlOutbox.periodSeconds | quote }} }
             {{- end }}
             {{- if .Values.catalog.controlEmit }}
             {{- with include "lance.doorEnv" (list $root true (list "catalog" "maintenance")) }}{{ . | nindent 12 }}{{- end }}
@@ -123,27 +123,20 @@ spec:
             - { name: LANCE_ERASURE_RELEASE_GRACE_DAYS, value: {{ required "catalog.erasure.releaseGraceDays is required" .Values.catalog.erasure.releaseGraceDays | quote }} }
             - { name: LANCE_ERASURE_CLEANUP_WINDOW_DAYS, value: {{ required "maintenance.olderThanDays is required" .Values.maintenance.olderThanDays | quote }} }
             - { name: LANCE_MANIFEST_RETAIN_SECONDS, value: {{ required "catalog.manifestReclaim.retainSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.retainSeconds | quote }} }
-            {{- if .Values.dapr.enabled }}
-            - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
-            - { name: LANCE_PROMOTION_EXPIRY_BINDING_NAME, value: {{ .Values.catalog.promotion.bindingName | quote }} }
-            - { name: LANCE_COMMIT_RECONCILE_BINDING_NAME, value: {{ .Values.catalog.commitReconcile.bindingName | quote }} }
+            - { name: LANCE_ERASURE_RELEASE_PERIOD_SECONDS, value: {{ required "catalog.erasure.releasePeriodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.erasure.releasePeriodSeconds | quote }} }
+            - { name: LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS, value: {{ required "catalog.promotion.expiryPeriodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.promotion.expiryPeriodSeconds | quote }} }
+            - { name: LANCE_COMMIT_RECONCILE_PERIOD_SECONDS, value: {{ required "catalog.commitReconcile.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.commitReconcile.periodSeconds | quote }} }
             - { name: LANCE_DECLARATION_FILE, value: "/etc/rask/declaration/declaration.json" }
-            - { name: LANCE_DECLARATION_CONVERGE_BINDING_NAME, value: {{ required "catalog.declarationConverge.bindingName is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.declarationConverge.bindingName | quote }} }
-            - { name: LANCE_MANIFEST_RECLAIM_BINDING_NAME, value: {{ required "catalog.manifestReclaim.bindingName is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.bindingName | quote }} }
+            - { name: LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS, value: {{ required "catalog.declarationConverge.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.declarationConverge.periodSeconds | quote }} }
+            - { name: LANCE_MANIFEST_RECLAIM_PERIOD_SECONDS, value: {{ required "catalog.manifestReclaim.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.periodSeconds | quote }} }
             - { name: LANCE_COMMIT_RECONCILE_GRACE_SECONDS, value: {{ required "catalog.commitReconcile.graceSeconds is required" .Values.catalog.commitReconcile.graceSeconds | quote }} }
             {{- $horizon := required "catalog.commitReconcile.horizonSeconds is required" .Values.catalog.commitReconcile.horizonSeconds | int }}
             {{- if ge $horizon (mul (.Values.services.lineage.eventsRetentionDays | int) 86400) }}
             {{- fail "catalog.commitReconcile.horizonSeconds must be shorter than services.lineage.eventsRetentionDays: a version older than the feed's retention may have had its row pruned, and the reconciler would announce it again" }}
             {{- end }}
             - { name: LANCE_COMMIT_RECONCILE_HORIZON_SECONDS, value: {{ $horizon | quote }} }
+            {{- if .Values.dapr.enabled }}
             {{- include "lance.busEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}
-            {{- end }}
-            {{- if .Values.dapr.enabled }}
-
-            {{- if .Values.dapr.enabled }}
-
-{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}
-            {{- end }}
             {{- end }}
             {{- if not .Values.auth.enabled }}
             {{- include "lance.governedAuthAck" . | nindent 12 }}
@@ -246,8 +239,6 @@ spec:
             {{- include "lance.otelEnv" (list $root "lineage") | nindent 12 }}
             {{- end }}
             {{- if .Values.dapr.enabled }}
-
-{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}
             {{- include "lance.busEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}
             {{- end }}
             - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
@@ -273,7 +264,8 @@ spec:
             - { name: LINEAGE_DELIVERY_RETRY_SECONDS, value: {{ required "services.lineage.delivery.retrySeconds is required" $delivery.retrySeconds | quote }} }
             - { name: LINEAGE_DELIVERY_ACK_WAIT_SECONDS, value: {{ required "services.lineage.delivery.ackWaitSeconds is required" $delivery.ackWaitSeconds | quote }} }
             {{- if .Values.services.lineage.relay.enabled }}
-            - { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }
+            - { name: LINEAGE_RELAY_PERIOD_SECONDS, value: {{ required "services.lineage.relay.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.services.lineage.relay.periodSeconds | quote }} }
+            - { name: LINEAGE_TIMER_ROOT, value: "s3://{{ .Values.objectStore.bucket }}" }
             {{- end }}
             - { name: LINEAGE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             {{- include "lance.objectStoreSessionEnv" (list $root "LINEAGE" "lineage") | nindent 12 }}

@@ -90,7 +90,7 @@ deployment needs its regional STS endpoint here, for which the chart has no valu
 
 THE CATALOG LOGS IN TO THE SECRET STORE AS ITSELF ([[XC-199]]). The store's address, its role `<release>-catalog`, the
 mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its secrets (its signing key, its
-commit-id key, the app token its cron ticks' routes check, its bus credential) come ONLY from the store, read under the
+commit-id key, its bus credential) come ONLY from the store, read under the
 process's own login at boot and again on a TTL (ADR 0166). None is in pod env. Lineage's Deployment carries
 the same include for its own role.
 
@@ -124,7 +124,7 @@ to that announcement, so the loss is not only a provenance hole but a downstream
 never happens.
 
 The SAME prefix `LINEAGE_OUTBOX_URI` names below, because that is the only thing that drains
-it: lineage's relay cron records and re-publishes what it finds there. A private prefix
+it: lineage's relay records and re-publishes what it finds there. A private prefix
 would stage objects nothing ever reads, which looks like durability and is not.
 
 ## `- { name: LANCE_PROVENANCE_NAMESPACE, value: {{ include "lance.provenanceNamespace" $root | quote }} }`
@@ -147,28 +147,31 @@ ternary (NOT `| default`, which treats false as empty) so a key missing under
 
 ## `- { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }`
 
-#4 transactional outbox on the CONTROL lane + the cron that RELAYS it. A control event lost
+#4 transactional outbox on the CONTROL lane + the timer that RELAYS it. A control event lost
 to a NATS blip (a grant, a `table_published`) reaches nobody — not a notifier on the control
 lane, not any replica's GET /management/v1/events buffer — with every pod green. Staged here, re-published by
-`catalog/api/control_relay.py` on the schedule in catalog-control-relay-cron.yaml.
+`catalog/api/control_relay.py` on the catalog's `catalog-control-relay` timer.
 
-A PRIVATE PREFIX, never `_lineage_outbox`: lineage's relay cron parses everything in
+A PRIVATE PREFIX, never `_lineage_outbox`: lineage's relay parses everything in
 its prefix as an OpenLineage RunEvent and DELETES what it cannot, so a shared prefix
 destroys these events rather than relaying them (the catalog refuses to boot on equality).
 
-## `- { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }`
+## `- { name: LANCE_CONTROL_RELAY_PERIOD_SECONDS, value: {{ required "catalog.controlOutbox.periodSeconds is unset —...`
 
-The binding name IS the route this app serves it on — one string with the Component above.
+The control relay's period. Each of the catalog's periodic ticks is a fixed timer (`lakehouse.timers`,
+`catalog/api/timers.py`): a loop in every catalog replica that wakes once a period, claims the window with one
+conditional write of `_timers/<timer>.json` under the control root, and runs the tick only where that write landed, so
+a tick runs once a window whatever the replica count. A period of 0 runs no timer. Rendered only where the control
+outbox is, since without it there is nothing to relay.
 
-## `{{- if .Values.dapr.enabled }}`
+## `- { name: LANCE_ERASURE_RELEASE_PERIOD_SECONDS, value: {{ required "catalog.erasure.releasePeriodSeconds is un...`
 
-The app token lets `require_dapr_token` verify the `dapr-api-token` header the sidecar stamps on each cron tick, so a
-forged direct in-cluster POST to a tick's route is 403'd. Same secret and pattern as lineage's.
-
-## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}`
-
-Gated on the sidecar because that is what it verifies: without one nothing stamps the header, so there is nothing to
-verify, and the Secret is not rendered.
+The periods of the catalog's other timers (`LANCE_ERASURE_RELEASE_PERIOD_SECONDS`,
+`LANCE_PROMOTION_EXPIRY_PERIOD_SECONDS`, `LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`,
+`LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS`, `LANCE_MANIFEST_RECLAIM_PERIOD_SECONDS`), each claimed per window as the
+control relay's is. Rendered whatever carries the bus: a timer needs only the object store and the catalog. Each is
+`required`, so a release upgraded with `--reuse-values` from one without them fails the render rather than running no
+timer.
 
 ## `{{- if not .Values.autoscaling.enabled }}`
 
@@ -265,15 +268,6 @@ cluster route sends public traffic here through the Gateway's data plane, so wit
 `X-Forwarded-For` every anonymous request carries the data plane's address and the rate limiter keys
 the whole public estate as one client.
 
-## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}`
-
-The app token lets `require_dapr_token` verify the `dapr-api-token` header the sidecar stamps on
-the relay's cron tick, so a forged direct POST to the tick's route is 403'd.
-
-Gated on the sidecar for the reason the guard exists: with no sidecar nothing stamps the
-header, so there is nothing to verify — and the Secret is not rendered, so the reference
-would dangle and the pod would never start.
-
 ## `- { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $r...`
 
 Lineage's store IS the catalog: every row of its feed, edge list and outbox refusals is written through the
@@ -309,9 +303,16 @@ records it. The consumer's own `max_deliver` is unlimited, so this rule is the o
 is published to a dead-letter topic. 5 attempts 120 s apart (the defaults) ride out an outage of 8 minutes. Each is
 `required`, so a release upgraded with `--reuse-values` from one without them fails the render.
 
-## `- { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }`
+## `- { name: LINEAGE_RELAY_PERIOD_SECONDS, value: {{ required "services.lineage.relay.periodSeconds is unset — up...`
 
-Mounts the relay tick's route at this binding name (matches the bindings.cron component in dapr-component.yaml).
+The relay's period: lineage runs its tick on a fixed timer (`lakehouse.timers`, `lineage/api/relay.py`), a loop in
+every replica whose window one replica claims with a conditional write, so the tick runs once a window whatever the
+replica count. Never a schedule on the bus: the relay is what records events while the bus is away.
+
+## `- { name: LINEAGE_TIMER_ROOT, value: "s3://{{ .Values.objectStore.bucket }}" }`
+
+The control root the relay's claim record lives under, `_timers/lineage-relay.json`. Lineage's store policy reaches
+that one key with get and put and nothing else beside its outbox (`ClaimItsOwnTimersWindows`, `_helpers.tpl.md`).
 
 ## `{{- include "lance.objectStoreSessionEnv" (list $root "LINEAGE" "lineage") | nindent 12 }}`
 
@@ -319,8 +320,9 @@ LINEAGE'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-084]], ADR 0170). The pod p
 `objectStore.identity.audience` beside its `rask-catalog` one, and lineage exchanges it through STS
 `AssumeRoleWithWebIdentity` for the sessions its outbox drain signs with (`lakehouse.store_session`). It holds no key
 pair. The session's reach is its canned policy, `<release>-sa-lineage` in the ConfigMap
-`<release>-object-store-identities` (`lance.objectStorePolicy`): list, get and delete under `_lineage_outbox/` and
-nothing else, so a compromised lineage pod can drain its own outbox and reach no table.
+`<release>-object-store-identities` (`lance.objectStorePolicy`): list, get and delete under `_lineage_outbox/`, get and
+put on its relay timer's claim record `_timers/lineage-relay.json`, and nothing else, so a compromised lineage pod can
+drain its own outbox and reach no table.
 
 ## `{{- include "lance.governedOidcEnv" . | nindent 12 }}`
 

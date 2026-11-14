@@ -1,11 +1,9 @@
 """At lineage's door a service is the service account its projected token names, and a name it claims proves nothing.
 
-[[LH-220]], clause "the shared token plus a claimed name answers 401". Measured live before the row: a fleet service was
-allowlisted and not privileged, so the estate-wide `dapr-api-token` plus `x-lance-service-identity: <its name>`
-authenticated as that service, and any holder of that one token could speak as any allowlisted subject. A service
-authenticates with its pod's projected token, verified offline against the cluster issuer, and is the subject its full
-username names (`kubernetes~system:serviceaccount:<ns>:<sa>`, ADR 0156 C5); the shared token stays only as the proof a
-sidecar delivered a request, and names nobody.
+[[LH-220]], clause "a claimed name answers 401". A service authenticates with its pod's projected token, verified
+offline against the cluster issuer, and is the subject its full username names
+(`kubernetes~system:serviceaccount:<ns>:<sa>`, ADR 0156 C5); a name it claims in `x-lance-service-identity` names nobody,
+or any caller could speak as any service.
 
 Driven at lineage's real door: its `authenticate`, the verifiers `attach_auth` builds from lineage's settings at boot,
 and the handlers `build_lance_service_app` installs. The service-account issuer is the loopback one in the root
@@ -32,9 +30,6 @@ from lineage.api import security
 from lineage.core.config import get_settings
 
 
-_SHARED = "the-estate-wide-app-token"
-
-
 @pytest.fixture
 def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     issuer = sa_issuer
@@ -47,8 +42,6 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
         "RASK_SA_AUDIENCE": "rask-lineage",
         "RASK_SA_FETCH_TOKEN_FILE": str(issuer.fetch_token_file),
         "RASK_SA_CA_FILE": str(issuer.ca_file),
-        # The shared token configured, as the deployment carries it for its sidecars.
-        "APP_API_TOKEN": _SHARED,
     }.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
@@ -72,7 +65,7 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
     get_settings.cache_clear()
 
 
-def test_lineage_refuses_the_shared_token_and_a_claimed_service_name(door: TestClient) -> None:
-    answered = door.get("/who", headers={"dapr-api-token": _SHARED, "x-lance-service-identity": "maintenance"})
+def test_lineage_refuses_a_claimed_service_name(door: TestClient) -> None:
+    answered = door.get("/who", headers={"x-lance-service-identity": "maintenance"})
 
     assert answered.status_code == 401, answered.text

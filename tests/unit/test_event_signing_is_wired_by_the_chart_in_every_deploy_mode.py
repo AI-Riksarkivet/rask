@@ -276,7 +276,6 @@ def _loaded_dapr_objects(docs: tuple[dict, ...]) -> dict[str, tuple[str, str]]:
 @pytest.mark.parametrize(
     ("probe", "loaded_by"),
     [
-        pytest.param("catalog.commitReconcile.schedule=@every 660s", {"rask-catalog"}, id="a-binding-one-app-loads"),
         pytest.param("externalSecrets.kvMount=kv2", {"rask-catalog", "rask-lineage"}, id="the-secret-store-every-sidecar-loads"),
     ],
 )

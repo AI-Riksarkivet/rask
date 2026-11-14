@@ -1549,6 +1549,72 @@ tests:
               summary: "The estate is not what git declares"
               description: "The catalog's declaration converge tick could not make or correct warehouse:acme on three ticks within fifteen minutes, so the estate is not what git declares: a declared project, warehouse or service grant is missing or drifted, or the declaration itself cannot be read. Read the catalog's `declaration_converge_failed` and `declaration_unreadable` logs for the object and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#the-estate-is-not-what-git-declares"
 
+  # A timer whose newest claimed window is older than three of its periods pages; one that keeps claiming does not, and
+  # neither does one held through a read-only window, whose held turns keep counting.
+  - interval: 1m
+    input_series:
+      - series: 'timer_last_claimed_seconds{timer="catalog-control-relay"}'
+        values: "0+0x30"
+      - series: 'timer_period_seconds{timer="catalog-control-relay"}'
+        values: "60+0x30"
+      - series: 'timer_last_claimed_seconds{timer="lineage-relay"}'
+        values: "0+60x30"
+      - series: 'timer_period_seconds{timer="lineage-relay"}'
+        values: "60+0x30"
+      - series: 'timer_last_claimed_seconds{timer="catalog-erasure-release"}'
+        values: "0+0x30"
+      - series: 'timer_period_seconds{timer="catalog-erasure-release"}'
+        values: "60+0x30"
+      - series: 'timer_turns_total{timer="catalog-erasure-release",outcome="held"}'
+        values: "0+1x30"
+      - series: 'timer_turns_total{timer="lineage-relay",outcome="ran"}'
+        values: "0+1x30"
+      - series: 'timer_turns_total{timer="lineage-relay",outcome="unread"}'
+        values: "0+0x10 1+0x20"
+      - series: 'timer_turns_total{timer="catalog-commit-reconcile",outcome="unread"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LakehouseTimerStopped
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: LakehouseTimerStopped
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              timer: "catalog-commit-reconcile"
+            exp_annotations:
+              summary: "A lakehouse timer runs on no replica"
+              description: "The timer catalog-commit-reconcile has claimed no window for three of its periods and is not held by a read-only window, or every turn it took in fifteen minutes found its claim unreadable, so its work runs on no replica: each replica's loop reads and claims the timer's record under the control root (`_timers/<timer>.json`), and none has. Read the service's `timer_claim_unread` WARN logs for the error (the object store, or the service's session at it) and `timer_work_failed` for a tick that raises. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              timer: "catalog-control-relay"
+            exp_annotations:
+              summary: "A lakehouse timer runs on no replica"
+              description: "The timer catalog-control-relay has claimed no window for three of its periods and is not held by a read-only window, or every turn it took in fifteen minutes found its claim unreadable, so its work runs on no replica: each replica's loop reads and claims the timer's record under the control root (`_timers/<timer>.json`), and none has. Read the service's `timer_claim_unread` WARN logs for the error (the object store, or the service's session at it) and `timer_work_failed` for a tick that raises. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+
+  # A timer whose first turns after a start found the store not answering, and which then finds its window claimed,
+  # is working: the series of that turn begins at one, and on a ten-minute period moves again only minutes later.
+  - interval: 1m
+    input_series:
+      - series: 'timer_last_claimed_seconds{timer="catalog-manifest-reclaim"}'
+        values: "0+60x30"
+      - series: 'timer_period_seconds{timer="catalog-manifest-reclaim"}'
+        values: "600+0x30"
+      - series: 'timer_turns_total{timer="catalog-manifest-reclaim",outcome="unread"}'
+        values: "1 2 2+0x28"
+      - series: 'timer_turns_total{timer="catalog-manifest-reclaim",outcome="elsewhere"}'
+        values: "_ _ 1+0x28"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: LakehouseTimerStopped
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: LakehouseTimerStopped
+        exp_alerts: []
+
   # One tick's blip on every root (a store that did not answer once) is repaired by the next tick and pages nothing.
   - interval: 1m
     input_series:

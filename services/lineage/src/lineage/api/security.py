@@ -11,8 +11,7 @@ verified bearer, and the bearer's unverified issuer decides which verifier answe
   principal their Dex connector maps to, `<idp-id>~<user id>` ([[LH-063]]), and a Dex client signed in for itself as
   the `ServicePrincipal` `dex-client~<client id>` (ADR 0181).
 
-Either way the caller is authorized by FGA as its principal key, `.subject`. Nothing a caller asserts in a header names it:
-`dapr-api-token` proves only that a sidecar delivered a request (`require_dapr_token`, on the relay tick's route),
+Either way the caller is authorized by FGA as its principal key, `.subject`. Nothing a caller asserts in a header names it,
 and a service-account token's audience is lineage's own (`rask-lineage`), so a token minted for another door is
 refused here.
 

@@ -7,7 +7,7 @@
   worker's), the process's own read (`lakehouse.governed.secrets`, with the store, the role and the projected token its
   pod was given) returns a secret the app owns and nothing of one another app owns;
 - the Dapr scope: from inside the pod of each app the `lance-secrets` component is scoped to (the catalog and lineage,
-  whose pods run daprd for their cron ticks), its daprd answers 403 for both;
+  whose pods run daprd), its daprd answers 403 for both;
 - the store: a token the store issues to one app's ServiceAccount, through the Kubernetes auth role the `lance-secrets`
   component logs that app in as, reads the app's own secret and is refused another app's; the same account is refused
   another app's role; and `root`, the token a store in dev mode publishes, reads nothing.

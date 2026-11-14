@@ -1,6 +1,6 @@
 ---
 name: rask-dapr
-description: "Dapr in rask: which of the 12 building blocks this estate uses (2) and why, which it does not (10) with the recorded rulings, and the component-vs-DIY rubric — when a Dapr component is the answer and when hand-rolling is justified. Use when adding a capability that smells like queuing/scheduling/locking/config/secrets/middleware, when tempted to hand-roll one of those, when a Dapr API seems to fit a new feature, or when touching sidecar annotations, Components or the cron bindings."
+description: "Dapr in rask: which of the 12 building blocks this estate uses (1) and why, which it does not (11) with the recorded rulings, and the component-vs-DIY rubric — when a Dapr component is the answer and when hand-rolling is justified. Use when adding a capability that smells like queuing/scheduling/locking/config/secrets/middleware, when tempted to hand-roll one of those, when a Dapr API seems to fit a new feature, when adding a periodic tick to a service, or when touching sidecar annotations or Components."
 ---
 
 # rask × Dapr — what we use, what we refused, and how to decide
@@ -11,25 +11,26 @@ docs list the 12 building blocks without tradeoffs. This skill is the estate-gro
 claim below was verified against the render or the code (2026-08-28), not inherited from docs.
 
 **ADR 0199 makes NATS JetStream the lakehouse's one bus and plans the move off Dapr** ([[XC-199]], #787, an ADR of its
-own at its last step). Every event is published and taken on the service's own connection to the bus; what Dapr still
-does for the lakehouse is deliver the catalog's and lineage's cron ticks and log their sidecars in to the secret store.
-This file describes that Dapr; a new capability is not built on a Dapr block that the move would have to undo.
+own at its last step). Every event is published and taken on the service's own connection to the bus, and every
+periodic tick is a fixed timer in the service's own process (`lakehouse.timers`); the catalog's and lineage's pods run a
+sidecar that logs in to the secret store and delivers nothing to its app. This file describes that Dapr; a new
+capability is not built on a Dapr block that the move would have to undo.
 
-## The inventory — 2 of 12 blocks in use
+## The inventory — 1 of 12 blocks in use
 
 | Block | Used | Where (verified) |
 | --- | --- | --- |
 | Service invocation | ❌ | No service in the estate calls another through it, and the product chart renders no invocation Resiliency. Public traffic never rides invocation: the cluster route reaches each app port directly. A client that invokes a lakehouse app through its own sidecar renders its own policy, since Dapr applies an invocation policy on the CALLING sidecar |
 | State | ❌ | No service in the estate keeps Dapr state, and the product chart renders no state store. Its one user, the notifications inbox, is retired (ADR 0193); a client that hosts actors brings its own store in its own release, scoped to its app-id (see traps) |
 | Pub/sub | ❌ | No service publishes or subscribes through it, and the product chart renders no `pubsub.jetstream` Component and no Resiliency. Each service publishes and takes its deliveries on its own connection to NATS JetStream as its own bus user (`lakehouse.bus`; the maintenance worker's queue, `maintenance.services.queue`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]): lineage and the worker pull durable consumers the chart's stream Job declares and create none, and each catalog replica follows CATALOG_CONTROL by reading it by sequence. A client that subscribes through its own sidecar renders its own Component, in its own release (see traps) |
-| Bindings | ✅ | `bindings.cron` ×7 in the product chart, six scoped to the catalog and one to lineage (maintenance runs none: its times are NATS message schedules on its own work queue, which fire once whatever its replica count, ADR 0198 decisions 5 and 6): `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline), `catalog-commit-reconcile-cron` ([[LH-497]], announcing each committed version lineage's feed lacks), `catalog-manifest-reclaim-cron` ([[LH-251]], ADR 0185, removing each root's `__manifest` versions past their retention), `catalog-declaration-converge-cron` ([[XC-213]], ADR 0206, converging the projects, warehouses and service grants the chart's `catalog.declared` values declare); `catalog-control-relay-cron` renders only with `catalog.controlEmit` and `catalog.controlOutbox.enabled`, and `lineage-relay-cron` only with `services.lineage.relay.enabled`. A client's release renders its own — read the cluster for what runs, not the templates. Each cron is an input binding delivered to `POST /<component-name>` at the pod ROOT. The product chart renders no output binding |
+| Bindings | ❌ | The product chart renders no binding. Every periodic tick of the catalog (six) and of lineage (its relay) is a fixed timer: a loop in each replica that claims each window with one conditional write of `_timers/<timer>.json` under the control root, so the tick runs once a window whatever the replica count (`lakehouse.timers`). Maintenance's times are NATS message schedules on its own work queue (ADR 0198 decisions 5 and 6). A client's release renders its own — read the cluster for what runs, not the templates |
 | Actors | ❌ | No service in the estate hosts an actor, so placement and the Scheduler hold nothing of the lakehouse's. The one host, the notifications inbox, is retired (ADR 0193) |
-| Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). ONE component, `lance-secrets`, scoped to the catalog's and lineage's sidecars and to any `openbao.externalReaders` app (`lance.sidecarScopes`), logs each sidecar in with Kubernetes auth as the role `<release>-{appID}` (Dapr 1.19+). No product Component names a `secretKeyRef`, so it resolves no secret for the lakehouse; a client's sidecar may resolve its own components' secrets through it. NO APP READS A SECRET THROUGH IT ([[XC-199]]): each service logs in to the store itself, as the same role, with the pod's projected token mounted into its own container (`lakehouse.governed.secrets`, env from `lance.secretStoreEnv`): before it serves, failing its start closed when the store gives it no usable login (one the store admits and then answers about itself, `auth/token/lookup-self`, which each rendered policy grants; a login refused that question is made again at the next attempt), and again once half its token's lease is used or on the pass that finds the store refusing that question (asked every 15 s; a refusal costs a login, and logins the store goes on refusing wait twice as many passes each time, fifteen at most), on a loop its supervisor keeps (`secret_store_session`, entered first in each lifespan). While that loop is passing no read logs in, on a refused secret or on a login that ran out: the start and the loop do (a read logs in itself only once the loop has made no pass for a minute), and the store answers 403 for a dropped token and for a secret the policy does not name alike. Each app's Configuration denies the sidecar's secrets API whole (`lance.storeReads`, ADR 0169 as amended 2026-11-14). THE estate rule: sole source, fail-closed, never env fallback. Every read is held at most a jittered 300-600 s and read again (`lakehouse.governed.secret_cache`, ADR 0166), so a rotation in the store reaches running pods; no lakehouse service holds an object-store key pair, each one's store identity being its ServiceAccount token (ADR 0170, ADR 0197), and the app-token door accepts the current or previous token |
-| Workflow | ❌ | Nothing in this repository runs a workflow. The lakehouse runs none: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, `catalog-promotion-expiry-cron` expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
+| Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). ONE component, `lance-secrets`, scoped to the catalog's and lineage's sidecars and to any `openbao.externalReaders` app (`lance.sidecarScopes`), logs each sidecar in with Kubernetes auth as the role `<release>-{appID}` (Dapr 1.19+). No product Component names a `secretKeyRef`, so it resolves no secret for the lakehouse; a client's sidecar may resolve its own components' secrets through it. NO APP READS A SECRET THROUGH IT ([[XC-199]]): each service logs in to the store itself, as the same role, with the pod's projected token mounted into its own container (`lakehouse.governed.secrets`, env from `lance.secretStoreEnv`): before it serves, failing its start closed when the store gives it no usable login (one the store admits and then answers about itself, `auth/token/lookup-self`, which each rendered policy grants; a login refused that question is made again at the next attempt), and again once half its token's lease is used or on the pass that finds the store refusing that question (asked every 15 s; a refusal costs a login, and logins the store goes on refusing wait twice as many passes each time, fifteen at most), on a loop its supervisor keeps (`secret_store_session`, entered first in each lifespan). While that loop is passing no read logs in, on a refused secret or on a login that ran out: the start and the loop do (a read logs in itself only once the loop has made no pass for a minute), and the store answers 403 for a dropped token and for a secret the policy does not name alike. Each app's Configuration denies the sidecar's secrets API whole (`lance.storeReads`, ADR 0169 as amended 2026-11-14). THE estate rule: sole source, fail-closed, never env fallback. Each holder reads its secret again on its own period (the signing key and the commit-id key every 300 s, a bus credential at each connect), so a rotation in the store reaches running pods; no lakehouse service holds an object-store key pair, each one's store identity being its ServiceAccount token (ADR 0170, ADR 0197) |
+| Workflow | ❌ | Nothing in this repository runs a workflow. The lakehouse runs none: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, the catalog's `catalog-promotion-expiry` timer expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
 | Configuration | ❌ | Ruled out — see refusals |
 | Middleware | ❌ | Ruled out — see refusals |
 | Distributed lock | ❌ | Not yet — the ONE open candidate (see below) |
-| Jobs | ❌ | Cron bindings instead — revisit trigger recorded below |
+| Jobs | ❌ | Fixed timers and NATS message schedules instead — revisit trigger recorded below |
 | Crypto / Conversation | ❌ | No use case; Conversation would put an LLM key in a Component |
 
 ## The rubric — component vs DIY
@@ -51,9 +52,10 @@ This file describes that Dapr; a new capability is not built on a Dapr block tha
   therefore lives in the app, `lakehouse.body_limit`, by owner ruling 2026-08-26, and no rask service rate-limits
   (no limiter is in the tree, measured 2026-11-07)), and
   **a bring-your-own job's pods** (no daprd, so no Dapr API to publish, subscribe or bind through).
-- **Per-request semantics the block cannot express.** A reconcile guard that must SKIP an overlapping tick, not
-  queue it, cannot be an actor (turn-based, so it queues); it is a process-local lock on a single replica until a
-  cross-pod guard that skips exists (below).
+- **Per-request semantics the block cannot express.** A periodic tick that must run once a window across replicas,
+  skipping a window another replica took rather than queueing behind it, cannot be an actor (turn-based, so it queues);
+  it is a fixed timer whose window one conditional write on the store claims (`lakehouse.timers`), as Lance picks one
+  writer of a version (`lance_docs/lance/format/table/transaction.md` § Storage Primitives).
 - **The render is the gate.** rask's invariant tests read config out of `helm template`; state moved
   behind a runtime API (the Configuration block) is state those gates can no longer see.
 - **The block is Alpha and the need is load-bearing.** Alpha components (lock, most middleware) may
@@ -74,8 +76,16 @@ retry loop around either), and actor placement/turn semantics.
 - **Configuration API** (2026-08-28): the fleet's config is ONE ConfigMap via `envFrom`, validated by
   pydantic-settings at boot, and the render-driven invariant tests depend on seeing it; change
   cadence is deliberately rollout-shaped. It solves a problem this estate chose not to have.
-- **Jobs API** (2026-08-28, re-judged 2026-11-09 against the code as it runs). The seven crons stay `bindings.cron`,
-  and maintenance needs no scheduler from Dapr at all.
+- **Jobs API** (2026-08-28, re-judged 2026-11-09 against the code as it runs). The catalog's and lineage's seven
+  ticks are fixed timers in their own processes, and maintenance needs no scheduler from Dapr at all.
+
+  **A fixed estate tick is a store-claimed timer** (`lakehouse.timers`, [[XC-199]]). Every replica runs the loop; once a
+  window each reads the timer's claim record (`_timers/<timer>.json`, control prefix `TIMERS`, a lease-class prefix a
+  control-root backup skips) and tries one conditional write that claims it, create-if-absent or replace under the ETag
+  it read. The store lets one land and that replica runs the tick. A window is named by when it began on the STORE's
+  clock (the read's `Date`), so no two pods' clocks are compared and a period changed in git is due at its own next
+  boundary. A timer depends on nothing its work does not need: all seven need only the object store and the catalog,
+  and lineage's relay and the control relay exist for the bus being away, so none is a schedule on the bus.
 
   **Maintenance's times are NATS message schedules on its own work queue** (ADR 0198 decisions 5 and 6,
   `maintenance/services/queue.py`). Each table's next pass is a schedule on `maintenance.schedule.<kind>.<uuid>` in
@@ -85,12 +95,13 @@ retry loop around either), and actor placement/turn semantics.
   (`maintenance.queue.auditSchedule`, `@hourly`: the drift report, its repairs and the lost-task backstop) and the scan
   (`maintenance.queue.scanSchedule`, `0 30 0 * * *`: the audit with the orphan scan, the listing floors and the trash
   purge). A schedule lives on the bus, fires once whatever the replica count, and the worker takes the fired task off a
-  work queue that holds one per table, so it needs no lease, no lock and no cron binding.
+  work queue that holds one per table, so it needs no lease and no lock.
 
   **Why the Jobs API still loses, on today's code:** a Dapr job would be a second home for times the bus already holds,
   scheduled through a sidecar whose publish cannot set the `Nats-Schedule` headers (ADR 0198 decision 5 cites
   `pubsub/jetstream/jetstream.go:115-145`), and invisible to the render gates. ADR 0199 makes NATS JetStream the one bus
-  and plans the move off Dapr, so a new time-shaped need goes to a NATS message schedule, not to a Dapr block.
+  and plans the move off Dapr, so a new time-shaped need is never a Dapr block: a fixed estate-wide tick is a
+  store-claimed timer on `lakehouse.timers`, and a per-object time (a table's next pass) is a NATS message schedule.
 
   **The audit of 2026-08-28** (10 time-shaped clusters, adversarial) found zero SHOULD_USE_JOBS, and the candidates it
   refuted stay refuted on today's code:
@@ -111,7 +122,8 @@ One question decides it: **where does the state live?**
 | one step of a stateful multi-step process | **Workflow timer** | the process already holds the context (run record, idempotency key, what to emit on outcome); resumes mid-process after a crash |
 | a wakeup for state living in an actor | **actor reminder** | runs under the actor's turn lock — the plane's own concurrency control; Jobs would land at the app and have to re-invoke the actor anyway |
 | a bare future trigger with no surrounding state | **Jobs** | one etcd row + a callback; a workflow here would be an orchestrator used as an alarm clock (history rows, replay, determinism rules, zero orchestration) |
-| recurring scan-and-converge | **cron binding** | as ruled above |
+| recurring scan-and-converge on a fixed period | **fixed timer** (`lakehouse.timers`) | as ruled above: one store-claimed window per period, needing only the store |
+| a time per object (a table's next pass) | **NATS message schedule** | ADR 0198 decisions 5 and 6: the bus holds it and fires it once |
 
 Two failure smells, one per direction: a workflow whose body is ONLY `create_timer` → should be
 Jobs; Jobs callbacks that CHAIN (A schedules B schedules C, payload accumulating state) → a
@@ -119,10 +131,11 @@ hand-built workflow without history, replay or per-step retry — should be Work
 
 ## The one open candidate
 
-**Distributed lock**, for a cron reconciler that must SKIP a tick another replica is running. A lock component IS
-try-acquire-or-fail (skip on failure — the right shape, where an actor queues), but the API is Alpha, and no service in
-the estate needs it today: maintenance's replicas share a work queue that holds one task per table (ADR 0198), and
-lineage's and the catalog's crons are idempotent or ETag-guarded (traps below). Adopting it is an owner decision.
+**Distributed lock**, for work that must SKIP while another replica runs it. A lock component IS try-acquire-or-fail
+(skip on failure — the right shape, where an actor queues), but the API is Alpha, and no service in the estate needs it
+today: maintenance's replicas share a work queue that holds one task per table (ADR 0198), each of the catalog's and
+lineage's timers claims its window on the store, and a tick that outlasts its window and overlaps the next one's is
+idempotent or ETag-guarded (traps below). Adopting it is an owner decision.
 
 ## Sidecar map — who can call Dapr APIs at all
 
@@ -131,7 +144,8 @@ per cluster (ADR 0153, [[XC-128]]); rask renders only its Components and Configu
 cluster that does not serve `dapr.io/v1alpha1`. Development installs it from `deploy/fixtures/dapr` in `dapr-system`,
 with `dapr_rbac.secretReader` off (`rask-helm` §8).
 
-Sidecars are injected into the catalog's and lineage's pods, for their cron ticks (`rask.daprAnnotations`; the
+Sidecars are injected into the catalog's and lineage's pods, where they log in to the secret store and deliver nothing
+to the app (`rask.daprAnnotations`; the
 injector webhook is fail-closed via the paired label — a pod with the annotation but no label is the
 silent no-sidecar failure). **No sidecar:** the maintenance worker, the console's web pod and any bring-your-own job.
 A lakehouse service reads its secrets under its own store login whether or not its pod runs a sidecar
@@ -166,32 +180,21 @@ as a Kubernetes Secret.
   actor hosting silently disables — healthy pod, permanently empty feature. Probe `/v1.0/metadata`
   for the ACTOR capability, not the log line.
 - daprd APPENDS its caller-identity headers and FastAPI binds the FIRST duplicate, so a client-supplied
-  `dapr-caller-app-id` is a claim, never an identity. No door authorizes on it: a cron tick route (and its binding
-  pre-flight, `add_binding_preflight`) authenticates on `dapr-api-token` alone (`require_dapr_token`), which a request through the cluster
-  route never carries because it reaches the app port without a sidecar, and a caller's identity is its
-  verified bearer (ADR 0156 C5).
-- A cron/input binding is delivered to `POST /<component-name>` at the pod ROOT — never under an API
-  prefix. Component name, env var and served path are one string, pinned by invariants.
-- **`bindings.cron` FIRES ON EVERY REPLICA.** The component is stateless and uncoordinated — Diagrid,
-  verbatim: *"No coordination – each replica runs the schedule independently, causing duplicate
-  triggers"* and *"when the target app is scaled to multiple replicas, the schedule will fire on every
-  instance"*. There is no lease anywhere in the path, so every multi-replica service must buy the
-  guarantee itself, and the estate answers it three different ways: lineage's relay tick makes every step idempotent (an
-  insert-only merge on each feed row, a forwarder cursor that only moves forward); catalog's
-  control relay accepts duplicates because a duplicate publish dedupes on `event_id`; catalog's erasure
-  release and promotion expiry move each record by an ETag-guarded write, so one replica wins it; catalog's declaration
-  converge runs one tick at a time per process (an `asyncio.Lock`) and, across replicas, repeats the same idempotent
-  writes (conditional registry records, a grant record created once, OpenFGA writes with duplicates ignored). A new cron on a service that can scale needs its answer chosen and written down, or its
-  absence reads as an oversight rather than a decision.
-- **A cron tick through the read-only window is answered 2xx and does nothing.** The chart's one `readOnlyWindow` holds
-  every tick: the catalog's are held in `maintenance_mode` before routing, each one recorded by its own mount
-  (`catalog.api.cron.ticks_of`; a tick mounted elsewhere than `mount_cron` calls `record_tick`, or it keeps writing
-  through a window), lineage's relay returns `paused`. A 2xx, not a
-  refusal: the cron component discards the handler's result (components-contrib `bindings/cron/cron.go`, `_, _ =
-  handler(...)`), so a refusal would buy only daprd's error log, and the next tick after the window does the work.
+  `dapr-caller-app-id` is a claim, never an identity. No door authorizes on it: a caller's identity is its verified
+  bearer (ADR 0156 C5).
+- **A Dapr `bindings.cron` fires on every replica**, uncoordinated (Diagrid, verbatim: *"No coordination – each replica
+  runs the schedule independently, causing duplicate triggers"*), and its component discards the handler's answer
+  (components-contrib `bindings/cron/cron.go`, `_, _ = handler(...)`). That is why an estate tick is a store-claimed
+  timer: the claim gives once a window, and a tick that outlasts its window and overlaps the next one's still has its
+  own answer. Lineage's relay makes every step idempotent (an insert-only merge on each feed row, a forwarder cursor
+  that only moves forward); the control relay accepts duplicates because a duplicate publish dedupes on `event_id`; the
+  erasure release and the promotion expiry move each record by an ETag-guarded write, so one replica wins it; the
+  declaration converge repeats the same idempotent writes (conditional registry records, a grant record created once,
+  OpenFGA writes with duplicates ignored). A new timer needs its overlap answer chosen and written down at its site.
+- **A timer through the read-only window is held.** The chart's one `readOnlyWindow` holds every timer of the catalog
+  and lineage: a held turn claims nothing and runs nothing (`timer_held`, outcome `held`), and the first window after
+  the window ends does the work. `LakehouseTimerStopped` does not page on a held timer.
 - `ActorProxy` dispatches @actormethod WIRE names, not Python names; mocks cannot catch a mismatch.
-- Missing `dapr.io/app-token-secret` on an app with a cron tick route ⇒ `assert_app_token_configured`
-  crash-loops the pod. The app token guards the cron tick routes and their pre-flights only.
 - **A Component edit reaches a sidecar ONLY on restart** (`HotReload: false`), so every Dapr pod carries a
   `checksum/dapr` digest of the Components its sidecar loads (`lance.daprDigest`): an edit rolls the pods whose sidecar
   loads it ([[XC-164]]). Every product Component lives in `dapr-component.yaml`, the one template the digest reads.

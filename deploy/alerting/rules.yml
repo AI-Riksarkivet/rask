@@ -133,7 +133,7 @@ groups:
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       # LH-497: the commit is the outbox. A find is a write whose own announcement was lost between its commit and its
-      # staging, which the catalog's reconcile cron has just announced from the version log: the feed now holds it, and a
+      # staging, which the catalog's commit reconcile has just announced from the version log: the feed now holds it, and a
       # pipeline following `/events` was late to hear of it. Any find pages, as the closes-when of the row asks.
       # THE SECOND ARM IS A POD'S FIRST FIND. An OTel counter exports nothing until its first add, so its first sample is
       # already 1 and `increase()` reads 0 across it; a series present now and absent a window ago is that find. Measured
@@ -215,6 +215,36 @@ groups:
           summary: "The estate is not what git declares"
           description: >-
             The catalog's declaration converge tick could not make or correct {{ $labels.lance_catalog_object }} on three ticks within fifteen minutes, so the estate is not what git declares: a declared project, warehouse or service grant is missing or drifted, or the declaration itself cannot be read. Read the catalog's `declaration_converge_failed` and `declaration_unreadable` logs for the object and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#the-estate-is-not-what-git-declares
+
+      # Each fixed timer of the catalog and of lineage is a loop in every replica that claims each window with one
+      # conditional write under the control root (XC-199), and each replica reports when the window it last saw claimed
+      # began. A timer whose newest window began three periods ago runs on no replica. A read-only window holds every
+      # timer on purpose, which the held turns say. A timer that has never read its claim reports no window at all, so
+      # the second arm pages on one whose every turn for fifteen minutes found the claim unreadable. A turn that claimed
+      # or found a claim counts from its series' first sample too, which an increase reads as nothing.
+      - alert: LakehouseTimerStopped
+        expr: >-
+          (
+            ((time() - max by (timer) (timer_last_claimed_seconds)) > 3 * max by (timer) (timer_period_seconds))
+            unless on (timer) (sum by (timer) (increase(timer_turns_total{outcome="held"}[30m])) > 0)
+          )
+          or
+          (
+            (sum by (timer) (increase(timer_turns_total{outcome="unread"}[15m])) > 0)
+            unless on (timer) (
+              (sum by (timer) (increase(timer_turns_total{outcome=~"ran|failed|elsewhere"}[15m])) > 0)
+              or
+              (sum by (timer) (timer_turns_total{outcome=~"ran|failed|elsewhere"} unless timer_turns_total{outcome=~"ran|failed|elsewhere"} offset 15m) > 0)
+            )
+          )
+        for: 2m
+        labels:
+          severity: warning
+          service: lakehouse
+        annotations:
+          summary: "A lakehouse timer runs on no replica"
+          description: >-
+            The timer {{ $labels.timer }} has claimed no window for three of its periods and is not held by a read-only window, or every turn it took in fifteen minutes found its claim unreadable, so its work runs on no replica: each replica's loop reads and claims the timer's record under the control root (`_timers/<timer>.json`), and none has. Read the service's `timer_claim_unread` WARN logs for the error (the object store, or the service's session at it) and `timer_work_failed` for a tick that raises. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped
 
       # A released erasure obligation is final, so a table found derived from its table after the release, written before
       # it, may still hold the subject (ADR 0183 §5). One is enough to page.

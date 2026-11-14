@@ -40,11 +40,11 @@ with its Gateway provider switched on by `deploy/k3s/traefik-gateway.yaml` (a He
 `kube-system`, listener `web` on the node's port 80. `deploy/values-local.yaml` attaches to it (`route.parentRefs`) and
 sets `forwardedAllowIps: 10.42.0.0/16`.
 
-**The route publishes doors, never a service's root** ([[CTL-001]]): the probes and the cron ticks are not published
-at the edge (a request there falls to the console's 404), and no route takes an event: each service pulls or follows
-its own on its connection to the bus. The pod's port still admits any peer (ADR 0165), so the services guard them:
-each tick and its `OPTIONS` pre-flight answer the sidecar's app token alone (`require_dapr_token`; daprd stamps it on
-both), and only the probes answer a caller with none. A docs page (`docs.enabled`) names its schema, and the schema its server, by
+**The route publishes doors, never a service's root** ([[CTL-001]]): the probes are not published at the edge (a
+request there falls to the console's 404), no route takes an event (each service pulls or follows its own on its
+connection to the bus), and no route runs a tick (each periodic tick is a timer inside the service's process,
+`lakehouse.timers`). The pod's port still admits any peer (ADR 0165), so the services guard their doors themselves, and
+only the probes answer a caller with no credential. A docs page (`docs.enabled`) names its schema, and the schema its server, by
 relative URL, so it works under any public prefix. **Adding a
 door at a service's root** is one path in its `rask.apiRoutes` row (`prefix`, `component`, `service`, `port`, `rewrite`
 true to land each path on itself, false to forward unchanged, `paths`); the offline render gate
@@ -107,8 +107,7 @@ service directly. See `rask-frontend`.
    (`rask-lakehouse`, never a client's own sign-in id): the console asks Dex for it with
    `audience:server:client_id:<audience>`, which Dex grants only to a client the audience client lists in
    `trustedPeers` ([[LH-515]]), so a token for the sign-in client alone is a 401. A token without `federated:id` is a
-   401 too (`lakehouse.governed.idp_identity`). A request through the Gateway reaches the app port directly and never
-   carries a Dapr sidecar token, so `require_dapr_token` alone refuses it on a sidecar-only door; any verified
+   401 too (`lakehouse.governed.idp_identity`). Any verified
    service-account token authenticates at any door (ADR 0156 C5), through the edge included. The FGA denials read
    `<subject> lacks <relation> on <object>`. A client asks a lakehouse verb through the catalog's decision door, which
    answers only `can_*` verbs and `member`, and only about objects inside the scope its own identity was granted at the

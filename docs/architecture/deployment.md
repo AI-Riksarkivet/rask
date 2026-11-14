@@ -69,9 +69,8 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   that trust and those policies; on AWS it is an IAM OIDC provider and one role per account
   (`objectStore.identity.roleArns.<component>`), its trust policy naming the subject and its permission policy the
   ConfigMap's document.
-- `dapr-app-token` (fields `token` and, during a rotation, `previous`; docs/OPERATORS.md § 8): the app-API token, read by
-  the apps whose cron tick routes check it (catalog, lineage) and by ESO, which writes it into the
-  `<release>-dapr-app-token` Secret daprd stamps the header from.
+- `dapr-app-token` (field `token`; docs/OPERATORS.md § 8): the app-API token, read by ESO alone, which writes it into
+  the `<release>-dapr-app-token` Secret the injector hands each sidecar. No service reads or checks it.
 - `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
   every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
@@ -94,10 +93,10 @@ its environment.
 
 ## Prerequisite: the Dapr control plane
 
-The catalog and lineage take their timed ticks through Dapr sidecars (the cron bindings), so a
+The catalog's and lineage's pods run a Dapr sidecar, so a
 **Dapr control plane is a prerequisite** (ADR 0153), installed once per cluster by the platform, as Dapr documents,
-in `dapr-system`. The chart renders only rask's own Dapr objects (the secret-store Component `lance-secrets`, the cron
-binding Components, and the Configurations) and the sidecar annotations of the catalog's and lineage's pods; with `dapr.enabled` on it refuses to render for a cluster that does not
+in `dapr-system`. The chart renders only rask's own Dapr objects (the secret-store Component `lance-secrets` and the
+Configurations) and the sidecar annotations of the catalog's and lineage's pods; with `dapr.enabled` on it refuses to render for a cluster that does not
 serve `dapr.io/v1alpha1` (a cluster-less `helm template` names it: `--api-versions dapr.io/v1alpha1`). Name the
 control plane's namespace in `dapr.controlPlaneNamespace` (default `dapr-system`): the Collector scrapes it there,
 and under NetworkPolicy every rask pod may reach it.
@@ -288,7 +287,7 @@ address, token, scrape job, alert or network peer (ADR 0189).
   anywhere and dials nothing.
 - **The cluster route** (`templates/route.yaml`) — Gateway API HTTPRoutes on the platform's Gateway
   (`route.parentRefs`): `<release>-api` sends each door a service publishes (the catalog's `/v1` and `/management/v1`,
-  lineage's feed, intake, parks and derived tables; never a probe or a cron tick's route) to
+  lineage's feed, intake, parks and derived tables; never a probe) to
   its service under its public prefix, with a `URLRewrite` `ReplacePrefixMatch` where the service mounts another path
   (the table is `rask.apiRoutes` in `_helpers.tpl`), and
   `<release>-dex`, rendered only with `auth.enabled` and `dex.enabled`, sends `/dex` to the development Dex. Both
