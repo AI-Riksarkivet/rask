@@ -28,9 +28,9 @@ no secret store) passes ``sign=None`` and publishes unsigned, which only a door 
 action has a signer (:func:`lakehouse.control_events.control_signer_role`).
 
 **One seam to the broker.** Publishing goes over this process's own connection to the bus
-(:func:`lakehouse.bus.publish_event`): one bounded attempt, and the outbox's relay is the retry. Subscribers
-take the topic without a queue group, so every replica receives every event
-(broadcast — each replica's cache/ring-buffer stays complete).
+(:func:`lakehouse.bus.publish_event`): one bounded attempt, and the outbox's relay is the retry. Each catalog
+replica follows the topic by reading its stream by sequence (`catalog.api.control_lane`), so every replica receives every
+event and each replica's ring buffer stays complete.
 
 Two ways this fails SILENTLY in-cluster, named because "best-effort" hides them:
 

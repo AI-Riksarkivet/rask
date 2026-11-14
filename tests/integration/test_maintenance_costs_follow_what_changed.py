@@ -1,7 +1,7 @@
 """Closes-when (a) of [[LH-494]] (ADR 0198): a commit's pass costs a fixed handful of store requests, and an idle estate
 costs what is due, never a read of every table.
 
-Counted on the wire, at two estate sizes: the real catalog and the real maintenance app over one moto store, maintenance's
+Counted on the wire, at two estate sizes: the real catalog and what maintenance's worker stands on over one moto store, maintenance's
 requests passing through `store_requests.counted`, since Lance's and pyarrow's native S3 clients go through no Python
 hook. Each table is a catalog table of three commits and three fragments, and a commit's pass is measured after the pass
 before that commit.
@@ -23,8 +23,9 @@ before that commit.
   the multi-question tool: an idle table costs about one request an hour and one pass a day, and nothing walks the
   estate's files; a commit's pass costs a fixed handful plus Lance's own cleanup accounting.
 * **Each maintenance process** reads its store's root once a health round (`lakehouse.health`, every 5 s) for its
-  `/readyz`: one request of the process's own, whatever the estate, and no pass's. Here it reads once, at the app's start,
-  so no round lands inside a window the test counts (measured 2026-11-12: one landing in a pass's window cost it 51).
+  `/readyz`: one request of the process's own, whatever the estate, and no pass's. Here maintenance runs on what its
+  worker stands on and keeps no health watch, so no round lands inside a window the test counts (measured 2026-11-12:
+  one landing in a pass's window cost it 51).
 """
 
 from __future__ import annotations
@@ -33,7 +34,6 @@ import uuid
 from collections import Counter
 from collections.abc import Iterator
 from datetime import datetime
-from functools import partial
 from typing import Any, cast
 
 import pyarrow as pa
@@ -42,7 +42,6 @@ from moto.server import ThreadedMotoServer
 
 from lakehouse import file_identities
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.health import HealthWatch
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.audit import run_audit
 from maintenance.services.queue import Task, TaskQueue
@@ -59,8 +58,6 @@ _PASS_CEILING = 80
 #: The most a pass of a table of 25 versions may cost: one open of the dataset before its expiry and one after, and one
 #: count of its reclaimable versions, which reads every retained manifest; a second count would cost 25 reads more.
 _PASS_AT_25_VERSIONS = 160
-#: The maintenance app's health round here: it reads once at the app's start and not again inside the test.
-_A_DAY_SECONDS = 86400.0
 
 
 @pytest.fixture(scope="module")
@@ -182,7 +179,6 @@ class _Estate:
 
 
 def test_a_commits_pass_costs_a_fixed_handful_and_an_idle_estate_opens_no_table(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("maintenance.runtime.HealthWatch", partial(HealthWatch, interval=_A_DAY_SECONDS))
     with counted(moto_url) as store:
         env = {"MAINTENANCE_CATALOG_URL": CATALOG_URL, "MAINTENANCE_S3_ENDPOINT": store.url}
         with catalog_and_maintenance(moto_url, monkeypatch, env=env) as both:

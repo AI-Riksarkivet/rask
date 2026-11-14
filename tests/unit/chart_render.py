@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import copy
 import functools
+import json
 import pathlib
 import re
 import shutil
 import subprocess
+from typing import Any
 
 import pytest
 import yaml
@@ -248,6 +250,13 @@ def selects(selector: dict, labels: dict[str, str]) -> bool:
 _NATS_USER = re.compile(r"^\s*nats_user ([a-z0-9][a-z0-9-]*) '([^']*)' '([^']*)'$", re.MULTILINE)
 #: A stream the NATS stream Job declares and converges, never a commented-out one.
 _STREAM = re.compile(r'^[^\S\n]*declare_stream ([A-Z_]+) "([^"]+)"', re.MULTILINE)
+#: A durable consumer the stream Job converges, never a commented-out one.
+_CONSUMER = re.compile(r"^[^\S\n]*converge_consumer ([A-Z_]+) ([a-z0-9-]+)$", re.MULTILINE)
+#: The config the Job writes for a consumer before it converges it: whole, or behind the start sequence it fills in.
+_CONSUMER_CONFIG = re.compile(r"""printf '(?:%s' '|\{"opt_start_seq":%s,%s' "\$START" ')(.+)' > "\$HOME/([A-Z_]+)-([a-z0-9-]+)\.json"$""", re.MULTILINE)
+#: The consumers the retire phase spares, and the mark a consumer carries when this release declared it.
+_SPARED = re.compile(r'^[^\S\n]*DECLARED="([^"]*)"$', re.MULTILINE)
+_MARK = re.compile(r"""^[^\S\n]*MARK='("[^']+")'$""", re.MULTILINE)
 
 
 def seed_scripts(docs: tuple[dict, ...]) -> dict[str, str]:
@@ -300,6 +309,39 @@ def jetstream_streams(docs: tuple[dict, ...]) -> dict[str, str]:
         if workload.startswith("Job/") and "-nats-stream-" in workload:
             found.update(_STREAM.findall((container.get("command") or [""])[-1]))
     return found
+
+
+def bus_jobs(docs: tuple[dict, ...]) -> dict[str, str]:
+    """The script of each phase of the NATS stream Job: `declare`, which converges every stream and consumer during the
+    sync, and `retire`, which removes what the chart declares no longer once the sync is done."""
+    found: dict[str, str] = {}
+    for workload, _, container in containers(docs):
+        if workload.startswith("Job/") and "-nats-stream-" in workload:
+            found["retire" if "-nats-stream-retire-" in workload else "declare"] = (container.get("command") or [""])[-1]
+    return found
+
+
+def bus_consumers(docs: tuple[dict, ...]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Each durable consumer the stream Job's declare phase converges, by (stream, name), with the config it declares.
+
+    A consumer whose start the Job reads off the bus at run time is declared without one here.
+    """
+    script = bus_jobs(docs).get("declare", "")
+    declared = {(stream, name): json.loads(config if config.startswith("{") else "{" + config) for config, stream, name in _CONSUMER_CONFIG.findall(script)}
+    converged = set(_CONSUMER.findall(script))
+    if converged != declared.keys():
+        raise AssertionError(f"the stream Job converges {sorted(converged)} and writes a config for {sorted(declared)}")
+    return declared
+
+
+def retired_consumers(docs: tuple[dict, ...]) -> tuple[set[tuple[str, str]], str]:
+    """What the stream Job's retire phase spares, as (stream, name) pairs, and the mark by which it knows a consumer for
+    this release's own."""
+    script = bus_jobs(docs).get("retire", "")
+    spared, mark = _SPARED.search(script), _MARK.search(script)
+    if spared is None or mark is None:
+        raise AssertionError("the retire phase names no consumers it spares, or no mark it removes by")
+    return {(stream, name) for stream, _, name in (pair.partition("/") for pair in spared.group(1).split())}, mark.group(1)
 
 
 def captures(subject: str, declared: str) -> bool:

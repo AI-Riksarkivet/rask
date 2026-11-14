@@ -5,26 +5,21 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- define "lance.maintenanceEnv" -}}`
 
-One environment for maintenance's two Deployments, which are one service under one identity (ServiceAccount, Dapr app
-id, store and bus credentials): the web pods and the worker pods read the same settings and differ in three values. The
-write-event lane is on for the web pods alone (`MAINTENANCE_ARRIVAL_ENABLED`, and with it the door's signer lists), and
-the worker's drain and probe port (`MAINTENANCE_DRAIN_SECONDS`, `MAINTENANCE_WORKER_PORT`) are the worker pods' alone.
-
-## `name: {{ include "lance.fullname" . }}-maintenance`
-
-The web pods: `uvicorn maintenance.service:app`, serving the write-event lane (`/maintenance-arrival`) and running no
-task. They hold the queue's connection only to publish the passes that lane queues. Their grace, preStop, sidecar block
-and uvicorn bound are the fleet's (`lifecycle.terminationGracePeriodSeconds`, `rask.shutdownArg`): nothing here drains
-longer than a request.
+The worker's environment. Maintenance is one process under one identity (its ServiceAccount, its store role and its bus
+users), and the worker's drain (`MAINTENANCE_DRAIN_SECONDS`) is passed in from the Deployment, where the render checks
+it against the pod's grace.
 
 ## `name: {{ include "lance.fullname" . }}-maintenance-worker`
 
-The worker pods: `python -m maintenance.worker`, a process of its own and not a web app's lifespan, one worker per
-replica on the shared work queue (ADR 0198). A pass that hangs ends its own replica and never the write-event lane's,
-and the two Deployments scale apart (`maintenance.worker.replicas`). Rendered only with `dapr.enabled`: the bus is named
-to the pod only then, for its work queue and for the connection it publishes what a pass emits on. Its two bus
-credentials and its signing key it reads from the secret store under its own login. RollingUpdate with no pod unavailable: the queue holds
-one task per table and hands it to one worker at a time, so a surge pod shares the work and repeats none.
+The worker pods: `python -m maintenance.worker`, maintenance's only process, one worker per replica on the shared work
+queue (ADR 0198). It takes its tasks, its fired schedules, the store's change events and, under
+`maintenance.arrivalEnabled`, the commit announcements off the bus on its queue connection (bus user
+`maintenance-worker`), and serves nothing but its probes. Rendered only with `dapr.enabled`: the bus is named to the
+pod only then, for its work queue and for the connection it publishes what a pass emits on. Its bus credentials and its
+signing key it reads from the secret store under its own login. The pod carries no `dapr.io/*` annotation or label: it
+takes no cron tick, its schedules being NATS message schedules on its own work queue. RollingUpdate with no pod
+unavailable: the queue holds one task per table and hands it to one worker at a time, so a surge pod shares the work and
+repeats none.
 
 ## `terminationGracePeriodSeconds: {{ $grace }}`
 
@@ -32,31 +27,6 @@ one task per table and hands it to one worker at a time, so a surge pod shares t
 running finish for `maintenance.queue.drainSeconds` rather than leave it to be delivered again. The render refuses a
 drain the grace cannot hold after preStop and the teardown, since a replica killed mid-pass is what the drain exists to
 avoid. Held by `tests/unit/test_invariants.py::test_a_queue_value_the_worker_cannot_run_with_fails_the_render`.
-
-## `dapr.io/enable-app-health-check: "true"`
-
-This pod's sidecar blocks its shutdown for the grace less the teardown, which holds preStop and the whole drain, so it
-outlives the worker's drain. A blocking sidecar leaves early only when its app turns unhealthy,
-and it learns that from a health check: with none it holds the pod in Terminating for the whole block however soon the
-worker is done. Measured on daprd 1.19.0-rc.4 (2026-11-10): block 40 s and the app gone after 5 s, the sidecar left at
-40.0 s with no check and at 7.9 s with one (interval 2 s, threshold 2); with the app still up it held the whole block.
-On the estate a worker pod under the block alone stayed Terminating 113 s on every rollout (helm revision 33). So the
-sidecar probes the worker's `/livez` on `maintenance.worker.port`, which the worker serves from a thread that keeps
-answering through the drain. A health check also starts and stops a sidecar's subscriptions with the app's health, so
-only this pod has one: it subscribes to nothing. Held by `tests/unit/test_sidecar_drain_budget.py`.
-
-## `- { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }`
-
-Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
-symmetric with the lineage service (the audit's consistency fix).
-
-## `{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.appId) | nindent 0 }}`
-
-Gated on the sidecar because that is what it VERIFIES — the token exists to check the
-`dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
-to check and the reference dangles: the Secret is not rendered and the pod never starts.
-The one route it guards is the write-event lane's delivery (`/maintenance-arrival`, `require_dapr_token`): maintenance
-has no Dapr cron binding, its schedules being NATS message schedules on its own work queue.
 
 ## `- { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root)...`
 
@@ -89,18 +59,12 @@ upgrade, which is a bool_parsing crash at boot.
 
 ## `- { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ $arrival | quote }} }`
 
-The write-event lane: a commit's announcement holds its table's pass a delay out (ADR 0198). It is the web pods'
-alone: `$arrival` is `maintenance.arrivalEnabled` for them and false for the worker pods, which serve no route.
-Rendered on and off, so each process reads the chart's decision rather than its own default. Its dead-letter topic
-and the signature door settings (`lance.doorEnv`, the `/maintenance-arrival` door) render only with the lane on,
-because only then is the route registered.
-
-## `- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.appId) | quote }} }`
-
-The component the write-event lane SUBSCRIBES through, maintenance's own (`lance.subPubsub`): `queueGroupName` lives on
-the COMPONENT, so the web replicas are one competing-consumer group and a commit holds its table's pass once, not once
-per replica. Rendered with the lane, for the web pods alone: the worker subscribes to nothing, and what a pass emits
-it publishes on its own connection to the bus (`lance.busEnv`, `lakehouse.bus`).
+The write-event lane: a commit's announcement holds its table's pass a delay out (ADR 0198). `$arrival` is
+`maintenance.arrivalEnabled`, rendered on and off, so the worker reads the chart's decision rather than its own default.
+On, the worker pulls the durable consumer `maintenance-arrival` on LINEAGE, which the stream Job declares under the
+same value (`lance.busConsumers`), so its replicas compete for each announcement and one of them holds the task it asks
+for. The signature door settings (`lance.doorEnv`) render only with the lane on, because only then does the worker
+check an announcement's signature.
 
 ## `- { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }`
 
@@ -149,8 +113,7 @@ an ungated writer is to plan only.
 
 ## `{{- $check := required "maintenance.orphanCheck is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.maintenance.orphanCheck }}`
 
-Each table's orphan check (owner, 2026-11-09/10) runs on the worker pods alone, which run every task: the web pods take
-none, so its three values render only there. Each is `required`, so a release upgraded with `--reuse-values` from one
+Each table's orphan check (owner, 2026-11-09/10) is a task the worker runs. Each of its three values is `required`, so a release upgraded with `--reuse-values` from one
 that predates them fails the render rather than starting a worker on a setting pydantic would refuse; `enabled: false`
 is a value, not an absent one, and renders. The schema holds `ceilingDays` to at least the one-day floor and
 `maxSeconds` to the 60 s the worker's settings accept.
@@ -221,7 +184,7 @@ catalog vend:
 MAINTENANCE LOGS IN TO THE SECRET STORE AS ITSELF ([[XC-199]]). The store's address, its role `<release>-maintenance`, the
 mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its signing key and its work queue's
 bus credential come ONLY from the store, read under the process's own login at boot and again while it runs ([[XC-082]],
-ADR 0166), never from pod env and never through its sidecar. A store that does not serve them fails the start closed.
+ADR 0166), never from pod env. A store that does not serve them fails the start closed.
 
 ## `{{- $extra := list }}`
 
@@ -249,12 +212,12 @@ provisioning hook, `object-store-provisioning.yaml`, creates on the dev store) p
 
 ## `args:`
 
-No `command:`, so the image's tini, its ENTRYPOINT, stays the container's PID 1 and runs uvicorn's command line from
+No `command:`, so the image's tini, its ENTRYPOINT, stays the container's PID 1 and runs the worker's command line from
 `args` ([[LH-313]]; `services.yaml.md` § `args:`).
 
 ## `lance.spreadConstraints`
 
-Both Deployments spread their replicas over the nodes by their own component label, as the catalog and lineage do
+The worker spreads its replicas over the nodes by its own component label, as the catalog and lineage do
 (`services.yaml.md`): two worker replicas on one node are one node's loss away from nobody pulling a task, which pages
 only once `MaintenanceQueueStalled` or `MaintenanceTaskMetricsMissing` has waited out its window. `ScheduleAnyway`, so a
 one-node estate still schedules both.
@@ -262,5 +225,4 @@ one-node estate still schedules both.
 ## `resources:` on the worker
 
 The worker names the `maintenanceWorker` tier (`values.yaml` `resources.maintenanceWorker`), sized from its measured
-working set (ADR 0198, 2026-11-13); the web pods, which serve the write-event lane and run no pass, keep the default
-tier.
+working set (ADR 0198, 2026-11-13).

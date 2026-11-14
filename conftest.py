@@ -100,14 +100,14 @@ _strip_harness_otlp()
 os.environ.setdefault("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
 
 # THE SAME DECLARATION, for the same control one layer down. `require_dapr_token` refuses a door with
-# no `APP_API_TOKEN` to compare against: a guard that cannot authenticate must not admit. Dozens of
-# suites drive a Dapr-delivered route — the cron bindings, the pub/sub subscriptions, the DLQ drains —
+# no `APP_API_TOKEN` to compare against: a guard that cannot authenticate must not admit. Many
+# suites drive a cron tick's route — the relays, the reconcile, the expiry and reclaim ticks —
 # to exercise what the HANDLER does, and configure no token because the door is not what they are
 # testing. That is "open because I meant it", and it is declared here rather than left implicit.
 #
 # It costs nothing in coverage, because the door has its own tests and they decide this variable for
-# themselves: `test_annotation_jobs_gate.py` `delenv`s it and `test_produce_auth.py` sets it `false`,
-# which `setdefault` leaves them free to do. The DEPLOYMENT half is gated separately by
+# themselves: `test_the_app_token_can_arrive_without_the_environment.py` `delenv`s it, which `setdefault`
+# leaves it free to do. The DEPLOYMENT half is gated separately by
 # `test_every_dapr_door_has_a_token_to_check.py`, reading the render — so a service that ships with no
 # token to check is caught there, not hidden here.
 os.environ.setdefault("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")

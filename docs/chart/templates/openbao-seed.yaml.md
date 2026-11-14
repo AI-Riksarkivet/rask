@@ -125,8 +125,8 @@ that left the table with no stored secret left to name it) while every credentia
 the table holds now is newer and keeps admitting. Written only when the bound moves.
 
 Measured 2026-11-07 on nats-server 2.14.2, nsc 2.15.0 and nats.go 1.39.1: a client holding a revoked JWT is closed after
-two refused reconnects, which is the closed connection `lakehouse.bus_watchdog` restarts a sidecar from, and the one a
-service's own connection opens again from with the credential the store holds then (`lakehouse.bus`).
+two refused reconnects, which is the closed connection a service's own connection opens again from with the
+credential the store holds then (`lakehouse.bus`).
 
 ## `G=$DEV_CREDENTIALS`
 
@@ -175,7 +175,7 @@ LH-497: the key the catalog derives every announcement's run id under, which onl
 ## `bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kub...`
 
 THE STORE'S KUBERNETES AUTH, which every identity that reads it logs in through: ESO's SecretStore, as the role
-`{{ $.Values.externalSecrets.role }}` bound to ESO's ServiceAccount, and each app's sidecar, as the role
+`{{ $.Values.externalSecrets.role }}` bound to ESO's ServiceAccount, and each app (and its sidecar, where one runs), as the role
 `<release>-<app id>` bound to that app's ServiceAccount and to the audience its pod's projected token carries
 ([[XC-165]]). Measured 2026-09-08: the operator ran 3/3 with ZERO SecretStores in the cluster while nothing enabled that
 auth backend or created that role, so every ExternalSecret sat in SecretSyncedError, which reads as a broken deploy

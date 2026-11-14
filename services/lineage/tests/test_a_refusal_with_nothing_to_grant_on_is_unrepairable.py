@@ -1,14 +1,14 @@
 """A refusal naming outputs that carry no tuple raises the UNREPAIRABLE type ([[LH-166]]).
 
-The consumer's ack is chosen by the EXCEPTION TYPE, so this is where the two refusals are separated —
+The consumer's verdict is chosen by the EXCEPTION TYPE, so this is where the two refusals are separated —
 `test_an_unrepairable_event_is_consumed_not_parked.py` proves the consumer honours the split, and this
 proves the gate makes it correctly. Neither test is sufficient alone: a gate that always raised the
-plain error would pass the consumer's suite, and a consumer that acked everything would pass this one.
+plain error would pass the consumer's suite, and a consumer that took everything would pass this one.
 
 WHY THE LINE IS "IS THERE ANYTHING TO GRANT ON". A named person denied on a GOVERNED table is
 repairable — write the tuple, and the same event succeeds on its next presentation — so that refusal
-keeps the DROP that parks it. A table FGA has no record of cannot be granted on at all, so parking the
-event appends a dead-letter copy per restart about something that can never be accepted.
+is parked. A table FGA has no record of cannot be granted on at all, so parking the event keeps a copy
+per replay about something that can never be accepted.
 
 MEASURED on the deployed estate 2026-09-19: all 7 parks in a six-hour window named four outputs
 (`e2e-ns$t74eff1b3`, `lh144b5e42f0dfns$aa`, `lh144b5e42f0dfns$bb`, `lh098bbff657cns$frag`) and a direct

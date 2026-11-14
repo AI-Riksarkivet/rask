@@ -19,3 +19,11 @@ multi-replica-correct fan-out with zero new dependencies. `deliverPolicy=new` + 
 here (where it would be a bug for the cascade stage runners) because events are **refresh hints**, not the
 durable record — the audit trail is — so replaying history into a fresh buffer would only re-announce
 stale changes; a client bridging a restart just sees `reset` and re-reads authoritative state.
+
+**Amended 2026-11-14 (#787, XC-199 step D4).** The catalog now holds a NATS client of its own (`lakehouse.bus`) and
+follows `catalog.control.v1` on it, so the dedicated Component `catalog-control-pubsub` is gone and the rationale's "the
+catalog has no NATS client and must not grow one" no longer holds. The semantics stand: every replica receives every
+event by reading the stream by sequence, a starting replica begins after the stream's last message rather than replaying
+history into its buffer, and the per-replica ring buffer is unchanged. The read is recorded in
+[ADR 0182](0182-each-catalog-replica-hears-the-control-broadcast-through-a-durable-of-its-own.md), superseded in its
+mechanism the same day. The reopening by ADR 0199 (the poll reads the stream by sequence) is still open.

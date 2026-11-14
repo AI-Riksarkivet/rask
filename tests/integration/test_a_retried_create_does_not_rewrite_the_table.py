@@ -1,10 +1,9 @@
 """A create replayed with the same `Idempotency-Key` answers once and executes once.
 
-§ Q17-32. `dapr-resiliency.yaml` retries a write door's failure, and until now the catalog's 91 write
-routes carried no key on any of them — so a replay of `POST /v1/table/{id}/create` re-entered
-`create_governed_table`: under `mode=Overwrite` that DROPS AND REWRITES the dataset, strips and
-re-seeds the ACL, and emits a second `table_created`; under `mode=Create` it answers AlreadyExists, so
-a fully successful create surfaces as a 409 nobody can tell from a name collision.
+§ Q17-32. A retrying client replays a write door's failure, and a replay of `POST /v1/table/{id}/create`
+that carries no key re-enters `create_governed_table`: under `mode=Overwrite` that DROPS AND REWRITES the
+dataset, strips and re-seeds the ACL, and emits a second `table_created`; under `mode=Create` it answers
+AlreadyExists, so a fully successful create surfaces as a 409 nobody can tell from a name collision.
 
 THE KEY IS OPTIONAL AND THE FIRST TEST HERE IS THAT IT STAYS SO. The Lance Namespace spec defines no
 such header and a stock client must work with no rask SDK, so a door that required it would fail

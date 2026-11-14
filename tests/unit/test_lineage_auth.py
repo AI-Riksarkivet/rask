@@ -458,7 +458,7 @@ def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
 
 def test_output_authz_unwired_client_fails_closed() -> None:
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request(), _settings(**_FULL_AUTH), _token()))
+        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request().app, _settings(**_FULL_AUTH), _token()))
 
 
 def test_output_authz_output_less_still_requires_auth() -> None:
@@ -467,12 +467,12 @@ def test_output_authz_output_less_still_requires_auth() -> None:
     # unauthenticated caller could record a forged inputs-only run in the governed feed.
     with pytest.raises(UnauthenticatedError):
         asyncio.run(
-            fga_deps.enforce_output_authz(_event(inputs=["a$b"]), _request(decider=OpenFgaDecider(cast("Any", object()))), _settings(**_FULL_AUTH), None)
+            fga_deps.enforce_output_authz(_event(inputs=["a$b"]), _request(decider=OpenFgaDecider(cast("Any", object()))).app, _settings(**_FULL_AUTH), None)
         )
 
 
 # --- A service principal on the HTTP ingest ----------------------------------------------------------
-# A sidecar-less in-cluster producer (a user's pipeline job on its own compute, ADR 0155) POSTs the HTTP ingest with
+# An in-cluster producer with no bus user (a user's pipeline job on its own compute, ADR 0155) POSTs the HTTP ingest with
 # its pod's projected token, which the door verifies into a `ServicePrincipal` (`lakehouse.governed.machine_identity`).
 # The door itself is driven over HTTP in `services/lineage/tests/test_a_claimed_service_name_authenticates_nobody.py`;
 # this pins what the ingest gates do with the principal it hands them.
@@ -521,7 +521,7 @@ def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(held: s
         asyncio.run(
             fga_deps.enforce_output_authz(
                 _service_run(),
-                _request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))),
+                _request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))).app,
                 _settings(**_FULL_AUTH),
                 security.ServicePrincipal.for_account(_SERVICE_ACCOUNT),
             )

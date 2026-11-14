@@ -10,7 +10,7 @@ runs on one replica at a time, as the queue hands it out.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Collection
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -23,10 +23,22 @@ from lakehouse.control_emit import ControlEmitter
 from lakehouse.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
-from maintenance.core.metrics import create_orphan_check_series, create_task_series
+from maintenance.core.metrics import create_orphan_check_series, create_signature_refused_series, create_task_series
+from maintenance.services.arrival import Arrivals
 from maintenance.services.audit import run_audit, run_scan
 from maintenance.services.orphan_check import FLOOR, run_orphan_check
-from maintenance.services.queue import BUS_USER, SAMPLE_SECONDS, QueueUnavailableError, Task, TaskKind, TaskQueue, Worker, sample_queue
+from maintenance.services.queue import (
+    ARRIVALS_SAMPLED,
+    BUS_USER,
+    SAMPLE_SECONDS,
+    SAMPLED_CONSUMERS,
+    QueueUnavailableError,
+    Task,
+    TaskKind,
+    TaskQueue,
+    Worker,
+    sample_queue,
+)
 from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask, emit_pass_lineage, emit_zero_baselines, run_table_pass
 from maintenance.services.trash_task import run_trash_task
@@ -82,7 +94,7 @@ async def _check_orphans(task: Task, *, settings: MaintenanceSettings, queue: Ta
 @asynccontextmanager
 async def connected_queue(settings: MaintenanceSettings) -> AsyncGenerator[TaskQueue | None]:
     """The work queue, connected as this service's own bus user and drained on the way out; ``None`` for a stack with no
-    bus. The web pods hold it for the write-event lane's publishes alone, and run no worker.
+    bus.
 
     The credential is read from the store, never the environment, and held only in this process.
 
@@ -150,6 +162,7 @@ async def _worker_on(
     emit_zero_baselines()
     create_task_series(get_args(TaskKind.__value__))
     create_orphan_check_series()
+    create_signature_refused_series()
     worker = Worker(
         queue,
         run=partial(run_task, settings=settings, queue=queue, emitter=emitter, control=control),
@@ -161,14 +174,17 @@ async def _worker_on(
         max_seconds_by_kind=settings.max_seconds_by_kind,
         retry_ended_seconds=settings.recheck_hours * 3600,
         store_events=StoreEvents(settings, queue).hold_passes,
+        arrivals=Arrivals(settings, queue).hold_task if settings.arrival_enabled else None,
         end=end,
     )
+    sampled = (*SAMPLED_CONSUMERS, ARRIVALS_SAMPLED) if settings.arrival_enabled else SAMPLED_CONSUMERS
     async with Supervisor(end=end) as loops:
         loops.keep("maintenance-tasks", worker.run_tasks)
         loops.keep("maintenance-due", worker.run_due)
         loops.keep("maintenance-store-events", worker.run_store_events)
+        loops.keep("maintenance-arrivals", worker.run_arrivals)
         loops.keep("maintenance-cadences", partial(_keep_cadences, worker, queue, settings))
-        loops.keep("maintenance-queue-sampler", partial(_sample_queue, worker, queue))
+        loops.keep("maintenance-queue-sampler", partial(_sample_queue, worker, queue, sampled))
         try:
             yield
         finally:
@@ -199,9 +215,9 @@ async def _keep_cadences(worker: Worker, queue: TaskQueue, settings: Maintenance
             log.warning("maintenance_cadences_unasserted", extra={"error": str(exc)[:300]})
 
 
-async def _sample_queue(worker: Worker, queue: TaskQueue) -> None:
-    """Sample the queue's streams and durables into their gauges every ``SAMPLE_SECONDS`` until the worker stops, the first
-    at once (:func:`maintenance.services.queue.sample_queue`)."""
+async def _sample_queue(worker: Worker, queue: TaskQueue, consumers: Collection[tuple[str, str]]) -> None:
+    """Sample the queue's streams and ``consumers`` into their gauges every ``SAMPLE_SECONDS`` until the worker stops, the
+    first at once (:func:`maintenance.services.queue.sample_queue`)."""
     while not worker.stopping():
-        await sample_queue(queue)
+        await sample_queue(queue, consumers)
         await worker.pause(SAMPLE_SECONDS)

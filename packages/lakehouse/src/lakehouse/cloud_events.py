@@ -18,8 +18,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
+from opentelemetry import propagate
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from lakehouse.control_events import CatalogControlEvent, control_signer_role
@@ -27,8 +28,15 @@ from lakehouse.lineage.schemas import TERMINAL_STATES
 from lakehouse.lineage_events import dataset_uuids, event_identity
 
 
+if TYPE_CHECKING:
+    from opentelemetry.context import Context
+
+
 #: The content type of a structured-mode CloudEvent in the JSON format: the whole envelope is the message body.
 STRUCTURED_CONTENT_TYPE: Final = "application/cloudevents+json"
+#: The W3C Trace Context fields CloudEvents' distributed tracing extension carries as attributes of the same names: a
+#: publish stamps its own on the envelope, and a consumer handles the event under them (:func:`trace_context`).
+TRACE_ATTRIBUTES: Final = ("traceparent", "tracestate")
 
 _SPEC_VERSION: Final = "1.0"
 _DATA_CONTENT_TYPE: Final = "application/json"
@@ -75,6 +83,12 @@ class CloudEvent(BaseModel):
         """
         attributes = self.model_dump(mode="json", exclude={"data"}, exclude_none=True)
         return {"specversion": _SPEC_VERSION, "datacontenttype": _DATA_CONTENT_TYPE, **attributes, "data": self.data}
+
+
+def trace_context(envelope: Mapping[str, object]) -> Context:
+    """The trace context ``envelope``'s publish stamped it with, for its handling to continue; the empty context for an
+    envelope that carries none."""
+    return propagate.extract({field: value for field in TRACE_ATTRIBUTES if isinstance(value := envelope.get(field), str)})
 
 
 def lineage_envelope(event: Mapping[str, Any]) -> CloudEvent:

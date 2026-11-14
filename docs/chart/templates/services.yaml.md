@@ -3,10 +3,16 @@
 Rationale for `chart/templates/services.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
+## `{{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}`
+
+The catalog is named its bus under `dapr.enabled` (`lance.busEnv`), so with it off a catalog told to emit control
+events would publish none and follow none. The render refuses the pair rather than ship a switch that does nothing.
+
 ## `apiVersion: apps/v1`
 
-Catalog (producer): creates Lance tables on S3 and publishes its OpenLineage events and its control broadcast on NATS
-JetStream, over a connection of its own as the bus user `lance.busEnv` names it (`lakehouse.bus`).
+Catalog (producer): creates Lance tables on S3 and publishes its OpenLineage events and its control-plane change events
+on NATS JetStream, over a connection of its own as the bus user `lance.busEnv` names it (`lakehouse.bus`). On the same
+connection each replica follows the control topic into its own buffer (`catalog.api.control_lane`).
 
 ## `args:`
 
@@ -84,8 +90,8 @@ deployment needs its regional STS endpoint here, for which the chart has no valu
 
 THE CATALOG LOGS IN TO THE SECRET STORE AS ITSELF ([[XC-199]]). The store's address, its role `<release>-catalog`, the
 mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its secrets (its signing key, its
-commit-id key, the app token its Dapr doors check) come ONLY from the store, read under the process's own login at boot
-and again on a TTL (ADR 0166). None is in pod env, and none is read through its sidecar. Lineage's Deployment carries
+commit-id key, the app token its cron ticks' routes check, its bus credential) come ONLY from the store, read under the
+process's own login at boot and again on a TTL (ADR 0166). None is in pod env. Lineage's Deployment carries
 the same include for its own role.
 
 ## `- { name: LANCE_VENDING_MODE, value: {{ .Values.vending.mode | quote }} }`
@@ -133,8 +139,9 @@ the two services cannot name different namespaces.
 ## `- { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.cata...`
 
 Control-plane change-events (opt-in, best-effort: the governance/metadata stream). ON: mutations publish a
-CatalogControlEvent on catalog.control.v1 over the catalog's own connection to the bus, and every replica receives
-every event through a DEDICATED broadcast component (no queueGroupName) and buffers it for GET /management/v1/events. hasKey+
+CatalogControlEvent on catalog.control.v1 over the catalog's own connection to the bus, and every replica follows
+every event on that connection, by reading the stream by sequence, and
+buffers it for GET /management/v1/events. hasKey+
 ternary (NOT `| default`, which treats false as empty) so a key missing under
 `helm upgrade --reuse-values` renders the default, not "" (pydantic bool_parsing crash).
 
@@ -155,16 +162,13 @@ The binding name IS the route this app serves it on — one string with the Comp
 
 ## `{{- if .Values.dapr.enabled }}`
 
-Explicit APP_API_TOKEN so require_dapr_token can verify the `dapr-api-token` header the sidecar
-stamps on /control-events delivery → a forged direct in-cluster POST is 403'd. Without it the
-guard silently no-ops and any pod could inject fabricated change-events into every replica's
-buffer. Same secret + pattern as the lineage and maintenance apps; the catalog
-lifespan also asserts it is set when control eventing is on (fail-closed, not silently open).
+The app token lets `require_dapr_token` verify the `dapr-api-token` header the sidecar stamps on each cron tick, so a
+forged direct in-cluster POST to a tick's route is 403'd. Same secret and pattern as lineage's.
 
 ## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}`
 
-Same rule as maintenance's: this verifies the header the SIDECAR
-stamps, so without one there is nothing to verify and the Secret is not rendered.
+Gated on the sidecar because that is what it verifies: without one nothing stamps the header, so there is nothing to
+verify, and the Secret is not rendered.
 
 ## `{{- if not .Values.autoscaling.enabled }}`
 
@@ -207,7 +211,7 @@ still honors an explicit false.
 ## `sessionAffinity: ClientIP`
 
 ONE CALLER, ONE REPLICA — because the control-event cursor is per-replica. Each catalog replica
-subscribes to `catalog.control.v1` with NO queueGroupName (broadcast), so every replica keeps its
+follows every event on `catalog.control.v1` by reading its stream by sequence, so every replica keeps its
 own ring buffer and its own monotonic counter (`core/control_buffer.py`). Round-robined across the
 two replicas `values-prod.yaml` runs, a polling caller hands replica A's cursor to replica B, which
 reads it against a counter that never issued it.
@@ -229,7 +233,7 @@ Service's endpoints itself rather than through its ClusterIP, so the data plane'
 address never meets kube-proxy's affinity. An implementation that forwarded to the ClusterIP instead
 would send every edge request to one replica. The console carries no cursor: it reads the buffer
 from `since=0` on each read (`frontend/console/src/lib/remote/warehouses.api.ts`), and every replica
-holds the same broadcast events.
+holds the same events.
 
 ## `timeoutSeconds: 10800`
 
@@ -239,8 +243,10 @@ here so the window is a decision rather than an inherited one.
 
 ## `apiVersion: apps/v1`
 
-Lineage (consumer) — SUBSCRIBES (via its daprd sidecar) to the lineage topic and records each event in its
-feed and edge tables, Lance tables the catalog governs (ADR 0158). It keeps no database.
+Lineage (consumer): pulls the lineage topic from the durable consumer `lineage-ingest` on its own connection to the bus
+(`lineage.api.ingest_lane`, `lance.busEnv`) and records each event in its feed and edge tables, Lance tables the
+catalog governs (ADR 0158). It keeps no database. Its replicas share the consumer, so each event is delivered to one
+of them.
 
 ## `args:`
 
@@ -261,8 +267,8 @@ the whole public estate as one client.
 
 ## `{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}`
 
-Explicit APP_API_TOKEN (recommended k8s approach) so require_dapr_token can verify the
-`dapr-api-token` header the sidecar stamps on delivery → forged direct POSTs are 403'd.
+The app token lets `require_dapr_token` verify the `dapr-api-token` header the sidecar stamps on
+the relay's cron tick, so a forged direct POST to the tick's route is 403'd.
 
 Gated on the sidecar for the reason the guard exists: with no sidecar nothing stamps the
 header, so there is nothing to verify — and the Secret is not rendered, so the reference
@@ -291,25 +297,21 @@ The forwarder (ADR 0158): the relay tick sends every recorded event, as standard
 the secret in the secret store, which lineage reads under its own login on every tick, and only lineage's store role
 reads it (`lance.storeReads`).
 
-## `- { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.dap...`
+## `{{- $delivery := required "services.lineage.delivery is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.services.lineage.delivery }}`
 
-The lineage app's OWN subscriber component (queueGroupName=lineage, deliverPolicy=all) —
-must match the Component name in dapr-component.yaml (both render lance.subPubsub).
-
-## `- { name: LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events" }`
-
-Dapr-native DLQ (ships with the Resiliency CRD): lineage deliveries that exhaust the
-sidecar retry schedule park here (visibility only — replay-from-stream stays the recovery).
-
-## `- { name: LINEAGE_DLQ_PUBSUB, value: "{{ include "lance.subPubsub" (list $root .Values.services.lineage.dap...`
-
-The parking subscription's OWN durable component (dapr-component.yaml, `-dlq` suffix) —
-never the main deliverPolicy=all component, whose replay would re-park the whole retained
-DLQ backlog.
+The ingest lane's numbers, rendered from the same values the stream Job declares `lineage-ingest` with
+(`lance.busConsumers`), so the bound lineage handles at once and the consumer's `max_ack_pending` are one value, and the
+ack wait lineage cuts a handling 10 s short of is the consumer's own. `LINEAGE_DELIVERY_ATTEMPTS` and
+`LINEAGE_DELIVERY_RETRY_SECONDS` are lineage's own rule for ending a delivery (`lakehouse.bus_delivery`): a delivery
+it cannot record is asked for again after the retry delay, and on its last attempt is parked in the provenance
+namespace's `refusals` table, from which the estate admin's replay door (`POST /admin/dlq/parked/{run_id}/replay`)
+records it. The consumer's own `max_deliver` is unlimited, so this rule is the only one that ends a delivery; nothing
+is published to a dead-letter topic. 5 attempts 120 s apart (the defaults) ride out an outage of 8 minutes. Each is
+`required`, so a release upgraded with `--reuse-values` from one without them fails the render.
 
 ## `- { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }`
 
-Mounts the relay tick's route at this binding name (matches the bindings.cron component above).
+Mounts the relay tick's route at this binding name (matches the bindings.cron component in dapr-component.yaml).
 
 ## `{{- include "lance.objectStoreSessionEnv" (list $root "LINEAGE" "lineage") | nindent 12 }}`
 

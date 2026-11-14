@@ -1,7 +1,7 @@
 """An OpenFGA item the server could not answer is an outage at both lineage gates, never a verdict.
 
 The SDK hands an unanswered BatchCheck item back as ``allowed=False`` beside a ``CheckError``. Read as
-a deny, the bus door parks a delivery as a refusal (or consumes it as unrepairable, deleting the
+a deny, the bus door parks a delivery as a refusal (or takes it as unrepairable, deleting the
 provenance) and the read filter hides a dataset the caller may hold a grant on.
 
 The other half: a governed dataset an event names without its table's uuid is no object any grant can name
@@ -15,14 +15,14 @@ classes; nothing here replaces ``batch_check`` itself.
 from __future__ import annotations
 
 import asyncio
-import logging
 import uuid
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import Request
 from lance_namespace import ServiceUnavailableError
+from lineage_lane import Feed, governed, started
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientBatchCheckRequest, ClientTuple
 from openfga_sdk.client.models.batch_check_response import ClientBatchCheckResponse
@@ -30,17 +30,16 @@ from openfga_sdk.client.models.batch_check_single_response import ClientBatchChe
 from openfga_sdk.models.check_error import CheckError
 from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
 from openfga_sdk.models.read_response import ReadResponse
-from starlette.testclient import TestClient
 
+from lakehouse.bus_delivery import Outcome, Settlement
 from lakehouse.governed import fga
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
-from lakehouse.ns_errors import install_problem_handlers
 from lineage.api import fga_deps
-from lineage.core.config import LineageSettings
+from lineage.core.config import LineageSettings, get_settings
 from lineage.models import RunEvent
 
 
@@ -98,91 +97,48 @@ def _event(*, outputs: tuple[str, ...] = (), inputs: tuple[str, ...] = ()) -> Ru
     )
 
 
-class _Repo:
-    """The capturing store plus both reads the bus door's authz path makes."""
-
-    def __init__(self) -> None:
-        self.ingested: list[RunEvent] = []
-
-    async def record(self, event: RunEvent) -> None:
-        self.ingested.append(event)
-
-    async def run_author(self, _run_id: str) -> str | None:
-        return None
-
-    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
-        return None
-
-
-def _bus_door(monkeypatch: pytest.MonkeyPatch, fga_client: _OpenFga) -> tuple[TestClient, _Repo]:
-    """The REGISTERED bus route with production wiring, so the authorizer is the one `register_dapr` passes."""
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
-    monkeypatch.setenv("RASK_FGA_ENABLED", "true")
-    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
-    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://idp.invalid/dex")
-    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
-    monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
-
-    from lineage.api.dapr import register_dapr
-    from lineage.core.config import get_settings
-
-    get_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-    register_dapr(app)
-    get_settings.cache_clear()
-    repo = _Repo()
-    app.state.provenance = repo
-    app.state.decider = OpenFgaDecider(cast("OpenFgaClient", fga_client))
-    return TestClient(app), repo
-
-
-def _deliver(client: TestClient, event: RunEvent | None = None) -> dict[str, Any]:
-    body = {"data": (event or _event()).model_dump(by_alias=True)}
-    response = client.post("/lineage-events", json=body, headers={"dapr-api-token": "s3cret"})
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def test_the_bus_harness_records_a_delivery_openfga_answered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without this, the RETRY below could be a door that never reached OpenFGA."""
-    fga_client = _OpenFga(unanswered=set())
-    client, repo = _bus_door(monkeypatch, fga_client)
-
-    assert _deliver(client) == {"status": "SUCCESS"}
-    assert len(repo.ingested) == 1
-    assert fga_client.asked == [_PAGES_OBJECT]
+def _deliver(monkeypatch: pytest.MonkeyPatch, fga_client: _OpenFga, event: RunEvent | None = None) -> tuple[Settlement, Feed, float]:
+    """Deliver ``event`` to lineage's own ingest lane, its gate asking ``fga_client``; answers the settlement, the feed,
+    and the delay the lane gives a delivery it asks for again."""
+    governed(monkeypatch)
+    with started(monkeypatch, Feed(), decider=OpenFgaDecider(cast("OpenFgaClient", fga_client))) as lineage:
+        settled = lineage.deliver({"id": "evt-1", "data": (event or _event()).model_dump(by_alias=True)})
+        retry_seconds = get_settings().delivery_retry_seconds
+    return settled, lineage.feed, retry_seconds
 
 
 def test_a_bus_delivery_openfga_could_not_answer_is_retried_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    client, repo = _bus_door(monkeypatch, _OpenFga(unanswered={_PAGES_OBJECT}))
+    fga_client = _OpenFga(unanswered={_PAGES_OBJECT})
 
-    assert _deliver(client) == {"status": "RETRY"}, "an unanswered item was treated as a verdict on the delivery"
-    assert repo.ingested == []
+    settled, feed, retry_seconds = _deliver(monkeypatch, fga_client)
+
+    assert settled == Settlement(outcome=Outcome.AGAIN, delay_seconds=retry_seconds), "an unanswered item was treated as a verdict on the delivery"
+    assert (feed.recorded, feed.kept, fga_client.asked) == ([], {}, [_PAGES_OBJECT])
 
 
 @pytest.mark.parametrize("output", ["a:b", "file//my scans"], ids=["second-colon", "space"])
 def test_an_output_that_names_no_object_is_consumed_as_ungoverned_without_asking(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
     """An output a bus delivery names without its table's uuid is no object a grant can name, and a redelivery or a
-    replay carries the same bytes, so the refusal is one nothing can repair ([[LH-166]]): consumed, not ingested, and
-    not parked or retried. Neither a check nor a tuple read is sent for it: its name is no object, and a space in it
-    fails the whole OpenFGA request."""
+    replay carries the same bytes, so the refusal is one nothing can repair ([[LH-166]]): taken, not recorded, and
+    neither parked nor asked for again. Neither a check nor a tuple read is sent for it: its name is no object, and a
+    space in it fails the whole OpenFGA request."""
     fga_client = _OpenFga(unanswered=set())
-    client, repo = _bus_door(monkeypatch, fga_client)
 
-    assert _deliver(client, _event(outputs=(output,))) == {"status": "SUCCESS"}
-    assert repo.ingested == []
+    settled, feed, _ = _deliver(monkeypatch, fga_client, _event(outputs=(output,)))
+
+    assert settled == Settlement(outcome=Outcome.TAKEN)
+    assert (feed.recorded, feed.kept) == ([], {})
     assert all(obj == _PAGES_OBJECT for obj in fga_client.asked), fga_client.asked
     assert fga_client.read_asked == []
 
 
 def test_an_input_that_names_no_object_is_refused_without_asking(monkeypatch: pytest.MonkeyPatch) -> None:
     fga_client = _OpenFga(unanswered=set())
-    client, repo = _bus_door(monkeypatch, fga_client)
 
-    assert _deliver(client, _event(inputs=("a#b",))) == {"status": "DROP"}
-    assert repo.ingested == []
+    settled, feed, _ = _deliver(monkeypatch, fga_client, _event(inputs=("a#b",)))
+
+    assert settled == Settlement(outcome=Outcome.PARKED)
+    assert (feed.recorded, list(feed.kept)) == ([], ["dead_letter:evt-1"])
     assert fga_client.asked == [_PAGES_OBJECT]
 
 

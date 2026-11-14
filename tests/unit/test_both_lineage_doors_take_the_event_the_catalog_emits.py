@@ -38,6 +38,7 @@ from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from catalog.core.lineage_emit import build_write_event
+from lakehouse.bus_delivery import Verdict
 from lakehouse.ns_errors import install_problem_handlers
 from lineage.api.v1.router import api_router
 from lineage.core.metrics import Door
@@ -124,6 +125,6 @@ def test_the_bus_door_accepts_it(operation: str, door: str) -> None:
 
     # CAST, not a subclass: the fake records which shape arrived, which is the whole assertion, and the real
     # store would need a catalog for a test about the parse.
-    status = asyncio.run(handle_cloud_event(cast(ProvenanceStore, repo), {"data": _emitted(operation)}, door=Door.SUBSCRIBER))
-    assert status == {"status": "SUCCESS"}, f"{operation} -> {status}"
+    verdict = asyncio.run(handle_cloud_event(cast(ProvenanceStore, repo), {"data": _emitted(operation)}, door=Door.SUBSCRIBER))
+    assert verdict is Verdict.TAKEN, f"{operation} -> {verdict}"
     assert len(getattr(repo, door)) == 1, f"{operation} was recorded as neither shape: runs={repo.runs} datasets={repo.datasets}"

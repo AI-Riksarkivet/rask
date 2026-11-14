@@ -8,9 +8,9 @@ import * as v from 'valibot';
 
 export const JetStreamConsumerSchema = v.object({
 	name: v.string(),
-	// The estate SERVICE behind this consumer: the deliver group when present (Dapr's
-	// queueGroupName IS the app-id), else the catalog broadcast replica on CATALOG_CONTROL, else the
-	// "(ephemeral)" placeholder for a group-less ephemeral (e.g. a nats-cli inspection consumer).
+	// The estate service this consumer serves, as the read names it: the owner of a durable the chart
+	// declares, a catalog replica for its follow of CATALOG_CONTROL, else the "(ephemeral)" placeholder
+	// for an unnamed consumer (e.g. a nats-cli inspection consumer).
 	service: v.string(),
 	durable: v.boolean(),
 	deliver_group: v.optional(v.string()),

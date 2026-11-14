@@ -198,11 +198,11 @@ class Run(BaseModel):
 class UnauthoredRunError(PermissionDeniedError):
     """A bus-delivered run carrying no author at all — a defect in the MESSAGE, not a verdict on a person.
 
-    Its own type because the ack differs and nothing else separates the two: a named person who lacks a
+    Its own type because the verdict differs and nothing else separates the two: a named person who lacks a
     grant can be granted one, and the same event then succeeds on its next presentation, so that refusal
-    keeps the DROP that routes it to the dead-letter topic. An author cannot be added to bytes already
+    is parked for repair. An author cannot be added to bytes already
     published — no tuple, no redelivery and no restart changes the answer — so re-presenting it buys
-    nothing and parking it buys a duplicate.
+    nothing and parking it keeps a copy nothing can repair.
 
     Measured on the deployed estate 2026-09-18: 37 of 44 refusals in one hour were this, all for ONE run
     id, in a single burst at pod start with `already_recorded=False`, while the whole retained stream was
@@ -216,49 +216,48 @@ class UnauthoredRunError(PermissionDeniedError):
 class ForeignRunError(PermissionDeniedError):
     """An event extending a run another subject founded — refused, and no grant can change that ([[LIN-5]]).
 
-    Its own type for the reason :class:`UnauthoredRunError` has one: the ack differs. A named person who lacks a
-    grant can be granted one, so that refusal keeps the DROP that parks it for repair; whose run this is cannot be
-    granted, so re-presenting the event buys nothing, and the bus acks it and counts it unrepairable.
+    Its own type for the reason :class:`UnauthoredRunError` has one: the verdict differs. A named person who lacks a
+    grant can be granted one, so that refusal is parked for repair; whose run this is cannot be
+    granted, so re-presenting the event buys nothing, and the lane takes it and counts it unrepairable.
     """
 
 
 class UngovernedOutputError(PermissionDeniedError):
     """A refusal naming outputs that carry NO authorization tuple at all — nothing to grant ON.
 
-    Its own type for the same reason :class:`UnauthoredRunError` has one: the ack differs and the
+    Its own type for the same reason :class:`UnauthoredRunError` has one: the verdict differs and the
     message cannot carry the distinction. A named person denied on a GOVERNED table is repairable —
-    write the tuple and the same event succeeds on its next presentation — so that refusal keeps the
-    DROP that routes it to the dead-letter topic. A table FGA has no record of is a different fact: a
-    grant needs an object, and re-presenting the event cannot conjure one, so parking it appends a new
-    dead-letter copy per restart about an event that can never be accepted.
+    write the tuple and the same event succeeds on its next presentation — so that refusal is parked
+    for repair. A table FGA has no record of is a different fact: a
+    grant needs an object, and re-presenting the event cannot conjure one, so parking it keeps a
+    copy of an event that can never be accepted.
 
     Measured on the deployed estate 2026-09-19: all 7 parks in a six-hour window named four outputs —
     `e2e-ns$t74eff1b3`, `lh144b5e42f0dfns$aa`, `lh144b5e42f0dfns$bb`, `lh098bbff657cns$frag` — and
     every one carries ZERO tuples (`POST /stores/{id}/read` on `table:<id>`, 0 of 0). The first also
-    answers 404 from the catalog. So the repairable arm was holding only unrepairable events, and the
-    DLQ grew by exactly that set on every roll.
+    answers 404 from the catalog. So the repairable arm was holding only unrepairable events.
 
     THE UNKNOWN CASE IS NOT THIS TYPE. A store that cannot be read is not evidence of absence, and the
     gate raises the plain :class:`PermissionDeniedError` there — parking a repairable event costs a
-    duplicate, while acking an unreadable one deletes provenance, and only the second is unrecoverable.
+    kept copy, while taking an unreadable one deletes provenance, and only the second is unrecoverable.
     """
 
 
 class UnverifiedEventError(PermissionDeniedError):
     """An event no listed signer's published key verifies: unsigned, forged, or signed by an identity the chart does not list ([[LH-064]]).
 
-    Its own type for the reason :class:`UnauthoredRunError` has one: the ack differs and the message cannot
-    carry the distinction. A named person who lacks a grant keeps the DROP that routes the event to the
-    dead-letter topic, because a tuple can be written and the same event then succeeds on its next
+    Its own type for the reason :class:`UnauthoredRunError` has one: the verdict differs and the message cannot
+    carry the distinction. A named person who lacks a grant is parked for repair, because a tuple can be
+    written and the same event then succeeds on its next
     presentation. Bytes already published cannot gain a signature, so no grant, redelivery or restart changes
-    this answer: the bus ACKS it and counts it (`Outcome.SIGNATURE_REFUSED`), and the drain records it and
+    this answer: the lane takes it and counts it (`Outcome.SIGNATURE_REFUSED`), and the drain records it and
     retires the staged object, which is the only copy a retry would have re-read.
 
     ``reason`` is the kit's closed :data:`~lakehouse.lineage.signing.RefusalReason`, the label `lineage.signature.refused`
     is keyed on; the message names what was wrong with the signature and never its bytes.
 
     THE OUTAGE IS NOT THIS TYPE. A public-key list that cannot be read says nothing about the signature, so
-    the gate raises :class:`lance_namespace.ServiceUnavailableError` there and the delivery is retried.
+    the gate raises :class:`lance_namespace.ServiceUnavailableError` there and the lane asks for the delivery again.
     """
 
     def __init__(self, message: str, reason: RefusalReason) -> None:
@@ -429,7 +428,7 @@ def author_sub_from_payload(raw: object) -> str | None:
     """The VERIFIED author sub inside a run-event payload, or ``None`` — tolerant of a payload that
     does not parse.
 
-    For the DISCARD paths: a dead-lettered delivery and a poison outbox object are both terminal
+    For the DISCARD paths: a parked delivery and a poison outbox object are both terminal
     provenance loss, and both throw away a payload that CONTAINS the person it belonged to. The log
     named only the event id, so an operator could see that provenance was dropped and not whose.
 
@@ -469,13 +468,12 @@ def run_id_from_payload(raw: object) -> str | None:
     """The run id inside a run-event payload, or ``None`` — tolerant of a payload that does not parse.
 
     Tolerant for the same reason :func:`author_sub_from_payload` is, and it shares that function's
-    caller: the parking path fires on a delivery that already exhausted its retries, so the strict
-    model is unavailable exactly where the answer is needed.
+    caller: the park reads whatever a delivery the lane ends unrecorded carried, parsed or not, so the
+    strict model cannot be relied on exactly where the answer is needed.
 
     A blank or wrong-typed id reads as "no run id", and what that buys is narrower than it looks: the
-    VERDICT is the same either way — `_feed_already_holds` answers ``False`` for ``None``, and a feed
-    lookup of ``""`` finds nothing and reaches the same ``False`` — so both paths record ``DEAD_LETTERED``.
-    What it actually avoids is a feed query for an id that cannot match, and a `run_id` log field
+    VERDICT does not depend on it — the park asks the feed for the delivery's own row
+    (`IngestLane._feed_holds`), never its run. What it avoids is a `run_id` log field and a kept row
     presenting a malformed value as though it were an id.
     """
     if not isinstance(raw, dict):

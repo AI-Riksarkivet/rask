@@ -31,6 +31,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_emit import build_write_event
+from lakehouse.bus_delivery import Verdict
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE
 from lineage.api.v1.endpoints.events import targeting_view
@@ -108,7 +109,7 @@ def test_a_change_the_catalog_announces_is_recorded_though_a_poster_sent_its_ide
     )
 
     assert posted.status_code == 201, posted.text
-    assert delivered == {"status": "SUCCESS"}
+    assert delivered is Verdict.TAKEN
     recorded = asyncio.run(lineage.app.state.provenance.list_events(since=0))
     assert sorted((row.author, "rask_signature" in row.event["dataset"]["facets"]) for row in recorded if row.job is None) == [(_ALICE, True), (_BOB, False)]
     # A feed walker tells the two apart by the signer lineage verified, which the projection keeps ([[LH-576]]).

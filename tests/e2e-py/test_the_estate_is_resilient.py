@@ -7,7 +7,7 @@ criteria 1 and 4 hold the scenario to (`correctness`):
 - every version of the drill's table is a commit the pipeline made, carrying exactly the run it named and who committed
   it, no write refused while the dependency was gone landed, and no run landed twice;
 - the edge list holds exactly one edge for each input those versions name;
-- nothing parked on the DLQ stream from the drill's start, and both of the catalog's outboxes drained.
+- nothing parked by lineage's ingest lane from the drill's start, and both of the catalog's outboxes drained.
 
 The drills, and what each outage must look like while it lasts:
 
@@ -18,10 +18,12 @@ The drills, and what each outage must look like while it lasts:
    allow, and never a deny, which would read as a missing grant (`lakehouse.governed.fga`).
 3. Lineage, the commit feed's recorder. Commits go on landing, and each announcement is recorded once lineage is back:
    its durable consumer resumes where it stopped.
-4. The bus, held down past the window a sidecar's NATS client reconnects for. Commits and grants go on landing while
+4. The bus, held down past the window a service's own NATS client reconnects for. Commits and grants go on landing while
    NATS is gone, each announcement staged in the catalog's outbox, and the lineage relay records the staged writes
-   without the bus. The outage closes every sidecar's connection for good, so each service restarts its own sidecar once
-   the bus answers again (`lakehouse.bus_watchdog`), and both relays publish what they hold.
+   without the bus. The outage closes each service's connection for good, and each opens another in-process once the bus
+   answers again (`lakehouse.bus`): no pod of the catalog or lineage restarts, both relays publish what they hold, and
+   every consumer delivers again: lineage's records each commit, the catalog's control feed takes the grant made while
+   the bus was gone, and the maintenance worker's commit lane, where the release runs it, settles every announcement.
 5. The issuer. A door verifies a bearer offline against the issuer's key set, which it holds for 300 s
    (`lakehouse.governed.oidc`): an existing token is accepted while the door holds the keys, answered
    ServiceUnavailable once a door must fetch them and cannot (never Unauthenticated, the caller is not at fault), and
@@ -40,7 +42,7 @@ holds `writer` there and owns each table it makes. Every commit names a run whos
 at version 1, so every version has an edge to hold the edge list to.
 
 A DRILL BEGINS QUIET. Before it takes anything down it waits until lineage has acknowledged every announcement the bus
-holds, so the outage meets no announcement in flight, and its DLQ window opens there. Its outage ends in a `finally`, so
+holds, so the outage meets no announcement in flight, and its window for parked deliveries opens there. Its outage ends in a `finally`, so
 a drill that fails hands the release back with what it took down serving again.
 
 WHAT IS NOT CLAIMED, and why. A commit whose writer never got its answer may lack its announcement: a kill between the
@@ -56,6 +58,7 @@ its throwaway cluster, and the deployed release only when invoked explicitly, wi
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
@@ -73,19 +76,25 @@ import pytest
 import requests
 from byo_scenario import CATALOG, Commit, NamedRun, Tenant
 from chaos import Workload
-from correctness import LINEAGE_DURABLE, as_named, edges_named, history_of, rask_properties, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
+from correctness import as_named, edges_named, history_of, parked_since, rask_properties, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
 from pydantic import BaseModel
+
+from lakehouse.governed.fga import user_object
+from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
+from lineage.api.ingest_lane import STREAM as INGEST_STREAM
+from maintenance.services.queue import ARRIVALS_CONSUMER, ARRIVALS_STREAM
 
 
 #: The spec's code for a door that cannot answer now (`lance_docs/ns_catalog/spec.yaml`, `ErrorResponse.code`).
 SERVICE_UNAVAILABLE = 17
-#: How long an announcement may take to land once its dependency is back: a delivery its sidecar retries waits out a
-#: 120 s step (`chart/templates/dapr-resiliency.yaml`), and a relay ticks every 30 s (lineage) or 60 s (control).
+#: How long an announcement may take to land once its dependency is back: a delivery lineage hands back waits out its
+#: lane's 120 s delay (`services.lineage.delivery.retrySeconds`), and a relay ticks every 30 s (lineage) or 60 s (control).
 RECOVERY_SECONDS = chaos.SETTLE_SECONDS
-#: How long the bus stays down: past the window a sidecar's NATS client goes on reconnecting for, since a client that
-#: is still reconnecting buffers its publishes and sends them once the bus is back, so a shorter outage loses nothing
-#: whether the outbox is on or off and asks nothing of the estate's recovery.
-BUS_OUTAGE_SECONDS = chaos.RECONNECT_WINDOW_SECONDS + 30.0
+#: How long the bus stays down: past the window a service's own NATS client goes on reconnecting for, since a client
+#: that is still reconnecting holds its subscriptions and resumes them once the bus is back, so a shorter outage never
+#: asks a service to open a connection of its own again. `LANCE_E2E_BUS_OUTAGE_SECONDS` names a longer one, for a read
+#: of what the estate does across an outage of minutes.
+BUS_OUTAGE_SECONDS = max(float(os.environ.get("LANCE_E2E_BUS_OUTAGE_SECONDS", "0")), chaos.RECONNECT_WINDOW_SECONDS + 30.0)
 #: What a stock client says of a commit whose answer it lost, which may have landed, and of a request no door answered,
 #: which committed nothing (measured on pylance 13.0.0 with the catalog killed under concurrent appends).
 COMMIT_RESULT_UNKNOWN = "the commit may or may not have been applied"
@@ -244,12 +253,30 @@ class Drills:
         return commit
 
     def quiet(self) -> datetime:
-        """Wait until lineage has acknowledged every announcement the bus holds; the instant the drill's DLQ window opens.
+        """Wait until lineage has acknowledged every announcement the bus holds; the instant the drill's window for parked
+        deliveries opens.
 
         Lineage's is the one durable consumer the readings depend on. The control lane has none: each catalog replica
-        reads it through a broadcast consumer named by its pod, and the control outbox's depth is read on its own."""
-        bus.wait_until_acked("LINEAGE", (LINEAGE_DURABLE,), bus.last_seq("LINEAGE"), within=RECOVERY_SECONDS)
+        follows it by reading the stream by sequence, with no consumer on the bus, and the control outbox's depth is
+        read on its own."""
+        bus.wait_until_acked(INGEST_STREAM, (INGEST_CONSUMER,), bus.last_seq(INGEST_STREAM), within=RECOVERY_SECONDS)
         return datetime.now(UTC)
+
+    def granted_in_the_control_feed(self, principal: str, relation: str) -> bool:
+        """Whether the catalog's control feed (`GET /management/v1/events`, read by the tenant's admin, the estate's) holds
+        the grant of ``relation`` on the namespace to ``principal``: the catalog took it off its control lane."""
+        try:
+            answer = self.tenant.admin.http.get(f"{CATALOG}/management/v1/events", params={"since": 0}, timeout=30)
+        except requests.ConnectionError:
+            return False
+        events = scenario.ok(answer)["events"]
+        return any(
+            event.get("action") == "grant_added"
+            and event.get("object_name") == self.namespace
+            and (event.get("extra") or {}).get("subject") == user_object(principal)
+            and (event.get("extra") or {}).get("relation") == relation
+            for event in events
+        )
 
     def assert_correct(self, tables: Iterable[list[str]], *, since: datetime) -> None:
         """The estate as criteria 1 and 4 read it, over ``tables``.
@@ -268,7 +295,7 @@ class Drills:
         owed = edges_named({key: history[key] for key in acknowledged if key in history})
         edges = recorded_edges(self.tenant.admin, names, expected=owed, within=RECOVERY_SECONDS)
         unowed = [edge for edge in edges if (edge.out_table, edge.out_branch, edge.out_version) in landed]
-        parked = [(message.seq, message.subject) for message in bus.messages_since("DLQ", since)]
+        parked = parked_since(self.tenant.admin, since)
         depths = (settled_outbox_depth(self.tenant.admin, within=RECOVERY_SECONDS), settled_control_outbox_depth(within=RECOVERY_SECONDS))
 
         assert history == acknowledged | landed, "Lance holds a version the pipeline did not commit, or lacks one it was told landed"
@@ -352,11 +379,14 @@ def test_a_lineage_outage_loses_no_announcement_and_the_estate_recovers_correct(
     drills.assert_correct([table], since=started)
 
 
-def test_a_bus_outage_loses_no_announcement_and_the_estate_recovers_correct(drills: Drills) -> None:
+def test_a_bus_outage_loses_no_announcement_restarts_no_pod_and_the_estate_recovers_correct(drills: Drills) -> None:
+    """Every consumer delivers again: lineage's is read by `assert_correct` (it waits on the consumer's ack floor and holds
+    the edge list to every commit), the catalog's control lane by its control feed taking the grant made while the bus
+    was gone, and the maintenance worker's commit lane, where the release declares it, by its consumer's ack floor."""
     table = drills.make("bus")
     grantee = f"{drills.pipeline.principal.split('~', 1)[0]}~c5-grantee-{uuid.uuid4().hex[:8]}"
     started = drills.quiet()
-    sidecars = chaos.sidecar_restarts(chaos.BUS_CLIENTS)
+    before = chaos.container_restarts(chaos.BUS_CLIENTS)
 
     with chaos.scaled_to_zero(Workload(kind="statefulset", name=chaos.BUS)):
         down_since = time.monotonic()
@@ -364,11 +394,18 @@ def test_a_bus_outage_loses_no_announcement_and_the_estate_recovers_correct(dril
         drills.grant(grantee, "reader")
         time.sleep(max(0.0, BUS_OUTAGE_SECONDS - (time.monotonic() - down_since)))
     chaos.until(chaos.bus_answers, "the bus did not answer again", within=RECOVERY_SECONDS)
-    chaos.until(lambda: chaos.sidecars_restarted(sidecars), "a sidecar the outage closed was not restarted by its service", within=RECOVERY_SECONDS)
+    chaos.until(
+        lambda: drills.granted_in_the_control_feed(grantee, "reader"),
+        "the catalog's control feed did not take the grant made while the bus was gone",
+        within=RECOVERY_SECONDS,
+    )
     drills.serving(table)
     drills.append(table, range(12, 16))
+    if bus.declared(ARRIVALS_STREAM, ARRIVALS_CONSUMER):
+        bus.wait_until_acked(ARRIVALS_STREAM, (ARRIVALS_CONSUMER,), bus.last_seq(ARRIVALS_STREAM), within=RECOVERY_SECONDS)
 
     assert [commit.version for commit in while_gone] == [2, 3]
+    assert chaos.container_restarts(chaos.BUS_CLIENTS) == before, "a pod of the catalog or lineage restarted or was replaced across the bus outage"
     drills.assert_correct([table], since=started)
 
 

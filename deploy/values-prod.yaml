@@ -44,7 +44,7 @@ podDisruptionBudget:
 # any of them empty and an http `auth.fgaApiUrl`. No credential is a value: an FGA client presents its projected `rask-openfga`
 # ServiceAccount token, which the platform's OpenFGA admits by OIDC against the cluster's ServiceAccount issuer for the
 # subjects `lance.openfgaSubjects` lists, and the Postgres password is the store's `postgres` secret, which ESO
-# delivers. The platform's Postgres carries the `openfga` and `daprstate` databases; lineage keeps no database
+# delivers. The platform's Postgres carries the `openfga` database; lineage keeps no database
 # (ADR 0158). OpenFGA is the authz chokepoint every governed call fails closed through, so the platform runs it highly
 # available.
 openfga:

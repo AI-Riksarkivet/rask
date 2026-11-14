@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 STORE_CLIENTS = {
     "Deployment/rask-catalog": ("catalog", "LANCE"),
     "Deployment/rask-lineage": ("lineage", "LINEAGE"),
-    "Deployment/rask-maintenance": ("maintenance", "MAINTENANCE"),
+    "Deployment/rask-maintenance-worker": ("worker", "MAINTENANCE"),
     "CronJob/rask-pg-backup": ("upload", "RASK"),
     "CronJob/rask-control-root-backup": ("backup", "RASK"),
 }

@@ -5,15 +5,15 @@ What happens when a service goes down, can we get corrupted state, and how do we
 > **The standing chaos suite.** Criterion 5's drills (`tests/e2e-py/test_the_estate_is_resilient.py`, [[XC-095]]) take
 > one dependency down at a time (the object store, OpenFGA, lineage, the bus, the issuer, the secret store) or kill the
 > catalog mid-commit, drive the doors a pipeline uses while it is gone, restore it, and hold the estate to criteria 1
-> and 4: every version a commit the pipeline made, one edge for each input it names, nothing parked on the DLQ, both
-> outboxes drained. The e2e-stack kind lane runs them on every push, last, with `--chaos`; the deployed release runs
+> and 4: every version a commit the pipeline made, one edge for each input it names, no delivery parked by lineage's
+> ingest lane, both outboxes drained. The e2e-stack kind lane runs them on every push, last, with `--chaos`; the deployed release runs
 > them only when invoked explicitly (`bash scripts/e2e_live.sh -m phase1 --require-live --chaos`), and a plain live
 > drive selects none. Their measured record is the next section; the table after it is the earlier point-in-time
 > record, each row run once by hand.
 
 ## The core guarantee: at-least-once + idempotent → no corruption, no loss (within bounds)
 
-The event-driven path is `catalog --publish on its own connection--> JetStream (LINEAGE / CATALOG_CONTROL streams) --> sidecar --> subscriber`.
+The event-driven path is `catalog --publish on its own connection--> JetStream (LINEAGE / CATALOG_CONTROL streams) --> consumer --pulled or followed on the service's own connection--> service`.
 Two properties make it safe:
 
 1. **Durable buffer.** Both streams use **Limits retention** (messages persist after ack, up to `max-age`
@@ -27,7 +27,7 @@ Two properties make it safe:
 
 Each drill ends with the readings criteria 1 and 4 hold the scenario to. Every version is a commit the pipeline made,
 carrying the run it named. The edge list holds one edge per input those versions name, and at most one for a commit whose
-answer was lost (LH-497). Nothing parks on the DLQ, and both of the catalog's outboxes drain. The durations are each drill's
+answer was lost (LH-497). Lineage's ingest lane parks no delivery, and both of the catalog's outboxes drain. The durations are each drill's
 whole run, outage and recovery included, on the e2e-stack kind lane (run 39049821010).
 
 | Dependency | Taken down | What the doors answer while it is gone | Kind lane, 2026-10-17 |
@@ -35,7 +35,7 @@ whole run, outage and recovery included, on the e2e-stack kind lane (run 3904982
 | Object store (`rask-rustfs`)¹ | scaled to zero | A write through the catalog's insert door is refused 503 code 17, or gets no answer within the bound the catalog's own store timeouts set (2 × 6 listings × (retries + 1) × max(connect, request): 60 s at the defaults). It never lands while the store is gone. | 24 s |
 | OpenFGA | scaled to zero | A governed write answers 503 code 17 at its authorization check: never an allow, and never a deny that would read as a missing grant. | 20 s |
 | Lineage | scaled to zero | Commits go on landing; its durable consumer resumes where it stopped and records each announcement once. | 39 s |
-| The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. The outage closes every sidecar's connection for good (below), and each service restarts its own sidecar once the bus greets a connection again; each service's own publishing connection is opened again by its own loop (`lakehouse.bus`). | 320 s, 150 s of it the outage |
+| The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. Each service's own connection is opened again by its own loop (`lakehouse.bus`), and its consumers are pulled or followed again on it (below). | 320 s, 150 s of it the outage² |
 | Dex | its Service cut from its pod | A door holding the issuer's key set (300 s) accepts an existing token. A door that must fetch the key set answers 503 code 17, never 401, and accepts the token again once Dex is back, with no restart. | 69 s |
 | The secret store (`rask-openbao`) | sealed in place | Within one re-read of its key (300 s) the catalog drops its signing key, then refuses every write it would announce with 503 code 17 before committing it. The store's contents survive the seal, so nothing is minted again. | 290 s, most of it the re-read |
 | The catalog | its uvicorn SIGKILLed, four writers committing through `version/create` | Every acknowledged commit lands once, a commit whose answer the kill lost lands at most once, and no run lands twice: Lance's put-if-not-exists of each `_versions/` manifest keeps one history. | 168 s |
@@ -43,25 +43,21 @@ whole run, outage and recovery included, on the e2e-stack kind lane (run 3904982
 ¹ Measured on the RustFS fixture (ADR 0168): run 39129931426, main's e2e-stack lane, 2026-10-18; the drill passed
 again on the estate rebuilt on RustFS from empty the same day (helm rev 1, "XC-163 from empty 9858db38").
 
-**A bus outage longer than about two minutes stops every sidecar's pub/sub until the sidecar restarts.** Dapr 1.18.1's
-`pubsub.jetstream` component connects with none of nats.go's reconnect options, so each NATS client gives up after its
-default 60 attempts 2 s apart and closes for good. Its subscriptions are gone, a publish through the sidecar answers
-`nats: connection closed`, and the pod stays Ready, because daprd's liveness is a TCP check and its readiness reads no
-component. Measured on the kind lane before the fix: with NATS held down 150 s, lineage's and notifications' durables
-acknowledged nothing for the sixteen minutes that followed and both outboxes kept their backlog. The feed and the edge
-list stayed correct, because the lineage relay records the outbox without the bus.
+² Measured 2026-10-17 on the sidecar delivery path. The drill has not been run on the pull consumers (XC-199 step D4,
+2026-11-14).
 
-The fix is upstream (components-contrib#4563; #4564, `MaxReconnects(-1)`, unmerged). Until a Dapr release ships it, the
-catalog, lineage and maintenance each run `lakehouse.bus_watchdog` over their own sidecar. The watchdog probes every
-`pubsub.jetstream` component every 30 s on `probe.<app-id>`, a subject no stream captures. When a probe answers that the
-connection is closed, the watchdog waits until the bus greets a new connection, then asks the sidecar to shut down, and
-the kubelet restarts it. A shorter outage needs none of this: the sidecar's client reconnects by itself.
+**A bus outage of any length leaves every service pulling again once the bus is back, with no pod restarted.** Each
+service publishes and takes its deliveries on a connection of its own (`lakehouse.bus`). While that connection is away
+a publish fails at once, so its event stays staged in the outbox for its relay. nats-py reconnects by itself through a
+short cut; past its attempts, or when the bus ends the session, the service's own loop (`Bus.keep_connected`) opens a
+new client with the credential the secret store holds then. A pull consumer (`Bus.consume`) is pulled again on the new
+connection, where the bus has kept every message the service had not settled; the catalog's control topic
+(`Bus.follow`) is followed again from the message after the last one it handed on. The connection loop is measured
+against a three-node bus on the nats-auth lane (`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`).
 
-A service's own publishes ride none of it. Each publishes on a connection of its own (`lakehouse.bus`): while that
-connection is away a publish fails at once, so its event stays staged in the outbox for its relay, and the connection
-is made again by nats-py through a short cut and, past its attempts, by the service's own loop, with the credential the
-secret store holds then. Measured against a three-node bus on the nats-auth lane
-(`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`).
+The maintenance worker holds its work queue on a connection of its own (`maintenance.services.queue.TaskQueue`), which
+reconnects for ever. A bus that refuses its credential or ends its session ends the replica, and Kubernetes starts it
+again with the credential the store holds then.
 
 ## Chaos experiments (all recovered with zero loss)
 
@@ -70,22 +66,31 @@ secret store holds then. Measured against a three-node bus on the nats-auth lane
 | **Pull `lineage` (scale 0), publish 3 events, restart** | events buffered in JetStream (70→73); on restart the **ephemeral consumer replayed** them | **3/3 ingested** — no loss |
 | **Poison-inject 2026-09-14: a NON-CloudEvent body** (`rawPayload`) | the sidecar could not deserialize the envelope, dead-lettered it in **21ms with ZERO retries** (ahead of any retry policy), and the dead letter reached the DLQ topic as the same unreadable bytes | **parked INVISIBLY** — `/dlq-event` never ran, so no ERROR log and nothing for a dead-lettering alert to fire on. Tracked as LH-151 |
 
-So: **a service going down delays the pipeline; it does not lose or corrupt data.** Transient dependency
-failures recover via Dapr `RETRY`. With the DEFAULT `dapr.resiliency.enabled=true` the sidecar's Resiliency
-policy owns the schedule — **constant 120s x 4 retries = 480s (8 min) over 5 attempts, no jitter**; a poison event
-driven live 2026-09-14 measured 4 steps of 120.2/120.1/120.1/120.6s, **481.1s** end to end — and the broker ackWait is
-720s crash-recovery only, so the two never race. The policy must be `constant`: the Resiliency CRD exposes no
-`initialInterval`, so an `exponential` policy is pinned to cenkalti/backoff's 500ms default and gives ~4s however
-long a `duration` sits beside it. With `resiliency=false` the broker owns it instead: ackWait 30s, maxDeliver 5,
-backOff `30s,60s,120s,300s` — there the first backOff step IS the effective ack window per NATS consumer
-semantics, so it must not undercut the slowest handler. Either way the window covers a realistic dependency blip.
+Since 2026-11-14 (XC-199 step D4) a body that is no event envelope reaches lineage's own handling, which logs
+`lineage_event_invalid` at ERROR, counts it `unrepairable` and acknowledges it; nothing parks it unseen.
 
-> **Delivery semantics per subscriber.** Each subscriber has its **own** pubsub component with
-> `queueGroupName=<app-id>` (replicas = competing consumers → single delivery per app) and a `durableName`, so
-> the consumer cursor survives pod death and redeploys. `deliverPolicy` is **`all` for lineage** (replay into the
-> insert-only merge is the durability story, and the first chaos row holds) and **`new`** for
-> maintenance, whose durable cursor delivers an event published while they were down on recovery
-> (`chart/templates/dapr-component.yaml`).
+So: **a service going down delays the pipeline; it does not lose or corrupt data.** A transient dependency failure is
+asked for again by the lane that met it, on the numbers that lane names (`lakehouse.bus_delivery.judged`):
+
+- **Lineage** handles a delivery up to `services.lineage.delivery.attempts` (5) times, `retrySeconds` (120) apart, so it
+  rides out an outage of 8 minutes. A handling that raises, or runs past the consumer's ack wait (`ackWaitSeconds`,
+  300) less the 10 s kept for its settle, counts as asked for again. On its last attempt the delivery is parked (gap 2).
+- **The maintenance worker** hands an announcement it cannot settle back with a delay drawn at random up to a bound
+  that doubles with each delivery, and ends it on its `maintenance.queue.maxDeliver`-th (10): the table's recheck
+  backs it up.
+- **The catalog's control lane** judges an event whose signature keys it cannot read 5 times, 15 s apart, then gives it
+  up (`bus.deliveries` outcome `failed`): the event is a refresh hint, and the audit trail is the record. It waits that
+  way at most once in five minutes: a replica is handed one event at a time, so a wait holds back every event behind
+  it, and until the five minutes have passed an event whose keys cannot be read is given up on its one judgement.
+
+> **Delivery semantics per consumer.** The stream Job declares every durable consumer (`lance.busConsumers` in
+> `chart/templates/_helpers.tpl`), and each service binds to its own and creates none. Lineage's replicas share
+> `LINEAGE/lineage-ingest`, so each event is delivered to one of them, and the consumer keeps its place across pod death
+> and redeploys. It is delivered by start sequence: a consumer created afresh begins at the stream's first message, so
+> replay into the insert-only merge is the durability story, and the first chaos row holds. The worker's replicas share
+> `LINEAGE/maintenance-arrival`, delivered from the events published after its creation (`new`), so an event published
+> while every worker was down is delivered on recovery. Each catalog replica follows `CATALOG_CONTROL` by
+> reading it by sequence, so every replica sees every event, in the stream's order.
 
 ## Where it CAN bite — the real gaps (honest)
 
@@ -104,47 +109,37 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    authz as a fresh ingest, audited), surfaced in the frontend at `/dlq`. This is the manual twin of the
    relay tick's drain, for an operator who does not want to wait for the next tick.
 
-2. **No dead-letter queue; `maxDeliver=5` — FIXED 2026-07-12 (`dapr.resiliency.enabled`, DEFAULT ON;
-   `false` = the exact pre-existing broker-only behavior).** The gap as it stood: a genuinely poison
-   message (always `RETRY`, not malformed) was dropped from the *consumer* after 5 deliveries
-   (~8.5 min of backOff) with **no DLQ**; limits retention kept it in the *stream*, so the lineage
-   consumer (`deliverPolicy: all`) re-saw it on restart — but an outage longer than the retry window
-   meant the event wasn't ingested **until a restart**. The fix is the Dapr-native SET (only correct
-   together — a `deadLetterTopic` without a retry policy dead-letters on the FIRST failure, Dapr's
-   documented default): a **Resiliency CRD** makes the sidecar own delivery retries (constant
-   120s x 4 retries = 480s over 5 attempts, deterministic — the old broker schedule's shape, reached the
-   only way the CRD can express it), every subscription declares a per-app
-   **`deadLetterTopic`** (`dlq.*`, parked on the dedicated **DLQ stream** — load-bearing: Dapr does
-   not auto-create streams, so without it the parking publish itself would fail), exhausted
-   deliveries PARK there — ERROR-logged (`dapr_dead_letter_parked`) by each app's `/dlq-event`
-   route, acked, never blind-requeued — and the broker `backOff` moves to a 720s crash-recovery
-   window so it can't race the sidecar's retries. The durable-consumer question was ANSWERED FROM
-   SOURCE (components-contrib `jetstream.go` applies `durableName` as-is per subscription; NATS
-   scopes consumer names PER STREAM; the dlq topics live on their own stream). CI render-asserts the set
-   ships together and the escape hatch restores the chaos-verified schedule. **DRIVEN LIVE 2026-09-14**
-   (see the chaos table above, and [RUNBOOK-oncall § DLQ parking](runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up)):
-   a poison event retried, exhausted the schedule and parked on its `dlq.*` topic, ERROR-logged by
-   `/dlq-event` — measured at **481.1s** end to end on helm revision 156, against the 480s the policy
-   specifies. **A policy change reaches a sidecar only on
-   restart** (`HotReload: false`), so rolling the chart is not enough: every subscriber app-id was
-   rollout-restarted before this was re-measured.
+2. **A delivery lineage cannot record is parked where the estate admin can replay it.** A pull consumer has no dead
+   letter, so the rule that ends a delivery is the lakehouse's own (`lakehouse.bus_delivery.judged`, pinned by
+   `packages/lakehouse/tests/test_a_delivery_is_settled_by_what_its_handling_answers.py`). Lineage parks a delivery on
+   its last attempt (above), and at once when its handling refuses a named person who lacks a grant, since a grant can
+   repair it. A park keeps the delivery in the provenance namespace's `refusals` table under `dead_letter:<CloudEvent
+   id>` (or, for an envelope that carries no id, under the key of the feed row it would write), unless the feed already
+   holds its row; logs `lineage_delivery_parked` (ERROR, or WARNING when the row is
+   already recorded); counts `lineage.events.processed` at door `dead_letter`, outcome `dead_lettered` or
+   `parked_already_recorded`; and then ends the message on the bus. A park the store did not take is asked for again,
+   so a park is never lost. Nothing is published to a dead-letter topic. The estate admin lists the parks at
+   `GET /admin/dlq/parked` and records one with `POST /admin/dlq/parked/{run_id}/replay` (see
+   [RUNBOOK-oncall § DLQ parking](runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up)). A changed ack wait or
+   in-flight bound reaches the consumer when the stream Job edits it in place; a changed attempt count or delay reaches
+   lineage with its pods' next start.
 
-3. **Durable cursors; lineage full-stream-replay by design.** The `new` subscribers pair `deliverPolicy: new`
-   with a `durableName` (`chart/templates/dapr-component.yaml`): the consumer cursor survives pod death and
-   redeploys, so an event published while a subscriber is down is **delivered on recovery** instead of skipped —
-   chaos-verified live 2026-07-06 (publish-while-scaled-to-0 → `Unprocessed: 1` retained → processed on scale-up;
-   post-redeploy consumption clean). Lineage is durable too, with `deliverPolicy: all` ([[LH-303]]):
-   an ephemeral consumer dies with a NATS restart and the sidecar does not re-create it (measured
-   2026-09-26: lineage heard nothing from the bus until its pod restarted). Its first attach replays the
-   retained stream into the idempotent ingest; to REBUILD the feed from the stream, remove the durable
-   and restart lineage — `nats consumer rm LINEAGE lineage-durable`, then
-   `kubectl rollout restart deploy/rask-lineage` — and the new durable replays from the first message. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`.
-   The catalog's own broadcast is durable as well, one consumer per replica named by its pod on the mirror stream
-   `CATALOG_CONTROL_BROADCAST`, whose consumer limit (`catalog.controlConsumerInactiveSeconds`, 1 h) reaps a deleted
-   pod's ([[LH-305]]). Residual: gap #2's poison/no-DLQ window, which durable cursors do not change.
+3. **Durable cursors; lineage full-stream-replay by design.** Lineage's and the worker's consumers are durable
+   ([[LH-303]]): the consumer keeps its place across pod death and redeploys, so an event published while a service is
+   down is **delivered on recovery** instead of skipped. `lineage-ingest` is delivered by start sequence, and the
+   stream Job declares the start it holds back to it on every run, since a consumer's start cannot be edited. Created
+   afresh it begins at the stream's first message and replays the retained stream into the idempotent ingest. To
+   REBUILD the feed from the stream, remove the consumer and run the declare phase again: `nats consumer rm LINEAGE
+   lineage-ingest` as `admin` ([OPERATORS.md](OPERATORS.md) § 7: nats-box itself runs as the read-only `monitor`),
+   then a reconcile (an Argo CD sync, or `helm upgrade`), which creates it at the first message; lineage's replicas pull
+   it as soon as it exists. The catalog's control topic needs no durable consumer: each replica reads the stream by
+   sequence, begins after the stream's last message when it first connects, and asks for the message after the last it
+   handed on, through a read the bus refused and a connection it lost ([[LH-305]]). A stream removed and made again
+   numbers its messages from 1: a replica that finds the topic's last message behind its place begins at the new
+   stream's first and logs `bus_follow_began_again`.
 
-4. **The feed is the record.** Lineage writes the edges, then the feed row, each keyed; a failed write answers
-   `RETRY`, and the redelivery lands what is missing and nothing twice. The feed keeps `eventsRetentionDays`
+4. **The feed is the record.** Lineage writes the edges, then the feed row, each keyed; a failed write asks for the
+   delivery again, and the redelivery lands what is missing and nothing twice. The feed keeps `eventsRetentionDays`
    (default 7) and is pruned on the relay tick; the long-lived graph is the forwarded backend's
    (`services.lineage.forward.url`), fed at least once, in feed order, from a cursor in `lance_catalog$provenance$cursors`.
 
@@ -152,9 +147,10 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    kind — this is a **demo topology, not an HA one**. If any of these pods dies, the pipeline stalls until it
    restarts (no data loss — PVCs persist — but no availability either):
    - **AGE / Postgres** — one StatefulSet pod serving OpenFGA's datastore. Down →
-     authz checks fail (lineage's ingest gate answers `RETRY`, so events stay buffered). Lineage keeps no database: its tables live in the object store behind the catalog.
+     authz checks fail (lineage's ingest gate asks for each delivery again, so events stay buffered for its 5
+     attempts and are parked after them, gap 2). Lineage keeps no database: its tables live in the object store behind the catalog.
    - **The catalog** — lineage's feed and edge list are read and written through its doors. Down → lineage
-     ingest answers `RETRY` (buffered) and lineage's `/readyz` reports the catalog unavailable.
+     ingest asks for each delivery again (buffered, then parked, as above) and lineage's `/readyz` reports the catalog unavailable.
    - **NATS / JetStream** — three nodes, `streamReplicas=3`, each on its own volume; the one bus every event rides. All
      down → no event flows: the catalog's writes still land and stage their announcements in its outboxes, which the
      relays deliver once the bus is back.
@@ -171,26 +167,16 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    the new name, naming the old one as `previousIdentifier` and the table's uuid, so lineage follows the table across it
    (ADR 0173 §10, ADR 0191).
 
-7. **Durable-consumer config drift wedges every durable subscription at upgrade — self-heals in
-   ~20–25 min (observed live 2026-07-13).** JetStream durables are create-once: upgrading a
-   deployed stack whose `<app>-durable` consumers were created under a **different** consumer
-   config leaves the new sidecars unable to bind them — they retry-loop
-   `nats: consumer name already in use: creating consumer "<app>-durable" on stream "<STREAM>"`
-   while the pods stay **Ready** and **nothing is delivered** (a silent outage — the probes are
-   process-level, not delivery-level). Concrete trigger: the resiliency+DLQ default-ON change
-   (maxDeliver 5→3, backOff `30s,60s,120s,300s` → `720s,720s`) — durables created 2026-07-06 under
-   the old config blocked every `new` subscriber after the image roll. It **self-heals**:
-   JetStream reaps the old unbound durables at their `inactive_threshold` (~20–25 min observed —
-   rollout 06:53–07:00 UTC → reaped + recreated 07:19–07:20), the sidecars recreate them with the
-   new config, and delivery resumes with **no manual intervention**. *Fast cutover (operators):*
-   right after the rollout, `nats consumer rm` the `<app>-durable` consumers on
-   LINEAGE/CATALOG_CONTROL/DLQ — the sidecars recreate them within seconds. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`. Fresh installs and
-   CI never hit this (the consumers are created right the first time); only config-changing
-   upgrades of an already-deployed stack do. **Shipped mitigation:** the stream-provision Job now
-   reconciles drift on every `helm upgrade` — it deletes any `*-durable` whose
-   maxDeliver/backOff fingerprint differs from the render's expected config (templated from the
-   SAME values conditional as the pubsub components), and the sidecars recreate it within seconds;
-   the ~25 min window applies only when upgrading with a chart older than that Job.
+7. **A consumer's config converges on every reconcile, and a change the bus refuses fails the reconcile.** The services
+   bind to the consumers the chart declares and create none, so no consumer exists under a config the chart does not
+   describe. The stream Job's declare phase edits every declared consumer to its rendered config in place, as it does
+   every stream. Measured on natscli 0.5.1 against nats-server 2.15.2, 2026-11-14: a changed `ack_wait`,
+   `max_ack_pending`, filter or metadata is applied in place, an unchanged config edits to no change, and a changed
+   start sequence or `max_waiting` is refused (`... can not be updated (10012)`). A refused edit fails the Job with the
+   server's reason, and the services keep pulling the consumer as it stands. The retire phase, after the sync, removes
+   each consumer the chart no longer declares that carries the release's mark (`rask.dev/release`); a consumer with no
+   mark is another subscriber's and is never touched. Each phase's log is its Job's
+   (`kubectl logs job/<release>-nats-stream-r<rev>`, `kubectl logs job/<release>-nats-stream-retire-r<rev>`).
 
 ## Operational hardening (k8s posture)
 
@@ -233,12 +219,11 @@ The lakehouse runs no batch pipeline ([ADR 0155](adr/0155-the-medallion-is-tier-
 pipeline's own invariants are its engine's business. One rule binds the work the lakehouse does run, and a test fails
 without it:
 
-- **Refuse new work while draining.** `lakehouse.draining.retry_when_draining` guards every sidecar-delivered work
-  door (maintenance's arrival route, `/maintenance-arrival`): a draining process answers
-  RETRY so the broker redelivers to a live replica. It answers RETRY, not DROP, because on a subscription that
-  declares a `deadLetterTopic` daprd routes a DROP to that topic, so a good message would be parked for a human to
-  find (`lakehouse/draining.py` carries the daprd source references). Pinned by
-  `packages/lakehouse/tests/test_draining_refuses_admission.py`.
+- **A stopping process parks nothing it was handling.** A delivery whose handling is cut because its process stops is
+  settled by nobody (`lakehouse.bus_delivery.judged` lets the cancellation through, and parks nothing): `Bus.consume`
+  hands it back to the bus at once, so another replica takes it without waiting out the ack wait, and a good message
+  is never parked for a human to find. Pinned by
+  `packages/lakehouse/tests/test_a_delivery_is_settled_by_what_its_handling_answers.py`.
 
 ## Prod hardening backlog (delegate-to-platform — NOT dev-blocking)
 
@@ -257,6 +242,7 @@ PSA would reject `lineage`/`openfga-migrate` until their root init containers ar
 - **Loss:** only in the commit->stage window the outbox narrows the gap to (a crash between the write and
   the stage, or a stage that fails AND a publish that fails). Everything staged or successfully published is
   durable + replayed.
-- **Recovery:** automatic — `RETRY` for transient faults, JetStream buffer + replay for downed services.
-- **Hardening roadmap (for prod):** durable push cursors + Resiliency retries + Dapr `deadLetterTopic`
-  (shipped, default on) · a transactional outbox that closes the commit→stage window (the remaining item).
+- **Recovery:** automatic — a delivery asked for again for transient faults, JetStream buffer + replay for downed
+  services, and a parked delivery replayed by the estate admin.
+- **Hardening roadmap (for prod):** durable pull consumers the chart declares + each lane's retry and park (shipped)
+  · a transactional outbox that closes the commit→stage window (the remaining item).

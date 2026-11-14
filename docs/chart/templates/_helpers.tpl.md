@@ -23,7 +23,7 @@ They render the SAME string only because the release is named `rask` AND `fullna
 deliberate (ADR 0108: lance object names become `rask-*`), and `lance.fullname`
 is kept on `.Release.Name` rather than delegated to `rask.fullname` because ~40 grafted lance templates
 build sibling object names from a RAW `{{ .Release.Name }}-…` (the `-dapr-app-token`
-Secret, the `-pubsub-resiliency` Configuration). Delegating would
+Secret, for one). Delegating would
 move the Deployments but not those, splitting the estate the moment release name ≠ fullnameOverride.
 Install under any other release name and the two planes diverge — keep them equal.
 
@@ -49,9 +49,8 @@ The ONE store's root identity is objectStore.accessKey (a value) and the store's
 (`object-store-provisioning.yaml`) are its only readers, since on RustFS the root secret signs every STS session token (ADR 0168).
 
 Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
-estate: the lance planes (services.yaml catalog/lineage,
-maintenance.yaml) all render
-THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
+estate: the catalog's and lineage's pods (services.yaml) both render
+THIS helper, and the maintenance worker's pod renders none (it runs no sidecar), so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
   - enabled / app-id / app-port / log-level (the original rask surface)
   - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
   - app-token-secret → the shared <release>-dapr-app-token Secret (ESO-written, external-secrets.yaml,
@@ -71,7 +70,7 @@ Dapr's sidecar injector is a MUTATING WEBHOOK, and its MutatingWebhookConfigurat
 `failurePolicy: Ignore` by default: a pod created while the injector is unreachable (a restart, an
 outage) is SILENTLY admitted unmutated and comes up with NO daprd container at all. Nothing recreates
 that pod — a CrashLoopBackOff restarts the container inside the SAME pod, which will never gain a
-sidecar — so the app in it takes no delivery and no tick, which only a sidecar brings, for
+sidecar — so the app in it takes no cron tick, which only a sidecar brings, for
 as long as that pod lives.
 
 Fix, in the control plane rask runs against (a prerequisite; deploy/fixtures/dapr/values.yaml in
@@ -95,23 +94,18 @@ plane back into unparsed logfmt with no gate firing.
 
 ## `checksum/dapr: {{ include "lance.daprDigest" (list $root $appId) | quote }}`
 
-daprd loads its Components and its Resiliency once, at boot (HotReload is off), and only a changed pod spec starts a
-rollout, so an edit to one would otherwise reach a sidecar only when something else restarted its pod, which no reconcile
-does ([[LH-305]], [[XC-164]]). Each Dapr pod carries a digest of every Component and Resiliency its sidecar loads (those
-scoped to its app, and any with no scopes), read from `dapr-component.yaml` (every Component) and `dapr-resiliency.yaml`,
-so an edit rolls exactly the pods whose sidecar loads it, as a Configuration's hash-named object does. Those two templates
-render nothing else: the digest includes each whole, so a Deployment in one would include itself. `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py`
-holds both directions for a pub/sub Component, a binding and the Resiliency, and refuses a Dapr object any other template
-renders.
+daprd loads its Components once, at boot (HotReload is off), and only a changed pod spec starts a rollout, so an edit to
+one would otherwise reach a sidecar only when something else restarted its pod, which no reconcile does ([[LH-305]],
+[[XC-164]]). Each sidecar's pod carries a digest of every Component its sidecar loads (those scoped to its app, and any
+with no scopes), read from `dapr-component.yaml`, which renders every Component (`lance-secrets` and the cron bindings),
+so an edit rolls exactly the pods whose sidecar loads it, as a Configuration's hash-named object does. That template
+renders nothing else: the digest includes it whole, so a Deployment in it would include itself.
 
 ## `dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) |...`
 
-THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. This block emitted nothing about
-shutdown, so daprd took its 5s default while the app was still inside its own preStop sleep —
-and since the kubelet SIGTERMs every container simultaneously, the sidecar was gone before the
-app had begun draining. A delivery or a timer tick still in its handler then ended with an answer no
-sidecar was left to carry to the broker, and was delivered again after its ack wait, which is
-indistinguishable from a subscriber that was slow.
+THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. The kubelet SIGTERMs every container at
+once, and daprd's own default block is 5 s, while the app is still inside its preStop sleep: a cron
+tick still in its handler would end with an answer no sidecar is left to carry.
 Derived from the same `lifecycle` block that feeds preStop and the grace period, so the three
 numbers cannot drift — see the arithmetic in values.yaml.
 
@@ -131,7 +125,7 @@ only on a Configuration -- so an app-id that reads secrets needs its OWN, carryi
 spec body plus a deny-by-default scope. An app-id with no store access has nothing to scope and
 keeps `lance-tracing`, which also keeps the dangling-reference guard above honest: both names
 render under this same `dapr.enabled` condition.
-DERIVED FROM `lance.secretScopes`, the same list that decides the Component's own `scopes:`, so
+DERIVED FROM `lance.secretScopes`, the list `lance.sidecarScopes` narrows to the Component's own `scopes:`, so
 a new consumer added there gets its Configuration without a second edit here. The same membership
 mounts the pod's store token into daprd (`lance.storeIdentity`): a sidecar the component is scoped
 to always has the projected token it logs in with, as its app's own container has.
@@ -177,9 +171,9 @@ was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
   age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecarRestricted,
-  sidecarResources.*,resiliency.enabled} · auth.oidc.{issuer,audience} · dex.{enabled,port} · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
+  sidecarResources.*} · auth.oidc.{issuer,audience} · dex.{enabled,port} · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   medallion.buckets · nats.url ·
-  observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
+  observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.topic ·
   resources.{default,<component>} · objectStore.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
   services.{catalog,lineage}.{port,appId} · services.lineage.relay.bindingName
 `objectStore.bucket` (singular) is the one that is easy to lose: rask's values ship `objectStore.buckets` (a
@@ -333,17 +327,16 @@ answer, so none of them can disagree. Non-empty string = on.
 ## `{{- define "lance.platformStoreAddr" -}}`
 
 THE PLATFORM'S STORE IS NAMED, AND OVER TLS ([[XC-149]]). The chart renders no secret store, so with
-`openbao.enabled` off the address is required: a render that names no store would leave every
-`secretKeyRef` resolving against Kubernetes Secrets the chart never declares (each bus user's `jwt` and `seedKey`,
-`lance.natsCreds`).
+`openbao.enabled` off the address is required: each service reads its own secrets from it under its own login, its bus
+credential among them, and a render that names no store would leave each with nothing to log in to.
 An http address is refused because every service and every sidecar presents its ServiceAccount token and its store
 token to it, in the clear otherwise; the dev store alone is http, inside the namespace.
 
 ## `{{- define "lance.vaultAddrFQDN" -}}`
 
 The SAME address, FULLY QUALIFIED — for a caller that is not in this namespace.
-A bare service name resolves only within its own namespace. Every Dapr sidecar consuming
-`lance.vaultAddr` sits beside the workload in this release's namespace, so the short form is
+A bare service name resolves only within its own namespace. Every pod reading
+`lance.vaultAddr` sits in this release's namespace, so the short form is
 correct there. The ExternalSecrets OPERATOR does not: it runs in `external-secrets`, and its
 SecretStore login failed with `lookup rask-openbao ... server misbehaving` — a DNS failure that
 reads as an OpenBao outage rather than as a name that cannot resolve from where it is used.
@@ -352,57 +345,59 @@ Measured against the live cluster 2026-08-31.
 ## `{{- define "lance.busEnv" -}}`
 
 The bus as a service's process reaches it (list $root <user>): its address (`RASK_BUS_URL`) and the bus user the process
-connects as (`RASK_BUS_USER`), for catalog, lineage and maintenance. Each service publishes its events on a connection
-of its own as that user (`lakehouse.bus`, [[XC-199]]), with the credential it reads from the store under its own login
-(`nats-user-<user>`, granted by `lance.storeReads`) and replies arriving under `_INBOX_<user>`, which `nats.auth.users`
-grants to that user alone. The render refuses a user the table does not declare: the store would hold no credential
-for it, and the process would never connect. A name and an address, never a credential.
-
-The address also serves the watch each service keeps on its own sidecar: it restarts the sidecar once one of the
-sidecar's connections has closed for good and the bus greets a new connection again (`lakehouse.bus_watchdog`,
-[[XC-095]]), since Dapr 1.18.1's component never reconnects past nats.go's default 60 attempts
-(components-contrib#4563).
-
-## `{{- define "lance.subPubsub" -}}`
-
-The per-SUBSCRIBER pubsub component name (call: include "lance.subPubsub" (list $root <appId>)).
-Each subscriber app-id gets its OWN pubsub.jetstream component carrying its queueGroupName — one shared
-component cannot: lineage AND maintenance (under `maintenance.arrivalEnabled`) both consume lineage.events.v1, so a
-single queue group would
-SPLIT those messages across the two apps instead of duplicating per app / competing per replica. The
-component (dapr-component.yaml) and the app's *_PUBSUB env must agree on this name — hence one helper.
+connects as (`RASK_BUS_USER`), for the catalog and lineage, and for maintenance's own user while the worker publishes
+events. Each service publishes its events, and takes its deliveries, on a connection of its own as that user
+(`lakehouse.bus`, [[XC-199]]), with the credential it reads from the store under its own login (`nats-user-<user>`,
+granted by `lance.storeReads`) and replies arriving under `_INBOX_<user>`, which `nats.auth.users` grants to that user
+alone. The render refuses a user the table does not declare: the store would hold no credential for it, and the process
+would never connect. A name and an address, never a credential. A connection the bus ends is opened again in the
+process, with the credential the store holds then, and each consumer loop pulls again on the new one; no pod restarts
+for it.
 
 ## `{{- define "lance.natsTable" -}}`
 
 The NATS permission table as issued (values.yaml `nats.auth`): `users`, plus each `flagged` grant whose key holds. A key
 is one value path, or several joined by `,` that must all be true, so a grant whose call site exists only under two
-switches is issued under both ([[LH-559]]: a lane's dead-letter topic exists only with the lane and the retry policy).
-
-## `{{- define "lance.brokerWindows" -}}`
-
-The broker's redelivery windows for a pub/sub component the sidecar retries, rendered by every subscriber component so
-the schedule has one copy. backOff supersedes ackWait for redelivery timing (NATS consumer semantics): its first value is
-the effective ack window, so it must not undercut the slowest handler (one doing real S3 reads and writes).
-
-With `dapr.resiliency.enabled` the sidecar owns delivery retries (the Resiliency CR's constant 120 s x 4 = 480 s over five
-attempts) and parks an exhausted message on the subscription's dead-letter topic, so broker redelivery is the
-crash-recovery layer only: its first step (720 s) must exceed the sidecar's whole span plus the handler's own time per
-attempt, or the broker redelivers while the sidecar still holds the message mid-retry. Pinned by
-tests/unit/test_the_pubsub_retry_window_is_the_one_the_chart_states.py, which reads the rendered `ackWait` of every
-component the Resiliency CR targets (NATS's 30 s default where a component names none), and by .dagger/charts.go's
-resiliency gate. Off, the broker alone redelivers (30 s up to 300 s, five deliveries) and nothing parks.
+switches is issued under both ([[LH-559]]).
 
 ## `{{- define "lance.natsUsers" -}}`
 
 The NATS users of lance.natsTable, sorted and validated: a name becomes a secret name and a shell word, a subject a single-quoted shell word.
 
-## `{{- define "lance.natsCreds" -}}`
+## `{{- define "lance.busConsumers" -}}`
 
-A pub/sub Component's credential (list $root $appId): its one app's user, from the store (values.yaml `nats.auth`).
+EVERY DURABLE CONSUMER A SERVICE PULLS, IN ONE DERIVATION ([[XC-199]]), as a JSON list of {stream, name, config}. Its
+readers must agree: the stream Job's declare phase converges each consumer to its config, its retire phase removes a
+consumer of this release that the list no longer names (`nats-stream-job.yaml.md`), and
+`tests/unit/test_every_bus_user_may_do_what_its_service_is_configured_to.py` fails a render whose consumers a bus user
+cannot pull. Every consumer is a pull consumer with explicit acks; no service creates, edits or deletes one, and its bus
+user holds only `$JS.API.CONSUMER.MSG.NEXT.<stream>.<consumer>` and `$JS.ACK.<stream>.<consumer>.>` on it. Each
+config carries the release's mark, `metadata: {"rask.dev/release": "<release name>"}`, which is what makes a consumer
+this release's to retire.
 
-## `{{- define "lance.natsAuth" -}}`
+- `LINEAGE/lineage-ingest`, filtered to `pubsub.topic`: lineage's ingest lane. It starts by stream sequence
+  (`start: position`), and the Job declares the start it holds back to it, since a start cannot be edited.
+  Its ack wait is `services.lineage.delivery.ackWaitSeconds` (lineage cuts a handling 10 s short of it), its
+  `max_ack_pending` is `services.lineage.deliveriesInFlight`, the bound across every replica, and its `max_deliver` is
+  unlimited (-1): lineage's own rule ends a delivery, parking it after `services.lineage.delivery.attempts`
+  deliveries `retrySeconds` apart (`lakehouse.bus_delivery`), since a pull consumer has no dead letter.
+- `MAINTENANCE_TASKS/maintenance-worker`, `MAINTENANCE_SCHEDULES/maintenance-due` and
+  `STORE_EVENTS/maintenance-store-events`, under `maintenance.enabled`: the worker's queue, its fired schedules and
+  the store's change events, each delivered from the stream's first message.
+- `LINEAGE/maintenance-arrival`, under `maintenance.arrivalEnabled`, filtered to `pubsub.topic`: the worker's
+  write-event lane. It delivers only what is published after it is created (`deliver_policy: new`), because a replayed
+  announcement acts twice: replaying the retained stream would queue a pass for every table written in the window,
+  which each table's own scheduled pass reaches anyway, within `maintenance.queue.recheckHours`.
 
-The store that resolves a Component's credential, only while one exists (a null `auth:` is refused by the CRD).
+A TASK OR AN ANNOUNCEMENT IS DELIVERED ONCE MORE THAN `maintenance.queue.maxDeliver`. A worker whose run fails on the
+last delivery ends the message itself, but a pass that takes its replica down (out of memory, or past twice
+`maintenance.queue.maxPassSeconds`, when the worker exits) never gets there, and JetStream keeps a work-queue message
+whose deliveries ran out (measured on nats-server 2.15.2, 2026-11-09): it would hold its table's subject, refusing
+every later pass of the table, until the stream's day-long `max_age`. The extra delivery reaches a worker, which ends
+the message without handling it and counts it (`maintenance.tasks.ended`, the alert MaintenanceTasksEnded, for a task;
+`maintenance.arrivals.settled` at `ended` for an announcement), and holds a task's next try
+`maintenance.queue.recheckHours` out, since the hourly audit queues a table nothing holds. `maintenance-due` alone
+sets no limit (-1).
 
 ## `{{- define "lance.mintsDevCredentials" -}}`
 
@@ -414,7 +409,7 @@ Whether the dev OpenBao issues the NATS credentials: the dev store this chart se
 
 ## `{{- define "lance.natsFiles" -}}`
 
-The Secrets ESO writes for the NATS pods that have no sidecar, as JSON {target: [store secrets]}. This chart's ExternalSecrets write `nats-admin-creds`; the ESO policy grants all of them, because the NATS fixture's ExternalSecrets read the other two (nats-box's `monitor` creds, the server's operator config and route credential) from the dev store.
+The Secrets ESO writes for the NATS pods that read their credential from a file, as JSON {target: [store secrets]}. This chart's ExternalSecrets write `nats-admin-creds`; the ESO policy grants all of them, because the NATS fixture's ExternalSecrets read the other two (nats-box's `monitor` creds, the server's operator config and route credential) from the dev store.
 
 ## `{{- define "lance.daprSidecarResources" -}}`
 
@@ -948,29 +943,26 @@ there would let lineage read every secret in the store: refused at the render, b
 ## `{{- define "lance.storeReads" -}}`
 
 WHO READS WHAT FROM THE STORE, ONE TABLE ([[XC-165]], ADR 0169): app id -> {its ServiceAccount, `api` (the secrets its
-code reads under its own login to the store, `lakehouse.governed.secrets`: its bus user among them, for the connection
-it publishes on), `components` (the secrets its sidecar's own components resolve: the same bus user, where a
-subscription component names it)}. Every place that decides a read is a view of it: its store role's policy grants
-`api` and `components` (the seed's `policy-<release>-<app>.json`), its environment names that role
-(`lance.secretStoreEnv`), and an app with neither reads nothing, so it gets no store at all (`lance.secretScopes`). Two
-lists that agreed when written are how a read gets refused at runtime, or granted past its owner, so nothing restates
-it.
+code reads under its own login to the store, `lakehouse.governed.secrets`: its bus users among them, for the
+connections it publishes and pulls on)}. Every place that decides a read is a view of it: its store role's policy grants
+`api` (the seed's `policy-<release>-<app>.json`), its environment names that role (`lance.secretStoreEnv`), and an app
+with no read gets no store at all (`lance.secretScopes`). Two lists that agreed when written are how a read gets
+refused at runtime, or granted past its owner, so nothing restates it.
 
-THE STORE'S READERS DO NOT HANG ON THE SIDECAR ([[XC-199]]). A service reads its own secrets whatever carries the bus, so
-its role, its policy and its login render with `dapr.enabled` off. What follows that switch is what it renders a
-reader for: the app token its Dapr doors check, each subscription component's bus user, and the bus users a process
-reads for itself, since the same switch names each service its bus (`lance.busEnv`) and renders maintenance's worker
-(its work-queue user). Pinned by
-`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
+A service reads its own secrets whatever carries the bus, so its role, its policy and its login render with
+`dapr.enabled` off ([[XC-199]]). What follows that switch is what it renders a reader for: the app token the cron
+ticks' routes check (`dapr-app-token`), and the bus users a process reads for itself, since the same switch names each
+service its bus (`lance.busEnv`) and renders maintenance's worker (its work-queue user, `nats-user-maintenance-worker`).
+Pinned by `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 
 The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
 (`dapr-app-token`, a signer's public key), never a copy, so a rotation writes one place. The verifier
 lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
-`signing.doors`), and a signer reads its own pair. A service's own read of its bus user restates when its process
-opens a connection (the catalog always, lineage with its outbox, maintenance's worker when it emits), and a
-component's restates `dapr-component.yaml`'s subscriptions, so
-`tests/unit/test_a_dapr_component_names_a_secret_something_can_resolve.py` checks, over every overlay CI deploys, that
-each scoped sidecar's own policy reads every secret its components name.
+`signing.doors`), and a signer reads its own pair. A service's read of its bus user restates when its process opens a
+connection: under `dapr.enabled`, the catalog and lineage each (each publishes or pulls on its own), maintenance's
+worker for its queue user, and maintenance's own user when the worker emits (`maintenance.lineageEmit`,
+`maintenance.controlEmit`). Maintenance's worker reads the signers' public keys when its write-event lane checks
+signatures (`auth.enabled`, `maintenance.arrivalEnabled`, and `signing.doors` not `off`).
 
 A CLIENT'S READER (`openbao.externalReaders`) is an ALLOWLIST, because the store grants by name and a client's values are
 not the lakehouse's to trust: `<app>` may hold only `nats-user-<app>`, names of its own (`<app>-<name>`) and
@@ -1068,8 +1060,8 @@ ServiceAccount, so a token projected for another door would log in to the store.
 ## `{{- define "lance.secretScopes" -}}`
 
 The app-ids that read the secret store: every app with a read in `lance.storeReads`. It has several readers that
-must not drift: the Component's `scopes:` names the sidecars that load `lance-secrets` for their components,
-`lance.appTokenEnv` below decides a pod's credential path from the same membership, the per-app Configuration, the
+must not drift: `lance.sidecarScopes` below narrows it to the apps whose pods run a sidecar, for the Component's
+`scopes:` and the per-app Configurations, `lance.appTokenEnv` below decides a pod's credential path from the same membership, the per-app Configuration, the
 store token's volume and the service's own store settings (`lance.secretStoreEnv`) follow it, and the NetworkPolicy
 admits exactly these apps' pods to the store (`lance.secretReaderComponents`). One membership decides them all, so no
 pod is told to read a store it was named no address, role or token for: such a read fails the pod's start closed.
@@ -1078,11 +1070,20 @@ Usage: {{ splitList "," (include "lance.secretScopes" .) }}
 
 ## `{{- define "lance.secretReaderComponents" -}}`
 
-The component labels of the pods that dial the store (each service logs in to it, and its sidecar does for its
-components), for the NetworkPolicies that admit them: the scope above, where an app's id is its pods' component label,
+The component labels of the pods that dial the store (each service logs in to it, and the catalog's and lineage's
+sidecars do too), for the NetworkPolicies that admit them, and for the bus's client list (`lance.busClients`): the scope above, where an app's id is its pods' component label,
 and `maintenance-worker`, the label of maintenance's worker pods, which run under maintenance's app id (ADR 0198's
 amendment of 2026-11-10) and so appear in no scope of their own. A policy that ranged the scope alone would lock the
-worker out of the store, and its start would fail closed.
+worker out of the store, and its start would fail closed. The worker's label is named only where its Deployment is
+rendered (`maintenance.enabled` with `dapr.enabled`): a label no pod carries admits whoever takes it. The object
+store's list (`lance.objectStoreClients`) names it under the same condition.
+
+## `{{- define "lance.sidecarScopes" -}}`
+
+The apps of `lance.secretScopes` whose pods run a sidecar: every one but maintenance, whose worker pod carries no
+`dapr.io/*` annotation and so has no sidecar to load a Component or a Configuration. It scopes `lance-secrets`
+(dapr-component.yaml) and decides which per-app Configurations render (observability.yaml). A scope naming an app no
+sidecar runs for would render a Configuration nothing references.
 
 ## `{{- define "lance.appTokenEnv" -}}`
 
@@ -1152,8 +1153,8 @@ and nothing is broken; the loop is structurally unable to converge, and it burie
 
 Turning it off costs nothing this estate was using: a component change here is a coordinated
 chart rollout. The trade is explicit: with HotReload off,
-a Component/Resiliency/Configuration edit reaches running sidecars only after
-`kubectl rollout restart`.
+a Component or Configuration edit reaches running sidecars only when their pods roll, which
+`checksum/dapr` (above) and a Configuration's hash-named object make each edit do.
 
 ## `tracing:`
 
@@ -1275,8 +1276,8 @@ DENY, AND ALLOW NONE ([[XC-165]], [[XC-199]]): no app reads a secret through its
 itself, so the sidecar's secrets API serves the app, and anything else on the pod's loopback, nothing. Dapr applies this
 scope only to the app-facing secrets API (`pkg/api/universal/secrets.go:35`, `IsSecretAllowed`, the same in 1.18.1 and
 1.19.0-rc.4); a component resolving its own `secretKeyRef` goes straight to the store with the sidecar's login
-(`pkg/runtime/processor/secret/secret.go:162-170`), so a bus user's credential is resolved for the component. What the
-store itself refuses is the role's policy, which holds for every login.
+(`pkg/runtime/processor/secret/secret.go:162-170`), and no component of this chart names one. What the store itself
+refuses is the role's policy, which holds for every login.
 
 Every secret a reader names is known at render. A data base holds no credential of its own ([[LH-286]]),
 and a warehouse record's `credential_ref` is consumed by no door ([[LH-205]]).
@@ -1372,5 +1373,5 @@ The rows mirror the gates of the templates that render each backend: catalog and
 
 A new door a service mounts at its root is a path in its row; the gate in
 `tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` fails until it is, and fails on a path that
-reaches only the pod's probes, `/dapr/subscribe`, a Dapr delivery or a cron tick. A client's own prefixes are not rows: its
+reaches only the pod's probes or a cron tick. A client's own prefixes are not rows: its
 release publishes them with an HTTPRoute of its own.

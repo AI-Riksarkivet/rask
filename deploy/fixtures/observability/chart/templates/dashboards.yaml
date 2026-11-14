@@ -406,10 +406,10 @@ data:
           "ingress": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Deliveries by process_status", "description": "`drop` is an ACK: Dapr does not retry it, but it DOES route to the declared dead-letter topic — so a drop reads as an exhausted delivery on the DLQ panels even when it was a deterministic decision. Read it beside the handler's own refusal counter, which is what separates the two." },
+              "display": { "name": "Deliveries by consumer and outcome", "description": "Each service's deliveries from its consumer on the bus, counted where they are settled: taken, asked for again, parked, and, on a subject a service follows, failed. A lane that books `again` with no `taken` beside it is not draining its consumer. The maintenance worker counts its own lanes' settlings (`maintenance_arrivals_settled_total`, `maintenance_store_events_settled_total`)." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (topic, process_status) (rate(dapr_component_pubsub_ingress_count_total[5m]))", "seriesNameFormat": {{ "{{topic}} {{process_status}}" | quote }} } } } } ]
+                "query": "sum by (lance_bus_consumer, lance_bus_outcome) (rate(bus_deliveries_total[5m]))", "seriesNameFormat": {{ "{{lance_bus_consumer}} {{lance_bus_outcome}}" | quote }} } } } } ]
             }
           },
           "cron": {

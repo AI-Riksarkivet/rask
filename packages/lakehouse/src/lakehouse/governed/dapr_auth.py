@@ -1,19 +1,15 @@
-"""Authenticate Dapr-delivered routes (pub/sub subscriptions + input bindings).
+"""Authenticate the routes a Dapr sidecar delivers to: the cron ticks (input bindings).
 
-Dapr delivers events to the SAME FastAPI app that serves the public HTTP API (``/lineage-events``,
-``/medallion-event``, the compaction cron route), so without a check any client that can reach the port
-can POST a forged CloudEvent — bypassing ``enforce_author`` and poisoning the authoritative lineage
-graph (security audit, prod-blocker). When the pod is annotated ``dapr.io/app-token-secret``, Dapr
-injects ``APP_API_TOKEN`` into the app **and** adds a ``dapr-api-token`` header to every request it
-delivers. This dependency rejects any delivery whose header doesn't match.
+A tick is delivered to the SAME FastAPI app that serves the public HTTP API, at ``POST /<binding name>`` on the pod's
+root, so without a check any client that can reach the port can fire one (the control relay's replays every staged
+event). When the pod is annotated ``dapr.io/app-token-secret``, Dapr injects ``APP_API_TOKEN`` into the app **and** adds
+a ``dapr-api-token`` header to every request it delivers. This dependency rejects any delivery whose header doesn't
+match.
 
 The token is sufficient against a public caller because no public path rides a sidecar: the cluster's
 Gateway routes each `/api/*` prefix to the app's own port (ADR 0165), so a request from outside the
-cluster never carries a sidecar's ``dapr-api-token``, and the route is only registered when Dapr is enabled.
-The ``pubsub.jetstream`` component's ``scopes`` decide which app-ids' sidecars load it, which is not who may
-publish: every scoped app can publish every topic on it, and a client that reaches the broker directly needs no sidecar. So the token authenticates the sidecar
-that delivered an event and nothing about who wrote it; a door that acts on what an event claims verifies
-the producer's signature (``lakehouse.lineage.signing``).
+cluster never carries a sidecar's ``dapr-api-token``, and a tick's route is only mounted when the chart names its
+binding. The token authenticates the sidecar that delivered a tick, and a tick carries nothing a caller could claim.
 
 **An unconfigured door REFUSES.** No ``APP_API_TOKEN`` means no caller can be authenticated, and a
 guard that cannot authenticate must not admit — ``RASK_ALLOW_UNAUTHENTICATED_DAPR`` is the one way to
@@ -28,9 +24,7 @@ import secrets
 from pathlib import Path
 from typing import Annotated, Self
 
-from dapr.ext.fastapi import DaprApp  # noqa: TID251
-from fastapi import APIRouter, Depends, FastAPI, Header
-from fastapi.routing import APIRoute
+from fastapi import APIRouter, Depends, Header
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -246,7 +240,7 @@ def require_dapr_token(
     An UNSET ``APP_API_TOKEN`` is a refusal, not a skip: the door cannot authenticate anybody, so it
     admits nobody. ``RASK_ALLOW_UNAUTHENTICATED_DAPR`` reopens it for a deployment that means to run
     open. ``assert_app_token_configured`` remains the earlier, louder version of the same rule — a
-    startup error beats a per-request 403 — but only the six services that CALL it get that, which is
+    startup error beats a per-request 403 — but only a service that CALLS it at boot gets that, which is
     why this door carries the check as well rather than relying on it.
 
     """
@@ -281,28 +275,6 @@ def require_dapr_token(
         raise PermissionDeniedError("invalid or missing Dapr app-api-token")
 
 
-#: Where a sidecar reads its app's subscriptions at startup; ``DaprApp`` mounts it on construction.
-_SUBSCRIPTIONS_PATH = "/dapr/subscribe"
-
-
-def sidecar_app(app: FastAPI) -> DaprApp:
-    """A ``DaprApp`` on ``app`` whose subscription read answers the app's own sidecar alone, out of the schema.
-
-    The list names the app's topics, components and delivery routes, and ``DaprApp`` mounts its route with no guard and
-    takes none, so the route it mounted is mounted again behind :func:`require_dapr_token`. The sidecar stamps its app
-    token on this read as on every call it makes (measured on daprd 1.19.0-rc.4, 2026-11-13), and answers a refusal by
-    loading no subscription, so a door left unconfigured shows as a lane that receives nothing rather than as an open
-    list.
-    """
-    wrapper = DaprApp(app)
-    mounted = [route for route in app.router.routes if isinstance(route, APIRoute) and route.path == _SUBSCRIPTIONS_PATH]
-    if len(mounted) != 1:
-        raise RuntimeError(f"DaprApp mounted {len(mounted)} routes at {_SUBSCRIPTIONS_PATH}, where one is guarded: the subscription read would answer anyone")
-    app.router.routes.remove(mounted[0])
-    app.add_api_route(_SUBSCRIPTIONS_PATH, mounted[0].endpoint, methods=["GET"], dependencies=[Depends(require_dapr_token)], include_in_schema=False)
-    return wrapper
-
-
 async def _ack_binding() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -318,12 +290,12 @@ def add_binding_preflight(router: APIRouter, binding_name: str) -> None:
 
 
 def assert_app_token_configured(*, dapr_enabled: bool) -> None:
-    """Fail closed at startup: when Dapr ingest is enabled the delivery route is live and MUST be
+    """Fail closed at startup: when a cron tick's route is mounted (``dapr_enabled``) it is live and MUST be
     authenticated, so an unset/blank ``APP_API_TOKEN`` is a misconfiguration — not the dev default — and
-    the pod must refuse to start rather than silently expose an unauthenticated ingest path (the security
-    audit's 'blanked token silently reopens the route' residual). No-op when Dapr ingest is off.
+    the pod must refuse to start rather than silently expose an unauthenticated tick route (the security
+    audit's 'blanked token silently reopens the route' residual). No-op when no tick route is mounted.
 
-    `require_dapr_token` refuses an unconfigured door on its own, so this is no longer the only thing
+    `require_dapr_token` refuses an unconfigured door on its own, so this is not the only thing
     standing between a blank token and an open route — it is the EARLIER and louder version of the same
     answer, and a boot failure beats a per-request 403 on a route whose caller is a sidecar with no
     person behind it.
@@ -333,9 +305,9 @@ def assert_app_token_configured(*, dapr_enabled: bool) -> None:
     response. The request path cannot afford that and reads with a single attempt (`expected_app_tokens`).
 
     What it read is held where the request path reads (`secret_cache.STORE_READS`), so the door's first answers come
-    from it. A started app's first callers are its sidecar's subscription read and binding pre-flights, each asked once
-    and a refusal taken as "none" until the pod restarts (Dapr v1.19.0-rc.4, `pkg/runtime/pubsub/subscriptions.go` and
-    `pkg/runtime/processor/binding/send.go`), so they must not wait on a store read of their own."""
+    from it. A started app's first callers are its sidecar's binding pre-flights, each asked once and a refusal taken
+    as "none" until the pod restarts (Dapr v1.19.0-rc.4, `pkg/runtime/processor/binding/send.go`), so they must not
+    wait on a store read of their own."""
     if not dapr_enabled:
         return
     door = DaprDoorSettings()

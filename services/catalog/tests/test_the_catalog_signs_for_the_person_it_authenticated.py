@@ -255,6 +255,31 @@ def test_a_write_nobody_authenticated_is_announced_unsigned_and_its_control_even
     }
 
 
+def test_a_control_event_the_catalog_announced_reaches_the_feed_of_the_replica_following_the_topic(
+    boot: Boot, bus: BusDouble, event_signer: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each replica follows the topic it announces on, so what a write announced is in the feed its console polls once
+    the bus hands it back: verified, under an enforcing door, against the keys the catalog publishes ([[CTL-32]])."""
+    for name, value in {
+        "RASK_SIGNATURE_DOORS": "enforce",
+        "RASK_EVENT_SIGNERS": [CATALOG],
+        "RASK_EVENT_DELEGATORS": [CATALOG],
+        "RASK_CONTROL_SIGNER_ROLES": {"catalog": [CATALOG]},
+    }.items():
+        monkeypatch.setenv(name, value if isinstance(value, str) else json.dumps(value))
+    pair = event_signer(CATALOG)
+    client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), _person(PERSON))
+    _write_a_table_and_a_row(client)
+    announced = [sent.envelope for sent in bus.sent if sent.topic == CONTROL_TOPIC]
+    portal = client.portal
+    assert portal is not None, "the catalog's lifespan is not running, so it follows nothing"
+
+    for envelope in announced:
+        portal.call(bus.broadcast, CONTROL_TOPIC, envelope)
+
+    assert [event["action"] for event in client.get("/management/v1/events").json()["events"]] == ["namespace_created", "table_created"]
+
+
 def test_a_control_event_the_bus_did_not_take_is_delivered_by_the_relay_as_the_catalog_signed_it(
     boot: Boot, relay: str, bus: BusDouble, control_outbox: str, event_signer: Any
 ) -> None:

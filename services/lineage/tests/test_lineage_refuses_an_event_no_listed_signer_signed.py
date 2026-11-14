@@ -1,31 +1,31 @@
 """With signing enforced, lineage records a bus event only when a listed signer's key verifies it.
 
-[[LH-064]] C1 (owner ruling 2026-10-02: Ed25519, keys in the store). The bus door authenticates the sidecar, not the
-producer, so a pod holding the estate's app token could record provenance as anyone. Enforced, an unsigned event and
-one whose signature does not verify are refused: acked so the sidecar never redelivers or parks them, and not recorded.
-A public-key source lineage cannot read is an outage, so the delivery is retried rather than refused.
+[[LH-064]] C1 (owner ruling 2026-10-02: Ed25519, keys in the store). The bus authenticates the connection that
+published, not the producer, so a publisher the bus admits could otherwise record provenance as anyone. Enforced, an
+unsigned event and one whose signature does not verify are refused: taken, so the bus neither delivers them again nor
+has them parked, and not recorded. A public-key source lineage cannot read is an outage, so the delivery is asked for
+again rather than refused.
 
-Driven through the registered `/lineage-events` route with the production wiring, FGA off so only the signature decides.
-The signer's public keys are read from the secret store, which the suite's double answers; the signatures are built by
-the root conftest's `EventSigner` from the wire format alone. Every reason
-series of the refusal counter exists at 0 from the moment the door is registered, so the alert's `rate()` sees the first
-refusal as an increase; the counter is read through a real in-memory reader.
+Driven through lineage's own app and lifespan, each event delivered to its ingest lane, FGA off so only the signature
+decides. The signer's public keys are read from the secret store, which the suite's double answers; the signatures are
+built by the root conftest's `EventSigner` from the wire format alone. Every reason series of the refusal counter exists
+at 0 from the moment the lane starts, so the alert's `rate()` sees the first refusal as an increase; the counter is read
+through a real in-memory reader.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import logging
-from collections.abc import Callable, Iterator, Sequence
-from typing import Any, cast, get_args
+from collections.abc import Callable, Iterator
+from typing import Any, get_args
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from starlette.testclient import TestClient
+from lineage_lane import Feed, Lineage, measured, started
 
+from lakehouse.bus_delivery import Outcome, Settlement
 from lakehouse.lineage.signing import RefusalReason
+from lineage.core.config import get_settings
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -33,61 +33,14 @@ SIGNER = "service-bronze-to-silver"
 
 
 @pytest.fixture
-def refusals(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], dict[str, int]]]:
-    """`lineage.signature.refused` by reason, read through a real in-memory reader.
+def refusals(monkeypatch: pytest.MonkeyPatch) -> Callable[[], dict[str, int]]:
+    """`lineage.signature.refused` by reason, read through a real in-memory reader."""
+    counts = measured(monkeypatch, "_signature_refused")
 
-    The counter is made when `lineage.core.metrics` is imported. Its code is run again into a module object of its own
-    under a meter of this reader's provider, and only the refusal counter is swapped onto the imported module, so its name
-    is the module's own and nothing else is replaced: a reload would replace the module's enums, which every importer
-    holds as it imported them.
-    """
-    from opentelemetry import metrics as otel_metrics
-    from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+    def by_reason() -> dict[str, int]:
+        return {dict(attributes)["lance.lineage.reason"]: count for attributes, count in counts("lineage.signature.refused").items()}
 
-    from lineage.core import metrics
-
-    reader = InMemoryMetricReader()
-    provider = MeterProvider(metric_readers=[reader])
-    spec = importlib.util.find_spec(metrics.__name__)
-    assert spec is not None and spec.loader is not None, "the metrics module has no loader to run it again with"
-    measured = importlib.util.module_from_spec(spec)
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(otel_metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
-        spec.loader.exec_module(measured)
-    monkeypatch.setattr(metrics, "_signature_refused", measured._signature_refused)
-
-    def counts() -> dict[str, int]:
-        found: dict[str, int] = {}
-        data = reader.get_metrics_data()
-        for resource in data.resource_metrics if data is not None else ():
-            for scope in resource.scope_metrics:
-                for metric in scope.metrics:
-                    if metric.name != "lineage.signature.refused":
-                        continue
-                    # A counter only ever yields `NumberDataPoint`, the member of the reader's point union that has a value.
-                    for point in cast(Sequence[NumberDataPoint], metric.data.data_points):
-                        found[str((point.attributes or {}).get("lance.lineage.reason"))] = int(point.value)
-        return found
-
-    yield counts
-    provider.shutdown()
-
-
-class _Feed:
-    """The store surface the bus door reaches on a first delivery: it records, and has nothing to replay."""
-
-    def __init__(self) -> None:
-        self.recorded: list[str] = []
-
-    async def record(self, event: Any) -> None:
-        self.recorded.append(event.run_id)
-
-    async def run_author(self, _run_id: str) -> str | None:
-        return None
-
-    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
-        return None
+    return by_reason
 
 
 def _event() -> dict[str, Any]:
@@ -103,59 +56,44 @@ def _event() -> dict[str, Any]:
 
 
 @pytest.fixture
-def door(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]]) -> tuple[TestClient, _Feed]:
-    """The registered route, built after `refusals` as a pod registers its door after its MeterProvider is installed."""
-    for key, value in {
-        "APP_API_TOKEN": "the-estate-app-token",
-        "LINEAGE_DAPR_ENABLED": "true",
-        "LINEAGE_SIGNERS": json.dumps([SIGNER, "service-catalog"]),
-        "LINEAGE_DELEGATORS": json.dumps(["service-catalog"]),
-    }.items():
-        monkeypatch.setenv(key, value)
-
-    from lakehouse.ns_errors import install_problem_handlers
-    from lineage.api.dapr import register_dapr
-    from lineage.core.config import get_settings
-
-    get_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-    register_dapr(app)
-    feed = _Feed()
-    app.state.provenance = feed
-    return TestClient(app), feed
+def lane(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]], secret_store: SecretStoreDouble) -> Iterator[Lineage]:
+    """Lineage started after `refusals`, as a pod starts its lane after its MeterProvider is installed."""
+    del refusals, secret_store
+    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([SIGNER, "service-catalog"]))
+    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps(["service-catalog"]))
+    with started(monkeypatch, Feed()) as lineage:
+        yield lineage
 
 
 @pytest.mark.parametrize(
-    ("case", "status", "recorded"),
+    ("case", "again", "recorded"),
     [
-        pytest.param("unsigned", "SUCCESS", False, id="an-unsigned-event"),
-        pytest.param("tampered", "SUCCESS", False, id="an-event-changed-after-its-signer-signed-it"),
-        pytest.param("store-down", "RETRY", False, id="a-public-key-source-lineage-cannot-read"),
+        pytest.param("unsigned", False, False, id="an-unsigned-event"),
+        pytest.param("tampered", False, False, id="an-event-changed-after-its-signer-signed-it"),
+        pytest.param("store-down", True, False, id="a-public-key-source-lineage-cannot-read"),
     ],
 )
 def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
-    door: tuple[TestClient, _Feed],
+    lane: Lineage,
     refusals: Callable[[], dict[str, int]],
     event_signer: Any,
     secret_store: SecretStoreDouble,
     respx_allows_unused_routes: None,
     case: str,
-    status: str,
+    again: bool,
     recorded: bool,
 ) -> None:
-    client, feed = door
     signer = event_signer(SIGNER)
     secret_store.hold(f"signing-public-{SIGNER}", httpx.Response(500) if case == "store-down" else secret_store.held({"keys": signer.public}))
     event = _event() if case == "unsigned" else signer.sign(_event())
     if case == "tampered":
         event["outputs"] = [{"namespace": "gold", "name": "acme-gold$events"}]
     assert refusals() == dict.fromkeys(get_args(RefusalReason.__value__), 0), (
-        "registering the door must create every refusal series at 0, or a first refusal is no increase"
+        "starting the lane must create every refusal series at 0, or a first refusal is no increase"
     )
 
-    answered = client.post("/lineage-events", json={"data": event}, headers={"dapr-api-token": "the-estate-app-token"})
+    settled = lane.deliver({"data": event})
 
-    assert answered.status_code == 200, answered.text
-    assert answered.json() == {"status": status}, f"{case}: the door answered {answered.json()}"
-    assert bool(feed.recorded) is recorded, f"{case}: recorded {feed.recorded}"
+    expected = Settlement(outcome=Outcome.AGAIN, delay_seconds=get_settings().delivery_retry_seconds) if again else Settlement(outcome=Outcome.TAKEN)
+    assert settled == expected, f"{case}: the lane settled {settled}"
+    assert bool(lane.feed.recorded) is recorded, f"{case}: recorded {lane.feed.recorded}"

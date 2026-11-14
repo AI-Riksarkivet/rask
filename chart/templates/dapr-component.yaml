@@ -1,88 +1,8 @@
 {{- if and .Values.dapr.enabled (not (.Capabilities.APIVersions.Has "dapr.io/v1alpha1")) }}
 {{- fail "Dapr is a prerequisite: dapr.enabled is on and this cluster does not serve dapr.io/v1alpha1. Install the Dapr control plane on its own release before rask (docs/architecture/deployment.md, Prerequisites; development: deploy/fixtures/dapr); rask never installs it. A cluster-less render names the API it targets: --api-versions dapr.io/v1alpha1" }}
 {{- end }}
-{{- if .Values.dapr.enabled }}
-{{- if .Values.catalog.controlEmit }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
-    - { name: name, value: "lance-dapr-catalog-control" }
-    - { name: streamName, value: "CATALOG_CONTROL_BROADCAST" }
-    - { name: durableName, value: "catalog-control-{podName}" }
-    - { name: deliverPolicy, value: "new" }
-    {{- include "lance.brokerWindows" . | nindent 4 }}
-    {{- with include "lance.natsCreds" (list . .Values.services.catalog.appId) }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" . }}
-scopes:
-  - {{ .Values.services.catalog.appId }}
-
-{{- end }}
-
-{{- $subscribers := list (dict "appId" .Values.services.lineage.appId "deliverPolicy" "all") }}
-
-{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}
-{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.appId "deliverPolicy" "new") }}
-{{- end }}
-
-{{- range $subscribers }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ include "lance.subPubsub" (list $ .appId) }}
-  labels: {{- include "lance.labels" $ | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" $ }}" }
-    - { name: name, value: "lance-dapr-{{ .appId }}" }
-    - { name: queueGroupName, value: {{ .appId | quote }} }
-    - { name: deliverPolicy, value: {{ .deliverPolicy | quote }} }
-    {{- if eq .appId $.Values.services.lineage.appId }}
-    - { name: concurrencyMode, value: "parallel" }
-    - { name: maxAckPending, value: {{ required "services.lineage.deliveriesInFlight is required" $.Values.services.lineage.deliveriesInFlight | quote }} }
-    {{- end }}
-    - { name: durableName, value: "{{ .appId }}-durable" }
-
-    {{- include "lance.brokerWindows" $ | nindent 4 }}
-    {{- with include "lance.natsCreds" (list $ .appId) }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" $ }}
-scopes:
-  - {{ .appId }}
-{{- end }}
-{{- if .Values.dapr.resiliency.enabled }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ include "lance.subPubsub" (list . .Values.services.lineage.appId) }}-dlq
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
-    - { name: name, value: "lance-dapr-{{ .Values.services.lineage.appId }}-dlq" }
-    - { name: queueGroupName, value: "{{ .Values.services.lineage.appId }}-dlq" }
-    - { name: deliverPolicy, value: "new" }
-    - { name: durableName, value: "{{ .Values.services.lineage.appId }}-dlq-durable" }
-    - { name: ackWait, value: "720s" }
-    - { name: maxDeliver, value: "3" }
-    - { name: backOff, value: "720s,720s" }
-    {{- with include "lance.natsCreds" (list . .Values.services.lineage.appId) }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" . }}
-scopes:
-  - {{ .Values.services.lineage.appId }}
-{{- end }}
+{{- $scopes := splitList "," (include "lance.sidecarScopes" .) | compact }}
+{{- if and .Values.dapr.enabled $scopes }}
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Component
@@ -105,7 +25,7 @@ spec:
     - { name: caCert, value: {{ include "lance.storeCaFile" . }} }
     {{- end }}
 scopes:
-{{- range (splitList "," (include "lance.secretScopes" .) | compact) }}
+{{- range $scopes }}
   - {{ . }}
 {{- end }}
 {{- end }}

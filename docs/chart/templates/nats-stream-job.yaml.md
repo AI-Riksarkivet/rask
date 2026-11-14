@@ -3,19 +3,26 @@
 Rationale for `chart/templates/nats-stream-job.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `apiVersion: batch/v1`
+## `{{- range $phase := list "declare" "retire" }}`
 
-Declare the JetStream streams (LINEAGE, subjects lineage.events.>, and DLQ and the catalog's control streams) that the
-services publish into on their own connections and that their Dapr pubsub.jetstream components consume from. Neither
-creates a stream (Dapr's jetstream component does NOT auto-create one), so this Job does it on the bus `nats.url` names,
-and on every run converges each stream to the config the chart declares (`converge_stream` below). The bus is a
-prerequisite (ADR 0153), and the streams are rask's: without them every publish would fail and every component would
-bind to nothing.
+The template renders two Jobs, one per phase, from one script body.
 
-NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. A daprd sidecar subscribes at startup, so an
-absent stream is a startup-time dependency of half the fleet; running the provisioner only after
-`--wait` had already declared those pods hopeless is the wrong order in the same way the OpenFGA
-migration was.
+The DECLARE phase, `<release>-nats-stream-r<rev>`, declares the JetStream streams (LINEAGE, subjects
+lineage.events.>, DLQ, CATALOG_CONTROL under `catalog.controlEmit`, and maintenance's streams under
+`maintenance.enabled`) and the durable consumers the services pull (`lance.busConsumers` in `_helpers.tpl`), on the bus
+`nats.url` names. No service creates a stream or a consumer: each binds to what this Job declared, and its bus user
+holds no grant to create one. So on every run the Job converges each stream and each consumer to the config the chart
+declares (`converge_stream`, `converge_consumer` below). The bus is a prerequisite (ADR 0153), and the streams and
+consumers are rask's: without them every publish would fail and every pull would bind to nothing.
+
+The declare phase is NOT a Helm hook (see "BOOTSTRAP JOBS" in _helpers.tpl): it is a plain manifest Job, applied in the
+same wave as the Deployments, and under Argo CD a `Sync` hook (`lance.reconciledJob`). A service whose consumer is not
+declared yet asks for it again (`bus_pull_failed`, said once per fault) until the Job has run, so nothing waits on an
+order the chart would have to know.
+
+The RETIRE phase, `<release>-nats-stream-retire-r<rev>`, removes what git no longer declares. It is a Helm
+`post-install,post-upgrade` hook and, under Argo CD, a `PostSync` hook: it runs after the sync, once no pod of the
+previous revision is left to pull a consumer it removes.
 
 ## `ttlSecondsAfterFinished: 3600`
 
@@ -28,6 +35,7 @@ before-hook-creation delete policy never matches the previous one — without a 
 The explicit component label (the P4 landmine): `nats-stream` is on the bus's exclusive
 client list (`lance.busClients`), which admits it to the development bus's 4222 (network-policy.yaml (3f)) and to the
 platform bus's egress on a real deployment ([[XC-202]]); a Job without it reaches no bus under the isolation layer.
+Both phases carry it.
 
 ## `seccompProfile: { type: RuntimeDefault }`
 
@@ -48,6 +56,18 @@ The path of the `admin` creds file the nats CLI reads (values.yaml `nats.auth`),
 
 A server that is not up yet is waited for; one that refuses this Job's credential fails it now, by name.
 
+## `consumer_of() {`
+
+Both phases judge a consumer by its info: the declare phase reads the start a consumer holds, and the retire phase reads
+its ownership mark before it removes it. A judgement on a failed read must not act ([[LH-343]]: measured 2026-10-27 on
+the nats-auth rig with an admin that may list and delete but not read, a pass that judged on a failed read deleted every
+durable on LINEAGE, DLQ and CATALOG_CONTROL and the Job exited 0). The CLI's `consumer info` cannot tell a missing
+consumer from a failed read (on a missing name nats-box 0.14.5's CLI v0.1.5 tries to prompt for one, "cannot pick a
+Consumer without a terminal"), so the reader asks `$JS.API.CONSUMER.INFO` itself: error 10014 is a consumer that does
+not exist (an empty answer), a `config` is one read, and anything else (a timeout during a leader move, a refusal, no
+server) is retried five times, 3 s apart, then fails the Job with that consumer left in place; `backoffLimit` runs it
+again.
+
 ## `converge_stream() {`
 
 EVERY STREAM CONVERGES TO THE CONFIG THE CHART DECLARES ([[XC-164]]). A stream created once keeps its creation config
@@ -64,9 +84,14 @@ nats-server 2.15.2 answered an unchanged config and a refused one the same way (
 holds `$JS.API.STREAM.UPDATE` for exactly the streams it edits, so an operator-mode bus admits the edits and nothing
 wider; the `nats-auth` lane runs this Job as that user against such a bus. `allow_direct: true` is in the declared config
 because `nats stream add --defaults` sets it, so a stream created that way edits to no change, and a config without it
-would turn it off. The mirror's `mirror_direct` is the server's: it derives `true` for a mirror of a stream that allows direct
-gets, on create and on an edit that omits it (measured on nats-server 2.14.2), so the declared config leaves it out. `tests/unit/test_the_stream_job_converges_each_stream_to_its_declared_config.py` runs the script against a
+would turn it off. `tests/unit/test_the_stream_job_converges_each_stream_to_its_declared_config.py` runs the script against a
 stand-in CLI; the GitOps lane reads a running bus back after a change.
+
+RETENTION IS A FAN-OUT CORRECTNESS INVARIANT on a stream several consumers read (LINEAGE is read by `lineage-ingest`
+and `maintenance-arrival`, each of which must see every event): `limits`, never `workqueue`, whose first ack deletes a
+message so the consumers take deliveries from each other, and never `interest`, which deletes a message once every
+consumer has acked it, so the history a lineage rebuild replays is gone. The edit restores `limits` from `interest` in
+place; from `workqueue` it is refused and the Job fails naming why.
 
 ## `converge_bucket() {`
 
@@ -88,44 +113,27 @@ hand were turned back off, and a request no one answered exited 0. A bucket that
 `nats stream add`, which asks nothing. The `nats-auth` lane re-runs this Job as `admin` on a running three-node bus after
 changing `maintenance.queue.ackWaitSeconds`, and reads the bucket's max age back.
 
-## `consumer_of() {`
+## `converge_consumer() {`
 
-The drift passes judge a durable by its info, and a judgement on a failed read deleted a healthy durable, which the
-sidecar re-creates at `deliverPolicy: new`, skipping what was published in between ([[LH-343]]). Measured 2026-10-27 on
-the nats-auth rig with an admin that may list and delete but not read: every durable on LINEAGE, DLQ and CATALOG_CONTROL was
-deleted and the Job exited 0. The CLI's `consumer info` cannot tell a missing consumer from a failed read (on a missing
-name nats-box 0.14.5's CLI v0.1.5 tries to prompt for one, "cannot pick a Consumer without a terminal"), so the reader
-asks `$JS.API.CONSUMER.INFO` itself: error 10014 is a consumer that does not exist (nothing to judge), a `config` is
-one read, and anything else (a timeout during a leader move, a refusal, no server) is retried five times, 3 s apart,
-then fails the Job with that durable left in place; `backoffLimit` runs it again.
+A DURABLE CONSUMER CONVERGES TO ITS DECLARED CONFIG AS A STREAM DOES: created when absent, edited in place when present
+(`nats consumer edit --config -f`), so a changed ack wait, in-flight bound, filter or mark reaches a consumer that
+already exists, and a service never has to delete and re-create one to change it. What JetStream refuses to change in
+place (where a consumer starts, its `max_waiting`) fails the Job with the server's own reason. Measured on natscli 0.5.1
+(nats-box 0.20.2) against nats-server 2.15.2, 2026-11-14: an edit to an unchanged config exits 0; a changed `ack_wait`,
+`max_ack_pending`, filter or metadata is applied in place; a changed start sequence or `max_waiting` is refused
+(`... can not be updated (10012)`). The server adds `_nats.*` keys of its own to a consumer's metadata, and an edit that
+omits them does not fail.
 
-## `LIN="{{ .Values.services.lineage.appId }}-durable"`
+The rendered declare and retire scripts were run against a scratch nats-server 2.15.2 (no auth), 2026-11-14: a fresh bus
+is declared, and a second run converges all 12 objects; changed values edit `lineage-ingest` in place and keep its
+start.
 
-LINEAGE'S DURABLE IS HELD TO ITS IN-FLIGHT BOUND ([[LH-533]]). `services.lineage.deliveriesInFlight` is the
-durable's `max_ack_pending`, the one config field the chart sets beyond `max_deliver` and `backoff`, and a
-sidecar cannot rebind a durable whose config differs ("consumer name already in use"), so a durable at another
-value is deleted for the sidecar to recreate. This Job runs beside the rollout, so the outgoing pod's sidecar
-may recreate the durable as it was: the Job checks again every 5 s and deletes it again until it is at the
-bound, and after 300 s, which outlasts the outgoing pod's grace period, it fails for its retry if a durable is
-still at another value. Each recreation starts at the stream's first message (`deliverPolicy: all`), a replay
-the keyed ingest lands nothing twice from.
+## `declare_stream DLQ "dlq.>"`
 
-## `BROADCAST_INACTIVE_NS="{{ mul (int (required "catalog.controlConsumerInactiveSeconds is required" .Values.catalog.controlConsumerInactiveSeconds)) 1000000000 }}"`
-
-The mirror CATALOG_CONTROL_BROADCAST holds each catalog replica's durable ([[LH-305]]); its consumer limit is what
-reaps a deleted pod's, so the Job declares it in git and converges it: the mirror is edited to the same config on every run
-(`nats stream edit --config`, measured on nats-server v2.14.2 to update both its limit and its message age).
-The server refuses a change to a stream's consumer limits while any consumer exceeds them, comparing `max_ack_pending`
-too (v2.14.2 `stream.go:2420-2446`), so the limits name `max_ack_pending: 1000`, the server's default for a consumer
-that sets none, and a lowered limit first lowers each durable above it (`nats consumer edit --inactive-threshold`):
-measured, a raise applies directly, and a lower is refused until the durables are lowered.
-A consumer takes the stream's limit when it is created or re-bound (measured: a second create of one durable with a new
-deliver subject is accepted and carries the limit), so an edited limit reaches each replica's durable when its sidecar
-next subscribes. The message age equals the limit, so a replica back within it resumes at its acknowledgement floor. The
-config is written whole because `nats stream add --mirror` asks for the mirror's details even under `--defaults`
-(nats-box 0.14.5's CLI v0.1.5), which a Job without a terminal cannot answer. Before the Job creates the mirror on an
-upgrade, a rolled catalog pod's subscribe fails on the missing stream and daprd retries it (dapr
-`pkg/runtime/processor/subscriber/subscriber.go:354-360`).
+DLQ holds what a subscriber outside this release parks on `dlq.<its own name>`. Nothing of the lakehouse's is published
+there: lineage keeps a delivery it ends in the provenance namespace's `refusals` table, and the other lanes end theirs
+on the bus and count them. The stream stays declared so such a subscriber has a place to park without a stream of its
+own.
 
 ## `converge_stream MAINTENANCE_TASKS`
 
@@ -169,16 +177,6 @@ while the first is still passing the table. So the render refuses a heartbeat pa
 with it for three ack waits, a killed one's moved to the other, and one the bus stopped answering ended itself before its
 task moved.
 
-## `converge_consumer MAINTENANCE_TASKS maintenance-worker`
-
-The consumer delivers a task once more than `maintenance.queue.maxDeliver`. A worker whose run fails on the last
-delivery ends the task itself, but a pass that takes its replica down (out of memory, or past twice
-`maintenance.queue.maxPassSeconds`, when the worker exits) never gets there, and JetStream keeps a work-queue message
-whose deliveries ran out (measured on nats-server 2.15.2, 2026-11-09): it would hold its table's subject, refusing
-every later pass of the table, until the stream's day-long `max_age`. The extra delivery reaches a worker, which ends
-the task without running it, counts it (`maintenance.tasks.ended`, the alert MaintenanceTasksEnded) and holds its next
-try `maintenance.queue.recheckHours` out, since the hourly audit queues a table nothing holds.
-
 ## `converge_stream STORE_EVENTS`
 
 STORE_EVENTS holds the store's change events (ADR 0198 §3): each object write of a rask bucket, published on
@@ -188,3 +186,67 @@ event is a hint: the table's daily recheck finds what a lost one would have repo
 events past `maintenance.queue.storeEventsMaxBytes` (`discard` old) rather than refusing the store, because it shares
 the bus's JetStream disk with LINEAGE and the work queue, and a long maintenance outage must not fill that disk for
 them. One event is about 2 KB (RustFS 1.0.3), so the default 128 MiB holds about 65,000.
+
+## `declare_stream CATALOG_CONTROL "catalog.control.>"`
+
+CATALOG_CONTROL carries the catalog's control-plane change events, under `catalog.controlEmit`. Every catalog replica
+must see every event, so no consumer is declared on it: each replica follows the topic by reading the stream by
+sequence on its own connection (`lakehouse.bus.Bus.follow`, nats-py's `get_msg`). A replica holds nothing on the bus,
+so one that is gone leaves nothing to reap.
+
+## `{{- range $consumers }}`
+
+Every durable consumer the services pull comes from one derivation, `lance.busConsumers` in `_helpers.tpl`, which
+both phases read: the declare phase converges each one, and the retire phase keeps each one. So a consumer the chart
+declares is never the retire phase's to remove, and a consumer the chart stops declaring is removed by the next sync.
+Each config carries the release's mark, `metadata: {"rask.dev/release": "<release name>"}`.
+
+## `held=$(consumer_of {{ .stream }} {{ .name }}) || exit 1`
+
+A CONSUMER'S START IS DECLARED BACK TO IT. `lineage-ingest` starts by stream sequence (`start: position` in
+`lance.busConsumers`), and JetStream refuses to change a consumer's start in place (`... can not be updated (10012)`,
+measured 2026-11-14 as above), so a config naming any other start than the one the consumer holds fails the edit. So
+the Job reads the `opt_start_seq` the consumer
+holds and writes it into the config it converges: the edit keeps the start and applies everything else.
+
+## `held=$(consumer_of {{ .stream }} lineage-durable) || exit 1`
+
+ONE-DEPLOY MIGRATION ([[XC-199]]), labelled in the script and removed with the next change to this Job. When
+`lineage-ingest` does not exist yet, it begins after the ack floor of `lineage-durable`, the consumer it replaces, so
+lineage's first pull consumer takes up exactly where the old subscription's acknowledgements end; with no such consumer
+it begins at sequence 1. Measured on a scratch nats-server 2.15.2 prepared as the previous revision left the bus,
+2026-11-14: `lineage-ingest` began at the old consumer's ack floor + 1.
+
+The old subscription acknowledged an event as its sidecar dead-lettered it, and only the route that took the dead
+letter (`DLQ/lineage-dlq-durable`) kept it for the estate admin. A dead letter still waiting on that consumer at the
+cut-over is therefore an event below the ack floor that nothing recorded or kept, and nothing of this revision reads
+`dlq.lineage.events`. So the step reads that consumer too: while it holds a delivery pending or unacknowledged,
+`lineage-ingest` begins at the stream's first message instead, and the lane is handed every retained event again
+(each already recorded lands nothing new; the one that was parked is recorded, or parked into the refusals table).
+Measured with the rendered scripts on a scratch nats-server 2.15.2, 2026-11-14: with one dead letter pending the
+consumer began at sequence 1, with none at the ack floor + 1, and a declare after the retire kept either start.
+
+## `MARK='"rask.dev/release":"{{ $.Release.Name }}"'`
+
+WHAT GIT NO LONGER DECLARES IS REMOVED IN THE RETIRE PHASE. The phase lists every stream and every consumer on the bus,
+and removes a consumer only when the chart does not declare it AND it carries this release's mark, which the declare
+phase writes on each consumer it converges. A consumer with no mark, or another release's mark, is another
+subscriber's and is never touched, and no stream is ever removed: a subscriber outside the release may hold a consumer
+on any stream, and a stream holds data. Measured on a scratch nats-server 2.15.2, 2026-11-14: with
+`maintenance.arrivalEnabled=false` the retire phase removes `maintenance-arrival`, and it leaves a consumer of another
+subscriber. `nats consumer rm` and `nats stream rm` of an absent object exit 1 (natscli 0.5.1, 2026-11-14), so each
+removal is of an object the phase has just read.
+
+The phase runs after the sync (a Helm `post-install,post-upgrade` hook, an Argo CD `PostSync` hook), so nothing of the
+new revision still pulls what it removes. Neither Helm's wait nor Argo CD's health waits for the previous revision's
+terminating pods, so one of those may still be stopping: its pulls of a consumer that is gone are refused, which its
+lane waits out until the pod ends (`lakehouse.bus` says a refused pull once and asks again).
+
+## `for old in LINEAGE/lineage-durable LINEAGE/maintenance-durable DLQ/lineage-dlq-durable; do`
+
+ONE-DEPLOY MIGRATION ([[XC-199]]), labelled in the script and removed with the next change to this Job. The consumers
+the services' subscriptions were held on carry no mark, so the mark rule leaves them, and the mirror stream
+`CATALOG_CONTROL_BROADCAST` is a stream, which the rule never removes. This step removes the three named consumers and
+that mirror by name, each only when it exists (`admin` holds `$JS.API.STREAM.DELETE.CATALOG_CONTROL_BROADCAST` for
+it, on a line of its own in `nats.auth.users` labelled for removal with this step). Measured on a scratch nats-server 2.15.2 prepared as the previous revision left the bus, 2026-11-14: the phase
+removed the three consumers and the mirror and left a consumer of another subscriber.

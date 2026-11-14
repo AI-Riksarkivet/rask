@@ -5,106 +5,38 @@ error path, so a misrouted event produces a green deployment, a healthy pod, and
 Nothing about the running system distinguishes "no lineage was emitted" from "nothing has happened
 yet". That is why the wiring has to be asserted at render time rather than observed at runtime.
 
-The lakehouse's producers publish on the bus, each on a connection of its own: maintenance and the catalog on the
-topic their ``<APP>_LINEAGE_TOPIC`` names, and ``services/lineage`` subscribes on ``LINEAGE_EVENTS_TOPIC``. The TOPIC
-must match. The in-code defaults are held equal by
-``test_lineage_dapr_delivery.py::test_the_default_subscription_takes_the_topic_its_publishers_default_to``, which
-cannot see the chart, and the chart overrides those defaults on every deployed pod, so a template that stopped
-deriving from ``.Values.pubsub.topic`` would satisfy that pin while dropping every event. A producer outside the estate posts OpenLineage to lineage's HTTP door with its own
-transport (any OpenLineage client, configured by that producer), which this chart renders nothing for.
+The lakehouse's producers publish on the bus, each on a connection of its own: the catalog and maintenance on the topic
+their ``<APP>_LINEAGE_TOPIC`` names, and lineage republishes a recovered event on ``LINEAGE_EVENTS_TOPIC``. What takes
+them is a durable consumer the stream Job declares, filtered to one subject: lineage's ingest lane, and maintenance's
+write-event lane. A publisher's topic and a consumer's filter are each rendered from ``pubsub.topic``, and a template
+that stopped deriving one of them from it would publish where no consumer reads while every pod stays healthy. A
+producer outside the estate posts OpenLineage to lineage's HTTP door with its own transport (any OpenLineage client,
+configured by that producer), which this chart renders nothing for.
 
-Asserted against ``helm template`` output rather than values.yaml, because the rendered manifest is what
-actually runs.
+Asserted against the render rather than values.yaml, because the rendered manifest is what runs, and with the topic
+moved off its default, so two equal defaults cannot pass for one derivation.
 """
 
 from __future__ import annotations
 
-import re
-import shutil
-import subprocess
-from pathlib import Path
-
-import pytest
-
-from tests.unit.chart_render import PREREQ_ARGS
+from lineage.api import ingest_lane
+from maintenance.services import queue
+from tests.unit.chart_render import DEFAULT_ARGS, bus_consumers, containers, env_of, render
 
 
-REPO = Path(__file__).resolve().parents[2]
-CHART = REPO / "chart"
+#: Every env var that names the topic a service publishes lineage on: the catalog's (each committed write), maintenance's
+#: (its passes) and lineage's (a recovered event, published again).
+_PUBLISHER_TOPICS = ("LANCE_LINEAGE_TOPIC", "MAINTENANCE_LINEAGE_TOPIC", "LINEAGE_EVENTS_TOPIC")
 
-#: The chart renders env in TWO styles and both must be read. The lance-ns templates use the inline
-#: `- { name: FOO, value: "bar" }`; the rask fleet templates (gateway, controlplane, …) use the block
-#: form on two lines. A regex for only the inline form silently exempts half the estate from every
-#: assertion here — which is precisely the "green gate that checks nothing" failure this file is about.
-_ENV = re.compile(r"\{\s*name:\s*([A-Z0-9_]+),\s*value:\s*\"([^\"]*)\"\s*\}|-\s*name:\s*([A-Z0-9_]+)\s*\n\s*value:\s*\"([^\"]*)\"")
+#: The consumers that take the topic: lineage's ingest lane and maintenance's write-event lane.
+_CONSUMERS = ((ingest_lane.STREAM, ingest_lane.CONSUMER), (queue.ARRIVALS_STREAM, queue.ARRIVALS_CONSUMER))
 
 
-def _env_pairs(rendered: str) -> list[tuple[str, str]]:
-    """(name, value) for every env var in the render, in document order, both styles."""
-    return [(m[0] or m[2], m[1] or m[3]) for m in _ENV.findall(rendered)]
+def test_every_lineage_publisher_renders_the_topic_the_declared_consumers_take() -> None:
+    docs = render(*DEFAULT_ARGS, "--set", "pubsub.topic=lineage.events.moved")
 
+    published = {name: {env[name] for _, _, container in containers(docs) if name in (env := env_of(container))} for name in _PUBLISHER_TOPICS}
+    taken = {key: bus_consumers(docs)[key]["filter_subject"] for key in _CONSUMERS}
 
-#: The subscriber. If this is wrong or absent, nothing reaches the graph no matter who publishes.
-_SUBSCRIBER_TOPIC = "LINEAGE_EVENTS_TOPIC"
-
-#: Every env var that names the topic a service PUBLISHES lineage to. Each must be rendered, and equal the
-#: subscriber's. `LANCE_LINEAGE_TOPIC` is the catalog's (it emits its own table-lifecycle runs).
-_PUBLISHER_TOPICS = ("MAINTENANCE_LINEAGE_TOPIC", "LANCE_LINEAGE_TOPIC")
-
-
-def _render(*set_values: str) -> str:
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not Path(helm).exists():
-        pytest.skip("helm not available")
-    argv = [helm, "template", "rask", str(CHART)]
-    # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
-    # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
-    argv += PREREQ_ARGS
-    argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
-    # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
-    # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
-    argv += ["--set", "image.localImages=true"]
-    for value in set_values:
-        argv += ["--set", value]
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=300)
-    assert proc.returncode == 0, f"helm template failed:\n{proc.stderr}"
-    return proc.stdout
-
-
-def _env_values(rendered: str, name: str) -> list[str]:
-    return [value for key, value in _env_pairs(rendered) if key == name]
-
-
-def test_every_lineage_publisher_renders_the_subscribers_topic() -> None:
-    """Publisher topics == subscriber topic, in the rendered chart."""
-    rendered = _render()
-
-    subscribed = _env_values(rendered, _SUBSCRIBER_TOPIC)
-    assert subscribed, f"{_SUBSCRIBER_TOPIC} is not rendered — services/lineage subscribes to its in-code default while the chart moves the publishers"
-    assert len(set(subscribed)) == 1, f"the lineage subscriber is rendered with conflicting topics: {sorted(set(subscribed))}"
-    topic = subscribed[0]
-    assert topic, f"{_SUBSCRIBER_TOPIC} rendered EMPTY — the subscription binds to nothing and every event is dropped"
-
-    published: dict[str, list[str]] = {name: _env_values(rendered, name) for name in _PUBLISHER_TOPICS}
-    unrendered = sorted(name for name, values in published.items() if not values)
-    assert not unrendered, f"these publishers render no topic, so each publishes on its in-code default while the chart moves the subscriber: {unrendered}"
-
-    mismatched = {name: sorted(set(values)) for name, values in published.items() if values and set(values) != {topic}}
-    assert not mismatched, (
-        f"these services publish lineage to a topic nobody subscribes to (subscriber is on {topic!r}): {mismatched} — "
-        "every event they emit is silently discarded by the broker, and the emit path logs nothing above DEBUG"
-    )
-
-
-def test_the_lineage_subscriber_is_actually_subscribing() -> None:
-    """A rendered-but-disabled subscriber drops everything just as thoroughly as a wrong topic.
-
-    ``lineage.api.dapr`` always constructs ``DaprApp`` (it serves ``/dapr/subscribe`` regardless), so
-    the pod is healthy and the endpoint answers whether or not the subscription itself was registered.
-    """
-    rendered = _render()
-    enabled = _env_values(rendered, "LINEAGE_DAPR_ENABLED")
-    assert enabled, "LINEAGE_DAPR_ENABLED is not rendered — whether the lineage service subscribes is left to a default the chart does not state"
-    assert set(enabled) == {"true"}, (
-        f"the lineage subscriber is rendered disabled ({enabled}) — the graph would stay empty while every producer reports success"
-    )
+    assert published == {name: {"lineage.events.moved"} for name in _PUBLISHER_TOPICS}
+    assert taken == dict.fromkeys(_CONSUMERS, "lineage.events.moved")

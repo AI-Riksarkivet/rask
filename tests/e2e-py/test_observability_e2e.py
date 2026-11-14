@@ -1,4 +1,4 @@
-"""End-to-end observability test against the deployed kind stack (catalog + Dapr + lineage + GreptimeDB).
+"""End-to-end observability test against the deployed kind stack (catalog + the bus + lineage + GreptimeDB).
 
 The regression guard for the thing that must never silently break while refactoring: the event-driven
 pipeline AND its observability. ONE catalog table-create drives the real path, and we assert it produced
@@ -44,6 +44,8 @@ GREPTIME = os.environ.get("LANCE_E2E_GREPTIME_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+#: The topic the catalog announces each commit on and lineage takes it from (`pubsub.topic`).
+LINEAGE_TOPIC = "lineage.events.v1"
 
 pytestmark = [pytest.mark.e2e, pytest.mark.observability]
 
@@ -82,7 +84,7 @@ def _auth_headers() -> dict[str, str]:
 
 def _eventually(fn: Callable[[], Any], *, timeout: float = 60.0, interval: float = 3.0) -> Any:
     """Poll ``fn`` until it returns a truthy value (the signal arrived), else fail with the last result.
-    Signals are asynchronous here — Dapr redelivery, the 5s metric export interval, trace batching."""
+    Signals are asynchronous here — a delivery handed back, the 5s metric export interval, trace batching."""
     deadline = time.monotonic() + timeout
     last: Any = None
     while time.monotonic() < deadline:
@@ -187,7 +189,8 @@ def test_distributed_trace_spans_catalog_to_lineage(pipeline_run: dict[str, Any]
     """3. The create's own trace spans catalog → its publish on the bus → lineage → its feed write — true distributed tracing.
 
     The publish is the catalog's own span (`lakehouse.bus`, named `publish <topic>`), and the envelope carries its
-    `traceparent` to the subscriber, so lineage's delivery joins the same trace.
+    `traceparent` to lineage, whose delivery of it is a CONSUMER span `process <topic>` in the same trace. The span is
+    read with its service: the maintenance worker's commit lane names its own delivery of the same publish alike.
 
     Read off the trace the create's `traceparent` names, never the newest trace that spans both services: lineage
     writes its feed through the catalog's doors, so each relay tick spans catalog and lineage with no publish in it.
@@ -199,9 +202,9 @@ def test_distributed_trace_spans_catalog_to_lineage(pipeline_run: dict[str, Any]
         return spans if {"catalog", "lineage"} <= {service for service, _ in spans} else None
 
     spans = _eventually(joined_trace)
-    span_names = {name for _, name in spans}
-    assert "publish lineage.events.v1" in span_names, f"the catalog's publish on the lineage topic is not a span of the trace: {span_names}"
-    assert any("/lineage-events" in n for n in span_names), f"no lineage subscriber span in {span_names}"
+    named = {(service, name) for service, name in spans}
+    assert ("catalog", f"publish {LINEAGE_TOPIC}") in named, f"the catalog's publish on the lineage topic is not a span of the trace: {named}"
+    assert ("lineage", f"process {LINEAGE_TOPIC}") in named, f"lineage's delivery of the publish is not a span of the trace: {named}"
 
 
 @pytest.mark.usefixtures("pipeline_run")

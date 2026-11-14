@@ -1,8 +1,8 @@
 """Durable object-store outbox for lineage events (#4) — narrows the loss window to commit→stage.
 
 A producer commits its Lance write and then publishes its event on the bus. A crash between the commit and the
-stream's acknowledgement loses the lineage event: the data landed but the feed never learns of it. The DLQ only
-catches events that were published *then* failed delivery.
+stream's acknowledgement loses the lineage event: the data landed but the feed never learns of it. A consumer's park
+only catches events that were published *then* failed delivery.
 
 The outbox narrows it: the producer stages the FULL event JSON — a ``RunEvent``, or the ``DatasetEvent``
 every catalog DDL change is — under ``<outbox_uri>/<its envelope's id>.json`` BEFORE the publish,

@@ -42,11 +42,12 @@ REPO = Path(__file__).resolve().parents[2]
 ENTRYPOINTS: list[tuple[str, str]] = [
     ("catalog.main", "app"),
     ("lineage.main", "app"),
-    ("maintenance.service", "app"),
+    ("maintenance.worker", "app"),
 ]
 
-#: The setting that opts each entrypoint's docs in, as its chart value `docs.enabled` renders it.
-DOCS_FLAGS = {"catalog.main": "LANCE_REST_DOCS", "lineage.main": "LINEAGE_DOCS", "maintenance.service": "MAINTENANCE_DOCS"}
+#: The setting that opts each entrypoint's docs in, as its chart value `docs.enabled` renders it. Maintenance's worker
+#: serves its probes alone and has no such setting.
+DOCS_FLAGS = {"catalog.main": "LANCE_REST_DOCS", "lineage.main": "LINEAGE_DOCS"}
 
 _PROBE = """
 import importlib, json, re
@@ -110,7 +111,7 @@ def test_the_app_serves_no_docs_by_default(module: str, expr: str) -> None:
     )
 
 
-@pytest.mark.parametrize(("module", "expr"), ENTRYPOINTS, ids=[m for m, _ in ENTRYPOINTS])
+@pytest.mark.parametrize(("module", "expr"), [(m, e) for m, e in ENTRYPOINTS if m in DOCS_FLAGS], ids=list(DOCS_FLAGS))
 def test_an_opted_in_docs_page_names_its_schema_beside_itself(module: str, expr: str) -> None:
     """A page served at `<prefix>/docs` behind a route that rewrites or strips the prefix must fetch `<prefix>/openapi.json`,
     and the app does not know the prefix: a schema URL relative to the page is right behind any route and with none, where

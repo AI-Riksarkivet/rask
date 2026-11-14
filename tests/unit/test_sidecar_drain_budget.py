@@ -9,25 +9,19 @@ its own 5 s default while the app container is still inside its 5 s preStop slee
 the grace period allows. The kubelet SIGTERMs every container in the pod SIMULTANEOUSLY, so the
 sidecar is gone before the app's drain window has properly opened.
 
-THE CONCRETE FAILURE, and it is silent. A delivery or a cron tick that is mid-handler when a rollout starts ends
-with an answer its sidecar must carry back: the acknowledgement of a delivery, or the drain gate's RETRY verdict,
-which has to travel through the sidecar to reach the broker. Against a sidecar that has already stopped the answer
-goes nowhere: the broker waits out the delivery's ack wait and delivers the event again, and nothing distinguishes
-that from a subscriber that was slow.
+THE CONCRETE FAILURE, and it is silent. A cron tick that is mid-handler when a rollout starts ends with an answer
+its sidecar takes. Against a sidecar that has already stopped the answer goes nowhere.
 
 TWO NUMBERS, ONE FORMULA. `kubernetes.md` gives the grace budget as
 `preStop + max in-flight + lifespan cleanup + buffer`, and `microservices.md` adds the sidecar term
-explicitly: "+ sidecar drain time (~10 s — Dapr flushes pending acks)". The fix is not a magic
-constant in an annotation — it is that the sidecar's block duration and the pod's grace period are
-derived from the same values so they cannot drift.
+explicitly: "+ sidecar drain time (~10 s)". The fix is not a magic constant in an annotation — it is that the
+sidecar's block duration and the pod's grace period are derived from the same values so they cannot drift.
 """
 
 from __future__ import annotations
 
 import pathlib
 import sys
-
-import pytest
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -59,8 +53,8 @@ def test_every_sidecar_is_told_to_outlive_the_apps_drain() -> None:
     unbounded = sorted(name for name, ann in pods.items() if BLOCK not in ann)
     assert not unbounded, (
         f"these pods run a Dapr sidecar with no {BLOCK}: {unbounded} — daprd takes its 5s default and "
-        f"stops while the app is still draining, so the answer to a delivery still in flight has no "
-        f"sidecar left to carry it to the broker"
+        f"stops while the app is still draining, so the answer to a cron tick still in its handler has no "
+        f"sidecar left to take it"
     )
 
 
@@ -68,7 +62,7 @@ def test_the_sidecar_block_is_bounded_by_the_pods_grace_period() -> None:
     """The sidecar must outlive the app's drain and still die before SIGKILL.
 
     A block longer than the grace period is not "safer": the kubelet SIGKILLs the whole pod at the
-    deadline, so the sidecar would be killed mid-flush having refused to start flushing earlier.
+    deadline, the sidecar with it.
     """
     import yaml  # noqa: PLC0415
     from test_invariants import CHART  # noqa: PLC0415
@@ -82,13 +76,12 @@ def test_the_sidecar_block_is_bounded_by_the_pods_grace_period() -> None:
     assert block > pre_stop, (
         f"the sidecar blocks for {block}s but the app sleeps {pre_stop}s in preStop before it even begins draining — the sidecar would still go first"
     )
-    assert block < grace, f"the sidecar blocks for {block}s against a {grace}s grace period — it would be SIGKILLed mid-flush having declined to flush earlier"
+    assert block < grace, f"the sidecar blocks for {block}s against a {grace}s grace period — it would be SIGKILLed with the pod"
 
 
 def test_the_grace_period_budgets_the_sidecar_drain() -> None:
-    """`microservices.md` adds a sidecar term to the no-sidecar formula: "+ sidecar drain time
-    (~10 s — Dapr flushes pending acks)". A pod that runs a sidecar and keeps the un-adjusted budget
-    is spending the app's drain allowance on the sidecar's."""
+    """`microservices.md` adds a sidecar term to the no-sidecar formula: "+ sidecar drain time (~10 s)". A pod that
+    runs a sidecar and keeps the un-adjusted budget is spending the app's drain allowance on the sidecar's."""
     import yaml  # noqa: PLC0415
     from test_invariants import CHART  # noqa: PLC0415
 
@@ -99,85 +92,3 @@ def test_the_grace_period_budgets_the_sidecar_drain() -> None:
 
     # preStop + the sidecar's own drain + a buffer must still fit, or the budget is nominal.
     assert grace >= pre_stop + block + 5, f"grace={grace}s does not cover preStop={pre_stop}s + sidecar block={block}s + a 5s buffer"
-
-
-def _deployment(docs: tuple[dict, ...], name: str) -> dict:
-    return next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == name)
-
-
-@pytest.mark.parametrize(
-    "moved",
-    [
-        pytest.param({}, id="the-shipped-lifecycle"),
-        pytest.param(
-            {"terminationGracePeriodSeconds": 61, "maintenanceTerminationGracePeriodSeconds": 97, "preStopSeconds": 3, "teardownSeconds": 7},
-            id="every-lifecycle-number-moved",
-        ),
-    ],
-)
-def test_the_worker_runs_in_pods_of_its_own_whose_sidecar_outlives_its_drain_and_leaves_with_it(moved: dict[str, int]) -> None:
-    """[[LH-494]]: maintenance's queue worker runs in a Deployment of its own, as a process and not a web app's lifespan,
-    and the web pods keep the write-event lane and run no worker. The worker pod's sidecar blocks its shutdown for the
-    pod's grace less the teardown, which holds preStop and the whole drain, and it health-checks the worker's probe
-    port, so it leaves when the worker does rather than at the block's end
-    (measured on daprd 1.19.0-rc.4: with the check, 3 s after the app; without it, the whole block). A health check also
-    gates a sidecar's subscriptions, so only this pod, which subscribes to nothing, has one. The second case moves every
-    lifecycle number, so only a computed grace and block pass it. Each Deployment's replicas spread over the nodes by its
-    own label, so one node's loss leaves a worker pulling, and the worker takes a resources tier of its own, sized from
-    its measured working set, where the web pods keep the default one. The audit, the scan and an orphan check are each
-    bounded by a value of their own, which reaches the worker's settings as that kind's bound."""
-    import yaml  # noqa: PLC0415
-    from test_invariants import CHART  # noqa: PLC0415
-
-    from maintenance.core.config import MaintenanceSettings  # noqa: PLC0415
-    from tests.unit.chart_render import DEFAULT_ARGS, render, selects  # noqa: PLC0415
-
-    lifecycle = {**yaml.safe_load((CHART / "values.yaml").read_text())["lifecycle"], **moved}
-    docs = render(
-        *DEFAULT_ARGS,
-        *("--set", "maintenance.queue.drainSeconds=60", "--set", "resources.maintenanceWorker.requests.memory=333Mi"),
-        *("--set", "maintenance.queue.auditMaxSeconds=1234", "--set", "maintenance.queue.scanMaxSeconds=4321"),
-        *(arg for key, value in moved.items() for arg in ("--set", f"lifecycle.{key}={value}")),
-    )
-    worker, web = (_deployment(docs, name)["spec"]["template"] for name in ("rask-maintenance-worker", "rask-maintenance"))
-    process, served = worker["spec"]["containers"][0], web["spec"]["containers"][0]
-    env = {entry["name"]: entry.get("value") for entry in process["env"]}
-    notes = worker["metadata"]["annotations"]
-    grace = worker["spec"]["terminationGracePeriodSeconds"]
-    selecting = [
-        doc["metadata"]["name"]
-        for doc in docs
-        if doc.get("kind") == "Service" and selects({"matchLabels": doc["spec"].get("selector") or {"none": "none"}}, worker["metadata"]["labels"])
-    ]
-
-    assert process["args"][-3:] == ["python", "-m", "maintenance.worker"]
-    spreads = {
-        (of, over): [selects(rule["labelSelector"], pods["metadata"]["labels"]) for rule in template["spec"]["topologySpreadConstraints"]]
-        for of, template in (("worker", worker), ("web", web))
-        for over, pods in (("worker", worker), ("web", web))
-    }
-    assert spreads == {("worker", "worker"): [True], ("worker", "web"): [False], ("web", "worker"): [False], ("web", "web"): [True]}
-    assert (process["resources"]["requests"]["memory"], served["resources"]["requests"]["memory"]) == ("333Mi", "128Mi")
-    bounds = MaintenanceSettings(
-        s3_bucket="b",
-        audit_max_seconds=int(env["MAINTENANCE_AUDIT_MAX_SECONDS"]),
-        scan_max_seconds=int(env["MAINTENANCE_SCAN_MAX_SECONDS"]),
-        orphan_check_max_seconds=int(env["MAINTENANCE_ORPHAN_CHECK_MAX_SECONDS"]),
-    ).max_seconds_by_kind
-    assert bounds == {"audit": 1234, "scan": 4321, "orphans": 1800}
-    pre_stop = int(" ".join(process["lifecycle"]["preStop"]["exec"]["command"]).rsplit(" ", 1)[-1])
-    assert (grace, pre_stop, selecting) == (int(lifecycle["maintenanceTerminationGracePeriodSeconds"]), int(lifecycle["preStopSeconds"]), [])
-    assert pre_stop + int(env["MAINTENANCE_DRAIN_SECONDS"]) <= int(notes[BLOCK].rstrip("s")) == grace - int(lifecycle["teardownSeconds"])
-    assert (notes["dapr.io/enable-app-health-check"], notes["dapr.io/app-health-check-path"]) == ("true", "/livez")
-    assert notes["dapr.io/app-port"] == str(process["ports"][0]["containerPort"]) == env["MAINTENANCE_WORKER_PORT"]
-    assert (env["MAINTENANCE_ARRIVAL_ENABLED"], process["livenessProbe"]["httpGet"]["path"], process["readinessProbe"]["httpGet"]["path"]) == (
-        "false",
-        "/livez",
-        "/readyz",
-    )
-    web_env = {entry["name"]: entry.get("value") for entry in served["env"]}
-    assert ("MAINTENANCE_DRAIN_SECONDS" in web_env, "dapr.io/enable-app-health-check" in web["metadata"]["annotations"]) == (False, False)
-    assert (web["spec"]["terminationGracePeriodSeconds"], web["metadata"]["annotations"][BLOCK]) == (
-        int(lifecycle["terminationGracePeriodSeconds"]),
-        f"{lifecycle['sidecarBlockShutdownSeconds']}s",
-    )

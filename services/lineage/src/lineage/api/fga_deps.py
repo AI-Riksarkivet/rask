@@ -29,7 +29,7 @@ import logging
 from collections.abc import Callable, Iterable, Mapping
 from typing import Annotated, Any, Final, TypeGuard
 
-from fastapi import Depends, Request
+from fastapi import Depends, FastAPI, Request
 from lance_namespace import (
     PermissionDeniedError,
     ServiceUnavailableError,
@@ -80,9 +80,8 @@ _PRODUCER: Final = "https://github.com/AI-Riksarkivet/rask/tree/main/services/li
 #:
 #: An operation missing here falls to the data-write rule and demands `can_write_data`, the rung the owner's
 #: zero-trust ruling refuses the sweep, so its event is refused terminally. Measured 2026-09-11: 9 of 9
-#: `compact_table` messages on the LINEAGE stream were rejected `can_write_data required on outputs`, none
-#: was recorded, and each is refused again on every restart replay. Nothing downstream notices: this
-#: path does not dead-letter a refusal, and the outbox has already dropped its staged copy.
+#: `compact_table` messages on the LINEAGE stream were rejected `can_write_data required on outputs`, and none
+#: was recorded.
 
 #: The relation a data write demands. Named once so the two doors cannot drift on it.
 _WRITE_RELATIONS: Final = ("can_write_data",)
@@ -201,13 +200,13 @@ async def _denied_objects(decider: AccessDecider, *, user: str, relations: tuple
 async def _none_are_governed(decider: AccessDecider, *, objects: list[str]) -> bool:
     """True only when EVERY denied object carries zero tuples — i.e. there is nothing to grant on.
 
-    Decides which ack a refusal earns ([[LH-166]]): a grant needs an object, so a denial naming only
-    objects FGA has no record of can never be repaired, and parking it appends a dead-letter copy per
-    restart forever. One targeted read per denied object, on the refusal path only — `governed_objects`
+    Decides which verdict a refusal earns ([[LH-166]]): a grant needs an object, so a denial naming only
+    objects FGA has no record of can never be repaired, and parking it would keep a copy nothing can
+    repair. One targeted read per denied object, on the refusal path only — `governed_objects`
     pages the whole store and is a per-SWEEP cost, not a per-event one.
 
     FAIL-CLOSED TO THE REPAIRABLE ARM. An unreadable store answers False, so the caller parks: parking
-    a repairable event costs a duplicate, acking an unreadable one deletes provenance, and only the
+    a repairable event costs a kept copy, taking an unreadable one deletes provenance, and only the
     second cannot be undone. Short-circuits on the first governed object — one is enough to make the
     refusal repairable.
     """
@@ -329,8 +328,8 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None
 class _StampedAuthor:
     """The subject a BUS producer stamped on its own event, as a :class:`Caller`.
 
-    WHAT AUTHENTICATES THE STAMP IS THE SIGNATURE, not the bus. The door authenticates the SIDECAR (a shared
-    app token), so on an estate that does not enforce signing nothing proves the stamp, and what the gate changes
+    WHAT AUTHENTICATES THE STAMP IS THE SIGNATURE, not the bus. The bus's permission table admits a TRANSPORT (a
+    bus user that may publish on the topic), never a producer, so on an estate that does not enforce signing nothing proves the stamp, and what the gate changes
     is that the stamp becomes CONSEQUENTIAL: a forged subject must still hold the rung on every output, so a
     forger can only claim an identity that was already authorized to write those datasets, which bounds the
     forgery to producers that could have recorded it honestly. Where signing is enforced the stamp is also
@@ -345,14 +344,14 @@ class _StampedAuthor:
         self.subject = subject
 
 
-async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings, arrived: Mapping[str, Any]) -> None:
-    """Output-scoped authz for a DAPR-DELIVERED event, as the subject the producer stamped (§ E2).
+async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settings: LineageSettings, arrived: Mapping[str, Any]) -> None:
+    """Output-scoped authz for an event delivered from the BUS, as the subject the producer stamped (§ E2).
 
     The HTTP door proves WHO is ingesting (`enforce_author`) and then what they may write
-    (`enforce_output_authz`); the bus door could do neither, because it has no principal — it is
-    authenticated by the sidecar's shared credential and reads the author off the payload. So a
-    producer holding that one token could record any provenance it liked about any dataset, including
-    a `drop_table` operation on a table it has never seen.
+    (`enforce_output_authz`); the bus door can do neither by itself, because it has no principal — a delivery
+    arrives from the stream, and the author is read off the payload. So without this gate a producer the bus lets
+    publish could record any provenance it liked about any dataset, including a `drop_table` operation on a table it
+    has never seen.
 
     THE SAME FUNCTION, not a second copy: this delegates to `enforce_output_authz` with a synthetic
     principal, so the run-author check and the output check apply identically at both doors. Two
@@ -371,8 +370,8 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     WHERE SIGNING IS ENFORCED THE EVENT MUST VERIFY FIRST ([[LH-064]]): `verify_arrived_event` refuses an event no
     listed signer's published key verifies (`UnverifiedEventError`) and answers an unreadable key list as an outage
     (`ServiceUnavailableError`). Every door that records a bus or staged event passes through here, so all four
-    apply the one rule: the bus subscription, the outbox drain, the operator's DLQ replay and the parking route's
-    re-ingest. So do they all record an announcement the catalog attests on its signature (`_attested`, [[LH-551]]):
+    apply the one rule: the bus lane, the outbox drain and the estate admin's replay of a parked delivery. So do
+    they all record an announcement the catalog attests on its signature (`_attested`, [[LH-551]]):
     a drop here, a write with no grant re-derived in `enforce_output_authz`.
     """
     # OVER `arrived`, NEVER over a re-serialisation of the parsed model, and BEFORE `fga_enabled` is
@@ -387,7 +386,7 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     # A SIGNATURE IS AUTHENTICATION. `fga_enabled` decides whether OpenFGA is consulted about what a
     # subject may write; it says nothing about whether the producer is who it claims to be, so gating
     # the one on the other would let an estate with auth on and FGA off verify nothing at all.
-    verified = await verify_arrived_event(arrived, request, settings)
+    verified = await verify_arrived_event(arrived, app, settings)
     if _is_an_attested_drop(event, verified, settings):
         log.info("lineage_catalog_drop_admitted", extra={"dataset": event.dataset.name, "operation": event.operation})
         return
@@ -405,14 +404,14 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
             raise UnauthoredRunError(f"a bus-delivered run's author {subject[:128]!r} is not a principal (<idp-id>~<subject>)")
         await enforce_output_authz(
             event,
-            request,
+            app,
             settings,
             _StampedAuthor(subject),
             relations=relations_for_operation(event.operation),
             signed_by=verified,
         )
     except PermissionDeniedError:
-        if not await _is_replay(event, payload, request):
+        if not await _is_replay(event, payload, app):
             raise
         log.info("lineage_replay_not_reauthorized", extra={"run": event.run_id, "event_type": event.feed_event_type})
 
@@ -452,12 +451,12 @@ def _attested(verified: VerifiedSignature | None, settings: LineageSettings) -> 
     return verified is not None and verified.identity in settings.signing.delegators
 
 
-async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
+async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], app: FastAPI) -> bool:
     """Is this the SAME event the feed already holds — a redelivery rather than a new assertion?
 
-    A REPLAY RE-PRESENTS EVERY RETAINED EVENT. Lineage's `deliverPolicy: all` consumer starts at the
-    stream's first message on its first attach and on a rebuild, which is the estate's recovery story,
-    so an authorization gate meets the whole history again each time. Those events are already in the
+    A REPLAY RE-PRESENTS EVERY RETAINED EVENT. A `lineage-ingest` consumer the chart declares afresh begins at
+    the stream's first message, which is the estate's recovery story, so an authorization gate meets the
+    whole history again each time. Those events are already in the
     feed — measured 2026-09-09, a full 2 161-message replay left the durable feed flat at 3 248 rows —
     so refusing them loses nothing and merely turns a replay into a burst of refusals
     indistinguishable from a producer under attack.
@@ -472,7 +471,7 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
     """
     # THE FEED'S OWN ROW KEY, never `run_id`: a static change has no run id and is stored under the id derived from its
     # content and who vouches for it (`feed_key`), so only its own row can say whether this is that row again.
-    provenance = getattr(request.app.state, "provenance", None)
+    provenance = getattr(app.state, "provenance", None)
     if provenance is None or not event.feed_id:
         return False
     stored = await provenance.recorded_event(feed_key(event))
@@ -543,7 +542,7 @@ async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, us
 
 async def enforce_output_authz(
     event: RunEvent | DatasetEvent,
-    request: Request,
+    app: FastAPI,
     settings: LineageSettings,
     token: Caller | None,
     *,
@@ -576,7 +575,7 @@ async def enforce_output_authz(
         return
     # Fail-closed FIRST — BEFORE any empty-set short-circuit: an authenticated but unauthorized caller must
     # not be able to record a run merely by declaring no outputs. (bug hunt 2026-07-13)
-    decider = getattr(request.app.state, "decider", None)
+    decider = getattr(app.state, "decider", None)
     if decider is None:
         raise ServiceUnavailableError("authorization service is not available")
     if token is None:
@@ -588,10 +587,10 @@ async def enforce_output_authz(
     # every reader of the feed. Authorizing the extension by the data the run wrote left two holes: a run that
     # recorded no output had nothing to authorize against, and a run that did could be extended by anyone else who
     # may write those outputs. The author is the verified subject of the run's first recorded event: the HTTP door
-    # stamps the caller's token subject (`enforce_author`), and the bus, the outbox and the DLQ present the subject a
+    # stamps the caller's token subject (`enforce_author`), and the bus, the outbox and a kept delivery's replay present the subject a
     # listed signer verified, so one rule holds at every door. A run the feed does not hold yet has no author, and
     # its first event founds it.
-    provenance = getattr(request.app.state, "provenance", None)
+    provenance = getattr(app.state, "provenance", None)
     if provenance is not None and event.run_id:
         author = await provenance.run_author(event.run_id)
         if author is not None and author != token.subject:

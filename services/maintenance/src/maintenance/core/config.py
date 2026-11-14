@@ -5,8 +5,8 @@ Its drift report reads the store's grant census through the catalog, and every g
 is the catalog's (``maintenance.services.credentials``).
 
 The signature door's knobs are the estate's too ([[XC-078]]): ``SignatureDoorSettings`` reads
-``RASK_SIGNATURE_DOORS``, ``RASK_EVENT_SIGNERS`` and ``RASK_EVENT_DELEGATORS``, which decide how
-``/maintenance-arrival`` treats the signature of a write event before it evaluates anything.
+``RASK_SIGNATURE_DOORS``, ``RASK_EVENT_SIGNERS`` and ``RASK_EVENT_DELEGATORS``, which decide how the commit lane
+treats the signature of a write event before it acts on it.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # every alias below silently gained an un-namespaced twin (a field named `address` would
     # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
-    # deliberately-bare ones (DAPR_HTTP_PORT) still land.
+    # deliberately-bare ones (RASK_SIGNING_IDENTITY) still land.
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MAINTENANCE_", alias_generator=env_alias("MAINTENANCE"), extra="ignore")
 
@@ -45,23 +45,6 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # Lance's own defaults are 1 GiB metadata + 6 GiB index PER OPEN, which is the defect).
     lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="MAINTENANCE_LANCE_METADATA_CACHE_MB")
     lance_index_cache_mb: int = Field(default=256, ge=8, alias="MAINTENANCE_LANCE_INDEX_CACHE_MB")
-
-    # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
-    #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
-    #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
-    #: and the schemas shipped openly. A security default every deployment must remember to disable is
-    #: one nobody disables. Turn it on per-environment (the chart's dev values do).
-    docs_enabled: bool = Field(default=False, alias="MAINTENANCE_DOCS")
-
-    #: The largest request body maintenance reads; one over it is refused 413 before it is buffered (`lakehouse.body_limit`).
-    #: Its one door with a body is the write-event lane, which the sidecar delivers from the bus: a commit's announcement,
-    #: at most NATS's message ceiling of 1 MiB (the bus fixture sets no `max_payload`) plus its envelope.
-    max_body_bytes: int = Field(default=4 * 1024 * 1024, ge=1, alias="MAINTENANCE_MAX_BODY_BYTES")
-
-    #: A request with no answer begun after this long is answered 503 while its handling runs on (`lakehouse.deadline`),
-    #: the catalog's and lineage's bound: maintenance's longest request over two weeks of the estate's traces took 34.2 s
-    #: (2026-10-29..11-12).
-    request_deadline_seconds: float = Field(default=300.0, gt=0, alias="MAINTENANCE_REQUEST_DEADLINE_SECONDS")
 
     #: Whether this service emits the `lance.audit` compliance stream. ON by default — the trail is
     #: evidence, so a deployment that forgets still has it.
@@ -77,19 +60,13 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # threshold — to GC aggressively, use a small positive value, not 0.
     older_than_days: int = Field(default=7, ge=1, alias="MAINTENANCE_OLDER_THAN_DAYS")
 
-    # Behind a Dapr sidecar? — when true, boot fails closed if the app-token is unset (the write-event route would
-    # otherwise be an open forged-commit path). Symmetric with the lineage service. Off in dev (no sidecar).
-    dapr_enabled: bool = Field(default=False, alias="MAINTENANCE_DAPR_ENABLED")
-
-    # --- The write-event lane (`/maintenance-arrival`). A write a signed producer announced on `lineage.events.v1`
-    # refreshes that table's due record between ticks, so a bring-your-own compaction removes the table from the due
-    # list on its own commit rather than at the next sweep, and expires the table's versions once enough are
-    # reclaimable (`min_versions_to_expire`), through the same pass the sweep runs.
-    #: Subscribe the write-event lane. Off by default: an estate opts in by naming the lane in the chart.
+    # --- The commit lane (`maintenance.services.arrival`). A write a signed producer announced on `lineage.events.v1`
+    # holds that table's pass a delay out, so a bring-your-own compaction removes the table from the due list after its
+    # own commit rather than at the table's next recheck, and the pass expires the table's versions once enough are
+    # reclaimable (`min_versions_to_expire`).
+    #: Pull the commit lane. Off by default: an estate opts in by naming the lane in the chart, whose stream Job then
+    #: declares the lane's consumer.
     arrival_enabled: bool = Field(default=False, alias="MAINTENANCE_ARRIVAL_ENABLED")
-    #: Where an event the lane could not decide on parks once its redeliveries are spent, so a poison event leaves the
-    #: subscription instead of recirculating.
-    arrival_dlq_topic: str = Field(default="", alias="MAINTENANCE_ARRIVAL_DLQ_TOPIC")
     #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy. Both lanes ask it: an
     #: expiry pass that reclaims one version a tick costs a vend, a manifest commit read and a listing for almost nothing.
     #: The count is Lance's own, ``explain_cleanup_old_versions`` with the arguments the pass's ``cleanup_old_versions``
@@ -102,10 +79,10 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # --- The work queue (ADR 0198 §2). Each table's pass, each trash record's release and the hourly audit are tasks on
     # NATS JetStream, which every replica's worker pulls from; the streams and their durable consumers are the chart's
     # (`chart/templates/nats-stream-job.yaml`), so the worker binds to them and creates nothing.
-    #: The bus the worker connects to; empty runs no worker, which leaves a stack with no NATS to the doors and the tests.
+    #: The bus the worker connects to; empty runs no worker, for a stack with no NATS and for the tests.
     nats_url: str = Field(default="", alias="MAINTENANCE_NATS_URL")
     #: The store secret holding the worker's own bus user (`jwt`, `seed`), read once at start and never from env. Its
-    #: permissions are the chart's `nats.auth.users` row: pull and ack on the two consumers, publish tasks and schedules.
+    #: permissions are the chart's `nats.auth.users` row: pull and ack on its consumers, publish tasks and schedules.
     nats_credentials_secret: str = Field(default="nats-user-maintenance-worker", alias="MAINTENANCE_NATS_CREDENTIALS_SECRET")
     #: How often a running task tells JetStream it is still being worked on, well inside the consumer's ack wait (the
     #: chart's `maintenance.queue.ackWaitSeconds`), so a long pass is never redelivered beneath itself while its worker lives.
@@ -132,8 +109,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: `terminationGracePeriodSeconds`; a task cut short goes to another replica once its heartbeat stops. A pass still
     #: running when the drain ends ends its replica (`Worker.drain`), since its heartbeat ends with the drain.
     drain_seconds: float = Field(default=50.0, gt=0, alias="MAINTENANCE_DRAIN_SECONDS")
-    #: The port the worker's process serves its probes on (:mod:`maintenance.worker`), for the kubelet and for its
-    #: sidecar's health check, which is what lets the sidecar leave when the worker does.
+    #: The port the worker's process serves its probes on (:mod:`maintenance.worker`), for the kubelet.
     worker_port: int = Field(default=8001, ge=1, le=65535, alias="MAINTENANCE_WORKER_PORT")
     #: The lakehouse's read-only window, rendered from the chart's one `readOnlyWindow` with the catalog's and lineage's: the
     #: worker takes no task through it, so every task stays queued on the work queue with its deliveries unspent.
@@ -154,9 +130,6 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     lineage_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_LINEAGE_EMIT_ENABLED")
     # Bound each publish so a bus that does not answer can't stall a sweep (best-effort → the outage is swallowed).
     publish_timeout_seconds: float = Field(default=5.0, gt=0, alias="MAINTENANCE_PUBLISH_TIMEOUT_SECONDS")
-    #: The Dapr pub/sub component the write-event lane SUBSCRIBES through (`maintenance.api.arrival`): this app's own,
-    #: `<pubsub.name>-<app-id>` as the chart renders it.
-    lineage_pubsub: str = Field(default="lineage-pubsub-maintenance", alias="MAINTENANCE_LINEAGE_PUBSUB")
     lineage_topic: str = Field(default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC")
     # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
     # AGE. The job NAME, `expire_versions.<table_id>`, names the operation.

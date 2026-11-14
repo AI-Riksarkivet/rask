@@ -298,13 +298,14 @@ recheck a day later.
   table, namespace and project (`packages/lakehouse/src/lakehouse/maintenance_policies.py:1-30`), set through the
   catalog's owner-gated doors.
 - **The pin test that keeps destructive queues off the manual-schedule endpoint** (`mod.rs:284-333`): rask has no door
-  that queues maintenance work by hand; the arrival route takes only signed events.
+  that queues maintenance work by hand; the commit lane takes only signed events.
 - **Legacy queue names**, dual-read after a rename (`mod.rs:462-469`): rask carries no backward compatibility.
 - **Task-log cleanup queue**: the feed's retention covers it (finding 2.4).
 - **Endpoint statistics** (`lakekeeper/src/service/endpoint_statistics.rs`, a Postgres sink): per-endpoint call counts per
   project and warehouse. rask's OTel HTTP metrics cover the operational need; a per-project usage view is not Phase 1.
 - **Health refresh loop and the CLI health check** (`health.rs`, `lakekeeper-bin/src/healthcheck.rs`): rask's probes and
-  its signing-key ready check (`services/maintenance/src/maintenance/service.py:159-166`) cover them.
+  its signing-key ready check (`signing_ready_check`, which the worker's `/readyz` answers by,
+  `services/maintenance/src/maintenance/worker.py`) cover them.
 - **The runtime read-only flag** (`maintenance_mode.rs:1-8`): in memory, per process, lost on restart. Live-only state;
   rask should keep its switch a rendered value (finding 2.3).
 - **Admission gates, idempotency keys, contract verification, cache TTL jitter and cache metrics**

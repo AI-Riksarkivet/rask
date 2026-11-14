@@ -34,3 +34,17 @@ Kept from the readback. Every door's refusal series exists at 0 from its registr
 at 1 makes a single refusal invisible to rate(); measured in the backend at Rev B (24 + 24 + 36 + 12 zero series). A
 forged publication's trigger, acting under observe, was parked in dlq.silver-to-gold by the stage runner (DLQ seq 12495).
 vmalert evaluated none of its 59 rules (GreptimeDB answers its content-type-less POST with 415); out of scope by R8.
+
+**Amended 2026-11-14 (#787, XC-199 step D4).** The lakehouse's bus doors are lanes now: no route takes a delivered
+event, and each service takes its own on its own connection to the bus (lineage's ingest lane and the maintenance
+worker's write-event lane pull a durable consumer the chart declares, and each catalog replica follows
+`catalog.control.v1`), because a sidecar's subscription could not be rebound after a configuration change, closed for
+good after a bus outage of about two minutes and sent no in-progress acknowledgement. The verification is unchanged:
+enforcing, lineage and maintenance acknowledge a refusal and the catalog buffers nothing for one, each counts it, and
+nothing acts on it. An unreadable key list has the delivery asked for again: lineage after
+`services.lineage.delivery.retrySeconds`, parking it on its last attempt, and maintenance after a growing delay. A
+followed control event is not delivered again, so the catalog's lane judges it again in place, five times 15 s apart,
+and then gives it up, counted `failed` on `bus.deliveries`. It waits that way at most once in five minutes, and gives
+an event up on its one judgement until then: a replica is handed one event at a time, and an event naming a key id the
+list read moments ago does not hold is one any publisher on the topic can send, so a wait for each would hold the lane
+for as long as a run of them lasts.

@@ -46,6 +46,7 @@ from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
 from lineage.services.provenance import feed_key
+from lineage.services.signature import store_published_keys
 from tests.bus_double import BusDouble
 from tests.secret_store_double import SecretStoreDouble
 
@@ -187,7 +188,7 @@ def _arm_gate(monkeypatch: pytest.MonkeyPatch, *, writer: str | None) -> None:
 
 
 def _request() -> Any:  # noqa: ANN401 — the drain and the routes read only app.state
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())))))
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), published_keys=store_published_keys())))
 
 
 def _rewrite_staged(settings: LineageSettings, key: str, doc: dict[str, Any]) -> None:
@@ -476,7 +477,8 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
             return held.model_dump(by_alias=True) if key == feed_key(held) else None
 
     repo = _FeedHoldsIt()
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), provenance=repo)))
+    state = SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), provenance=repo, published_keys=store_published_keys())
+    request = SimpleNamespace(app=SimpleNamespace(state=state))
 
     outcome = asyncio.run(relay_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, StorageOptions(), BusDouble()))
 

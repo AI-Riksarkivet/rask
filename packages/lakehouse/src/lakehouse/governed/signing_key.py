@@ -71,7 +71,7 @@ _KEY_NAME: Final = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 #: The bound on one verifier's read of a published key list. ONE attempt, and short: verification sits on the delivery
 #: path of every signed event, and the boot-time budget `read_secret` defaults to (about two minutes) would hold a
-#: worker that long per event through a store blip. An outage is answered RETRY instead, and the redelivery is the retry.
+#: worker that long per event through a store blip. An outage asks for the delivery again instead, and the redelivery is the retry.
 KEY_READ_TIMEOUT_SECONDS: Final = 2.0
 
 
@@ -141,7 +141,7 @@ def published_key_fetch() -> Callable[[str], Mapping[str, str]]:
     `signing-public-<name>`, `signing_public_secret`) from the store, under THIS process's own login.
 
     One attempt bounded by `KEY_READ_TIMEOUT_SECONDS`. A secret the store does not serve answers ``{}``, which the
-    reader turns into `KeySourceUnavailableError`, so the door answers RETRY rather than refusing an honest event.
+    reader turns into `KeySourceUnavailableError`, so the door asks for the delivery again rather than refusing an honest event.
     """
 
     def fetch(identity: str) -> dict[str, str]:

@@ -1,12 +1,12 @@
 """A refused ingest is counted the same whichever door it arrives at.
 
-TWO DOORS REACH ONE GRAPH and only one of them was counting its losses. The Dapr subscriber
+TWO DOORS REACH ONE GRAPH and only one of them was counting its losses. The bus subscriber
 classifies every refusal into `Outcome` — `REFUSED` for a denied grant, `UNREPAIRABLE` for a run no
 tuple or redelivery could ever fix — and an alert rule in `deploy/alerting/rules.yml` reads each of
 those. The HTTP ingest door recorded `INGESTED` on success and nothing at all on refusal.
 
-THE ASYMMETRY IS NOT COSMETIC, because the HTTP door is the ONLY door for a producer with no Dapr
-sidecar: a user's pipeline job on its own compute, and any external OpenLineage producer. Measured live
+THE ASYMMETRY IS NOT COSMETIC, because the HTTP door is the ONLY door for a producer with no bus
+user: a user's pipeline job on its own compute, and any external OpenLineage producer. Measured live
 2026-09-21, a job wrote 64 rows to a silver table and its provenance was refused
 `ingest_denied … relation='can_write_data'`; the write is governed, the run is absent from the feed,
 and the job exited SUCCEEDED ([[LH-184]]).
@@ -27,7 +27,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from fastapi import Request
+from fastapi import FastAPI, Request
 from lance_namespace import PermissionDeniedError
 
 from lineage.core.config import LineageSettings
@@ -50,6 +50,11 @@ _RUN_BODY: dict[str, Any] = {
     "job": {"namespace": "lance", "name": "acme-silver$features.insert"},
     "outputs": [{"namespace": "lance", "name": "acme-silver$features"}],
 }
+
+
+def _request() -> Request:
+    """A request to an app that holds nothing: the door reads its gate's state off ``request.app``."""
+    return Request({"type": "http", "app": FastAPI()})
 
 
 #: The subscriber's classification, which is the REFERENCE this door must match
@@ -88,7 +93,7 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
     with pytest.raises(type(error)):
         await ingest.ingest_event(
             body=_RUN_BODY,
-            request=cast("Request", object()),
+            request=_request(),
             provenance=cast("ProvenanceStore", object()),
             settings=LineageSettings.model_validate({}),
             token=None,
@@ -125,7 +130,7 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
 
     answer = await ingest.ingest_event(
         body=_RUN_BODY,
-        request=cast("Request", object()),
+        request=_request(),
         provenance=cast("ProvenanceStore", _Store()),
         settings=LineageSettings.model_validate({}),
         token=None,

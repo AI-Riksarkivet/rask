@@ -161,7 +161,8 @@ _datasets_swept = _meter.create_counter(
 )
 
 
-#: The bus doors that check an event's signature ([[XC-078]]), as the closed `door` label of the two series below.
+#: The doors that check an event's signature ([[XC-078]]), as the closed `door` label of the two series below: the commit
+#: lane (:mod:`maintenance.services.arrival`).
 type SignatureDoor = Literal["maintenance-arrival"]
 
 #: Events a door refused because no listed signer's published key verifies them. A refusal is acknowledged and acts on
@@ -187,7 +188,7 @@ def create_signature_refused_series() -> None:
 
     The alert over this counter is `rate(...) > 0`, and a cumulative counter exports nothing for a series before its first
     add: a series born at 1 has no 0 before it, so `rate()` sees no increase and the first refusal never pages. Called
-    when the door is registered, at import, after `opentelemetry-instrument` installed the MeterProvider at interpreter
+    when the worker starts its commit lane, after `opentelemetry-instrument` installed the MeterProvider at interpreter
     start: an add through the proxy meter before then is dropped. Both measured on opentelemetry-sdk 1.44.0.
     """
     for door in get_args(SignatureDoor.__value__):
@@ -354,6 +355,20 @@ _store_events_settled = _meter.create_counter(
     unit="{event}",
     description="Store events the worker settled, by outcome: held, ignored, retried, unreadable, ended.",
 )
+#: How the worker settled one commit announcement it pulled (:meth:`maintenance.services.queue.Worker.run_arrivals`), the
+#: closed `outcome` set of `maintenance.arrivals.settled`: acknowledged with the task it asks for held or queued
+#: (``held``), acknowledged because a task already held covers it (``covered``), acknowledged untouched (``ignored``: an
+#: event the lane asks nothing for, or a write no table's claim holds), acknowledged and acted on by nothing because no
+#: listed signer's key verifies it (``refused``), handed back for another delivery (``retried``), ended at once as no
+#: event envelope (``unreadable``), and ended on its last delivery, or on the one past it after its worker died every
+#: time (``ended``).
+type ArrivalOutcome = Literal["held", "covered", "ignored", "refused", "retried", "unreadable", "ended"]
+
+_arrivals_settled = _meter.create_counter(
+    "maintenance.arrivals.settled",
+    unit="{event}",
+    description="Commit announcements the worker settled, by outcome: held, covered, ignored, refused, retried, unreadable, ended.",
+)
 #: A fired schedule the queue did not take (:meth:`maintenance.services.queue.Worker._move`): it is delivered again
 #: after a delay, and a refusal that stands is a table whose time never comes.
 _schedules_not_queued = _meter.create_counter(
@@ -363,7 +378,7 @@ _schedules_not_queued = _meter.create_counter(
 )
 
 #: What the worker's sampler reads off the bus every 15 s (:func:`maintenance.services.queue.sample_queue`). Synchronous
-#: gauges: one exports nothing until it is first set, so a web pod, which imports this module and runs no sampler,
+#: gauges: one exports nothing until it is first set, so a process that imports this module and runs no sampler
 #: exports no constant 0 beside the worker's truth, and once set it exports its last value at every collection
 #: (measured on opentelemetry-sdk 1.45.2, cumulative temporality). A sample the bus does not answer leaves a gauge at
 #: its last value, logged (`maintenance_queue_unsampled`).
@@ -416,7 +431,7 @@ def record_store_event_bucket_checked(*, outcome: BucketEventsOutcome) -> None:
 
 def create_task_series(kinds: tuple[str, ...]) -> None:
     """Create each kind's series of the worker's task counters at 0 when it starts, the `unreadable` one of the ended
-    count, every outcome of the store-event count and of the bucket-events count, and the not-queued count: a series born at 1 has no 0 before it, so
+    count, every outcome of the store-event count, of the commit-announcement count and of the bucket-events count, and the not-queued count: a series born at 1 has no 0 before it, so
     `increase()` sees no increase and the first task ended or overrun never pages, and a worker that has completed
     nothing yet would read "no data"."""
     for kind in kinds:
@@ -425,6 +440,8 @@ def create_task_series(kinds: tuple[str, ...]) -> None:
     _tasks_ended.add(0, {"kind": "unreadable"})
     for outcome in get_args(StoreEventOutcome.__value__):
         _store_events_settled.add(0, {"outcome": outcome})
+    for outcome in get_args(ArrivalOutcome.__value__):
+        _arrivals_settled.add(0, {"outcome": outcome})
     _schedules_not_queued.add(0)
     for outcome in get_args(BucketEventsOutcome.__value__):
         _store_event_buckets_checked.add(0, {"outcome": outcome})
@@ -453,6 +470,11 @@ def record_task_duration(*, kind: str, seconds: float) -> None:
 def record_store_event_settled(*, outcome: StoreEventOutcome) -> None:
     """Record how the worker settled one store event."""
     _store_events_settled.add(1, {"outcome": outcome})
+
+
+def record_arrival_settled(*, outcome: ArrivalOutcome) -> None:
+    """Record how the worker settled one commit announcement."""
+    _arrivals_settled.add(1, {"outcome": outcome})
 
 
 def record_schedule_not_queued() -> None:

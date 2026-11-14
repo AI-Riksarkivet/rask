@@ -50,9 +50,6 @@ max-statements = 40
 max-nested-blocks = 4
 max-positional-args = 3
 
-# The limits are for the source. A test function's positional parameters are its fixtures, and a route
-# handler's are its dependency declaration: FastAPI resolves them by annotation, and nothing calls a
-# route by position.
+# The limits are for the source. A test function's positional parameters are its fixtures.
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**" = ["PLR0915", "PLR1702", "PLR0917"]
-"src/maintenance/api/routes.py" = ["PLR0917"]

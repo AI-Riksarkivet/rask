@@ -31,12 +31,7 @@ _FLAG = "--timeout-graceful-shutdown="
 
 #: Workloads whose lifespan arms `lakehouse.draining.arm_drain_on_sigterm`, so the drain hands SIGTERM to
 #: THIS uvicorn. A floor: a detection that stopped finding uvicorn must not pass by finding nothing.
-_DRAIN_ARMED = frozenset(
-    {
-        "Deployment/rask-lineage",
-        "Deployment/rask-maintenance",
-    }
-)
+_DRAIN_ARMED = frozenset({"Deployment/rask-lineage"})
 
 _DEFAULTS = yaml.safe_load((REPO / "chart" / "values.yaml").read_text(encoding="utf-8"))["lifecycle"]
 

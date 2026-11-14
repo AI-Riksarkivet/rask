@@ -203,19 +203,11 @@ class CatalogControlBusSettings(BaseSettings):
     control_root: str = Field(default="", alias="LANCE_CONTROL_ROOT")
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream, distinct from the
     # OpenLineage data events above). When on, mutations publish a `CatalogControlEvent` on the
-    # `catalog.control.v1` topic over this process's own connection to the bus, and each replica subscribes to it
-    # through the `control_pubsub` component (below) WITHOUT a queueGroupName, so every replica buffers every event
-    # for the poll endpoint. Off by default, like lineage.
+    # `catalog.control.v1` topic over this process's own connection to the bus, and each replica follows it on that
+    # connection by reading its stream by sequence (`api/control_lane.py`), so every replica buffers every event for the
+    # poll endpoint. Off by default, like lineage.
     control_emit_enabled: bool = Field(default=False, alias="LANCE_CONTROL_EMIT_ENABLED")
     control_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_CONTROL_EMIT_TIMEOUT_SECONDS")
-    # The Dapr pub/sub component this catalog SUBSCRIBES through, with NO queueGroupName, so the
-    # catalog's own subscription is a BROADCAST — every replica receives every event → each replica's ring
-    # buffer stays complete. The chart renders it (dapr-component.yaml) + a NATS stream (nats-stream-job).
-    control_pubsub: str = Field(default="catalog-control-pubsub", alias="LANCE_CONTROL_PUBSUB")
-    #: Where a control event this replica could not take parks once the sidecar's retry schedule is spent, so a poison
-    #: delivery leaves the subscription and the sidecar's dead-letter count records it. Empty = no dead-lettering: the
-    #: chart sets it only beside the retry policy, since a dead-letter topic with none parks on the first failure.
-    control_dlq_topic: str = Field(default="", alias="LANCE_CONTROL_DLQ_TOPIC")
     # The bounded per-replica ring buffer size (events retained for `GET /management/v1/events`); a client whose cursor
     # fell off the end (overflow) gets `reset: true` → the console `invalidateAll()`s.
     control_buffer_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_BUFFER_SIZE")
@@ -446,8 +438,8 @@ class Settings(
     The OIDC/FGA knobs are NOT declared here. They are the estate's shared vocabulary and arrive from
     `GovernedAuthSettings` under `RASK_OIDC_*` / `RASK_FGA_*`; this class once carried a byte-identical
     twin of them, which is precisely how the copies drifted. So do the control door's mode and signer sets, from
-    `SignatureDoorSettings` (`RASK_SIGNATURE_DOORS`, `RASK_CONTROL_SIGNER_ROLES`): the subscription in
-    `api/dapr.py` verifies each event against them before it acts ([[CTL-32]])."""
+    `SignatureDoorSettings` (`RASK_SIGNATURE_DOORS`, `RASK_CONTROL_SIGNER_ROLES`): the control lane in
+    `api/control_lane.py` verifies each event against them before it acts ([[CTL-32]])."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (a field named `address` would

@@ -346,24 +346,25 @@ def test_a_worker_value_the_worker_cannot_run_with_fails_the_render(value: str, 
 
 
 def test_each_queue_consumer_is_declared_one_delivery_past_the_workers_bound() -> None:
-    """[[LH-494]]: the worker ends a task, and a store event, on its last delivery (`maintenance.queue.maxDeliver`), and the
-    consumer allows one more, on which a message whose worker died every time is ended unhandled. A consumer declared
-    without a bound would deliver such a message for ever; the fired schedules are moved, never run, so theirs has none."""
+    """[[LH-494]]: the worker ends a task, a store event and a commit announcement on its last delivery
+    (`maintenance.queue.maxDeliver`), and the consumer allows one more, on which a message whose worker died every time is
+    ended unhandled. A consumer declared without a bound would deliver such a message for ever; the fired schedules are
+    moved, never run, so theirs has none."""
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "maintenance.queue.maxDeliver=7")
-    job = next(doc for doc in docs if doc.get("kind") == "Job" and "-nats-stream-" in doc["metadata"]["name"])
-    script = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
-    consumers = [json.loads(declared) for declared in re.findall(r"printf '%s' '(\{\"durable_name\".*?\})' >", script)]
 
-    assert {consumer["durable_name"]: consumer["max_deliver"] for consumer in consumers} == {
-        "maintenance-worker": 8,
-        "maintenance-due": -1,
-        "maintenance-store-events": 8,
+    consumers = chart_render.bus_consumers(docs)
+
+    assert {name: config["max_deliver"] for (_, name), config in consumers.items() if name.startswith("maintenance-")} == {
+        queue.TASK_CONSUMER: 8,
+        queue.DUE_CONSUMER: -1,
+        queue.STORE_EVENTS_CONSUMER: 8,
+        queue.ARRIVALS_CONSUMER: 8,
     }
 
 
 def test_the_worker_reads_the_bus_credential_the_user_table_issues_whatever_its_app_id() -> None:
     """[[LH-494]]: the worker's bus user is `maintenance-worker` in `nats.auth.users`, and the store issues its credential
-    under that name. An install that renames maintenance's Dapr app id must still read that secret, or the worker finds
+    under that name. An install that renames maintenance's app id must still read that secret, or the worker finds
     none at its start and fails closed. The worker's replies arrive under the inbox prefix its connection names
     (`maintenance.services.queue.INBOX_PREFIX`), so that user's row must grant it: without the grant every fetch and
     every put waits out its timeout unanswered."""
@@ -371,10 +372,10 @@ def test_the_worker_reads_the_bus_credential_the_user_table_issues_whatever_its_
         "--set",
         "maintenance.appId=maint",
         "--set-json",
-        'nats.auth.users.maint={"publish":["lineage.events.v1","probe.maint"],"subscribe":["_INBOX.>","_INBOX_maint.>"]}',
+        'nats.auth.users.maint={"publish":["lineage.events.v1"],"subscribe":["_INBOX_maint.>"]}',
     )
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, *renamed)
-    maintenance = next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-maintenance"))
+    maintenance = next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-maintenance-worker"))
     env = {entry["name"]: entry.get("value") for container in maintenance["spec"]["template"]["spec"]["containers"] for entry in container.get("env", [])}
 
     assert env["MAINTENANCE_NATS_CREDENTIALS_SECRET"] == "nats-user-maintenance-worker"
@@ -401,59 +402,6 @@ def test_no_env_var_is_rendered_twice_on_any_workload() -> None:
             if dupes:
                 offenders.append(f"{doc['metadata']['name']}/{container['name']}: {sorted(dupes)}")
     assert offenders == [], f"duplicated env names make the release unupgradable: {offenders}"
-
-
-def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
-    """A trigger consumer that must not lose messages must also be named in the Resiliency CRD.
-
-    THE REGRESSION THIS GATES. The cascade's control component
-    (`catalog-control-pubsub-<producer>`) carried a `durableName` — the chart's own marker for "a
-    trigger published while this app is down must be DELIVERED on recovery" — and was absent from
-    the Resiliency CRD's `targets.components`, which ranges only over the `lance.subPubsub` family.
-    The `/publication-arrival` subscription declares a `dead_letter_topic`, and Dapr sends there
-    after the FIRST failure when no retry policy targets the component. So the most expensive
-    trigger in the estate got zero retries and parked on one transient blip — while the CRD existed,
-    the app was in `scopes:`, and every neighbour was covered.
-
-    The rule is stated as a PROPERTY rather than a list of names on purpose: a future subscriber
-    added to one template and not the other fails here, which is exactly how this one was missed.
-    """
-    # THE RENDER HAS TO PRODUCE THE COMPONENTS THIS GATE CLAIMS TO CHECK. Stated as a property, the
-    # rule is only as wide as the values it is rendered with, so the lane that is a deployment
-    # choice is switched on here rather than inherited: maintenance's write-event lane.
-    rendered = _helm_template(
-        "dapr.enabled=true",
-        "dapr.resiliency.enabled=true",
-        "maintenance.arrivalEnabled=true",
-    )
-    docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
-
-    durable = {
-        d["metadata"]["name"]
-        for d in docs
-        if d.get("kind") == "Component"
-        and (d.get("spec") or {}).get("type") == "pubsub.jetstream"
-        and any(m.get("name") == "durableName" for m in (d.get("spec") or {}).get("metadata") or [])
-        # DLQ components are EXEMPT, and not as a convenience. A dead-letter handler must
-        # unconditionally ACK — a RETRY from a DLQ route requeues the message onto the DLQ forever —
-        # so its subscription never returns RETRY and an inbound retry policy could never engage.
-        # Requiring one would push a meaningless target into the CRD and teach the next reader that
-        # a DLQ is retried, which is the opposite of the rule. (This exemption is not hypothetical:
-        # `lineage-pubsub-lineage-dlq` is durable, by design, and correctly has no target.)
-        and not d["metadata"]["name"].endswith("-dlq")
-    }
-    assert durable, "no durable pub/sub component rendered — this gate would pass vacuously"
-
-    targeted: set[str] = set()
-    for d in docs:
-        if d.get("kind") != "Resiliency":
-            continue
-        targeted |= set(((d.get("spec") or {}).get("targets") or {}).get("components") or {})
-
-    missing = durable - targeted
-    assert not missing, (
-        f"durable pub/sub components with NO inbound retry target: {sorted(missing)} — with a dead_letter_topic declared, Dapr parks these on the FIRST failure"
-    )
 
 
 def test_the_object_store_carries_NO_credential_in_its_environment() -> None:
@@ -529,24 +477,22 @@ def _rendered_docs(*set_values: str) -> list[dict]:
 
 def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_none() -> None:
     """[[XC-129]]: NATS JetStream is a prerequisite (ADR 0153). The platform runs the bus and rask names it in `nats.url`;
-    every service's own connection, maintenance's work queue, every pub/sub Component and the stream Job dial that one
-    address, and no render holds a NATS server or its JetStream volumes (nats-box's CLI, which the stream Job and the dev mint run, is a client). That the
-    render refuses with no bus named is the prerequisite gate in test_no_credential_is_carried_by_the_render.py."""
+    every service's own connection, maintenance's work queue and both phases of the stream Job dial that one address, and
+    no render holds a NATS server or its JetStream volumes (nats-box's CLI, which the stream Job and the dev mint run, is a
+    client). That the render refuses with no bus named is the prerequisite gate in
+    test_no_credential_is_carried_by_the_render.py."""
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "networkPolicy.enabled=true")
-    dialled: dict[str, set[str]] = {}
-    for doc in docs:
-        if doc.get("kind") == "Component" and (doc.get("spec") or {}).get("type") == "pubsub.jetstream":
-            for row in doc["spec"]["metadata"]:
-                if row["name"] == "natsURL":
-                    dialled.setdefault("pubsub.jetstream", set()).add(row["value"])
-    for workload, _, container in chart_render.containers(docs):
-        if workload.startswith("Job/") and "-nats-stream-" in workload:
-            dialled.setdefault("stream Job", set()).update(re.findall(r'^\s*S="([^"]+)"', container["command"][-1], re.MULTILINE))
+    dialled: dict[str, set[str]] = {
+        f"stream Job, {phase}": set(re.findall(r'^\s*S="([^"]+)"', script, re.MULTILINE)) for phase, script in chart_render.bus_jobs(docs).items()
+    }
+    for _, _, container in chart_render.containers(docs):
         env = chart_render.env_of(container)
         for named in ("RASK_BUS_URL", "MAINTENANCE_NATS_URL"):
             if url := env.get(named):
                 dialled.setdefault(named, set()).add(url)
-    assert dialled == {client: {chart_render.NATS_URL} for client in ("pubsub.jetstream", "stream Job", "RASK_BUS_URL", "MAINTENANCE_NATS_URL")}, dialled
+    assert dialled == {client: {chart_render.NATS_URL} for client in ("stream Job, declare", "stream Job, retire", "RASK_BUS_URL", "MAINTENANCE_NATS_URL")}, (
+        dialled
+    )
 
     bus = sorted(
         f"{workload}/{name} ({container['image']})"
@@ -589,8 +535,8 @@ def test_the_render_runs_no_development_stand_in(stand_in: str) -> None:
 
 
 def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_platforms() -> None:
-    """[[XC-132]], [[XC-149]]: OpenFGA, the Postgres behind OpenFGA and the Dapr state store, and the secret store are the
-    platform's in production, which names each (ADR 0153). The production render runs no workload or identity of any of
+    """[[XC-132]], [[XC-149]]: OpenFGA, the Postgres behind it and the secret store are the platform's in production, which
+    names each (ADR 0153). The production render runs no workload or identity of any of
     them and holds no object of the secret store. Every FGA client, Postgres client and secret reader dials the named
     endpoint, the pods that log in to the secret store are the pods admitted to it and no others, and no credential rides
     along in an env value: the FGA token is a projected file and the Postgres password the store's `postgres-password`,
@@ -630,7 +576,11 @@ def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_pla
         if doc.get("kind") == "NetworkPolicy" and any(peer in (rule.get("to") or []) for rule in doc["spec"].get("egress") or [])
     ]
     pods = {f"{doc['kind']}/{doc['metadata']['name']}": doc["spec"]["template"] for doc in docs if doc.get("kind") in {"Deployment", "StatefulSet"}}
-    readers = {name for name, pod in pods.items() if (pod["metadata"].get("annotations") or {}).get("dapr.io/app-id") in secrets["scopes"]}
+    readers = {
+        name
+        for name, pod in pods.items()
+        if any(entry.get("name") == "RASK_SECRET_STORE_ADDR" for container in pod["spec"]["containers"] for entry in container.get("env") or [])
+    }
     admitted = {name for name, pod in pods.items() if any(chart_render.selects(selector, pod["metadata"]["labels"]) for selector in admitting)}
     assert "Deployment/rask-catalog" in readers, f"the readers read as {sorted(readers)}"
     assert admitted == readers, (
@@ -720,12 +670,12 @@ def test_the_sidecars_non_telemetry_config_survives_telemetry_being_off() -> Non
     assert api_logging.get("omitHealthChecks") is True, "the kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise"
 
 
-#: Every deployed app and the env var its own config reads for the docs opt-in. The names differ
-#: because the services predate any shared setting; what must NOT differ is that each one is set.
+#: Every deployed app that serves doors and the env var its own config reads for the docs opt-in. The names differ
+#: because the services predate any shared setting; what must NOT differ is that each one is set. Maintenance's worker
+#: serves its probes alone, and its app is built with docs off.
 _DOCS_ENV_BY_WORKLOAD: dict[str, str] = {
     "catalog": "LANCE_REST_DOCS",
     "lineage": "LINEAGE_DOCS",
-    "maintenance": "MAINTENANCE_DOCS",
 }
 
 
@@ -783,7 +733,6 @@ def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
 _READ_ONLY_ENV_BY_COMPONENT: dict[str, str] = {
     "catalog": "LANCE_MAINTENANCE_READ_ONLY",
     "lineage": "LINEAGE_READ_ONLY",
-    "maintenance": "MAINTENANCE_READ_ONLY",
     "maintenance-worker": "MAINTENANCE_READ_ONLY",
 }
 

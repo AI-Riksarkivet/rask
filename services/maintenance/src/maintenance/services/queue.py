@@ -2,10 +2,9 @@
 that put a task back on the queue when its time comes.
 
 THE WORK QUEUE IS HELD HERE, ON A CONNECTION OF ITS OWN (ADR 0198 decision 5); what a pass emits goes out on the
-service's other connection (`lakehouse.bus`). Dapr's JetStream subscription sends no
-in-progress acknowledgement, so a pass longer than its ack wait would be delivered again beneath itself, and its publish
-sets no header but the message id, so it cannot put a schedule (`pubsub/jetstream/jetstream.go:115-145`, components-contrib
-e90662b02d70). nats-py is the client, and the worker is a pull worker. The streams and their durable consumers
+service's other connection (`lakehouse.bus`). A pass tells the bus it is still working, so one longer than its ack
+wait is never delivered again beneath itself, and a held task is a message whose headers name when it fires. nats-py is
+the client, and the worker is a pull worker. The streams and their durable consumers
 are the chart's (`chart/templates/nats-stream-job.yaml`), so this binds to them and creates nothing, under a bus user of its
 own whose credential is read from the store at start.
 
@@ -42,9 +41,7 @@ from typing import TYPE_CHECKING, Final, Literal, NoReturn
 import nats
 from nats.aio.client import Client, RawCredentials
 from nats.aio.msg import Msg
-from nats.aio.subscription import Subscription
 from nats.errors import Error as NatsError
-from nats.js.api import Header
 from nats.js.errors import (
     APIError,
     BucketNotFoundError,
@@ -58,8 +55,11 @@ from opentelemetry import propagate, trace
 from opentelemetry.trace import Link, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from lakehouse.bus import pull
 from lakehouse.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
 from maintenance.core.metrics import (
+    ArrivalOutcome,
+    record_arrival_settled,
     record_consumer_backlog,
     record_pass_overran,
     record_schedule_not_queued,
@@ -86,10 +86,15 @@ TASKS_STREAM: Final = "MAINTENANCE_TASKS"
 SCHEDULES_STREAM: Final = "MAINTENANCE_SCHEDULES"
 #: The store's change events (:mod:`maintenance.services.store_events`), which the store publishes on ``store.events``.
 STORE_EVENTS_STREAM: Final = "STORE_EVENTS"
-#: The chart's durable pull consumers: on the tasks, on the fired schedules, and on the store's events.
+#: The stream every governed write is announced on, whose announcements the commit lane reads
+#: (:mod:`maintenance.services.arrival`).
+ARRIVALS_STREAM: Final = "LINEAGE"
+#: The chart's durable pull consumers: on the tasks, on the fired schedules, on the store's events, and on the commit
+#: announcements.
 TASK_CONSUMER: Final = "maintenance-worker"
 DUE_CONSUMER: Final = "maintenance-due"
 STORE_EVENTS_CONSUMER: Final = "maintenance-store-events"
+ARRIVALS_CONSUMER: Final = "maintenance-arrival"
 
 #: The bus user the queue is worked as, which names its connection, and the prefix of that user's reply subjects
 #: (`_INBOX_<user>`, as `lakehouse.bus` names each user's), so no other bus user reads the tasks it fetches or the
@@ -99,12 +104,8 @@ INBOX_PREFIX: Final = f"_INBOX_{BUS_USER}"
 #: The key-value bucket holding the claim a pass takes on its table (the chart's stream Job declares it, its max age the
 #: consumer's ack wait).
 CLAIMS_BUCKET: Final = "MAINTENANCE_CLAIMS"
-#: How long a worker waits on an empty queue before asking again, and how many fired schedules it moves at once.
+#: How long a worker waits on an empty queue before asking again.
 _FETCH_TIMEOUT: Final = 5.0
-#: The status with which JetStream ends a pull whose wait ran out with no message. Any other status ending a task's pull,
-#: which always asks the server to wait, is a refusal (a consumer the bus does not hold, a request it would not take).
-_PULL_EXPIRED: Final = "408"
-_DUE_BATCH: Final = 10
 #: The kinds whose task has a schedule of its own, which the hourly audit reads to find one nothing holds.
 _SCHEDULED_KINDS: Final = frozenset({"table", "trash", "orphans"})
 #: The shortest interval a table's orphan check is held at, in hours: a check that found residue, and a check whose
@@ -330,24 +331,6 @@ def _claim_key(task: Task) -> str:
 def _nak(delay: float) -> bytes:
     """A nak asking JetStream to deliver the task again after ``delay`` seconds, as nats-py's ``Msg.nak`` spells it."""
     return Msg.Ack.Nak + b" " + json.dumps({"delay": int(delay * 1_000_000_000)}).encode()
-
-
-async def _still_working_on(waiting: Collection[Msg]) -> None:
-    """Restart the ack wait of each delivery ``waiting`` to be handled; one the bus does not take is logged, and comes
-    again after its ack wait like any delivery its worker could not vouch for."""
-    for msg in waiting:
-        try:
-            await msg.in_progress()
-        except NatsError as exc:
-            log.warning("maintenance_store_event_unvouched", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
-
-
-async def _unsubscribe(subscription: Subscription | JetStreamContext.PullSubscription) -> None:
-    """End ``subscription``; one the bus already dropped is logged and left."""
-    try:
-        await subscription.unsubscribe()
-    except NatsError as exc:
-        log.warning("maintenance_unsubscribe_failed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 class _Lease(BaseModel):
@@ -654,41 +637,16 @@ class TaskQueue:
         """
         return await self._api(f"$JS.API.CONSUMER.INFO.{stream}.{durable}", {}, ConsumerState)
 
-    async def bind(self, stream: str, consumer: str) -> JetStreamContext.PullSubscription:
-        """A pull subscription on the chart's durable ``consumer`` of ``stream``, which it binds to and never creates."""
-        return await self._js.pull_subscribe_bind(durable=consumer, stream=stream)
-
-    async def next_task(self, *, wait: float, answered_within: float) -> Msg | None:
-        """The task one pull on the queue is answered with, or ``None`` once the bus ends the pull with none.
-
-        The pull asks the server to wait ``wait`` seconds, on an inbox of its own, and is read until the server ends it:
-        with the task, or with the status saying it found none. Never sooner: the server counts the wait from the pull's
-        arrival and goes on answering it until it learns of the unsubscribe, so a client that stopped reading at its own
-        ``wait`` would leave the server answering an inbox nobody reads for as long as the path to the stream's leader
-        takes, and a task sent then would be spent there, handed on only an ack wait later and a delivery short (nats-py's
-        fetch stops reading 0.1 ms after the wait it asks the server for). A bus that says nothing for ``answered_within``
-        past the wait is judged gone, and the pull given up.
+    async def pulled(self, stream: str, consumer: str, *, wait: float, answered_within: float) -> Msg | None:
+        """The message one pull on the chart's durable ``consumer`` of ``stream`` is answered with, or ``None`` once the
+        bus ends the pull with none (:func:`lakehouse.bus.pull`, which reads each pull on an inbox of its own until the bus
+        ends it).
 
         Raises:
-            QueueUnavailableError: The bus ended the pull with a status other than finding nothing.
+            NatsError: The bus ended the pull with a status other than finding nothing, or took neither the pull's
+                subscription nor its request.
         """
-        inbox = self._client.new_inbox()
-        subscription = await self._client.subscribe(inbox)
-        try:
-            request = {"batch": 1, "expires": int(wait * 1_000_000_000)}
-            await self._client.publish(f"$JS.API.CONSUMER.MSG.NEXT.{TASKS_STREAM}.{TASK_CONSUMER}", json.dumps(request).encode(), reply=inbox)
-            try:
-                answer = await subscription.next_msg(timeout=wait + answered_within)
-            except TimeoutError:
-                return None
-        finally:
-            await _unsubscribe(subscription)
-        status = (answer.headers or {}).get(Header.STATUS)
-        if status is None:
-            return answer
-        if status == _PULL_EXPIRED:
-            return None
-        raise QueueUnavailableError(f"the bus ended a pull for a task with {status} {(answer.headers or {}).get(Header.DESCRIPTION, '')}".rstrip())
+        return await pull(self._client, stream, consumer, wait=wait, answered_within=answered_within)
 
     async def _api[M: BaseModel](self, subject: str, body: dict[str, object], answer: type[M]) -> M:
         """One JetStream API request's answer, read as ``answer``.
@@ -731,9 +689,55 @@ class TaskQueue:
             await self._client.close()
 
 
+#: How a hint lane's rule settles a message whose handling did not acknowledge it.
+type _Unhandled = Literal["retried", "unreadable", "ended"]
+
+
+class _Said(BaseModel):
+    """What one hint lane calls its settlings in its log lines."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ended: str
+    unreadable: str
+    retried: str
+
+
+_STORE_EVENT_SAID: Final = _Said(
+    ended="maintenance_store_event_ended",
+    unreadable="maintenance_store_event_unreadable",
+    retried="maintenance_store_event_retried",
+)
+_ARRIVAL_SAID: Final = _Said(
+    ended="maintenance_arrival_ended",
+    unreadable="maintenance_arrival_unreadable",
+    retried="maintenance_arrival_retried",
+)
+
+
+class _HintLane[OutcomeT]:
+    """One of the worker's hint lanes: the consumer it pulls, the service's handling of one message, which answers the
+    outcome an acknowledged one is counted under, how a settling is counted, and what its log lines are called."""
+
+    def __init__(
+        self,
+        *,
+        stream: str,
+        consumer: str,
+        said: _Said,
+        handle: Callable[[bytes], Awaitable[OutcomeT]],
+        settled: Callable[[OutcomeT | _Unhandled], None],
+    ) -> None:
+        self.stream = stream
+        self.consumer = consumer
+        self.said = said
+        self.handle = handle
+        self.settled = settled
+
+
 class Worker:
-    """What one replica runs: one task at a time off the queue, every fired schedule moved onto it, and the store's change
-    events handed to ``store_events``.
+    """What one replica runs: one task at a time off the queue, every fired schedule moved onto it, the store's change
+    events handed to ``store_events``, and the commit announcements handed to ``arrivals``.
 
     A task is acknowledged when its run returns, delivered again after a delay that grows with each failure, and ended
     on its last delivery, counted (``maintenance.tasks.ended``). While it runs the worker tells JetStream it is still
@@ -769,6 +773,7 @@ class Worker:
         max_pass_seconds: float,
         retry_ended_seconds: float,
         store_events: Callable[[bytes], Awaitable[int]] | None = None,
+        arrivals: Callable[[bytes], Awaitable[ArrivalOutcome]] | None = None,
         end: EndProcess = end_process,
         max_seconds_by_kind: Mapping[str, float] | None = None,
     ) -> None:
@@ -778,6 +783,7 @@ class Worker:
         self._retry_ended = retry_ended_seconds
         self._run = run
         self._store_events = store_events
+        self._arrivals = arrivals
         self._ready = ready
         self._heartbeat = heartbeat_seconds
         self._ack_wait = ack_wait_seconds
@@ -833,7 +839,7 @@ class Worker:
         """Pull one task at a time from the chart's durable consumer until :meth:`stop`, and none while ``ready`` says no:
         a service whose signing key is unresolved takes no task, since what its pass emits could not be signed.
 
-        Each pull has a subscription of its own, read until the bus ends the pull (:meth:`TaskQueue.next_task`), then
+        Each pull has a subscription of its own, read until the bus ends the pull (:meth:`TaskQueue.pulled`), then
         ended. A pull a reconnect held back can reach the server after the worker gave up on it, and be answered while a
         pass runs; on a subscription that outlived it, that task would wait in the client and be run once the pass ended,
         its ack wait long run out and the task perhaps another replica's by then. Sent to an inbox no one reads, it is
@@ -844,33 +850,22 @@ class Worker:
             if not self._ready():
                 await self.pause(_FETCH_TIMEOUT)
                 continue
-            msg = await self._next_task()
+            msg = await self._next(TASKS_STREAM, TASK_CONSUMER)
             if msg is None:
                 continue
             received = monotonic()
             await self._safely(self._hand_on(msg, received) if self._hands_on(msg) else self._handle(msg, received), msg)
 
-    async def _next_task(self) -> Msg | None:
-        """The task the next pull is answered with, or ``None``: an empty wait, or a pull the bus refused or dropped, which
-        is logged and asked again after a pause."""
+    async def _next(self, stream: str, consumer: str) -> Msg | None:
+        """The message the next pull on ``consumer`` is answered with, or ``None``: an empty wait, or a pull the bus
+        refused or dropped, which is logged and asked again after a pause. A reconnect is the bus's ordinary weather,
+        which a loop waits out rather than ending on."""
         try:
-            return await self._queue.next_task(wait=_FETCH_TIMEOUT, answered_within=_API_TIMEOUT)
-        except (NatsError, QueueUnavailableError) as exc:
-            log.warning("maintenance_fetch_failed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
+            return await self._queue.pulled(stream, consumer, wait=_FETCH_TIMEOUT, answered_within=_API_TIMEOUT)
+        except NatsError as exc:
+            log.warning("maintenance_fetch_failed", extra={"consumer": consumer, "error": f"{type(exc).__name__}: {exc}"[:300]})
             await self.pause(_FETCH_TIMEOUT)
             return None
-
-    async def _bound(self, stream: str, consumer: str) -> JetStreamContext.PullSubscription | None:
-        """A pull subscription on the chart's durable ``consumer`` of ``stream``, asked for again after a pause while the
-        bus does not take it; ``None`` once the worker is asked to stop. A reconnect is the bus's ordinary weather, which
-        the loop waits out rather than ending on."""
-        while not self._stopping.is_set():
-            try:
-                return await self._queue.bind(stream, consumer)
-            except NatsError as exc:
-                log.warning("maintenance_bind_failed", extra={"consumer": consumer, "error": f"{type(exc).__name__}: {exc}"[:300]})
-                await self.pause(_FETCH_TIMEOUT)
-        return None
 
     def _hands_on(self, msg: Msg) -> bool:
         """Whether ``msg`` arrived as the worker stopped with a delivery to spare. On the last delivery this worker allows,
@@ -1099,92 +1094,101 @@ class Worker:
         """Move each fired schedule onto the queue until :meth:`stop`. A table that already has a task queued or in flight
         is covered by it, since its pass computes the table's next time; a fired follow-up is not, since the commit it
         follows may be one that task's pass read the table before, so it waits until nothing holds the table."""
-        subscription = await self._bound(SCHEDULES_STREAM, DUE_CONSUMER)
-        if subscription is None:
-            return
-        try:
-            while not self._stopping.is_set():
-                for msg in await self._fetch(subscription, _DUE_BATCH):
-                    await self._safely(self._move(msg), msg)
-        finally:
-            # Ended with the loop: the connection's drain waits on every subscription still open, for the client's whole
-            # drain timeout (measured on the estate: an idle worker took 34 s to stop).
-            await _unsubscribe(subscription)
+        while not self._stopping.is_set():
+            msg = await self._next(SCHEDULES_STREAM, DUE_CONSUMER)
+            if msg is not None:
+                await self._safely(self._move(msg), msg)
 
     async def run_store_events(self) -> None:
         """Hand each of the store's change events to ``store_events`` until :meth:`stop`, which answers how many tables'
-        passes it held; each event's settling is counted by outcome (``maintenance.store_events.settled``).
+        passes it held; each event's settling is counted by outcome (``maintenance.store_events.settled``) and follows
+        the hint lanes' one rule (:meth:`_run_hints`).
 
-        ``store_events`` raises ``ValueError`` for a body that is no store event, which is ended at once, and ``OSError``
-        or :class:`QueueUnavailableError` for one whose handling the store or the bus refused, which is delivered again
-        after a delay that grows with each delivery, and ended on its ``max_deliver``-th: an event is a hint the table's
-        recheck backs up. The consumer allows one delivery more, on which an event whose handling outlived its worker
-        every time is ended without handling. Any other error is a fault of the handling's own: it ends the loop, and the
-        loop's end the process, and the event is delivered again after the consumer's ack wait.
-
-        A batch's events wait while the ones before them are handled, and a handling reads the store, so each one handled
-        tells the bus the rest are still being worked on: ten slow reads would otherwise outlast the consumer's ack wait,
-        and the bus hand the batch's tail to another replica while this one still held it.
+        One event a pull: an event the bus handed over while another was handled would wait out its ack wait unread, and
+        go to another replica while this one still held it.
         """
         handle = self._store_events
         if handle is None:
             await self._stopping.wait()
             return
-        subscription = await self._bound(STORE_EVENTS_STREAM, STORE_EVENTS_CONSUMER)
-        if subscription is None:
-            return
-        try:
-            while not self._stopping.is_set():
-                waiting = await self._fetch(subscription, _DUE_BATCH)
-                while waiting:
-                    msg, *waiting = waiting
-                    await self._safely(self._on_store_event(msg, handle), msg)
-                    await _still_working_on(waiting)
-        finally:
-            await _unsubscribe(subscription)
 
-    async def _on_store_event(self, msg: Msg, handle: Callable[[bytes], Awaitable[int]]) -> None:
+        async def held(body: bytes) -> Literal["held", "ignored"]:
+            return "held" if await handle(body) > 0 else "ignored"
+
+        await self._run_hints(
+            _HintLane(
+                stream=STORE_EVENTS_STREAM,
+                consumer=STORE_EVENTS_CONSUMER,
+                said=_STORE_EVENT_SAID,
+                handle=held,
+                settled=lambda outcome: record_store_event_settled(outcome=outcome),
+            )
+        )
+
+    async def run_arrivals(self) -> None:
+        """Hand each commit announcement to ``arrivals`` until :meth:`stop`, which answers how it is acknowledged; each
+        one's settling is counted by outcome (``maintenance.arrivals.settled``) and follows the hint lanes' one rule
+        (:meth:`_run_hints`)."""
+        handle = self._arrivals
+        if handle is None:
+            await self._stopping.wait()
+            return
+        await self._run_hints(
+            _HintLane(
+                stream=ARRIVALS_STREAM,
+                consumer=ARRIVALS_CONSUMER,
+                said=_ARRIVAL_SAID,
+                handle=handle,
+                settled=lambda outcome: record_arrival_settled(outcome=outcome),
+            )
+        )
+
+    async def _run_hints[OutcomeT](self, lane: _HintLane[OutcomeT]) -> None:
+        """Pull ``lane``'s consumer until :meth:`stop`, each message handed to the lane's handling and settled by one rule.
+
+        A hint makes a table's pass due sooner and the table's recheck backs it up, so one that cannot be handled is
+        ended, never kept. The handling raises ``ValueError`` for a body that is no hint of the lane's, which is ended at
+        once, and ``OSError`` or :class:`QueueUnavailableError` for one whose handling the store or the bus refused,
+        which is delivered again after a delay that grows with each delivery, and ended on its ``max_deliver``-th. The
+        consumer allows one delivery more, on which a hint whose handling outlived its worker every time is ended
+        without handling. Any other error is a fault of the handling's own: it ends the loop, and the loop's end the
+        process, and the hint is delivered again after the consumer's ack wait.
+        """
+        while not self._stopping.is_set():
+            msg = await self._next(lane.stream, lane.consumer)
+            if msg is not None:
+                await self._safely(self._on_hint(msg, lane), msg)
+
+    async def _on_hint[OutcomeT](self, msg: Msg, lane: _HintLane[OutcomeT]) -> None:
         delivered = msg.metadata.num_delivered or 1
         if delivered > self._max_deliver:
-            log.error("maintenance_store_event_ended", extra={"subject": msg.subject, "deliveries": delivered, "error": "every delivery outlived its worker"})
+            log.error(lane.said.ended, extra={"subject": msg.subject, "deliveries": delivered, "error": "every delivery outlived its worker"})
             await msg.term()
-            record_store_event_settled(outcome="ended")
+            lane.settled("ended")
             return
         try:
-            held = await handle(msg.data)
+            outcome = await lane.handle(msg.data)
         except ValueError as exc:
-            log.error("maintenance_store_event_unreadable", extra={"subject": msg.subject, "error": str(exc)[:300]})
+            log.error(lane.said.unreadable, extra={"subject": msg.subject, "error": str(exc)[:300]})
             await msg.term()
-            record_store_event_settled(outcome="unreadable")
+            lane.settled("unreadable")
             return
         except (OSError, QueueUnavailableError) as exc:
-            await self._retry_or_end_store_event(msg, exc, delivered=delivered)
+            await self._retry_or_end_hint(msg, lane, exc, delivered=delivered)
             return
         await msg.ack()
-        record_store_event_settled(outcome="held" if held > 0 else "ignored")
+        lane.settled(outcome)
 
-    async def _retry_or_end_store_event(self, msg: Msg, exc: OSError | QueueUnavailableError, *, delivered: int) -> None:
+    async def _retry_or_end_hint[OutcomeT](self, msg: Msg, lane: _HintLane[OutcomeT], exc: OSError | QueueUnavailableError, *, delivered: int) -> None:
         error = f"{type(exc).__name__}: {exc}"[:300]
         if delivered >= self._max_deliver:
-            log.error("maintenance_store_event_ended", extra={"subject": msg.subject, "deliveries": delivered, "error": error})
+            log.error(lane.said.ended, extra={"subject": msg.subject, "deliveries": delivered, "error": error})
             await msg.term()
-            record_store_event_settled(outcome="ended")
+            lane.settled("ended")
             return
-        log.warning("maintenance_store_event_retried", extra={"subject": msg.subject, "deliveries": delivered, "error": error})
+        log.warning(lane.said.retried, extra={"subject": msg.subject, "deliveries": delivered, "error": error})
         await msg.nak(delay=redelivery_delay(delivered))
-        record_store_event_settled(outcome="retried")
-
-    async def _fetch(self, subscription: JetStreamContext.PullSubscription, batch: int) -> list[Msg]:
-        """The next ``batch`` messages, or none: an empty wait, or a fetch the bus refused or dropped, which is logged
-        and asked again after a pause."""
-        try:
-            return await subscription.fetch(batch, timeout=_FETCH_TIMEOUT)
-        except TimeoutError:
-            return []
-        except NatsError as exc:
-            log.warning("maintenance_fetch_failed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
-            await asyncio.sleep(_FETCH_TIMEOUT)
-            return []
+        lane.settled("retried")
 
     async def _safely(self, handling: Awaitable[None], msg: Msg) -> None:
         """Run one message's handling; an ack, nak or term the bus refuses or drops is logged, and the message is
@@ -1216,17 +1220,18 @@ class Worker:
 #: ages (MAINTENANCE_TASKS drops a task at its 24 h max age; STORE_EVENTS holds an event until it is settled), never the
 #: schedules, which hold a table's next time for as long as it is due.
 SAMPLED_STREAMS: Final = ((TASKS_STREAM, True), (SCHEDULES_STREAM, False), (STORE_EVENTS_STREAM, True))
-#: The durable consumers the sampler reads, each with its stream.
+#: The durable consumers the sampler reads, each with its stream; the commit lane's joins them where the lane runs.
 SAMPLED_CONSUMERS: Final = ((TASKS_STREAM, TASK_CONSUMER), (SCHEDULES_STREAM, DUE_CONSUMER), (STORE_EVENTS_STREAM, STORE_EVENTS_CONSUMER))
+ARRIVALS_SAMPLED: Final = (ARRIVALS_STREAM, ARRIVALS_CONSUMER)
 #: How often the worker samples them: six reads of the bus, a quarter of a minute apart, so a rule held for minutes reads
 #: many samples of a backlog and not one.
 SAMPLE_SECONDS: Final = 15.0
 
 
-async def sample_queue(queue: TaskQueue) -> int:
-    """Read each sampled stream's depth and each durable's backlog off the bus into their gauges; how many reads the bus
-    did not answer. A read it did not answer leaves its gauge at its last value, logged, so one stream's outage does not
-    hide what the others say."""
+async def sample_queue(queue: TaskQueue, consumers: Collection[tuple[str, str]] = SAMPLED_CONSUMERS) -> int:
+    """Read each sampled stream's depth and the backlog of each of ``consumers`` off the bus into their gauges; how many
+    reads the bus did not answer. A read it did not answer leaves its gauge at its last value, logged, so one stream's
+    outage does not hide what the others say."""
     unread = 0
     for stream, aged in SAMPLED_STREAMS:
         try:
@@ -1236,7 +1241,7 @@ async def sample_queue(queue: TaskQueue) -> int:
             unread += 1
             continue
         record_stream_depth(stream=stream, messages=state.messages, oldest_seconds=state.oldest_seconds(datetime.now(UTC)) if aged else None)
-    for stream, durable in SAMPLED_CONSUMERS:
+    for stream, durable in consumers:
         try:
             backlog = await queue.consumer_state(stream, durable)
         except QueueUnavailableError as exc:

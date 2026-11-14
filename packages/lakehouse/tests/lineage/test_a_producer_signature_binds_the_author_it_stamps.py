@@ -1,7 +1,7 @@
 """A producer's Ed25519 signature binds the event it signs, author included, to a key its identity publishes.
 
-[[LH-064]] C3. The lineage bus door authenticates the sidecar, not the producer, so the author stamped on an event
-is a claim. The signature turns it into one a listed signer's published key vouches for, and `lakehouse.lineage.signing`
+[[LH-064]] C3. The bus authenticates the connection that published, not the producer, so the author stamped on an
+event is a claim. The signature turns it into one a listed signer's published key vouches for, and `lakehouse.lineage.signing`
 is the one implementation every signer and verifier imports.
 
 [[XC-078]]. A control event is the same claim in another layout: a flat object whose `actor` plays the author and whose

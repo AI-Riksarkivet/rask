@@ -16,6 +16,7 @@ from typing import Annotated, Self
 from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from lakehouse.bus_delivery import Lane
 from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
@@ -57,7 +58,7 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     # every alias below silently gained an un-namespaced twin (a field named `address` would
     # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
-    # deliberately-bare ones (DAPR_HTTP_PORT) still land.
+    # deliberately-bare ones (RASK_CATALOG_IDENTITY_TOKEN_FILE) still land.
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LINEAGE_", alias_generator=env_alias("LINEAGE"), extra="ignore")
 
@@ -104,31 +105,25 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     #: (`LINEAGE_SIGNERS`, `LINEAGE_DELEGATORS`), so a settings object made by `model_validate` reads them too.
     signing: Signing = Field(default_factory=Signing)
 
-    # --- Durable ingest through the sidecar's subscription (opt-in): the catalog publishes to NATS JetStream, which
-    # keeps each event, and the sidecar delivers it to this service's subscription handler over HTTP and redelivers
-    # per backOff, so a lineage outage never loses provenance.
-    # The HTTP /api/v1/lineage endpoint stays for external producers. Off by default (HTTP is dev default).
-    dapr_enabled: bool = Field(default=False, alias="LINEAGE_DAPR_ENABLED")
-    #: The component the subscription is taken through: this app's own, `<pubsub.name>-<app-id>` as the chart renders it.
-    dapr_pubsub: str = Field(default="lineage-pubsub-lineage", alias="LINEAGE_DAPR_PUBSUB")
-    #: The topic lineage's events ride: the one the subscription takes, and the one the relay publishes a recovered event on.
+    # --- Durable ingest off the bus: the catalog publishes to NATS JetStream, which keeps each event, and this service
+    # pulls it from its own consumer on its own connection wherever the chart names it a bus (`lineage.api.ingest_lane`,
+    # `lakehouse.bus`), so a lineage outage never loses provenance. The HTTP /api/v1/lineage endpoint stays for
+    # external producers.
+    #: The topic lineage's events ride: the one its consumer takes, and the one the relay publishes a recovered event on.
     events_topic: str = Field(default="lineage.events.v1", alias="LINEAGE_EVENTS_TOPIC")
+    #: How many deliveries are handled at once, across this service's replicas: the consumer's `max_ack_pending`, which
+    #: the chart declares from the same value, so the bus hands out no more than the replicas handle.
+    deliveries_in_flight: int = Field(default=64, ge=1, alias="LINEAGE_DELIVERIES_IN_FLIGHT")
+    #: How many deliveries an event is handled on before it is parked, and how long one that is asked for again waits.
+    delivery_attempts: int = Field(default=5, ge=1, alias="LINEAGE_DELIVERY_ATTEMPTS")
+    delivery_retry_seconds: float = Field(default=120.0, ge=0, alias="LINEAGE_DELIVERY_RETRY_SECONDS")
+    #: The consumer's ack wait, as the chart declares it: a handling is cut short of it, so the bus never delivers an
+    #: event again beneath a handling still running.
+    delivery_ack_wait_seconds: float = Field(default=300.0, gt=Lane.SETTLE_SECONDS, alias="LINEAGE_DELIVERY_ACK_WAIT_SECONDS")
     #: Bounds the relay's re-publish of a drained event. An unbounded publish against a bus that does not answer
     #: would stall the tick — the relay failing hardest exactly when a backlog means it matters most, which is the
     #: same failure the bounded drain was introduced to avoid.
     publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_PUBLISH_TIMEOUT_SECONDS")
-    # Dead-letter topic for the ingest subscription (Dapr-native DLQ). "" (default) = none — the
-    # pre-existing behavior. Ships together with the chart's Resiliency retry policy (a DLQ without
-    # one dead-letters on the FIRST failure per Dapr's documented default). Lineage's recovery story
-    # stays replay-from-stream (its durable deliverPolicy=all consumer, re-created to rebuild); the DLQ
-    # adds operator VISIBILITY for deliveries that exhausted retries, it does not replace the replay.
-    dapr_dlq_topic: str = Field(default="", alias="LINEAGE_DLQ_TOPIC")
-    # The PARKING subscription's own pubsub component (durable, deliverPolicy=new). "" (default) falls
-    # back to `dapr_pubsub` — but that component starts at the stream's first message (a replay rebuilds
-    # the feed), so riding it would re-park the whole retained DLQ backlog on a replay. The chart
-    # always sets this alongside LINEAGE_DLQ_TOPIC; the fallback only
-    # exists so a dev stack without the extra component keeps working.
-    dapr_dlq_pubsub: str = Field(default="", alias="LINEAGE_DLQ_PUBSUB")
     # The relay tick: a Dapr cron binding POSTs to /<name> on a schedule, and the tick drains the outbox,
     # prunes the feed and forwards to the configured graph backend. Empty = the route isn't mounted.
     relay_binding_name: str = Field(default="", alias="LINEAGE_RELAY_BINDING_NAME")

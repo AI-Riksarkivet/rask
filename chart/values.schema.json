@@ -23,11 +23,11 @@
                     }
                 },
                 "enabled": {
-                    "description": "Run the in-cluster apache/age Postgres StatefulSet that serves the OpenFGA and Dapr state store databases.",
+                    "description": "Run the in-cluster apache/age Postgres StatefulSet that serves OpenFGA's database.",
                     "type": "boolean"
                 },
                 "externalHost": {
-                    "description": "Postgres host OpenFGA and the Dapr state store use instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.",
+                    "description": "Postgres host OpenFGA uses instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.",
                     "type": "string"
                 },
                 "image": {
@@ -248,17 +248,8 @@
                         }
                     }
                 },
-                "controlConsumerInactiveSeconds": {
-                    "description": "Seconds a catalog replica's control-event consumer outlives lost interest before NATS reaps it; also the broadcast mirror's message age.",
-                    "type": "integer",
-                    "minimum": 121
-                },
-                "controlDlqTopic": {
-                    "description": "Dead-letter topic of the catalog's control subscription, for deliveries that exhaust their retries; set only with `controlEmit` and `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.",
-                    "type": "string"
-                },
                 "controlEmit": {
-                    "description": "Publish catalog control events (catalog.control.v1) on the catalog's own bus connection, broadcast to every replica; renders the CATALOG_CONTROL stream and the broadcast subscription component. Best-effort.",
+                    "description": "Publish catalog control events (catalog.control.v1) on the catalog's own bus connection, where every replica follows them; declares the CATALOG_CONTROL stream. Best-effort.",
                     "type": "boolean"
                 },
                 "controlOutbox": {
@@ -484,7 +475,7 @@
                     }
                 },
                 "enabled": {
-                    "description": "Use Dapr: inject a daprd sidecar into every lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. Each service is named its bus (`RASK_BUS_URL`, `RASK_BUS_USER`) under this switch too, so off, none publishes.",
+                    "description": "Use Dapr: inject a daprd sidecar into the catalog's and lineage's pods and render rask's Components and Configurations. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. Each service is named its bus (`RASK_BUS_URL`, `RASK_BUS_USER`), and the maintenance worker rendered, under this switch too, so off, none publishes or takes a delivery.",
                     "type": "boolean"
                 },
                 "logLevel": {
@@ -494,15 +485,6 @@
                 "maxBodySize": {
                     "description": "Max request body for Dapr service invocation (`dapr.io/max-body-size`); Dapr's own default is 4Mi.",
                     "type": "string"
-                },
-                "resiliency": {
-                    "type": "object",
-                    "properties": {
-                        "enabled": {
-                            "description": "Render the Dapr Resiliency policy (sidecar retries, constant 120s x 4), per-app dead-letter topics, and the long broker backOff; false = broker-only.",
-                            "type": "boolean"
-                        }
-                    }
                 },
                 "sidecarResources": {
                     "type": "object",
@@ -673,7 +655,7 @@
             "type": "object",
             "properties": {
                 "maintenanceTerminationGracePeriodSeconds": {
-                    "description": "Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed; the web pods take `terminationGracePeriodSeconds`.",
+                    "description": "Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed.",
                     "type": "integer"
                 },
                 "preStopSeconds": {
@@ -681,7 +663,7 @@
                     "type": "integer"
                 },
                 "sidecarBlockShutdownSeconds": {
-                    "description": "Seconds the Dapr sidecar keeps running after SIGTERM to flush acks; must lie between preStopSeconds and the grace period.",
+                    "description": "Seconds the Dapr sidecar keeps running after SIGTERM, so a cron tick still in its handler is answered; must lie between preStopSeconds and the grace period.",
                     "type": "integer"
                 },
                 "teardownSeconds": {
@@ -689,7 +671,7 @@
                     "type": "integer"
                 },
                 "terminationGracePeriodSeconds": {
-                    "description": "Pod grace period in seconds; must be at least preStop + sidecar drain + 5 s buffer.",
+                    "description": "Pod grace period in seconds; must be at least preStop + `sidecarBlockShutdownSeconds` + 5 s buffer.",
                     "type": "integer"
                 }
             }
@@ -698,15 +680,11 @@
             "type": "object",
             "properties": {
                 "appId": {
-                    "description": "Maintenance's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id and durable consumer.",
-                    "type": "string"
-                },
-                "arrivalDlqTopic": {
-                    "description": "Dead-letter topic of the write-event lane, for deliveries that exhaust their retries; set only with `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.",
+                    "description": "Maintenance's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), the bus user its events are published as (`nats-user-\u003cid\u003e`) and its OTel service.",
                     "type": "string"
                 },
                 "arrivalEnabled": {
-                    "description": "Subscribe the write-event lane: queue the written table's pass on each announced commit.",
+                    "description": "Run the write-event lane: queue the written table's pass on each announced commit.",
                     "type": "boolean"
                 },
                 "controlEmit": {
@@ -745,11 +723,6 @@
                     "description": "Emit a lineage event per dataset whose versions a pass reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.",
                     "type": "boolean"
                 },
-                "maxBodyBytes": {
-                    "description": "Maximum request-body bytes on any maintenance route (MAINTENANCE_MAX_BODY_BYTES), one write event its lane is delivered; larger bodies get 413 before a byte is read.",
-                    "type": "integer",
-                    "minimum": 1
-                },
                 "minVersionsToExpire": {
                     "description": "Expiry runs on a table only once it has at least this many reclaimable versions.",
                     "type": "integer"
@@ -777,10 +750,6 @@
                         }
                     }
                 },
-                "port": {
-                    "description": "HTTP port of the maintenance container.",
-                    "type": "integer"
-                },
                 "queue": {
                     "type": "object",
                     "properties": {
@@ -805,7 +774,7 @@
                             "minimum": 1
                         },
                         "drainSeconds": {
-                            "description": "How long a stopping worker lets its running task finish, inside its pod's `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain. The render refuses a drain the grace cannot hold after preStop and the teardown, and the worker pod's sidecar blocks its shutdown for the grace less the teardown, which holds it.",
+                            "description": "How long a stopping worker lets its running task finish, inside its pod's `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain. The render refuses a drain the grace cannot hold after preStop and the teardown.",
                             "type": "integer",
                             "minimum": 1
                         },
@@ -851,16 +820,6 @@
                         }
                     }
                 },
-                "replicas": {
-                    "description": "Replicas of maintenance's web pods, which serve the write-event lane and run no worker.",
-                    "type": "integer",
-                    "minimum": 1
-                },
-                "requestDeadlineSeconds": {
-                    "description": "Seconds a maintenance request may run before its caller is answered 503 (code 17) while it runs on to its end (MAINTENANCE_REQUEST_DEADLINE_SECONDS, ADR 0203).",
-                    "type": "integer",
-                    "minimum": 1
-                },
                 "tombstoneSweep": {
                     "description": "Clear trash records whose bytes a probe proves are gone; deletes bookkeeping rows, never bytes. Off by default.",
                     "type": "boolean"
@@ -905,7 +864,7 @@
                     "type": "object",
                     "properties": {
                         "port": {
-                            "description": "Port a worker pod serves its probes on, for the kubelet and for its sidecar's health check, which lets the sidecar leave when the worker does.",
+                            "description": "Port a worker pod serves its probes on, for the kubelet.",
                             "type": "integer",
                             "minimum": 1
                         },
@@ -957,42 +916,10 @@
                                         }
                                     }
                                 },
-                                "catalog.controlEmit,dapr.resiliency.enabled": {
-                                    "type": "object",
-                                    "properties": {
-                                        "catalog": {
-                                            "type": "object",
-                                            "properties": {
-                                                "publish": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "string"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
                                 "maintenance.arrivalEnabled": {
                                     "type": "object",
                                     "properties": {
-                                        "maintenance": {
-                                            "type": "object",
-                                            "properties": {
-                                                "publish": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "string"
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                "maintenance.arrivalEnabled,dapr.resiliency.enabled": {
-                                    "type": "object",
-                                    "properties": {
-                                        "maintenance": {
+                                        "maintenance-worker": {
                                             "type": "object",
                                             "properties": {
                                                 "publish": {
@@ -1016,6 +943,12 @@
                                                     "items": {
                                                         "type": "string"
                                                     }
+                                                },
+                                                "subscribe": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
                                                 }
                                             }
                                         }
@@ -1028,6 +961,12 @@
                                             "type": "object",
                                             "properties": {
                                                 "publish": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "subscribe": {
                                                     "type": "array",
                                                     "items": {
                                                         "type": "string"
@@ -1060,7 +999,7 @@
                             "type": "boolean"
                         },
                         "users": {
-                            "description": "The bus user table, one user per service (its Dapr app-id) plus admin and monitor, each with publish and subscribe subject lists (never empty).",
+                            "description": "The bus user table, one user per connection a service opens (named by its app id) plus admin and monitor, each with publish and subscribe subject lists (never empty).",
                             "type": "object",
                             "properties": {
                                 "admin": {
@@ -1098,23 +1037,6 @@
                                     }
                                 },
                                 "lineage": {
-                                    "type": "object",
-                                    "properties": {
-                                        "publish": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        },
-                                        "subscribe": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
-                                },
-                                "maintenance": {
                                     "type": "object",
                                     "properties": {
                                         "publish": {
@@ -1187,7 +1109,7 @@
                     }
                 },
                 "egress": {
-                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the bus's clients (every pod whose service or sidecar connects to it, the stream Job) to the platform's bus at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment, where the bus is the platform's.",
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the bus's clients (every pod whose service connects to it, the stream Job) to the platform's bus at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment, where the bus is the platform's.",
                     "type": "array"
                 },
                 "streamMaxAgeSeconds": {
@@ -1200,7 +1122,7 @@
                     "type": "integer"
                 },
                 "url": {
-                    "description": "NATS JetStream address every service, every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.",
+                    "description": "NATS JetStream address every service and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.",
                     "type": "string"
                 }
             }
@@ -1686,16 +1608,8 @@
         "pubsub": {
             "type": "object",
             "properties": {
-                "controlName": {
-                    "description": "Name of the broadcast (no queue group) Dapr pubsub component the catalog subscribes to catalog.control.v1 through; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on.",
-                    "type": "string"
-                },
-                "name": {
-                    "description": "Prefix of each subscriber app's Dapr pubsub component, `\u003cname\u003e-\u003capp-id\u003e`, which carries that app's queue group.",
-                    "type": "string"
-                },
                 "topic": {
-                    "description": "Topic OpenLineage events are published and subscribed on (LANCE_LINEAGE_TOPIC and siblings).",
+                    "description": "Topic OpenLineage events are published on and each consumer of them is filtered to (LANCE_LINEAGE_TOPIC and siblings).",
                     "type": "string"
                 }
             }
@@ -1935,7 +1849,7 @@
                     "type": "object",
                     "properties": {
                         "appId": {
-                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id, pubsub components and durable consumers.",
+                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id and the scope of its cron bindings.",
                             "type": "string"
                         },
                         "module": {
@@ -1956,12 +1870,33 @@
                     "type": "object",
                     "properties": {
                         "appId": {
-                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id, its pubsub, DLQ and durable consumers and the scope of its relay cron.",
+                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id and the scope of its relay cron.",
                             "type": "string"
                         },
                         "deliveriesInFlight": {
-                            "description": "How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `maxAckPending`).",
-                            "type": "integer"
+                            "description": "How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `max_ack_pending`, and each replica's bound).",
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "delivery": {
+                            "type": "object",
+                            "properties": {
+                                "ackWaitSeconds": {
+                                    "description": "The consumer's ack wait, in seconds: how long a delivery a dead replica held waits before another gets it. Lineage cuts a handling 10 s short of it, so the bus never delivers an event beneath a handling still running (LINEAGE_DELIVERY_ACK_WAIT_SECONDS).",
+                                    "type": "integer",
+                                    "minimum": 11
+                                },
+                                "attempts": {
+                                    "description": "Deliveries an event is handled on before lineage parks it (LINEAGE_DELIVERY_ATTEMPTS).",
+                                    "type": "integer",
+                                    "minimum": 1
+                                },
+                                "retrySeconds": {
+                                    "description": "Seconds a delivery lineage asks for again waits before the bus delivers it again (LINEAGE_DELIVERY_RETRY_SECONDS).",
+                                    "type": "integer",
+                                    "minimum": 0
+                                }
+                            }
                         },
                         "eventsRetentionDays": {
                             "description": "Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a consumer's outage it survives. 0 is unbounded.",
@@ -2045,7 +1980,7 @@
                             }
                         },
                         "replicas": {
-                            "description": "Replica count of lineage; replicas form a competing-consumer group, so it scales freely.",
+                            "description": "Replica count of lineage; its replicas share one durable consumer, so it scales freely.",
                             "type": "integer"
                         },
                         "requestDeadlineSeconds": {

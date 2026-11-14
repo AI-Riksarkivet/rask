@@ -5,11 +5,11 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- range (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "openbao" | uniq) }}`
 
-The dev store's readers are the pods that log in to it (each service, and its sidecar for its components), named by their component labels:
-`lance.secretReaderComponents`, which is the secret-store component's scope (`lance.secretScopes`, where an app's id is
+The dev store's readers are the pods that log in to it (each service, and the catalog's and lineage's sidecars), named by their component labels:
+`lance.secretReaderComponents`, which is the store-reads table's apps (`lance.secretScopes`, where an app's id is
 its pods' component label) and maintenance's worker pods, which run under maintenance's app id and carry the label
-`maintenance-worker`. Derived from the scope, so this list and the scope of `lance-secrets` (dapr-component.yaml)
-cannot drift. The store's own pods are admitted too, because the seed reads the signing pairs and the bus root from the
+`maintenance-worker`. Derived from the same table as the scope of `lance-secrets` (dapr-component.yaml,
+`lance.sidecarScopes`), so the two cannot drift. The store's own pods are admitted too, because the seed reads the signing pairs and the bus root from the
 outgoing pod through the Service (openbao-seed.yaml).
 
 ## `{{- $platform := include "lance.platformEgress" . | fromJsonArray }}`
@@ -56,8 +56,8 @@ reads pod metadata), the volume-snapshot CronJob (`kubectl`) and the Dapr dashbo
 store's are the pods that log in to it (`lance.secretReaderComponents`, as the dev store's ingress lock); the
 telemetry backend's is the Collector; the S3's are the pods holding a store session (`lance.objectStoreClients`), whose
 STS answers at addresses the same rules name; the IdP's are the doors verifying a person's token (`lance.tokenVerifiers`);
-the bus's are every service pod (`lance.secretReaderComponents`: each dials the bus itself, as its own bus user, and
-through the components its sidecar loads) and the stream Job (`lance.busClients`); and the graph backend's is lineage, whose
+the bus's are every service pod (`lance.secretReaderComponents`: each dials the bus itself, as its own bus user) and the
+stream Job (`lance.busClients`); and the graph backend's is lineage, whose
 relay forwards to it. `test_no_egress_rule_admits_every_destination.py` compares each row's callers, read off the pods'
 own specs, with the pods its policy admits.
 

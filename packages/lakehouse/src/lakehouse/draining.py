@@ -1,28 +1,14 @@
-"""Refuse NEW work while this process is draining — the admission half of the shutdown flag.
+"""The drain flag, flipped the moment SIGTERM arrives.
 
-Nine lifespans set `app.state.shutting_down`. Before this module exactly one thing read it: `/readyz`
-(:mod:`lakehouse.probes`), whose whole effect is to make Kubernetes stop routing new CONNECTIONS.
-That is the wrong half for this estate, because the doors that matter are sidecar-delivered: Dapr's
-pub/sub delivery does not consult a readiness probe, so a pod that had begun shutting down kept
-accepting deliveries, started work it could not finish, and took the work
-down with it: the flag existed, and nothing read it on admission (`docs/RESILIENCE.md`, "Refuse new work while draining").
+Every lifespan sets `app.state.shutting_down` as it unwinds, and `/readyz` (:mod:`lakehouse.probes`) answers by it. But
+uvicorn reaches a lifespan's teardown only after it has stopped accepting and drained the requests in flight, so a
+process that waited for it would answer ready through its whole drain. :func:`arm_drain_on_sigterm` flips the flag at
+the signal and hands the signal on, so whatever is dispatched after SIGTERM is answered by a process that says it is
+stopping.
 
-The design rejected the `POST /drain` ENDPOINT — a process-local flag cannot mean "this
-deployment is draining" behind a multi-replica Service — and adopted this half. Nothing here decides
-that a deployment is draining; it reacts to the flag the lifespan already set for THIS process.
-
-A SIDECAR-DELIVERED ROUTE gets **RETRY** from :func:`retry_when_draining`, never DROP and never
-SUCCESS. A SUCCESS ack is indistinguishable from having done the work, and DROP does not mean what
-it looks like: on a subscription that declares a `deadLetterTopic`, daprd routes a DROP to that topic
-rather than discarding it (v1.18.1, `pkg/runtime/subscription/subscription.go:362-372` ->
-`sendToDeadLetter`; the HTTP postman turns the app's DROP into `ErrMessageDropped` at
-`postman/http/http.go:142-146`). So dropping a delivery because this replica happened to be draining
-would PARK a perfectly good message for a human to find, not cancel it quietly. RETRY hands the
-message back to the broker, which redelivers it to a replica that is still alive.
-
-It is a pure read of one boolean. It may not touch a resource — a drain gate that opened a client
-would fail during exactly the window it exists for, which is the rule `/readyz` already states:
-once `shutting_down` flips, that is the answer regardless of anything else.
+It is a pure write of one boolean. It may not touch a resource: a drain that opened a client would fail during exactly
+the window it exists for, which is the rule `/readyz` already states: once `shutting_down` flips, that is the answer
+regardless of anything else.
 """
 
 from __future__ import annotations
@@ -32,11 +18,9 @@ import logging
 import signal
 from collections.abc import Callable
 from contextlib import suppress
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
-from fastapi import Request
-
-from lakehouse.lifecycle import is_draining, mark_draining
+from lakehouse.lifecycle import mark_draining
 
 
 if TYPE_CHECKING:
@@ -45,35 +29,6 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
 log = logging.getLogger(__name__)
-
-
-#: The subscription verdict, the literal Dapr reads.
-RETRY: Final[dict[str, str]] = {"status": "RETRY"}
-
-
-def draining(request: Request) -> bool:
-    """Is THIS process shutting down?
-
-    Defaults to False for an app that never declared it. Each service's lifespan owns the lifecycle flags,
-    and defaulting an undeclared flag to "draining" would take such a service permanently out of service
-    the moment this dependency was applied — a gate that fails closed on absence would be a worse outage
-    than the one it prevents.
-    """
-    return is_draining(request.app)
-
-
-def retry_when_draining(request: Request) -> dict[str, str] | None:
-    """FastAPI dependency for a SIDECAR-delivered route: the RETRY verdict while draining, else None.
-
-    Returns rather than raises, because a subscription route answers 200 with a verdict body — an
-    HTTP error at a Dapr sidecar is read as a delivery failure, which happens to retry today and
-    would silently become a DROP the moment a resiliency policy treated 5xx as terminal. The handler
-    checks the value and returns it unchanged.
-    """
-    return RETRY if draining(request) else None
-
-
-__all__ = ["RETRY", "draining", "retry_when_draining"]
 
 
 #: What ``signal.getsignal`` can answer once ``None`` (a handler installed outside Python) is excluded.
@@ -89,7 +44,7 @@ def arm_drain_on_sigterm(app: FastAPI) -> Callable[[], None]:
     The lifespan's ``finally`` sets the same flag, but uvicorn reaches it only after it has stopped
     accepting and drained in-flight requests, so a guard reading the flag there refuses nothing.
     Flipped at the signal, it is already set for whatever uvicorn dispatches after SIGTERM — a probe,
-    a request whose admission guard has not yet run — which answers draining (503 or RETRY) instead
+    a request whose admission guard has not yet run — which answers draining (503) instead
     of starting work the process will not finish. A request already past its guard is answered as
     it would have been, including the one whose handler sent a self-SIGTERM: that response is the
     ack for the unit that tripped the maintenance worker's recycle.

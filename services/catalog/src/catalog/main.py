@@ -21,8 +21,10 @@ from lance_namespace import LanceNamespaceError
 from starlette.middleware import Middleware
 
 from catalog.api.commit_reconcile import mount_commit_reconcile
-from catalog.api.control_relay import mount_control_relay
-from catalog.api.dapr import register_control_dapr
+from catalog.api.control_lane import STREAM as CONTROL_STREAM
+from catalog.api.control_lane import TOPIC as CONTROL_TOPIC
+from catalog.api.control_lane import ControlLane, create_signature_refused_series
+from catalog.api.control_relay import attach_published_keys, mount_control_relay
 from catalog.api.declaration_converge import mount_declaration_converge
 from catalog.api.erasure_release import mount_erasure_release
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
@@ -45,7 +47,6 @@ from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
 from lakehouse.admission import judge_before_the_body
 from lakehouse.bus import Bus, bus_session
-from lakehouse.bus_watchdog import BusWatchdog, start_bus_watchdog
 from lakehouse.control_emit import make_control_emitter
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.dapr_auth import assert_app_token_configured
@@ -177,21 +178,17 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # once half the store token's lease is used, or as soon as the store no longer honours it. Nothing for a stack with
     # no secret store.
     await stack.enter_async_context(secret_store_session(loops))
-    # Fail closed if control eventing is on but the ingest route (api/dapr.py /control-events) would be
-    # unauthenticated: require_dapr_token silently no-ops on a blank APP_API_TOKEN, so an unset token with
-    # the subscription live is a misconfiguration a forged in-cluster POST could exploit — refuse to boot.
-    # The relay's cron route (api/control_relay.py) is a SECOND sidecar-delivered door on this app and
-    # carries the same guard, so its mount counts as "dapr enabled" here: a named binding with a blank
-    # token would make `require_dapr_token` no-op and leave a replay-every-staged-event door open.
-    # The erasure release tick (api/erasure_release.py) is a third, guarded the same way, and the promotion
-    # expiry (api/promotion_expiry.py), commit reconcile (api/commit_reconcile.py) and manifest reclaim
-    # (api/manifest_reclaim.py) ticks are the rest.
+    # Fail closed if a cron tick's route mounts, which this pod's Dapr sidecar delivers, but the app-api-token is unset:
+    # a start that fails says so at once, where the door's own refusal (`require_dapr_token`) would answer every tick 403
+    # with the pod Ready. The ticks are the control relay's (api/control_relay.py), the erasure release's
+    # (api/erasure_release.py), the promotion expiry's (api/promotion_expiry.py), the commit reconcile's
+    # (api/commit_reconcile.py), the manifest reclaim's (api/manifest_reclaim.py) and the declaration converge's
+    # (api/declaration_converge.py).
     # AFTER THE LOGIN ABOVE, AND OFF THE EVENT LOOP: with the token in the store this is a read with the boot's budget,
     # made under the login the start already holds, so a store that never admits the catalog ends the start there.
     await run_in_threadpool(
         assert_app_token_configured,
-        dapr_enabled=settings.control_emit_enabled
-        or bool(settings.control_relay_binding_name)
+        dapr_enabled=bool(settings.control_relay_binding_name)
         or bool(settings.erasure_release_binding_name)
         or bool(settings.promotion_expiry_binding_name)
         or bool(settings.commit_reconcile_binding_name)
@@ -287,6 +284,8 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
 
     signing = make_signing_holder(identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
     attach_signing(app, signing)
+    # The reader the relay and the control lane verify with, built per start and before either can ask for it.
+    attach_published_keys(app)
     # THE KEY EVERY COMMIT'S RUN ID IS DERIVED UNDER ([[LH-497]]): read from the store like the signing seed, or the empty
     # key for a stack with no store. Published for the gate, the readiness check and the reconciler.
     commit_ids = make_commit_ids()
@@ -319,7 +318,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes on
     # the same connection to the bus. The per-replica ring buffer is ALWAYS
-    # built (plain memory, fed by the broadcast subscription in api/dapr.py); the emitter is a no-op when off.
+    # built (plain memory, fed by the control lane, api/control_lane.py); the emitter is a no-op when off.
     # The connection itself, published for callers that are not the emitter. The control relay
     # (api/control_relay.py) re-publishes the STAGED event, never a re-serialization of the model, so it
     # cannot go through `control_emitter`, which would rebuild the event from the model and stage it
@@ -367,11 +366,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # backfill's reasons: lineage retries its tables until the namespace exists, so a slow OpenFGA or store must not
     # delay this catalog's readiness. A name under the estate's warehouse is absent until the row is there.
     loops.start("estate-namespaces", partial(_ensure_estate_namespaces, app))
-    # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
-    # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
-    bus_watchdog = await start_bus_watchdog(loops)
-    if bus_watchdog is not None:
-        stack.push_async_callback(bus_watchdog.stop)
+    _follow_control_events(app, settings, bus, loops)
     # What `/readyz` answers, read in the background so the probe never waits on a dependency or a request thread
     # (`lakehouse.health`, ADR 0203). The store and OpenFGA gate: no door serves without them. The bus is reported only,
     # since every announcement it carries is staged in an outbox first. The namespace this catalog serves is a fact
@@ -379,17 +374,27 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # surfaces that as a domain error.
     with suppress(LanceNamespaceError):
         app.state.readiness_facts = {"namespace": str(namespace.namespace_id())}
-    app.state.health = HealthWatch(_dependencies(app, settings, bus, bus_watchdog))
+    app.state.health = HealthWatch(_dependencies(app, settings, bus))
     app.state.health.watch(loops)
 
 
-def _dependencies(app: FastAPI, settings: Settings, bus: Bus | None, bus_watchdog: BusWatchdog | None) -> list[Dependency]:
+def _follow_control_events(app: FastAPI, settings: Settings, bus: Bus | None, loops: Supervisor) -> None:
+    """Follow the control topic into this replica's ring buffer on a loop of ``loops``, where control eventing is on
+    (`catalog.api.control_lane`): the lane runs under the emitter's own gate, so a control-off deployment follows
+    nothing. Started once the buffer is on ``app.state``, and stopped with the other loops."""
+    if bus is None or not settings.control_emit_enabled:
+        return
+    create_signature_refused_series()
+    loops.keep("catalog-control-lane", partial(bus.follow, CONTROL_STREAM, CONTROL_TOPIC, ControlLane(app, settings).handle))
+
+
+def _dependencies(app: FastAPI, settings: Settings, bus: Bus | None) -> list[Dependency]:
     """What the catalog reads to know it can serve: its store under its own session (the control root's listing), OpenFGA
     under its own credential, the bus where the chart names one, and the secret store its keys are read from."""
     dependencies = [
         store_dependency(settings.registry_root, settings.storage_options, required=True),
         *openfga_dependency(app, required=True),
-        *bus_dependency(bus, bus_watchdog),
+        *bus_dependency(bus),
     ]
     if secret_store_configured():
         dependencies.append(secret_store_dependency())
@@ -430,9 +435,6 @@ app = build_lance_service_app(
     inner_middleware=[maintenance_middleware, signing_gate_middleware],
     outer_middleware=[Middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes), Middleware(PathReadingMiddleware)],
 )
-# Wire the broadcast control-plane-event subscription that fills each replica's ring buffer. DaprApp always
-# adds GET /dapr/subscribe; the subscription registers only when control_emit_enabled (see api/dapr.py).
-register_control_dapr(app)
 # THE CRON TICKS BELOW are mounted at the pod root, outside both gated mounts, and `maintenance_middleware` holds every
 # one of them through a read-only window, answering it 2xx without running it: each mount records its tick
 # (`catalog.api.cron.ticks_of`), so a tick mounted is a tick held.

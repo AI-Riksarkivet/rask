@@ -8,25 +8,24 @@ on that signature with no grant re-derived ([[LH-551]]): the catalog authorized 
 revoked since, on its outputs or its inputs, takes nothing back. The commit reconciler's re-announcement of a lost one
 is the same: the catalog signs it only for the author it recorded authorizing the commit ([[LH-550]], ADR 0187).
 
-Driven through the registered `/lineage-events` route, FGA on. Public keys come from the secret store, which the suite's
-double answers; signatures are built by the root conftest's `EventSigner` from the wire format alone.
+Driven through lineage's own app and lifespan, each event delivered to its ingest lane, FGA on. Public keys come from
+the secret store, which the suite's double answers; signatures are built by the root conftest's `EventSigner` from the
+wire format alone.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
-from fastapi import FastAPI
+from lineage_lane import Feed, governed, started
 from openfga_sdk import OpenFgaClient
-from starlette.testclient import TestClient
 
+from lakehouse.bus_delivery import Outcome, Settlement
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.signing_key import signing_public_secret
-from lineage.models import DatasetEvent
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -38,20 +37,6 @@ PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
 EVENTS_UUID = "5d0f6a1e-8b2c-4f3d-9e7a-1c2b3d4e5f60"
 SOURCE_UUID = "8e1f2a3b-4c5d-4e6f-8a7b-9c0d1e2f3a4b"
 DROPPED_UUID = "2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901"
-
-
-class _Feed:
-    def __init__(self) -> None:
-        self.recorded: list[str] = []
-
-    async def record(self, event: Any) -> None:
-        self.recorded.append(event.dataset.name if isinstance(event, DatasetEvent) else event.run_id)
-
-    async def run_author(self, _run_id: str) -> str | None:
-        return None
-
-    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
-        return None
 
 
 def _run(author: str) -> dict[str, Any]:
@@ -95,53 +80,30 @@ def _nothing(_object: str) -> bool:
     return False
 
 
-def _door(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], governed: Callable[[str], bool]) -> tuple[TestClient, _Feed]:
-    for key, value in {
-        "APP_API_TOKEN": "the-estate-app-token",
-        "LINEAGE_DAPR_ENABLED": "true",
-        "RASK_FGA_ENABLED": "true",
-        "RASK_OIDC_ENABLED": "true",
-        "RASK_OIDC_ISSUER": "https://idp.invalid/dex",
-        "RASK_OIDC_AUDIENCE": "rask",
-        "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
-        "LINEAGE_SIGNERS": json.dumps([CATALOG, STAGE, PIPELINE]),
-        "LINEAGE_DELEGATORS": json.dumps([CATALOG]),
-    }.items():
-        monkeypatch.setenv(key, value)
-
+def _answering(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], governed_objects: Callable[[str], bool]) -> None:
+    """OpenFGA answering ``held`` for every check and holding a tuple on each object ``governed_objects`` names."""
     from lakehouse.governed import fga
-    from lakehouse.ns_errors import install_problem_handlers
-    from lineage.api.dapr import register_dapr
-    from lineage.core.config import get_settings
 
     async def answer(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         del user, relation
         return {obj: held(obj) for obj in objects}
 
     async def tuples(_client: object, obj: str) -> list[object]:
-        return [object()] if governed(obj) else []
+        return [object()] if governed_objects(obj) else []
 
     monkeypatch.setattr(fga, "batch_check", answer)
     monkeypatch.setattr(fga, "read_object_tuples", tuples)
-    get_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-    register_dapr(app)
-    feed = _Feed()
-    app.state.provenance = feed
-    app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
-    return TestClient(app), feed
 
 
 @pytest.mark.parametrize(
-    ("case", "held", "governed", "status", "recorded"),
+    ("case", "held", "governed_objects", "recorded"),
     [
-        pytest.param("stage-for-a-person", _everything, _everything, "SUCCESS", False, id="a-signer-that-is-not-a-delegator-signing-for-a-person"),
-        pytest.param("catalog-for-a-person", _nothing, _everything, "SUCCESS", True, id="the-delegator-signing-for-a-person-whose-grants-were-revoked-since"),
-        pytest.param("unlisted-signer", _everything, _everything, "SUCCESS", False, id="a-signer-the-chart-does-not-list"),
-        pytest.param("catalog-drop", _nothing, _nothing, "SUCCESS", True, id="a-catalog-drop-its-signature-verifies"),
-        pytest.param("forged-catalog-drop", _nothing, _nothing, "SUCCESS", False, id="a-catalog-drop-its-signature-does-not-verify"),
-        pytest.param("pipeline-own-run", _nothing, _nothing, "SUCCESS", False, id="a-non-delegators-write-whose-output-holds-no-tuple"),
+        pytest.param("stage-for-a-person", _everything, _everything, False, id="a-signer-that-is-not-a-delegator-signing-for-a-person"),
+        pytest.param("catalog-for-a-person", _nothing, _everything, True, id="the-delegator-signing-for-a-person-whose-grants-were-revoked-since"),
+        pytest.param("unlisted-signer", _everything, _everything, False, id="a-signer-the-chart-does-not-list"),
+        pytest.param("catalog-drop", _nothing, _nothing, True, id="a-catalog-drop-its-signature-verifies"),
+        pytest.param("forged-catalog-drop", _nothing, _nothing, False, id="a-catalog-drop-its-signature-does-not-verify"),
+        pytest.param("pipeline-own-run", _nothing, _nothing, False, id="a-non-delegators-write-whose-output-holds-no-tuple"),
     ],
 )
 def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # noqa: PLR0913 - parametrized
@@ -151,11 +113,13 @@ def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # 
     respx_allows_unused_routes: None,
     case: str,
     held: Callable[[str], bool],
-    governed: Callable[[str], bool],
-    status: str,
+    governed_objects: Callable[[str], bool],
     recorded: bool,
 ) -> None:
-    client, feed = _door(monkeypatch, held=held, governed=governed)
+    governed(monkeypatch)
+    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([CATALOG, STAGE, PIPELINE]))
+    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([CATALOG]))
+    _answering(monkeypatch, held=held, governed_objects=governed_objects)
     catalog, stage, unlisted, impostor, pipeline = (event_signer(name) for name in (CATALOG, STAGE, UNLISTED, CATALOG, PIPELINE))
     for signer in (catalog, stage, pipeline):
         secret_store.hold(signing_public_secret(signer.identity), {"keys": signer.public})
@@ -169,8 +133,9 @@ def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # 
         "pipeline-own-run": lambda: pipeline.sign(_run(PIPELINE)),
     }[case]()
 
-    answered = client.post("/lineage-events", json={"data": event}, headers={"dapr-api-token": "the-estate-app-token"})
+    with started(monkeypatch, Feed(), decider=OpenFgaDecider(cast("OpenFgaClient", object()))) as lineage:
+        settled = lineage.deliver({"data": event})
 
-    assert answered.json() == {"status": status}, f"{case}: the door answered {answered.json()}"
-    assert bool(feed.recorded) is recorded, f"{case}: recorded {feed.recorded}"
+    assert settled == Settlement(outcome=Outcome.TAKEN), f"{case}: the lane settled {settled}"
+    assert bool(lineage.feed.recorded) is recorded, f"{case}: recorded {lineage.feed.recorded}"
     assert not unlisted_read.called, "lineage read a key for a signer the chart does not list"

@@ -1,5 +1,7 @@
 # 0193. The inbox is retired, and the console joins the product (2026-11-06)
 
+**Amended 2026-11-14** (XC-199 step D4, #787): no sidecar holds a bus connection, and the bus watchdog is deleted; see the amendment below.
+
 **Status:** accepted. Source: XC-195 (#773). The owner ruled "Console in product" on 2026-11-06 (the console belongs to
 the lakehouse, with its own settings and its own login) and, for the notifications inbox, "Drop it, like all three" the
 same day. On 2026-11-07 the owner folded two more decisions into the row: the dev store's seed revokes what the
@@ -131,3 +133,13 @@ The reference catalogs, read from source the same day:
 - Removed on the live estate at deploy: the release `console-notifications` and the Postgres
   `Cluster/rask-notifications-state` holding the inbox's actor state. Deleting the cluster is destructive, so it is
   asked of the owner first.
+
+## Amendment (2026-11-14): a closed bus connection is the service's own to open again
+
+Source: #787 (XC-199), step D4. The consequence that `service_kit.bus_watchdog` restarts a sidecar from a closed
+connection no longer holds: no sidecar holds a bus connection, and the watchdog (`lakehouse.bus_watchdog` since the kits
+folded) is deleted. Each service publishes and takes its deliveries on its own connection (`lakehouse.bus`), and when
+the bus ends that connection, a revoked credential included, the service opens a new one in-process with the credential
+the store holds at that moment; the maintenance worker ends its process instead and starts again on the store's current
+credential (ADR 0198 decision 5). The reason is the sidecar's own: its subscription could not be rebound after a
+configuration change and closed for good after a bus outage of about two minutes.

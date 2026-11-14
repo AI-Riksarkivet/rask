@@ -1,8 +1,8 @@
 """The drain flag flips at SIGTERM, and SIGTERM still reaches the handler the drain displaced.
 
-`retry_when_draining` reads `app.state.shutting_down`, and a lifespan that
+`/readyz` (`lakehouse.probes`) answers by `app.state.shutting_down`, and a lifespan that
 sets it only in its `finally` sets it after uvicorn has stopped accepting connections and drained
-in-flight requests — so the guards would refuse nothing. `arm_drain_on_sigterm` flips it when the
+in-flight requests — so the process would answer ready through its whole drain. `arm_drain_on_sigterm` flips it when the
 signal arrives instead. Owner ruling 2026-08-25.
 
 These run in-process, so every test that raises SIGTERM first installs a SENTINEL handler for the

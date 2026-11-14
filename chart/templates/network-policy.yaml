@@ -144,8 +144,8 @@ spec:
 {{- if .Values.openbao.enabled }}
 ---
 # (3b) openbao:8200, the development store (the openbao fixture's pod): only the pods that log in to it, by their
-# component labels (`lance.secretReaderComponents`: the apps the lance-secrets component is scoped to, and maintenance's
-# worker pods, which run under maintenance's app id with a label of their own), and the store's own pods, whose seed
+# component labels (`lance.secretReaderComponents`: each app of the store-reads table, maintenance by its worker
+# pods' label), and the store's own pods, whose seed
 # reads the outgoing pod through the Service. External-secrets
 # (off-namespace) needs an entry in networkPolicy.openbaoExtraFrom.
 apiVersion: networking.k8s.io/v1
@@ -312,7 +312,7 @@ spec:
 {{- if .Values.objectStore.enabled }}{{- $busPeers = append $busPeers "rustfs" }}{{- end }}
 # (3f) the development bus (the nats fixture's servers, when the bus runs in this namespace): its ONLY ingress, since NATS
 # is on the (3a) exclusion list. 4222 admits the bus's clients (`lance.busClients`, the same pods the platform's bus is
-# reached from: every service pod, which dials it itself and through its sidecar, and the stream Job), the fixture's own nats-box, and with
+# reached from: every service pod, which dials it itself, and the stream Job's two phases), the fixture's own nats-box, and with
 # the development object store its server, which publishes each change on `store.events`; 6222 admits the servers to each
 # other, whose cluster routes the three-node JetStream cluster runs on. 7422 (leafnodes) and the 8222 monitor stay closed:
 # no pod the release renders reads them. component=nats (not just name) so nats-box is not a target.

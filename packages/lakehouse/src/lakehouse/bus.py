@@ -1,8 +1,16 @@
-"""The lakehouse's one seam to the bus: a process's own connection to NATS JetStream, and each event published on it
-once, whole, sized, traced and under a tight timeout ([[XC-199]]).
+"""The lakehouse's one seam to the bus: a process's own connection to NATS JetStream, each event published on it once,
+whole, sized, traced and under a tight timeout, and each delivery taken on it and settled ([[XC-199]]).
 
 EVERY PUBLISH SITE GOES THROUGH :func:`publish_event`, and no other lakehouse module publishes an event. nats-py is
 the client (maintenance's work queue, `maintenance.services.queue`, is the one other place that holds it, ADR 0198).
+
+A SERVICE TAKES ITS DELIVERIES ON THE SAME CONNECTION, by pulling. :meth:`Bus.consume` pulls a durable consumer the
+chart's stream Job declares, which the service binds to and never creates, and settles each message by the one rule
+`lakehouse.bus_delivery` states: acknowledged, asked for again after the lane's delay, or parked and ended. A pull
+consumer has no dead letter, so that rule is what ends a message. :meth:`Bus.follow` hands a process every message of
+a subject in the stream's order, read by sequence with no consumer on the bus: what each replica must see, and none
+may take from another. Both wait for a connection, and take up again on the next one when
+the bus ends theirs.
 
 A PROCESS CONNECTS AS ITS OWN BUS USER. The chart names the user (``RASK_BUS_USER``), the store holds its credential
 as ``nats-user-<user>`` (a JWT and the seed that signs the server's nonce), and the process reads it under its own store
@@ -41,23 +49,25 @@ import asyncio
 import json
 import logging
 import random
-from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
 from functools import partial
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, Self
 
 from nats.aio.client import Client, RawCredentials
+from nats.aio.msg import Msg
 from nats.errors import Error as NatsError
 from nats.js.api import Header, PubAck
 from nats.js.errors import NotFoundError
 from opentelemetry import propagate, trace
-from opentelemetry.trace import SpanKind
-from pydantic import Field, model_validator
+from opentelemetry.trace import Span, SpanKind, StatusCode
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.bus_metrics import record_publish, record_refusal
-from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, CloudEvent
+from lakehouse.bus_delivery import Delivery, Handle, Lane, Outcome, Park, Settlement, being_cancelled, envelope_of, judged
+from lakehouse.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_refusal
+from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
 from lakehouse.governed.secrets import read_required_secret
 from lakehouse.lifecycle import closed_quietly
 
@@ -76,9 +86,6 @@ WARN_PAYLOAD_BYTES: Final = 64 * 1024
 #: Hard cap, just under JetStream's default ``max_payload`` of about 1 MiB. No envelope under the broker's limit is
 #: refused, and none over it could have been delivered.
 MAX_PAYLOAD_BYTES: Final = 900 * 1024
-
-#: The W3C Trace Context fields CloudEvents' distributed tracing extension carries as attributes of the same names.
-_TRACE_FIELDS: Final = ("traceparent", "tracestate")
 
 #: What the store holds a bus user's credential as, before the user's name, and the prefix of its reply subjects, likewise.
 _STORED_AS: Final = "nats-user-"
@@ -109,8 +116,28 @@ _DISCONNECTED: Final = "disconnected"
 _PAUSE_SECONDS: tuple[float, float] = (2.0, 15.0)
 
 _MESSAGING: Final = {"messaging.system": "nats", "messaging.operation.name": "publish"}
+_PROCESSING: Final = {"messaging.system": "nats", "messaging.operation.name": "process"}
+#: The most of an envelope's id a span carries: the id is its publisher's own text.
+_MAX_ID_CHARS: Final = 200
+
+#: How long one pull waits on a consumer that holds nothing, and how long a pull the bus refused waits before the next.
+_PULL_SECONDS: Final = 5.0
+#: How often a connection the keeper has not yet let go of is looked at again by a consumer waiting for the next.
+_NEXT_CONNECTION_SECONDS: Final = 0.5
+#: How long past a pull's own wait the bus is given to end it before it is judged gone.
+_PULL_ANSWERED_WITHIN_SECONDS: Final = 10.0
+#: The status the bus ends a pull with once its wait ran out with no message.
+_PULL_EXPIRED: Final = "408"
+#: What every delivery's reply subject begins with, and no status the bus sends has: a status has no reply subject.
+_ACK_PREFIX: Final = "$JS.ACK."
+#: How often a followed subject that held nothing new is read again.
+_FOLLOW_EVERY_SECONDS: Final = 1.0
+#: JetStream's error code for a read by sequence that found no message (`JSNoMessageFoundErr`).
+_NO_MESSAGE_FOUND: Final = 10037
 
 type Ended = Callable[[], Awaitable[None]]
+#: What a followed subject's messages are handed to, one at a time.
+type Follow = Callable[[Delivery], Awaitable[None]]
 
 
 class BusUnavailableError(RuntimeError):
@@ -251,6 +278,8 @@ class Bus:
         self._reported = False
         #: What the bus itself has said during that outage, each fault once.
         self._said: set[str] = set()
+        #: Set while a connection is held, for the consumers waiting for one.
+        self._held = asyncio.Event()
 
     async def keep_connected(self) -> None:
         """Hold a connection until cancelled: open one, and open another whenever the one held has closed for good.
@@ -268,8 +297,10 @@ class Bus:
             self._client = client
             self._reported = False
             self._said.clear()
+            self._held.set()
             log.info("bus_connected", extra={"user": self._settings.user})
             await ended.wait()
+            self._held.clear()
             log.warning("bus_connection_ended", extra={"user": self._settings.user})
 
     async def _opened(self, ended: asyncio.Event) -> Client | None:
@@ -339,6 +370,99 @@ class Bus:
         except NatsError as exc:
             raise BusUnavailableError(f"the bus did not take {message_id} on {topic}: {type(exc).__name__}: {exc}"[:500]) from exc
 
+    async def consume(self, lane: Lane, handle: Handle, *, park: Park) -> None:
+        """Hand every message of ``lane``'s consumer to ``handle`` until cancelled, at most ``lane.in_flight`` at once,
+        and tell the bus what became of each (`lakehouse.bus_delivery.judged`).
+
+        The consumer is the chart's: this binds to it and creates nothing, and a consumer the bus does not hold yet is
+        asked for again until it does. A pull the bus refuses or drops is said once and asked again, and a connection
+        the bus ended is waited out: the consumer is pulled again on the next one, where it keeps every message this
+        process had not settled. Cancelled, it hands back at once what it was still handling, for another replica or
+        this one's next start.
+
+        Args:
+            lane: The consumer, and the numbers its deliveries are settled by.
+            handle: The service's handling of one delivery.
+            park: The lane's keeping of a delivery that is ended unhandled or refused.
+        """
+        create_delivery_series(lane.consumer, [Outcome.TAKEN, Outcome.AGAIN, Outcome.PARKED])
+        client: Client | None = None
+        while True:
+            client = await self._connection(after=client)
+            await self._pulled(client, lane, handle, park)
+
+    async def follow(self, stream: str, subject: str, handle: Follow) -> None:
+        """Hand every message published on ``subject`` from now on to ``handle``, one at a time and in the stream's
+        order, until cancelled.
+
+        The stream is read by sequence (``$JS.API.STREAM.MSG.GET.<stream>``, the call a publisher's read-back makes):
+        the bus keeps no consumer for this process, and no other process takes a message from this one. It begins after
+        the last message the stream holds as the first connection is up, and asks for the subject's next message after
+        the last one handed on, again every ``_FOLLOW_EVERY_SECONDS`` while there is none, so a message is handed on
+        once and none is passed over, through a read the bus refused and a connection it ended. A stream whose end is
+        behind the follower's place was made again: the follower begins at its first message, and says so.
+        A handling that raises is said and counted, and the next message is handed on: a followed message is read once.
+        """
+        create_delivery_series(subject, ["taken", "failed"])
+        last: int | None = None
+        client: Client | None = None
+        while True:
+            client = await self._connection(after=client)
+            last = await self._followed(client, _Followed(stream=stream, subject=subject, last=last), handle)
+
+    async def _connection(self, *, after: Client | None) -> Client:
+        """The connection held now, once it is another than ``after`` and open."""
+        while True:
+            await self._held.wait()
+            client = self._client
+            if client is not None and client is not after and not client.is_closed:
+                return client
+            await asyncio.sleep(_NEXT_CONNECTION_SECONDS)
+
+    async def _pulled(self, client: Client, lane: Lane, handle: Handle, park: Park) -> None:
+        """Pull ``lane``'s consumer on ``client`` until that connection has closed for good."""
+        handling: set[asyncio.Task[None]] = set()
+        consumer = _Pull(client, lane)
+        try:
+            while not client.is_closed:
+                _reaped(handling)
+                if len(handling) >= lane.in_flight:
+                    await asyncio.wait(handling, return_when=asyncio.FIRST_COMPLETED)
+                    continue
+                msg = await consumer.next()
+                if msg is not None:
+                    handling.add(asyncio.create_task(_settled(msg, lane, handle, park), name=f"bus-delivery-{lane.consumer}"))
+        finally:
+            for task in handling:
+                task.cancel()
+            # Waited for, so each has handed its message back before the connection its caller closes next is gone.
+            await asyncio.gather(*handling, return_exceptions=True)
+
+    async def _followed(self, client: Client, following: _Followed, handle: Follow) -> int | None:
+        """Follow on ``client`` until that connection has closed for good; the sequence of the last message handed on,
+        or that the follow began after, and None while the stream's end has not been read."""
+        last = following.last
+        said = ""
+        while not client.is_closed:
+            try:
+                if last is None:
+                    last = await _end_of(client, following.stream, following.subject)
+                stored = await client.jetstream().get_msg(following.stream, seq=last + 1, subject=following.subject, next=True)
+            except NatsError as exc:
+                if isinstance(exc, NotFoundError) and exc.err_code == _NO_MESSAGE_FOUND and last is not None:
+                    said = ""
+                    last = await _place_on(client, following, last)
+                    await asyncio.sleep(_FOLLOW_EVERY_SECONDS)
+                    continue
+                said = _said_once(said, exc, "bus_follow_failed", subject=following.subject)
+                await asyncio.sleep(_PULL_SECONDS)
+                continue
+            said = ""
+            # A message the bus answers without its sequence is passed over as the one asked for, never asked for again.
+            last = stored.seq or last + 1
+            await _handed_on(Delivery(subject=stored.subject or following.subject, body=stored.data or b"", sequence=last, attempt=1), handle)
+        return last
+
     async def close(self) -> None:
         """Close the connection once the bus has taken what was sent on it, or after ``_CLOSE_SECONDS`` without. One
         that is not up is closed as it is: every publish was acknowledged or failed before its caller went on, so
@@ -363,6 +487,235 @@ class Bus:
                 log.warning("bus_close_abandoned", extra={"user": self._settings.user})
 
 
+class _Followed(BaseModel):
+    """One subject a process follows, and the sequence of the last message it handed on or began after (None until the
+    stream's end has been read)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stream: str
+    subject: str
+    last: int | None
+
+
+async def _end_of(client: Client, stream: str, subject: str) -> int:
+    """The sequence of the last message ``stream`` holds on ``subject``; 0 for one that holds none."""
+    try:
+        return (await client.jetstream().get_last_msg(stream, subject)).seq or 0
+    except NotFoundError:
+        return 0
+
+
+async def _place_on(client: Client, following: _Followed, last: int) -> int:
+    """Where a follow that found nothing after ``last`` stands: at ``last``, or before the stream's first message when
+    the subject's last one there is behind it or gone. Such a stream was made again and numbers its messages from 1, or
+    has outlived every message it held: a follower kept at its old place would ask past every message a new stream
+    takes until it had taken that many, and whatever the stream holds now was published after the follower began. A
+    read the bus does not answer, or answers for a stream it does not hold, leaves the place as it is, to be asked
+    again."""
+    try:
+        end = (await client.jetstream().get_last_msg(following.stream, following.subject)).seq or 0
+    except NotFoundError as exc:
+        if exc.err_code != _NO_MESSAGE_FOUND:
+            return last
+        return 0
+    except NatsError:
+        return last
+    if end >= last:
+        return last
+    log.warning("bus_follow_began_again", extra={"subject": following.subject, "stream": following.stream, "was_after": last, "holds_to": end})
+    return 0
+
+
+class PullEndedError(NatsError):
+    """The bus ended a pull with a status other than finding nothing."""
+
+
+async def pull(client: Client, stream: str, consumer: str, *, wait: float, answered_within: float = _PULL_ANSWERED_WITHIN_SECONDS) -> Msg | None:
+    """The message one pull on ``consumer`` of ``stream`` is answered with, or None once the bus ends the pull with none.
+
+    The pull asks the bus to wait ``wait`` seconds, on an inbox of its own, and is read until the bus ends it: with a
+    message, or with the status saying it found none. Never sooner: the bus counts the wait from the pull's arrival and
+    goes on answering it until it learns of the unsubscribe, so a client that stopped reading at its own ``wait`` would
+    leave the bus answering an inbox nobody reads, and a message sent then would be spent there, handed on only an ack
+    wait later and a delivery short. A bus that says nothing for ``answered_within`` past the wait is judged gone, and
+    the pull given up.
+
+    A delivery is told from a status by its reply subject, which the bus writes: the subject its settling is published
+    on, where a status has none. Headers say nothing here, since a stored message carries its publisher's, and a
+    client that reads a ``Status`` header as the bus's word drops or raises on a message the consumer goes on holding
+    (measured on nats-server 2.15.2 with nats-py 2.16.0's fetch: ``Status: 408`` read as an empty wait, ``Status: 500``
+    raised ``KeyError``, the message left unsettled each time).
+
+    Raises:
+        PullEndedError: The bus ended the pull with a status other than finding nothing.
+        NatsError: The connection took neither the subscription nor the request.
+    """
+    inbox = client.new_inbox()
+    subscription = await client.subscribe(inbox)
+    try:
+        request = {"batch": 1, "expires": int(wait * 1_000_000_000)}
+        await client.publish(f"$JS.API.CONSUMER.MSG.NEXT.{stream}.{consumer}", json.dumps(request).encode(), reply=inbox)
+        try:
+            answer = await subscription.next_msg(timeout=wait + answered_within)
+        except TimeoutError:
+            return None
+    finally:
+        await closed_quietly(subscription.unsubscribe)
+    if answer.reply.startswith(_ACK_PREFIX):
+        return answer
+    headers = answer.headers or {}
+    if headers.get(Header.STATUS) == _PULL_EXPIRED:
+        return None
+    # The status's own text, on one line: nats-py hands on whatever follows the code, line breaks included.
+    said = " ".join(f"{headers.get(Header.STATUS)} {headers.get(Header.DESCRIPTION, '')}".split())
+    raise PullEndedError(f"the bus ended a pull on {stream}/{consumer} with {said}"[:300])
+
+
+class _Pull:
+    """One connection's pulls on a lane's consumer, one message at a time."""
+
+    def __init__(self, client: Client, lane: Lane) -> None:
+        self._client = client
+        self._lane = lane
+        #: The fault the outage in course was told of: a consumer the bus does not hold is asked for every few seconds.
+        self._said = ""
+
+    async def next(self) -> Msg | None:
+        """The next message, or None: an empty wait, or a pull the bus refused or dropped, which is said once and
+        waited out."""
+        lane = self._lane
+        try:
+            msg = await pull(self._client, lane.stream, lane.consumer, wait=_PULL_SECONDS)
+        except NatsError as exc:
+            self._said = _said_once(self._said, exc, "bus_pull_failed", stream=lane.stream, consumer=lane.consumer)
+            await asyncio.sleep(_PULL_SECONDS)
+            return None
+        if msg is not None:
+            self._said = ""
+        return msg
+
+
+def _said_once(said: str, exc: NatsError, event: str, **named: str) -> str:
+    """Log ``exc`` under ``event`` unless it is the fault ``said`` already; the fault's text, to pass as ``said`` next."""
+    text = f"{type(exc).__name__}: {exc}"[:300]
+    if text != said:
+        log.warning(event, extra={**named, "error": text})
+    return text
+
+
+def _reaped(handling: set[asyncio.Task[None]]) -> None:
+    """Forget each handling that has ended. One that ended by what no settle answers (a native library's panic, or a
+    cancellation nobody asked of it) raises here, which ends the loop, and the loop's end the process
+    (`lakehouse.supervision`)."""
+    for task in [task for task in handling if task.done()]:
+        handling.discard(task)
+        if task.cancelled():
+            # Its result would raise CancelledError into the loop, whose end a supervisor would then read as a stop it
+            # asked for.
+            raise RuntimeError(f"a handling of {task.get_name()} was cancelled while its lane runs")
+        task.result()
+
+
+def _delivery_of(msg: Msg) -> Delivery:
+    return Delivery(subject=msg.subject, body=msg.data, sequence=msg.metadata.sequence.stream, attempt=msg.metadata.num_delivered or 1)
+
+
+@contextmanager
+def processing(subject: str, envelope: Mapping[str, object], *, consumer: str | None = None) -> Generator[Span]:
+    """One delivery's handling as a CONSUMER span of the trace its envelope was published under, with how long it took
+    recorded (`messaging.process.duration`). An exception the handling raises is the handler's to say: the span records
+    none and takes no status from it.
+
+    NOTHING HERE RENDERS WHAT THE PUBLISHER SENT. This runs before any rule can settle the delivery, so a failure here
+    would end the loop that took it, and the bus would hand the same message to the next replica. The span carries the
+    envelope's id only when it is a string: an id of another kind names nothing, and one nested as deep as the parser
+    still reads cannot be rendered at all (measured on CPython 3.13.15, 2026-11-14, in a task: `json.loads` reads an id
+    9,993 lists deep, and `str` of one 9,992 deep raises `RecursionError`).
+
+    Args:
+        subject: The subject the message was published on.
+        envelope: The envelope the message carries, or an empty mapping for a body that is none.
+        consumer: The durable consumer the delivery was taken from, which a service's replicas share; None for a
+            subject a process follows.
+    """
+    started = perf_counter()
+    attributes = {**_PROCESSING, "messaging.destination.name": subject}
+    if consumer is not None:
+        attributes["messaging.consumer.group.name"] = consumer
+    named = {"messaging.message.id": message_id[:_MAX_ID_CHARS]} if isinstance(message_id := envelope.get("id"), str) else {}
+    with tracer.start_as_current_span(
+        f"process {subject}",
+        context=trace_context(envelope),
+        kind=SpanKind.CONSUMER,
+        attributes={**attributes, **named},
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
+        try:
+            yield span
+        finally:
+            record_processing(attributes, perf_counter() - started)
+
+
+async def _settled(msg: Msg, lane: Lane, handle: Handle, park: Park) -> None:
+    """Handle one message of ``lane`` as a span of the trace it was published under, and tell the bus how it was
+    settled. A settle the bus does not take is said, and the message comes again after the consumer's ack wait.
+    Cancelled, the message is handed back at once."""
+    delivery = _delivery_of(msg)
+    with processing(delivery.subject, delivery.envelope() or {}, consumer=lane.consumer) as span:
+        try:
+            settlement = await judged(delivery, lane, handle, park)
+        except asyncio.CancelledError:
+            await _handed_back(msg)
+            raise
+        if settlement.outcome is Outcome.PARKED:
+            span.set_status(StatusCode.ERROR, "the delivery was parked")
+    try:
+        await _tell(msg, settlement)
+    except NatsError as exc:
+        log.warning("bus_delivery_unsettled", extra={"consumer": lane.consumer, "sequence": delivery.sequence, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        return
+    record_delivery(lane.consumer, settlement.outcome)
+
+
+async def _tell(msg: Msg, settlement: Settlement) -> None:
+    """Tell the bus what became of ``msg``: acknowledged, to be delivered again after a delay, or ended."""
+    match settlement.outcome:
+        case Outcome.TAKEN:
+            await msg.ack()
+        case Outcome.AGAIN:
+            await msg.nak(delay=settlement.delay_seconds)
+        case Outcome.PARKED:
+            await msg.term()
+
+
+async def _handed_back(msg: Msg) -> None:
+    """Ask for ``msg`` again at once, as its handling is cut by the process stopping; a bus that does not take the ask
+    delivers it again after the consumer's ack wait."""
+    with suppress(NatsError, TimeoutError):
+        async with asyncio.timeout(_CLOSE_SECONDS):
+            await msg.nak()
+
+
+async def _handed_on(delivery: Delivery, handle: Follow) -> None:
+    """Hand one followed message to ``handle`` as a span of the trace it was published under."""
+    outcome = "taken"
+    with processing(delivery.subject, delivery.envelope() or {}) as span:
+        try:
+            await handle(delivery)
+        except (Exception, asyncio.CancelledError) as exc:
+            # A followed message is read once, so a handling that failed has lost that message and must not lose the
+            # ones behind it: said, counted, and the next is handed on. A cancellation nobody asked of this
+            # task is such a failure; one asked of it is the process stopping.
+            if isinstance(exc, asyncio.CancelledError) and being_cancelled():
+                raise
+            span.set_status(StatusCode.ERROR, type(exc).__name__)
+            log.exception("bus_followed_message_not_handled", extra={"subject": delivery.subject, "sequence": delivery.sequence})
+            outcome = "failed"
+    record_delivery(delivery.subject, outcome)
+
+
 async def _stored_carries(stream: JetStreamContext, acknowledged: PubAck, body: bytes) -> bool:
     """Whether the message the stream kept at the acknowledged sequence carries the event ``body`` does.
 
@@ -383,11 +736,8 @@ def _event(body: bytes) -> str | None:
     Spelled out as JSON with its keys in order, because two parsed documents compare equal across types JSON tells
     apart (``1``, ``1.0`` and ``true``), and a signature over the one does not verify over the other.
     """
-    try:
-        envelope = json.loads(body)
-    except ValueError:
-        return None
-    if not isinstance(envelope, dict) or "data" not in envelope:
+    envelope = envelope_of(body)
+    if envelope is None or "data" not in envelope:
         return None
     return json.dumps(envelope["data"], sort_keys=True, separators=(",", ":"))
 
@@ -396,7 +746,7 @@ def _trace_attributes() -> dict[str, str]:
     """The publish's trace context as envelope attributes; nothing outside a span."""
     carrier: dict[str, str] = {}
     propagate.inject(carrier)
-    return {field: carrier[field] for field in _TRACE_FIELDS if field in carrier}
+    return {field: carrier[field] for field in TRACE_ATTRIBUTES if field in carrier}
 
 
 def _body(envelope: CloudEvent, topic: str) -> bytes:

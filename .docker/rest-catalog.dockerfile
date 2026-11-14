@@ -3,7 +3,7 @@
 # (src-layout services installed as wheels; no PYTHONPATH, no raw source COPY in the final stage).
 # The chart runs every lakehouse container from this image with a different command
 # (see chart/templates/{services,maintenance}.yaml → include "lance.catalogImage"):
-#   catalog.main:app (:2333) · lineage.main:app (:8000) · maintenance.service:app (:8000)
+#   catalog.main:app (:2333) · lineage.main:app (:8000) · python -m maintenance.worker (its probes on :8001)
 # — optionally wrapped in `opentelemetry-instrument` (shipped via lineage's opentelemetry-distro).
 # It installs and import-gates the lakehouse's services and nothing else: the console is its own image
 # (.docker/frontend.dockerfile), and a client builds its own in its own repository, so no client changes what this image
@@ -54,7 +54,7 @@ ARG BUILD_DATE
 ARG VCS_REF
 ARG VERSION
 LABEL org.opencontainers.image.title="lance-rest-catalog" \
-      org.opencontainers.image.description="Lance lakehouse image — REST catalog + lineage + maintenance; one image, per-container uvicorn commands" \
+      org.opencontainers.image.description="Lance lakehouse image — REST catalog + lineage + maintenance worker; one image, a command per container" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
@@ -139,7 +139,7 @@ RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + || true
 # admission when the image user is numeric; a name ("app") makes the kubelet reject the pod
 # (CreateContainerConfigError). The chart's lance.securityContext relies on this.
 USER 10001
-# 2333 catalog · 8000 lineage/maintenance.
+# 2333 catalog · 8000 lineage.
 EXPOSE 2333 8000
 
 # Cheap socket-connect probe against the default CMD's port (avoids urllib's ssl/http.client

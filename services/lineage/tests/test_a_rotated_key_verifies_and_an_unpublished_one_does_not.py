@@ -5,38 +5,24 @@ before the rotation (still in the 168 h stream, still staged in the outbox, or f
 verifies. A key the identity's published list does not hold is refused once lineage has re-read the list, so an
 unknown key id is never decided on a stale cache.
 
-Driven through the registered `/lineage-events` route with signing enforced and FGA off. The published list comes from
-the secret store, which the suite's double answers; signatures are built by the root conftest's `EventSigner`.
+Driven through lineage's own app and lifespan, each event delivered to its ingest lane, with signing enforced and FGA
+off. The published list comes from the secret store, which the suite's double answers; signatures are built by the root
+conftest's `EventSigner`.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
-from starlette.testclient import TestClient
+from lineage_lane import Feed, started
 
+from lakehouse.bus_delivery import Outcome, Settlement
 from tests.secret_store_double import SecretStoreDouble
 
 
 SIGNER = "service-maintenance"
-
-
-class _Feed:
-    def __init__(self) -> None:
-        self.recorded: list[str] = []
-
-    async def record(self, event: Any) -> None:
-        self.recorded.append(event.run_id)
-
-    async def run_author(self, _run_id: str) -> str | None:
-        return None
-
-    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
-        return None
 
 
 def _event() -> dict[str, Any]:
@@ -61,28 +47,14 @@ def _event() -> dict[str, Any]:
 def test_lineage_verifies_the_previous_key_after_a_rotation_and_refuses_an_unpublished_one(
     monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: SecretStoreDouble, signed_with: str, recorded: bool
 ) -> None:
-    for key, value in {
-        "APP_API_TOKEN": "the-estate-app-token",
-        "LINEAGE_DAPR_ENABLED": "true",
-        "LINEAGE_SIGNERS": json.dumps([SIGNER]),
-        "LINEAGE_DELEGATORS": json.dumps([]),
-    }.items():
-        monkeypatch.setenv(key, value)
-    from lakehouse.ns_errors import install_problem_handlers
-    from lineage.api.dapr import register_dapr
-    from lineage.core.config import get_settings
-
-    get_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-    register_dapr(app)
-    feed = _Feed()
-    app.state.provenance = feed
+    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([SIGNER]))
+    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([]))
     current, previous, unpublished = event_signer(SIGNER), event_signer(SIGNER), event_signer(SIGNER)
     secret_store.hold(f"signing-public-{SIGNER}", {"keys": f"{current.public},{previous.public}"})
     event = (previous if signed_with == "previous" else unpublished).sign(_event())
 
-    answered = TestClient(app).post("/lineage-events", json={"data": event}, headers={"dapr-api-token": "the-estate-app-token"})
+    with started(monkeypatch, Feed()) as lineage:
+        settled = lineage.deliver({"data": event})
 
-    assert answered.json() == {"status": "SUCCESS"}, f"{signed_with}: the door answered {answered.json()}"
-    assert bool(feed.recorded) is recorded, f"{signed_with}: recorded {feed.recorded}"
+    assert settled == Settlement(outcome=Outcome.TAKEN), f"{signed_with}: the lane settled {settled}"
+    assert bool(lineage.feed.recorded) is recorded, f"{signed_with}: recorded {lineage.feed.recorded}"

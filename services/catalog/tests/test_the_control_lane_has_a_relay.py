@@ -122,7 +122,7 @@ def _relay_app(settings: Settings, publisher: BusDouble, *, signing: SigningKeyH
     `signing` is published where the catalog's lifespan publishes its own holder (`attach_signing`); None is a catalog
     that does not sign.
     """
-    from catalog.api.control_relay import mount_control_relay
+    from catalog.api.control_relay import attach_published_keys, mount_control_relay
     from catalog.core.config import get_settings
 
     app = FastAPI()
@@ -131,6 +131,7 @@ def _relay_app(settings: Settings, publisher: BusDouble, *, signing: SigningKeyH
     app.dependency_overrides[get_settings] = lambda: settings
     app.state.bus = publisher
     attach_signing(app, signing)
+    attach_published_keys(app)
     return app
 
 

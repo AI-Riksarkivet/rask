@@ -26,7 +26,7 @@ import json
 import os
 import subprocess
 import time
-from collections.abc import Callable, Generator, Iterable, Mapping
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from typing import Literal
 
@@ -47,8 +47,10 @@ SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_CHAOS_SETTLE_SECONDS", "300"))
 CATALOG = f"{RELEASE}-catalog"
 LINEAGE = f"{RELEASE}-lineage"
 OPENFGA = f"{RELEASE}-openfga"
-#: The release's workloads whose sidecar holds a connection to the bus that the drills' readings depend on: the catalog
-#: announces, lineage records and relays (`lance.busEnv`).
+#: The release's workloads whose own connection to the bus the drills' readings depend on, and which ride out a bus
+#: outage in-process (`lakehouse.bus`): the catalog announces and follows its control lane, lineage records and relays.
+#: The maintenance worker holds a connection of its own too, but a replica in the middle of a pass when the outage
+#: outlasts its ack wait ends itself (ADR 0198), so a drill holds it to its consumer delivering again instead.
 BUS_CLIENTS = (CATALOG, LINEAGE)
 #: The dev fixtures standing in for the platform's dependencies.
 #: The object store's StatefulSet (`deploy/fixtures/rustfs`), which the store drill scales to zero.
@@ -64,11 +66,9 @@ CATALOG_PORT = int(os.environ.get("LANCE_E2E_CATALOG_PORT", "2333"))
 #: A signer re-reads its key from the store every 300 s while it holds one (`lakehouse.governed.signing_key`), so it
 #: drops the key within that of the store's loss; the rest is the slack of one failed re-read.
 SIGNER_DROP_SECONDS = 360.0
-#: How long a sidecar's NATS client goes on reconnecting before it closes for good: nats.go v1.39.1's 60 attempts per
-#: server, 2 s apart, which Dapr 1.18.1's jetstream component leaves at their defaults (`lakehouse.bus_watchdog`).
-RECONNECT_WINDOW_SECONDS = 120.0
-#: The container the Dapr injector adds to every annotated pod, an ordinary container while rask sets no native sidecar.
-SIDECAR = "daprd"
+#: How long a service's own NATS client goes on reconnecting before it closes for good and the service opens another:
+#: `lakehouse.bus` sets 10 attempts at the server, 2 s apart, each connect bounded at 2 s.
+RECONNECT_WINDOW_SECONDS = 40.0
 #: How many times Lance issues a failed listing per dataset open, whatever `client_max_retries` says (measured on
 #: pylance 12.0.0, `lakehouse.objectfs.StoreTimeouts`).
 LISTINGS_PER_OPEN = 6
@@ -217,19 +217,17 @@ def _restarts(pod: str, container: str) -> int:
     return int(kubectl("get", "pod", pod, "-o", f"jsonpath={{.status.containerStatuses[?(@.name=='{container}')].restartCount}}") or 0)
 
 
-def sidecar_restarts(deployments: Iterable[str]) -> dict[str, int]:
-    """How often the sidecar of each pod of the release's Deployments ``deployments`` has restarted, keyed by pod."""
-    pods = [pod.removeprefix("pod/") for name in deployments for pod in Workload(kind="deployment", name=name).pods()]
-    return {pod: _restarts(pod, SIDECAR) for pod in pods}
-
-
-def sidecars_restarted(before: Mapping[str, int]) -> bool:
-    """Whether every pod of ``before`` runs a sidecar restarted since it was read, and is Ready again."""
-    return all(_restarts(pod, SIDECAR) > count and _ready(pod) for pod, count in before.items())
-
-
-def _ready(pod: str) -> bool:
-    return kubectl("get", "pod", pod, "-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}") == "True"
+def container_restarts(deployments: Iterable[str]) -> dict[str, dict[str, int]]:
+    """How often each container of each pod of the release's Deployments ``deployments`` has restarted, keyed by pod and
+    container: a pod replaced shows as a pod gone and another come, a container restarted as a count gone up."""
+    found: dict[str, dict[str, int]] = {}
+    for name in deployments:
+        selector = Workload(kind="deployment", name=name).selector()
+        listed = json.loads(kubectl("get", "pods", "-l", selector, "--field-selector", "status.phase!=Failed,status.phase!=Succeeded", "-o", "json"))
+        for pod in listed.get("items") or []:
+            statuses = (pod.get("status") or {}).get("containerStatuses") or []
+            found[pod["metadata"]["name"]] = {status["name"]: int(status.get("restartCount") or 0) for status in statuses}
+    return found
 
 
 @contextmanager

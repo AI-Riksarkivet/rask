@@ -10,8 +10,8 @@ template value. A client's route is its own release's (ADR 0155, ADR 0171).
 A render that still names a gateway object keeps a second router in the request path.
 
 The route publishes each service's doors by name, never its whole root: a prefix over the root also publishes every
-route the pod answers for its own platform (the kubelet's probes, the sidecar's `/dapr/subscribe`, the Dapr deliveries
-and cron ticks), and every route the service mounts later. Which routes a service mounts follows the env its pod is
+route the pod answers for its own platform (the kubelet's probes and the cron ticks its sidecar delivers), and every
+route the service mounts later. Which routes a service mounts follows the env its pod is
 rendered with, so the gate boots each app under that env and holds the published set to what it mounts less those.
 An `/api/*` path no rule names falls to the console's `/`, whose server answers it 404.
 
@@ -89,9 +89,8 @@ def test_each_public_prefix_reaches_its_service_through_the_cluster_route_and_no
     assert leftovers == []
 
 
-#: What a pod answers for its platform alone, beside its Dapr deliveries and ticks: the kubelet's probes and the sidecar's
-#: subscription read.
-_PLATFORM_ROUTES = frozenset({"/livez", "/readyz", "/dapr/subscribe"})
+#: What a pod answers for its platform alone, beside its cron ticks: the kubelet's probes.
+_PLATFORM_ROUTES = frozenset({"/livez", "/readyz"})
 
 
 def _reaches(prefix: str, path: str) -> bool:
@@ -119,10 +118,10 @@ def test_the_route_publishes_each_door_the_service_mounts_and_nothing_only_its_p
         if backend == deployment
     }
 
-    published = {path for path in served_by_pod.paths if any(_reaches(landing, path) for landing in landings.values())}
-    dead = sorted(match for match, landing in landings.items() if not any(_reaches(landing, path) for path in served_by_pod.paths))
+    published = {path for path in served_by_pod if any(_reaches(landing, path) for landing in landings.values())}
+    dead = sorted(match for match, landing in landings.items() if not any(_reaches(landing, path) for path in served_by_pod))
 
-    assert sorted(published) == sorted(served_by_pod.paths - _PLATFORM_ROUTES - served_by_pod.deliveries - ticks), (
+    assert sorted(published) == sorted(served_by_pod - _PLATFORM_ROUTES - ticks), (
         "the route publishes a path only the pod should answer, or leaves a door unpublished"
     )
     assert dead == [], "a rule publishes a prefix the service mounts nothing under"

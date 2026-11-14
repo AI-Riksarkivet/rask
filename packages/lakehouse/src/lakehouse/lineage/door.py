@@ -1,6 +1,6 @@
 """What a bus door does with an event once its signature has been checked ([[XC-078]]).
 
-Every bus door makes the same decision: maintenance's `/maintenance-arrival` in the lakehouse, and a client's door on
+Every bus door makes the same decision: the catalog's control lane and maintenance's arrival consumer in the lakehouse, and a client's door on
 the lakehouse's events (a notifier's subscriptions to the control lane and the lineage feed). The decision has to catch
 this package's own
 exceptions, so it is written once here and each door only translates the verdict into its transport's answer.
@@ -16,7 +16,7 @@ THE THREE MODES are the chart's `signing.doors`:
   sign and doors that refuse: a refusal is acknowledged and gone, so a door that enforced before every producer signed
   would destroy honest events without a failure anywhere to point at.
 * ENFORCE: the door acts only on an event a listed signer's published key verifies. A refusal is final (the door acknowledges
-  it, counts it and drives nothing); an unreadable key list says nothing about the signature, so the delivery is retried.
+  it, counts it and drives nothing); an unreadable key list says nothing about the signature, so the event is judged again later.
 
 AN EXCEPTION THAT IS NEITHER A REFUSAL NOR AN OUTAGE PROPAGATES in every mode. The verifiers turn whatever an event provokes into
 a refusal, so anything else is the door's own bug, and treating it as a refusal would acknowledge a good event away.

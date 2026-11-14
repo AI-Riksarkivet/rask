@@ -77,7 +77,7 @@ jobs:
   #   lint      ruff check + ruff format --check
   #   typecheck ty, with error-on-warning
   #   openapi   committed specs vs the live apps — drift fails here
-  #   charts    helm lint + full render, the networkPolicy / security-hardening / Dapr-resiliency
+  #   charts    helm lint + full render, the networkPolicy / security-hardening
   #             `--set` render-and-grep invariants, the prod-overlay HA/security render, and the
   #             promtool alert-rules validate-and-fire proof. `dagger call charts` == `make charts`.
   #   alert-rules-drill
@@ -89,9 +89,10 @@ jobs:
   #             it. An empty store is enough: the drill asserts the endpoint ACCEPTS the query, not
   #             that any series exists.
   #   nats-auth the chart's NATS permission table (`nats.auth.users`) on the chart's own nats-server in
-  #             operator mode with test-only keys, and the real daprd the Dapr fixture injects, running the chart's
-  #             Components against it: each bus client reaches exactly its own subjects; maintenance's worker
-  #             shares the work queue, and a killed replica's task goes to another. Hermetic,
+  #             operator mode with test-only keys: each bus client reaches exactly its own subjects, each
+  #             service publishes, pulls and follows on its own connection, and the stream Job's declare and
+  #             retire phases run with their rendered scripts; maintenance's worker shares the work queue, a
+  #             killed replica's task goes to another, and its commit lane settles each announcement. Hermetic,
   #             public images only. `dagger call nats-auth` == `make nats-auth`.
   ms-gates:
     name: ms-${{ matrix.gate }}

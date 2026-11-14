@@ -90,7 +90,6 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **A describe names no version unless asked.** the `dir` backend, and the catalog's DescribeTable that passes the flag through, report `version: None` without `load_detailed_metadata=True` (XC-095, 2026-10-17).
 - **A port-forward outlives its pod.** `kubectl port-forward svc/<s>` binds one pod and stays up after that pod dies, dropping every connection it accepts unanswered, so a lane that restarts pods forwards to the Service's ready pod and starts the forward again when that pod changes (`scripts/e2e_stack.sh` `forward`, XC-095, 2026-10-17).
 - **`bao status` exits 2 for a sealed store,** with the same JSON it prints for an unsealed one, so a caller reads `sealed` from the JSON and accepts both codes (XC-095, 2026-10-17).
-- **A Dapr sidecar's bus connection does not survive a long outage.** past nats.go's 60 reconnect attempts the sidecar's pub/sub is dead until it restarts, while its pod stays Ready; `lakehouse.bus_watchdog` restarts it (`rask-dapr` § Traps, XC-095, 2026-10-17).
 - **A live drill dies with the session that started it.** A drill run from an agent session's background shell is killed when the session ends, and a killed drill skips its `finally`: XC-095's issuer drill left Dex's Service selector cut on the live estate until it was restored by hand. Run a live drill detached (`setsid nohup … &`) so it reaches its `finally` whatever happens to the session (XC-095, 2026-10-17).
 - **pytest takes a conftest option's value for a path.** It parses the command line before it loads the conftest that
   defines an option, so `-m phase1 --keep-drive PATH` with no test path took PATH for the run's own and never loaded
@@ -120,5 +119,5 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
   three minutes of refused reads measured on 2026-11-07 (XC-164) were reads through daprd, which kept the old store's
   token until its pod restarted. A service's own recovery, measured 2026-11-14 on helm rev 8 with
   `kubectl rollout restart deploy/rask-openbao`: all six pods logged `secret_store_token_dropped` and logged in again
-  within 6 s of the replacement being Ready, and none restarted or left Ready. Restart the Dapr apps only when the
+  within 6 s of the replacement being Ready, and none restarted or left Ready. Restart the bus's clients only when the
   replacement minted a new bus root (docs/OPERATORS.md § 7).

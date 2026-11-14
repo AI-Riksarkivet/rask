@@ -1,11 +1,11 @@
 """A burst of deliveries is recorded in one commit per provenance table, and every rule of a record holds across it ([[LH-533]]).
 
-Lineage takes the sidecar's deliveries in parallel (`concurrencyMode: parallel` on its subscription), and each recorded
-event touches up to three tables: the run's binding in `runs`, its edges in `edges`, its row in `events`. Every commit is
-a Lance version and a fragment each later open and scan pays for (ADR 0174), so the deliveries that arrive while a commit
-is in flight land together in the next one. Driven against the real catalog app under uvicorn on a real `dir` namespace
-(`lineage_app.live_catalog`), each delivery presented concurrently to the bus door's handler over the store, as the
-sidecar presents its parallel deliveries.
+Lineage's lane handles many deliveries at once (`LINEAGE_DELIVERIES_IN_FLIGHT`), and each recorded event touches up to
+three tables: the run's binding in `runs`, its edges in `edges`, its row in `events`. Every commit is a Lance version and
+a fragment each later open and scan pays for (ADR 0174), so the deliveries that arrive while a commit is in flight land
+together in the next one. Driven against the real catalog app under uvicorn on a real `dir` namespace
+(`lineage_app.live_catalog`), each delivery presented concurrently to the bus door's handler over the store, as the lane
+hands out the deliveries it holds at once.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from catalog.core.config import get_settings
+from lakehouse.bus_delivery import Verdict
 from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport
 from lineage.core.metrics import Door
 from lineage.services.consumer import handle_cloud_event
@@ -55,14 +56,14 @@ def _versions(url: str) -> dict[str, int]:
     return {table: _reader(url, table).table_version() for table in (RUNS, EDGES, FEED)}
 
 
-_SUCCESS = {"status": "SUCCESS"}
-_RETRY = {"status": "RETRY"}
+_SUCCESS = Verdict.TAKEN
+_RETRY = Verdict.AGAIN
 
 
-def _deliver(store: ProvenanceStore, events: Sequence[dict[str, Any]]) -> list[dict[str, str]]:
-    """Present each of ``events`` to the bus door concurrently, as the sidecar's parallel deliveries arrive; each ack, in order."""
+def _deliver(store: ProvenanceStore, events: Sequence[dict[str, Any]]) -> list[Verdict]:
+    """Present each of ``events`` to the bus door concurrently, as the lane's deliveries in flight arrive; each verdict, in order."""
 
-    async def burst() -> list[dict[str, str]]:
+    async def burst() -> list[Verdict]:
         return await asyncio.gather(*(handle_cloud_event(store, {"data": event}, door=Door.SUBSCRIBER) for event in events))
 
     return asyncio.run(burst())
@@ -101,7 +102,7 @@ def test_a_burst_lands_in_two_commits_per_table_each_row_once_and_a_run_extended
     # The first delivery commits alone and every other one arrives while it is in flight.
     commits = {table: after[table] - before[table] for table in after}
     assert max(commits.values()) <= 2, f"{len(burst)} deliveries took {commits} commits per table"
-    # The other author's event is acked, since no grant or redelivery could admit it, and none of its rows land.
+    # The other author's event is taken, since no grant or redelivery could admit it, and none of its rows land.
     assert outcomes == [_SUCCESS] * len(burst)
     completes = [event["run"]["runId"] for event in (*fresh, recorded, twice)]
     assert feed == Counter({**{(run, "COMPLETE"): 1 for run in completes}, (shared, "START"): 1})

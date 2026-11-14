@@ -29,7 +29,7 @@ import pytest
 from tests.secret_store_double import SecretStoreDouble
 
 from lakehouse.lifecycle import mark_draining, mark_started
-from maintenance import service, worker
+from maintenance import worker
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.services.queue import TaskQueue
 
@@ -224,24 +224,3 @@ def test_the_process_under_sigterm_keeps_its_probes_up_until_it_is_done_and_exit
         process.kill()
 
     assert (up, draining, ended) == ((200, 200, "ready"), (200, 503, "shutting_down"), code) if started else (up, ended) == ((200, 503, "starting"), code)
-
-
-def test_a_web_process_whose_start_fails_leaves_its_drain_disarmed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A start that fails must not leave the SIGTERM drain armed: the next start in the process would be refused for
-    it, and the failure that mattered would be hidden behind that one."""
-    for name in ("MAINTENANCE_S3_ACCESS_KEY_ID", "MAINTENANCE_S3_SECRET_ACCESS_KEY", "AWS_WEB_IDENTITY_TOKEN_FILE"):
-        monkeypatch.delenv(name, raising=False)
-    get_settings.cache_clear()
-
-    async def _starts() -> None:
-        async with service.lifespan(service.app):
-            pass
-
-    failures = []
-    for _ in range(2):
-        with pytest.raises(ValueError) as failed:  # noqa: PT011 — the same refusal twice is the claim
-            asyncio.run(_starts())
-        failures.append(str(failed.value))
-    get_settings.cache_clear()
-
-    assert failures[0] == failures[1] and "already armed" not in failures[1]

@@ -20,7 +20,7 @@ import httpx
 import pyarrow as pa
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -108,12 +108,12 @@ async def decider(granted: Any) -> AsyncIterator[OpenFgaDecider]:  # noqa: ANN40
         yield OpenFgaDecider(client)
 
 
-def _lineage_request(decider: OpenFgaDecider) -> Request:
-    """A request to lineage's app, whose state holds the decider and the feed its gates read."""
+def _lineage_app(decider: OpenFgaDecider) -> FastAPI:
+    """Lineage's app as its gates read it: its state holds the decider and the feed."""
     app = FastAPI()
     app.state.decider = decider
     app.state.provenance = _Feed()
-    return Request({"type": "http", "method": "POST", "path": "/lineage-events", "headers": [], "app": app})
+    return app
 
 
 @pytest.mark.asyncio
@@ -139,7 +139,7 @@ async def test_a_renamed_tables_writes_pass_lineages_checks(decider: OpenFgaDeci
         async def namespace(self, name: str, *, bearer: str | None) -> str | None:
             return None
 
-    request = _lineage_request(decider)
-    await enforce_bus_authz(RunEvent.model_validate(write), request, settings, write)
+    app = _lineage_app(decider)
+    await enforce_bus_authz(RunEvent.model_validate(write), app, settings, write)
     await stamp_resolved_uuids(outside, cast(CatalogNames, _Catalog()), bearer="pipeline-token")
-    await enforce_output_authz(outside, request, settings, caller)
+    await enforce_output_authz(outside, app, settings, caller)

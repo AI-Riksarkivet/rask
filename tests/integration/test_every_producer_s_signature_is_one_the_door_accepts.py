@@ -22,10 +22,10 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
 from lance_namespace import PermissionDeniedError
 
 from lakehouse.governed import fga
@@ -33,6 +33,7 @@ from lakehouse.governed.decider import OpenFgaDecider
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import UnverifiedEventError, parse_event
+from lineage.services.signature import store_published_keys
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -99,9 +100,11 @@ def _settings(signers: set[str], delegators: set[str], *, fga_enabled: bool = Fa
 
 async def _drive(event: dict[str, Any], settings: LineageSettings) -> None:
     """Through the REAL door, as the bus drives it: the parsed model plus the bytes that arrived."""
-    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object()))))))
+    app = FastAPI()
+    app.state.decider = OpenFgaDecider(cast("Any", object()))
+    app.state.published_keys = store_published_keys()
     parsed = parse_event(json.loads(json.dumps(event)))
-    await fga_deps.enforce_bus_authz(parsed, request, settings, event)
+    await fga_deps.enforce_bus_authz(parsed, app, settings, event)
 
 
 @pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS])

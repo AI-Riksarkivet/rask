@@ -10,8 +10,8 @@ test's: it records which worker ran it, and holds while the test holds it. The r
 `_ACK_WAIT` seconds, so a dead worker's task moves within the test.
 
 ONE BUS FOR THE MODULE, ITS QUEUE DECLARED AFRESH FOR EACH TEST. The cluster and every user any test connects as are made
-once (`bus`); before each test the maintenance streams and the claims bucket are deleted and the stream Job declares them
-again (`declared`), so no test reads a message, a delivery count or a claim another left, and a test that deletes a stream
+once (`bus`); before each test the maintenance streams, the claims bucket and LINEAGE are deleted and the stream Job
+declares them again (`declared`), so no test reads a message, a delivery count or a claim another left, and a test that deletes a stream
 leaves nothing behind. A broker refusal of the worker's user fails the test that drew it.
 
 Each test claims one behaviour:
@@ -48,11 +48,17 @@ Each test claims one behaviour:
 * A store event is acknowledged once its table's pass is held, ended at once when it is no store event, delivered again
   after its delivery's retry delay when the store refused a claim's read, and ended on its last delivery when the store
   refuses it on every one.
+* A commit announcement the catalog published, pulled from the commit lane's own consumer on LINEAGE
+  (`maintenance-arrival`) by the worker's own user (`Worker.run_arrivals` over `maintenance.services.arrival.Arrivals`),
+  is acknowledged once its table's pass is held, ended at once when its body is no envelope, and, when the store refuses
+  the claim's read on every delivery, delivered again after its delivery's retry delay and ended on the worker's last.
+  This lane is the only proof of that loop: no offline test drives it.
 
 A replica started as the service starts it (`maintenance.services.tasks.running_worker`, its bus credential read from a
 stand-in of the store's secrets API) keeps its loops and its schedules: a loop that ends before the replica stops, with an
 error or without, ends the replica's process; the audit's and the scan's schedules are asserted at its start, and put
-back on the cadence the replica asserts them on once the bus loses them.
+back on the cadence the replica asserts them on once the bus loses them; and where its settings turn the commit lane on,
+it pulls that lane, so an announced write holds its table's pass.
 
 A worker whose credential the bus takes no longer ends its process (exit 70), whether the bus ends the session holding it
 or refuses it at a reconnect: the store issues a new credential when a user's grants change and revokes the old one, and
@@ -69,7 +75,6 @@ import inspect
 import json
 import logging
 import os
-import re
 import sys
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
@@ -83,7 +88,23 @@ import pytest
 import pytest_asyncio
 from measured_metrics import Measured
 from nats.aio.msg import Msg
-from nats_auth_rig import VALUES_ENV, Broker, Client, Credential, Link, Mint, Permissions, Tools, Violation, issue, mint, run_stream_job, violations
+from nats_auth_rig import (
+    VALUES_ENV,
+    Broker,
+    Client,
+    Credential,
+    Link,
+    Mint,
+    Permissions,
+    Tools,
+    Violation,
+    client_calls,
+    issue,
+    mint,
+    run_stream_job,
+    stream_job_script,
+    violations,
+)
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -94,14 +115,21 @@ from lakehouse import location_claims, store_session
 from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed import secrets
 from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.lineage_events import LANCE_FACET, DatasetUuids, with_dataset_uuids
 from lakehouse.supervision import EndProcess, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
+from maintenance.core.metrics import ArrivalOutcome
 from maintenance.services import queue as worker_queue
 from maintenance.services import tasks
+from maintenance.services.arrival import Arrivals
 from maintenance.services.queue import (
+    ARRIVALS_CONSUMER,
+    ARRIVALS_SAMPLED,
+    ARRIVALS_STREAM,
     CLAIMS_BUCKET,
     INBOX_PREFIX,
+    SAMPLED_CONSUMERS,
     SCHEDULES_STREAM,
     STORE_EVENTS_STREAM,
     TASK_CONSUMER,
@@ -122,6 +150,8 @@ pytestmark = pytest.mark.nats_auth
 
 REPO = Path(__file__).resolve().parents[2]
 _WORKER = "maintenance-worker"
+#: The catalog's own bus user, which announces each commit on `lineage.events.v1`.
+_CATALOG = "catalog"
 #: The store's own bus user, which publishes each object write on `store.events` (`deploy/fixtures/rustfs`).
 _STORE = "object-store"
 #: The test's own user, every JetStream call granted: it reads and purges what the worker's schedules leave on the bus,
@@ -332,20 +362,18 @@ def _declare_the_queue(tools: Tools, docs: tuple[dict[str, Any], ...], broker: B
     that fails is run again, as Kubernetes runs a failed Job's pod again (the chart's `backoffLimit`). Creating a stream
     copied to three servers can outlast the CLI's request deadline on a loaded host (measured 2026-11-09), and the Job is
     idempotent, so a second run finishes what the first began."""
-    job = next(d for d in docs if d.get("kind") == "Job" and "-nats-stream-" in d["metadata"]["name"])
-    script = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
-    rendered = re.search(r'S="(nats://[^"]+)"', script)
-    assert rendered, "the stream Job's script names no broker"
-    runs = [run_stream_job(tools.job_cli, script.replace(rendered.group(1), broker.url), admin, home, 300.0)]
+    script = stream_job_script(docs, broker.url)
+    runs = [run_stream_job(tools.job_cli, script, admin, home, 300.0)]
     while runs[-1].returncode and len(runs) < _JOB_RUNS:
-        runs.append(run_stream_job(tools.job_cli, script.replace(rendered.group(1), broker.url), admin, home, 300.0))
+        runs.append(run_stream_job(tools.job_cli, script, admin, home, 300.0))
     done = runs[-1]
     assert done.returncode == 0, f"the stream Job exited {done.returncode} on each of {len(runs)} runs: {(done.stdout + done.stderr)[-800:]}"
 
 
 def _the_bus(tmp_path: Path, extra: dict[str, Permissions] | None = None) -> tuple[Tools, tuple[dict[str, Any], ...], Mint, Broker]:
-    """The bus as the chart declares it, at the lane's short timings: `admin`, the worker's user and the store's minted with
-    the grants the render issues (and ``extra`` users the test needs for itself), and the three-node cluster started."""
+    """The bus as the chart declares it, at the lane's short timings: `admin`, the worker's user, the store's and the
+    catalog's (which announces each commit) minted with the grants the render issues (and ``extra`` users the test needs
+    for itself), and the three-node cluster started."""
     tools = Tools.from_env(os.environ)
     values = Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
     queue_values = (
@@ -354,7 +382,7 @@ def _the_bus(tmp_path: Path, extra: dict[str, Permissions] | None = None) -> tup
     )
     docs = render(*DEFAULT_ARGS, "-f", str(values), *queue_values)
     issued = nats_users(docs)
-    rendered = {"admin", _WORKER, _STORE}
+    rendered = {"admin", _WORKER, _STORE, _CATALOG}
     table = {user: Permissions(publish=tuple(sorted(issued[user][0])), subscribe=tuple(sorted(issued[user][1]))) for user in rendered if user in issued}
     assert set(table) == rendered, f"the render with {values} issues no {sorted(rendered - set(table))}"
     mint_ = mint(tools.nsc, {**table, **(extra or {})}, tmp_path / "nsc")
@@ -481,11 +509,11 @@ class _Bus:
         _declare_the_queue(self.tools, self.docs, self.broker, self.mint.credentials["admin"], self.home)
 
     async def declare_afresh(self) -> None:
-        """Delete the maintenance streams and the claims bucket, then have the stream Job declare them again: no message,
-        delivery count, consumer state or claim survives into the next test."""
+        """Delete the maintenance streams, the claims bucket and the stream the commit lane reads, then have the stream Job
+        declare them again: no message, delivery count, consumer state or claim survives into the next test."""
         rig = await self.rig()
         try:
-            for stream in (TASKS_STREAM, SCHEDULES_STREAM, STORE_EVENTS_STREAM, f"KV_{CLAIMS_BUCKET}"):
+            for stream in (TASKS_STREAM, SCHEDULES_STREAM, STORE_EVENTS_STREAM, f"KV_{CLAIMS_BUCKET}", ARRIVALS_STREAM):
                 await rig.request(f"$JS.API.STREAM.DELETE.{stream}")
         finally:
             await rig.close()
@@ -1296,6 +1324,148 @@ async def test_a_store_event_the_store_refuses_on_every_delivery_is_ended_on_its
     assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"retried": 2, "ended": 1}
 
 
+# --- commit announcements ---------------------------------------------------------------------------------------------
+
+
+def _write_announcement(location: str) -> bytes:
+    """The catalog's announcement of a write to the table at ``location``, naming no table uuid, so the lane reads the
+    claim there for it."""
+    event = {"run": {"facets": {LANCE_FACET: {"operation": "append"}}}, "outputs": [{"name": "db.t", "facets": {"dataSource": {"uri": location}}}]}
+    return json.dumps({"specversion": "1.0", "id": f"announced-{location}", "source": "rask/lane", "type": "rask.test.lane.v1", "data": event}).encode()
+
+
+class _Announcements(_StoreEvents):
+    """The service's own handling of commit announcements (`maintenance.services.arrival.Arrivals`) behind one worker on
+    the commit lane's consumer, on a control root of the test's own, where a claim the store cannot read is a directory
+    standing at its key. The worker ends an announcement on its `_MAX_DELIVER`-th delivery, as the service's does
+    (`maintenance.queue.maxDeliver`); the consumer the render declares allows one more."""
+
+    async def deliver(self, body: bytes) -> None:
+        queue = await self.fleet.lane("arrivals")
+        arrivals = Arrivals(MaintenanceSettings(s3_bucket="b", control_root=str(self.control), commit_pass_delay_seconds=3600), queue)
+        loop = asyncio.get_running_loop()
+
+        async def handle(announced: bytes) -> ArrivalOutcome:
+            self.handled.append(loop.time())
+            return await arrivals.hold_task(announced)
+
+        worker = Worker(
+            queue,
+            run=_never_run,
+            ready=lambda: True,
+            heartbeat_seconds=_HEARTBEAT,
+            ack_wait_seconds=_ACK_WAIT,
+            max_deliver=_MAX_DELIVER,
+            max_pass_seconds=600,
+            retry_ended_seconds=3600,
+            arrivals=handle,
+        )
+        self._loops.append(asyncio.create_task(worker.run_arrivals()))
+        catalog = await Client.connect(self.fleet.bus.broker.url, self.fleet.bus.mint.credentials[_CATALOG], _CATALOG, f"_INBOX_{_CATALOG}", answer_within=10.0)
+        self.fleet.clients.append(catalog)
+        await catalog.js.publish("lineage.events.v1", body, timeout=10)
+
+    async def settled_after(self, deliveries: int, seconds: float) -> bool:
+        """Whether the announcement was handled ``deliveries`` times and the lane's consumer holds nothing, within
+        ``seconds``."""
+        reader = await self.fleet.rig()
+
+        async def settled() -> bool:
+            state = await reader.request(f"$JS.API.CONSUMER.INFO.{ARRIVALS_STREAM}.{ARRIVALS_CONSUMER}") or {}
+            return len(self.handled) == deliveries and (state.get("num_pending"), state.get("num_ack_pending")) == (0, 0)
+
+        return await _until(settled, seconds)
+
+    def lane_calls(self) -> set[str]:
+        """The worker's calls on the commit lane's consumer since the test began, each settle folded to its grant."""
+        key = self.fleet.bus.worker.public_key
+        calls = {call.subject for call in client_calls(self.fleet.bus.logged_since()).get(key, set()) if f".{ARRIVALS_STREAM}." in call.subject}
+        return {f"$JS.ACK.{ARRIVALS_STREAM}.{ARRIVALS_CONSUMER}.>" if subject.startswith("$JS.ACK.") else subject for subject in calls}
+
+
+@pytest_asyncio.fixture
+async def announcements(fleet: _Fleet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Announcements]:
+    # The delay is drawn at random beneath a bound that doubles (`redelivery_delay`, whose draw has a test of its own);
+    # drawn here at 6 s a delivery, each gap names the delivery it followed.
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda delivered: 6.0 * delivered)
+    control = tmp_path / "control"
+    control.mkdir()
+    made = _Announcements(fleet, control)
+    try:
+        yield made
+    finally:
+        await made.stop()
+
+
+@pytest.mark.asyncio
+async def test_an_announcement_whose_pass_is_held_is_acknowledged(announcements: _Announcements, maintenance_metrics: Measured) -> None:
+    announcements.claim("held", readable=True)
+
+    await announcements.deliver(_write_announcement("s3://b/held"))
+
+    assert await announcements.settled_after(1, 30), f"the announcement was not settled on its first delivery: {announcements.handled}"
+    assert await announcements.follow_up_held("held"), "the announcement's table holds no pass"
+    assert maintenance_metrics.by("maintenance.arrivals.settled", "outcome") == {"held": 1}
+    assert announcements.lane_calls() == {
+        f"$JS.API.CONSUMER.MSG.NEXT.{ARRIVALS_STREAM}.{ARRIVALS_CONSUMER}",
+        f"$JS.ACK.{ARRIVALS_STREAM}.{ARRIVALS_CONSUMER}.>",
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_announcement_that_is_no_envelope_is_ended_at_once(announcements: _Announcements, maintenance_metrics: Measured) -> None:
+    await announcements.deliver(b"no envelope")
+
+    assert await announcements.settled_after(1, 30), f"the announcement that is no envelope was delivered again: {announcements.handled}"
+    assert maintenance_metrics.by("maintenance.arrivals.settled", "outcome") == {"unreadable": 1}
+
+
+@pytest.mark.asyncio
+async def test_an_announcement_whose_claim_the_store_refuses_comes_back_after_its_retry_delay_and_is_ended_on_its_last(
+    announcements: _Announcements, maintenance_metrics: Measured
+) -> None:
+    announcements.claim("locked", readable=False)
+
+    await announcements.deliver(_write_announcement("s3://b/locked"))
+
+    assert await announcements.settled_after(_MAX_DELIVER, 60), f"the announcement the store refused on every delivery was not ended: {announcements.handled}"
+    assert 5 <= announcements.waits()[0] < 10, f"the refused announcement came back after {announcements.waits()} s, not after its retry delay"
+    assert not await announcements.follow_up_held("locked"), "an announcement that was ended held its table's pass"
+    assert maintenance_metrics.by("maintenance.arrivals.settled", "outcome") == {"retried": 1, "ended": 1}
+
+
+@pytest.mark.asyncio
+async def test_a_replica_whose_commit_lane_is_on_holds_the_pass_an_announced_write_asks_for(
+    fleet: _Fleet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replica started as the service starts it pulls the commit lane where its settings turn the lane on
+    (`MAINTENANCE_ARRIVAL_ENABLED`, the chart's `maintenance.arrivalEnabled`): a write the catalog announced holds its
+    table's pass."""
+    monkeypatch.setattr(tasks, "run_task", _runs_nothing)
+    settings = _replica_settings(tmp_path, monkeypatch, fleet.bus.broker).model_copy(update={"arrival_enabled": True})
+    table = "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a55"
+    location = {"name": "s3://b/announced", "uri": "s3://b/announced"}
+    output = with_dataset_uuids(
+        {"name": "db$t", "namespace": "rask", "facets": {"dataSource": location}}, DatasetUuids(table_uuid=table), producer="https://example.test/catalog"
+    )
+    event = {"eventType": "COMPLETE", "run": {"runId": "r-1", "facets": {LANCE_FACET: {"operation": "append"}}}, "outputs": [output]}
+    body = json.dumps({"specversion": "1.0", "id": "announced-to-a-replica", "source": "rask/lane", "type": "rask.test.lane.v1", "data": event}).encode()
+    reader = await fleet.rig()
+    catalog = await Client.connect(fleet.bus.broker.url, fleet.bus.mint.credentials[_CATALOG], _CATALOG, f"_INBOX_{_CATALOG}", answer_within=10.0)
+    fleet.clients.append(catalog)
+    held_at = Task(kind="table", uuid=table).follow_up_subject("schedule")
+
+    async def held() -> bool:
+        return _held_at(await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": held_at})) is not None
+
+    async with AsyncExitStack() as stack:
+        await _start_replica(stack, settings, fleet.bus.worker)
+        await catalog.js.publish("lineage.events.v1", body, timeout=10)
+        passed = await _until(held, 30)
+
+    assert passed, "a replica whose commit lane is on held no pass for the write the catalog announced"
+
+
 # --- a task whose run fails -------------------------------------------------------------------------------------------
 
 
@@ -1915,11 +2085,11 @@ async def test_the_sampler_reads_each_streams_depth_and_age_and_each_durables_ba
     """The worker's sampler (`maintenance.services.queue.sample_queue`), as `maintenance-worker` under the grants the
     render issues, reads each stream's depth and its oldest message's age, and each durable's messages not yet delivered,
     deliveries awaiting an ack and redeliveries: a task running and one queued behind it, and a store event delivered
-    twice and unsettled."""
+    twice and unsettled; and, where the commit lane runs, its consumer's, which holds nothing."""
     backlog = _Backlog(fleet)
     lane = await backlog.build(with_a_store_event=True)
 
-    unread = await sample_queue(lane)
+    unread = await sample_queue(lane, (*SAMPLED_CONSUMERS, ARRIVALS_SAMPLED))
 
     sampled_at = backlog.clock()
     oldest = maintenance_metrics.by("maintenance.queue.oldest", "stream")
@@ -1929,9 +2099,9 @@ async def test_the_sampler_reads_each_streams_depth_and_age_and_each_durables_ba
     assert abs(oldest[TASKS_STREAM] - (sampled_at - backlog.queued_at)) < 1.5, f"the oldest task's age read {oldest[TASKS_STREAM]:.1f} s"
     assert abs(oldest[STORE_EVENTS_STREAM] - (sampled_at - backlog.published_at)) < 1.5, f"the oldest event's age read {oldest[STORE_EVENTS_STREAM]:.1f} s"
     assert {name: maintenance_metrics.by(f"maintenance.queue.{name}", "consumer") for name in ("waiting", "ack_pending", "redelivered")} == {
-        "waiting": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 0},
-        "ack_pending": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 1},
-        "redelivered": {"maintenance-worker": 0, "maintenance-due": 0, "maintenance-store-events": 1},
+        "waiting": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 0, ARRIVALS_CONSUMER: 0},
+        "ack_pending": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 1, ARRIVALS_CONSUMER: 0},
+        "redelivered": {"maintenance-worker": 0, "maintenance-due": 0, "maintenance-store-events": 1, ARRIVALS_CONSUMER: 0},
     }
 
 

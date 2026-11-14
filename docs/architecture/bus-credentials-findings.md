@@ -176,6 +176,8 @@ choose (b) without a rask change (§ 5).
   connection and the worker's reply under `_INBOX_<user>`, and `_INBOX.>` stays granted to `catalog`, `lineage` and
   `maintenance` for their sidecars' subscription components (`chart/values.yaml`, `nats.auth.users`), which lets one of
   the three read what another's sidecar is answered.
+  Since 2026-11-14 (XC-199 step D4) no service holds `_INBOX.>`: each pulls or follows on its own connection under
+  `_INBOX_<user>`, and only `admin`, `monitor` and the development object store reply on the shared `_INBOX.>`.
 - What the chart refuses on a real deployment (the platform's store, `openbao.enabled` false): a `nats.url` that is not
   `tls://`; no CA; an empty `nats.auth.audience`; a table row with `>` or `$JS.API.>` in `publish`, or an empty list.
 - **The dev stand-in in `deploy/fixtures/nats`**: operator mode on (`auth.server`), the `AUTH` account, the sentinel as

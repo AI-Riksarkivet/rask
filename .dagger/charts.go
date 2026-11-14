@@ -106,7 +106,7 @@ func (m *Rask) chartsBase(src *dagger.Directory) *dagger.Container {
 }
 
 // Charts runs the CI `test` job's non-Python hermetic gates that aren't daggerized elsewhere: helm lint,
-// the chart render + `--set` invariant gates (networkPolicy / security service-accounts / dapr resiliency),
+// the chart render + `--set` invariant gates (networkPolicy / security service-accounts),
 // the prod-overlay HA/security render check, and the promtool alert-rules validate-and-fire gate. Each
 // WithExec fails the whole function on the first non-zero exit (Dagger surfaces the container error), so a
 // green `dagger call charts` == that whole subset of CI green. Byte-for-byte equal to the ci.yml shell.
@@ -157,8 +157,6 @@ func (m *Rask) Charts(
 		WithExec([]string{"bash", "-c", networkPolicyGate}).
 		// 'Helm render security hardening (flags on) + invariants'.
 		WithExec([]string{"bash", "-c", securityGate}).
-		// 'Helm render dapr resiliency + DLQ layer (default on) + invariants'.
-		WithExec([]string{"bash", "-c", resiliencyGate}).
 		// 'Helm render prod overlay + HA/security invariants' == make prod-render-check.
 		WithExec([]string{"make", "prod-render-check"}).
 		// 'Alert rules — validate + prove they fire (promtool)' == make alert-rules-check.
@@ -291,92 +289,6 @@ if grep -q "runAsUser: 999" /tmp/sa.yaml; then exit 1; fi
 render --set security.infraContexts.enabled=true > /tmp/sec.yaml
 grep -q "runAsUser: 999" /tmp/sec.yaml
 grep -q "runAsUser: 65532" /tmp/sec.yaml`
-
-// resiliencyGate: the Dapr resiliency + DLQ layer is on by default (Resiliency CR, DLQ topics, the long
-// 720s,720s retry) and, when flipped off, falls back to the legacy inline retry with no DLQ. Verbatim.
-const resiliencyGate = `set -euo pipefail
-RENDER_ARGS="` + renderArgs + `"
-# Render CONFIGURATION, not prose. Every assertion in these gates is about what the chart produces for
-# the API server, and a YAML comment is neither. Two assertions were failing on comments alone when this
-# gate was first run after its 923-commit outage: '-sa-jobs' inside a note explaining why the sweep SA
-# is exempt, and MEDALLION_DLQ_TOPIC inside a note about a historical subject name. Stripping comment
-# lines at the source makes every check below mean what it says — and prevents the mirrored bug, where a
-# "must be present" grep is satisfied by documentation rather than by a rendered field.
-render() { helm template chart $RENDER_ARGS "$@" | grep -v '^[[:space:]]*#'; }
-render > /tmp/resil.yaml
-grep -q "kind: Resiliency" /tmp/resil.yaml
-grep -q "pubsubDeliveryRetry" /tmp/resil.yaml
-# The schedule must MATCH the policy it declares, the numbers must produce the window the comments
-# claim, AND — new in the M4 correction (2026-08-03) — every field must be one the CRD ACCEPTS.
-# Two prior shapes failed here, in opposite directions. Presence-only checking (the two greps above,
-# the whole gate until 2026-07-28) passed "policy: exponential" with "duration: 30s", a
-# PolicyConstant-ONLY field (dapr/kit retry.go): Dapr ignored the duration, initialInterval stayed at
-# its 500ms default, and the real window was ~4s where both comments claimed minutes — resiliency ON
-# was ~125x SHORTER than OFF. The 2026-07-28 fix then asserted initialInterval/multiplier/
-# randomizationFactor — correct for dapr/kit, but those three fields DO NOT EXIST in
-# resiliencies.dapr.io (absent from the vendored dapr-1.18.1 chart CRD, from the live cluster CRD,
-# and from the Go type Retry), so the API server rejected the CR by strict decoding and it never
-# applied ONCE while this gate stayed green. A render gate cannot see an apply failure — hence the
-# explicit CRD-vocabulary assertion below, which is the part that would have caught it.
-awk '/^ +pubsubDeliveryRetry:/{f=1;next} f&&/^ +[a-zA-Z]+: /{print} f&&/^ +[a-z]+:$/{exit}' /tmp/resil.yaml > /tmp/policy.txt
-# THE WINDOW IS THE INVARIANT; THE POLICY SHAPE IS NOT. This block asserted
-# "policy: exponential" / "duration: 30s" / a present "maxInterval", which the chart has not rendered
-# since 2026-09-14: LH-106 moved it to constant/120s/4 because the exponential shape delivered 3.5
-# seconds where both comments claimed 7.5 minutes, and the template states why maxInterval is now
-# omitted — "it is read only under exponential, so carrying it here would be a value that looks like a
-# bound and bounds nothing". The chart was right and this gate was stale, which it could not say
-# because it has not RUN since 2026-08-04 (see Charts()). Asserting the WINDOW instead is what the
-# comment above already promised, so the next equivalent re-shaping is measured rather than refused.
-grep -qE "policy: (constant|exponential)" /tmp/policy.txt
-grep -qE "duration: [0-9]+s" /tmp/policy.txt
-grep -qE "maxRetries: [0-9]+" /tmp/policy.txt
-# CRD vocabulary: a Resiliency retry accepts only policy/duration/maxInterval/maxRetries/matching and
-# the status-code matchers. Anything else is dropped by strict decoding and the CR never lands.
-! grep -qE "initialInterval:|multiplier:|randomizationFactor:" /tmp/policy.txt
-# maxInterval is EXPONENTIAL-ONLY, so it is required exactly there and refused under constant, where it
-# would read as a bound while bounding nothing. Conditional rather than unconditional in either
-# direction, because both shapes are legitimate and only one of them uses the field.
-if grep -q "policy: exponential" /tmp/policy.txt; then
-  grep -q "maxInterval:" /tmp/policy.txt || { echo "FAIL: exponential retry with no maxInterval — a step can run away"; exit 1; }
-else
-  ! grep -q "maxInterval:" /tmp/policy.txt || { echo "FAIL: constant retry carries maxInterval, which Dapr reads only under exponential"; exit 1; }
-fi
-d=$(sed -n 's/.*duration: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
-n=$(sed -n 's/.*maxRetries: \([0-9]*\).*/\1/p' /tmp/policy.txt)
-cap=$(sed -n 's/.*maxInterval: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
-# Sum the real backoff ladder: step doubles from ` + "`duration`" + `, capped at ` + "`maxInterval`" + `, ` + "`maxRetries`" + ` steps.
-# The old ` + "`w=$((d*n))`" + ` was the CONSTANT-policy sum and understates exponential by 3.75x here (120s vs
-# 450s), so leaving it in place would have failed the window check for a policy that in fact preserves
-# the documented window exactly: 30 + 60 + 120 + 240 = 450s.
-# Sum the ladder the RENDERED policy actually produces. A single exponential formula computed the wrong
-# window for a constant policy — and with maxInterval legitimately absent, the step-vs-cap comparison
-# compares against an empty string, so the arithmetic was not merely wrong but unevaluable.
-if grep -q "policy: exponential" /tmp/policy.txt; then
-  w=0; step=$d
-  for _ in $(seq 1 "$n"); do
-    w=$((w + step)); step=$((step * 2)); [ "$step" -gt "$cap" ] && step=$cap
-  done
-else
-  w=$((d * n))
-fi
-[ "$w" -ge 400 ] && [ "$w" -le 500 ] || { echo "FAIL: rendered retry window ${w}s is not the ~450s (7.5 min) the comments claim"; exit 1; }
-[ "$w" -lt 720 ] || { echo "FAIL: retry window ${w}s meets/exceeds the broker's 720s first backOff step — the broker would redeliver mid-retry"; exit 1; }
-echo "resiliency window ${w}s (${d}s x${n}) — matches the documented 7.5 min, under the 720s broker step"
-dlq=$(grep -c "DLQ_TOPIC" /tmp/resil.yaml || true); [ "$dlq" -ge 3 ] || exit 1
-grep -q '"dlq.>"' /tmp/resil.yaml
-grep -q "720s,720s" /tmp/resil.yaml
-! grep -q "30s,60s,120s,300s" /tmp/resil.yaml
-render --set dapr.resiliency.enabled=false > /tmp/legacy.yaml
-off=$(grep -c "kind: Resiliency" /tmp/legacy.yaml || true); [ "$off" = "0" ] || exit 1
-# THE TOGGLE OWNS THE POLICY LANES, NOT EVERY DLQ IN THE ESTATE. Maintenance's write-event lane carries
-# its own DLQ topic, which the toggle does not gate -- so it correctly survives the toggle. ON renders
-# LINEAGE, the catalog's control lane (LANCE_CONTROL) and MAINTENANCE_ARRIVAL.
-# Asserting the policy-governed lanes by NAME says what the toggle actually means, and a new lane that
-# wires its own DLQ does not red a gate about somebody else's retry policy.
-for governed in LINEAGE_DLQ_TOPIC LANCE_CONTROL_DLQ_TOPIC; do
-  ! grep -q "$governed" /tmp/legacy.yaml || { echo "FAIL: $governed survives dapr.resiliency.enabled=false, but the retry policy that gives it meaning does not"; exit 1; }
-done
-grep -q '30s,60s,120s,300s' /tmp/legacy.yaml`
 
 // AlertRulesDrill replays every shipped alert rule against a REAL GreptimeDB, hermetically.
 //

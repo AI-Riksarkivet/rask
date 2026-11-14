@@ -10,7 +10,7 @@ OTel-first telemetry hub. A single OpenTelemetry Collector (contrib) that:
   - TAILS infra-pod stdout via the filelog receiver (the SINGLE log shipper — the Vector subchart is
     retired, owner ruling 2026-07-27), dropping from the app pods (lance.dev/logs=otlp) ONLY the lines
     their own SDK also exported — the uvicorn/crash/daprd tier on those pods has no OTLP twin and is kept,
-  - SCRAPES the Dapr sidecars' :9090 via the prometheus receiver + k8s SD (the DaprConsumerWedge source),
+  - SCRAPES the Dapr sidecars' :9090 via the prometheus receiver + k8s SD,
 and exports all three signals over OTLP/HTTP to `observability.export.endpoint`, the platform's backend
 (ADR 0153; in development the observability fixture's GreptimeDB). The backend's ingestion headers come from
 values: `export.headers` on every signal, `export.traceHeaders` on traces only and `export.auditHeaders` on the

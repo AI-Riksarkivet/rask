@@ -5,7 +5,7 @@ Service, rewriting the prefix where the service serves another path, and each se
 itself. One anonymous request per prefix proves both halves at once: an RFC 9457 `unauthenticatederror` comes only from
 a rask service's own door (the Gateway answers an unrouted path with its own 404), so the route reached the service, the
 rewrite landed on a route it serves, and the door refused. The routes publish each service's doors by name, so what a pod
-answers only for its platform (probes, `/dapr/subscribe`, Dapr's cron ticks) falls to the console's `/` and its 404.
+answers only for its platform (probes, the cron ticks its pod's daprd delivers) falls to the console's `/` and its 404.
 
 A lakehouse prefix whose door verifies a person also refuses a token the IdP issued for another client: the same person's
 token from the sign-in client without the lakehouse's audience ([[LH-515]]).
@@ -39,11 +39,9 @@ _PROBES = [
 ]
 
 
-#: What a service's pod answers for its own platform (the sidecar's subscription read, the kubelet's probes, a Dapr cron
-#: tick), which the route publishes under no prefix: the console's server answers each 404.
+#: What a service's pod answers for its own platform (the kubelet's probes, a cron tick its pod's daprd delivers), which
+#: the route publishes under no prefix: the console's server answers each 404.
 _UNPUBLISHED = [
-    ("GET", "/api/catalog/dapr/subscribe"),
-    ("GET", "/api/lineage/dapr/subscribe"),
     ("GET", "/api/catalog/readyz"),
     ("POST", "/api/lineage/lineage-relay-cron"),
 ]

@@ -61,8 +61,9 @@ STORE_POD: Final = "Deployment/rask-openbao"
 #: The KV v2 data path a policy grants a secret by.
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
-_DOORS: Final = frozenset({"catalog", "lineage", "maintenance"})
-_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "maintenance-worker"))
+#: The apps a sidecar delivers cron ticks to, each checking the app token the sidecar stamps on a tick.
+_DOORS: Final = frozenset({"catalog", "lineage"})
+_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in _DOORS)
 _POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "CronJob/rask-pg-backup"})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
@@ -80,10 +81,10 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "nats-user-catalog": {"store": frozenset({"catalog"})},
     "nats-user-lineage": {"store": frozenset({"lineage"})},
     "nats-user-maintenance": {"store": frozenset({"maintenance"})},
-    # The work queue's own bus user (ADR 0198 decision 5): the app reads it under its own login, as it reads its signing
-    # key, where a component's user is read by the sidecar's.
+    # The work queue's own bus user (ADR 0198 decision 5): the worker reads it under its own login, as it reads its
+    # signing key.
     "nats-user-maintenance-worker": {"store": frozenset({"maintenance"})},
-    "nats-user-admin": {"store": frozenset({"eso"}), "pods": frozenset({"Job/rask-nats-stream-r1"})},
+    "nats-user-admin": {"store": frozenset({"eso"}), "pods": frozenset({"Job/rask-nats-stream-r1", "Job/rask-nats-stream-retire-r1"})},
     "nats-user-monitor": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-nats-box"})},
     # The development store's own bus user: it publishes each write and delete of a rask bucket on store.events.
     "nats-user-object-store": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-rustfs"})},
@@ -153,6 +154,18 @@ def _audiences(pod: dict) -> dict[str, str]:
     return found
 
 
+def _told(pod: dict) -> dict[str, str]:
+    """What a pod's own container is told of the secret store, by its environment; empty for one told nothing."""
+    [own] = pod["containers"][:1]
+    return {row["name"]: row["value"] for row in own.get("env") or [] if row["name"].startswith("RASK_SECRET_STORE_") and "value" in row}
+
+
+def _app(pod: dict) -> str | None:
+    """The app a pod's own container logs in to the store as: the role it is told, less the release's prefix."""
+    role = _told(pod).get("RASK_SECRET_STORE_ROLE")
+    return role.removeprefix("rask-") if role else None
+
+
 def _store_readers(estate: tuple[dict, ...], chart: tuple[dict, ...], namespace: str) -> tuple[dict[str, set[str]], list[str]]:
     """secret -> identities whose login reads it, and every way a login fails to be the app's own."""
     policies = {name: _granted(doc) for name, doc in _documents(chart, "policy-").items()}
@@ -165,9 +178,9 @@ def _store_readers(estate: tuple[dict, ...], chart: tuple[dict, ...], namespace:
         holders: set[str] = set()
         if ESO in bound:
             holders.add("eso")
-        for workload, metadata, pod in _pods(estate):
+        for workload, _metadata, pod in _pods(estate):
             if (namespace, pod.get("serviceAccountName")) in bound and audience in _audiences(pod).values():
-                holders.add((metadata.get("annotations") or {}).get("dapr.io/app-id") or workload)
+                holders.add(_app(pod) or workload)
         if not audience and holders - {"eso"}:
             problems.append(f"role {name} takes a token of any audience, so any token its accounts hold logs in")
         for policy in role.get("token_policies") or []:
@@ -178,9 +191,9 @@ def _store_readers(estate: tuple[dict, ...], chart: tuple[dict, ...], namespace:
 
 
 def _logins(chart: tuple[dict, ...], estate: tuple[dict, ...]) -> list[str]:
-    """Every app the store is scoped to logs in as its own role, twice: its own container, which its environment tells the
-    store, the role and the mounts and which is given the projected token; and its daprd, through the one component. No
-    other container holds the token."""
+    """Every pod told the store logs in as its own app's role from its own container, which its environment tells the
+    store, the role and the mounts and which alone among its containers is given the projected token. A pod that runs a
+    sidecar hands its daprd the same token, through the one component, which is scoped to exactly the apps that run one."""
     [store] = [doc for doc in chart if doc.get("kind") == "Component" and doc["spec"]["type"] == "secretstores.hashicorp.vault"]
     meta = {row["name"]: row.get("value") for row in store["spec"].get("metadata") or []}
     problems = [f"lance-secrets carries {key}" for key in ("vaultToken", "vaultTokenMountPath") if key in meta]
@@ -189,20 +202,23 @@ def _logins(chart: tuple[dict, ...], estate: tuple[dict, ...]) -> list[str]:
     roles = _documents(chart, "role-")
     token_file = str(meta["vaultServiceAccountTokenPath"])
     token_dir = token_file.rsplit("/", 1)[0]
+    with_a_sidecar: set[str] = set()
     for workload, metadata, pod in _pods(estate):
-        annotations = metadata.get("annotations") or {}
-        app = annotations.get("dapr.io/app-id")
-        if not app or app not in (store.get("scopes") or []):
+        app = _app(pod)
+        if app is None:
             continue
+        annotations = metadata.get("annotations") or {}
         role_name = str(meta["vaultKubernetesRole"]).replace("{appID}", app)
         role = roles.get(role_name)
         if role is None or pod.get("serviceAccountName") not in (role.get("bound_service_account_names") or []):
             problems.append(f"{workload} logs in as a role rask does not bind to its account {pod.get('serviceAccountName')}")
             continue
         volumes = {name for name, audience in _audiences(pod).items() if audience == role.get("audience")}
-        sidecar = {entry.split(":", 1)[0] for entry in annotations.get("dapr.io/volume-mounts", "").split(",") if entry.endswith(f":{token_dir}")}
-        if not volumes & sidecar:
-            problems.append(f"{workload}'s daprd is given no token for {role.get('audience')!r} at {token_dir}")
+        if beside := annotations.get("dapr.io/app-id"):
+            with_a_sidecar.add(beside)
+            sidecar = {entry.split(":", 1)[0] for entry in annotations.get("dapr.io/volume-mounts", "").split(",") if entry.endswith(f":{token_dir}")}
+            if beside != app or not volumes & sidecar:
+                problems.append(f"{workload}'s daprd runs as {beside} beside {app}, or is given no token for {role.get('audience')!r} at {token_dir}")
         [own] = pod["containers"]
         held = {
             container["name"]: mount["mountPath"]
@@ -219,9 +235,10 @@ def _logins(chart: tuple[dict, ...], estate: tuple[dict, ...]) -> list[str]:
             "RASK_SECRET_STORE_KV_MOUNT": meta["enginePath"],
             "RASK_SECRET_STORE_TOKEN_FILE": token_file,
         }
-        env = {row["name"]: row.get("value") for row in own.get("env") or []}
-        if (given := {name: env.get(name) for name in told}) != told:
-            problems.append(f"{workload}'s own container is told {given}, where its sidecar logs in with {told}")
+        if (given := {name: _told(pod).get(name) for name in told}) != told:
+            problems.append(f"{workload}'s own container is told {given}, where the store's one component names {told}")
+    if (scoped := set(store.get("scopes") or [])) != with_a_sidecar:
+        problems.append(f"lance-secrets is scoped to {sorted(scoped)}, and the apps that run a sidecar are {sorted(with_a_sidecar)}")
     return problems
 
 
@@ -400,9 +417,10 @@ def _own_logins(chart: tuple[dict, ...]) -> dict[str, tuple[str | None, list[str
 
 
 def test_each_service_keeps_its_store_role_and_its_own_login_where_no_sidecar_runs() -> None:
-    """The store's readers are the services, whatever carries the bus ([[XC-199]]): with no sidecar each still has its role,
-    bound to its own account under a policy naming its own reads, the store in its environment and its projected token.
-    Each role's token may also ask the store about itself, which is how its service learns that the store dropped it: the
+    """The store's readers are the services, whatever runs beside them ([[XC-199]]): with no sidecar each still has its
+    role, bound to its own account under a policy naming its own reads, the store in its environment and its projected
+    token. Maintenance's worker is rendered where the bus is named, so this render holds its role and no pod of it. Each
+    role's token may also ask the store about itself, which is how its service learns that the store dropped it: the
     roles carry no `default` policy, so the rendered one is what grants the question."""
     chart = render(*DEFAULT_ARGS, "--set", "dapr.enabled=false", "--set", "catalog.controlEmit=false")
 
@@ -410,11 +428,6 @@ def test_each_service_keeps_its_store_role_and_its_own_login_where_no_sidecar_ru
     assert _own_logins(chart) == {
         "Deployment/rask-catalog": ("rask-catalog", ["commit-id-key", "signing-key-rask-sa-catalog", "signing-public-rask-sa-catalog"], token),
         "Deployment/rask-lineage": ("rask-lineage", ["signing-public-rask-sa-catalog", "signing-public-rask-sa-maintenance"], token),
-        "Deployment/rask-maintenance": (
-            "rask-maintenance",
-            ["signing-key-rask-sa-maintenance", "signing-public-rask-sa-catalog", "signing-public-rask-sa-maintenance"],
-            token,
-        ),
     }
     services = ("rask-catalog", "rask-lineage", "rask-maintenance")
     policies, roles = _documents(chart, "policy-"), _documents(chart, "role-")
@@ -440,14 +453,14 @@ def test_a_private_ca_named_for_the_platform_store_reaches_every_reader_of_it() 
                 [volume.get("configMap") for volume in pod.get("volumes") or [] if volume["name"] == "secret-store-ca"],
                 "secret-store-ca:/etc/rask/secret-store-ca" in (metadata.get("annotations") or {}).get("dapr.io/volume-mounts", "").split(","),
             )
-    mounted = (
-        "/etc/rask/secret-store-ca/ca.crt",
-        ["/etc/rask/secret-store-ca"],
-        [{"name": "platform-ca", "items": [{"key": "bundle.pem", "path": "ca.crt"}]}],
-        True,
-    )
+    mounted = ("/etc/rask/secret-store-ca/ca.crt", ["/etc/rask/secret-store-ca"], [{"name": "platform-ca", "items": [{"key": "bundle.pem", "path": "ca.crt"}]}])
 
-    assert readers == {f"Deployment/rask-{name}": mounted for name in ("catalog", "lineage", "maintenance", "maintenance-worker")}
+    # The last element: whether the pod hands the CA to a sidecar too, which the worker's pod does not run.
+    assert readers == {
+        "Deployment/rask-catalog": (*mounted, True),
+        "Deployment/rask-lineage": (*mounted, True),
+        "Deployment/rask-maintenance-worker": (*mounted, False),
+    }
     assert {row["name"]: row.get("value") for row in component["spec"]["metadata"]}.get("caCert") == "/etc/rask/secret-store-ca/ca.crt"
     assert secret_store["spec"]["provider"]["vault"].get("caProvider") == {"type": "ConfigMap", "name": "platform-ca", "key": "bundle.pem"}
 

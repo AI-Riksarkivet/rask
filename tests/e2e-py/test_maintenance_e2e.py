@@ -3,9 +3,11 @@
 The offline suites drive each half over moto: the commit lane's queueing
 (`services/maintenance/tests/test_an_announced_event_queues_the_task_it_asks_for.py`) and the pass
 (`tests/integration/test_a_tables_pass_lists_what_is_due_and_rewrites_nothing.py`). This proves what only a deployed
-release can: the catalog's announcement of a commit reaches maintenance's commit lane over the bus, the lane's task
-reaches a worker through JetStream, and the worker's pass opens the real table and writes its due record, which the
-catalog's due door answers to the table's owner (ADR 0198 §2, §3). The pass compacts nothing (ADR 0155).
+release can: the catalog's announcement of a commit reaches the maintenance worker's commit lane over the bus (its
+pull consumer `maintenance-arrival` on `LINEAGE`), the lane's task reaches a worker through JetStream, and the worker's
+pass opens the real table and writes its due record, which the catalog's due door answers to the table's owner (ADR
+0198 §2, §3). Every step is read at the catalog's door, so the proof needs no address of the worker's. The pass
+compacts nothing (ADR 0155).
 
 Four commits through the stock client leave four small fragments, which Lance's own planner would merge, so the record
 names a compaction, at the last commit's version: the first commit holds the table's pass the commit delay out

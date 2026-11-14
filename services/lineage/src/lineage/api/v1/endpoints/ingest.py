@@ -2,12 +2,12 @@
 
 The OpenLineage HTTP-transport default path: any producer (our emitter, Airflow, Spark, dbt, …)
 configured with ``OPENLINEAGE_URL`` pointed here ingests with no glue — the lightweight-Marquez
-contract. Durable catalog→lineage delivery rides the Dapr subscription (``lineage.api.dapr``) instead.
+contract. Durable catalog→lineage delivery rides the bus instead, on lineage's ingest lane (``lineage.api.ingest_lane``).
 
 **THIS DOOR RECORDS; IT DOES NOT TRIGGER.** An event ingested here lands in the commit feed and the edge
 list and drives NOTHING — the whole handler is authorize, ``ingest_event``, return, with no publish
 anywhere on the path. The subscribers on the ``lineage.events.v1`` TOPIC (maintenance's arrival
-door, a notifier on the bus) hear only what is published there, and nothing republishes from HTTP
+consumer, a notifier on the bus) hear only what is published there, and nothing republishes from HTTP
 ingest onto that topic.
 
 The distinction is easy to miss and expensive: this is the one door an external orchestrator finds,
@@ -171,7 +171,7 @@ async def ingest_event(
         enforce_author(event, token)
         decider = getattr(request.app.state, "decider", None) if settings.fga_enabled else None
         await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider, subject=token.subject if token else None)
-        await enforce_output_authz(event, request, settings, token)
+        await enforce_output_authz(event, request.app, settings, token)
         started = time.perf_counter()
         # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the
         # retry lands what is missing and nothing twice (see `ProvenanceStore.record`). Its own refusal of a run
@@ -180,7 +180,7 @@ async def ingest_event(
     except PermissionDeniedError as exc:
         record_outcome(refusal_outcome(exc), door=Door.HTTP)
         raise
-    # Domain metrics for the HTTP transport too — every external producer lands here, so counting only the Dapr subscriber undercounted real ingest (audit 2026-07-15).
+    # Domain metrics for the HTTP transport too — every external producer lands here, so a count on the bus lane alone undercounts real ingest (audit 2026-07-15).
     # A 401 or a 422 still never reaches this point and needs no domain outcome: neither names a run the
     # graph should have held. An authorization refusal does, and is counted above.
     record_ingest_duration(time.perf_counter() - started)

@@ -1,6 +1,6 @@
 """Verifying the signature an event carries against the public keys its signer publishes ([[LH-064]]).
 
-The bus door authenticates the sidecar that delivered an event, never the producer that wrote it, so the author
+The bus door authenticates the transport an event arrived on, never the producer that wrote it, so the author
 stamped inside is a claim until a signature proves it. A producer signs with an Ed25519 key only its own store role can
 read; lineage holds PUBLIC keys only, so a compromised lineage can admit or refuse events and cannot forge one.
 
@@ -15,7 +15,7 @@ outcomes into the three answers a door needs.
   Final, so every door answers it without a retry.
 * OUTAGE (`ServiceUnavailableError`): the list could not be read, or lacks the event's key id and no read has begun
   since that key id was first met, so the key that signed may have been published after the read that missed it. Says
-  nothing about the signature, so the delivery is retried and a staged object stays staged. Refusing on an outage
+  nothing about the signature, so the lane asks for the delivery again and a staged object stays staged. Refusing on an outage
   would destroy honest events during a store blip.
 """
 
@@ -26,7 +26,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any, Final
 
-from fastapi import Request
+from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
 
@@ -50,15 +50,6 @@ def store_published_keys(*, clock: Callable[[], float] = time.monotonic) -> Publ
     return PublishedKeys(published_key_fetch(), clock=clock)
 
 
-def _published_keys(request: Request) -> PublishedKeys:
-    """This process's key reader, built on first use and kept on the app so its cache outlives one delivery."""
-    state = request.app.state
-    keys: PublishedKeys | None = getattr(state, "published_keys", None)
-    if keys is None:
-        keys = state.published_keys = store_published_keys()
-    return keys
-
-
 def _bounded(text: str) -> str:
     return text if len(text) <= _MAX_REASON_CHARS else f"{text[:_MAX_REASON_CHARS]}..."
 
@@ -71,7 +62,7 @@ def _subject_of(arrived: Mapping[str, Any]) -> dict[str, str | None]:
     return {"run_id": _bounded(run_id) if run_id else None, "dataset": _bounded(name) if isinstance(name, str) else None}
 
 
-async def verify_arrived_event(arrived: Mapping[str, Any], request: Request, settings: LineageSettings) -> VerifiedSignature | None:
+async def verify_arrived_event(arrived: Mapping[str, Any], app: FastAPI, settings: LineageSettings) -> VerifiedSignature | None:
     """Verify the signature on the event exactly as it arrived, or answer ``None`` when this estate enforces none.
 
     ``None`` is the unenforced estate (`settings.signing` lists no signer): nothing is verified, a `rask_signature`
@@ -90,7 +81,8 @@ async def verify_arrived_event(arrived: Mapping[str, Any], request: Request, set
     signing = settings.signing
     if not signing.enforced:
         return None
-    keys = _published_keys(request)
+    # The one reader the lifespan builds: its cache and its pacing are the process's, shared by every door that verifies.
+    keys: PublishedKeys = app.state.published_keys
     claim = signature_of(arrived)
     try:
         verified = await run_in_threadpool(

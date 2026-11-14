@@ -1,8 +1,8 @@
 """Admin DLQ / transactional-outbox ops endpoints (#83) — view + replay the at-risk lineage events.
 
-The lineage delivery path has two failure backstops (see ``docs/RESILIENCE.md``): the Dapr-native DLQ on a
-NATS JetStream stream (park-and-alert, replayed from the stream on restart — not app-queryable, by design),
-and the **transactional outbox** (``lakehouse.outbox``) — an object-store of events staged BEFORE publish and
+The lineage delivery path has two failure backstops (see ``docs/RESILIENCE.md``): the ingest lane's **park**
+(`lineage.api.ingest_lane`: a delivery it ends unrecorded is kept in the provenance namespace's ``refusals`` table and
+replayed at this module's ``/parked`` doors), and the **transactional outbox** (``lakehouse.outbox``) — an object-store of events staged BEFORE publish and
 dropped on ack. A surviving outbox object is a committed write whose lineage was not yet confirmed delivered:
 the at-risk set the reconcile relay drains on a timer. This module surfaces that set for an operator and lets
 them replay one on demand instead of waiting for the next reconcile tick.
@@ -25,6 +25,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, ServiceUnavailableError, TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
 
 from lakehouse import outbox
+from lakehouse.bus_delivery import Verdict
 from lakehouse.governed import audit, fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome
 from lakehouse.lineage_events import dataset_uuids
@@ -44,7 +45,7 @@ from lineage.core.config import storage_options
 from lineage.core.metrics import Door, Outcome, record_outcome
 from lineage.models import DatasetEvent, RunEvent
 from lineage.schemas import DlqBacklog, DlqEvent, DlqReplayResponse, ParkedRuns
-from lineage.services.consumer import RETRY, handle_cloud_event
+from lineage.services.consumer import handle_cloud_event
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 
 
@@ -174,8 +175,8 @@ async def replay_dlq(
     # and a forged or re-targeted object stays refused however trusted the operator is. Then the ingest
     # door's, over the operator: a caller may only replay what they could have written in the first place.
     arrived = json.loads(event_json)
-    await enforce_bus_authz(event, request, settings, arrived)
-    await enforce_output_authz(event, request, settings, token)
+    await enforce_bus_authz(event, request.app, settings, arrived)
+    await enforce_output_authz(event, request.app, settings, token)
     await provenance.record(event)  # idempotent: every row under its key
     # BEFORE the drop: the staged object is the only copy the relay could still re-publish. The feed is
     # already repaired when this fails, so the answer says so, and the partial outcome is audited: a 503
@@ -197,15 +198,15 @@ async def replay_dlq(
 
 @router.get("/parked", dependencies=[Depends(require_parks_reader)])
 async def list_parked(provenance: ProvenanceDep) -> ParkedRuns:
-    """The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]])."""
+    """The runs whose deliveries the ingest lane's park keeps, each with how many, for the estate admin ([[LH-148]])."""
     return ParkedRuns(runs=dict(Counter(delivery.run_id or "" for delivery in await provenance.parked())))
 
 
 @router.post("/parked/{run_id}/replay", dependencies=[Depends(require_parks_replayer)])
 async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep, settings: SettingsDep, token: CurrentToken) -> DlqReplayResponse:
-    """Re-present the deliveries of ``run_id`` the parking route kept, once their cause is fixed ([[LH-148]]).
+    """Re-present the deliveries of ``run_id`` the ingest lane's park kept, once their cause is fixed ([[LH-148]]).
 
-    Each kept CloudEvent goes through the subscription's own ingest (``handle_cloud_event`` under
+    Each kept CloudEvent goes through the ingest lane's own handling (``handle_cloud_event`` under
     :func:`enforce_bus_authz`: the signature over the bytes that arrived, and what the stamped author may record), so
     this admits nothing the bus refuses, however trusted the operator is. It writes to the feed directly and publishes
     nothing: the run's subscribers heard the original publish, and the feed is what was missing it. Each delivery is
@@ -227,7 +228,7 @@ async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep
         raise TransactionNotFoundError(f"no parked lineage delivery is kept for run {run_id}")
     answers = [
         await handle_cloud_event(
-            provenance, delivery.cloud_event, lambda parsed, arrived: enforce_bus_authz(parsed, request, settings, arrived), door=Door.DEAD_LETTER
+            provenance, delivery.cloud_event, lambda parsed, arrived: enforce_bus_authz(parsed, request.app, settings, arrived), door=Door.DEAD_LETTER
         )
         for delivery in kept
     ]
@@ -241,8 +242,8 @@ async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep
     left = [(delivery, answer) for delivery, answer in zip(kept, answers, strict=True) if delivery.feed_key not in held]
     if left:
         audit.audit(AuditAction.DLQ_PARKED_REPLAY, AuditOutcome.FAILURE, subject=subject, resource=f"run:{run_id}")
-        names = [f"{delivery.feed_key or delivery.key}: {answer.get('status')}" for delivery, answer in left]
-        if any(answer.get("status") == RETRY for _, answer in left):
+        names = [f"{delivery.feed_key or delivery.key}: {answer.value}" for delivery, answer in left]
+        if any(answer is Verdict.AGAIN for _, answer in left):
             raise ServiceUnavailableError(f"re-presenting run {run_id} met an outage; {len(left)} delivery(ies) stay kept: {names}")
         raise InvalidInputError(f"run {run_id} is still refused on re-presentation; {len(left)} delivery(ies) stay kept, {len(recovered)} recovered: {names}")
     audit.audit(AuditAction.DLQ_PARKED_REPLAY, AuditOutcome.SUCCESS, subject=subject, resource=f"run:{run_id}")

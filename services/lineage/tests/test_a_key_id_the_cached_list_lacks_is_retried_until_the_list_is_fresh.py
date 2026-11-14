@@ -1,20 +1,21 @@
 """A key id the cached list lacks is retried until a list read since it was first met decides it, and a cached list expires.
 
 [[LH-064]]. A rotation publishes the identity's new key first, so a lineage that cached the list a moment earlier has not seen it.
-Refusing the first event signed with the new key would ack and discard honest provenance on a stale cache, and reading the store again
-for every unknown key id would hand a forger the store. So a key id missing from the cached list is answered RETRY while no read has
-begun since the key id was FIRST met and the last read is younger than the refresh interval (a rate limit delays a verdict and never
-decides one). Any read that begins after that first sighting decides it, whichever event caused the read, so the sidecar's redelivery
-120 s later always ends in a verdict: a key id the list does not hold is refused, which is acked and never recorded. The list is also
+Refusing the first event signed with the new key would take and discard honest provenance on a stale cache, and reading the store
+again for every unknown key id would hand a forger the store. So a delivery whose key id is missing from the cached list is asked for
+again while no read has begun since the key id was FIRST met and the last read is younger than the refresh interval (a rate limit
+delays a verdict and never decides one). Any read that begins after that first sighting decides it, whichever event caused the read,
+so the lane's redelivery after its retry delay always ends in a verdict: a key id the list does not hold is refused, which is taken
+and never recorded. The list is also
 the trust anchor, so a cached copy is served only until its TTL: a key the store has since removed stops verifying once the copy
 expires. The memory of first sightings is bounded: a key id pushed out of it is met afresh, which is one more retry cycle for its
 event, while a key id still in it keeps its verdict. A read that fails is shared like one that succeeds: every verification that
 began before it ended takes its failure, a retry, rather than reading again, which would cost N verifications queued behind a
 hung store N reads of its timeout each, every one of them holding a worker; a verification that begins after it ended reads afresh.
 
-Driven through the registered `/lineage-events` route, with the key reader's clock injected so the interval, the TTL and the
-redelivery are crossed without waiting, and the bound shrunk to one key id so a second one pushes the first out. One event is built
-per signing key, so delivering a key's event again is the sidecar's redelivery of it. A delivery's clock time is when its
+Driven through lineage's own app and lifespan, each event delivered to its ingest lane, with the key reader's clock injected so the
+interval, the TTL and the redelivery are crossed without waiting, and the bound shrunk to one key id so a second one pushes the first
+out. One event is built per signing key, so delivering a key's event again is the bus's redelivery of it. A delivery's clock time is when its
 verification began, so deliveries at one instant are verifications that overlap, and a store that hangs moves the clock on by the
 read's timeout. The secret store is the suite's double, and the signatures are built by the root conftest's
 `EventSigner` from the wire format alone.
@@ -23,27 +24,29 @@ read's timeout. The secret store is the suite's double, and the signatures are b
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from starlette.testclient import TestClient
+from lineage_lane import Feed, started
 
+from lakehouse.bus_delivery import Outcome, Settlement
 from lakehouse.governed.signing_key import KEY_READ_TIMEOUT_SECONDS
 from lakehouse.lineage.keys import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS
+from lineage import main
+from lineage.core.config import LineageSettings
 from lineage.services.signature import store_published_keys
 from tests.secret_store_double import SecretStoreDouble
 
 
 SIGNER = "service-maintenance"
 
-#: What the door did with one delivery: asked for it again, acked it as refused with nothing recorded, or recorded it.
+#: What the lane did with one delivery: asked for it again, took it refused with nothing recorded, or recorded it.
 RETRIED, REFUSED, RECORDED = "retried", "refused", "recorded"
 
-#: The chart's `pubsubDeliveryRetry` is a constant 120 s.
-REDELIVERY_SECONDS = 120.0
+#: How long the lane waits before a delivery it asked for again comes back: the settings' own default, which no test here
+#: overrides.
+REDELIVERY_SECONDS = LineageSettings.model_fields["delivery_retry_seconds"].default
 
 PRIMER = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e"
 RUN_IDS = {
@@ -52,20 +55,6 @@ RUN_IDS = {
     "unpublished": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a61",
     "unpublished-too": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a62",
 }
-
-
-class _Feed:
-    def __init__(self) -> None:
-        self.recorded: list[str] = []
-
-    async def record(self, event: Any) -> None:
-        self.recorded.append(event.run_id)
-
-    async def run_author(self, _run_id: str) -> str | None:
-        return None
-
-    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
-        return None
 
 
 class _Clock:
@@ -88,12 +77,12 @@ def _event(run_id: str) -> dict[str, Any]:
     }
 
 
-def _outcome(answered: dict[str, Any], newly_recorded: bool) -> str:
-    if answered == {"status": "RETRY"}:
+def _outcome(settled: Settlement, newly_recorded: bool) -> str:
+    if settled.outcome is Outcome.AGAIN:
         return RETRIED
-    if answered == {"status": "SUCCESS"}:
+    if settled.outcome is Outcome.TAKEN:
         return RECORDED if newly_recorded else REFUSED
-    return f"unexpected answer {answered}"
+    return f"unexpected settlement {settled}"
 
 
 @pytest.mark.parametrize(
@@ -157,51 +146,35 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
 ) -> None:
     """``published_now`` is the list the store serves after the priming read, or None for a store that hangs for the read's
     whole timeout and then fails."""
-    for key, value in {
-        "APP_API_TOKEN": "the-estate-app-token",
-        "LINEAGE_DAPR_ENABLED": "true",
-        "LINEAGE_SIGNERS": json.dumps([SIGNER]),
-        "LINEAGE_DELEGATORS": json.dumps([]),
-    }.items():
-        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([SIGNER]))
+    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([]))
     # One key id remembered: the second distinct unknown one pushes the first out. `raising=False` lets the test run against a reader
     # with no bound at all (the red check); if the patch ever fails to take effect the eviction case fails, so it cannot pass unnoticed.
     monkeypatch.setattr("lakehouse.lineage.keys.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
-    from lakehouse.ns_errors import install_problem_handlers
-    from lineage.api.dapr import register_dapr
-    from lineage.core.config import get_settings
-
-    get_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-    register_dapr(app)
-    feed = _Feed()
-    app.state.provenance = feed
     clock = _Clock()
-    app.state.published_keys = store_published_keys(clock=clock)
     signers = {name: event_signer(SIGNER) for name in RUN_IDS}
     events = {name: signer.sign(_event(RUN_IDS[name])) for name, signer in signers.items()}
     published = secret_store.hold(f"signing-public-{SIGNER}", {"keys": signers["old"].public})
-    client = TestClient(app)
-    headers = {"dapr-api-token": "the-estate-app-token"}
-    primed = client.post("/lineage-events", json={"data": signers["old"].sign(_event(PRIMER))}, headers=headers)
-    assert (primed.json(), published.call_count) == ({"status": "SUCCESS"}, 1), "the list was not cached by a verified event, so this tests nothing"
-    if published_now is None:
+    with started(monkeypatch, Feed()) as lineage:
+        main.app.state.published_keys = store_published_keys(clock=clock)
+        primed = lineage.deliver({"data": signers["old"].sign(_event(PRIMER))})
+        assert (primed, published.call_count) == (Settlement(outcome=Outcome.TAKEN), 1), "the list was not cached by a verified event, so this tests nothing"
+        if published_now is None:
 
-        def _hangs_then_fails(request: httpx.Request) -> httpx.Response:
-            clock.now += KEY_READ_TIMEOUT_SECONDS
-            raise httpx.ReadTimeout("the store did not answer within the read's timeout", request=request)
+            def _hangs_then_fails(request: httpx.Request) -> httpx.Response:
+                clock.now += KEY_READ_TIMEOUT_SECONDS
+                raise httpx.ReadTimeout("the store did not answer within the read's timeout", request=request)
 
-        published.mock(side_effect=_hangs_then_fails)
-    else:
-        published.mock(return_value=secret_store.held({"keys": ",".join(signers[name].public for name in published_now.split(","))}))
+            published.mock(side_effect=_hangs_then_fails)
+        else:
+            published.mock(return_value=secret_store.held({"keys": ",".join(signers[name].public for name in published_now.split(","))}))
 
-    outcomes: list[str] = []
-    for at, signed_with, _ in deliveries:
-        clock.now = at
-        recorded_before = len(feed.recorded)
-        answered = client.post("/lineage-events", json={"data": events[signed_with]}, headers=headers)
-        outcomes.append(_outcome(answered.json(), len(feed.recorded) > recorded_before))
+        outcomes: list[str] = []
+        for at, signed_with, _ in deliveries:
+            clock.now = at
+            recorded_before = len(lineage.feed.recorded)
+            settled = lineage.deliver({"data": events[signed_with]})
+            outcomes.append(_outcome(settled, len(lineage.feed.recorded) > recorded_before))
 
-    assert outcomes == [expected for _, _, expected in deliveries], f"the door answered {outcomes}"
+    assert outcomes == [expected for _, _, expected in deliveries], f"the lane settled {outcomes}"
     assert published.call_count == reads_of_the_store, f"the store was read {published.call_count} times"

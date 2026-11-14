@@ -2,6 +2,8 @@
 
 **Reopened 2026-11-10** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): its consequence that the planned operator reconciles production store policies, bus permissions and signing pairs continuously would give that operator the platform store's admin credential, the bus account's signing key and secret-store write access.
 
+**Amended 2026-11-14** (XC-199 step D4, #787): the stream Job also converges the durable consumers the chart declares, and a retire phase removes what git no longer declares; see the amendment below.
+
 **Status:** accepted. Source: [[XC-164]] (#658), the design audit of 2026-11-01 that widened it, and the owner's rulings
 of 2026-11-07: Argo CD is the one GitOps reconciler rask targets ("Fuck flux, only Argo cd if you use any of them"),
 and each generated dev credential becomes a Secret of its own, carried over on the dev estate. Refines
@@ -63,3 +65,19 @@ Measured at main `5f5810964` on offline renders and in Argo CD v3.5.7's source (
 - Production provisioning (the store's roles and policies, the bus permission table, the signing pairs) is still
   applied by the platform's operator and attested in values; reconciling it continuously is the planned operator's
   ([[XC-162]]).
+
+## Amendment (2026-11-14): the stream Job converges consumers too, and retires what git no longer declares
+
+Source: #787 (XC-199), step D4, in which the services stopped receiving events through a sidecar's subscription, which
+could not be rebound after a configuration change, and began pulling durable consumers the chart declares.
+
+- **Decision 3.** The stream Job converges every durable consumer the chart declares (one derivation,
+  `lance.busConsumers`) as it converges a stream: created when absent, edited in place when present, and failing with
+  the server's reason where the bus refuses the edit (a consumer's start and its `max_waiting`, measured on natscli
+  0.5.1 against nats-server 2.15.2, 2026-11-14). It runs as two Jobs: the declare phase, an Argo CD `Sync` hook, and a
+  retire phase, a Helm `post-install,post-upgrade` hook and an Argo CD `PostSync` hook, which removes each consumer
+  carrying this release's mark that git no longer declares, once no pod of the previous revision is left to pull it.
+  The mirror `CATALOG_CONTROL_BROADCAST` is no longer declared, so admin's update grant on it gives way to a delete
+  grant, for the retire phase's one-deploy removal of it.
+- **Decision 4.** No Resiliency is rendered (`dapr-resiliency.yaml` is deleted), so `checksum/dapr` digests the
+  Components of `dapr-component.yaml` that a pod's sidecar loads, and only the catalog's and lineage's pods carry one.

@@ -71,10 +71,12 @@ delivery's row, so a run is bound to its first event's author. Where the doors a
 author bound first is refused with none of its rows written: the doors' rule, asked again at the commit because events
 delivered together were each authorized before any of them bound its run. A batch whose rows the catalog refuses (400,
 413, 422) lands in halves, so only the event it refuses fails its delivery; any other failure (a 429 at its write cap, a
-5xx, no answer) fails the batch whole, and each delivery retries. Lineage's bus subscription delivers in parallel
-(`concurrencyMode: parallel`; the JetStream component's default is one at a time), at most
-`services.lineage.deliveriesInFlight` unacknowledged at once (its durable's `maxAckPending`), so a backlog's events arrive
-together and an event the sidecar is retrying holds no other back.
+5xx, no answer) fails the batch whole, and each delivery is asked for again. Lineage pulls its durable consumer
+`lineage-ingest` and handles its deliveries in parallel, at most `services.lineage.deliveriesInFlight` (64)
+unacknowledged at once (the consumer's `max_ack_pending`, and each replica's bound), so a backlog's events arrive
+together. An event waiting to be delivered again still counts against that bound (measured on nats-server 2.15.2,
+2026-11-14): one holds no other back, and as many as the bound hold back every event behind them until one is taken or
+parked.
 
 **The feed's sequence is Lance's own.** The tables use stable row ids, which Lance assigns in commit order
 (`lance_docs/lance/format/table/row_id_lineage.md`, "Row ID Assignment"), and `seq` is `_rowid + 1`. A follower reading `seq > since`
@@ -94,8 +96,8 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 | `GET /events` | The durable commit feed, governed per dataset: newest first by `after`, or forward from `since` with `next_cursor`; filterable by `table` or `namespace`; reports `oldest_seq` |
 | `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify, with the `rask_signature` lineage verified when it recorded each event, which tells the catalog's change from one a writer posted under the same identity; gated on `can_read_event_feed`, for a notifier holding `event_reader` (granted at the estate admin's tuple door) |
 | `GET /tables/{name}/derived?depth=` | Every table derived from `name`, nearest first |
-| `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The dead-letter queue: list parked deliveries, replay one |
-| `POST /lineage-events` | Dapr subscription on `lineage.events.v1` (sidecar only) |
+| `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The outbox's at-risk events: list them, replay one |
+| `GET /admin/dlq/parked`, `POST /admin/dlq/parked/{run_id}/replay` | The bus deliveries the ingest lane parked in the refusals table: list them by run, re-present a run's (the estate admin's) |
 | `POST /lineage-relay-cron` | Dapr cron binding that drives the relay tick (sidecar only) |
 | `GET /livez` | Liveness |
 
@@ -127,10 +129,11 @@ until each derived table holds an obligation following it (ADR 0178).
 **Authz.** Two layers, the same the catalog applies to `describe table`: OIDC (a valid bearer verified against Dex,
 else 401) and OpenFGA (`can_get_metadata` on `table:<uuid>`, else 403; feed rows naming a dataset the caller cannot see
 are dropped). Lineage reads the shared OpenFGA store and writes no tuple. Both layers are off in the code defaults and
-on in the chart (`RASK_OIDC_ENABLED`, `RASK_FGA_ENABLED`). The two Dapr-delivered routes verify the Dapr app token,
+on in the chart (`RASK_OIDC_ENABLED`, `RASK_FGA_ENABLED`). The relay tick's route verifies the Dapr app token,
 which only the sidecar stamps: the cluster route publishes `/api/lineage` onto lineage's root, but a request through
-the Gateway reaches the app port directly and never carries that token, so the routes refuse it. The service refuses
-to boot if either would mount without the token.
+the Gateway reaches the app port directly and never carries that token, so the route refuses it. The service refuses
+to boot if it would mount without the token. The bus transport has no route: lineage pulls its consumer on its own
+connection to the bus, as its own bus user.
 
 ## The relay tick
 
@@ -179,7 +182,7 @@ Every other facet (`schema`, `outputStatistics`, `dataQualityAssertions`, `dataS
 
 ## Signed events (the `rask_signature` facet)
 
-A bus door authenticates the sidecar that delivered an event, not the producer that wrote it, so the author an event
+The bus's permission table says which user may publish on a topic, not who wrote a given event, so the author an event
 stamps is a claim until a signature proves it. Every producer that publishes to `lineage.events.v1` or stages an event
 in the outbox signs it with its own Ed25519 key. The signature rides inside the event, in the `rask_signature` facet of
 `run.facets` (or `dataset.facets` for a catalog change), over the canon-1 bytes of the whole event. The facet names the
@@ -208,21 +211,21 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   `control_outbox_undeliverable`), since left staged it would hold every event behind it.
 - **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
   secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
-  that record a bus or staged event apply the rule: the `/lineage-events` subscription, the outbox drain, the operator's
-  DLQ replay and the parking route's re-ingest. The authenticated HTTP door (`POST /api/v1/lineage`: a user's pipeline, any
+  that record a bus or staged event apply the rule: the ingest lane (`lineage.api.ingest_lane`), the outbox drain, the
+  operator's replay of an outbox event and the estate admin's replay of a parked delivery. The authenticated HTTP door (`POST /api/v1/lineage`: a user's pipeline, any
   OpenLineage client) takes no signature; it authenticates the caller's bearer token and strips any
   `rask_signature` the body carries. With `signing.enforce` off lineage verifies nothing and ignores a present facet.
 - **What is refused.** An event with no facet (`unsigned`), a malformed facet or an unsupported `alg` or `canon`, an
   identity outside `LINEAGE_SIGNERS` (`signer`), a signer that is not the stamped author and declares no delegation
   (`author`), a delegation from a non-delegator (`delegation`) or for another subject (`author`), a `kid` its signer does
   not publish (`kid`), and bytes that do not verify (`signature`, `uncanonical`, `encoding`). A refusal is final, so
-  nothing retries or parks it: the subscription and the parking route acknowledge the delivery, the drain records the
+  nothing retries or parks it: the ingest lane acknowledges the delivery, the drain records the
   verdict with the event and retires the staged object, and the operator's replay is refused. The only trace is
   `lineage_signature_refused_total{lance_lineage_reason}` and a `lineage_signature_refused` WARN line naming the run, the
   claimed identity and the reason. A key list that cannot be read is an outage, not a verdict, and the delivery is
   retried. What each reason means and what to do:
   [RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events).
-- **The doors that act on the bus.** The catalog's own `/control-events` (which feeds `GET /management/v1/events`) and maintenance's `/maintenance-arrival` verify the same signatures before they act, in
+- **The lanes that act on the bus.** The catalog's control lane (which feeds `GET /management/v1/events`) and the maintenance worker's write-event lane verify the same signatures before they act, in
   the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce), and a notifier's doors verify
   them with the same settings (`lakehouse.signature_doors`). A lineage event verifies against `RASK_EVENT_SIGNERS` and
   `RASK_EVENT_DELEGATORS`, lineage's own sets. A control
@@ -244,5 +247,6 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   dataset identity.
 - `lineage/services/provenance.py`: `ProvenanceStore`, the feed, edge list, refusals and cursors over the catalog's doors.
 - `lineage/services/forward.py`: the forwarder. `lineage/services/{consumer,staged,signature}.py`: shared intake.
-- `lineage/api/v1/endpoints/{ingest,events,tables,dlq}.py`: the HTTP doors; `lineage/api/dapr.py` and
-  `lineage/api/relay_cron.py`: the sidecar-only routes; `lineage/api/{security,fga_deps}.py`: authn and authz.
+- `lineage/api/v1/endpoints/{ingest,events,tables,dlq}.py`: the HTTP doors; `lineage/api/ingest_lane.py`: the bus
+  transport's handling and park; `lineage/api/relay_cron.py`: the sidecar-only cron route;
+  `lineage/api/{security,fga_deps}.py`: authn and authz.

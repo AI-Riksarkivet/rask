@@ -139,17 +139,20 @@ def get_control_publisher(request: Request) -> Bus | None:
 ControlPublisherDep = Annotated[Bus | None, Depends(get_control_publisher)]
 
 
-def published_keys(request: Request) -> PublishedKeys:
-    """This app's one key reader, built on first use and kept on the app so its cache outlives one delivery or tick.
+def attach_published_keys(app: FastAPI) -> None:
+    """Give ``app`` the one reader of its signers' published keys, which reads the secret store under this process's
+    login when an event is verified. The catalog's start calls it, so each start reads through a cache of its own."""
+    app.state.published_keys = PublishedKeys(published_key_fetch())
 
-    Shared by the relay and the control lane's subscription (`api/dapr.py`): one reader per app, so both read the keys
+
+def published_keys(app: FastAPI) -> PublishedKeys:
+    """This app's one key reader (:func:`attach_published_keys`), kept on the app so its cache outlives one delivery or
+    tick.
+
+    Shared by the relay and the control lane (`api/control_lane.py`): one reader per app, so both read the keys
     through one cache.
     """
-    state = request.app.state
-    keys: PublishedKeys | None = getattr(state, "published_keys", None)
-    if keys is None:
-        keys = state.published_keys = PublishedKeys(published_key_fetch())
-    return keys
+    return app.state.published_keys
 
 
 async def get_staged_verifier(request: Request) -> StagedVerifier | None:
@@ -159,13 +162,11 @@ async def get_staged_verifier(request: Request) -> StagedVerifier | None:
     only delegator, so a person actor verifies only under the delegation this catalog declares for the person it
     authenticated. Checked against the keys that identity publishes, read from the secret store under the catalog's own
     login. Whether the holder has resolved its own private key does not matter here, since the relay signs nothing.
-
-    `async def` although it awaits nothing, so the key reader is built on the event loop and two first ticks share one.
     """
     holder: SigningKeyHolder[SigningKey] | None = getattr(request.app.state, SIGNING_STATE, None)
     if holder is None:
         return None
-    keys = published_keys(request)
+    keys = published_keys(request.app)
     own = frozenset({holder.identity})
 
     def verify(envelope: Mapping[str, Any]) -> VerifiedSignature:

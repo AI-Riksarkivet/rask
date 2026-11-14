@@ -124,7 +124,7 @@ class DlqBacklog(BaseModel):
 
 
 class ParkedDelivery(BaseModel):
-    """A delivery the parking route kept ([[LH-148]]): its row in ``refusals``, the CloudEvent as it arrived, and the feed
+    """A delivery the ingest lane's park kept ([[LH-148]]): its row in ``refusals``, the CloudEvent as it arrived, and the feed
     row it would write (``None`` for a delivery no event parses out of)."""
 
     key: str
@@ -134,7 +134,7 @@ class ParkedDelivery(BaseModel):
 
 
 class ParkedRuns(BaseModel):
-    """The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]])."""
+    """The runs whose deliveries the ingest lane's park keeps, each with how many, for the estate admin ([[LH-148]])."""
 
     runs: dict[str, int] = Field(default_factory=dict)
 

@@ -11,8 +11,8 @@ release, before rask's (`make k3s-up`).
 
 The chart takes **no credential as a value** ([[XC-004]]). Every secret lives in a store (the platform's
 Vault or OpenBao in production, the dev OpenBao fixture in development; the next section) and reaches a pod
-from it: a lakehouse service reads its own under its own login to the store, its sidecar resolves its components'
-secrets through the Dapr secret store, and a pod that does neither gets an ExternalSecret. So the **External Secrets
+from it: a lakehouse service reads its own under its own login to the store, the catalog's and lineage's sidecars
+resolve their components' secrets through the Dapr secret store, and a pod that does neither gets an ExternalSecret. So the **External Secrets
 Operator is a prerequisite**, platform-run like the store, and rask never installs it.
 Install it on its own release first, at the version `deploy/fixtures/external-secrets/fixture.env` names (the one
 rask is tested against; that fixture is also the development install `make k3s-up` runs).
@@ -28,7 +28,7 @@ The chart renders no secret store ([[XC-149]], ADR 0153). `deploy/values-prod.ya
 and the deployer names the platform's Vault or OpenBao as `openbao.externalAddr`, over https: every service and every
 sidecar sends its tokens to it, so the render refuses an http address. Its certificate is checked against public roots,
 or, for a store under a private CA, against the CA the ConfigMap `openbao.ca.configMap` holds, which the chart mounts
-into each service and its sidecar and names to ESO's SecretStore. Under the production NetworkPolicy, `openbao.egress`
+into each service and each sidecar and names to ESO's SecretStore. Under the production NetworkPolicy, `openbao.egress`
 states the store's addresses, and the rule admits only the pods that read it (the apps `lance.secretScopes` lists). The
 render refuses either one empty.
 
@@ -40,9 +40,10 @@ store token that returns in memory and logs in again inside its lifetime, or as 
 longer honours that token ([[XC-199]], `lakehouse.governed.secrets`). It takes a token whose lease is a minute to an
 hour, and the render refuses an `openbao.identity.tokenTtl` or `tokenMaxTtl` outside that range. Each role's policy
 grants its token the question about itself (`auth/token/lookup-self`, as the rendered policy documents do): a service
-asks it of the login it has just made, and its start fails closed while the store refuses it. Its
-sidecar logs in to the same role through the one Dapr secret store `lance-secrets` (`secretstores.hashicorp.vault`,
-which names the role `<release>-{appID}`), only for the secrets its components resolve. This needs Dapr 1.19 or later,
+asks it of the login it has just made, and its start fails closed while the store refuses it. The
+catalog's and lineage's sidecars log in to their app's role through the one Dapr secret store `lance-secrets`
+(`secretstores.hashicorp.vault`, which names the role `<release>-{appID}`), only for the secrets their components
+resolve; the maintenance worker runs no sidecar. This needs Dapr 1.19 or later,
 the first whose Vault store logs in with Kubernetes auth and renews its session (components-contrib#4448). ESO's SecretStore
 `<release>-vault` logs in as the role `externalSecrets.role`, bound to ESO's ServiceAccount.
 
@@ -69,7 +70,7 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   (`objectStore.identity.roleArns.<component>`), its trust policy naming the subject and its permission policy the
   ConfigMap's document.
 - `dapr-app-token` (fields `token` and, during a rotation, `previous`; docs/OPERATORS.md § 8): the app-API token, read by
-  the apps with a Dapr door (catalog, lineage, maintenance) and by ESO, which writes it into the
+  the apps whose cron tick routes check it (catalog, lineage) and by ESO, which writes it into the
   `<release>-dapr-app-token` Secret daprd stamps the header from.
 - `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
@@ -93,10 +94,10 @@ its environment.
 
 ## Prerequisite: the Dapr control plane
 
-rask's services take their deliveries off the bus and their timed ticks through Dapr sidecars, so a
+The catalog and lineage take their timed ticks through Dapr sidecars (the cron bindings), so a
 **Dapr control plane is a prerequisite** (ADR 0153), installed once per cluster by the platform, as Dapr documents,
-in `dapr-system`. The chart renders only rask's own Dapr objects (Components, Configurations, Resiliency,
-Subscriptions) and the sidecar annotations; with `dapr.enabled` on it refuses to render for a cluster that does not
+in `dapr-system`. The chart renders only rask's own Dapr objects (the secret-store Component `lance-secrets`, the cron
+binding Components, and the Configurations) and the sidecar annotations of the catalog's and lineage's pods; with `dapr.enabled` on it refuses to render for a cluster that does not
 serve `dapr.io/v1alpha1` (a cluster-less `helm template` names it: `--api-versions dapr.io/v1alpha1`). Name the
 control plane's namespace in `dapr.controlPlaneNamespace` (default `dapr-system`): the Collector scrapes it there,
 and under NetworkPolicy every rask pod may reach it.
@@ -110,17 +111,18 @@ In production also HA (`global.ha.enabled`) and an injector that drops every sid
 
 ## Prerequisite: NATS JetStream
 
-Every event rask moves rides **NATS JetStream, a prerequisite** (ADR 0153) the platform runs, and ADR 0199 makes it the lakehouse's one bus. Each service publishes lineage's events and the catalog's control broadcast on a connection of its own, as its own bus user (`lakehouse.bus`, nats-py), and takes its deliveries through its app's Dapr pub/sub component; maintenance's work queue, schedules and the store's change events go through nats-py as the bus user `maintenance-worker` (ADR 0198 decision 5). The chart
-renders no server; it renders what is rask's: the address its clients dial, the stream definitions (the stream Job,
-which creates rask's streams on the bus as the `admin` user), and the bus users (`nats.auth.users`, one per service and one for the queue). Name
+Every event rask moves rides **NATS JetStream, a prerequisite** (ADR 0153) the platform runs, and ADR 0199 makes it the lakehouse's one bus. Each service publishes lineage's events and the catalog's control events on a connection of its own, as its own bus user (`lakehouse.bus`, nats-py), and takes its deliveries on that connection too: lineage pulls the durable consumer `lineage-ingest`, and each catalog replica follows `CATALOG_CONTROL` by reading it by sequence. Maintenance's work queue, schedules, the store's change events and the write-event lane (`maintenance-arrival`) go through nats-py as the bus user `maintenance-worker` (ADR 0198 decision 5). The chart
+renders no server; it renders what is rask's: the address its clients dial, the stream and durable consumer
+definitions (the stream Job, which declares them on the bus as the `admin` user, converges each to its declared config,
+and after the sync removes the consumers of this release that git no longer declares), and the bus users
+(`nats.auth.users`, one per connection a service opens). Name
 the bus in `nats.url` (the render refuses without it). Each user's credential `nats-user-<user>` lives in the store; a store the chart does not seed needs them issued by
 the bus's operator and attested with `nats.auth.provisioned` (docs/OPERATORS.md § 7).
 
 What the bus must provide, and the version rask is tested against, are in `deploy/fixtures/nats` (the development
 install `make k3s-up` runs, release `nats`, Service `rask-nats` in rask's namespace): NATS 2.15.2; JetStream on a file
 store; a cluster of at least `nats.streamReplicas` nodes (three); operator mode with one APP account holding JetStream
-and every rask user, so each service, each Dapr pubsub.jetstream component and maintenance's worker authenticate with a
-user JWT and NKEY seed.
+and every rask user, so each service and maintenance's worker authenticate with a user JWT and NKEY seed.
 
 ## Prerequisite: the CloudNativePG operator, for the AGE-on-CNPG path
 
@@ -286,7 +288,7 @@ address, token, scrape job, alert or network peer (ADR 0189).
   anywhere and dials nothing.
 - **The cluster route** (`templates/route.yaml`) — Gateway API HTTPRoutes on the platform's Gateway
   (`route.parentRefs`): `<release>-api` sends each door a service publishes (the catalog's `/v1` and `/management/v1`,
-  lineage's feed, intake, parks and derived tables; never a probe, `/dapr/subscribe` or a Dapr delivery or tick) to
+  lineage's feed, intake, parks and derived tables; never a probe or a cron tick's route) to
   its service under its public prefix, with a `URLRewrite` `ReplacePrefixMatch` where the service mounts another path
   (the table is `rask.apiRoutes` in `_helpers.tpl`), and
   `<release>-dex`, rendered only with `auth.enabled` and `dex.enabled`, sends `/dex` to the development Dex. Both
@@ -302,8 +304,8 @@ address, token, scrape job, alert or network peer (ADR 0189).
   that is Gateway policy, not route (ADR 0165).
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
   OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA); see *Prerequisites in production*.
-- **Its own configuration of what it does not run**: the Dapr Components, Configurations and Resiliency, the NATS stream
-  Job, the ExternalSecrets and SecretStore, the object store's bucket and user hooks, and the dev OpenBao's seed scripts.
+- **Its own configuration of what it does not run**: the Dapr Components and Configurations, the NATS stream
+  Job (its streams and durable consumers), the ExternalSecrets and SecretStore, the object store's bucket and user hooks, and the dev OpenBao's seed scripts.
 - **The OTel Collector**, with `observability.enabled` (see below).
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from

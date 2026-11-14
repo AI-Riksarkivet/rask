@@ -32,17 +32,17 @@ KEY_TTL_SECONDS: Final = 60.0
 #: costs one read per interval rather than one per event. A key id is judged on a list read AFTER IT WAS FIRST MET
 #: (`PublishedKeys.read_for_unknown_key_id`), not after the delivery in hand arrived: a redelivery arrives later than
 #: the delivery before it, so a rule keyed on the arrival is deferred again by every read another event made in the
-#: interval before it. The interval therefore only paces reads. It is far BELOW the sidecar's first redelivery (the
-#: chart's `pubsubDeliveryRetry` is a constant 120 s), so when a key id comes round again a read has either begun
+#: interval before it. The interval therefore only paces reads. It is far BELOW the delay before lineage's lane asks for
+#: a delivery again (the chart's `services.lineage.delivery.retrySeconds`, 120 s), so when a key id comes round again a read has either begun
 #: since it was first met or ended long enough ago to repeat, and the redelivery ends in a verdict.
 KEY_REFRESH_INTERVAL_SECONDS: Final = 30.0
 
 #: How many key ids ONE identity remembers having met unknown, each with when it was first met. The ids are the events'
 #: own text, so the memory is bounded, and per identity so that a flood against one identity cannot push another's out.
-#: An id is met twice, at its delivery and at the sidecar's redelivery 120 s later, where it is decided, so the memory
+#: An id is met twice, at its delivery and at its redelivery 120 s later, where it is decided, so the memory
 #: has to hold the ids of two redelivery intervals. 8192 ids (162 bytes each, measured on CPython 3.13: 1.3 MB per
-#: identity) hold a flood of about 34 DIFFERENT ids a second: measured through the real reader with the sidecar's retry
-#: schedule emulated, none are parked at 30 a second and 88% at 36. Honest traffic adds one id per rotation, while the
+#: identity) hold a flood of about 34 DIFFERENT ids a second: measured through the real reader with a constant 120 s
+#: redelivery schedule emulated, none are parked at 30 a second and 88% at 36. Honest traffic adds one id per rotation, while the
 #: cached list predates the new key. An id pushed out is met afresh, which costs its event one more retry cycle and
 #: never a refusal on a list that predates the key.
 MAX_UNKNOWN_KEY_IDS: Final = 8192
@@ -116,8 +116,8 @@ class PublishedKeys:
 
         A read that began after the first sighting is returned as it is. A list read earlier cannot decide the key id,
         and reading again for every such event would hand a forger the store: while the last read ended less than
-        `KEY_REFRESH_INTERVAL_SECONDS` ago that is declined with `KeySourceUnavailableError`, which the door answers
-        RETRY, and past it the store is read afresh unless a read that failed since this delivery arrived answers it
+        `KEY_REFRESH_INTERVAL_SECONDS` ago that is declined with `KeySourceUnavailableError`, on which the door judges
+        the event again later, and past it the store is read afresh unless a read that failed since this delivery arrived answers it
         (`_read`). A rate limit delays a verdict and never decides one.
         """
         with self._lock_for(identity):

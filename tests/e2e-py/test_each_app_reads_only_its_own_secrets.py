@@ -3,9 +3,11 @@
 [[XC-165]] (#659), [[XC-199]] (#787), read back on the deployed estate. The render holds the same claim offline
 (`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`); this asks the running layers:
 
-- the app's own login: inside each app's pod, the process's own read (`lakehouse.governed.secrets`, with the store, the
-  role and the projected token its pod was given) returns a secret the app owns and nothing of one another app owns;
-- the Dapr scope: from inside each app's pod, its own sidecar answers 403 for both;
+- the app's own login: inside the pod of each Deployment an app runs (the catalog's, lineage's and the maintenance
+  worker's), the process's own read (`lakehouse.governed.secrets`, with the store, the role and the projected token its
+  pod was given) returns a secret the app owns and nothing of one another app owns;
+- the Dapr scope: from inside the pod of each app the `lance-secrets` component is scoped to (the catalog and lineage,
+  whose pods run daprd for their cron ticks), its daprd answers 403 for both;
 - the store: a token the store issues to one app's ServiceAccount, through the Kubernetes auth role the `lance-secrets`
   component logs that app in as, reads the app's own secret and is refused another app's; the same account is refused
   another app's role; and `root`, the token a store in dev mode publishes, reads nothing.
@@ -38,6 +40,9 @@ OWN_READS: Final[dict[str, tuple[str, str, str]]] = {
 #: The apps that sign, each the only reader of its own signing key in the store.
 SIGNERS: Final = ("catalog", "maintenance")
 
+#: app -> the release's Deployment that runs its process. Maintenance's one process is its worker.
+DEPLOYMENTS: Final = {"catalog": f"{chaos.RELEASE}-catalog", "lineage": f"{chaos.RELEASE}-lineage", "maintenance": f"{chaos.RELEASE}-maintenance-worker"}
+
 #: Reads each named secret as the pod's own process does, and prints, per secret, the FIELD NAMES the store gave it.
 _READ_AS_THE_APP: Final = """\
 import json, sys
@@ -66,11 +71,21 @@ def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, input=stdin, capture_output=True, text=True, check=False, timeout=chaos.SETTLE_SECONDS)  # noqa: S603 — a fixed tool, argv built here
 
 
-def _sidecars() -> dict[str, dict[str, str]]:
-    """app -> each Deployment that runs its sidecar and that Deployment's own container, for each app the `lance-secrets`
-    component is scoped to that the release runs a pod of. One app may run in several Deployments (maintenance's web pods
-    and its worker pods share one app id), and every one of them is asked. A Deployment that asks for a pod and has none
-    running stays, and fails the ask."""
+def _apps() -> dict[str, dict[str, str]]:
+    """app -> the Deployment that runs its process and that Deployment's own container, for each app of `DEPLOYMENTS` the
+    release runs. A Deployment that asks for a pod and has none running stays, and fails the ask."""
+    running: dict[str, dict[str, str]] = {}
+    names = {deployment: app for app, deployment in DEPLOYMENTS.items()}
+    for deployment in json.loads(chaos.kubectl("get", "deployments", "-o", "json"))["items"]:
+        app = names.get(deployment["metadata"]["name"])
+        if app is not None and deployment["spec"].get("replicas", 1):
+            running[app] = {deployment["metadata"]["name"]: deployment["spec"]["template"]["spec"]["containers"][0]["name"]}
+    return running
+
+
+def _scoped() -> dict[str, dict[str, str]]:
+    """app -> each Deployment whose pods run daprd under that app's id and that Deployment's own container, for each app
+    the `lance-secrets` component is scoped to that the release runs a pod of."""
     scopes = set(json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json")).get("scopes") or [])
     running: dict[str, dict[str, str]] = {}
     for deployment in json.loads(chaos.kubectl("get", "deployments", "-o", "json"))["items"]:
@@ -109,14 +124,13 @@ def _read_as(pod: str, token: str, secret: str) -> tuple[int, str]:
     return done.returncode, done.stderr.strip()[-200:]
 
 
-def _asked_in_each_pod(script: str) -> dict[str, tuple[tuple[str, str, str], dict[str, list]]]:
+def _asked_in_each_pod(script: str, apps: dict[str, dict[str, str]]) -> dict[str, tuple[tuple[str, str, str], dict[str, list]]]:
     """Deployment -> (its app's own secret, that secret's field, a foreign secret) and what ``script`` printed for the two,
-    run in the app's own container of every Deployment the store is scoped to."""
-    sidecars = _sidecars()
-    assert sidecars, "the release runs no app the store is scoped to"
-    assert sidecars.keys() <= OWN_READS.keys(), f"the store is scoped to {sorted(sidecars.keys() - OWN_READS.keys())}, which this test does not ask"
+    run in the app's own container of every Deployment ``apps`` names."""
+    assert apps, "the release runs none of the apps asked"
+    assert apps.keys() <= OWN_READS.keys(), f"the release runs {sorted(apps.keys() - OWN_READS.keys())}, which this test does not ask"
     answers = {}
-    for app, deployment, container in sorted((app, name, container) for app, held in sidecars.items() for name, container in held.items()):
+    for app, deployment, container in sorted((app, name, container) for app, held in apps.items() for name, container in held.items()):
         own, _field, foreign = OWN_READS[app]
         done = _run("exec", f"deployment/{deployment}", "-c", container, "--", "python", "-c", script, own, foreign)
         assert done.returncode == 0, f"{deployment}'s pod could not ask: {done.stderr.strip()[-300:]}"
@@ -126,7 +140,7 @@ def _asked_in_each_pod(script: str) -> dict[str, tuple[tuple[str, str, str], dic
 
 def test_each_app_reads_its_own_secret_from_the_store_as_itself_and_none_of_another_s() -> None:
     found: dict[str, object] = {}
-    for deployment, ((own, field, foreign), fields) in _asked_in_each_pod(_READ_AS_THE_APP).items():
+    for deployment, ((own, field, foreign), fields) in _asked_in_each_pod(_READ_AS_THE_APP, _apps()).items():
         if field not in fields[own]:
             found[f"{deployment} reading its app's own {own}"] = fields[own]
         if fields[foreign]:
@@ -136,7 +150,7 @@ def test_each_app_reads_its_own_secret_from_the_store_as_itself_and_none_of_anot
 
 def test_no_sidecar_serves_its_app_a_secret() -> None:
     found: dict[str, object] = {}
-    for deployment, ((own, _field, foreign), answers) in _asked_in_each_pod(_ASK_THE_SIDECAR).items():
+    for deployment, ((own, _field, foreign), answers) in _asked_in_each_pod(_ASK_THE_SIDECAR, _scoped()).items():
         for secret in (own, foreign):
             if answers[secret][0] != 403:
                 found[f"{deployment}'s sidecar serving {secret}"] = answers[secret]
@@ -148,7 +162,7 @@ def test_the_store_refuses_each_app_s_token_another_app_s_secret_and_role() -> N
     assert meta.get("vaultAuthMethod") == "kubernetes", f"lance-secrets logs in by {meta.get('vaultAuthMethod')!r}, not as each app's own account"
     mount, role = meta["vaultKubernetesMountPath"], meta["vaultKubernetesRole"]
     pod = _store_pod()
-    specs = {app: json.loads(chaos.kubectl("get", f"deployment/{chaos.RELEASE}-{app}", "-o", "json"))["spec"]["template"]["spec"] for app in SIGNERS}
+    specs = {app: json.loads(chaos.kubectl("get", f"deployment/{DEPLOYMENTS[app]}", "-o", "json"))["spec"]["template"]["spec"] for app in SIGNERS}
     keys = {app: f"signing-key-{spec['serviceAccountName']}" for app, spec in specs.items()}
     found: dict[str, object] = {}
     for app, foreign in (SIGNERS, SIGNERS[::-1]):

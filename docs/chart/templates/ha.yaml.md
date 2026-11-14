@@ -7,9 +7,8 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 HA for the stateless request-serving services, the lakehouse pair, catalog and lineage. Off by default
 (single-node kind); the prod overlay enables the PDB after bumping replicas. The stateful stores
-(AGE, the object store) get HA from their operators or the platform, NOT from here. The
-event-driven subscribers are intentionally excluded — eviction is safe there (Dapr redelivers, and
-every hop converges on its idempotency key).
+(AGE, the object store) get HA from their operators or the platform, NOT from here. The maintenance
+worker gets a budget of its own, rendered only above one replica (`maintenance.worker.replicas`) for the rule below.
 
 ONE RULE THROUGHOUT, and it is why every block below is gated: a `minAvailable: 1` PDB over a SINGLE
 replica blocks every voluntary drain, so a node cordon hangs instead of proceeding. Scale first, bound

@@ -622,35 +622,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dapr"
-version = "1.18.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "grpcio" },
-    { name = "grpcio-status" },
-    { name = "protobuf" },
-    { name = "python-dateutil" },
-    { name = "typing-extensions" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/cf/0e558760eca8db826a95b4ff101cd5b7c24dbd552afc5ac899f1c82f9b3e/dapr-1.18.3-py3-none-any.whl", hash = "sha256:32bd139df4f2ac1824819d41abf3ba66bacca2cd01063b55b5464e3a651a985b", size = 271624, upload-time = "2026-07-15T14:35:09.283Z" },
-]
-
-[[package]]
-name = "dapr-ext-fastapi"
-version = "1.18.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "dapr" },
-    { name = "fastapi" },
-    { name = "uvicorn" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/91/26f965593366ad4475e5541e35635db40e9e3cb04288e5f3550e9e5adee8/dapr_ext_fastapi-1.18.3-py3-none-any.whl", hash = "sha256:e67fb18cf6ebef646f5f30c23377700150b21be56fd8da51688a9d28b700548e", size = 9728, upload-time = "2026-07-15T14:35:21.365Z" },
-]
-
-[[package]]
 name = "deprecation"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -897,20 +868,6 @@ wheels = [
 ]
 
 [[package]]
-name = "grpcio-status"
-version = "1.83.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "grpcio" },
-    { name = "protobuf" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/52/fd/848dd7e009de85f8ca59999d1cc618ff8ebf7ea5636d083a47455d212d24/grpcio_status-1.83.0.tar.gz", hash = "sha256:837219c6de9afdccb6f6f72b34bc71e151a2011ef04040e3faaca746a57e54ae", size = 13965, upload-time = "2026-07-23T15:24:26.98Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d6/00/73204406228cf989bea6b0fd9fe4702fab49a8a152a0c6f90856dadb6ac7/grpcio_status-1.83.0-py3-none-any.whl", hash = "sha256:f6a838a7c5fb84ae98833ec0ef81ed438c26e11e54b2ddb8e92ad328c861de69", size = 14636, upload-time = "2026-07-23T15:23:49.044Z" },
-]
-
-[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1117,7 +1074,6 @@ dependencies = [
     { name = "boto3" },
     { name = "certifi" },
     { name = "cryptography" },
-    { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lance-namespace" },
@@ -1156,7 +1112,6 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "certifi", specifier = ">=2026.10.23" },
     { name = "cryptography", specifier = ">=49" },
-    { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },

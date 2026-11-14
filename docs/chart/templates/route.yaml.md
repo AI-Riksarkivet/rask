@@ -53,10 +53,10 @@ rule order.
 | `<prefix>/docs`, `<prefix>/redoc`, `<prefix>/openapi.json`, under `docs.enabled` only | each of the two | as its row above |
 
 No row publishes a service's root. A pod answers routes for its own platform (the kubelet's `/livez` and `/readyz`,
-the sidecar's `/dapr/subscribe`, the Dapr deliveries and cron ticks), and a prefix over the root would publish those and
+the sidecar's cron ticks), and a prefix over the root would publish those and
 every route the service mounts later. The route keeps them off the edge; the pod's port still admits any peer
-(`<release>-edge-<component>`, ADR 0165), so each service guards them itself: `/dapr/subscribe`, every delivery and
-every tick with its `OPTIONS` pre-flight answer the sidecar's app token alone
+(`<release>-edge-<component>`, ADR 0165), so each service guards them itself: every tick with its `OPTIONS` pre-flight
+answers the sidecar's app token alone
 (`lakehouse.governed.dapr_auth`), and only the probes answer a caller with none.
 
 A client has no row here, and none is rendered: a client publishes its own prefixes from its own release. The console,
@@ -71,8 +71,8 @@ The offline gate is `tests/unit/test_the_cluster_route_names_one_backend_per_api
 the live one is `tests/e2e-py/test_the_cluster_route_reaches_each_service.py` (marker `edge`,
 `make e2e-edge RASK_E2E_EDGE_URL=…`). The render gate boots each app under the env its pod renders and fails when the
 route publishes a route the pod answers only for its platform, leaves a door the app mounts unpublished, or names a
-path the app mounts nothing under: a new root route of a service is a path in its `rask.apiRoutes` row, or a delivery
-or tick the gate already reads off the app.
+path the app mounts nothing under: a new root route of a service is a path in its `rask.apiRoutes` row, or a tick
+the gate already reads off the app.
 
 ## `- type: URLRewrite`
 

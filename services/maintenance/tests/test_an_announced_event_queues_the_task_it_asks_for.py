@@ -7,13 +7,14 @@ is held rather than queued at once, so a busy table is passed at most once per d
 commit it covers. Maintenance's own run is announced on the topic the lane reads, and queues nothing, so a pass never
 queues itself.
 
-THE SIGNATURE DECIDES TOO ([[XC-078]], owner ruling R4). The app token proves only that this pod's own sidecar delivered
-an event, so the location a write names is the publisher's claim. The route checks the signature of an event it would
-queue a task for, driven here through the registered `/maintenance-arrival` with the configuration the chart sets: the
-signer's public keys come from the secret store (the suite's double), and the root conftest's `EventSigner` builds the
-signatures from the wire format alone. Every reason series of the door's refusal counter exists at 0 from the moment the
-door is registered, so the alert's `rate()` sees the first refusal as an increase. The queue is a recording fake with
-`TaskQueue`'s own signatures: the bus contract is the `nats-auth` lane's.
+THE SIGNATURE DECIDES TOO ([[XC-078]], owner ruling R4). The bus's permission table says who may publish on the topic,
+not who wrote a given event, so the location a write names is the publisher's claim. The lane checks the signature of an
+event it would queue a task for, driven here through the worker's handling of one delivery's body
+(`maintenance.services.arrival.Arrivals.hold_task`) with the configuration the chart sets: the signer's public keys come
+from the secret store (the suite's double), and the root conftest's `EventSigner` builds the signatures from the wire
+format alone. The handling answers how the delivery is acknowledged, or raises what the worker settles it by
+(`maintenance.services.queue.Worker.run_arrivals`, driven on a real broker by the queue's own lane). The queue is a
+recording fake with `TaskQueue`'s own signatures: the bus contract is the `nats-auth` lane's.
 """
 
 from __future__ import annotations
@@ -23,23 +24,19 @@ import json
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast, get_args
+from typing import Any, cast
 from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from botocore.exceptions import ClientError
 from tests.secret_store_double import SecretStoreDouble
 
 from lakehouse import location_claims
 from lakehouse.cloud_events import lineage_envelope
-from lakehouse.lineage.signing import RefusalReason
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
-from maintenance.api import arrival as route
-from maintenance.api.dependencies import get_task_queue
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services.arrival import LaneTask, lane_task
+from maintenance.services.arrival import Arrivals, LaneTask, lane_task
 from maintenance.services.queue import QueueUnavailableError, Task, TaskQueue
 
 
@@ -57,9 +54,15 @@ def _event(operation: str, *, uri: str | None = URI, uuid: str | None = TABLE_UU
     return {"eventType": "COMPLETE", "run": {"runId": "r-1", "facets": {"rask_lance": {"operation": operation}}}, "outputs": [output]}
 
 
+def _body(event: dict[str, Any]) -> bytes:
+    """What a delivery of ``event`` carries: its envelope on the lineage topic, as the bus holds it."""
+    return json.dumps(lineage_envelope(event).as_wire()).encode()
+
+
 class _RecordingQueue:
     """The lane's publishes, with `TaskQueue`'s signatures, recorded; ``down`` refuses each as an unreachable bus does.
-    Which of a table's follow-ups the bus keeps is the bus's own guard, proven on a real broker by the `nats-auth` lane
+    A follow-up asked for a task that already has one is answered as the bus answers it, not held. That the bus keeps
+    the first and refuses the others is its own guard, proven on a real broker by the `nats-auth` lane
     (`tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py`, its burst)."""
 
     def __init__(self, *, down: bool = False) -> None:
@@ -76,8 +79,9 @@ class _RecordingQueue:
     async def follow_up(self, task: Task, at: datetime) -> bool:
         if self.down:
             raise QueueUnavailableError("the bus did not take it")
+        held_already = any(held == task for held, _ in self.followed)
         self.followed.append((task, at))
-        return True
+        return not held_already
 
 
 def _queue(recording: _RecordingQueue) -> TaskQueue:
@@ -124,24 +128,25 @@ def test_an_event_the_lane_cannot_act_on_is_acknowledged_untouched(event: object
     assert lane_task(event) is None
 
 
-# --- the handler: what reaches the queue -------------------------------------------------------------
+# --- the handling: what reaches the queue ------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_each_commit_holds_its_tables_pass_a_delay_out() -> None:
-    """Two writes and a registration each hold the table's pass, ``MAINTENANCE_COMMIT_PASS_DELAY_SECONDS`` out, and queue
-    nothing: the bus keeps the first follow-up and refuses the others, so one pass reads the table after them all. A
-    registration waits as a write does, which an undrop needs, since it announces its table before it clears the trash
-    record."""
+    """Two writes and a registration each ask for the table's pass, ``MAINTENANCE_COMMIT_PASS_DELAY_SECONDS`` out, and
+    queue nothing: the bus keeps the first follow-up and refuses the others, which that pass covers, so one pass reads
+    the table after them all. A registration waits as a write does, which an undrop needs, since it announces its table
+    before it clears the trash record."""
     queue = _RecordingQueue()
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
+    arrivals = Arrivals(settings, _queue(queue))
     delay = timedelta(seconds=settings.commit_pass_delay_seconds)
     before = datetime.now(UTC)
 
-    answers = [await route.handle_arrival({"data": _event(operation)}, settings, _queue(queue)) for operation in ("insert", "insert", "register_table")]
+    answers = [await arrivals.hold_task(_body(_event(operation))) for operation in ("insert", "insert", "register_table")]
 
     after = datetime.now(UTC)
-    assert (answers, queue.queued) == ([{"status": route.SUCCESS}] * 3, [])
+    assert (answers, queue.queued) == (["held", "covered", "covered"], [])
     assert [task for task, _ in queue.followed] == [Task(kind="table", uuid=TABLE_UUID, location=URI)] * 3
     assert all(before + delay <= at <= after + delay for _, at in queue.followed), "a pass was not held the commit delay"
 
@@ -150,16 +155,20 @@ async def test_each_commit_holds_its_tables_pass_a_delay_out() -> None:
 async def test_a_drop_queues_the_release_of_the_uuid_it_names() -> None:
     queue = _RecordingQueue()
 
-    answer = await route.handle_arrival({"data": _event("drop_table", uri=None)}, MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(queue))
+    answer = await Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(queue)).hold_task(_body(_event("drop_table", uri=None)))
 
-    assert (answer, queue.queued) == ({"status": route.SUCCESS}, [Task(kind="trash", uuid=TABLE_UUID)])
+    assert (answer, queue.queued) == ("held", [Task(kind="trash", uuid=TABLE_UUID)])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("uri", "passed"), [pytest.param(URI, True, id="a-location-a-claim-holds"), pytest.param("s3://bucket/held-by-no-claim", False, id="a-location-none-holds")]
+    ("uri", "answer", "passed"),
+    [
+        pytest.param(URI, "held", True, id="a-location-a-claim-holds"),
+        pytest.param("s3://bucket/held-by-no-claim", "ignored", False, id="a-location-none-holds"),
+    ],
 )
-async def test_a_write_naming_no_uuid_is_passed_as_its_locations_claim_names_it(tmp_path: Path, uri: str, passed: bool) -> None:
+async def test_a_write_naming_no_uuid_is_passed_as_its_locations_claim_names_it(tmp_path: Path, uri: str, answer: str, passed: bool) -> None:
     """A producer outside the catalog may name no uuid: the claim at the location names the table, and a location no
     claim holds names no table to pass, which no redelivery changes."""
     queue = _RecordingQueue()
@@ -168,53 +177,65 @@ async def test_a_write_naming_no_uuid_is_passed_as_its_locations_claim_names_it(
     claimed = str(uuid4())
     location_claims.take(claims, URI, "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=claimed)
 
-    answer = await route.handle_arrival({"data": _event("insert", uri=uri, uuid=None)}, settings, _queue(queue))
+    answered = await Arrivals(settings, _queue(queue)).hold_task(_body(_event("insert", uri=uri, uuid=None)))
 
     expected = [Task(kind="table", uuid=claimed, location=URI)][: int(passed)]
-    assert (answer, [task for task, _ in queue.followed]) == ({"status": route.SUCCESS}, expected)
+    assert (answered, [task for task, _ in queue.followed]) == (answer, expected)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("queue", "status"),
+    ("body", "down", "raised", "match"),
     [
-        pytest.param(lambda: _queue(_RecordingQueue(down=True)), route.RETRY, id="the-bus-did-not-take-it"),
-        pytest.param(lambda: None, route.SUCCESS, id="a-stack-that-runs-no-worker"),
+        pytest.param(_body(_event("insert")), True, QueueUnavailableError, "the bus did not take it", id="the-bus-did-not-take-it"),
+        pytest.param(b'["no", "envelope"]', False, ValueError, "no event envelope", id="a-body-that-is-no-envelope"),
     ],
 )
-async def test_an_announcement_is_delivered_again_only_when_that_can_queue_it(queue: Callable[[], TaskQueue | None], status: str) -> None:
-    """A bus that did not take the task is the one failure a redelivery can fix; a stack that runs no worker has nothing to
-    queue on and decides the same way on every delivery."""
-    settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
+async def test_an_announcement_the_lane_cannot_settle_raises_what_the_worker_settles_it_by(
+    body: bytes, down: bool, raised: type[Exception], match: str
+) -> None:
+    """A bus that did not take the task is a failure a redelivery can fix, so the worker hands the delivery back; a body
+    that is no envelope reads the same on every delivery, so the worker ends it at once."""
+    queue = _RecordingQueue(down=down)
 
-    answer = await route.handle_arrival({"data": _event("insert")}, settings, queue())
+    with pytest.raises(raised, match=match):
+        await Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(queue)).hold_task(body)
 
-    assert answer == {"status": status}
+
+@pytest.mark.asyncio
+async def test_a_claim_the_store_does_not_answer_for_is_a_failure_a_redelivery_can_fix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A store that refuses the claim's read, or cannot be reached for it, says nothing about the claim. The lane raises
+    the error its worker hands a delivery back on; the store client's own error is none the worker settles, so it would
+    end the worker's process on every delivery of the announcement."""
+
+    def refused(_claims: object, _location: str) -> None:
+        raise ClientError({"Error": {"Code": "SlowDown", "Message": "reduce your request rate"}}, "GetObject")
+
+    monkeypatch.setattr(location_claims, "holder", refused)
+    arrivals = Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(_RecordingQueue()))
+
+    with pytest.raises(OSError, match="could not be read"):
+        await arrivals.hold_task(_body(_event("insert", uuid=None)))
 
 
-# --- the door's half: a task is queued only when its signature lets the door act -----------------
+# --- the signature's half: a task is queued only when its signature lets the lane act --------------
 
 
 SIGNER = "service-catalog"
 OUTSIDER = "service-outsider"
 AUTHOR = "alice"
-TOKEN = "the-estate-app-token"
 REFUSED = "maintenance.signature.refused"
 WOULD_REFUSE = "maintenance.signature.would_refuse"
 
 #: What the signature counters hold: metric name -> (door, reason) -> count.
 type Counts = dict[str, dict[tuple[str, str], int]]
 
-#: Every series of the refusal counter, at the 0 it is created with: the door, every reason the kit can refuse for.
-ZERO_REFUSALS: dict[tuple[str, str], int] = {("maintenance-arrival", reason): 0 for reason in get_args(RefusalReason.__value__)}
-
-
-type Door = Callable[[str], tuple[TestClient, _RecordingQueue]]
+type Lane = Callable[[str], tuple[Arrivals, _RecordingQueue]]
 
 
 @pytest.fixture
 def signature_counts(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], Counts]]:
-    """What the door's signature counters hold, read through a real in-memory reader.
+    """What the lane's signature counters hold, read through a real in-memory reader.
 
     The counters are made when `maintenance.core.metrics` is imported. Its code is run again into a module object of its
     own under a meter of this reader's provider, and only the two signature counters are swapped onto the imported module,
@@ -257,32 +278,27 @@ def signature_counts(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], C
 
 
 @pytest.fixture
-def arrival_door(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], Counts]) -> Iterator[Door]:
-    """`arrival_door(mode)`: the registered route, configured through the environment as the chart configures it, and the
-    queue it puts tasks on.
+def commit_lane(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], Counts]) -> Iterator[Lane]:
+    """`commit_lane(mode)`: the worker's handling of the commit lane, configured through the environment as the chart
+    configures it, and the queue it puts tasks on.
 
-    Built after `signature_counts`, as a pod registers its door after its MeterProvider is installed.
+    Built after `signature_counts`, as a worker starts its lane after its MeterProvider is installed.
     """
     from maintenance.core.config import get_settings
 
     queue = _RecordingQueue()
 
-    def _door(mode: str) -> tuple[TestClient, _RecordingQueue]:
+    def _lane(mode: str) -> tuple[Arrivals, _RecordingQueue]:
         for key, value in {
-            "APP_API_TOKEN": TOKEN,
-            "MAINTENANCE_ARRIVAL_ENABLED": "true",
             "RASK_SIGNATURE_DOORS": mode,
             "RASK_EVENT_SIGNERS": json.dumps([SIGNER, "service-bronze-to-silver"]),
             "RASK_EVENT_DELEGATORS": json.dumps([SIGNER]),
         }.items():
             monkeypatch.setenv(key, value)
         get_settings.cache_clear()
-        app = FastAPI()
-        app.dependency_overrides[get_task_queue] = lambda: _queue(queue)
-        route.register_arrival_route(app, get_settings())
-        return TestClient(app), queue
+        return Arrivals(get_settings(), _queue(queue)), queue
 
-    yield _door
+    yield _lane
     get_settings.cache_clear()
 
 
@@ -293,19 +309,20 @@ def _arrived_write() -> dict[str, Any]:
     return event
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("mode", "signed_by", "tampered", "queued", "counted"),
+    ("mode", "signed_by", "tampered", "answer", "queued", "counted"),
     [
-        pytest.param("enforce", None, False, [], [(REFUSED, "unsigned")], id="enforce-refuses-an-unsigned-write"),
-        pytest.param("enforce", OUTSIDER, False, [], [(REFUSED, "signer")], id="enforce-refuses-a-signer-the-chart-does-not-list"),
-        pytest.param("enforce", SIGNER, True, [], [(REFUSED, "signature")], id="enforce-refuses-a-location-changed-after-signing"),
-        pytest.param("enforce", SIGNER, False, [URI], [], id="enforce-queues-a-write-a-listed-delegator-signed"),
-        pytest.param("observe", None, False, [URI], [(WOULD_REFUSE, "unsigned")], id="observe-queues-an-unsigned-write-and-counts-it"),
+        pytest.param("enforce", None, False, "refused", [], [(REFUSED, "unsigned")], id="enforce-refuses-an-unsigned-write"),
+        pytest.param("enforce", OUTSIDER, False, "refused", [], [(REFUSED, "signer")], id="enforce-refuses-a-signer-the-chart-does-not-list"),
+        pytest.param("enforce", SIGNER, True, "refused", [], [(REFUSED, "signature")], id="enforce-refuses-a-location-changed-after-signing"),
+        pytest.param("enforce", SIGNER, False, "held", [URI], [], id="enforce-queues-a-write-a-listed-delegator-signed"),
+        pytest.param("observe", None, False, "held", [URI], [(WOULD_REFUSE, "unsigned")], id="observe-queues-an-unsigned-write-and-counts-it"),
     ],
 )
-def test_a_task_is_queued_only_when_the_door_admits_its_signature(
+async def test_a_task_is_queued_only_when_the_lane_admits_its_signature(
     *,
-    arrival_door: Door,
+    commit_lane: Lane,
     signature_counts: Callable[[], Counts],
     event_signer: Any,
     secret_store: SecretStoreDouble,
@@ -313,11 +330,12 @@ def test_a_task_is_queued_only_when_the_door_admits_its_signature(
     mode: str,
     signed_by: str | None,
     tampered: bool,
+    answer: str,
     queued: list[str],
     counted: list[tuple[str, str]],
 ) -> None:
-    """ENFORCE acks a refusal and queues nothing, since no redelivery can sign published bytes; OBSERVE queues as before
-    and counts what enforcing would refuse."""
+    """ENFORCE acknowledges a refusal and queues nothing, since no redelivery can sign published bytes; OBSERVE queues as
+    off does and counts what enforcing would refuse."""
     delegator = event_signer(SIGNER)
     secret_store.hold(f"signing-public-{SIGNER}", {"keys": delegator.public})
     arrived = _arrived_write()
@@ -325,34 +343,29 @@ def test_a_task_is_queued_only_when_the_door_admits_its_signature(
         arrived = (delegator if signed_by == SIGNER else event_signer(signed_by)).sign(arrived, on_behalf_of=AUTHOR)
     if tampered:
         arrived["outputs"][0]["facets"]["dataSource"]["uri"] = "s3://another-tenant/abc12345_db$t"
-    client, queue = arrival_door(mode)
-    assert signature_counts() == {REFUSED: ZERO_REFUSALS}, "registering the door must create every refusal series at 0, or a first refusal is no increase"
+    arrivals, queue = commit_lane(mode)
 
-    answered = client.post(
-        "/maintenance-arrival",
-        json=lineage_envelope(arrived).as_wire(),
-        headers={"dapr-api-token": TOKEN},
-    )
+    answered = await arrivals.hold_task(_body(arrived))
 
-    expected: Counts = {REFUSED: dict(ZERO_REFUSALS)}
+    expected: Counts = {}
     for name, reason in counted:
         expected.setdefault(name, {})[("maintenance-arrival", reason)] = 1
     reached = [task.location for task, _ in queue.followed]
-    assert (answered.status_code, answered.json(), reached, signature_counts()) == (200, {"status": "SUCCESS"}, queued, expected)
+    assert (answered, reached, signature_counts()) == (answer, queued, expected)
 
 
-def test_a_door_that_cannot_read_the_signers_keys_asks_for_the_event_again(*, arrival_door: Door, event_signer: Any, secret_store: SecretStoreDouble) -> None:
-    """Enforcing, a door that cannot read a signer's keys can neither admit nor refuse the event, so it asks for it again,
-    since the read can succeed on a later delivery, and queues nothing meanwhile. Off reads no key: the shared judge
-    answers off before it verifies anything (`lakehouse.lineage.door.judge`)."""
+@pytest.mark.asyncio
+async def test_a_lane_that_cannot_read_the_signers_keys_asks_for_the_event_again(
+    *, commit_lane: Lane, event_signer: Any, secret_store: SecretStoreDouble
+) -> None:
+    """Enforcing, a lane that cannot read a signer's keys can neither admit nor refuse the event, so it raises the error the
+    worker hands the delivery back for, since the read can succeed on a later delivery, and queues nothing meanwhile. Off
+    reads no key: the shared judge answers off before it verifies anything (`lakehouse.lineage.door.judge`)."""
     delegator = event_signer(SIGNER)
     keys = secret_store.hold(f"signing-public-{SIGNER}", httpx.Response(503))
-    client, queue = arrival_door("enforce")
+    arrivals, queue = commit_lane("enforce")
 
-    answered = client.post(
-        "/maintenance-arrival",
-        json=lineage_envelope(delegator.sign(_arrived_write(), on_behalf_of=AUTHOR)).as_wire(),
-        headers={"dapr-api-token": TOKEN},
-    )
+    with pytest.raises(ConnectionError, match="could not be read"):
+        await arrivals.hold_task(_body(delegator.sign(_arrived_write(), on_behalf_of=AUTHOR)))
 
-    assert (answered.status_code, answered.json(), queue.followed, keys.called) == (200, {"status": "RETRY"}, [], True)
+    assert (queue.followed, keys.called) == ([], True)

@@ -1,6 +1,6 @@
 ---
 name: rask-dapr
-description: "Dapr in rask: which of the 12 building blocks this estate uses (3) and why, which it does not (9) with the recorded rulings, and the component-vs-DIY rubric — when a Dapr component is the answer and when hand-rolling is justified. Use when adding a capability that smells like queuing/scheduling/locking/config/secrets/middleware, when tempted to hand-roll one of those, when a Dapr API seems to fit a new feature, or when touching sidecar annotations, Components, or the dapr-resiliency map."
+description: "Dapr in rask: which of the 12 building blocks this estate uses (2) and why, which it does not (10) with the recorded rulings, and the component-vs-DIY rubric — when a Dapr component is the answer and when hand-rolling is justified. Use when adding a capability that smells like queuing/scheduling/locking/config/secrets/middleware, when tempted to hand-roll one of those, when a Dapr API seems to fit a new feature, or when touching sidecar annotations, Components or the cron bindings."
 ---
 
 # rask × Dapr — what we use, what we refused, and how to decide
@@ -10,20 +10,21 @@ AUTHORING (its own README title; its prereqs even assume Docker, which rask forb
 docs list the 12 building blocks without tradeoffs. This skill is the estate-grounded layer: every
 claim below was verified against the render or the code (2026-08-28), not inherited from docs.
 
-**ADR 0199 makes NATS JetStream the lakehouse's one bus and plans the move off Dapr** (its own row after LH-494, an
-ADR of its own). Until then this file describes the Dapr the estate runs; a new capability is not built on a Dapr
-block that the move would have to undo.
+**ADR 0199 makes NATS JetStream the lakehouse's one bus and plans the move off Dapr** ([[XC-199]], #787, an ADR of its
+own at its last step). Every event is published and taken on the service's own connection to the bus; what Dapr still
+does for the lakehouse is deliver the catalog's and lineage's cron ticks and log their sidecars in to the secret store.
+This file describes that Dapr; a new capability is not built on a Dapr block that the move would have to undo.
 
-## The inventory — 3 of 12 blocks in use
+## The inventory — 2 of 12 blocks in use
 
 | Block | Used | Where (verified) |
 | --- | --- | --- |
 | Service invocation | ❌ | No service in the estate calls another through it, and the product chart renders no invocation Resiliency. Public traffic never rides invocation: the cluster route reaches each app port directly. A client that invokes a lakehouse app through its own sidecar renders its own policy, since Dapr applies an invocation policy on the CALLING sidecar |
 | State | ❌ | No service in the estate keeps Dapr state, and the product chart renders no state store. Its one user, the notifications inbox, is retired (ADR 0193); a client that hosts actors brings its own store in its own release, scoped to its app-id (see traps) |
-| Pub/sub | ✅ | SUBSCRIPTIONS: `pubsub.jetstream`, one Component per app-id that subscribes, each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers. Unset, the component hands its app ONE message at a time (`concurrencyMode` defaults to single, components-contrib v1.19.0 `pubsub/jetstream/metadata.go:63-65`; measured live 2026-10-23, 61 of 61 lineage deliveries back to back): lineage's subscriber alone says `parallel`, bounded by its durable's `maxAckPending` (`services.lineage.deliveriesInFlight`), so JetStream hands out no more and nothing waits in the sidecar past its `ackWait`. A sidecar cannot rebind a durable whose config changed, so the NATS stream Job recreates `lineage-durable` at a new bound and checks again until a sidecar has recreated it at that value, since the outgoing pod's may recreate it as it was ([[LH-533]]) |
+| Pub/sub | ❌ | No service publishes or subscribes through it, and the product chart renders no `pubsub.jetstream` Component and no Resiliency. Each service publishes and takes its deliveries on its own connection to NATS JetStream as its own bus user (`lakehouse.bus`; the maintenance worker's queue, `maintenance.services.queue`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]): lineage and the worker pull durable consumers the chart's stream Job declares and create none, and each catalog replica follows CATALOG_CONTROL by reading it by sequence. A client that subscribes through its own sidecar renders its own Component, in its own release (see traps) |
 | Bindings | ✅ | `bindings.cron` ×7 in the product chart, six scoped to the catalog and one to lineage (maintenance runs none: its times are NATS message schedules on its own work queue, which fire once whatever its replica count, ADR 0198 decisions 5 and 6): `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline), `catalog-commit-reconcile-cron` ([[LH-497]], announcing each committed version lineage's feed lacks), `catalog-manifest-reclaim-cron` ([[LH-251]], ADR 0185, removing each root's `__manifest` versions past their retention), `catalog-declaration-converge-cron` ([[XC-213]], ADR 0206, converging the projects, warehouses and service grants the chart's `catalog.declared` values declare); `catalog-control-relay-cron` renders only with `catalog.controlEmit` and `catalog.controlOutbox.enabled`, and `lineage-relay-cron` only with `services.lineage.relay.enabled`. A client's release renders its own — read the cluster for what runs, not the templates. Each cron is an input binding delivered to `POST /<component-name>` at the pod ROOT. The product chart renders no output binding |
 | Actors | ❌ | No service in the estate hosts an actor, so placement and the Scheduler hold nothing of the lakehouse's. The one host, the notifications inbox, is retired (ADR 0193) |
-| Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). ONE component, `lance-secrets`, logs each sidecar in with Kubernetes auth as the role `<release>-{appID}` (Dapr 1.19+), only to resolve its own components' `secretKeyRef`s (each subscription component's bus user). NO APP READS A SECRET THROUGH IT ([[XC-199]]): each service logs in to the store itself, as the same role, with the pod's projected token mounted into its own container (`lakehouse.governed.secrets`, env from `lance.secretStoreEnv`): before it serves, failing its start closed when the store gives it no usable login (one the store admits and then answers about itself, `auth/token/lookup-self`, which each rendered policy grants; a login refused that question is made again at the next attempt), and again once half its token's lease is used or on the pass that finds the store refusing that question (asked every 15 s; a refusal costs a login, and logins the store goes on refusing wait twice as many passes each time, fifteen at most), on a loop its supervisor keeps (`secret_store_session`, entered first in each lifespan). While that loop is passing no read logs in, on a refused secret or on a login that ran out: the start and the loop do (a read logs in itself only once the loop has made no pass for a minute), and the store answers 403 for a dropped token and for a secret the policy does not name alike. Each app's Configuration denies the sidecar's secrets API whole (`lance.storeReads`, ADR 0169 as amended 2026-11-14). THE estate rule: sole source, fail-closed, never env fallback. Every read is held at most a jittered 300-600 s and read again (`lakehouse.governed.secret_cache`, ADR 0166), so a rotation in the store reaches running pods; no lakehouse service holds an object-store key pair, each one's store identity being its ServiceAccount token (ADR 0170, ADR 0197), and the app-token door accepts the current or previous token |
+| Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). ONE component, `lance-secrets`, scoped to the catalog's and lineage's sidecars and to any `openbao.externalReaders` app (`lance.sidecarScopes`), logs each sidecar in with Kubernetes auth as the role `<release>-{appID}` (Dapr 1.19+). No product Component names a `secretKeyRef`, so it resolves no secret for the lakehouse; a client's sidecar may resolve its own components' secrets through it. NO APP READS A SECRET THROUGH IT ([[XC-199]]): each service logs in to the store itself, as the same role, with the pod's projected token mounted into its own container (`lakehouse.governed.secrets`, env from `lance.secretStoreEnv`): before it serves, failing its start closed when the store gives it no usable login (one the store admits and then answers about itself, `auth/token/lookup-self`, which each rendered policy grants; a login refused that question is made again at the next attempt), and again once half its token's lease is used or on the pass that finds the store refusing that question (asked every 15 s; a refusal costs a login, and logins the store goes on refusing wait twice as many passes each time, fifteen at most), on a loop its supervisor keeps (`secret_store_session`, entered first in each lifespan). While that loop is passing no read logs in, on a refused secret or on a login that ran out: the start and the loop do (a read logs in itself only once the loop has made no pass for a minute), and the store answers 403 for a dropped token and for a secret the policy does not name alike. Each app's Configuration denies the sidecar's secrets API whole (`lance.storeReads`, ADR 0169 as amended 2026-11-14). THE estate rule: sole source, fail-closed, never env fallback. Every read is held at most a jittered 300-600 s and read again (`lakehouse.governed.secret_cache`, ADR 0166), so a rotation in the store reaches running pods; no lakehouse service holds an object-store key pair, each one's store identity being its ServiceAccount token (ADR 0170, ADR 0197), and the app-token door accepts the current or previous token |
 | Workflow | ❌ | Nothing in this repository runs a workflow. The lakehouse runs none: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, `catalog-promotion-expiry-cron` expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
 | Configuration | ❌ | Ruled out — see refusals |
 | Middleware | ❌ | Ruled out — see refusals |
@@ -59,9 +60,10 @@ block that the move would have to undo.
   churn; a correctness-critical seam should not pivot on one without a recorded owner decision.
 
 **Never DIY these, ever:** secret distribution (the secret store is the sole source, read by each service under
-its own login through the one seam `lakehouse.governed.secrets` — no env fallback, no "graceful degradation"), pub/sub
-delivery/retry (JetStream + `dapr-resiliency.yaml` for a delivery; a publish the bus did not take stays staged in its
-outbox for its relay, never a hand retry loop around it), and actor placement/turn semantics.
+its own login through the one seam `lakehouse.governed.secrets` — no env fallback, no "graceful degradation"), bus
+delivery and retry (the bus seam's: `lakehouse.bus.Bus.consume` pulls and settles each delivery by the one rule
+`lakehouse.bus_delivery.judged`; a publish the bus did not take stays staged in its outbox for its relay, never a hand
+retry loop around either), and actor placement/turn semantics.
 
 ## Recorded refusals (do not re-litigate without new facts)
 
@@ -86,7 +88,7 @@ outbox for its relay, never a hand retry loop around it), and actor placement/tu
   work queue that holds one per table, so it needs no lease, no lock and no cron binding.
 
   **Why the Jobs API still loses, on today's code:** a Dapr job would be a second home for times the bus already holds,
-  scheduled through a sidecar whose publish cannot set the `Nats-Schedule` headers (`queue.py` cites
+  scheduled through a sidecar whose publish cannot set the `Nats-Schedule` headers (ADR 0198 decision 5 cites
   `pubsub/jetstream/jetstream.go:115-145`), and invisible to the render gates. ADR 0199 makes NATS JetStream the one bus
   and plans the move off Dapr, so a new time-shaped need goes to a NATS message schedule, not to a Dapr block.
 
@@ -125,34 +127,35 @@ lineage's and the catalog's crons are idempotent or ETag-guarded (traps below). 
 ## Sidecar map — who can call Dapr APIs at all
 
 The control plane (injector, sentry, operator, placement, scheduler) is the platform's, a prerequisite installed once
-per cluster (ADR 0153, [[XC-128]]); rask renders only its Components, Configurations and Resiliency, and refuses to
-render for a cluster that does not serve `dapr.io/v1alpha1`. Development installs it from `deploy/fixtures/dapr` in
-`dapr-system`, with `dapr_rbac.secretReader` off (`rask-helm` §8).
+per cluster (ADR 0153, [[XC-128]]); rask renders only its Components and Configurations, and refuses to render for a
+cluster that does not serve `dapr.io/v1alpha1`. Development installs it from `deploy/fixtures/dapr` in `dapr-system`,
+with `dapr_rbac.secretReader` off (`rask-helm` §8).
 
-Sidecars are injected for the lakehouse services (`rask.daprAnnotations`; the
+Sidecars are injected into the catalog's and lineage's pods, for their cron ticks (`rask.daprAnnotations`; the
 injector webhook is fail-closed via the paired label — a pod with the annotation but no label is the
-silent no-sidecar failure). **No sidecar:** the console's web pod and any bring-your-own job.
-Anything running there gets its secrets by other means; the ESO path
-(ESO, a prerequisite since XC-004) is the sanctioned k8s-native alternative when a pod must hold a secret and has no
-sidecar.
+silent no-sidecar failure). **No sidecar:** the maintenance worker, the console's web pod and any bring-your-own job.
+A lakehouse service reads its secrets under its own store login whether or not its pod runs a sidecar
+(`lakehouse.governed.secrets`); ESO (a prerequisite since XC-004) is the k8s-native path when a pod must hold a secret
+as a Kubernetes Secret.
 
 ## Traps already paid for (don't rediscover)
 
-- **The lakehouse publishes its own CloudEvent on its own connection, and a delivering sidecar takes it as it is**
-  ([[XC-199]], measured on daprd 1.19.0-rc.4 against nats-server 2.15.2, 2026-11-13 and 2026-11-14). The seam
+- **The lakehouse publishes its own CloudEvent on its own connection, and a client's subscribing sidecar takes it as it
+  is** ([[XC-199]], measured on daprd 1.19.0-rc.4 against nats-server 2.15.2, 2026-11-13 and 2026-11-14). The seam
   (`lakehouse.bus`) sends the envelope as the message body under `application/cloudevents+json`, with its `id` as the
   message's `Nats-Msg-Id`: the stream's duplicate window drops a second publish of that id and still acknowledges it,
   so the id is per event, never per run (`lakehouse.cloud_events`; a run's START and COMPLETE share a run id), and the
   seam believes a duplicate acknowledgement only after reading the stored message back. The envelope carries the
-  publish's `traceparent` (and `tracestate`), and a sidecar delivers it to its app under that trace, in the request's
-  `traceparent` header and in the envelope alike (the nats-auth lane holds this). And only structured mode works: the
-  component hands a subscriber no NATS header, so an envelope sent as headers reaches the app as bare data.
+  publish's `traceparent` (and `tracestate`): the lakehouse's own lanes handle each delivery as a consumer span
+  `process <subject>` under that trace, and a sidecar delivers it to its app under that trace too, in the request's
+  `traceparent` header and in the envelope alike. Only structured mode works through a sidecar: the component hands a
+  subscriber no NATS header, so an envelope sent as headers reaches the app as bare data.
 - **A Configuration's secret scope binds the app's API, never a component.** Dapr checks `secrets.scopes` only on
   `GET /v1.0/secrets/...` (`pkg/api/universal/secrets.go:35`); a component's `secretKeyRef` resolves through the store
   with the sidecar's own login (`pkg/runtime/processor/secret/secret.go:162-170`). Every product Configuration denies
   that API whole (`defaultAccess: deny` and no allow list, [[XC-199]]), which keeps an APP from its sidecar's store
-  login and nothing more: a secret a component reads (a pub/sub user) goes in the app's STORE policy, and only the
-  store's policy keeps a sidecar from a secret. Same in 1.18.1 and 1.19.0-rc.4.
+  login and nothing more: a secret a component reads (a client's pub/sub user, say) goes in that app's STORE policy, and
+  only the store's policy keeps a sidecar from a secret. Same in 1.18.1 and 1.19.0-rc.4.
 - **`{appID}` is filled into ANY component's metadata** when the sidecar starts (`pkg/runtime/meta/meta.go:96-97`,
   documented as templated metadata values, with `{podName}`, `{namespace}`, `{uuid}`). That is how one `lance-secrets`
   logs every sidecar in as its own app's role.
@@ -163,8 +166,8 @@ sidecar.
   actor hosting silently disables — healthy pod, permanently empty feature. Probe `/v1.0/metadata`
   for the ACTOR capability, not the log line.
 - daprd APPENDS its caller-identity headers and FastAPI binds the FIRST duplicate, so a client-supplied
-  `dapr-caller-app-id` is a claim, never an identity. No door authorizes on it: a Dapr-delivered route
-  authenticates on `dapr-api-token` alone (`require_dapr_token`), which a request through the cluster
+  `dapr-caller-app-id` is a claim, never an identity. No door authorizes on it: a cron tick route (and its binding
+  pre-flight, `add_binding_preflight`) authenticates on `dapr-api-token` alone (`require_dapr_token`), which a request through the cluster
   route never carries because it reaches the app port without a sidecar, and a caller's identity is its
   verified bearer (ADR 0156 C5).
 - A cron/input binding is delivered to `POST /<component-name>` at the pod ROOT — never under an API
@@ -187,36 +190,27 @@ sidecar.
   refusal: the cron component discards the handler's result (components-contrib `bindings/cron/cron.go`, `_, _ =
   handler(...)`), so a refusal would buy only daprd's error log, and the next tick after the window does the work.
 - `ActorProxy` dispatches @actormethod WIRE names, not Python names; mocks cannot catch a mismatch.
-- Missing `dapr.io/app-token-secret` on a bus-subscribing app ⇒ `assert_app_token_configured`
-  crash-loops the pod. Missing row in `dapr-resiliency.yaml` ⇒ no sidecar retry AND no dead-letter.
-- **A bus outage longer than about two minutes closes every `pubsub.jetstream` connection for good, and the pods
-  stay Ready.** Dapr 1.18.1's component (components-contrib v1.18.0, `jetstream.go:60-77`) connects with nats.go's
+- Missing `dapr.io/app-token-secret` on an app with a cron tick route ⇒ `assert_app_token_configured`
+  crash-loops the pod. The app token guards the cron tick routes and their pre-flights only.
+- **A Component edit reaches a sidecar ONLY on restart** (`HotReload: false`), so every Dapr pod carries a
+  `checksum/dapr` digest of the Components its sidecar loads (`lance.daprDigest`): an edit rolls the pods whose sidecar
+  loads it ([[XC-164]]). Every product Component lives in `dapr-component.yaml`, the one template the digest reads.
+- **A bus outage longer than about two minutes closes a `pubsub.jetstream` component's connection for good, and the
+  pod stays Ready.** Dapr 1.18.1's component (components-contrib v1.18.0, `jetstream.go:60-77`) connects with nats.go's
   defaults, 60 reconnect attempts 2 s apart, and no metadata field changes them. After the last attempt the client
-  closes: every subscription is dropped, and a publish through the sidecar (a dead-letter park, the watchdog's probe)
-  answers `nats: connection closed`. daprd's liveness is a TCP
-  check and its readiness reads no component, so nothing restarts it, and with HotReload off it re-creates no component
-  on its own. Measured on the kind lane 2026-10-17: after a 150 s outage, lineage's and notifications' durables
-  acknowledged nothing for sixteen minutes. Each service with a jetstream component runs `lakehouse.bus_watchdog`. It
-  probes each component on `probe.<app-id>`, a subject no stream captures (one row per app in `nats.auth.users`), and
-  asks the sidecar to shut down (`POST /v1.0/shutdown`, answered only on the pod's loopback) once the bus greets a
-  connection again. It never does so sooner: a sidecar started while the bus refuses connections fails its component
-  and exits. A new service with a jetstream component needs three things or it wedges on the first long outage: it
-  starts the watchdog in its lifespan, it gets `lance.busEnv`, and it gets its probe row. Upstream:
-  components-contrib#4563, fix #4564. Delete the watchdog once a Dapr release ships the fix.
+  closes: every subscription is dropped, and a publish through the sidecar answers `nats: connection closed`. daprd's
+  liveness is a TCP check and its readiness reads no component, so nothing restarts it, and with HotReload off it
+  re-creates no component on its own. Measured on the kind lane 2026-10-17: after a 150 s outage, two subscribing
+  sidecars' durables acknowledged nothing for sixteen minutes. The product chart renders no such component, since each
+  service opens its own connection again in-process (`lakehouse.bus.Bus.keep_connected`); a client that subscribes
+  through its own sidecar inherits the trap. Upstream: components-contrib#4563, fix #4564.
 - **A Resiliency retry whose `policy` and `duration` disagree is silently ineffective, and nothing
-  rejects it.** dapr/kit's `NewBackOff` reads `Duration` ONLY under `PolicyConstant`; under
-  `PolicyExponential` it is ignored and the schedule comes from `InitialInterval`/`Multiplier`/
-  `RandomizationFactor` — none of which `resiliencies.dapr.io` declares, so the first step is pinned at
-  cenkalti/backoff's 500ms default. `policy: exponential` + `duration: 30s` therefore renders, applies,
-  and retries for **~4 seconds**. Measured 2026-09-14 by driving a poison delivery at `bronze-to-silver`
-  and timing the park: 3.553s against a chart that documented 7.5 minutes. **`constant` + `duration` is
-  the only shape that reaches minutes, and the only deterministic one** (`randomizationFactor` is
-  equally unsettable, and exponential's 0.5 default swings the total ±50%). When sizing the window,
-  spend it on FEW LONG steps: the handler's own time per attempt counts against the component's
-  `ackWait`, so the same total split into many short steps overruns it and the broker redelivers
-  underneath a retry still in flight. Gated by
-  `tests/unit/test_the_pubsub_retry_window_is_the_one_the_chart_states.py`. **A Resiliency edit reaches
-  a sidecar ONLY on restart**, exactly like a Component (`HotReload: false`), so the Resiliency is in every Dapr pod's
-  `checksum/dapr` digest beside its Components: an edit rolls the pods whose sidecar loads it ([[XC-164]]). Every
-  Component and the Resiliency live in `dapr-component.yaml` and `dapr-resiliency.yaml`, the two templates the digest
-  reads (`test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py` refuses one rendered anywhere else).
+  rejects it.** The product chart renders no Resiliency; this is for a client's own. dapr/kit's `NewBackOff` reads
+  `Duration` ONLY under `PolicyConstant`; under `PolicyExponential` it is ignored and the schedule comes from
+  `InitialInterval`/`Multiplier`/`RandomizationFactor` — none of which `resiliencies.dapr.io` declares, so the first
+  step is pinned at cenkalti/backoff's 500ms default. `policy: exponential` + `duration: 30s` therefore renders,
+  applies, and retries for **~4 seconds**. Measured 2026-09-14 by driving a poison delivery at a subscription and
+  timing the park: 3.553s against a chart that documented 7.5 minutes. **`constant` + `duration` is the only shape
+  that reaches minutes, and the only deterministic one** (`randomizationFactor` is equally unsettable, and
+  exponential's 0.5 default swings the total ±50%). A Resiliency edit, like a Component's, reaches a sidecar only on
+  restart.

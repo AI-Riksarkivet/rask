@@ -1,10 +1,9 @@
-"""What maintenance's two processes stand on (ADR 0198).
+"""What maintenance's worker process stands on (ADR 0198).
 
-The web process (:mod:`maintenance.service`) serves the write-event lane, and the worker process
-(:mod:`maintenance.worker`) runs the queue's tasks. Both read the store under this service's session and both carry a
-sidecar whose bus connections are watched (:func:`standing`); only the worker signs and emits, so only it holds the
-signing key, the connection its events are published on and the two emitters (:func:`collaborators`). Each is built once at its process's
-start and stopped at its end, and a start that fails part-way stops what it had started.
+The worker (:mod:`maintenance.worker`) runs the queue's tasks and pulls the commit lane. It reads the store under this
+service's session (:func:`standing`), and signs and emits with its signing key, the connection its events are published
+on and the two emitters (:func:`collaborators`). Each is built once at the process's start and stopped at its end, and a
+start that fails part-way stops what it had started.
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.bus import Bus, bus_session
-from lakehouse.bus_watchdog import start_bus_watchdog
 from lakehouse.control_emit import ControlEmitter, ControlSign, make_control_emitter
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency
@@ -82,8 +80,7 @@ def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
 
 @asynccontextmanager
 async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[None]:
-    """The secret store's login, the object store's session and the bus watchdog, for either process, their loops on
-    ``loops``, stopped on the way out."""
+    """The secret store's login and the object store's session, their loops on ``loops``, stopped on the way out."""
     async with AsyncExitStack() as stack:
         instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
         # MAINTENANCE LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before it serves or takes a task, and its start
@@ -101,11 +98,6 @@ async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Superviso
         else:
             stack.push_async_callback(store_session.stop)
         app.state.store_session = store_session
-        # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
-        # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
-        bus_watchdog = await start_bus_watchdog(loops)
-        if bus_watchdog is not None:
-            stack.push_async_callback(bus_watchdog.stop)
         yield
 
 

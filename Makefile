@@ -429,10 +429,12 @@ governance-chain: ## Governance e2e — authz + provenance authorship + lineage 
 
 # The NATS permission table (`nats.auth.users`) on a real broker: the chart's nats-server in operator mode
 # with test-only keys, every bus client driven as its own user and refused on every subject it does not
-# own, and real daprd running the chart's Components against it ([[XC-078]]); on the same rig, maintenance's worker
-# shares the work queue the stream Job declares, and a killed replica's task goes to another ([[LH-494]]). `dagger call nats-auth
-# --values=<file>` reads the table from another values file, e.g. a copy with one allowance deleted.
-nats-auth: ## NATS auth e2e — each bus client admitted only to its own subjects (operator-mode broker + daprd)
+# own ([[XC-078]]); each service's own connection publishing, pulling its durable consumer and following its topic,
+# and the stream Job's declare and retire phases run with their rendered scripts ([[XC-199]]); on the same rig,
+# maintenance's worker shares the work queue the stream Job declares, a killed replica's task goes to another, and its
+# commit lane settles each announcement ([[LH-494]]). `dagger call nats-auth --values=<file>` reads the table from
+# another values file, e.g. a copy with one allowance deleted.
+nats-auth: ## NATS auth e2e — each bus client admitted only to its own subjects, each lane on its own connection (operator-mode broker)
 	$(DAGGER) call nats-auth
 
 # ---- local k3s ------------------------------------------------------------
@@ -500,7 +502,7 @@ DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
-# Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
+# Ready before any pod that wants a sidecar exists; the NATS bus every service dials follows. The CloudNativePG
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
 # given the issuer rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's; observability is

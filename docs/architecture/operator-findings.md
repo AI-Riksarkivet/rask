@@ -357,6 +357,8 @@ catalog rung, and no store, bus or OpenFGA credential.
   objects, since a seed in a spec breaks the zero-trust fact.
 - **Whether NACK's control-loop mode can manage a stream it did not create** without first deleting it, and how it
   behaves on rask's mirror stream `CATALOG_CONTROL_BROADCAST`. Not read.
+  Since 2026-11-14 (XC-199 step D4) the mirror is gone: each catalog replica follows `CATALOG_CONTROL` itself, and the
+  stream Job's retire phase removes `CATALOG_CONTROL_BROADCAST`.
 - **Whether Argo CD v3.5.7 reports a custom resource's `Ready` condition as its health without a Lua health check.**
   Not read in Argo CD's source; it decides whether a sync wave can wait on a `LakehouseWarehouse`.
 - **The grant doors' idempotence.** I read that project and warehouse create converge on a re-POST; I did not read

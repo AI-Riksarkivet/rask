@@ -2,7 +2,7 @@ rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" (namespac
 
 
 {{- $root := . }}
-Event-driven path:  catalog --Dapr publish--> [pubsub.jetstream over NATS] --> lineage /lineage-events --> the provenance tables (forwarded as OpenLineage to services.lineage.forward.url)
+Event-driven path:  catalog --publishes on its own connection--> [NATS JetStream, stream LINEAGE] --pulled by lineage (consumer lineage-ingest)--> the provenance tables (forwarded as OpenLineage to services.lineage.forward.url)
 
 Services (ClusterIP):
 {{- range $name := list "catalog" "lineage" }}

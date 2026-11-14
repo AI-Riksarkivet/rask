@@ -25,7 +25,7 @@ from starlette.types import Message, Scope
 LANCE_APPS = (
     ("catalog", "catalog.main"),
     ("lineage", "lineage.main"),
-    ("maintenance", "maintenance.service"),
+    ("maintenance", "maintenance.worker"),
 )
 
 

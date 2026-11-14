@@ -170,45 +170,45 @@ tests:
         alertname: CatalogWritesShedSustained
         exp_alerts: []
 
-  # 7. A Dapr consumer booking process_status=retry continuously for >15m → DaprConsumerWedge fires. sum by
-  #    (app_id) keeps app_id on the resulting alert, so it names the wedged subscriber.
+  # 7. A lane asking for its deliveries again on every scrape for >15m → BusConsumerRetrying fires. sum by
+  #    (lance_bus_consumer) keeps the consumer on the alert, so it names the lane that is not draining.
   - interval: 1m
     input_series:
-      - series: 'dapr_component_pubsub_ingress_count_total{process_status="retry",app_id="lineage"}'
-        values: "0+1x20" # a retried delivery every scrape — the handler never succeeds
+      - series: 'bus_deliveries_total{lance_bus_outcome="again",lance_bus_consumer="lineage-ingest",service_name="lineage"}'
+        values: "0+1x20" # a delivery handed back every scrape: the handling never succeeds
     alert_rule_test:
       - eval_time: 16m
-        alertname: DaprConsumerWedge
+        alertname: BusConsumerRetrying
         exp_alerts:
           - exp_labels:
               severity: critical
-              service: dapr
-              app_id: lineage
+              service: fleet
+              lance_bus_consumer: lineage-ingest
             exp_annotations:
-              summary: "Dapr consumer wedged — a subscriber is retrying inbound messages for 15m"
-              description: "A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound deliveries for 15m without clearing, so this consumer is not draining its subscription and the cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end"
+              summary: "lineage-ingest: deliveries asked for again for 15m — the lane is not draining"
+              description: "The service that pulls lineage-ingest has asked for its deliveries again for 15m without clearing: its handling keeps failing, so the consumer is not draining and what the lane records has stopped. A transient error clears in minutes. Read the service's `delivery_handling_failed` log for the error and check what it depends on (the catalog, OpenFGA, the secret store). Runbook: docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end"
 
-  # 8. A busy-but-HEALTHY consumer books only process_status=success (no retry series at all) → NO alert.
-  #    This is the case the old dapr_resiliency_count rule got wrong: that counter rises on healthy traffic
-  #    too, so it would have false-paged here; process_status=retry stays absent on the happy path.
+  # 8. A busy and healthy lane books `taken` alone, its `again` series flat at the 0 it was created at → NO alert.
   - interval: 1m
     input_series:
-      - series: 'dapr_component_pubsub_ingress_count_total{process_status="success",app_id="lineage"}'
-        values: "0+5x20" # heavy healthy throughput — five successful deliveries per scrape, no retries
+      - series: 'bus_deliveries_total{lance_bus_outcome="taken",lance_bus_consumer="lineage-ingest",service_name="lineage"}'
+        values: "0+5x20" # five deliveries taken per scrape
+      - series: 'bus_deliveries_total{lance_bus_outcome="again",lance_bus_consumer="lineage-ingest",service_name="lineage"}'
+        values: "0x20"
     alert_rule_test:
       - eval_time: 16m
-        alertname: DaprConsumerWedge
+        alertname: BusConsumerRetrying
         exp_alerts: []
 
-  # 9. A transient inbound error that clears in a few minutes → NO alert (retries are normal; a WEDGE is
-  #    retries that never stop). The retry counter stops rising after ~4 min, so rate() falls back to 0.
+  # 9. A dependency that came back within a few minutes → NO alert (a delivery asked for again and then taken is the
+  #    lane working). The `again` counter stops rising after ~4 min, so rate() falls back to 0.
   - interval: 1m
     input_series:
-      - series: 'dapr_component_pubsub_ingress_count_total{process_status="retry",app_id="lineage"}'
-        values: "0 1 2 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4" # retried only in the first ~4 min, then recovered
+      - series: 'bus_deliveries_total{lance_bus_outcome="again",lance_bus_consumer="lineage-ingest",service_name="lineage"}'
+        values: "0 1 2 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4" # handed back only in the first ~4 min, then recovered
     alert_rule_test:
       - eval_time: 16m
-        alertname: DaprConsumerWedge
+        alertname: BusConsumerRetrying
         exp_alerts: []
 
   # 9a. [[LH-574]] Lance throttled by the store for over 15m → LanceObjectStoreThrottled fires, naming the service; a store
@@ -258,47 +258,67 @@ tests:
               summary: "catalog: over 5% of object-store requests drew a retryable answer for 15m"
               description: "More than one request in twenty from Lance in catalog got a 5xx, 429 or 408 from the store for 15m. Lance retries each inside its store bounds, so every call costs up to its retry count over: a degrading store shows here before requests fail. Runbook: docs/runbooks/RUNBOOK-oncall.md#the-object-store-throttles-or-retries"
 
-  # 9b. [[LH-559]] The two lakehouse lanes whose parks nothing reads: daprd's own count is the record. A pod's first park
-  #     is a series appearing at 1 (daprd creates it on the first event it books), so the alert must fire on it, and a
-  #     second park later on the same series fires through `increase`. An app's own DROP answer (`status="success"`)
-  #     and retries are not parks.
+  # 9b. [[LH-559]] The two lanes that give an event up with nothing left to read back: each service's own count is the
+  #     record. Every series exists at 0 from the lane's start, so the first event given up is an increase; an event
+  #     taken, and one asked for again that is taken later, are not given up. A worker's lane that hands announcements
+  #     back for 15m pages on its own rule, and one that recovered in minutes does not.
   - interval: 1m
     input_series:
-      - series: 'dapr_component_pubsub_ingress_count_total{app_id="catalog",process_status="drop",status="drop",topic="catalog.control.v1"}'
-        values: "_x3 1x6" # the replica's first park, at 3m
-      - series: 'dapr_component_pubsub_ingress_count_total{app_id="maintenance",process_status="drop",status="drop",topic="lineage.events.v1"}'
-        values: "1x20 2x10" # a park 20m ago that has stopped paging, then a second one at 20m
-      - series: 'dapr_component_pubsub_ingress_count_total{app_id="maintenance",process_status="drop",status="success",topic="lineage.events.v1"}'
-        values: "0+1x30" # the app answering DROP: not a park
-      - series: 'dapr_component_pubsub_ingress_count_total{app_id="catalog",process_status="retry",status="retry",topic="catalog.control.v1"}'
-        values: "0+1x30" # retries still in flight: not a park
+      - series: 'bus_deliveries_total{lance_bus_outcome="failed",lance_bus_consumer="catalog.control.v1",service_name="catalog"}'
+        values: "0x3 1x16" # the replica's first event given up, at 4m
+      - series: 'bus_deliveries_total{lance_bus_outcome="taken",lance_bus_consumer="catalog.control.v1",service_name="catalog"}'
+        values: "0+1x20" # events buffered: not given up
+      - series: 'maintenance_arrivals_settled_total{outcome="ended"}'
+        values: "0x19 1x10" # an announcement ended at 20m
+      - series: 'maintenance_arrivals_settled_total{outcome="held"}'
+        values: "0+1x30" # announcements settled: not ended
+      - series: 'maintenance_arrivals_settled_total{outcome="retried"}'
+        values: "0 1 2 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4" # handed back for ~4 min, then recovered
     alert_rule_test:
-      - eval_time: 5m
-        alertname: CatalogControlLaneDeadLettering
+      - eval_time: 6m
+        alertname: CatalogControlLaneDroppingEvents
         exp_alerts:
           - exp_labels:
               severity: warning
               service: catalog
-              topic: catalog.control.v1
+              lance_bus_consumer: catalog.control.v1
             exp_annotations:
-              summary: "The catalog dead-lettered control events (catalog.control.v1) — its feed missed them"
-              description: "A catalog replica's sidecar exhausted its retry schedule on a control event and parked it on dlq.catalog.control, so that replica's change-event feed lacks it. The park is kept on the DLQ stream. Read the replica's logs for the failing delivery (keys unavailable, a crash in the handler). Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
-      - eval_time: 15m
-        alertname: CatalogControlLaneDeadLettering
+              summary: "The catalog gave up control events (catalog.control.v1) — its feed missed them"
+              description: "A catalog replica could not buffer a control event it followed: the keys its signature is checked against could not be read on any try, or its handling raised. That replica's change-event feed lacks the event; the audit trail still records the change. Read the replica's `bus_followed_message_not_handled` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+      - eval_time: 18m
+        alertname: CatalogControlLaneDroppingEvents
         exp_alerts: []
       - eval_time: 15m
-        alertname: MaintenanceArrivalDeadLettering
+        alertname: MaintenanceArrivalLaneEndingEvents
         exp_alerts: []
       - eval_time: 22m
-        alertname: MaintenanceArrivalDeadLettering
+        alertname: MaintenanceArrivalLaneEndingEvents
         exp_alerts:
           - exp_labels:
               severity: warning
               service: maintenance
-              topic: lineage.events.v1
             exp_annotations:
-              summary: "Maintenance dead-lettered write events (lineage.events.v1) — their tables wait for their next pass"
-              description: "The write-event lane's sidecar exhausted its retry schedule and parked a write on dlq.maintenance.arrival, so no pass was held for the commit; the table's next scheduled pass, within `maintenance.queue.recheckHours`, reads it, and the hourly audit queues one for a table no schedule holds. The park is kept on the DLQ stream. A lane that parks every delivery cannot reach the work queue or read a table's claim: read maintenance's logs for the failing delivery. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              summary: "Maintenance ended commit announcements unhandled — their tables wait for their next pass"
+              description: "The worker's write-event lane could not settle a commit announcement on any of its deliveries and ended it, so no pass was held for the commit; the table's next scheduled pass, within `maintenance.queue.recheckHours`, reads it, and the hourly audit queues one for a table no schedule holds. A lane that ends every announcement cannot reach the work queue or read a table's claim: read the worker's `maintenance_arrival_ended` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+      - eval_time: 20m
+        alertname: MaintenanceArrivalLaneRetrying
+        exp_alerts: []
+
+  # 9c. The worker's lane handing announcements back on every scrape for >15m → MaintenanceArrivalLaneRetrying fires.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_arrivals_settled_total{outcome="retried"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: MaintenanceArrivalLaneRetrying
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+            exp_annotations:
+              summary: "Maintenance's write-event lane is handing announcements back for 15m"
+              description: "The worker's write-event lane has handed commit announcements back for 15m without clearing: it cannot read a signer's keys or a table's claim, or the work queue does not take the task. No pass is held for those commits until it clears, and each is ended on its last delivery. Read the worker's `maintenance_arrival_retried` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end"
 
   # ── M24: the six rules that had no fire-proof ────────────────────────────────────────────────────
   # `promtool test rules` only evaluates the cases declared here, so a rule with no case is never
@@ -347,7 +367,7 @@ tests:
               service: "lineage"
             exp_annotations:
               summary: "Lineage ingest dead-lettering — provenance is being LOST"
-              description: "A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal). Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "Lineage's ingest lane parked an event the feed does not hold: it could not be recorded on any of its deliveries, or its author lacks a grant. The event is kept in the refusals table for the estate admin's replay, and the feed lacks its row until then. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # M24 d. A flat dead-letter counter is the healthy estate; it must stay silent.
   - interval: 1m
@@ -375,9 +395,9 @@ tests:
               service: "lineage"
             exp_annotations:
               summary: "Lineage ingest is REFUSING events — a producer's provenance is being dropped"
-              description: "A run was refused because its stamped author does not hold the rung its operation demands on the datasets it claims to have written, and `lance_lineage_door` says where: a bus delivery is parked on the dead-letter topic, the HTTP door answers its producer 403, and the outbox drain records it in the refusals table. The feed lacks the run until the grant is written. Either a producer is claiming an identity it has no grant for (the case the gate exists to catch) or a legitimate producer lost a grant it needs (a broken cascade wearing an authorization costume). Distinct from `unrepairable`, which no grant can repair. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "A run was refused because its stamped author does not hold the rung its operation demands on the datasets it claims to have written, and `lance_lineage_door` says where: a bus delivery is parked in lineage's refusals table, the HTTP door answers its producer 403, and the outbox drain records it in the refusals table. The feed lacks the run until the grant is written. Either a producer is claiming an identity it has no grant for (the case the gate exists to catch) or a legitimate producer lost a grant it needs (a broken cascade wearing an authorization costume). Distinct from `unrepairable`, which no grant can repair. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
-  # THE DISCARD IS THE ONLY TRACE. An unrepairable event is ACKED, so it never reaches `/lineage-dlq`
+  # THE DISCARD IS THE ONLY TRACE. An unrepairable event is ACKED, so the lane never parks it
   # and `LineageIngestDeadLettering` cannot see it — a steady dribble must page or the loss is silent.
   - interval: 1m
     input_series:

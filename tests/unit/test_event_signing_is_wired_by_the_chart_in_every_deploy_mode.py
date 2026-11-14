@@ -69,21 +69,24 @@ def _lineage_env(docs: tuple[dict, ...]) -> dict[str, str]:
     return chart_render.env_of(lineage["spec"]["template"]["spec"]["containers"][0])
 
 
-#: The apps that host a signature door, and whether one of their doors takes control events: maintenance's
-#: /maintenance-arrival, which `register_arrival_route` registers while MAINTENANCE_ARRIVAL_ENABLED is true, and the
-#: catalog's own /control-events, its subscription to the broadcast it publishes, while LANCE_CONTROL_EMIT_ENABLED is true
-#: ([[CTL-32]]).
-_DOOR_APPS = {"maintenance.service:app": False, "catalog.main:app": True}
-#: The env switch a door's registration waits on, for the apps whose door is conditional.
-_DOOR_SWITCH = {"maintenance.service:app": "MAINTENANCE_ARRIVAL_ENABLED", "catalog.main:app": "LANCE_CONTROL_EMIT_ENABLED"}
+#: The apps that host a signature door, and whether one of their doors takes control events: maintenance's worker, whose
+#: write-event lane runs while MAINTENANCE_ARRIVAL_ENABLED is true, and the catalog, which follows the control events it
+#: publishes while LANCE_CONTROL_EMIT_ENABLED is true ([[CTL-32]]).
+_DOOR_APPS = {"maintenance.worker": False, "catalog.main:app": True}
+#: The env switch a door's lane waits on, for the apps whose door is conditional.
+_DOOR_SWITCH = {"maintenance.worker": "MAINTENANCE_ARRIVAL_ENABLED", "catalog.main:app": "LANCE_CONTROL_EMIT_ENABLED"}
 _DOOR_ENV = ("RASK_SIGNATURE_DOORS", "RASK_EVENT_SIGNERS", "RASK_EVENT_DELEGATORS", "RASK_CONTROL_SIGNER_ROLES")
 #: The door hosts each case names, so a values change that stops rendering one fails the case rather than shrinking it.
 _CONTROL_HOSTS = frozenset({"Deployment/rask-catalog"})
-_ALL_HOSTS = _CONTROL_HOSTS | {"Deployment/rask-maintenance"}
+_ALL_HOSTS = _CONTROL_HOSTS | {"Deployment/rask-maintenance-worker"}
 
 
 def _app(container: dict) -> str:
-    return chart_render.uvicorn_target(container) or ""
+    """What the container runs: the `module:attribute` its uvicorn serves, or the module `python -m` starts."""
+    if target := chart_render.uvicorn_target(container):
+        return target
+    args = [str(part) for part in container.get("args") or []]
+    return args[args.index("-m") + 1] if "-m" in args[:-1] else ""
 
 
 def _door_hosts(docs: tuple[dict, ...]) -> dict[str, str]:
@@ -194,7 +197,7 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
     # Each service that emits control events (lakehouse.control_events.ControlSigner), mapped to the identities its pods sign as.
     roles = {
         "catalog": _identities_running(docs, "catalog.main:app"),
-        "maintenance": _identities_running(docs, "maintenance.service:app"),
+        "maintenance": _identities_running(docs, "maintenance.worker"),
     }
     expected: dict[str, dict[str, object]] = {}
     if doors is not None:
@@ -242,7 +245,7 @@ def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod
     before = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *telemetry))
     after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *telemetry, *overlay))
 
-    assert before.keys() == after.keys() and len(before) >= 3, f"the pods that name a Configuration are {sorted(before)}"
+    assert before.keys() == after.keys() == {"rask-catalog", "rask-lineage"}, f"the pods that name a Configuration are {sorted(before)}"
     edited = {pod for pod in before if before[pod][1] != after[pod][1]}
     renamed = {pod for pod in before if before[pod][0] != after[pod][0]}
     assert edited == (before.keys() if edits else set()), f"the overlay edited {sorted(edited)}, so one direction below measures nothing"
@@ -255,12 +258,10 @@ def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod
 
 
 def _loaded_dapr_objects(docs: tuple[dict, ...]) -> dict[str, tuple[str, str]]:
-    """`Deployment/name` -> (its pod's Dapr digest, every Component and Resiliency its sidecar loads), for every Dapr pod.
+    """`Deployment/name` -> (its pod's Dapr digest, every Component its sidecar loads), for every Dapr pod.
 
     An object with no `scopes` is loaded by every sidecar in the namespace."""
-    scoped: list[tuple[list[str], str]] = [
-        (doc.get("scopes") or [], json.dumps(doc, sort_keys=True)) for doc in docs if doc.get("kind") in {"Component", "Resiliency"}
-    ]
+    scoped: list[tuple[list[str], str]] = [(doc.get("scopes") or [], json.dumps(doc, sort_keys=True)) for doc in docs if doc.get("kind") == "Component"]
     loaded: dict[str, tuple[str, str]] = {}
     for doc in docs:
         if doc.get("kind") != "Deployment":
@@ -275,15 +276,14 @@ def _loaded_dapr_objects(docs: tuple[dict, ...]) -> dict[str, tuple[str, str]]:
 @pytest.mark.parametrize(
     ("probe", "loaded_by"),
     [
-        pytest.param("services.lineage.deliveriesInFlight=32", {"rask-lineage"}, id="pubsub-component"),
-        pytest.param("catalog.commitReconcile.schedule=@every 660s", {"rask-catalog"}, id="binding-component"),
-        pytest.param("maintenance.arrivalEnabled=false", {"rask-catalog", "rask-lineage", "rask-maintenance", "rask-maintenance-worker"}, id="resiliency"),
+        pytest.param("catalog.commitReconcile.schedule=@every 660s", {"rask-catalog"}, id="a-binding-one-app-loads"),
+        pytest.param("externalSecrets.kvMount=kv2", {"rask-catalog", "rask-lineage"}, id="the-secret-store-every-sidecar-loads"),
     ],
 )
 def test_a_dapr_object_edit_rolls_exactly_the_pods_whose_sidecar_loads_it(probe: str, loaded_by: set[str]) -> None:
-    """daprd loads its Components and Resiliency once, at boot (HotReload is off), and only a changed pod spec starts a rollout
+    """daprd loads its Components once, at boot (HotReload is off), and only a changed pod spec starts a rollout
     ([[LH-305]], [[XC-164]]): an edit that changed no pod would reach a sidecar only when something else restarted it, which no
-    reconcile does. The Resiliency is one object every Dapr pod loads, so its case edits all of them."""
+    reconcile does. The secret store is one Component every sidecar loads, so its case edits all of them."""
     before = _loaded_dapr_objects(chart_render.render(*DEFAULT_ARGS))
     after = _loaded_dapr_objects(chart_render.render(*DEFAULT_ARGS, "--set", probe))
 
@@ -294,8 +294,8 @@ def test_a_dapr_object_edit_rolls_exactly_the_pods_whose_sidecar_loads_it(probe:
 
 
 def test_every_dapr_object_is_rendered_by_a_template_the_digest_reads() -> None:
-    """`lance.daprDigest` reads the Dapr objects from `dapr-component.yaml` and `dapr-resiliency.yaml`, so a Component or
-    Resiliency rendered by any other template would change no pod's digest, and its edits would reach no sidecar."""
-    sources = {source for source, doc in chart_render.by_source(*DEFAULT_ARGS) if doc["kind"] in {"Component", "Resiliency"}}
+    """`lance.daprDigest` reads the Dapr objects from `dapr-component.yaml`, so a Component rendered by any other template
+    would change no pod's digest, and its edits would reach no sidecar."""
+    sources = {source for source, doc in chart_render.by_source(*DEFAULT_ARGS) if doc["kind"] == "Component"}
 
-    assert sources == {"templates/dapr-component.yaml", "templates/dapr-resiliency.yaml"}
+    assert sources == {"templates/dapr-component.yaml"}

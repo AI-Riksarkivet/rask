@@ -42,3 +42,15 @@ app's `nats-user-<app>` through `lance-secrets`, under the sidecar's own login, 
 ([ADR 0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md), amendment of the same day).
 The read-back of rev 269 ("every foreign credential refused at the secret API") was taken while apps still read through
 that API.
+
+**Amended 2026-11-14 (#787, XC-199 step D4).** No pub/sub Component remains: each service opens its own connection to
+the bus as its own user, reading that user's `nats-user-<user>` under its own store login and holding it in memory
+(`lakehouse.bus`), so `nats.auth.users` has one row per connection a service opens rather than one per Dapr app id.
+Lineage's row pulls and acknowledges `lineage-ingest` alone, the maintenance worker's adds `maintenance-arrival` to its
+queue's durables, and under `catalog.controlEmit` the catalog's reads CATALOG_CONTROL by sequence, the call its read-back already
+holds; each service takes its replies under an inbox of its own (`_INBOX_<user>.>`), and none holds
+`_INBOX.>` or a grant on a `-durable`. Two residuals named above change: `_INBOX.>` is held only by admin, monitor and
+the development object store, and the catalog acknowledges nothing on CATALOG_CONTROL and may create no consumer there: the bus holds a consumer's
+deliver subject to no grant of its creator (measured 2026-11-14: a consumer made under a create grant on
+CATALOG_CONTROL delivered into STORE_EVENTS), so no service's user holds a create grant. The pull and follow
+rows were measured on nats-server 2.15.2 with nats-py 2.16.0 on 2026-11-14.

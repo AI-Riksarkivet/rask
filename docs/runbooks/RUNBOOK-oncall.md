@@ -18,8 +18,12 @@ fixture's) or a user report — not a page.
   the object store (RustFS in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao
   fixture in development; the platform's Vault or OpenBao in production), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels, `kubectl logs`, and the domain metrics —
-  `lineage_events_processed_total{lance_lineage_outcome}` (incl. `DEAD_LETTERED`),
-  `outbox_depth` / `outbox_oldest_age_seconds`.
+  `lineage_events_processed_total{lance_lineage_outcome}` (incl. `dead_lettered`),
+  `outbox_depth` / `outbox_oldest_age_seconds`, and each bus lane's own: `bus.deliveries` by `lance.bus.consumer` and
+  `lance.bus.outcome` (`taken`, `again`, `parked` for a pulled consumer; `taken`, `failed` for the catalog's followed
+  control topic), `messaging.process.duration`, and `maintenance.arrivals.settled` by outcome. A consumer's backlog is
+  the bus's own reading: `nats consumer info <stream> <consumer>` shows its pending messages (`num_pending`), the
+  deliveries awaiting an acknowledgement (`num_ack_pending`) and its ack floor.
 - **First move for any pod issue**: `kubectl get pods -o wide`, then `kubectl logs <pod> --all-containers
   --tail=100` and `kubectl describe pod <pod>` (Events section).
 
@@ -33,7 +37,7 @@ fixture's) or a user report — not a page.
 | lineage `/readyz` = 503 with `"catalog": "unavailable"` in `components`, pod `NotReady` | [Lineage not ready](#lineage-not-ready--catalog-unreachable) |
 | A lakehouse pod restarts with exit code 70, a `background_work_ended` CRITICAL line before it | [A process ended itself](#a-process-ended-itself-exit-70) |
 | `request_deadline_passed` or `request_panicked` ERROR lines; callers answered 503 code 17 or 500 code 18 | [A request ran past its deadline or panicked](#a-request-ran-past-its-deadline-or-panicked) |
-| `dapr_dead_letter_parked` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
+| `lineage_delivery_parked` ERROR logs, or `maintenance_arrival_ended` ERROR logs | [DLQ parking](#dlq-parking--a-delivery-gave-up) |
 | `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | `CatalogCommitsReannounced`, `CatalogCommitsUnauthored` or `CatalogCommitReconcileBlocked` firing | [Committed versions re-announced](#committed-versions-re-announced) |
@@ -43,7 +47,7 @@ fixture's) or a user report — not a page.
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | `LanceObjectStoreThrottled` or `LanceObjectStoreRetriesHigh` firing: writes and passes slow, nothing failing yet | [The object store throttles or retries](#the-object-store-throttles-or-retries) |
 | FGA failing across the estate | [AGE down](#age-postgres-down--fga) |
-| `DaprConsumerWedge` firing: a sidecar retrying its app's inbound deliveries | [A subscriber retries without end](#a-subscriber-retries-without-end) |
+| `BusConsumerRetrying` or `MaintenanceArrivalLaneRetrying` firing: a service asking for its bus deliveries again without end | [A subscriber retries without end](#a-subscriber-retries-without-end) |
 | `HttpServerMetricsMissing` firing | [No app reports HTTP metrics](#no-app-reports-http-metrics) |
 | `HttpServerErrorRatioHigh` or `HttpServerLatencyHigh` firing | [A service answers 5xx or slowly](#a-service-answers-5xx-or-slowly) |
 | Any other alert in `deploy/alerting/rules.yml` | [Alerts by name](#alerts-by-name) |
@@ -111,34 +115,52 @@ provenance tables through the catalog, retried until the catalog answers) runs *
 **Cause.** Lineage keeps no database: its commit feed and edge list are Lance tables in the catalog's
 `lance_catalog$provenance` namespace, read and written through the catalog's doors as lineage's own principal. A background
 read of the feed table through the catalog, every 5 s within 5 s (`lakehouse.health`, ADR 0203), gates `/readyz`,
-which answers from that read's verdict. While it fails, every delivery answers `RETRY`, so the bus keeps the events
-and nothing is lost. The bus, the secret store, OpenFGA and, where the outbox the relay drains is kept on it, the object
+which answers from that read's verdict. While it fails, every delivery is asked for again, so the bus keeps the events
+for lineage's 5 attempts, 120 s apart, and a delivery still failing on its last is parked where the estate admin can
+replay it ([DLQ parking](#dlq-parking--a-delivery-gave-up)). The bus, the secret store, OpenFGA and, where the outbox the relay drains is kept on it, the object
 store are reported in `components` the same way and never gate.
 
 **Diagnose.** Catalog pod health and logs; whether the catalog created the provenance namespace at boot (it
 retries until it holds); a 403 from the catalog means lineage's subject is not among `LANCE_PROVENANCE_WRITERS`
 or its projected `rask-catalog` token (`RASK_CATALOG_IDENTITY_TOKEN_FILE`) is not mounted.
 
-**Act.** Restore the catalog; lineage returns to Ready on its own and the bus redelivers.
+**Act.** Restore the catalog; lineage returns to Ready on its own and the bus redelivers. Replay what was parked
+meanwhile ([DLQ parking](#dlq-parking--a-delivery-gave-up)).
 
 ## DLQ parking → a delivery gave up
 
-**Symptom.** `dapr_dead_letter_parked` ERROR logs (and `LineageIngestDeadLettering`
-for lineage's subscriber), or `CatalogControlLaneDeadLettering` / `MaintenanceArrivalDeadLettering`, which read the
-sidecar's own count (`dapr_component_pubsub_ingress_count_total{status="drop"}`) because no route reads those two lanes'
-parks. A specific event was not processed after exhausting its retry schedule.
+**Symptom.** Lineage: `LineageIngestDeadLettering`, with `lineage_delivery_parked` ERROR lines on a lineage pod and
+`lineage_events_processed_total{lance_lineage_door="dead_letter", lance_lineage_outcome="dead_lettered"}` rising. The
+catalog's control lane: `CatalogControlLaneDroppingEvents`, with `bus.deliveries` at outcome `failed` for consumer
+`catalog.control.v1`. The maintenance worker's write-event lane: `MaintenanceArrivalLaneEndingEvents`, with
+`maintenance.arrivals.settled` at outcome `ended` and `maintenance_arrival_ended` ERROR lines. A specific event was not
+handled after its lane's last attempt.
 
-**Cause.** Dapr's Resiliency retry policy was exhausted for a delivery, so the sidecar published it to the
-DLQ topic and acked the original (no infinite retry loop). The message is retained in JetStream.
+**Cause.** A pull consumer has no dead letter, so each lane ends a delivery by its own rule:
 
-**Diagnose.** The log line carries `app`, `source_topic`, and `token` — trace that token through the subscribing
-service's logs to the root failure (a bad payload, a persistent downstream outage).
+- Lineage handles a delivery up to 5 times, 120 s apart (`services.lineage.delivery`), and parks it on its last
+  attempt, or at once when it refuses a named person who lacks a grant. The park keeps the delivery in the provenance
+  namespace's `refusals` table under `dead_letter:<CloudEvent id>` (its feed row's key when its envelope carries no id)
+  and ends it on the bus; one whose row the feed
+  already holds is kept nowhere and logged at WARNING (`already_recorded` true), not ERROR.
+- The catalog's control lane judges an event whose signature keys it cannot read 5 times, 15 s apart, then gives it up;
+  for five minutes after such a wait it gives an event whose keys cannot be read up at once.
+- The maintenance worker hands an announcement it cannot settle back with a growing delay, and ends it on its
+  `maintenance.queue.maxDeliver`-th delivery (10).
 
-**Act.** Fix the root cause, then **replay** from the retained JetStream stream. Deliberately no auto-requeue —
-re-firing a poison message blind would loop it through the same failure. The catalog's and maintenance's parks
-(`dlq.catalog.control`, `dlq.maintenance.arrival`) need no replay: a control event is a hint the console re-reads past, and
-the parked write's table is passed anyway on its own schedule, at most `maintenance.queue.recheckHours` later. For those two, the alert alone says the lane is failing; the
-cause is in the app's log for the delivery (`catalog` or `maintenance` container, the alert's `topic`).
+**Diagnose.** Lineage's `lineage_delivery_parked` line carries `event_id`, `run_id`, `author` and `reason`; the
+library's `delivery_parked` WARNING line beside it names the stream, the consumer, the sequence and the attempt. Trace
+the run through lineage's log to the root failure (an authorization service, key store or catalog that did not answer,
+or a missing grant). For the catalog, the `catalog_signature_keys_unavailable` WARNING line names the event; for
+maintenance, the `maintenance_arrival_ended` line names the subject, the deliveries and the last error.
+
+**Act.** Fix the root cause, then **replay** lineage's parks: the estate admin lists them with
+`GET /admin/dlq/parked` and records a run's with `POST /admin/dlq/parked/{run_id}/replay`, which re-presents each kept
+delivery through the bus door's own gate and keeps whatever is still refused. Deliberately no auto-requeue:
+re-presenting a poison message blind would loop it through the same failure. The catalog's and maintenance's ends need
+no replay: a control event is a hint the console re-reads past, and the ended write's table is passed anyway on its
+own schedule, at most `maintenance.queue.recheckHours` later. For those two, the alert alone says the lane is failing,
+and the cause is in that service's log.
 
 ## Lineage refusing a signer's events
 
@@ -146,7 +168,7 @@ cause is in the app's log for the delivery (`catalog` or `maintenance` container
 rising for a reason other than `unsigned` or `signer`, and `lineage_signature_refused` WARN lines on the lineage pod.
 
 **Cause.** Where `LINEAGE_SIGNERS` is rendered, lineage records a bus or staged event only when a listed signer's
-published Ed25519 key verifies its `rask_signature`. A refusal is **acked**: it is not retried, not parked in the DLQ and
+published Ed25519 key verifies its `rask_signature`. A refusal is **acked**: it is not retried, not parked and
 never recorded, so the counter and the log line are the only trace. By reason: `kid` — the signer signed with a key its
 `signing-public-<identity>` secret does not list (a store that was re-minted under signers that kept the old key, or an
 identity that never published); `signature` — the bytes that arrived differ from the bytes signed; `author` / `delegation`
@@ -157,7 +179,7 @@ genuine signer produces either.
 **Diagnose.** The log line carries `run_id` (or `dataset` for a catalog change), the claimed `identity` and the `reason`.
 Compare the signer's key id with the keys its identity publishes: the store's `signing-public-<identity>`, field `keys`,
 current key first, read as any verifier's own account (docs/OPERATORS.md § 6, Reading it back). An outage reads differently: the key list could not
-be read, so lineage answers RETRY (`lineage_signature_keys_unavailable`) and refuses nothing.
+be read, so lineage asks for the delivery again (`lineage_signature_keys_unavailable`) and refuses nothing.
 
 **Act.** A signer whose key is not listed: restart it so it re-resolves its key, and after a store re-mint restart every
 signer. Do not add a public key to a list to make events pass unless you know whose key it is; an identity that is being
@@ -171,12 +193,12 @@ the keys published by then.
 fires, with `<service>_signature_refused_total` rising for a door and a reason, and `<service>_signature_refused` WARN
 lines on that service's pods naming the door, the claimed identity, the event and the reason. Every door x reason
 series exists at 0 from the pod's start, so one refusal fires its alert about two minutes later, and the alert resolves
-about three minutes after that unless another refusal follows. The catalog's own `/control-events` door counts its
+about three minutes after that unless another refusal follows. The catalog's own control lane counts its
 refusals in `catalog_signature_refused_total` with a `catalog_signature_refused` WARN line, which `CatalogControlLaneRefusingEvents`
 reads.
 
 **Cause.** With `RASK_SIGNATURE_DOORS=enforce`,
-the catalog's `/control-events` and maintenance's `/maintenance-arrival` act on a bus event only when
+the catalog's control lane and the maintenance worker's write-event lane act on a bus event only when
 a signer that door allows verifiably signed it: a lineage event against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`,
 a control event against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role
 `lakehouse.control_events.control_signer_role` names for its action. A refusal is **acked**: the event drove nothing,
@@ -187,8 +209,9 @@ forgery or a producer that stopped signing.
 
 **Diagnose.** Read the claimed identity off the log line and compare it with the door's lists in the pod's environment.
 An identity a list lacks after a chart change is a render defect. `kid` or `signature` from a listed identity reads as
-§ Lineage refusing a signer's events. A key list that could not be read is not a refusal: the door answers RETRY and logs
-`<service>_signature_keys_unavailable`.
+§ Lineage refusing a signer's events. A key list that could not be read is not a refusal: the lane judges the event again
+and logs `<service>_signature_keys_unavailable` (the catalog gives the event up after 5 tries 15 s apart, or at once
+when it waited that way in the last five minutes; the worker hands it back to the bus with a growing delay).
 
 **Act.** A forged event is an incident: find the pod that published it, and rotate any identity whose key it presented.
 A signer that broke: restart it so it re-resolves its key. A refused event is not presented again; a write maintenance
@@ -362,18 +385,21 @@ prod, externalize to a replicated managed Postgres and take real backups
 
 ## A subscriber retries without end
 
-**Symptom.** `DaprConsumerWedge` (critical): an app's sidecar has booked `process_status="retry"` on its inbound bus
-deliveries for 15 minutes, by `app_id`.
+**Symptom.** `BusConsumerRetrying` (`bus.deliveries` at outcome `again`, by consumer) or
+`MaintenanceArrivalLaneRetrying` (`maintenance.arrivals.settled` at outcome `retried`): a service keeps asking for its
+bus deliveries again.
 
-**Cause.** The app's handler answers RETRY to every delivery, so its sidecar redelivers instead of moving on. Lineage
-records each event through the catalog's doors, maintenance's arrival lane reads each table's manifest and policy, and
-the catalog's control lane applies governance events, so a retry this long means a step every message needs is failing,
-not one message. A message that can never succeed is parked on its dead-letter topic once the subscription's retry
-policy (`dapr-resiliency.yaml`) is spent.
+**Cause.** The service's handling answers *again* to every delivery, so the bus delivers each one after its lane's delay
+instead of moving on. Lineage records each event through the catalog's doors, the maintenance worker's write-event lane
+reads each table's claim and puts its pass on the work queue, so a retry this long means a step every message needs is
+failing, not one message. A message that never succeeds is parked or ended on its lane's last attempt
+([DLQ parking](#dlq-parking--a-delivery-gave-up)).
 
-**Diagnose.** The alert's `app_id` names the app. `kubectl logs deploy/rask-<app> -c daprd | grep -i retry` shows the
-redeliveries, and the app's own log at WARN or ERROR shows the failing step and what it answered. Then the dependency it
-names: [OpenFGA down](#openfga-down--503-everywhere), [Object store down](#object-store-down--data-plane),
+**Diagnose.** The consumer the alert names is the lane: `lineage-ingest` is lineage's, `maintenance-arrival` the
+worker's. `nats consumer info LINEAGE <consumer>` shows the deliveries awaiting an acknowledgement (`num_ack_pending`)
+and what waits behind them (`num_pending`). The service's own log at WARNING or ERROR shows the failing step and what it
+answered (`delivery_handling_failed` for a handling that raised or ran past its bound). Then the dependency it names:
+[OpenFGA down](#openfga-down--503-everywhere), [Object store down](#object-store-down--data-plane),
 [Lineage not ready](#lineage-not-ready--catalog-unreachable).
 
 **Act.** Restore the dependency; the redeliveries then succeed and the retries stop. What was parked meanwhile is under
@@ -455,7 +481,8 @@ it answered (`status`, `code`). Then its readiness (`kubectl get pods`) and the 
 ## Alerts by name
 
 Each alert below is read from its rule in `deploy/alerting/rules.yml`; the rule's own description carries the detail.
-Every log line named is in the service's container log (`kubectl logs deploy/rask-<service> -c <service>`).
+Every log line named is in the service's container log (`kubectl logs deploy/rask-<service> -c <service>`; maintenance's
+is `kubectl logs deploy/rask-maintenance-worker -c worker`).
 
 **Lineage outbox** (see also [Outbox not draining](#outbox-not-draining)):
 
@@ -473,7 +500,7 @@ Every log line named is in the service's container log (`kubectl logs deploy/ras
 **Lineage ingest** (see also [DLQ parking](#dlq-parking--a-delivery-gave-up)):
 
 - `LineageIngestRefusingProvenance` (warning): a run's author lacks the rung its operation needs on the tables it
-  names; `lance_lineage_door` says whether it came on the bus (parked on the DLQ), at the HTTP door (answered 403) or
+  names; `lance_lineage_door` says whether it came on the bus (parked in the refusals table), at the HTTP door (answered 403) or
   from the outbox drain (kept in the refusals table). First check: lineage's refusal log lines for the author and the
   table, then that author's grants.
 - `LineageIngestDiscardingUnrepairable` (warning): events that can never be recorded (no parse, no author, another

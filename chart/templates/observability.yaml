@@ -9,7 +9,7 @@ spec:
 
 
 {{- $cfgRoot := . }}
-{{- range (splitList "," (include "lance.secretScopes" .) | uniq | compact | sortAlpha) }}
+{{- range (splitList "," (include "lance.sidecarScopes" .) | uniq | compact | sortAlpha) }}
 {{- $app := . }}
 {{- if not (hasKey ($cfgRoot.Values.openbao.externalReaders | default dict) $app) }}
 ---

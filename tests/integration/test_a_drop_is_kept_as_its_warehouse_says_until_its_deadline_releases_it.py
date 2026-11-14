@@ -9,7 +9,7 @@ every audit and whether or not the purge is on. The bytes stay for the purge, wh
 ships off.
 
 ONE ESTATE ON MOTO, TWO SERVICES (``catalog_and_maintenance``): the real catalog app drops through its door and files the
-record, and the real maintenance app runs its audit over the same control root, asking the catalog's own
+record, and maintenance runs its audit over the same control root, on what its worker stands on, asking the catalog's own
 release door (``catalog_doors``). One in-memory ``TupleStore`` stands behind the catalog through the real
 ``lakehouse.governed.fga`` functions, since the claim is which tuples remain. A table still in its window and a live
 table whose undrop crashed before clearing its record are the controls: the audit must keep both tables' grants.

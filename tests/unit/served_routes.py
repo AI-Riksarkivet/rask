@@ -1,11 +1,11 @@
 """What a lakehouse service mounts when it boots with the environment the chart renders for its pod.
 
-Each app is built at import from its settings (`catalog.main`, `lineage.main`), so which cron ticks, Dapr deliveries and
-docs routes it mounts follows the env its Deployment names. The app is imported in a fresh interpreter under exactly that
-env: a worker that already imported the module under another env would answer with that one's routes.
+Each app is built at import from its settings (`catalog.main`, `lineage.main`), so which cron ticks and docs routes it
+mounts follows the env its Deployment names. The app is imported in a fresh interpreter under exactly that env: a
+worker that already imported the module under another env would answer with that one's routes.
 
-The lifespan does not run, on purpose: every route and the Dapr subscription are registered at import from settings
-(`catalog.main`, `lineage.main`, each `register_*dapr`), and the lifespan dials the store, the bus and the IdP.
+The lifespan does not run, on purpose: every route is registered at import from settings, and the lifespan dials the
+store, the bus and the IdP.
 """
 
 from __future__ import annotations
@@ -15,45 +15,24 @@ import os
 import subprocess
 import sys
 
-from pydantic import BaseModel
 
-
-#: Imports the app named by argv[1] and prints every mounted path and the routes its Dapr subscription hands the sidecar.
+#: Imports the app named by argv[1] and prints every path it mounts.
 _PROBE = """
 import importlib, json, sys
 from fastapi.routing import iter_route_contexts
-from fastapi.testclient import TestClient
 app = importlib.import_module(sys.argv[1]).app
-paths = sorted({c.path for c in iter_route_contexts(app.routes) if c.path})
-deliveries = set()
-for s in TestClient(app).get("/dapr/subscribe", headers={"dapr-api-token": "probe"}).json():
-    routes = s.get("routes") or {}
-    deliveries |= {r for r in (s.get("route"), routes.get("default"), *(rule["path"] for rule in routes.get("rules", []))) if r}
-print(json.dumps({"paths": paths, "deliveries": sorted(deliveries)}))
+print(json.dumps(sorted({c.path for c in iter_route_contexts(app.routes) if c.path})))
 """
 
 
-#: The app answers its subscription read to its sidecar's token alone, and the rendered pod reads that token from its
-#: secret store; the probe has neither a sidecar nor a store, so it names a token of its own for the read.
-_SIDECAR_TOKEN = {"RASK_APP_TOKEN_FROM_STORE": "false", "APP_API_TOKEN": "probe"}
-
-
-class Served(BaseModel):
-    """The paths an app mounts, and the ones Dapr's sidecar delivers its subscriptions to."""
-
-    paths: frozenset[str]
-    deliveries: frozenset[str]
-
-
-def served(module: str, env: dict[str, str]) -> Served:
-    """Boot `module`'s app under `env`, the interpreter's PATH and HOME where set, and the probe's own sidecar token
-    (`_SIDECAR_TOKEN`, which replaces the store-read token `env` names), and read what it mounts."""
+def served(module: str, env: dict[str, str]) -> frozenset[str]:
+    """Boot `module`'s app under `env`, with the interpreter's PATH and HOME where set, and read the paths it mounts."""
     probe = subprocess.run(
         [sys.executable, "-c", _PROBE, module],
-        env={**{key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}, **env, **_SIDECAR_TOKEN},
+        env={**{key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ}, **env},
         capture_output=True,
         text=True,
         timeout=120,
         check=True,
     )
-    return Served.model_validate(json.loads(probe.stdout.splitlines()[-1]))
+    return frozenset(json.loads(probe.stdout.splitlines()[-1]))

@@ -37,7 +37,7 @@ export interface paths {
         };
         /**
          * List Parked
-         * @description The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]]).
+         * @description The runs whose deliveries the ingest lane's park keeps, each with how many, for the estate admin ([[LH-148]]).
          */
         get: operations["list_parked_admin_dlq_parked_get"];
         put?: never;
@@ -59,9 +59,9 @@ export interface paths {
         put?: never;
         /**
          * Replay Parked
-         * @description Re-present the deliveries of ``run_id`` the parking route kept, once their cause is fixed ([[LH-148]]).
+         * @description Re-present the deliveries of ``run_id`` the ingest lane's park kept, once their cause is fixed ([[LH-148]]).
          *
-         *     Each kept CloudEvent goes through the subscription's own ingest (``handle_cloud_event`` under
+         *     Each kept CloudEvent goes through the ingest lane's own handling (``handle_cloud_event`` under
          *     :func:`enforce_bus_authz`: the signature over the bytes that arrived, and what the stamped author may record), so
          *     this admits nothing the bus refuses, however trusted the operator is. It writes to the feed directly and publishes
          *     nothing: the run's subscribers heard the original publish, and the feed is what was missing it. Each delivery is
@@ -476,7 +476,7 @@ export interface components {
         LivenessStatus: "ok";
         /**
          * ParkedRuns
-         * @description The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]]).
+         * @description The runs whose deliveries the ingest lane's park keeps, each with how many, for the estate admin ([[LH-148]]).
          */
         ParkedRuns: {
             /** Runs */

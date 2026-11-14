@@ -12,7 +12,7 @@ The tree is language-first:
 
 - **Reusable Python library, no entrypoint** → `packages/<name>`. If it grows an
   `app` or a CLI, it's in the wrong layer.
-- **Runnable Python** (an HTTP service, or a Dapr-subscription plane) →
+- **Runnable Python** (an HTTP service, or a worker that pulls from the bus) →
   `services/<name>`. A model runtime or a compute workload does **not** go here: the lakehouse runs no engine
   (ADR 0155), and a workload is a client in its own repository.
 - **A reusable TS/Svelte library** → `frontend/packages/<name>`. There is one app, `frontend/console`; a second app

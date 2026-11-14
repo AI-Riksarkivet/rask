@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.chart_render import DEFAULT_ARGS, containers, render
+from tests.unit.chart_render import DEFAULT_ARGS, bus_jobs, render
 
 
 #: The stand-in CLI: `stream info` finds the streams named in `exists/`, `stream edit` records the config it is handed and
@@ -84,9 +84,7 @@ REFUSAL = "stream configuration update can not change retention policy to/from w
     ],
 )
 def test_an_existing_stream_is_edited_to_its_declared_config_or_the_job_fails_naming_why(refusal: str, exit_code: int, reported: str, tmp_path: Path) -> None:
-    [script] = [
-        c["command"][-1] for workload, _, c in containers(render(*DEFAULT_ARGS, "--set", "nats.streamMaxAgeSeconds=259200")) if "-nats-stream-" in workload
-    ]
+    script = bus_jobs(render(*DEFAULT_ARGS, "--set", "nats.streamMaxAgeSeconds=259200"))["declare"]
     bin_dir, state = tmp_path / "bin", tmp_path / "nats"
     (state / "exists").mkdir(parents=True)
     bin_dir.mkdir()

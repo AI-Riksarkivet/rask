@@ -12,7 +12,7 @@ verified bearer, and the bearer's unverified issuer decides which verifier answe
   the `ServicePrincipal` `dex-client~<client id>` (ADR 0181).
 
 Either way the caller is authorized by FGA as its principal key, `.subject`. Nothing a caller asserts in a header names it:
-`dapr-api-token` proves only that a sidecar delivered a request (`require_dapr_token`, on the subscription routes),
+`dapr-api-token` proves only that a sidecar delivered a request (`require_dapr_token`, on the relay tick's route),
 and a service-account token's audience is lineage's own (`rask-lineage`), so a token minted for another door is
 refused here.
 

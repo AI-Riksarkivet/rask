@@ -9,9 +9,8 @@ each replay RE-EXECUTES the destructive path — drop and rewrite the dataset, s
 ACL, four `table_created` events for one logical create.
 
 `python-infrastructure`'s rule offers exactly two outs — *"Always pair retry with an idempotency key
-OR mark the operation non-retryable"* — and no Dapr policy replays a catalog call (no rask service
-invokes the catalog through Dapr, and `dapr-resiliency.yaml` targets lineage alone). This is the first
-out, for every client whose own retry the estate cannot see.
+OR mark the operation non-retryable"* — and nothing the estate runs replays a catalog call. This is the
+first out, for every client whose own retry the estate cannot see.
 
 THE KEY IS OPTIONAL, AND THAT IS A SPEC CONSTRAINT RATHER THAN A COMPROMISE. The Lance Namespace spec
 defines no `Idempotency-Key`, and `rask-lance-catalog` records that a stock Lance client must work with

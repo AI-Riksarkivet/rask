@@ -50,7 +50,8 @@ new package exists only for a real reason of its own (a backend swapped behind a
 imports, a language necessity), never for an audience, because a client reaches the lakehouse through its doors and
 events and imports none of it.
 
-**Python services** (3): `catalog` (`:2333`), `lineage` (`:8000`), `maintenance` (`:8000`) — the lakehouse, one image
+**Python services** (3): `catalog` (`:2333`), `lineage` (`:8000`), `maintenance` (`:8001`, its probes; one process,
+`python -m maintenance.worker`) — the lakehouse, one image
 (`.docker/rest-catalog.dockerfile`) run with three commands. This repository hosts no client: the notifications inbox
 is retired (ADR 0193), and every other client left with XC-192.
 

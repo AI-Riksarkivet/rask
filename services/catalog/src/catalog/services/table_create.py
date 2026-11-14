@@ -303,7 +303,7 @@ async def create_governed_table(
     # which its OpenFGA object names (ADR 0173 §8, §10); the caller's bearer is forwarded so ingest accepts it when the lineage service has OIDC on; the
     # run id is derived from the commit (`catalog.core.commit_ids`).
     # Inline-await (NOT BackgroundTasks — no retry, dies with the worker; fastapi anti-pattern) so the event
-    # reaches the durable Dapr/JetStream transport before the response. emit_create is best-effort internally,
+    # reaches the durable JetStream transport before the response. emit_create is best-effort internally,
     # so it never fails the create; JetStream + the consumer's idempotent MERGE-on-run_id give durability.
     # The per-version column schema (blob/vector-aware) for the WROTE edge (#24). A fresh create writes
     # exactly the request's table, so the payload schema IS the table's schema. Two exceptions take the true

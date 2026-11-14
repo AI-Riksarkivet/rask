@@ -258,9 +258,10 @@ above holds unchanged. Who is told stays gated per person by `can_be_notified`, 
 observes and never what a person receives.
 
 The bus carries the run events too, on `lineage.events.v1`, but only the feed holds the ones producers post over HTTP,
-so a notifier that must not miss a run walks the feed. The topics are internal: the NATS stream Job deletes every
-`-durable` on a stream it walks that no component in the release renders (`chart/templates/nats-stream-job.yaml`), so a
-durable a client creates there does not outlive the next upgrade.
+so a notifier that must not miss a run walks the feed. The topics are internal, and nothing about them is a contract.
+The NATS stream Job removes only a consumer that carries the release's mark (`rask.dev/release`) and that the chart no
+longer declares (`chart/templates/nats-stream-job.yaml`), so a consumer a subscriber outside the release creates on a
+stream is left in place, reading a topic that may change with any release.
 
 ### The envelope on the bus
 

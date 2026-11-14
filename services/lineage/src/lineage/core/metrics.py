@@ -106,17 +106,17 @@ def record_signature_refused(reason: str) -> None:
 class Outcome(StrEnum):
     """The bounded set of terminal outcomes for one delivered event (the only metric attribute)."""
 
-    INGESTED = "ingested"  # graph write committed → Dapr SUCCESS
+    INGESTED = "ingested"  # graph write committed → the lane takes the delivery
     # A bus event the stamped subject was not authorized to record (§ E2). Its OWN value rather than
-    # `DROPPED`, though both ack the same way: the two send an operator to different places — a refusal
-    # is an authorization question about a producer, a drop is a schema question about its payload — and
+    # `UNREPAIRABLE`: the two send an operator to different places — a refusal is an authorization
+    # question about a producer, an unrepairable event a question about its payload or its author — and
     # a refusal is the one that can be a silent, deliberate loss, so it gets its own alert.
-    REFUSED = "refused"  # authorization denied → Dapr DROP (redelivery cannot grant a permission)
-    RETRIED = "retried"  # transient failure → Dapr RETRY (sidecar redelivers)
-    DEAD_LETTERED = "dead_lettered"  # exhausted the resiliency schedule → parked, and the feed lacks the run
-    # Parked, but the feed ALREADY holds the run — visibility, not loss. Its own value because
-    # `DEAD_LETTERED` is read as the terminal-loss signal and a re-park of a recorded run is not loss:
-    # a replay of the deliverPolicy=all ingest consumer re-reads up to the stream's retention and
+    REFUSED = "refused"  # authorization denied → parked (a redelivery cannot grant a permission; writing the tuple can)
+    RETRIED = "retried"  # transient failure → the lane asks for the delivery again after its delay
+    DEAD_LETTERED = "dead_lettered"  # the lane ended it unrecorded (its last attempt, or parked) → kept, and the feed lacks the row
+    # Parked, but the feed ALREADY holds the delivery's row — visibility, not loss. Its own value because
+    # `DEAD_LETTERED` is read as the terminal-loss signal and a re-park of a recorded event is not loss:
+    # a replay of the ingest consumer re-reads up to the stream's retention and
     # re-parks whatever still fails, while deterministic run ids mean a stage that runs
     # again heals the gap. Measured against the live estate 2026-09-13: 8,515 parked deliveries of
     # `lineage.events.v1` against a stream whose last sequence was 5,860, and 17 of 21 distinct parked
@@ -124,8 +124,7 @@ class Outcome(StrEnum):
     PARKED_ALREADY_RECORDED = "parked_already_recorded"
     # UNREPAIRABLE, and therefore the one outcome that ACKS a run the feed does not hold: a payload
     # that does not parse, or a run carrying no author at all. No tuple, redelivery or restart can
-    # change that answer, so parking it writes a dead-letter duplicate on every roll — measured
-    # 2026-09-18, 37 of 44 refusals in one hour were one unauthored run id re-presented at pod start.
+    # change that answer, so parking it would only keep a copy nothing can repair.
     #
     # ITS OWN VALUE BECAUSE THE ACK IS A DELIBERATE, SILENT DISCARD. `REFUSED` still means a named
     # person who lacks a grant, which parks and can be repaired by writing the tuple; this one cannot be
@@ -133,20 +132,21 @@ class Outcome(StrEnum):
     # argument for acking rather than a statistic. A producer regression shows up here as a rising line
     # and nowhere else.
     UNREPAIRABLE = "unrepairable"
-    # RECOVERED FROM THE DEAD-LETTER STREAM ([[LH-148]]): a parked delivery the feed did NOT hold, which
-    # the parking route re-presented to the ingest path and the feed then did. Its own value because it
-    # is the exact inverse of `DEAD_LETTERED` — the same population, measured after a second attempt
-    # rather than before one — and reading them as one number would hide the only thing an operator wants
-    # to know, which is whether the parking lane is losing provenance or repairing it.
+    # RECOVERED FROM THE KEPT DELIVERIES ([[LH-148]]): a parked delivery the feed did NOT hold, which
+    # the estate admin's replay door (`POST /admin/dlq/parked/{run_id}/replay`) re-presented to the ingest
+    # path and the feed then did. Its own value because it is the exact inverse of `DEAD_LETTERED` — the
+    # same population, measured after a second attempt rather than before one — and reading them as one
+    # number would hide the only thing an operator wants to know, which is whether the kept deliveries
+    # are losing provenance or being repaired.
     #
-    # MEASURED, NEVER INFERRED FROM AN ACK. `handle_cloud_event` answers SUCCESS both for a committed
-    # write and for an unrepairable discard, so the route asks the feed a second time instead: a run it
-    # lacked and now holds was recovered. Anything else stays `DEAD_LETTERED`.
+    # MEASURED, NEVER INFERRED FROM A VERDICT. `handle_cloud_event` answers TAKEN both for a committed
+    # write and for an unrepairable discard, so the door asks the feed a second time instead: a row it
+    # lacked and now holds was recovered. Anything else stays kept.
     RECOVERED = "recovered"
     # AN EVENT NO LISTED SIGNER'S PUBLISHED KEY VERIFIES ([[LH-064]]): unsigned, forged, or signed by an
-    # identity the chart does not list. ACKED rather than parked, like `UNREPAIRABLE` and for the same
-    # reason: a redelivery cannot add a signature to bytes already published, so a DROP would write a
-    # dead-letter copy per restart about an event that can never be recorded. Its own value because the
+    # identity the chart does not list. Taken rather than parked, like `UNREPAIRABLE` and for the same
+    # reason: a redelivery cannot add a signature to bytes already published, so a park would only keep
+    # a copy of an event that can never be recorded. Its own value because the
     # question it sends an operator to answer is different (who is publishing to the topic without a key
     # the estate provisions?) and `lineage.signature.refused` carries the reason that count cannot.
     SIGNATURE_REFUSED = "signature_refused"
@@ -160,14 +160,14 @@ class Door(StrEnum):
     woken by a `refused` rate learned that provenance was lost and nothing about where to look.
     """
 
-    #: The subscription off `lineage.events.v1`: a producer that publishes on the bus as a user of it, as the
-    #: lakehouse's own services do.
+    #: The ingest lane's durable consumer on `lineage.events.v1`: a producer that publishes on the bus as a user of
+    #: it, as the lakehouse's own services do.
     SUBSCRIBER = "subscriber"
     #: `POST /api/v1/lineage`, the OpenLineage HTTP transport. The ONLY door for a producer with no
     #: bus user: a user's pipeline job on its own compute, and any external OpenLineage producer.
     HTTP = "http"
-    #: The dead-letter handler — not an arrival but a giving-up, and an operator reads it as neither of
-    #: the above.
+    #: The lane's park of a delivery it ends unrecorded, and the estate admin's replay of a kept one — not an
+    #: arrival but a giving-up and its repair, and an operator reads it as neither of the above.
     DEAD_LETTER = "dead_letter"
     #: The relay tick's outbox drain: an event a producer staged, recorded through the bus door's own gate. Only its
     #: refusals are counted here, each once the drain has recorded it in the refusals table, which is where it is

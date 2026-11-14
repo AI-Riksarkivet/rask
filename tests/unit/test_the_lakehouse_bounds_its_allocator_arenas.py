@@ -70,7 +70,7 @@ from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
 #: on the same 64-core node under a one-CPU quota. The assertion below walks every container bearing a
 #: name rather than the first, so a per-deployment regression cannot hide behind a sibling that still
 #: renders the bound.
-LAKEHOUSE = frozenset({"catalog", "lineage", "maintenance"})
+LAKEHOUSE = frozenset({"catalog", "lineage", "worker"})
 
 #: The ceiling this gate enforces. 2 is what was measured; the bar is `<= 4` so a later tuning pass has
 #: room to trade lock contention against fragmentation without editing this file, while a container

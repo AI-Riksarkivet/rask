@@ -1,14 +1,13 @@
 """[[LH-148]] A parked lineage delivery is kept, and replayed into the feed on demand once its cause is fixed.
 
-The parking route presents a park to the ingest path once, when it arrives; the DLQ consumer (deliverPolicy=new) never
-presents it again, the DLQ stream keeps it 168 h, and lineage reads no NATS itself. So the route keeps each delivery it
-could not recover in the provenance namespace's ``refusals`` table, and the estate admin re-presents it through
+The stream drops a message past its retention and nothing reads an ended one back, so lineage's ingest lane keeps each
+delivery it parks in the provenance namespace's ``refusals`` table, and the estate admin re-presents it through
 ``POST /admin/dlq/parked/{run_id}/replay``: the same authorization and signature check the bus applies, written to the
 feed directly, publishing nothing on ``lineage.events.v1``. Each delivery is judged on its own feed row, since a run's
 START reaching the feed says nothing of its COMPLETE, the event naming the outputs a missing grant refuses.
 
-Driven through lineage's router over the real store in a live catalog (`lineage_app`), its parking route mounted as
-the sidecar delivers to it.
+Driven through lineage's router over the real store in a live catalog (`lineage_app`), with lineage's own ingest lane
+taking its deliveries from a `tests.bus_double.BusDouble` on the app's loop.
 """
 
 from __future__ import annotations
@@ -16,13 +15,19 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Generator
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+from anyio.from_thread import BlockingPortal
 from fastapi.testclient import TestClient
+from openfga_sdk import OpenFgaClient
+from openfga_sdk.client.models import ClientTuple
 
+from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.governed import fga
 from lakehouse.governed.fga import user_object
 from tests.bus_double import BusDouble
 from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineage, live_catalog, run_event
@@ -52,25 +57,58 @@ def _event(state: str, table: str, *, outputs: bool) -> dict[str, Any]:
     return data
 
 
+class _Estate:
+    """Lineage on a live catalog, the estate admin granted, the table the run writes, and the bus its lane takes from."""
+
+    def __init__(self, lineage: TestClient, portal: BlockingPortal, table: str, bus: BusDouble) -> None:
+        self.lineage = lineage
+        self.portal = portal
+        self.table = table
+        self.bus = bus
+
+    def deliver(self, envelope: dict[str, Any]) -> Settlement:
+        """Hand ``envelope`` to lineage's ingest lane as its first delivery; answers what the bus is told."""
+        from lineage.api.ingest_lane import CONSUMER
+
+        return self.portal.call(partial(self.bus.deliver, CONSUMER, envelope))
+
+
+def _governed(monkeypatch: pytest.MonkeyPatch, table: str) -> None:
+    """OpenFGA holding its owner's grant on ``table``, as the catalog writes one on a declare: a refusal on it is a
+    missing grant a tuple repairs, which the lane parks, rather than a table nothing can be granted on."""
+
+    async def held(client: OpenFgaClient, obj: str, **_retry: float) -> list[ClientTuple]:
+        del client
+        return [ClientTuple(user=user_object("dex~owner"), relation="owner", object=obj)] if obj == table else []
+
+    monkeypatch.setattr(fga, "read_object_tuples", held)
+
+
 @contextmanager
-def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, str, BusDouble]]:
-    """Lineage with its parking route mounted, the estate admin granted, and the table the run writes."""
+def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[_Estate]:
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
-    monkeypatch.setenv("LINEAGE_DLQ_TOPIC", "dlq.lineage.events")
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
         table = f"table:{_declared(catalog_url, _TABLE)}"
-        from lineage.api.dapr import register_dapr
+        _governed(monkeypatch, table)
+        from lineage.api.ingest_lane import IngestLane, lane
         from lineage.core.config import get_settings
 
         with governed_lineage(catalog_url, monkeypatch, set()) as lineage:
+            settings = get_settings()
             lineage.app.state.grants.allowed.update(
-                (user_object(_ADMIN), verb, get_settings().fga_root_object) for verb in ("can_read_parked_events", "can_replay_parked_events")
+                (user_object(_ADMIN), verb, settings.fga_root_object) for verb in ("can_read_parked_events", "can_replay_parked_events")
             )
-            register_dapr(lineage.app)
-            publisher = BusDouble()
-            lineage.app.state.bus = publisher
-            yield lineage, table, publisher
+            bus = BusDouble()
+            lineage.app.state.bus = bus
+            ingest = IngestLane(lineage.app, settings)
+            portal = lineage.portal
+            assert portal is not None, "the client runs no lifespan, so nothing would take a delivery"
+            # The lane as lineage's lifespan starts it (`lineage.main._take_deliveries`), on the app's own loop.
+            taking = portal.start_task_soon(partial(bus.consume, lane(settings), ingest.handle, park=ingest.park))
+            try:
+                yield _Estate(lineage, portal, table, bus)
+            finally:
+                taking.cancel()
 
 
 def _recorded(lineage: TestClient, state: str, table: str) -> bool:
@@ -81,9 +119,10 @@ def _recorded(lineage: TestClient, state: str, table: str) -> bool:
 
 
 def test_a_refused_complete_is_kept_and_replayed_into_the_feed_once_its_tuple_is_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    with _estate(tmp_path, monkeypatch) as (lineage, table, publisher):
-        started = lineage.post("/lineage-events", json={"id": "evt-start", "data": _event("START", table, outputs=False)}, headers=_TOKEN)
-        parked = lineage.post("/lineage-dlq", json={"id": "evt-complete", "data": _event("COMPLETE", table, outputs=True)}, headers=_TOKEN)
+    with _estate(tmp_path, monkeypatch) as estate:
+        lineage, table = estate.lineage, estate.table
+        started = estate.deliver({"id": "evt-start", "data": _event("START", table, outputs=False)})
+        parked = estate.deliver({"id": "evt-complete", "data": _event("COMPLETE", table, outputs=True)})
         listed = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
         not_admin = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _AUTHOR})
         refused = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _ADMIN})
@@ -93,25 +132,26 @@ def test_a_refused_complete_is_kept_and_replayed_into_the_feed_once_its_tuple_is
         left = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
         recorded = _recorded(lineage, "COMPLETE", table)
 
-    assert (started.json(), parked.json()) == ({"status": "SUCCESS"}, {"status": "SUCCESS"})
+    assert (started, parked) == (Settlement(outcome=Outcome.TAKEN), Settlement(outcome=Outcome.PARKED))
     assert listed.json() == {"runs": {_RUN: 1}}, "a COMPLETE refused after its START landed was not kept"
     assert (not_admin.status_code, "can_replay_parked_events" in not_admin.json()["detail"]) == (403, True), not_admin.text
     assert (refused.status_code, refused.json()["code"]) == (400, 13), refused.text
     assert (replayed.status_code, replayed.json()) == (200, {"status": "recovered", "run_id": _RUN}), replayed.text
     assert (again.status_code, left.json()) == (404, {"runs": {}}), "a recovered park is still kept"
     assert recorded, "the feed lacks the COMPLETE the door recovered"
-    assert publisher.sent == [], "a replayed park was published again"
+    assert estate.bus.sent == [], "a replayed park was published again"
 
 
 def test_the_relay_tick_retires_a_kept_park_the_feed_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A kept delivery whose row reaches the feed by another path (here the producer's own ingest over HTTP) is retired
     by the next relay tick, rather than kept until an admin replays it."""
-    with _estate(tmp_path, monkeypatch) as (lineage, table, _):
-        parked = lineage.post("/lineage-dlq", json={"id": "evt-complete", "data": _event("COMPLETE", table, outputs=True)}, headers=_TOKEN)
+    with _estate(tmp_path, monkeypatch) as estate:
+        lineage, table = estate.lineage, estate.table
+        parked = estate.deliver({"id": "evt-complete", "data": _event("COMPLETE", table, outputs=True)})
         lineage.app.state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
         ingested = lineage.post("/api/v1/lineage", json=_event("COMPLETE", table, outputs=True), headers={SUBJECT_HEADER: _AUTHOR})
         tick = lineage.post(f"/{RELAY}", headers=_TOKEN)
         left = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
 
-    assert (parked.json(), ingested.status_code) == ({"status": "SUCCESS"}, 201), ingested.text
+    assert (parked, ingested.status_code) == (Settlement(outcome=Outcome.PARKED), 201), ingested.text
     assert (tick.json()["parks_retired"], left.json()) == (1, {"runs": {}})

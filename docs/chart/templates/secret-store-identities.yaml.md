@@ -13,11 +13,10 @@ the same roles and policies from a production render, and the render gate
 read each secret. They are not in the seed's own ConfigMap because that renders only with `openbao.enabled`, and the
 platform's store needs them most.
 
-## `policy-{{ $role }}.json: {{ include "lance.storePolicy" (list $ (concat $reads.api $reads.components)) | quote }}`
+## `policy-{{ $role }}.json: {{ include "lance.storePolicy" (list $ $reads.api) | quote }}`
 
-EXACTLY THE APP'S READS: the secrets its code reads under its own login (`lakehouse.governed.secrets`) and the ones
-its sidecar's components resolve with the sidecar's login (a bus user), each a named KV v2 data path with `read` and
-nothing else: no list, no other path, no write. The policy also lets the token look itself up and renew
+EXACTLY THE APP'S READS: the secrets its code reads under its own login (`lakehouse.governed.secrets`), each a named
+KV v2 data path with `read` and nothing else: no list, no other path, no write. The policy also lets the token look itself up and renew
 itself (`auth/token/lookup-self`, `auth/token/renew-self`), which daprd's background renewal needs once the role drops
 the default policy. Zero trust applies to the thing fetching the secrets too.
 

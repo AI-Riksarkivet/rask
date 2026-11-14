@@ -9,7 +9,7 @@ design rule for this platform: every tier governed, nothing over-built, and no c
 say where its data came from.
 
 A **Lance lakehouse** under Lance Namespace (a governed REST catalog that enforces the bronze → silver → gold
-tiers in its write path, and OpenLineage provenance), **events** on Dapr + NATS JetStream, and **governance** over
+tiers in its write path, and OpenLineage provenance), **events** on NATS JetStream, and **governance** over
 all of it — Dex OIDC for identity, OpenFGA for authorization, S3-compatible storage (RustFS in development, the
 platform's S3 in production). The lakehouse runs no ingest, no pipeline stage, no training and no workflow engine:
 compute and orchestration are the user's, and a pipeline writes every tier through the catalog's Lance Namespace

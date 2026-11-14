@@ -42,7 +42,7 @@ with its client to that client's own repository.
 | [0023](0023-workflow-history-has-no-browser-surface-the-alert-is-the.md) |  | Workflow history has no browser surface — the ALERT is the surface (2026-08-26, owner ruling) |
 | [0024](0024-team-role-administration-wontfix-until-the-keycloak-sync.md) |  | Team/role administration — WONTFIX until the Keycloak sync (2026-07-23) |
 | [0026](0026-catalog-control-wildcard-masking-accepted-at-replicas-1.md) |  | CATALOG_CONTROL wildcard masking — accepted at replicas:1 (2026-07-23) |
-| [0027](0027-control-events-broadcast-ring-buffer.md) |  | control-events — broadcast + ring buffer (reopened by 0199) |
+| [0027](0027-control-events-broadcast-ring-buffer.md) |  | control-events — broadcast + ring buffer (reopened by 0199, amended 2026-11-14, XC-199) |
 | [0028](0028-control-events-per-replica-cursor-boundary.md) |  | control-events — per-replica cursor boundary (reopened by 0199) |
 | [0029](0029-control-events-estate-admin-scope.md) |  | control-events — estate-admin scope |
 | [0031](0031-control-events-fail-open-emit-contract.md) |  | control-events — fail-open emit contract |
@@ -90,13 +90,13 @@ with its client to that client's own repository.
 | [0077](0077-a-producer-door-on-an-existing-resource-authorizes-on-that.md) |  | A producer door on an existing resource authorizes on THAT resource (owner, 2026-09-25) |
 | [0078](0078-get-stage-runners-admits-any-signed-in-caller-owner-default.md) |  | `GET /stage-runners` admits any signed-in caller (owner default, 2026-09-26) |
 | [0079](0079-2026-09-26-phase-1-s-five-criteria-and-the-backlog-does-not.md) |  | 2026-09-26 — Phase 1's five criteria, and the backlog does not grow without the owner |
-| [0080](0080-lineage-s-bus-consumer-is-durable-and-a-graph-rebuild-is-an.md) |  | Lineage's bus consumer is durable, and a graph rebuild is an explicit step (LH-303, owner 2026-09-26) |
+| [0080](0080-lineage-s-bus-consumer-is-durable-and-a-graph-rebuild-is-an.md) |  | Lineage's bus consumer is durable, and a graph rebuild is an explicit step (LH-303, owner 2026-09-26) (amended 2026-11-14, XC-199) |
 | [0081](0081-dropped-at-means-no-longer-catalogued-at-this-id-lh-144.md) |  | `dropped_at` means "no longer catalogued at this id" (LH-144, owner scope 2026-09-27) |
 | [0082](0082-the-store-s-newest-authorization-model-decides-nothing-each.md) |  | The store's newest authorization model decides nothing; each component uses the model its image carries (LH-201, 2026-09-28) |
 | [0083](0083-a-service-is-the-serviceaccount-its-projected-token-names.md) |  | A service is the ServiceAccount its projected token names (LH-220, D1, 2026-10-02) (reopened by 0199) |
 | [0084](0084-lineage-events-are-signed-with-ed25519-the-keys-in-the.md) |  | Lineage events are signed with Ed25519, the keys in the store (LH-064, owner 2026-10-02) |
-| [0085](0085-the-bus-doors-verify-lh-064-s-signatures-before-they-act-xc.md) |  | The bus doors verify LH-064's signatures before they act (XC-078 slice 1, owner 2026-10-04) |
-| [0086](0086-nats-authenticates-every-client-one-user-per-app-xc-078.md) |  | NATS authenticates every client, one user per app (XC-078 slices 2 and 3, owner 2026-10-04/05) |
+| [0085](0085-the-bus-doors-verify-lh-064-s-signatures-before-they-act-xc.md) |  | The bus doors verify LH-064's signatures before they act (XC-078 slice 1, owner 2026-10-04) (amended 2026-11-14, XC-199) |
+| [0086](0086-nats-authenticates-every-client-one-user-per-app-xc-078.md) |  | NATS authenticates every client, one user per app (XC-078 slices 2 and 3, owner 2026-10-04/05) (amended 2026-11-14, XC-199) |
 | [0087](0087-the-notifications-reconciler-reads-the-whole-run-feed.md) |  | The notifications reconciler reads the whole run feed through a rung of its own (CTL-021, 2026-10-05) |
 | [0088](0088-a-ray-stage-run-is-a-plan-closed-by-its-job-s-report-or-the.md) |  | A Ray stage run is a plan, closed by its job's report or the sweep (CP-029 S1, 2026-10-05) |
 | [0089](0089-a-warehouse-in-another-object-store-is-refused-until-its.md) |  | A warehouse in another object store is refused until its credential is consumed (LH-205, 2026-10-05) |
@@ -183,7 +183,7 @@ with its client to that client's own repository.
 | [0179](0179-branch-creates-take-turns-and-leases-run-on-the-stores-clock.md) | LH-413 | Branch creates take turns, leases run on the store's clock, and edges name a branch's incarnation (2026-10-26) |
 | [0180](0180-no-lakehouse-run-carries-a-nominal-time.md) | LIN-002 | No lakehouse run carries a nominal time (2026-10-27) |
 | [0181](0181-a-dex-client-signed-in-for-itself-is-a-machine-principal.md) | XC-174 | A Dex client signed in for itself is a machine principal (2026-10-27) |
-| [0182](0182-each-catalog-replica-hears-the-control-broadcast-through-a-durable-of-its-own.md) | LH-305 | Each catalog replica hears the control broadcast through a durable of its own (2026-10-27) |
+| [0182](0182-each-catalog-replica-hears-the-control-broadcast-through-a-durable-of-its-own.md) | LH-305 | Each catalog replica hears the control broadcast through a durable of its own (2026-10-27) (superseded in its mechanism 2026-11-14, XC-199) |
 | [0183](0183-an-erasure-names-every-table-a-run-declared-it-read-whatever-lineage-has-recorded.md) | LH-541 | An erasure names every table a run declared it read, whatever lineage has recorded (2026-10-28) |
 | [0184](0184-a-committed-file-overwritten-in-place-is-found-by-the-sweep.md) | LH-419 | A committed file overwritten in place is found by the sweep (2026-10-30) |
 | [0185](0185-the-catalog-reclaims-each-roots-namespace-index-and-holds-no-connection-past-it.md) | LH-251 | The catalog reclaims each root's namespace index, and holds no connection past it (2026-10-30) (reopened by 0199) |
@@ -191,16 +191,16 @@ with its client to that client's own repository.
 | [0187](0187-a-re-announcement-is-signed-only-for-the-author-the-catalog-recorded.md) | LH-550 | A re-announcement is signed only for the author the catalog recorded authorizing the commit (2026-11-01) |
 | [0188](0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md) | LH-552 | A lost publication is announced from its tag; a table's lifecycle markers stay best-effort (2026-11-01) (reopened by 0199, amended by 0205) |
 | [0189](0189-the-product-chart-carries-no-engine-seam.md) | XC-182 | The product chart carries no engine seam: a bring-your-own engine is a client like any other (2026-11-01) |
-| [0190](0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md) | XC-188 | The notifications inbox is a client of the lakehouse's events: the lakehouse emits, a notifier delivers (2026-11-02; the inbox retired by 0193) |
+| [0190](0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md) | XC-188 | The notifications inbox is a client of the lakehouse's events: the lakehouse emits, a notifier delivers (2026-11-02; the inbox retired by 0193; amended 2026-11-14, XC-199) |
 | [0191](0191-a-rename-is-one-renamed-dataset-and-a-commit-names-its-writers-run-as-parent.md) | LH-554 | A rename is one renamed dataset, and a commit names its writer's run as its parent (2026-11-03) |
 | [0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) | LH-563 | A service's roles are granted at the catalog's doors, scoped to the tenants it serves (2026-11-06) (reopened by 0199, amended by 0206) |
-| [0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) | XC-195 | The inbox is retired, and the console joins the product: the bell is a browser-side log of the reader's own writes (2026-11-06) |
+| [0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) | XC-195 | The inbox is retired, and the console joins the product: the bell is a browser-side log of the reader's own writes (2026-11-06) (amended 2026-11-14, XC-199) |
 | [0194](0194-the-dev-estates-release-values-are-composed-from-git-alone.md) | XC-194 | The dev estate's release values are composed from git alone: no live values read back, and the schema refuses an undeclared key (2026-11-07) |
 | [0195](0195-the-three-kits-fold-into-one-lakehouse-library.md) | owner | The three kits fold into one lakehouse library: one package by module, no extras, no audience contracts, nothing a client imports (2026-11-07) (reopened by 0199) |
-| [0196](0196-an-install-from-git-converges-under-argo-cd.md) | XC-164 | An install from git converges under Argo CD, and a changed input converges on the next sync (2026-11-07) (reopened by 0199) |
+| [0196](0196-an-install-from-git-converges-under-argo-cd.md) | XC-164 | An install from git converges under Argo CD, and a changed input converges on the next sync (2026-11-07) (reopened by 0199, amended 2026-11-14, XC-199) |
 | [0197](0197-maintenance-writes-only-under-a-vend-and-no-workload-holds-a-store-key.md) | XC-084, LH-219, LH-238 | Maintenance writes only under a vend, and no workload holds a store key (2026-11-08) (amended by 0204) |
-| [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) | owner | Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08) (reopened by 0199) |
-| [0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) | owner | NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09) (amended by 0206) |
+| [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) | owner | Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08) (reopened by 0199, amended 2026-11-14, XC-199) |
+| [0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) | owner | NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09) (amended by 0206, and 2026-11-14, XC-199) |
 | [0200](0200-the-workbench-dock-is-horizon-layout.md) | owner | The workbench's dock is horizon-layout: dockview 8 moved keyboard control into a separately licensed package (2026-11-11) |
 | [0201](0201-the-console-holds-its-api-client-and-graph-views.md) | owner | The console holds its API client and graph views; `@rask/ui` is the one package, read from source (2026-11-11) |
 | [0202](0202-the-console-has-one-navigation-and-filters-by-project-in-the-url.md) | owner | The console has one navigation, the sidebar, and filters its lists by project in the URL in place of an active project (2026-11-11) |

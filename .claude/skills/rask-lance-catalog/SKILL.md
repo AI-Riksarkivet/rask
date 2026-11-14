@@ -746,13 +746,12 @@ governing their data. The project-scoped surface is the console's project page, 
   2026-11-09 amendment): a table is passed when it changes or its time comes, never on a whole-estate clock. Its work is tasks on a NATS JetStream
   work queue (`maintenance.services.queue`): one per subject on `MAINTENANCE_TASKS` (`maintenance.task.<kind>.<uuid>`; a
   guarded publish, `Nats-Expected-Last-Subject-Sequence: 0`, refuses a second while one is queued or in flight), and its
-  times are NATS message schedules on `MAINTENANCE_SCHEDULES`. The worker is a process of
-  its own (`python -m maintenance.worker`) in a Deployment of its own (`-maintenance-worker`, two replicas, RollingUpdate,
-  `chart/templates/maintenance.yaml`), under the same identity as the web pods, which serve the write-event lane and run
-  no task; its sidecar health-checks its probe port, so it outlives the drain and leaves with the worker. Every worker
-  replica runs a pull worker on the chart's durable consumers, as its own bus user
-  (`maintenance-worker`) through nats-py rather than Dapr, whose JetStream subscription sends no in-progress ack and whose
-  publish cannot set a schedule header (`maintenance.services.tasks`). What a pass emits, the worker publishes on a
+  times are NATS message schedules on `MAINTENANCE_SCHEDULES`. The worker (`python -m maintenance.worker`) is
+  maintenance's only process, in a Deployment of its own (`-maintenance-worker`, two replicas, RollingUpdate,
+  `chart/templates/maintenance.yaml`), and serves nothing but its probes. Every worker replica runs a pull worker on the
+  chart's durable consumers, binding to them and creating none, as its own bus user (`maintenance-worker`) through
+  nats-py, so a running task tells the bus it is still in progress and a held task carries its schedule header
+  (`maintenance.services.queue`). What a pass emits, the worker publishes on a
   second connection, as the bus user `maintenance` (`lakehouse.bus`, `maintenance.runtime.collaborators`), held only
   when it emits. It takes one task at a time and heartbeats it
   every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a replica
@@ -777,9 +776,14 @@ governing their data. The project-scoped surface is the console's project page, 
   store events expected, the hourly audit also reads each governed bucket's event configuration and reports each
   sending no `s3:ObjectCreated:*` event, counting each bucket once per audit on `maintenance.store_event_buckets.checked` by
   outcome (`configured`, `without`, `unknown`; `maintenance.services.bucket_events`, alerts `MaintenanceBucketWithoutStoreEvents`
-  and `MaintenanceBucketStoreEventsUnknown`). A commit's announcement on `lineage.events.v1` (`/maintenance-arrival`,
-  `maintenance.services.arrival.lane_task`) holds one follow-up pass `commitPassDelaySeconds` (300) out unless one is
-  held already, so a burst of commits makes one pass; a table's drop (`drop_table`) queues its trash task instead. A table's pass
+  and `MaintenanceBucketStoreEventsUnknown`). The write-event lane (`maintenance.arrivalEnabled`): the worker pulls each
+  commit's announcement on `lineage.events.v1` from a durable consumer of its own, `maintenance-arrival` on LINEAGE,
+  begun at the events published after it (`Worker.run_arrivals`, `maintenance.services.arrival.Arrivals.hold_task`), and
+  checks a write's signature before it acts. An announcement (`maintenance.services.arrival.lane_task`) holds one
+  follow-up pass `commitPassDelaySeconds` (300) out unless one is held already, so a burst of commits makes one pass; a
+  table's drop (`drop_table`) queues its trash task instead. One the worker cannot settle is handed back after a growing
+  delay and ended on its `maxDeliver`-th delivery, each outcome counted on `maintenance.arrivals.settled` (`held`,
+  `covered`, `ignored`, `refused`, `unreadable`, `retried`, `ended`). A table's pass
   (`maintenance.services.table_pass.run_table_pass`) expires the table and each branch once it has
   `minVersionsToExpire` (20) reclaimable versions, refreshes its due record, reads its committed files (below), and
   schedules its next pass (`next_due`: the earliest a version or a staged manifest comes due, held to the policy's
@@ -822,7 +826,7 @@ governing their data. The project-scoped surface is the console's project page, 
   whatever the replica count: its schedule fires on a subject of its own, and the queue holds one task per subject. The
   two share one claim (`queue._claim_key`, `reconcile`), since each repairs the estate from a report of its own: they
   never run at once, and the scan fires off the hour so it rarely waits. Maintenance has no Dapr cron binding; the
-  chart's six are the catalog's and lineage's relay (`chart/templates/dapr-component.yaml`).
+  chart's seven are the catalog's six and lineage's relay (`chart/templates/dapr-component.yaml`).
 - **OpenFGA rejects a bare-type Read.** `read_tuples(obj="project:")` with no user is HTTP 400
   (*"the object id and user cannot be empty"*), and the wrapper reports it as
   `ServiceUnavailableError` — so it presents as a permanent outage on a healthy server. To enumerate

@@ -255,8 +255,10 @@ groups:
         annotations:
           summary: "Lineage ingest dead-lettering — provenance is being LOST"
           description: >-
-            A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal).
-            Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+            Lineage's ingest lane parked an event the feed does not hold: it could not be recorded on any of its
+            deliveries, or its author lacks a grant. The event is kept in the refusals table for the estate admin's
+            replay, and the feed lacks its row until then. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       - alert: LineageIngestDiscardingUnrepairable
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="unrepairable"}[5m])) > 0
@@ -301,7 +303,7 @@ groups:
           description: >-
             A run was refused because its stamped author does not hold the rung its operation demands on the
             datasets it claims to have written, and `lance_lineage_door` says where: a bus delivery is parked
-            on the dead-letter topic, the HTTP door answers its producer 403, and the outbox drain records it in
+            in lineage's refusals table, the HTTP door answers its producer 403, and the outbox drain records it in
             the refusals table. The feed lacks the run until the grant is written. Either a producer is
             claiming an identity it has no grant for (the case the gate exists to catch) or a legitimate
             producer lost a grant it needs (a broken cascade wearing an authorization costume). Distinct from
@@ -358,28 +360,22 @@ groups:
 
   - name: lance-catalog
     rules:
-      # [[LH-559]] The catalog's broadcast control subscription parks on `dlq.catalog.control` once the sidecar's retry
-      # schedule is spent. Nothing reads the park back (the ring buffer is a hint), so daprd's own count is the record:
-      # it books `process_status="drop"` with an empty status, stored as `status="drop"`, only after the dead-letter
-      # publish succeeded, or for a delivery the app's route answered 404 or that expired (dapr v1.19.0
-      # pkg/runtime/subscription/subscription.go, postman/http/http.go:177). An app's own DROP answer books
-      # `status="success"` and is not counted. Each replica parks its own copy of a broadcast, so the count is per replica.
-      # daprd creates a series on the first event it books, so a pod's first park is a series appearing at 1, which
-      # `increase` cannot see (it needs two samples): the `unless ... offset` arm fires on a series that was absent 10m ago.
-      - alert: CatalogControlLaneDeadLettering
-        expr: >-
-          sum by (topic) (increase(dapr_component_pubsub_ingress_count_total{app_id="catalog", process_status="drop", status="drop"}[10m])) > 0
-          or count by (topic) (dapr_component_pubsub_ingress_count_total{app_id="catalog", process_status="drop", status="drop"} unless dapr_component_pubsub_ingress_count_total{app_id="catalog", process_status="drop", status="drop"} offset 10m)
+      # [[LH-559]] The catalog's control lane hands each event it follows on once: one a replica cannot buffer (the signers'
+      # keys unread on every try, or a handling that raised) is given up, and nothing delivers it to that replica again
+      # (the ring buffer is a hint). The bus seam counts it (`bus.deliveries`, outcome `failed`, under the subject the
+      # replica follows), per replica, and creates the series at 0 when the lane starts, so the first one is an increase.
+      - alert: CatalogControlLaneDroppingEvents
+        expr: sum by (lance_bus_consumer) (increase(bus_deliveries_total{lance_bus_outcome="failed"}[10m])) > 0
         labels:
           severity: warning
           service: catalog
         annotations:
-          summary: "The catalog dead-lettered control events ({{ $labels.topic }}) — its feed missed them"
+          summary: "The catalog gave up control events ({{ $labels.lance_bus_consumer }}) — its feed missed them"
           description: >-
-            A catalog replica's sidecar exhausted its retry schedule on a control event and parked it on dlq.catalog.control,
-            so that replica's change-event feed lacks it. The park is kept on the DLQ stream. Read the replica's logs for the failing delivery (keys unavailable, a crash in
-            the handler).
-            Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+            A catalog replica could not buffer a control event it followed: the keys its signature is checked against
+            could not be read on any try, or its handling raised. That replica's change-event feed lacks the event;
+            the audit trail still records the change. Read the replica's `bus_followed_message_not_handled` log for
+            the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       - alert: CatalogWritesShedSustained
         expr: sum(rate(catalog_writes_shed_total[5m])) > 0
@@ -429,29 +425,25 @@ groups:
 
   - name: lance-infra
     rules:
-      # The infra-tier signal — a Dapr consumer-wedge. Dapr records the OUTCOME of every inbound pub/sub
-      # delivery as dapr_component_pubsub_ingress_count{process_status=...}: a healthy consumer books
-      # `success`; a handler that returns RETRY (its work keeps failing) books `retry` on every redelivery.
-      # So a sustained rate of process_status="retry" is the wedge — the subscription is not draining.
-      # (NOT dapr_resiliency_count, which is flat regardless of outcome, nor dapr_resiliency_activations_total,
-      # which Dapr 1.18 doesn't emit — both verified live on the cluster.) A healthy transient error retries
-      # then succeeds, so the 15m `for` rides out blips. NOTE the `_total` suffix: the OTel Collector's
-      # prometheus receiver normalizes counters, so the Dapr `..._count` exposition lands in GreptimeDB as
-      # `..._count_total` (verified live — the un-suffixed name returns nothing). The Collector scrapes the
-      # sidecars into GreptimeDB, so this fires on a real wedge.
-      - alert: DaprConsumerWedge
-        expr: sum by (app_id) (rate(dapr_component_pubsub_ingress_count_total{process_status="retry"}[5m])) > 0
+      # The infra-tier signal: a lane that cannot settle its deliveries. A service counts each delivery it took from
+      # its consumer by how it settled it (`bus.deliveries`): a healthy lane books `taken`; one whose handling keeps
+      # failing (a dependency does not answer) books `again` on every redelivery, and parks on its last attempt. A
+      # transient error is asked again and then taken, so the 15m `for` rides out a blip, and a sustained rate of `again`
+      # is a lane that is not draining its consumer. The series is created at 0 when the lane starts.
+      - alert: BusConsumerRetrying
+        expr: sum by (lance_bus_consumer) (rate(bus_deliveries_total{lance_bus_outcome="again"}[5m])) > 0
         for: 15m
         labels:
           severity: critical
-          service: dapr
+          service: fleet
         annotations:
-          summary: "Dapr consumer wedged — a subscriber is retrying inbound messages for 15m"
+          summary: "{{ $labels.lance_bus_consumer }}: deliveries asked for again for 15m — the lane is not draining"
           description: >-
-            A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound
-            deliveries for 15m without clearing, so this consumer is not draining its subscription and the
-            cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check
-            the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end
+            The service that pulls {{ $labels.lance_bus_consumer }} has asked for its deliveries again for 15m without
+            clearing: its handling keeps failing, so the consumer is not draining and what the lane records has
+            stopped. A transient error clears in minutes. Read the service's `delivery_handling_failed` log for the
+            error and check what it depends on (the catalog, OpenFGA, the secret store). Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end
 
       # [[LH-574]] The object store under every Lance read and write, as Lance's own client sees it. pylance 13.0.0's
       # `lance.otel` bridge (`lakehouse.lance_metrics`, exported by the catalog and maintenance) counts each request on
@@ -491,25 +483,39 @@ groups:
 
   - name: lance-maintenance
     rules:
-      # [[LH-559]] The write-event lane parks on `dlq.maintenance.arrival` once the sidecar's retry schedule is spent, and
-      # nothing subscribes to it, so daprd's own count is the record: `status="drop"` is a park (or a 404 or an expired
-      # delivery); an app's DROP answer is `status="success"` and not counted (CatalogControlLaneDeadLettering above).
-      - alert: MaintenanceArrivalDeadLettering
-        expr: >-
-          sum by (topic) (increase(dapr_component_pubsub_ingress_count_total{app_id="maintenance", process_status="drop", status="drop"}[10m])) > 0
-          or count by (topic) (dapr_component_pubsub_ingress_count_total{app_id="maintenance", process_status="drop", status="drop"} unless dapr_component_pubsub_ingress_count_total{app_id="maintenance", process_status="drop", status="drop"} offset 10m)
+      # [[LH-559]] The worker's write-event lane settles each commit announcement itself and counts how
+      # (`maintenance.arrivals.settled`, every outcome's series created at 0 when the worker starts): `ended` is an
+      # announcement no delivery could settle, for which no pass was held, and a sustained `retried` is a lane that cannot
+      # reach what it needs. An announcement is a hint the table's recheck backs up, so both are warnings.
+      - alert: MaintenanceArrivalLaneEndingEvents
+        expr: sum(increase(maintenance_arrivals_settled_total{outcome="ended"}[10m])) > 0
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance dead-lettered write events ({{ $labels.topic }}) — their tables wait for their next pass"
+          summary: "Maintenance ended commit announcements unhandled — their tables wait for their next pass"
           description: >-
-            The write-event lane's sidecar exhausted its retry schedule and parked a write on dlq.maintenance.arrival, so
-            no pass was held for the commit; the table's next scheduled pass, within `maintenance.queue.recheckHours`,
-            reads it, and the hourly audit queues one for a table no schedule holds. The park is kept on the DLQ stream. A
-            lane that parks every delivery cannot reach the work queue or read a table's claim: read maintenance's logs
-            for the failing delivery.
-            Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+            The worker's write-event lane could not settle a commit announcement on any of its deliveries and ended
+            it, so no pass was held for the commit; the table's next scheduled pass, within
+            `maintenance.queue.recheckHours`, reads it, and the hourly audit queues one for a table no schedule holds.
+            A lane that ends every announcement cannot reach the work queue or read a table's claim: read the worker's
+            `maintenance_arrival_ended` log for the error. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+
+      - alert: MaintenanceArrivalLaneRetrying
+        expr: sum(rate(maintenance_arrivals_settled_total{outcome="retried"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Maintenance's write-event lane is handing announcements back for 15m"
+          description: >-
+            The worker's write-event lane has handed commit announcements back for 15m without clearing: it cannot
+            read a signer's keys or a table's claim, or the work queue does not take the task. No pass is held for
+            those commits until it clears, and each is ended on its last delivery. Read the worker's
+            `maintenance_arrival_retried` log for the error. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end
 
       # The drift report decides whether the purge may run at all and is the estate's answer to "is the
       # storage state understood". It reached a log line and nothing else until `maintenance.drift.items`

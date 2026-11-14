@@ -1,6 +1,7 @@
 # 0182. Each catalog replica hears the control broadcast through a durable of its own (2026-10-27)
 
-**Status:** accepted. Source: LH-305 (#323); design chosen by the owner on 2026-10-27 ("Per-pod durable"). Amends ADR 0027,
+**Status:** accepted; superseded in its mechanism 2026-11-14 (XC-199 step D4, below: each replica follows the stream
+through a consumer its own connection holds, and the mirror and its durables are gone). Source: LH-305 (#323); design chosen by the owner on 2026-10-27 ("Per-pod durable"). Amends ADR 0027,
 whose broadcast and ring buffer stand: only the consumer each replica holds changes.
 
 ## Context
@@ -52,3 +53,17 @@ connection, with the server up, left nothing delivered afterwards.
 - Rejected: deleting the events door and the subscription, which would leave binding staleness to its TTL alone and drop
   the governance feed over HTTP; and a watchdog self-probe, which would put probe traffic on CATALOG_CONTROL and extend a
   workaround meant to be deleted.
+
+## Superseded in its mechanism, 2026-11-14 (XC-199 step D4, #787)
+
+Each catalog replica follows `catalog.control.v1` on CATALOG_CONTROL over its own connection to the bus, by reading the
+stream by sequence (nats-py's `get_msg`, `lakehouse.bus.Bus.follow`): it begins after the stream's last message and asks
+for the subject's next message after the last one it handed on, every second while there is none, so the bus holds no
+consumer for a replica. An ordered consumer was built first and dropped the same day: a message whose publisher gave it
+an empty body and a `Status: 100` header made nats-py 2.16.0 re-create the consumer without end (measured on nats-server
+2.15.2: 909 consumers in 14 s, and no later message handed on), and its create grant let the catalog's user have the
+bus copy the stream onto a subject it may not publish. The mirror CATALOG_CONTROL_BROADCAST, its per-pod durables, `catalog.controlConsumerInactiveSeconds`,
+`catalog.controlDlqTopic` and the catalog's pub/sub Component are gone; the stream Job's retire phase removes the
+mirror once. The catalog's bus user reads the stream's messages and holds no ack and no consumer grant. This record's premise was a sidecar that binds its consumer once and never
+re-creates it; the service's own client reads on from its place on its next connection, so a lapse costs no restart. ADR
+0027's broadcast and per-replica buffer stand.

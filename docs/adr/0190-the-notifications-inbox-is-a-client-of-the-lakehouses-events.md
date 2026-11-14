@@ -1,5 +1,7 @@
 # 0190. The notifications inbox is a client of the lakehouse's events (2026-11-02)
 
+**Amended 2026-11-14** (XC-199 step D4, #787): the stream Job removes only consumers this release declared, so a client's durable outlives an upgrade; see the amendment below.
+
 **Status:** accepted, amended by [ADR 0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) (`auth.externalDeciders` is gone: a client's roles are grants made at the catalog's access doors) and superseded in part by [ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) (the inbox is retired and deleted, and the console joins the product; the contract below stays). Source: XC-188 (#755), admitted by the owner on 2026-11-01 through the multi-question tool ("Inbox
 leaves, events stay"), narrowed on 2026-11-02 ("Lakehouse half only": the inbox's own release is client work) and
 widened the same day ("Go": the lakehouse's own gates hold with every client tree deleted, checked on each push). Amends
@@ -85,3 +87,14 @@ chart:
   that provisions the users revokes one the chart stops declaring.
 - service-kit carries the contract a client reads the events by; a client imports nothing from `lakehouse_kit`, and the
   lakehouse's gates hold with every client tree deleted.
+
+## Amendment (2026-11-14): the stream Job removes only what this release declared
+
+Source: #787 (XC-199), step D4. The consequence that the stream Job deletes every `-durable` no component in the release
+renders no longer holds. The lakehouse's services pull consumers the chart declares, and the stream Job runs in two
+phases: the declare phase writes the release's mark (`rask.dev/release`) into the metadata of each consumer it
+converges, and the retire phase (a Helm post-install and post-upgrade hook, an Argo CD PostSync hook) removes only a
+consumer carrying that mark that git no longer declares, on any stream. A consumer with no mark, a client's included, is
+never touched, and no stream is removed, so a durable a client creates on `lineage.events.v1` outlives an upgrade; the
+DLQ stream stays declared for a subscriber outside the release that parks on `dlq.<its own name>`. The rest of the
+consequence stands: the topics are internal, and a notifier that must miss no run walks the feed over HTTP.

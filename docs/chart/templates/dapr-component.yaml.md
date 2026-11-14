@@ -3,138 +3,26 @@
 Rationale for `chart/templates/dapr-component.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `apiVersion: dapr.io/v1alpha1`
+## `{{- if and .Values.dapr.enabled (not (.Capabilities.APIVersions.Has "dapr.io/v1alpha1")) }}`
 
-Dapr pub/sub components: the subscriptions on NATS JetStream, and nothing else. EVERY COMPONENT IS ONE APP'S
-SUBSCRIPTION, AND NONE PUBLISHES: each service publishes its events on its own connection to the bus (`lakehouse.bus`,
-`lance.busEnv`), so a component exists only where an app's sidecar subscribes, scoped to that app and carrying that
-app's credential (values.yaml `nats.auth`). The sidecar owns delivery retry and backoff here (config, not app code);
-subscriptions are programmatic (each app serves GET /dapr/subscribe via dapr-ext-fastapi), so no declarative
-Subscription CRDs.
+The Dapr control plane is a prerequisite (ADR 0153), installed on its own release; rask never installs it. A render
+with `dapr.enabled` on against a cluster that does not serve `dapr.io/v1alpha1` fails here, naming the fix, rather than
+applying Components the API server refuses.
 
-BROADCAST component for the catalog's OWN control-plane change-events (grants/warehouses/policies/tables).
-DEDICATED and with NO queueGroupName, so jetstream sets no DeliverGroup and
-EVERY catalog replica receives EVERY event and appends it to its per-replica ring buffer (GET /management/v1/events).
-The catalog subscribes through it (api/dapr.py); it publishes the events on its own connection (`lakehouse.control_emit`).
-deliverPolicy=new: a booting/redeployed replica must NOT replay 168h of past governance events into a fresh in-memory
-buffer — the buffer is a live-refresh hint window, not a log.
+## `{{- $scopes := splitList "," (include "lance.sidecarScopes" .) | compact }}`
 
-## `- { name: durableName, value: "catalog-control-{podName}" }`
-
-Each replica's consumer is a durable it names for its pod ([[LH-305]]): daprd fills `{podName}` from `POD_NAME`, which
-the injector sets from `metadata.name` (Dapr 1.18.1 `pkg/runtime/meta/meta.go:88-93`,
-`pkg/injector/patcher/sidecar_container.go:264`). An ephemeral consumer is deleted after 5 s without interest (nats-server
-v2.14.2 `consumer.go:1462-1467`) and Dapr's jetstream component binds a consumer once and never re-creates it
-(components-contrib v1.18.0 `jetstream.go:268-279`), so a connection that dropped and reconnected left the replica deaf
-until its pod restarted; measured on the nats-auth rig, a 10 s cut silenced the ephemeral and the durable delivered again.
-The name carries no `-durable` suffix, so the stream Job's orphan and drift passes never touch it.
-
-## `- { name: streamName, value: "CATALOG_CONTROL_BROADCAST" }`
-
-The durables live on a mirror of CATALOG_CONTROL whose consumer limit reaps a deleted pod's durable after
-`catalog.controlConsumerInactiveSeconds`. Dapr gives a consumer no inactivity threshold, and a stream's limit applies to
-every consumer on it (nats-server v2.14.2 `consumer.go:663-667`), so on CATALOG_CONTROL it would reap every other
-consumer of the control topic as well. Naming the stream also makes Dapr skip its subject lookup, which would answer CATALOG_CONTROL (a mirror
-captures no subject). The catalog's own publish names only the subject, so it lands on CATALOG_CONTROL, which the
-mirror copies.
-
-## `{{- include "lance.brokerWindows" . | nindent 4 }}`
-
-The broadcast's broker windows, the ones every retried subscriber carries ([[LH-559]]). The subscription parks a
-delivery its retries cannot get taken on `catalog.controlDlqTopic` (`LANCE_CONTROL_DLQ_TOPIC`), and the Resiliency CR retries
-this component, so while the sidecar spends its 480 s schedule the broker must hold the delivery: unset, components-contrib
-v1.19.0 sets no `AckWait` or `MaxDeliver` on the consumer (`pubsub/jetstream/jetstream.go:174-181`), nats-server's 30 s
-ack window redelivers underneath the retry, and its unlimited `MaxDeliver` redelivers a poison event without end. The park
-is the one publish the sidecar makes through this component; a publish names only its subject, so it lands on the
-DLQ stream (`dlq.>`), and `CatalogControlLaneDeadLettering` pages on the sidecar's count of it.
-
-## `{{- $subscribers := list (dict "appId" .Values.services.lineage.appId "deliverPolicy" "all") }}`
-
-One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
-app's replicas a competing-consumer group (single delivery per app — without it every replica gets
-EVERY message: jetstream only sets a DeliverGroup when queueGroupName is non-empty), and it CANNOT
-live on one shared component because lineage and maintenance (under `maintenance.arrivalEnabled`) both consume
-lineage.events.v1 — one shared queue group would split those messages across the two apps. deliverPolicy differs on
-purpose: `all` for lineage (a NEW durable starts at the stream's first message, so its first attach,
-or a rebuild after `nats consumer rm LINEAGE lineage-durable`, replays the retained stream into the
-idempotent ingest), `new` for the other subscribers (a replayed event acts twice).
-
-EVERY subscriber is DURABLE + queue group ([[LH-303]]). An ephemeral consumer dies with its last
-member and with a NATS restart, and the sidecar does not re-create it: measured 2026-09-26 on Dapr
-1.18.1, NATS scaled to 0 and back left lineage deaf to the bus until its pod restarted, while the
-durables resumed. Durable + queue group keeps its cursor across pod death, redeploys and NATS
-restarts, with none of the "consumer name already in use" orphans of a durable WITHOUT a queue group
-(chaos-verified 2026-07-06). Pinned by tests/unit/test_every_bus_subscriber_survives_a_bus_restart.py.
-
-A REFUSAL REPEATS ON A REPLAY. The two unrepairable classes (bytes that do not parse, a run carrying
-no author) are ACKED and counted rather than parked, because nothing can change their answer and a
-park would write a duplicate per replay. A named PERSON who lacks a grant still parks: a tuple can be
-written and the same event then succeeds.
-
-## `{{- if eq .appId $.Values.services.lineage.appId }}`
-
-LINEAGE'S SUBSCRIPTION DELIVERS IN PARALLEL ([[LH-533]]). Unset, the JetStream component hands its app
-one message at a time (components-contrib v1.19.0, `pubsub/jetstream/metadata.go:63-65`): measured on the
-live estate 2026-10-23, 61 of 61 deliveries ran back to back, so a backlog was recorded one commit per
-event, and the one delivery a catalog kill failed held every later message through its 120 s retry. With
-`parallel` each message is handled on its own, the events a commit is in flight for land together in the
-next (`ProvenanceStore.record`), and a retrying event holds no other back. The bound is the durable's own
-`maxAckPending` (`services.lineage.deliveriesInFlight`), so JetStream hands out no more than that and
-nothing waits in the sidecar while its `ackWait` runs. A sidecar cannot rebind a durable whose config
-changed, so nats-stream-job.yaml recreates `lineage-durable` when its `max_ack_pending` differs, and its
-`deliverPolicy: all` replays the retained stream into the keyed ingest. `concurrencyMode` is the
-component's alone and changes no durable. The other subscribers keep one at a time.
-
-## `{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}`
-
-MAINTENANCE's write-event subscription: a write holds that table's pass on maintenance's work queue
-(ADR 0198), which refreshes its due record (the tables needing compaction or reindexing, ADR 0162). It
-rewrites nothing; the rewrite is the user's job. Its dead letters go to `maintenance.arrivalDlqTopic`.
-
-`new`, because a replayed event acts twice: replaying the retained stream on a pod restart would
-queue a pass for every table written in the window, hundreds of manifest opens to reach answers each
-table's own scheduled pass reaches anyway. A missed window costs at most that table's next pass, within
-`maintenance.queue.recheckHours`; a replayed one costs the walk this lane exists to avoid.
-
-## `{{- range $subscribers }}`
-
-NO `protectedTopics` / `publishingScopes` / `subscriptionScopes` HERE, and the reason is a
-measurement rather than an omission ([[LH-064]]). Deny-by-default on `lineage.events.v1` was
-built, applied and rolled on 2026-09-16 and BROKE DELIVERY: `subscriptionScopes` is NOT additive.
-Naming an app in it makes that list the app's COMPLETE allowlist for the component — including
-topics that are not protected at all. The live refusal, on a topic `protectedTopics` never named:
-"Retry failed for subscription pubsub lineage-pubsub-notifications, topic dlq.notifications:
-subscription to topic 'dlq.notifications' ... is not allowed". 47 denials on medallion-producer,
-16 on notifications, 4 on lineage before the revert.
-So a future attempt must enumerate EVERY topic each app uses on its component, in BOTH
-directions, measured off `/v1.0/metadata` and the publish call sites — not just the one topic
-being protected. The scoping the estate already has is the document-level `scopes:` below, which
-closes each component to one app-id.
-
-## `- { name: durableName, value: "{{ .appId }}-durable" }`
-
-One durable per subscriber app-id, for the reasons in the block above.
-
-## `{{- include "lance.brokerWindows" $ | nindent 4 }}`
-
-The subscriber's broker windows, from the one helper every retried component uses (`_helpers.tpl.md`).
+The apps whose pods run a sidecar and log in to the store: the catalog's and lineage's (for their cron ticks) and each
+reader of `openbao.externalReaders`. `lance.sidecarScopes` is the store-reads table's apps less maintenance, whose worker
+pod runs no sidecar (`_helpers.tpl.md`). With no such app the Component is not rendered.
 
 ## `apiVersion: dapr.io/v1alpha1`
 
-The lineage DLQ PARKING consumer — its own component, never the app's main one. The main
-lineage component starts at the stream's first message (`all`), which a parking subscription must
-not: riding it, a replay re-parks up to 168h of already-parked dead letters, spiking ERROR logs and
-DEAD_LETTERED counts with no new loss. deliverPolicy=new plus its own durable parks each dead letter
-exactly once. Consumer config matches the
-resiliency-mode values the nats-stream-job's durable-drift reconcile expects (EXP_MAXD/EXP_BOFF) —
-this component only renders when resiliency is on, which is also the only time LINEAGE_DLQ_TOPIC
-exists.
-
-Dapr secret store fronting the dev OpenBao or the platform's Vault or OpenBao (Vault-API compatible), for the secrets a
-sidecar's own components resolve by `secretKeyRef` (each subscription component's bus user). No app reads a secret through
-it ([[XC-199]]): each service logs in to the store itself (`lakehouse.governed.secrets`), and every per-app Configuration
-denies the sidecar's secrets API whole (`lance.daprAppSpec`). The chart renders no store ([[XC-149]]): it names the dev
-fixture's (`openbao.enabled`) or the platform's (`openbao.externalAddr`).
+Dapr secret store fronting the dev OpenBao or the platform's Vault or OpenBao (Vault-API compatible). No component of
+this chart names a secret, so a lakehouse sidecar logs in through it and resolves nothing, and no app reads a secret
+through it ([[XC-199]]): each service logs in to the store itself (`lakehouse.governed.secrets`), and the catalog's and
+lineage's Configurations deny the sidecar's secrets API whole (`lance.daprAppSpec`). A reader in
+`openbao.externalReaders` reads its own secrets through it, under its own role. The chart renders no store
+([[XC-149]]): it names the dev fixture's (`openbao.enabled`) or the platform's (`openbao.externalAddr`).
 
 ## `- { name: vaultAuthMethod, value: kubernetes }`
 
@@ -152,8 +40,7 @@ ONE COMPONENT, ONE ROLE PER APP. Dapr fills `{appID}` into any component's metad
 sidecar logs in to `<release>-<its own app id>`, a role bound to that app's ServiceAccount whose policy reads exactly its
 app's secrets (`lance.storeReads`). The app's own process logs in to the same role, named in its environment
 (`lance.secretStoreEnv`). The store refuses the rest, and a pod that claimed another app's id would still present its own
-account's token, which that app's role does not admit. Every other component keeps naming this one store
-(`auth.secretStore: lance-secrets`).
+account's token, which that app's role does not admit.
 
 ## `- { name: vaultServiceAccountTokenPath, value: {{ include "lance.storeTokenFile" . }} }`
 
@@ -177,13 +64,13 @@ secret/data/<key>. Drop the prefix so the path is the natural secret/data/<key> 
 TLS is verified wherever there is TLS: the platform's store is https (`lance.platformStoreAddr` refuses anything
 else); the dev store is plain http, where the setting has nothing to verify, and 1.19 logs every `true` as unsafe.
 
-## `{{- range (splitList "," (include "lance.secretScopes" .) | compact) }}`
+## `{{- range $scopes }}`
 
-ONE derivation, in `lance.secretScopes`, because this list has other readers:
-`lance.appTokenEnv` decides whether a workload takes its app-API token from this store or
-through the environment, and it decides by membership HERE. Restating the computation would
-let the two agree at review and diverge later — a pod told to take its app token from a store it
-was named no address for fails its start closed.
+ONE derivation, `lance.sidecarScopes` over `lance.secretScopes`, because these lists have other readers: the per-app
+Configurations (observability.yaml) are rendered for the same apps, and `lance.appTokenEnv` decides by membership in
+`lance.secretScopes` whether a workload takes its app-API token from the store or through the environment. Restating
+the computation would let them agree at review and diverge later: a pod told to take its app token from a store it was
+named no address for fails its start closed.
 
 ## `{{- if .Values.dapr.enabled }}`
 
@@ -215,7 +102,7 @@ Delivered to `POST /<component name>` at the catalog's pod ROOT (never under a p
 require_dapr_token so only the sidecar's cron may drive the replay. The Component's name, the app's
 LANCE_CONTROL_RELAY_BINDING_NAME and the served path are ONE string.
 
-Mirrors the maintenance crons: schedule as Component config so the
+Like every cron binding here: schedule as Component config so the
 cadence is a values edit rather than an app redeploy, scoped to the one consuming app-id, gated on
 dapr.enabled (no control plane, no Component CRD, and the release would fail to apply).
 

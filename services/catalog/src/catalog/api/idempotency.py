@@ -6,12 +6,11 @@ with no rask SDK — so requiring one would break conformance on 54 routed opera
 sends a key gets convergence; one that does not is exactly where it was, which is the whole reason the
 mechanism is a seam a door opts into rather than middleware over 91 write routes.
 
-WHAT IT BUYS, precisely. `dapr-resiliency.yaml` retries a write door's failure, and a 500 raised AFTER
-the Lance write in `create_governed_table` — the schema read-back, `emit_create`, `emit_control` — is
-replayed with nothing to converge it. With `mode=Create` the replay answers AlreadyExists, so a
-successful create surfaces as a 409 nobody can tell from a name collision; with `mode=Overwrite` each
-replay RE-EXECUTES the destructive path. The catalog's app-id already left the bare-500 matcher (the
-rule's other branch); this closes the replays that remain — a 503, a proxy timeout, a client retry.
+WHAT IT BUYS, precisely. A 500 raised AFTER the Lance write in `create_governed_table` — the schema
+read-back, `emit_create`, `emit_control` — is replayed by whoever retries it, with nothing to converge it.
+With `mode=Create` the replay answers AlreadyExists, so a successful create surfaces as a 409 nobody can
+tell from a name collision; with `mode=Overwrite` each replay RE-EXECUTES the destructive path. A key
+closes those replays — a 500, a 503, a proxy timeout, a client retry.
 
 THE SCOPE IS A HASH OF THE SUBJECT, NOT THE SUBJECT. A key belongs to its caller, so two tenants using
 the string `retry-1` are two operations and must not collide. The subject itself cannot be a path

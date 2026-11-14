@@ -247,7 +247,7 @@ for zero trust."*
 |---|---|
 | `env: valueFrom: secretKeyRef` marked ✅ "secrets from secretKeyRef" | **Not approved.** Whether an ESO-written Secret delivered this way satisfies the rule is backlog XC-002, awaiting a ruling. Default: a working secret never enters process env. |
 | `helm-secrets` / SOPS: encrypted secrets in a values file | **No.** A chart value never carries a secret, encrypted or not. A record NAMES a secret. |
-| `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from the secret store (the platform's Vault or OpenBao; the dev OpenBao fixture): a service reads its own under its own login, its sidecar resolves its components' through the Dapr secret store, and every other pod gets an ExternalSecret. |
+| `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from the secret store (the platform's Vault or OpenBao; the dev OpenBao fixture): a service reads its own under its own login, and every other pod gets an ExternalSecret. |
 | a literal `value:` in a Job's env for a credential | **No** — readable by anyone with `get jobs`; a pod mounts a secret as a file ([[XC-004]]), and a workload's object-store identity is no secret at all but its projected ServiceAccount token ([[XC-084]]). |
 | Docker-based chart tooling | **Dagger.** `dagger call charts` runs the chart gate. |
 
@@ -319,8 +319,8 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   ([[XC-199]], `lakehouse.governed.secrets`; pinned offline by
   `packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`, and measured on the estate
   2026-11-14, helm rev 8: after `kubectl rollout restart deploy/rask-openbao` all six pods logged in again 22 to 27 s
-  later, none restarted or left Ready, and readiness answered `degraded` for 5 s). A sidecar resolved its components' secrets when it started and serves its app none, so the store's
-  replacement alone restarts no pod; one that minted a new bus root does (below, docs/OPERATORS.md § 6 and § 7).
+  later, none restarted or left Ready, and readiness answered `degraded` for 5 s). No product Component names a secret,
+  so no sidecar holds one, and the store's replacement alone restarts no pod; one that minted a new bus root does (below, docs/OPERATORS.md § 6 and § 7).
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
   key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519
   pair (`signing-public-<key name>`, then `signing-key-<key name>`) over from the outgoing pod
@@ -339,9 +339,9 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   stored JWT's `iat` (`NATS user <u>: replaced`), the seed stopping only on a stored JWT that names no key; and the APP
   account's `*` revocation sits one second before the oldest JWT a declared user
   holds, taking back whatever earlier reseeds left (measured 2026-11-07, nats-server 2.14.2, nsc 2.15.0, nats.go 1.39.1:
-  a client holding a revoked JWT is closed after two refused reconnects, the state `lakehouse.bus_watchdog` restarts a
-  sidecar from and a service's own connection opens again from, with the credential the store holds then,
-  `lakehouse.bus`); a non-dev store waits for
+  a client holding a revoked JWT is closed after two refused reconnects, the state a service's own connection opens
+  again from, in-process, with the credential the store holds then, `lakehouse.bus`; the maintenance worker ends its
+  process instead and starts again on it, `TaskQueue.connect`); a non-dev store waits for
   `nats.auth.provisioned`. **The seed revokes every APP bus user the release stops declaring**: it lists the
   `nats-user-*` secrets in its own store and the one behind the Service, reads each undeclared user's key out of its
   stored JWT, adds it to the APP account's revocations (carried to the bus in `resolver_preload`), and deletes its
@@ -379,16 +379,17 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   `networkPolicy.extraEgress` (kept for an endpoint no row names). `lance.egressRules` refuses a rule with no `to` peers
   or a `/0` peer. The development stores' ingress admits exactly their callers from the same helpers
   (`lance.objectStoreClients`, `lance.busClients`), plus each fixture's own Job and, on the bus, the development object store's server, which publishes each change on `store.events`.
-- **Who reads which secret is one table, `lance.storeReads`** ([[XC-165]], ADR 0169): per app, its ServiceAccount, the
-  secrets its code reads and the ones its sidecar's components resolve. Each service logs in to the store ITSELF
+- **Who reads which secret is one table, `lance.storeReads`** ([[XC-165]], ADR 0169): per app, its ServiceAccount and
+  the secrets its code reads. Each service logs in to the store ITSELF
   ([[XC-199]], `lakehouse.governed.secrets`): Kubernetes auth as its role `<release>-<app>`, which `lance.secretStoreEnv`
   names in its environment (`RASK_SECRET_STORE_ADDR`, `_ROLE`, `_AUTH_MOUNT`, `_KV_MOUNT`, `_TOKEN_FILE`), with a token
-  projected for `openbao.identity.audience` into its own container. Its sidecar logs in to the same role through the one
-  `lance-secrets` component (`<release>-{appID}`, Dapr 1.19 is the floor), only for its components' secrets, and its
-  Configuration denies the sidecar's secrets API whole, so no secret is served through a sidecar. The table does not hang
-  on `dapr.enabled`: only the app token, each service's own bus user (`nats-user-<app>`, which its code reads for its
-  own connection wherever it publishes, and its sidecar's subscription component resolves) and maintenance's work-queue
-  user do. Each role's
+  projected for `openbao.identity.audience` into its own container. The catalog's and lineage's sidecars log in to the
+  same role through the one `lance-secrets` component (`<release>-{appID}`, Dapr 1.19 is the floor) and resolve no
+  secret, since no product Component names one; the maintenance worker runs no sidecar, so `lance.sidecarScopes` leaves
+  it out of the component's scopes; and every Configuration denies the sidecar's secrets API whole, so no secret is
+  served through a sidecar. The table does not hang on `dapr.enabled`: only the app token (the catalog's and lineage's,
+  for their cron tick routes), each service's own bus user (`nats-user-<app>`, which its code reads for its own
+  connection) and maintenance's work-queue user do. Each role's
   policy reads exactly that app's reads (`lance.storeIdentity` mounts the token). The roles and policies render in every
   mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform
   store's operator creates. A new secret a service reads is a row there, or the store's policy refuses its read.

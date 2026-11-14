@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
 from lineage.core.config import get_settings
+
+
+# The suite's shared helper (`lineage_lane`) is a plain module beside its tests: under `--import-mode=importlib` nothing
+# else puts this directory on the path, and a conftest is loaded before collection begins.
+sys.path.insert(0, str(Path(__file__).parent))
 
 
 @pytest.fixture(autouse=True)

@@ -1,10 +1,10 @@
 """The bus door authorizes the stamped subject, as the HTTP door does (§ E2).
 
 THE ASYMMETRY THIS CLOSES. `endpoints/ingest.py` applies `enforce_author` (bind the run to the verified
-principal) and `enforce_output_authz` (may that principal write these outputs). `api/dapr.py` applied
-neither: it was guarded only by the sidecar's shared app-api-token, which authenticates a TRANSPORT and
-not a producer. Any holder of that one credential could therefore record any provenance about any
-dataset — including an `operation: drop_table` on a table it had never seen.
+principal) and `enforce_output_authz` (may that principal write these outputs). A delivery off the bus has no
+principal: the bus's permission table authenticates a TRANSPORT and not a producer, and the author is read off the
+payload. Without the gate, any producer the bus lets publish could record any provenance about any dataset — including
+an `operation: drop_table` on a table it had never seen.
 
 THE ORDERING RULE THIS ROW SET, and why the gate is only now safe: "a consumer-side gate is only safe
 once the producers sign". Measured 2026-09-08, 664 of 5 644 runs carried no author and 518 of those were
@@ -20,13 +20,16 @@ import asyncio
 from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
 from lance_namespace import PermissionDeniedError
+from lineage_lane import Feed, governed, started
 from openfga_sdk import OpenFgaClient
 
+from lakehouse.bus_delivery import Outcome, Settlement
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lineage.api.fga_deps import relations_for_operation
-from lineage.core.config import Signing
+from lineage.core.config import LineageSettings, Signing
 from lineage.models import RunEvent
 
 
@@ -51,31 +54,6 @@ def _event(*, inputs: list[dict[str, Any]] | None = None, **run_facets: Any) -> 
     )
 
 
-class _Repo:
-    def __init__(self) -> None:
-        self.ingested: list[RunEvent] = []
-
-    async def record(self, event: RunEvent) -> None:
-        self.ingested.append(event)
-
-
-class _RepoWithOutputs(_Repo):
-    """The capturing double plus BOTH reads the authz path makes: the run's author and the replay
-    comparison.
-
-    A double that LACKS either does not fail the same way — the AttributeError lands in the consumer's
-    outage branch and the delivery answers RETRY, so the test would pass for the wrong reason and could
-    never tell a refusal from a broken double. `recorded_event` answers None: the route test drives a
-    FIRST delivery, which has nothing to have replayed.
-    """
-
-    async def run_author(self, _run_id: str) -> str | None:
-        return None
-
-    async def recorded_event(self, _key: str) -> dict[str, Any] | None:
-        return None
-
-
 def test_a_DATA_write_demands_the_writer_rung() -> None:
     """An insert changes what the table says, so nothing weaker than `can_write_data` may record it."""
     assert relations_for_operation("insert") == ("can_write_data",)
@@ -97,58 +75,24 @@ def test_the_TAG_GATES_operations_are_recorded_on_the_rungs_of_the_doors_that_pe
     assert relations_for_operation(operation) == rungs
 
 
-def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CONTRACT, and the only tier that can prove it: driven through the REGISTERED route with the
-    production wiring, so it fails if `register_dapr` stops passing the authorizer.
+def test_the_lane_parks_an_unauthorized_delivery_unrecorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONTRACT, and the only tier that can prove it: driven through lineage's own lane with the production wiring, so
+    it fails if the lane stops passing the authorizer.
 
-    The handler-level tests above take the callback as an argument and therefore cannot tell a wired
-    door from an unwired one — which is exactly how this defect survived: `enforce_output_authz`'s own
-    source named the asymmetry in a comment, and nothing executed against the door.
+    The gate-level tests below take the gate as a function and therefore cannot tell a wired door from an unwired one —
+    which is how this defect survived: `enforce_output_authz`'s own source named the asymmetry in a comment, and nothing
+    executed against the door. A named person lacking a grant is parked for the estate admin's replay, never recorded.
     """
-    import logging
+    governed(monkeypatch)
+    _deny_all(monkeypatch)
+    envelope = {"id": "evt-mallory", "data": _event(rask_author={"name": "mallory", "sub": "dex~mallory"}).model_dump(by_alias=True)}
 
-    from fastapi import FastAPI
-    from starlette.testclient import TestClient
+    with started(monkeypatch, Feed(), decider=OpenFgaDecider(cast("OpenFgaClient", object()))) as lineage:
+        settled = lineage.deliver(envelope)
 
-    from lakehouse.governed import fga
-    from lakehouse.ns_errors import install_problem_handlers
-
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
-    monkeypatch.setenv("RASK_FGA_ENABLED", "true")
-    # FGA-on requires OIDC-on (`GovernedAuthSettings` refuses the half-governed shape), and OIDC-on
-    # requires an issuer + audience. Supplied so this test exercises ITS subject rather than re-testing
-    # that guard, which `test_the_chart_REFUSES...` already owns.
-    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
-    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://idp.invalid/dex")
-    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
-    monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
-
-    from lineage.api.dapr import register_dapr
-    from lineage.core.config import get_settings
-
-    async def deny_everything(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        del user, relation
-        return dict.fromkeys(objects, False)
-
-    monkeypatch.setattr(fga, "batch_check", deny_everything)
-
-    get_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-    register_dapr(app)
-    get_settings.cache_clear()
-
-    repo = _RepoWithOutputs()
-    app.state.provenance = repo
-    app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
-
-    payload = {"data": _event(rask_author={"name": "mallory", "sub": "dex~mallory"}).model_dump(by_alias=True)}
-    response = TestClient(app).post("/lineage-events", json=payload, headers={"dapr-api-token": "s3cret"})
-
-    assert response.status_code == 200, "a refusal must be an ACK, not an error the sidecar retries"
-    assert response.json() == {"status": "DROP"}, f"the door recorded provenance it never authorized: {response.json()}"
-    assert repo.ingested == [], "an unauthorized delivery reached the feed"
+    assert settled == Settlement(outcome=Outcome.PARKED)
+    assert lineage.feed.recorded == [], "an unauthorized delivery reached the feed"
+    assert list(lineage.feed.kept) == ["dead_letter:evt-mallory"]
 
 
 # --------------------------------------------------------------------------- #
@@ -156,16 +100,28 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
 # --------------------------------------------------------------------------- #
 
 
-class _Settings:
-    fga_enabled = True
-    signing = Signing(signers=frozenset(), delegators=frozenset())
+def _settings() -> LineageSettings:
+    """Authorization on, and no signer listed, so only the grants decide."""
+    return LineageSettings.model_validate(
+        {
+            "oidc_enabled": True,
+            "oidc_issuer": "https://idp.invalid/dex",
+            "oidc_audience": "rask",
+            "oidc_connectors": {"local": "dex"},
+            "fga_enabled": True,
+            "fga_store_id": "s",
+            "fga_model_id": "m",
+            "signing": Signing(signers=frozenset(), delegators=frozenset()),
+        }
+    )
 
 
-def _request(provenance: object) -> Any:
-    class _App:
-        state = type("S", (), {"decider": OpenFgaDecider(cast("OpenFgaClient", object())), "provenance": provenance})()
-
-    return type("R", (), {"app": _App()})()
+def _app(provenance: object, decider: object | None = None) -> FastAPI:
+    """An app holding what the gate reads off its state: the decider and the feed."""
+    app = FastAPI()
+    app.state.decider = decider if decider is not None else OpenFgaDecider(cast("OpenFgaClient", object()))
+    app.state.provenance = provenance
+    return app
 
 
 class _Feed:
@@ -203,7 +159,7 @@ def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(monkeypatch: pytest.
     _deny_all(monkeypatch)
     event = _event(rask_author={"name": "someone", "sub": "dex~someone"})
     stored = event.model_dump(by_alias=True)
-    asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings()), event.model_dump(by_alias=True)))
+    asyncio.run(fga_deps.enforce_bus_authz(event, _app(_Feed(stored)), _settings(), event.model_dump(by_alias=True)))
 
 
 def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,7 +175,7 @@ def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(monkeypatch: pytest
     event = _event(rask_author={"name": "mallory", "sub": "dex~mallory"})
     stored = _event(rask_author={"name": "the-real-author", "sub": "dex~the-real-author"}).model_dump(by_alias=True)
     with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings()), event.model_dump(by_alias=True)))
+        asyncio.run(fga_deps.enforce_bus_authz(event, _app(_Feed(stored)), _settings(), event.model_dump(by_alias=True)))
 
 
 def test_an_UNAUTHORED_replay_is_still_exempt_but_an_unauthored_NEW_event_is_not(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,13 +186,9 @@ def test_an_UNAUTHORED_replay_is_still_exempt_but_an_unauthored_NEW_event_is_not
 
     _deny_all(monkeypatch)
     unauthored = _event()
-    asyncio.run(
-        fga_deps.enforce_bus_authz(
-            unauthored, _request(_Feed(unauthored.model_dump(by_alias=True))), cast(Any, _Settings()), unauthored.model_dump(by_alias=True)
-        )
-    )
+    asyncio.run(fga_deps.enforce_bus_authz(unauthored, _app(_Feed(unauthored.model_dump(by_alias=True))), _settings(), unauthored.model_dump(by_alias=True)))
     with pytest.raises(PermissionDeniedError, match="author"):
-        asyncio.run(fga_deps.enforce_bus_authz(unauthored, _request(_Feed(None)), cast(Any, _Settings()), {}))
+        asyncio.run(fga_deps.enforce_bus_authz(unauthored, _app(_Feed(None)), _settings(), {}))
 
 
 class _Grants:
@@ -272,8 +224,7 @@ def test_a_write_naming_a_table_by_a_name_another_rename_took_is_authorized_on_t
 
     grants = _Grants({("can_write_data", f"table:{_PAGES}"), ("can_get_metadata", f"table:{_SOURCE}")})
     event = _event(inputs=[_dataset("bronze$renamed_since", _SOURCE)], rask_author={"name": "pipeline", "sub": "dex~pipeline"})
-    request = type("R", (), {"app": type("A", (), {"state": type("S", (), {"decider": grants, "provenance": _Feed(None)})()})()})()
 
-    asyncio.run(fga_deps.enforce_bus_authz(event, cast(Any, request), cast(Any, _Settings()), event.model_dump(by_alias=True)))
+    asyncio.run(fga_deps.enforce_bus_authz(event, _app(_Feed(None), grants), _settings(), event.model_dump(by_alias=True)))
 
     assert sorted(grants.asked) == [("can_get_metadata", f"table:{_SOURCE}"), ("can_write_data", f"table:{_PAGES}")]

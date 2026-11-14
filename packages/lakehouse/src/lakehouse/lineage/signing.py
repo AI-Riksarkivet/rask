@@ -1,12 +1,12 @@
 """Ed25519 signatures over a lineage event or a control event, so the author a producer stamps cannot be forged ([[LH-064]], [[XC-078]]).
 
-A bus door authenticates the sidecar that delivered an event, not the producer that wrote it, so the author
+A bus door authenticates the transport an event arrived on, not the producer that wrote it, so the author
 stamped inside is a claim until something proves it. A producer signs its event with its own key and a
 verifier checks the signature against that producer's published public key: recording provenance as somebody
 else takes that other producer's key.
 
 THE SIGNATURE RIDES INSIDE THE EVENT, not beside it. A header belongs to whatever carries the bytes today and
-is re-agreed with every transport; a facet is part of the event and survives a Dapr retreat unchanged. A
+is re-agreed with every transport; a facet is part of the event and survives a change of transport unchanged. A
 producer signs, a verifier verifies, and neither needs to know what carried the bytes.
 
 THE KEYS ARE ASYMMETRIC, which is what makes a second verifier safe. Each signing identity owns an Ed25519

@@ -7,9 +7,8 @@ change dropped keeps its rung until the backfill takes it back ([[XC-164]]).
 
 WHY AT BOOT, IN THE BACKGROUND. The catalog runs it beside its lifespan (`main.py::_backfill_cascade_grants`), not
 awaited and not fatal: a slow OpenFGA must not delay readiness, and a grant that could not be converged leaves the
-estate as it was. A hook Job cannot do it, because the registry read needs the store's secret from the secret store,
-which needs a Dapr sidecar, and a sidecar keeps a Job from completing. Every replica runs it; each write and each revoke
-is idempotent (a revoke a sibling made first is recorded absent), so replicas racing converge on the same tuples.
+estate as it was. Every replica runs it; each write and each revoke is idempotent (a revoke a sibling made first is
+recorded absent), so replicas racing converge on the same tuples.
 
 WHY NOT RE-POST /management/v1/warehouses. A same-id create converges the record and calls `seed_warehouse`
 unconditionally, so it *would* land the tuples — while granting the CALLER `owner` on every tenant it

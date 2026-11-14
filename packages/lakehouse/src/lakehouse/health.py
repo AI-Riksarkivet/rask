@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from lakehouse.bus import Bus
-    from lakehouse.bus_watchdog import BusWatchdog
     from lakehouse.storage_options import StorageOptions
 
 
@@ -89,17 +88,14 @@ def openfga_dependency(app: FastAPI, *, required: bool) -> list[Dependency]:
     return [Dependency(name="openfga", read=fga.get_store, required=required)] if fga is not None else []
 
 
-def bus_dependency(bus: Bus | None, watchdog: BusWatchdog | None) -> list[Dependency]:
-    """The bus the chart names this pod, reported and never gating, since every announcement it carries is staged in an
-    outbox first and the bus delivers again what a consumer could not take; nothing for a pod named no bus.
+def bus_dependency(bus: Bus | None) -> list[Dependency]:
+    """The bus the chart names this process, reported and never gating, since every announcement it carries is staged
+    in an outbox first and the bus keeps what a consumer could not take; nothing for a process named no bus.
 
-    The verdict is the state of this process's own connection where it holds one (``bus``): a closed or reconnecting
-    client is the bus being away for this process, whatever a fresh connection would be told. A pod that reaches the bus
-    only through its sidecar is asked whether a server greets a new connection (``watchdog``).
+    The verdict is the state of this process's own connection: a closed or reconnecting client is the bus being away
+    for this process, whatever a fresh connection would be told.
     """
-    if bus is not None:
-        return [Dependency(name="bus", read=bus.answering, required=False)]
-    return [Dependency(name="bus", read=watchdog.bus_answer, required=False)] if watchdog is not None else []
+    return [Dependency(name="bus", read=bus.answering, required=False)] if bus is not None else []
 
 
 class _Answer(BaseModel):

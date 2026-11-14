@@ -8,8 +8,9 @@
 export RASK_EXPECT_CONTEXT
 
 # Live proof (kind `lance`) of the control-plane change-event pipeline, end to end:
-#   a governance mutation → best-effort emit → DEDICATED broadcast Dapr topic (catalog.control.v1, no
-#   queueGroupName) → every replica's ring buffer → GET /management/v1/events → the admin console's query.live feed.
+#   a governance mutation → best-effort emit → the subject catalog.control.v1 on the stream CATALOG_CONTROL, which every
+#   catalog replica follows on its own bus connection → that replica's ring buffer → GET /management/v1/events → the
+#   admin console's query.live feed.
 # Asserts the whole chain by driving the REAL catalog with real OIDC tokens + FGA tuples:
 #   - alice (ESTATE admin = owner of the root warehouse, fga_root_object) → GET /management/v1/events 200, and after she
 #     creates a namespace the poll returns a namespace_created event whose actor is her verified subject;
@@ -20,7 +21,7 @@ export RASK_EXPECT_CONTEXT
 #   make frontend-load
 #   helm upgrade --install lance-ns ./chart --set auth.enabled=true --set dapr.enabled=true
 #   kubectl rollout restart deploy/lance-ns-dex
-# catalog.controlEmit defaults ON, so the broadcast component + NATS stream + subscription render. This
+# catalog.controlEmit defaults ON, so the stream Job declares CATALOG_CONTROL and each catalog replica follows it. This
 # script port-forwards read-only; run it OUTSIDE auto mode (or `!`-prefix the invocation).
 #
 # Alice's estate-admin grant is ASSERTED, not seeded (goal cond 4): the catalog's declaration grants
@@ -138,7 +139,7 @@ for i in $(seq 1 10); do
   P="$(curl -s -H "Authorization: Bearer $ALICE" "$CAT/management/v1/events?since=$CURSOR")"
   hit="$(echo "$P" | python3 -c "import sys,json;d=json.load(sys.stdin);print(any(e['action']=='namespace_created' and e['actor']=='user:$ALICE_SUB' for e in d['events']))" 2>/dev/null || echo False)"
   [ "$hit" = "True" ] && { ok "GET /management/v1/events delivered namespace_created by user:$ALICE_SUB (the live pipeline)"; break; }
-  [ "$i" = "10" ] && { echo "$P"; fail "namespace_created never reached /management/v1/events (check catalog.control.v1 stream + the subscription)"; }
+  [ "$i" = "10" ] && { echo "$P"; fail "namespace_created never reached /management/v1/events (check the stream CATALOG_CONTROL and the catalog's bus_follow_failed log)"; }
   sleep 2
 done
 

@@ -55,4 +55,4 @@ def test_every_service_identity_is_the_subject_of_its_own_pods_service_account()
     assert {key for _pod, key, _value in named} == {"RASK_SIGNING_IDENTITY", "MAINTENANCE_CATALOG_SERVICE_IDENTITY"}, f"the render names {named}"
     assert not wrong, f"identities that are not their pod's service-account subject: {wrong}"
 
-    assert json.loads(maintainers) == [_subject(accounts["rask-maintenance"])], f"the catalog grants the maintainer rung to {maintainers}"
+    assert json.loads(maintainers) == [_subject(accounts["rask-maintenance-worker"])], f"the catalog grants the maintainer rung to {maintainers}"

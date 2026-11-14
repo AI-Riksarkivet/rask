@@ -153,6 +153,7 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     from lineage.core.config import get_settings
     from lineage.services.names import CatalogNames
     from lineage.services.provenance import ProvenanceStore
+    from lineage.services.signature import store_published_keys
 
     monkeypatch.setenv("LINEAGE_CATALOG_URL", catalog_url)
     monkeypatch.setenv("RASK_FGA_ENABLED", "true")
@@ -193,6 +194,7 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     app.state.grants = grants
     app.state.provenance = store
     app.state.names = CatalogNames.from_settings(settings)
+    app.state.published_keys = store_published_keys()
     try:
         with TestClient(app) as client:
             yield client

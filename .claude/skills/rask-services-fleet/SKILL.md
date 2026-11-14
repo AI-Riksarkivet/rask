@@ -40,11 +40,11 @@ with its Gateway provider switched on by `deploy/k3s/traefik-gateway.yaml` (a He
 `kube-system`, listener `web` on the node's port 80. `deploy/values-local.yaml` attaches to it (`route.parentRefs`) and
 sets `forwardedAllowIps: 10.42.0.0/16`.
 
-**The route publishes doors, never a service's root** ([[CTL-001]]): the probes, `/dapr/subscribe`, the Dapr deliveries
-and the cron ticks are not published at the edge (a request there falls to the console's 404). The pod's port still
-admits any peer (ADR 0165), so the services guard them: `/dapr/subscribe`, each delivery and each tick with its
-`OPTIONS` pre-flight answer the sidecar's app token alone (`require_dapr_token`; daprd stamps it on all of them), and
-only the probes answer a caller with none. A docs page (`docs.enabled`) names its schema, and the schema its server, by
+**The route publishes doors, never a service's root** ([[CTL-001]]): the probes and the cron ticks are not published
+at the edge (a request there falls to the console's 404), and no route takes an event: each service pulls or follows
+its own on its connection to the bus. The pod's port still admits any peer (ADR 0165), so the services guard them:
+each tick and its `OPTIONS` pre-flight answer the sidecar's app token alone (`require_dapr_token`; daprd stamps it on
+both), and only the probes answer a caller with none. A docs page (`docs.enabled`) names its schema, and the schema its server, by
 relative URL, so it works under any public prefix. **Adding a
 door at a service's root** is one path in its `rask.apiRoutes` row (`prefix`, `component`, `service`, `port`, `rewrite`
 true to land each path on itself, false to forward unchanged, `paths`); the offline render gate
@@ -61,7 +61,7 @@ chart names no client.
 |---|---|---|---|
 | **catalog** | 2333 | `/api/catalog` (its `/v1` and `/management/v1` doors) | the Lance Namespace REST catalog and the management doors (`rask-lance-catalog`) |
 | **lineage** | 8000 | `/api/lineage` (its feed, intake, parks and derived-table doors) | the OpenLineage intake, the commit feed (`GET /events`) and the forwarder (ADR 0158) |
-| **maintenance** | 8000 | none | the work-queue worker (each table's pass, the hourly audit, the daily scan, ADR 0198) and the write-event lane; it pulls its tasks from NATS and is reached only by its Dapr subscription (`/maintenance-arrival`) and the probes |
+| **maintenance** | 8001 (probes only) | none | the work-queue worker (each table's pass, the hourly audit, the daily scan, ADR 0198) and the write-event lane, one process (`python -m maintenance.worker`); it pulls its tasks, its fired schedules, the store's events and the commit announcements from NATS, and is reached by nothing but its probes |
 | **console** | 3000 | `/` | the console's static-file server (`serve.ts`), the lakehouse's own UI; calls no door itself (`rask-frontend`) |
 
 The lakehouse rows are `/api/catalog` and `/api/lineage`. There is no ingest row and no medallion row: the lakehouse

@@ -1,8 +1,7 @@
 # Import-layer contracts, run by `make lint-imports` (part of `make check`). Each names a layer that must
 # not import another; lint-imports walks the whole import graph, function-local (lazy) imports included,
-# and names the offending chain. `dapr` is a root package because import-linter cannot forbid an external
-# SUBPACKAGE (`dapr.ext.workflow`) otherwise, and include_external_packages lets the other third-party
-# names (ray, durabletask, fastapi, starlette, dotenv) be forbidden directly. Every first-party package the
+# and names the offending chain. include_external_packages lets a third-party name (ray, dapr, durabletask,
+# fastapi, starlette, dotenv) be forbidden directly, as a whole package. Every first-party package the
 # lakehouse imports is a root package too: an external package's own imports are not in the graph, so a client imported
 # through one would pass every contract. No client is a root package: a client lives in a repository of its own, and
 # the names a client's code goes by are forbidden below as external names.
@@ -13,7 +12,6 @@ root_packages =
     lineage
     maintenance
     lakehouse
-    dapr
 include_external_packages = True
 
 [importlinter:contract:catalog-api-speaks-the-spec-taxonomy]
@@ -53,6 +51,6 @@ source_modules =
     maintenance
     lakehouse
 forbidden_modules =
-    dapr.ext.workflow
+    dapr
     durabletask
 allow_indirect_imports = True

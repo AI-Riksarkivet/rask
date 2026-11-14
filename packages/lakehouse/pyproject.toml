@@ -9,8 +9,6 @@ dependencies = [
     "pydantic>=2.13",
     "pydantic-settings>=2.14",
     "python-dotenv>=1.0",
-    # The subscription wrapper a sidecar-delivered route is registered through (`lakehouse.governed.dapr_auth`).
-    "dapr-ext-fastapi>=1.18.1",
     # The bus client (`lakehouse.bus`); `nkeys` signs the server's nonce with the user's seed.
     "nats-py[nkeys]>=2.16",
     # The auth plane (`lakehouse.governed`): the OpenFGA client and its async transport, token verification, the

@@ -19,8 +19,8 @@ two racing deliveries of one event land it once (``catalog.services.primary_keys
 per terminal state of a run, one per arrival of a non-terminal state, and one per static change.
 
 A BURST IS ONE COMMIT PER TABLE ([[LH-533]]). Every commit is a Lance version and a fragment that each later open and
-scan of the table pays for (ADR 0174), and the sidecar delivers lineage's subscription in parallel (`concurrencyMode:
-parallel`, chart `services.lineage.deliveriesInFlight`), so the events recorded while a commit is in flight wait and land
+scan of the table pays for (ADR 0174), and the ingest lane handles up to `services.lineage.deliveriesInFlight` deliveries
+at once (`lakehouse.bus.Bus.consume`), so the events recorded while a commit is in flight wait and land
 together in the next one: one writer per process, started by the first event of a burst and gone with its last, with no
 timer, so an idle estate waits on nothing. Measured on pylance 13.0.0 against the catalog app, 29
 concurrent deliveries recorded one commit each took 16, 16 and 13 commits on `runs`, `edges` and `events`, and the
@@ -88,8 +88,9 @@ TERMINAL_STATES: Final = frozenset({"COMPLETE", "FAIL", "ABORT"})
 
 FEED: Final = "events"
 REFUSALS: Final = "refusals"
-#: A delivery the parking route could not recover is kept in ``refusals`` under this prefix and its CloudEvent id, beside
-#: the outbox refusals keyed by their staged object ([[LH-148]]): a re-park of the same delivery lands on its row.
+#: A delivery the ingest lane parks unrecorded is kept in ``refusals`` under this prefix and its CloudEvent id (its feed
+#: row's key when the envelope carries no id), beside the outbox refusals keyed by their staged object ([[LH-148]]): a
+#: re-park of the same delivery lands on its row.
 PARKED_KEY_PREFIX: Final = "dead_letter:"
 
 FEED_SCHEMA: Final = pa.schema(
@@ -203,7 +204,7 @@ def parked_delivery(key: str, run_id: str | None, cloud_event: dict[str, Any]) -
 
 
 def delivery_feed_key(cloud_event: Mapping[str, Any]) -> str | None:
-    """The feed row a Dapr-delivered CloudEvent would write, or ``None`` when no event parses out of it."""
+    """The feed row a delivered CloudEvent would write, or ``None`` when no event parses out of it."""
     try:
         return feed_key(parse_event(cloud_event.get("data")))
     except (ValidationError, TypeError, ValueError):
@@ -681,7 +682,7 @@ class ProvenanceStore:
         await self._run(lambda: self._writer(REFUSALS).merge_upsert(pa.Table.from_pylist([row], schema=REFUSAL_SCHEMA), on="outbox_key"))
 
     async def parked(self, run_id: str | None = None) -> list[ParkedDelivery]:
-        """Each delivery the parking route kept ([[LH-148]]), of ``run_id`` or of every run."""
+        """Each delivery the ingest lane's park kept ([[LH-148]]), of ``run_id`` or of every run."""
         where = f"starts_with(outbox_key, {sql_literal(PARKED_KEY_PREFIX)})" + (f" AND run_id = {sql_literal(run_id)}" if run_id is not None else "")
         rows = await self._run(lambda: self._reader(REFUSALS).to_table(columns=["outbox_key", "run_id", "event"], filter=where))
         return [parked_delivery(row["outbox_key"], row["run_id"], json.loads(row["event"])) for row in rows.to_pylist()]

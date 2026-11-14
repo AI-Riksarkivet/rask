@@ -13,8 +13,8 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 | Prerequisite | What rask renders against it |
 |---|---|
 | **External Secrets Operator** | the ExternalSecrets and SecretStore behind every credential a pod takes as a Kubernetes Secret (§ 8) |
-| **Dapr control plane** | the Components, Configurations, Resiliency and Subscriptions, and the sidecar annotations |
-| **NATS JetStream** | the stream Job that creates rask's streams, and one bus user per app (§ 7) |
+| **Dapr control plane** | the secret-store Component `lance-secrets`, the cron binding Components, the Configurations, and the sidecar annotations of the catalog's and lineage's pods, whose sidecars deliver their cron ticks |
+| **NATS JetStream** | the stream Job that declares rask's streams and durable consumers, and one bus user per app (§ 7) |
 | **CloudNativePG operator** | a `Cluster` only with `age.cnpgCluster.enabled`; see [`CNPG-AGE.md`](CNPG-AGE.md) |
 | **The OTel backend** | the Collector's export endpoint and headers; the store, dashboards and alerting are the platform's |
 
@@ -133,17 +133,18 @@ reference operators' source was read on 2026-11-10
 
 ## 3 · Optional: NACK for the streams
 
-The NATS operator's declarative `Stream` CRDs could replace the imperative stream Job that creates `LINEAGE`, `DLQ`
-and `CATALOG_CONTROL` (Dapr's jetstream component does not auto-create streams). The Job works and is idempotent; NACK would remove a boot-ordering foot-gun, nothing more, and it would be
-the platform's operator, not rask's.
+The NATS operator's declarative `Stream` and `Consumer` CRDs could replace the stream Job that declares `LINEAGE`, `DLQ`
+and `CATALOG_CONTROL` and the durable consumers (no service creates a stream or a consumer). The Job converges each
+object to its declared config on every reconcile and retires the consumers git no longer declares; NACK would remove a
+boot-ordering foot-gun, nothing more, and it would be the platform's operator, not rask's.
 
 ## 4 · Do Dapr or Lance need an operator story? (asked 2026-07-11)
 
 **Dapr — already covered, nothing to adopt.** Dapr's control plane *is* an operator
 (`dapr-operator`, sidecar-injector, placement, sentry — helm-installed here, already running on
-rask), and our pub/sub wiring is already declarative: `Component` CRs (`pubsub.jetstream`), a
-`Subscription`-via-code model, and per-app scoping. The one imperative residue is stream
-provisioning — that is the NACK row above, not a Dapr gap. Also pinned (python-infrastructure
+rask), and rask's Dapr objects are declarative: `Component` CRs (the secret store `lance-secrets` and the cron
+bindings) with per-app scoping. The bus is not wired through Dapr: the stream Job declares its streams and consumers,
+and that is the NACK row above, not a Dapr gap. Also pinned (python-infrastructure
 skill + #115 review): **Dapr Workflow stays un-adopted** — every multi-step path we have
 (bytes-then-commit registration) is token-keyed idempotent, so JetStream's
 redeliver-the-whole-message model suffices; a workflow engine would add a sidecar state store
@@ -198,7 +199,7 @@ holds two secrets per identity, named by its key (the signer's ServiceAccount na
 itself is that account's subject, `kubernetes~system:serviceaccount:<ns>:<sa>`): `signing-public-<key>` (field `keys`: comma-separated public NKEYs, current
 first, at most one previous) and `signing-key-<key>` (field `seed`: the NKEY user seed). A signer is Ready only
 while the kid of its own seed is in its list, so the list is always written before the seed it belongs to. Lineage
-reads lists only. The store enforces the same split: each service, and its sidecar, logs in as its own ServiceAccount,
+reads lists only. The store enforces the same split: each service, and the catalog's and lineage's sidecars, log in as their own ServiceAccount,
 and its role's policy reads only its own app's secrets (XC-165, ADR 0169, XC-199), so reaching :8200 without that login
 reads nothing.
 
@@ -211,8 +212,7 @@ rollout therefore carries every pair over; an in-place restart of either contain
 `--set signing.provisioned=true` attests it. Each identity needs `signing-public-<key>` (field `keys`: its public
 NKEYs, comma-separated, current first) written before `signing-key-<key>` (field `seed`: its NKEY user seed);
 `nk -gen user -pubout` prints a pair. Tooling for this is the production runbook, which waits for a production
-estate (owner, no-prod parking 2026-09-21). Until the keys exist no signer is Ready and none emits: a sidecar
-delivery to one is answered RETRY, not dropped.
+estate (owner, no-prod parking 2026-09-21). Until the keys exist no signer is Ready and none emits.
 
 **Retiring `service-token-<identity>` on the platform's store.** No door reads `secret/service-token-<identity>`
 (a service is the ServiceAccount its projected token names), and no deploy removes one from a store the chart never wrote
@@ -274,7 +274,7 @@ logs in to one can then be refused, by the other, the question about the token i
 then left is replaced within one more pass. Each further login the store refuses in turn waits twice the passes the
 last did (1, 3, 7, then 15, four minutes), and the store's first answer ends that. The drill of 2026-11-14 did not
 meet this case: the outgoing pod left the Service as the replacement joined it, and each service logged in once. A
-replacement that mints a new bus root still needs the bus and the Dapr apps restarted (§ 7).
+replacement that mints a new bus root still needs the bus and its clients restarted (§ 7).
 
 **Reading it back.** Logged in to the store as an app's own account and role (a token from
 `kubectl create token <release>-sa-<app> --audience rask-openbao`, presented at `auth/kubernetes/login` as
@@ -293,15 +293,17 @@ not a fault. Read a pod's Configuration from its `dapr.io/config`, not from the 
 The NATS bus is a prerequisite rask never installs (ADR 0153, XC-129); development runs it from `deploy/fixtures/nats`
 (release `nats`, Service `rask-nats`). With the bus in operator mode (the fixture's `nats.auth.server`), a client connects
 only with a user JWT signed under the operator's account, and each user may publish and subscribe only what its row of `nats.auth.users` (values.yaml)
-grants. There is one user per service: `catalog`, `lineage` and `maintenance` each publish on a connection of their own
-as that user (`lakehouse.bus`), whose replies arrive under `_INBOX_<user>`, a prefix the table grants to that user alone,
-and `maintenance-worker` works the queue the same way. Beside them are `admin` (the stream Job) and `monitor` (nats-box,
-read-only: stream and consumer state, no messages). A grant only a flag's publisher or
-component uses sits under `nats.auth.flagged` and is issued only while that flag is on. Each user's credential is
+grants. There is one user per connection a service opens: `catalog` and `lineage` each publish and take their
+deliveries on a connection of their own as that user (`lakehouse.bus`), whose replies arrive under `_INBOX_<user>`, a
+prefix the table grants to that user alone; `maintenance-worker` works the queue and pulls the write-event lane the
+same way; and `maintenance` exists only while the worker publishes (`maintenance.lineageEmit`,
+`maintenance.controlEmit`). Each service binds to the durable consumer the stream Job declares for it and may create,
+edit or delete none. Beside them are `admin` (the stream Job) and `monitor` (nats-box,
+read-only: stream and consumer state, no messages). A grant only a flag's call site uses sits under `nats.auth.flagged`
+and is issued only while that flag is on. Each user's credential is
 `nats-user-<user>` in the store (fields `jwt`, `seed`). A service reads its own under its own store login and holds it in
 memory only, never in a file or its environment, and opens a connection again by itself, with the credential the store
-holds then, when the bus ends the one it had; every pub/sub Component names its own app's user by `secretKeyRef` through
-`lance-secrets`, which the sidecar resolves with its own login; and the stream Job (rask's release) and nats-box (the
+holds then, when the bus ends the one it had; the stream Job (rask's release) and nats-box (the
 fixture's) take theirs as files written by ExternalSecrets.
 
 **Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Name the bus in
@@ -321,12 +323,12 @@ the operator or the system account and a pod restarted alone into operator mode 
 depth 0); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS
 pod exists; set `nats.auth.server: true` in `deploy/fixtures/nats/chart/values.yaml` and run `scripts/fixtures.sh nats`,
 which restores the three replicas together (each waits for ESO's `rask-nats-auth`); then `make k3s-up`, whose stream Job
-runs as `admin` and recreates the five streams empty; then `kubectl rollout restart` every Deployment whose sidecar loads
-a pub/sub component (a service's own connection needs none: it opens again by itself). Operator mode stays on only while git declares it: `scripts/fixtures.sh` installs with
+runs as `admin` and recreates the streams and their durable consumers empty; each service's own connection opens again
+by itself, and its consumer is pulled again once the stream Job has declared it. Operator mode stays on only while git declares it: `scripts/fixtures.sh` installs with
 `--reset-values`, so a `--set` given on one command line is dropped by the next install, which turns operator mode off and
 restarts the bus into an empty JetStream as above.
 
-**A consumer removal** (RESILIENCE.md gaps #7 and the lineage rebuild) needs `admin`, because nats-box runs as `monitor`.
+**A consumer removal** (RESILIENCE.md gap #3, the lineage rebuild) needs `admin`, because nats-box runs as `monitor`.
 Write a creds file into the nats-box pod from the store, without printing it:
 
 ```
@@ -334,7 +336,7 @@ JWT=$(kubectl exec deploy/rask-openbao -c seed -- bao kv get -field=jwt secret/n
 SEED=$(kubectl exec deploy/rask-openbao -c seed -- bao kv get -field=seed secret/nats-user-admin)
 printf -- '-----BEGIN NATS USER JWT-----\n%s\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n%s\n------END USER NKEY SEED------\n' "$JWT" "$SEED" \
   | kubectl exec -i deploy/rask-nats-box -- sh -c 'umask 077; cat > /tmp/admin.creds'
-kubectl exec deploy/rask-nats-box -- nats --no-context --server nats://rask-nats:4222 --creds /tmp/admin.creds consumer rm <STREAM> <durable> -f
+kubectl exec deploy/rask-nats-box -- nats --no-context --server nats://rask-nats:4222 --creds /tmp/admin.creds consumer rm <STREAM> <consumer> -f
 kubectl exec deploy/rask-nats-box -- rm -f /tmp/admin.creds
 ```
 
@@ -343,15 +345,16 @@ authorized user and none anonymous; `/connz?state=closed&auth=true` keeps short-
 with no credential is refused ("Authorization Violation") and one with another app's credential on a subject that app
 does not own is refused ("Permissions Violation"), each leaving the stream's last sequence unchanged.
 
-**Residuals, named.** `_INBOX.>` stays granted to `catalog`, `lineage` and `maintenance` for their sidecars'
-subscription components (Dapr exposes no inbox prefix), so a holder of one of those credentials could read what another's
-sidecar is answered there; no service's own connection uses it, nor the worker's. A service's own connection is its
-user's, so it also holds what that user's subscription component is granted. Both end with the last subscription
-component (XC-199). A publisher's read-back grant (`$JS.API.STREAM.MSG.GET.<stream>`, with which it checks the stored
-copy a duplicate acknowledgement names) reads any message of the stream it publishes into, since the bus scopes that
-call by stream and no finer. The catalog's grant on CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's
-durable is named by its pod, so one replica could ack another's broadcast copy: the same identity, and the copies are
-hints. Port 8222 is unauthenticated by design.
+**Residuals, named.** `admin`, `monitor` and the development object store receive their replies on the shared
+`_INBOX.>`, so within the account each of the three could read the replies to another (answers about streams and
+consumers, never a service's, which arrive under an inbox of its own). A publisher's read-back grant
+(`$JS.API.STREAM.MSG.GET.<stream>`, with which it checks the stored copy a duplicate acknowledgement names) reads any
+message of the stream it publishes into, since the bus scopes that call by stream and no finer. No service's user may
+create a consumer (each catalog replica reads CATALOG_CONTROL by sequence instead): the bus holds a consumer's deliver
+subject to no grant of its creator, so a create grant would let its holder have the bus copy a stream's messages onto a
+subject it may not publish. Measured on nats-server 2.15.2, 2026-11-14: under a create grant on CATALOG_CONTROL, a
+consumer delivering to `store.events` was created, and STORE_EVENTS kept its delivery. Port 8222 is
+unauthenticated by design.
 
 ## 8 · Credentials: generated for the dev store, provisioned for a real one (XC-004)
 
@@ -398,8 +401,8 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   4. Restart the consumers at once: OpenFGA reads its mounted config file and the injector's app token at start,
      so nothing rolls on its own. AGE: OpenFGA (its migrate Job and the backup CronJob read it at their next run).
      The root: the catalog, lineage and maintenance, whose store sessions the old root signed and which exchange a new
-     one at boot rather than at half a session's life. The app token: the sidecar Deployments (an app token rotated as
-     below refuses no delivery in between).
+     one at boot rather than at half a session's life. The app token: the catalog and lineage, whose sidecars deliver their cron ticks (an app
+     token rotated as below refuses no tick in between).
   5. Read it back by refusal: one `ListBuckets` signed with the old root answers 403 `SignatureDoesNotMatch`, and the
      AGE role refuses the old password over the pod's own IP (`password authentication failed`). The image trusts
      loopback, so a login from 127.0.0.1 succeeds with any password and proves nothing. Measured 2026-11-07, rotating
@@ -413,7 +416,7 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   ServiceAccount's subject, `system:serviceaccount:<namespace>:<release>-sa-<component>`, as
   `<release>-object-store-identities` declares it: the provisioning hook writes it on the dev store, and a platform
   store's owner provisions it.
-- **Rotating the Dapr app token, with no refused delivery (ADR 0166).** A door accepts the `token` and the `previous`
+- **Rotating the Dapr app token, with no refused cron tick (ADR 0166).** A tick's route accepts the `token` and the `previous`
   field of the secret `dapr-app-token`, and daprd keeps the token its pod started with.
   1. `bao kv put secret/dapr-app-token previous=<the current token> token=<the new token>`, then
      wait ten minutes, so every door holds both before any sidecar can start with the new one: a daprd that

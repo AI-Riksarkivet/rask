@@ -2,8 +2,9 @@
 
 Each event is published as a CloudEvent (`docs/COMMIT-EVENTS.md` § The envelope on the bus): a message's data is the
 envelope, and the envelope's `data` is the event its producer signed. Every read here is by stream sequence (`$JS.API.STREAM.MSG.GET`), so a reader creates no
-consumer on a stream the estate's subscribers share. A write is a plain publish, which each subscriber's sidecar
-delivers to its app exactly as it delivers a producer's.
+consumer on a stream the estate's subscribers share. A write is a plain publish, which each service pulls from its
+consumer on its own connection exactly as it pulls a producer's. `declared` and `wait_until_acked` read a durable
+consumer's info (`$JS.API.CONSUMER.INFO`) and change nothing.
 
 THE CLIENT IS ANONYMOUS unless `LANCE_E2E_NATS_CREDS` names a creds file. Both targets' bus takes a client with no
 credential (the NATS fixture's default, `nats.auth.server` off); a bus in operator mode needs a user whose
@@ -122,12 +123,29 @@ def publish(subject: str, envelope: dict[str, Any], *, msg_id: str | None) -> in
     return asyncio.run(_publish(subject, envelope, msg_id))
 
 
-async def _acked(stream: str, durables: Iterable[str], seq: int, deadline: float) -> dict[str, int]:
+async def _declared(stream: str, consumer: str) -> bool:
+    client = await _connect()
+    try:
+        await client.jetstream().consumer_info(stream, consumer)
+    except NotFoundError:
+        return False
+    finally:
+        await client.close()
+    return True
+
+
+def declared(stream: str, consumer: str) -> bool:
+    """Whether ``stream`` holds the durable consumer ``consumer``: the chart's stream Job declares a lane's consumer only
+    when the release runs that lane."""
+    return asyncio.run(_declared(stream, consumer))
+
+
+async def _acked(stream: str, consumers: Iterable[str], seq: int, deadline: float) -> dict[str, int]:
     client = await _connect()
     try:
         jetstream = client.jetstream()
         while True:
-            floors = {durable: (await jetstream.consumer_info(stream, durable)).ack_floor.stream_seq for durable in durables}
+            floors = {consumer: (await jetstream.consumer_info(stream, consumer)).ack_floor.stream_seq for consumer in consumers}
             if all(floor >= seq for floor in floors.values()) or time.monotonic() > deadline:
                 return floors
             await asyncio.sleep(0.5)
@@ -135,11 +153,13 @@ async def _acked(stream: str, durables: Iterable[str], seq: int, deadline: float
         await client.close()
 
 
-def wait_until_acked(stream: str, durables: Iterable[str], seq: int, *, within: float) -> None:
-    """Block until each durable consumer of ``stream`` has acknowledged every message up to ``seq``.
+def wait_until_acked(stream: str, consumers: Iterable[str], seq: int, *, within: float) -> None:
+    """Block until each durable consumer of ``stream`` has settled every message up to ``seq``.
 
-    A subscriber's sidecar acknowledges a delivery once its app has answered it, so past this point each app has
-    decided what to do with the message at ``seq``: recorded it, refused it, or found it already recorded.
+    A service acknowledges a delivery once its handling has answered it, and ends one it parks, and either moves the
+    consumer's ack floor past it; a delivery handed back keeps the floor below it until it is settled. So past this point
+    each service has decided what to do with the message at ``seq``: recorded it, refused it, parked it, or found it
+    already recorded.
     """
-    floors = asyncio.run(_acked(stream, list(durables), seq, time.monotonic() + within))
+    floors = asyncio.run(_acked(stream, list(consumers), seq, time.monotonic() + within))
     assert all(floor >= seq for floor in floors.values()), f"{stream} message {seq} was not acknowledged within {within:.0f} s: ack floors {floors}"

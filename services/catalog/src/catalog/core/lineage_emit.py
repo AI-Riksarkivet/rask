@@ -14,11 +14,10 @@ fail a catalog write. Two transports sit behind the same :class:`LineageEmitter`
   event is lost if the lineage service is down when we POST). Good for dev / external producers.
 * :class:`BusEmitter` — publish on the bus, NATS JetStream (the production transport,
   ``LANCE_LINEAGE_TRANSPORT=bus``), over this process's own connection (``lakehouse.bus``): one bounded
-  attempt whose acknowledgement means the stream holds the event. A delivery the subscriber can't process after
-  its retry budget dead-letter-parks on a ``dlq.*`` topic (the subscriber's sidecar parks it, default-on via the
-  ``dapr.resiliency.enabled`` chart resiliency; the subscriber's ``/dlq-event`` route ERROR-logs + acks —
-  park-and-alert, not replay — docs/RESILIENCE.md gap #2, fixed 2026-07-12). The lineage
-  service subscribes via its own sidecar. With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
+  attempt whose acknowledgement means the stream holds the event. The lineage service pulls it from its own durable
+  consumer on its own connection, and a delivery it cannot record within its lane's attempts is parked: kept in the
+  provenance namespace's ``refusals`` table, ERROR-logged and counted, for the estate admin to replay
+  (``lineage.api.ingest_lane``, docs/RESILIENCE.md). With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
   object-store outbox (``lakehouse.outbox``) before the publish, which narrows the loss window
   to commit→stage; the catalog's reconcile cron announces a version whose event a crash in that window lost,
   from the version log (``catalog.api.commit_reconcile``, [[LH-497]]).

@@ -2,7 +2,7 @@
 
 **Status: DOCUMENTED 2026-07-11 (§9 P1 — previously existed only in chat).** Answers four
 questions in order: what a data contract is, how THIS platform's works, whether it's prod-ready
-(honest split), and how it relates to Dapr/NATS and to Lakekeeper. Every claim cites shipped code.
+(honest split), and how it relates to NATS and to Lakekeeper. Every claim cites shipped code.
 
 ## 1 · What a "data contract" is
 
@@ -66,27 +66,37 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
 - **The claim-check rule is a guard on size, not on shape.** Every publish goes through `lakehouse.bus.publish_event`,
   which refuses an envelope past 900 KiB and logs one past 64 KiB; nothing below that caps facet metadata bloat for
   thousand-column tables. NATS's ~1 MB message limit is the physical backstop.
+- **A message body is read as an envelope only when it is a JSON object nested no deeper than 300 levels**
+  (`lakehouse.bus_delivery.envelope_of`, the one reader every lane and every publisher's read-back goes through). The
+  envelope is the first level, and each object or array inside another is one more. A body past that is handled as one
+  that carries no event: lineage takes it as malformed and records nothing, the catalog's lane passes it over, and the
+  maintenance worker ends it. Lineage's own model accepts an event at most 258 levels deep in its envelope, so nothing
+  its HTTP door accepts is past the bound.
 - **The quality gate is a floor**: row count, key non-null, blob resolution, declared columns. Real deployments add
   domain assertions in their own pipelines.
 
-## 5 · What Dapr and NATS actually enforce (and what they don't)
+## 5 · What NATS and the bus seam actually enforce (and what they don't)
 
-Dapr and NATS do **not** enforce the data contract — they enforce the **delivery contract** that
+NATS and the lakehouse's bus seam do **not** enforce the data contract — they enforce the **delivery contract** that
 makes the data contract *checkable*:
 
 - **NATS JetStream** guarantees at-least-once delivery on durable streams. `LINEAGE`, `CATALOG_CONTROL` and `DLQ` keep
-  Limits retention for `nats.streamMaxAgeSeconds` (604,800 s, 168 h), and with `dapr.resiliency.enabled` (the default)
-  each Dapr subscriber's durable redelivers up to 3 times on a 720 s ack wait and back-off after its sidecar's own
-  retries, then parks the event on `dlq.*` (`lance.brokerWindows`). Maintenance's streams are work queues it reads with
+  Limits retention for `nats.streamMaxAgeSeconds` (604,800 s, 168 h). Lineage pulls the durable consumer
+  `lineage-ingest`, which the stream Job declares with a 300 s ack wait (`services.lineage.delivery.ackWaitSeconds`);
+  a delivery lineage cannot record is delivered again up to 5 times, 120 s apart, then parked in the provenance
+  namespace's `refusals` table (`lakehouse.bus_delivery`, `lineage.api.ingest_lane`). Nothing of the lakehouse's is
+  published on `DLQ`: it holds what a subscriber outside the release parks on `dlq.<its own name>`. Maintenance's streams are work queues it reads with
   nats-py (ADR 0198): `MAINTENANCE_TASKS` holds one task per table for at most 24 h, delivered up to
   `maintenance.queue.maxDeliver` + 1 (11) times on a `maintenance.queue.ackWaitSeconds` (60 s) ack wait kept alive by
   heartbeats; `MAINTENANCE_SCHEDULES` holds the message schedules; `STORE_EVENTS` holds the store's change events up to
   `maintenance.queue.storeEventsMaxBytes` (128 MiB), dropping its oldest (`chart/templates/nats-stream-job.yaml`). Its ~1 MB
   message bound is *why* the claim-check rule exists: the bus physically cannot carry data, so
   events must be pointers — a contract enforced by constraint.
-- **Dapr** supplies the subscription side: delivery to each app's route, the SUCCESS/RETRY/DROP ack semantics, the
-  app-api-token on subscription routes (a forged event cannot reach a subscriber), and the 30s ack
-  window that shapes every handler. Each service publishes on a connection of its own (`lakehouse.bus`).
+- **The bus seam** (`lakehouse.bus`) supplies the consuming side: each service publishes and takes its deliveries on a
+  connection of its own, as its own bus user, and the bus lets each user pull only its own consumer. Every delivery is
+  settled by one rule (`lakehouse.bus_delivery.judged`): a handling answers taken (acknowledged), again (delivered
+  again after its lane's delay) or park (kept by the lane, then ended), and a handling is cut 10 s before its
+  consumer's ack wait. Who wrote an event is proven by its `rask_signature`, which each lane verifies, not by the bus.
 - The **data** contract itself is enforced by Lance (manifest schema + CAS commit) and by the
   catalog at the gates above. The bus's job is narrower: an event arrives at least once, and because every
   handler is idempotent (deterministic run ids, feed dedup), at-least-once is as good as exactly-once. The bus is
@@ -128,33 +138,34 @@ takes the event in its envelope and sends it on the process's own connection in 
 (`packages/lakehouse/src/lakehouse/cloud_events.py`; its attributes are `docs/COMMIT-EVENTS.md` § The envelope on
 the bus), so a relay's copy of an event carries the `id` its first publish carried, the message id a stream
 deduplicates on. Consumers
-receive the envelope as a dict and read `body["data"]`: `handle_cloud_event` in
-`services/lineage/services/consumer.py` and `on_control_event` in `services/catalog/api/dapr.py` treat `body` as an
-untrusted `Any` and guard with `isinstance` before touching `data`.
+read the envelope from the delivery (`Delivery.envelope()` in `lakehouse.bus_delivery`, None for a body that is no
+JSON object) and read its `data`: `handle_cloud_event` in `services/lineage/services/consumer.py` and
+`ControlLane.handle` in `services/catalog/api/control_lane.py` treat it as untrusted and guard with `isinstance` before
+touching `data`.
 
 ### 7.2 The topic is the compatibility unit
 
 | Topic | Producer → consumer | Schema (the pydantic model) | Where the name lives |
 |---|---|---|---|
-| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage and, under `maintenance.arrivalEnabled`, maintenance's arrival lane, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_EVENTS_TOPIC` / `LANCE_LINEAGE_TOPIC` / `MAINTENANCE_LINEAGE_TOPIC` in each service's `core/config.py` |
-| `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse/src/lakehouse/control_emit.py`, each signed as `control_signer_role` names → every catalog replica (broadcast, no `queueGroupName`), each verifying the signature | `lakehouse.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/lakehouse/src/lakehouse/control_events.py`, imported by every producer and by the catalog subscriber |
-| `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
+| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage (consumer `lineage-ingest`) and, under `maintenance.arrivalEnabled`, the maintenance worker's write-event lane (consumer `maintenance-arrival`), each a durable pull consumer the stream Job declares | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_EVENTS_TOPIC` / `LANCE_LINEAGE_TOPIC` / `MAINTENANCE_LINEAGE_TOPIC` in each service's `core/config.py` |
+| `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse/src/lakehouse/control_emit.py`, each signed as `control_signer_role` names → every catalog replica, each following the topic by reading its stream by sequence (`lakehouse.bus.Bus.follow`), each verifying the signature | `lakehouse.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/lakehouse/src/lakehouse/control_events.py`, imported by every producer and by the catalog subscriber |
+| `dlq.*` | a subscriber outside the release, on `dlq.<its own name>` | what that subscriber parks; nothing of the lakehouse's | the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
 
 The two **cross-plane** topics carry an explicit `.v1`: the version in the NAME is the compatibility
 unit — a consumer subscribed to `lineage.events.v1` is entitled to `RunEvent`-shaped payloads
-forever. `dlq.*` names derive mechanically from the subscription they park for. All of these are internal to the
-estate.
+forever. All of these are internal to the estate.
 
-### 7.3 Schema = the pydantic model, validated on consume; invalid → DROP, never crash
+### 7.3 Schema = the pydantic model, validated on consume; invalid → taken, never crash
 
 There is no schema artifact besides the model class the consumer validates with. The rule at every
-subscription: a payload that fails validation is **dropped** (redelivery cannot fix deterministic
-garbage), and a handler never raises on malformed input — a crash would poison the subscription.
+consumer: a payload that fails validation is **acknowledged and counted** (redelivery cannot fix deterministic
+garbage), and a handler never raises on malformed input — a raise would be read as *again* and delivered back.
 
-- lineage: `RunEvent.model_validate(data)` → on `ValidationError` log + `record_outcome(DROPPED)` +
-  return `{"status": "DROP"}` (`services/lineage/services/consumer.py`).
-- catalog control: `CatalogControlEvent.model_validate(data)` → on failure log + ack `SUCCESS`
-  (events are refresh hints; the audit trail is the durable record — `services/catalog/api/dapr.py`).
+- lineage: `parse_event(data)` → on `ValidationError`, `TypeError` or `ValueError` log `lineage_event_invalid` +
+  `record_outcome(UNREPAIRABLE)` + return `Verdict.TAKEN` (`services/lineage/services/consumer.py`).
+- catalog control: `CatalogControlEvent.model_validate(data)` → on failure log `control_event_invalid` and return, so
+  the event is taken (events are refresh hints; the audit trail is the durable record —
+  `services/catalog/api/control_lane.py`).
 
 ### 7.4 Evolution: additive-only within a topic; breaking = a new `.vN` topic
 

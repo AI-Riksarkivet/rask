@@ -1,5 +1,5 @@
-"""The bus instruments the lakehouse owns: how long each publish took and how it ended, and each publish refused before
-anything was sent.
+"""The bus instruments the lakehouse owns: how long each publish took and how it ended, each publish refused before
+anything was sent, and how each delivery a process took was settled and how long its handling took.
 
 A PUBLISH IS MEASURED WHERE IT IS MADE (`lakehouse.bus.publish_event`). The process publishes on its own connection, so
 nothing else counts it. One histogram carries what an operator reads for a boundary: its count is the traffic, its
@@ -9,12 +9,18 @@ conventions (`messaging.client.operation.duration`), so a backend's stock messag
 A PUBLISH REFUSED BEFORE ANYTHING IS SENT is counted on its own as well (`bus.publish.refused`), by the rule that
 refused it: the claim-check guard is a contract an alert names, where the histogram would show only a `ValueError`.
 
+A DELIVERY IS COUNTED BY HOW IT WAS SETTLED (`bus.deliveries`), under the consumer it was taken from: taken, asked for
+again, parked, or, on a followed subject, failed. Each series is created at 0 when its consumer starts
+(:func:`create_delivery_series`), since an alert over a counter reads its increase, and a series whose first sample is
+1 shows none. How long each handling took is its own histogram, under the messaging conventions' name for it
+(`messaging.process.duration`).
+
 NAMED `bus.*`: the instruments say what the lakehouse did, whichever client and broker carry it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from opentelemetry import metrics
 
@@ -38,6 +44,43 @@ _duration = _meter.create_histogram(
     # SDK's defaults apply, which are spaced for milliseconds (0, 5, 10, 25, ...), and every publish lands in the first.
     explicit_bucket_boundaries_advisory=[0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10],
 )
+
+
+_deliveries = _meter.create_counter(
+    "bus.deliveries",
+    unit="{message}",
+    description="Deliveries this process took from the bus, by the consumer they came from and how each was settled.",
+)
+
+_processing = _meter.create_histogram(
+    "messaging.process.duration",
+    unit="s",
+    description="How long the handling of each delivery took, from the message's arrival to its settlement.",
+    explicit_bucket_boundaries_advisory=[0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10],
+)
+
+
+def create_delivery_series(consumer: str, outcomes: Iterable[str]) -> None:
+    """Create ``consumer``'s series of `bus.deliveries` at 0, one per outcome it can settle a delivery with."""
+    for outcome in outcomes:
+        _deliveries.add(0, {"lance.bus.consumer": consumer, "lance.bus.outcome": outcome})
+
+
+def record_delivery(consumer: str, outcome: str) -> None:
+    """Count one delivery settled.
+
+    Args:
+        consumer: The durable consumer it was taken from, or the subject a process follows: a chart value or a
+            constant, never a value off a message.
+        outcome: How it was settled, a closed set: `lakehouse.bus_delivery.Outcome`, or ``failed`` for a followed
+            message whose handling raised.
+    """
+    _deliveries.add(1, {"lance.bus.consumer": consumer, "lance.bus.outcome": outcome})
+
+
+def record_processing(attributes: Mapping[str, str], seconds: float) -> None:
+    """Record how long one delivery's handling took, under the messaging attributes of its consumer."""
+    _processing.record(seconds, attributes)
 
 
 def record_refusal(topic: str, reason: str) -> None:

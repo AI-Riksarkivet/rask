@@ -1,23 +1,16 @@
 {{- define "lance.maintenanceEnv" -}}
 {{- $root := index . 0 -}}
-{{- $worker := eq (index . 1) "worker" -}}
-{{- $drain := index . 2 -}}
+{{- $drain := index . 1 -}}
 {{- with $root -}}
-{{- $arrival := and (not $worker) .Values.maintenance.arrivalEnabled -}}
+{{- $arrival := .Values.maintenance.arrivalEnabled -}}
 {{- include "lance.allocatorEnv" (list $root) | nindent 0 }}
 {{- include "lance.fileAuditEnv" (list $root) | nindent 0 }}
 {{- if include "lance.otelEnabled" $root }}
 {{- include "lance.otelEnv" (list $root .Values.maintenance.appId) | nindent 0 }}
 {{- end }}
-- { name: MAINTENANCE_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
-- { name: MAINTENANCE_MAX_BODY_BYTES, value: {{ .Values.maintenance.maxBodyBytes | int64 | quote }} }
-- { name: MAINTENANCE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.maintenance.requestDeadlineSeconds | quote }} }
 - { name: MAINTENANCE_READ_ONLY, value: {{ required "readOnlyWindow is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.readOnlyWindow | quote }} }
-- { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
 {{- with include "lance.signingEnv" (list $root .Values.maintenance.appId) }}{{ . | nindent 0 }}{{- end }}
-{{- if .Values.dapr.enabled }}
-
-{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.appId) | nindent 0 }}
+{{- if or .Values.maintenance.lineageEmit .Values.maintenance.controlEmit }}
 {{- include "lance.busEnv" (list $root $root.Values.maintenance.appId) | nindent 0 }}
 {{- end }}
 {{- if $root.Values.maintenance.vendWriteCredentials }}
@@ -27,16 +20,10 @@
 {{- end }}
 - { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ $arrival | quote }} }
 {{- if $arrival }}
-- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.appId) | quote }} }
-{{- if .Values.dapr.resiliency.enabled }}
-- { name: MAINTENANCE_ARRIVAL_DLQ_TOPIC, value: {{ .Values.maintenance.arrivalDlqTopic | quote }} }
-{{- end }}
 {{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 0 }}{{- end }}
 {{- end }}
-{{- if or $arrival .Values.maintenance.lineageEmit }}
-- { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
-{{- end }}
 {{- if .Values.maintenance.lineageEmit }}
+- { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
 - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
 - { name: MAINTENANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $root | quote }} }
 {{- if .Values.services.lineage.outbox.enabled }}
@@ -62,7 +49,6 @@
 - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
 {{- end }}
 - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
-{{- if .Values.dapr.enabled }}
 {{- $queue := required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue }}
 - { name: MAINTENANCE_NATS_URL, value: {{ include "lance.natsUrl" . | quote }} }
 - { name: MAINTENANCE_NATS_CREDENTIALS_SECRET, value: "nats-user-maintenance-worker" }
@@ -77,7 +63,6 @@
 - { name: MAINTENANCE_RETRY_SECONDS, value: {{ required "maintenance.queue.retrySeconds is required" $queue.retrySeconds | quote }} }
 - { name: MAINTENANCE_AUDIT_SCHEDULE, value: {{ required "maintenance.queue.auditSchedule is required" $queue.auditSchedule | quote }} }
 - { name: MAINTENANCE_SCAN_SCHEDULE, value: {{ required "maintenance.queue.scanSchedule is required" $queue.scanSchedule | quote }} }
-{{- if $worker }}
 {{- $check := required "maintenance.orphanCheck is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.maintenance.orphanCheck }}
 - { name: MAINTENANCE_ORPHAN_CHECK_ENABLED, value: {{ required "maintenance.orphanCheck.enabled is required" $check.enabled | quote }} }
 - { name: MAINTENANCE_ORPHAN_CHECK_CEILING_DAYS, value: {{ required "maintenance.orphanCheck.ceilingDays is required" $check.ceilingDays | quote }} }
@@ -86,8 +71,6 @@
 - { name: MAINTENANCE_STORE_EVENTS_EXPECTED, value: {{ or $root.Values.objectStore.enabled ($root.Values.objectStore.events).provisioned | quote }} }
 - { name: MAINTENANCE_DRAIN_SECONDS, value: {{ $drain | quote }} }
 - { name: MAINTENANCE_WORKER_PORT, value: {{ required "maintenance.worker.port is required" $root.Values.maintenance.worker.port | quote }} }
-{{- end }}
-{{- end }}
 - { name: MAINTENANCE_MIN_VERSIONS_TO_EXPIRE, value: {{ required "maintenance.minVersionsToExpire is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.minVersionsToExpire | quote }} }
 - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
 {{- include "lance.objectStoreSessionEnv" (list $root "MAINTENANCE" "maintenance") | nindent 0 }}
@@ -109,84 +92,16 @@
 {{- end -}}
 {{- end -}}
 
-{{- define "lance.maintenanceVolumes" -}}
-volumeMounts:
-  {{- include "lance.tmpMount" . | nindent 2 }}
-  {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 2 }}
-  {{- include "lance.storeIdentity" (list . .Values.maintenance.appId "mounts") | nindent 2 }}
-{{- end -}}
-
-{{- if .Values.maintenance.enabled }}
+{{- if and .Values.maintenance.enabled .Values.dapr.enabled }}
 {{- $root := . }}
-{{- $port := .Values.maintenance.port }}
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ include "lance.fullname" . }}-maintenance
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  replicas: {{ required "maintenance.replicas is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.replicas }}
-  strategy:
-    type: RollingUpdate
-    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
-  selector:
-    matchLabels: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
-  template:
-    metadata:
-      annotations:
-        {{- if .Values.dapr.enabled }}
-        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.appId $port) | nindent 8 }}
-        {{- end }}
-      labels:
-        {{- include "lance.labels" . | nindent 8 }}
-        app.kubernetes.io/component: maintenance
-        {{- include "rask.daprPodLabels" $root | nindent 8 }}
-        lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
-    spec:
-      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
-      {{- include "lance.spreadConstraints" "maintenance" | nindent 6 }}
-      {{- include "lance.podSecurityContext" . | nindent 6 }}
-      serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
-      {{- with $.Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      containers:
-        - name: maintenance
-          image: "{{ include "lance.catalogImage" . }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          {{- include "lance.securityContext" . | nindent 10 }}
-          {{- include "lance.preStop" . | nindent 10 }}
-          args:
-            {{- if include "lance.otelEnabled" $root }}
-            - "opentelemetry-instrument"
-            {{- end }}
-            - "uvicorn"
-            - "maintenance.service:app"
-            - "--host=0.0.0.0"
-            - "--port={{ $port }}"
-            {{- include "rask.shutdownArg" . | nindent 12 }}
-          ports: [{ name: http, containerPort: {{ $port }} }]
-          env:
-            {{- include "lance.maintenanceEnv" (list $root "web" 0) | nindent 12 }}
-          {{- include "lance.appProbes" . | nindent 10 }}
-          resources: {{- include "lance.resources" (dict "root" . "comp" "maintenance") | nindent 12 }}
-          {{- include "lance.maintenanceVolumes" . | nindent 10 }}
-      volumes:
-        {{- include "lance.tmpVolume" . | nindent 8 }}
-        {{- include "lance.storeIdentity" (list $root .Values.maintenance.appId "volumes") | nindent 8 }}
-        {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
-{{- if .Values.dapr.enabled }}
 {{- $worker := required "maintenance.worker is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.worker }}
 {{- $probes := required "maintenance.worker.port is required" $worker.port }}
 {{- $grace := int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}
-{{- $block := sub $grace (int .Values.lifecycle.teardownSeconds) }}
-{{- $budget := sub $block (int .Values.lifecycle.preStopSeconds) }}
+{{- $budget := sub (sub $grace (int .Values.lifecycle.teardownSeconds)) (int .Values.lifecycle.preStopSeconds) }}
 {{- $drain := int (required "maintenance.queue.drainSeconds is required" (required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue).drainSeconds) }}
 {{- if ge $drain $budget }}
 {{- fail (printf "maintenance.queue.drainSeconds (%d) is not inside the %d s the pod's grace leaves after preStop and the teardown: a stopping replica would be killed with its pass still running" $drain $budget) }}
 {{- end }}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -201,16 +116,9 @@ spec:
     matchLabels: { app.kubernetes.io/component: maintenance-worker, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
     metadata:
-      annotations:
-        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.appId $probes $block) | nindent 8 }}
-        dapr.io/enable-app-health-check: "true"
-        dapr.io/app-health-check-path: "/livez"
-        dapr.io/app-health-probe-interval: "2"
-        dapr.io/app-health-threshold: "2"
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: maintenance-worker
-        {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp
     spec:
       terminationGracePeriodSeconds: {{ $grace }}
@@ -236,22 +144,15 @@ spec:
             - "maintenance.worker"
           ports: [{ name: http, containerPort: {{ $probes }} }]
           env:
-            {{- include "lance.maintenanceEnv" (list $root "worker" $drain) | nindent 12 }}
+            {{- include "lance.maintenanceEnv" (list $root $drain) | nindent 12 }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "maintenanceWorker") | nindent 12 }}
-          {{- include "lance.maintenanceVolumes" . | nindent 10 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 12 }}
+            {{- include "lance.storeIdentity" (list . .Values.maintenance.appId "mounts") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.maintenance.appId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
-{{- end }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "lance.fullname" . }}-maintenance
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  ports: [{ name: http, port: {{ $port }}, targetPort: http }]
-  selector: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
 {{- end }}

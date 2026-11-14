@@ -116,7 +116,7 @@ def _get_json(url: str, headers: dict | None = None) -> dict:
 
 def _poll(fn: Callable[[], object], want: object, *, tries: int = 60, delay: float = 1.0) -> object:
     """Poll ``fn`` until it equals ``want`` — emission is async/fire-and-forget — or give up. Generous
-    window: on kind the create's announcement crosses Dapr → NATS JetStream → lineage → the catalog's
+    window: on kind the create's announcement crosses NATS JetStream → lineage's pull consumer → the catalog's
     provenance namespace, slower than a direct HTTP emit."""
     last: object = None
     for _ in range(tries):

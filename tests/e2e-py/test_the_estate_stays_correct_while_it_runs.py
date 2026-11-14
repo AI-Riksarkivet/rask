@@ -2,7 +2,7 @@
 
 The acceptance holds one drive of the bring-your-own scenario to the criteria the moment it ends. An estate left running
 goes on acting on what that drive made: maintenance sweeps its tables, the outbox relays deliver what the catalog
-staged, sidecars reconnect, secrets are re-read. An acceptance run keeps its drive with `--keep-drive PATH`
+staged, each service's bus connection is rebuilt, secrets are re-read. An acceptance run keeps its drive with `--keep-drive PATH`
 (`kept_drive`), and a day later this module reads that drive again and holds the estate to three claims, reported
 together:
 
@@ -10,12 +10,12 @@ together:
    list exactly one edge for each input those commits name (criterion 1);
 2. lineage's feed names every version on every ref of the drive's tables, and holds exactly the rows it held when the
    drive was kept (criterion 4): no version below the tip is unannounced, and nothing was recorded again;
-3. estate-wide, nothing parked on the DLQ stream from the tenant's creation on, and both of the catalog's outboxes are
-   drained.
+3. estate-wide, nothing parked by lineage's ingest lane from the tenant's creation on, and both of the catalog's
+   outboxes are drained.
 
 These are the readings XC-090's closes-when names versions_below_tip, unknown_to_graph, the dead-lettered delta and the
 outbox depth, taken where provenance and events are kept (ADR 0158): the commits' `rask.*` properties, the Lance-stored
-feed and edge list, the DLQ stream and the outboxes. Each is present before it is compared, because the kept drive
+feed, edge list and kept parks, and the outboxes. Each is present before it is compared, because the kept drive
 committed versions that name an input and was announced: a soak that reads an emptied tenant fails rather than passing
 on nothing.
 
@@ -42,7 +42,7 @@ import byo_scenario as scenario
 import kept_drive
 import pytest
 from byo_scenario import Tenant
-from correctness import announced, as_named, edges_named, history_of, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
+from correctness import announced, as_named, edges_named, history_of, parked_since, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
 from kept_drive import KeptDrive
 
 
@@ -82,7 +82,7 @@ def test_the_estate_left_running_still_reads_the_drive_as_the_criteria_did(kept:
     owed = edges_named(history)
     edges = recorded_edges(tenant.admin, tables, expected=owed)
     feed = announced(tenant.pipeline, drive.run)
-    parked = bus.messages_since("DLQ", drive.created_at)
+    parked = parked_since(tenant.admin, drive.created_at)
     depths = {"lineage": settled_outbox_depth(tenant.admin), "control": settled_control_outbox_depth()}
     named = {(row.table, row.ref, row.version) for row in feed}
     findings = {
@@ -94,7 +94,7 @@ def test_the_estate_left_running_still_reads_the_drive_as_the_criteria_did(kept:
         "versions no feed row names": [version for version in sorted(history, key=repr) if version not in named],
         "feed rows recorded since the drive was kept": [row for row in feed if row not in drive.feed],
         "feed rows gone since the drive was kept": [row for row in drive.feed if row not in feed],
-        "parked on the DLQ since the tenant was made": [(message.seq, message.subject) for message in parked],
+        "parked by lineage since the tenant was made": parked,
         "left in an outbox": [f"{outbox}: {depth}" for outbox, depth in depths.items() if depth],
     }
 

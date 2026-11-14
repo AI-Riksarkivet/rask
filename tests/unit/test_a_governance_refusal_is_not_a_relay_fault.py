@@ -22,7 +22,7 @@ Never destroy the only durable copy of a committed write's provenance to answer 
 
 STAGING AN EVENT IS NOT A WAY AROUND THE GATE PUBLISHING ONE HAS TO CLEAR. Four paths reach
 `ProvenanceStore.record`: the HTTP door (`enforce_author` then `enforce_output_authz`), the bus
-(`authorize(event)`, DROP on denial), the DLQ replay door (`enforce_output_authz`), and this outbox
+(`authorize(event)`, parked on a denial a grant can repair), the DLQ replay door (`enforce_output_authz`), and this outbox
 relay. The outbox is writable by the producers that stage there through the vended outbox credential
 (ingest, maintenance, medallion), so a relay that ingested unchecked would let a stager that cannot get
 an event past the bus door stage it instead. The relay calls the SAME `enforce_bus_authz`, which

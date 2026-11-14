@@ -13,17 +13,15 @@ table is passed twice at once:
 * the **scan**, once a day: the audit with the orphan scan, which opens every table, then, ONLY if that report ran
   clean, the purge of expired trash records, off by default.
 
-The worker is owned by this process and not by a web app's lifespan: a pass that hangs ends this replica and nothing
-else, and the web pods, which serve the write-event lane, run none. Blocking Lance and S3 IO runs in the threadpool so
-the heartbeats stay on the event loop.
+The worker also pulls the commit lane, the announcements that hold a written table's pass, and the store's change
+events (:mod:`maintenance.services.arrival`, :mod:`maintenance.services.store_events`). It is owned by this process,
+the service's only one: a pass that hangs ends this replica and nothing else. Blocking Lance and S3 IO runs in
+the threadpool so the heartbeats stay on the event loop.
 
-The process serves no API. It answers ``/livez`` and ``/readyz`` on ``MAINTENANCE_WORKER_PORT``, for the kubelet and
-for its sidecar's health check: a sidecar told to block its shutdown leaves early only when its app turns unhealthy
-(measured on daprd 1.19.0-rc.4: 3 s after the app with the check, the whole block without), so the probes are what
-lets the sidecar outlive the worker's drain and then leave with it. They are served from a thread of their own: uvicorn
-takes SIGTERM for itself on the main thread and would stop answering at the moment the drain begins. Served from
-another loop, ``/livez`` would say nothing of the worker's, so the worker's loop marks a beat each second and
-``/livez`` fails once the last one is :data:`STALE_SECONDS` old.
+The process serves no API. It answers ``/livez`` and ``/readyz`` on ``MAINTENANCE_WORKER_PORT``, for the kubelet. They
+are served from a thread of their own: uvicorn takes SIGTERM for itself on the main thread and would stop answering at
+the moment the drain begins. Served from another loop, ``/livez`` would say nothing of the worker's, so the worker's
+loop marks a beat each second and ``/livez`` fails once the last one is :data:`STALE_SECONDS` old.
 
 Run: ``python -m maintenance.worker``.
 """
@@ -80,7 +78,10 @@ def _alive() -> bool:
 
 
 #: The probes, and nothing else: liveness follows the worker's loop, and readiness the lifecycle flags this process sets,
-#: its signing key, and the bus and secret store it reports.
+#: its signing key, and the bus and secret store it reports. A probe carries no body and answers from memory, so the two
+#: bounds every lakehouse app is built with are a probe's own.
+_PROBE_MAX_BODY_BYTES = 64 * 1024
+_PROBE_DEADLINE_SECONDS = 30.0
 app = build_lance_service_app(
     title="Lance table maintenance worker",
     docs_enabled=False,
@@ -89,8 +90,8 @@ app = build_lance_service_app(
     log=log,
     ready_check=signing_ready_check(reported_readiness),
     live_check=_alive,
-    max_body_bytes=get_settings().max_body_bytes,
-    request_deadline_seconds=get_settings().request_deadline_seconds,
+    max_body_bytes=_PROBE_MAX_BODY_BYTES,
+    request_deadline_seconds=_PROBE_DEADLINE_SECONDS,
 )
 app.state.beat = monotonic()
 
@@ -103,7 +104,7 @@ def serving_probes(port: int) -> Generator[None]:
         RuntimeError: The server did not start, as when the port is taken.
     """
     app.state.beat = monotonic()
-    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_config=None, lifespan="off"))  # noqa: S104 — the kubelet and the sidecar probe the pod's address
+    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_config=None, lifespan="off"))  # noqa: S104 — the kubelet probes the pod's address
     thread = threading.Thread(target=server.run, name="maintenance-worker-probes", daemon=True)
     thread.start()
     waited = 0.0
@@ -133,7 +134,7 @@ async def _work(settings: MaintenanceSettings, stop: asyncio.Event, started: asy
         await _held(stop, started)
         return
     async with (
-        # The background loops what the worker stands on runs (its store session, its sidecar's watchdog, its signing key),
+        # The background loops what the worker stands on runs (its store login, its store session, its signing key),
         # each of which ending unasked ends the process (ADR 0203); the worker's own loops have a supervisor of their own.
         Supervisor() as loops,
         standing(app, settings, loops),

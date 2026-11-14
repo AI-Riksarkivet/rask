@@ -117,6 +117,8 @@ _UNHARDENED_TODAY: dict[str, dict[str, tuple[str, ...]]] = {
     # on nats-box 0.14.5 and 0.19.7, and 65532 on 0.20.2 — while the same command as root succeeds. Bisected key by key:
     # `readOnlyRootFilesystem` alone is fine. So it takes the other three and is listed for this one.
     "Job/nats-stream/nats": {"containers": ("runAsNonRoot",)},
+    # The stream Job's second phase: the same image running the same CLI, after the sync.
+    "Job/nats-stream-retire/nats": {"containers": ("runAsNonRoot",)},
 }
 
 

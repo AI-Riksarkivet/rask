@@ -13,3 +13,13 @@ Every subscriber is now durable + queue group, lineage included (`lineage-durabl
 (docs/RESILIENCE.md). Pinned by `tests/unit/test_every_bus_subscriber_survives_a_bus_restart.py`. The
 catalog's own control-event broadcast consumer stays ephemeral (one per replica, no queue group), so a
 NATS restart removes it too; that is parked as LH-305, since a shared durable cannot serve a broadcast.
+
+**Amended 2026-11-14 (#787, XC-199 step D4).** Lineage's consumer stays durable and shared, and it is now a pull
+consumer, `lineage-ingest`, which the stream Job declares (delivered by start sequence) and each lineage replica pulls on
+its own connection to the bus; no sidecar subscribes for it, because a sidecar's subscription could not be rebound after
+a configuration change and closed for good after a bus outage of about two minutes. The stream Job declares a new
+`lineage-ingest` to begin after the ack floor of `lineage-durable` while that consumer exists, and its retire phase
+removes `lineage-durable`, so the rebuild step above names a consumer that no longer exists: once `lineage-durable` is
+gone, a `lineage-ingest` that does not exist when the stream Job runs is declared at the stream's first message, and
+that is the consumer a rebuild now removes. The test named above is deleted with
+the Components it walked.

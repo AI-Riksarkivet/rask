@@ -64,10 +64,10 @@ on `can_get_metadata` for every dataset they name; the HTTP ingest takes the aut
 
 | Capability | Endpoints | Notes |
 |---|---|---|
-| **Ingest** | `POST /api/v1/lineage` | the HTTP transport into the commit feed and the edge list; the bus transport is a Dapr subscription delivered by lineage's own sidecar, on no public path |
+| **Ingest** | `POST /api/v1/lineage` | the HTTP transport into the commit feed and the edge list; the bus transport is the durable consumer `lineage-ingest`, which lineage pulls on its own connection to the bus, on no public path |
 | **Commit feed** | `GET /events`, `GET /events/projection` | the durable feed a pipeline polls ([COMMIT-EVENTS.md](COMMIT-EVENTS.md)); the projection is a notifier's, gated on `can_read_event_feed` (`event_reader`, granted at the estate admin's tuple door) |
 | **Derived tables** | `GET /tables/{name}/derived?depth=` | every table derived from `name`, over the edge list; how an erasure finds them |
-| **Dead letters** | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | parked deliveries |
+| **Dead letters** | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay`, `GET /admin/dlq/parked`, `POST /admin/dlq/parked/{run_id}/replay` | the outbox's at-risk events, and the bus deliveries lineage parked in its refusals table (the estate admin's) |
 | **Health** | `GET /livez`, `GET /readyz` | |
 
 Maintenance has no public REST surface: its replicas share a NATS JetStream work queue (ADR 0198), so it is not in

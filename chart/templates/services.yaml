@@ -1,6 +1,6 @@
 {{- $root := . }}
 {{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}
-{{- fail "catalog.controlEmit=true requires dapr.enabled=true: the catalog is named its bus under dapr.enabled, and each replica receives the control broadcast on /control-events from its Dapr sidecar, a delivery authenticated by the sidecar-injected APP_API_TOKEN, without which the catalog fails closed at boot. Enable dapr.enabled, or set catalog.controlEmit=false." }}
+{{- fail "catalog.controlEmit=true requires dapr.enabled=true: the catalog is named its bus under dapr.enabled, so with it off the catalog would publish no control event and follow none. Enable dapr.enabled, or set catalog.controlEmit=false." }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -112,10 +112,6 @@ spec:
             - { name: LANCE_PROVENANCE_RETAIN_VERSIONS, value: {{ . | quote }} }
             {{- end }}
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
-            - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
-            {{- if and .Values.catalog.controlEmit .Values.dapr.resiliency.enabled }}
-            - { name: LANCE_CONTROL_DLQ_TOPIC, value: {{ .Values.catalog.controlDlqTopic | quote }} }
-            {{- end }}
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
             - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }
             - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }
@@ -270,13 +266,12 @@ spec:
             - { name: LINEAGE_FORWARD_API_KEY_SECRET, value: {{ .authSecret.name | quote }} }
             - { name: LINEAGE_FORWARD_API_KEY_FIELD, value: {{ .authSecret.key | quote }} }
             {{- end }}
-            - { name: LINEAGE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
-            - { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.appId) | quote }} }
             - { name: LINEAGE_EVENTS_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
-            {{- if .Values.dapr.resiliency.enabled }}
-            - { name: LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events" }
-            - { name: LINEAGE_DLQ_PUBSUB, value: "{{ include "lance.subPubsub" (list $root .Values.services.lineage.appId) }}-dlq" }
-            {{- end }}
+            {{- $delivery := required "services.lineage.delivery is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.services.lineage.delivery }}
+            - { name: LINEAGE_DELIVERIES_IN_FLIGHT, value: {{ required "services.lineage.deliveriesInFlight is required" .Values.services.lineage.deliveriesInFlight | quote }} }
+            - { name: LINEAGE_DELIVERY_ATTEMPTS, value: {{ required "services.lineage.delivery.attempts is required" $delivery.attempts | quote }} }
+            - { name: LINEAGE_DELIVERY_RETRY_SECONDS, value: {{ required "services.lineage.delivery.retrySeconds is required" $delivery.retrySeconds | quote }} }
+            - { name: LINEAGE_DELIVERY_ACK_WAIT_SECONDS, value: {{ required "services.lineage.delivery.ackWaitSeconds is required" $delivery.ackWaitSeconds | quote }} }
             {{- if .Values.services.lineage.relay.enabled }}
             - { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }
             {{- end }}

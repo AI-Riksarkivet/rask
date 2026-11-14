@@ -17,8 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.admission import judge_before_the_body
-from lakehouse.bus import bus_session
-from lakehouse.bus_watchdog import BusWatchdog, start_bus_watchdog
+from lakehouse.bus import Bus, bus_session
 from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.dapr_auth import assert_app_token_configured
@@ -33,12 +32,14 @@ from lakehouse.obs import configure_app_logging
 from lakehouse.schemas.health import Readiness
 from lakehouse.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
-from lineage.api.dapr import register_dapr
+from lineage.api.ingest_lane import IngestLane, lane
 from lineage.api.security import authenticate, judge
 from lineage.api.v1.router import api_router
 from lineage.core.config import LineageSettings, get_settings, storage_options
+from lineage.core.metrics import create_signature_refused_series
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
+from lineage.services.signature import store_published_keys
 
 
 log = logging.getLogger(__name__)
@@ -89,9 +90,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         stack.push_async_callback(loops.stop)
         app.state.startup_complete = True
         # ARMED AT SIGTERM, not at lifespan shutdown. The flag below flips in the `finally`, which uvicorn reaches only
-        # AFTER it has stopped accepting connections and drained, so an admission guard reading that flag alone would
-        # refuse nothing. Kubernetes sends SIGTERM at the START of termination, and that window is exactly when the
-        # sidecar is still delivering. Owner ruling 2026-08-25.
+        # AFTER it has stopped accepting connections and drained, so a probe reading that flag alone would answer ready
+        # through the whole drain. Kubernetes sends SIGTERM at the START of termination. Owner ruling 2026-08-25.
         stack.callback(arm_drain_on_sigterm(app))
         try:
             yield
@@ -107,13 +107,12 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # has to verify. A loop of `loops` then logs in again once half the store token's lease is used, or as soon as the
     # store no longer honours it. Nothing for a stack with no secret store.
     await stack.enter_async_context(secret_store_session(loops))
-    # Fail closed if ANY sidecar-delivered route mounts — the pub/sub ingest (dapr_enabled) OR the relay
-    # cron binding — but the app-api-token is unset: either route would otherwise be an unauthenticated
-    # forgery path (the audit's 'blanked token' residual + its cron-route follow-up: the two flags can
-    # diverge, so the assert must cover both mounts). No-op in dev (both off).
+    # Fail closed if the relay tick's route mounts, which this pod's Dapr sidecar delivers, but the app-api-token is
+    # unset: a start that fails says so at once, where the door's own refusal (`require_dapr_token`) would answer every
+    # tick 403 with the pod Ready. No-op where no binding is named.
     # AFTER THE LOGIN ABOVE, AND OFF THE EVENT LOOP: with the token in the store this is a read with the boot's budget,
     # made under the login the start already holds, so a store that never admits lineage ends the start there.
-    await run_in_threadpool(assert_app_token_configured, dapr_enabled=settings.dapr_enabled or bool(settings.relay_binding_name))
+    await run_in_threadpool(assert_app_token_configured, dapr_enabled=bool(settings.relay_binding_name))
     # LINEAGE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its outbox drain signs with a session its ServiceAccount token is
     # exchanged for, here at boot, failing the boot closed if none is issued, then again once half the session's life is
     # used. With no token (the offline and Dagger lanes) an outbox on the store is drained under the environment's pair,
@@ -124,11 +123,6 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     if store_session is not None:
         stack.push_async_callback(store_session.stop)
     app.state.store_session = store_session
-    # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
-    # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
-    bus_watchdog = await start_bus_watchdog(loops)
-    if bus_watchdog is not None:
-        stack.push_async_callback(bus_watchdog.stop)
     store = ProvenanceStore.from_settings(settings)
     await _ensure_tables(store)
     app.state.provenance = store
@@ -142,22 +136,39 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # 503s that read as a slow feed, not as a broken authorization plane.
     stack.push_async_callback(fga_dispose, app)
     await attach_auth(app, settings, service="lineage", loops=loops, fatal=True)
-    # THIS PROCESS'S OWN CONNECTION TO THE BUS ([[XC-199]]), as lineage's bus user, and only when the outbox is on: the
-    # relay re-publishes a recovered event on it, so a subscriber that never saw it still acts on it
-    # (`lakehouse.bus`). A loop of `loops` connects it behind the start and keeps it. A deployment with the outbox off
-    # publishes nothing and opens no connection.
-    app.state.bus = await stack.enter_async_context(bus_session(loops)) if settings.outbox_uri else None
+    # THIS PROCESS'S OWN CONNECTION TO THE BUS ([[XC-199]]), as lineage's bus user (`lakehouse.bus`): lineage takes its
+    # deliveries on it, and the relay re-publishes a recovered event on it, so a consumer that never saw it still acts on
+    # it. A loop of `loops` connects it behind the start and keeps it, so lineage serves while the bus is away, and the
+    # bus keeps what it could not deliver. None for a stack the chart names no bus.
+    bus = await stack.enter_async_context(bus_session(loops))
+    app.state.bus = bus
+    # The signers' published keys, read from the secret store under this process's login when an event is verified
+    # (`lineage.services.signature`). Built per start, before the first delivery or request can ask for it.
+    app.state.published_keys = store_published_keys()
+    _take_deliveries(app, settings, bus, loops)
     # The forwarder's client, and only when a graph backend is configured: one connection pool per process.
     app.state.forward_client = httpx.AsyncClient(timeout=settings.forward_timeout_seconds) if settings.forward_url else None
     if app.state.forward_client is not None:
         stack.push_async_callback(closed_quietly, app.state.forward_client.aclose)
     # Readiness reads these verdicts, never a dependency itself (`lakehouse.health`): the feed's read costs what the
     # catalog takes to open the feed, which a one-second probe cannot wait for.
-    app.state.health = HealthWatch(_dependencies(app, settings, store, bus_watchdog))
+    app.state.health = HealthWatch(_dependencies(app, settings, store))
     app.state.health.watch(loops)
 
 
-def _dependencies(app: FastAPI, settings: LineageSettings, store: ProvenanceStore, bus_watchdog: BusWatchdog | None) -> list[Dependency]:
+def _take_deliveries(app: FastAPI, settings: LineageSettings, bus: Bus | None, loops: Supervisor) -> None:
+    """Pull lineage's consumer on a loop of ``loops`` for as long as the process runs, where a bus is named. Started once
+    the feed and the gate a delivery is handled with are on ``app.state``, and stopped with the other loops, before
+    either is released."""
+    # Every reason series of the signature refusal counter at 0, which the doors that verify a bus or staged event share.
+    create_signature_refused_series()
+    if bus is None:
+        return
+    ingest = IngestLane(app, settings)
+    loops.keep("lineage-ingest", partial(bus.consume, lane(settings), ingest.handle, park=ingest.park))
+
+
+def _dependencies(app: FastAPI, settings: LineageSettings, store: ProvenanceStore) -> list[Dependency]:
     """What lineage reads to know it can serve. The feed table answering through the catalog gates (owner, 2026-11-12): a
     pod whose catalog cannot be reached would otherwise report Ready, get rotated in, and answer every delivery with a
     retry. The rest is reported and never gates: OpenFGA where lineage asks it directly, whose outage its doors answer
@@ -167,7 +178,7 @@ def _dependencies(app: FastAPI, settings: LineageSettings, store: ProvenanceStor
     dependencies = [
         Dependency(name="catalog", read=store.ready, required=True),
         *openfga_dependency(app, required=False),
-        *bus_dependency(app.state.bus, bus_watchdog),
+        *bus_dependency(app.state.bus),
     ]
     if settings.outbox_on_the_store:
         dependencies.append(store_dependency(settings.outbox_uri, partial(storage_options, settings), required=False))
@@ -196,13 +207,9 @@ app = build_lance_service_app(
     request_deadline_seconds=get_settings().request_deadline_seconds,
 )
 
-# Dapr pub/sub subscription (#25): wired after the app exists, because `DaprApp(app)` needs it.
-# DaprApp also serves GET /dapr/subscribe (the sidecar's startup registration).
-register_dapr(app)
-
 
 def mount_relay_cron(target: FastAPI, binding_name: str | None) -> bool:
-    """Mount the relay tick's route iff a Dapr cron binding names it; return whether it mounted.
+    """Mount the relay tick's route iff a cron binding names it; return whether it mounted.
 
     A named function (not inline module-level wiring) so the unit tier can drive the PRODUCTION
     mount decision both ways.

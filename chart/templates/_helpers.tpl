@@ -43,7 +43,6 @@ dapr.io/enabled: "true"
 {{- $appId := index . 1 -}}
 {{- $appPort := index . 2 -}}
 {{- $block := int $root.Values.lifecycle.sidecarBlockShutdownSeconds -}}
-{{- if gt (len .) 3 }}{{- $block = int (index . 3) }}{{- end -}}
 {{- if $root.Values.dapr.enabled -}}
 dapr.io/enabled: "true"
 dapr.io/app-id: {{ $appId | quote }}
@@ -74,13 +73,11 @@ dapr.io/config: "lance-tracing"
 {{- $root := index . 0 -}}
 {{- $appId := index . 1 -}}
 {{- $loaded := list -}}
-{{- range $template := list "dapr-component.yaml" "dapr-resiliency.yaml" -}}
-{{- range $doc := splitList "\n---" (include (print $root.Template.BasePath "/" $template) $root) -}}
+{{- range $doc := splitList "\n---" (include (print $root.Template.BasePath "/dapr-component.yaml") $root) -}}
 {{- $object := fromYaml $doc -}}
 {{- $scopes := get $object "scopes" | default list -}}
-{{- if and (has (get $object "kind") (list "Component" "Resiliency")) (or (not $scopes) (has $appId $scopes)) -}}
+{{- if and (eq (get $object "kind" | toString) "Component") (or (not $scopes) (has $appId $scopes)) -}}
 {{- $loaded = append $loaded (toJson $object) -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- join "\n" $loaded | sha256sum | trunc 16 -}}
@@ -193,8 +190,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.objectStoreClients" -}}
-{{- $clients := include "lance.objectStoreIdentities" . | fromJsonArray -}}
-{{- if has "maintenance" $clients }}{{- $clients = append $clients "maintenance-worker" }}{{- end -}}
+{{- $clients := list -}}
+{{- range (include "lance.objectStoreIdentities" . | fromJsonArray) }}
+{{- if ne . "maintenance" }}{{- $clients = append $clients . }}
+{{- else if $.Values.dapr.enabled }}{{- $clients = append $clients "maintenance-worker" }}{{- end }}
+{{- end -}}
 {{- toJson $clients -}}
 {{- end -}}
 
@@ -267,7 +267,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.natsUrl" -}}
-{{- required "NATS JetStream is a prerequisite: set nats.url to the bus every pub/sub component and the stream Job connect to (docs/architecture/deployment.md, Prerequisites); rask never installs it" .Values.nats.url -}}
+{{- required "NATS JetStream is a prerequisite: set nats.url to the bus every service and the stream Job connect to (docs/architecture/deployment.md, Prerequisites); rask never installs it" .Values.nats.url -}}
 {{- end -}}
 
 {{- define "lance.busEnv" -}}
@@ -277,11 +277,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not (has $inbox ((get (include "lance.natsTable" $root | fromJson) $user).subscribe | default list)) }}{{- fail (printf "nats.auth.users.%s grants the service %s no inbox of its own (%s): the bus would hand it no acknowledgement of a publish, so every event it publishes would stay staged" $user $user $inbox) }}{{- end -}}
 - { name: RASK_BUS_URL, value: {{ include "lance.natsUrl" $root | quote }} }
 - { name: RASK_BUS_USER, value: {{ $user | quote }} }
-{{- end -}}
-
-{{- define "lance.subPubsub" -}}
-{{- $root := index . 0 -}}
-{{- $root.Values.pubsub.name }}-{{ index . 1 -}}
 {{- end -}}
 
 {{- define "lance.natsTable" -}}
@@ -303,18 +298,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- toJson $t -}}
 {{- end -}}
 
-{{- define "lance.brokerWindows" -}}
-{{- if .Values.dapr.resiliency.enabled -}}
-- { name: ackWait, value: "720s" }
-- { name: maxDeliver, value: "3" }
-- { name: backOff, value: "720s,720s" }
-{{- else -}}
-- { name: ackWait, value: "30s" }
-- { name: maxDeliver, value: "5" }
-- { name: backOff, value: "30s,60s,120s,300s" }
-{{- end -}}
-{{- end -}}
-
 {{- define "lance.natsUsers" -}}
 {{- $names := list -}}
 {{- range $u, $p := (include "lance.natsTable" . | fromJson) -}}
@@ -326,15 +309,34 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- join " " $names -}}
 {{- end -}}
 
-{{- define "lance.natsCreds" -}}
-{{- $root := index . 0 -}}{{- $app := index . 1 -}}
-{{- if not (has $app (include "lance.natsUsers" $root | splitList " ")) }}{{- fail (printf "a pub/sub component of %s names nats-user-%s, which nats.auth.users does not declare" $app $app) }}{{- end -}}
-- { name: jwt, secretKeyRef: { name: nats-user-{{ $app }}, key: jwt } }
-- { name: seedKey, secretKeyRef: { name: nats-user-{{ $app }}, key: seed } }
+{{- define "lance.busConsumers" -}}
+{{- $v := .Values -}}
+{{- $mark := dict "rask.dev/release" .Release.Name -}}
+{{- $delivery := required "services.lineage.delivery is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $v.services.lineage.delivery -}}
+{{- $out := list (dict "stream" "LINEAGE" "name" "lineage-ingest" "start" "position" "config" (dict
+  "durable_name" "lineage-ingest" "ack_policy" "explicit" "ack_wait" (mul (int (required "services.lineage.delivery.ackWaitSeconds is required" $delivery.ackWaitSeconds)) 1000000000)
+  "max_deliver" -1 "filter_subject" $v.pubsub.topic "deliver_policy" "by_start_sequence" "replay_policy" "instant"
+  "max_ack_pending" (int (required "services.lineage.deliveriesInFlight is required" $v.services.lineage.deliveriesInFlight)) "max_waiting" 512 "metadata" $mark)) -}}
+{{- if $v.maintenance.enabled -}}
+{{- $queue := required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $v.maintenance.queue -}}
+{{- $ackWait := mul (int (required "maintenance.queue.ackWaitSeconds is required" $queue.ackWaitSeconds)) 1000000000 -}}
+{{- $lastDelivery := add1 (int (required "maintenance.queue.maxDeliver is required" $queue.maxDeliver)) -}}
+{{- $out = append $out (dict "stream" "MAINTENANCE_TASKS" "name" "maintenance-worker" "config" (dict
+  "durable_name" "maintenance-worker" "ack_policy" "explicit" "ack_wait" $ackWait "max_deliver" $lastDelivery "filter_subject" "maintenance.task.>"
+  "deliver_policy" "all" "replay_policy" "instant" "max_ack_pending" 1000 "max_waiting" 512 "metadata" $mark)) -}}
+{{- $out = append $out (dict "stream" "MAINTENANCE_SCHEDULES" "name" "maintenance-due" "config" (dict
+  "durable_name" "maintenance-due" "ack_policy" "explicit" "ack_wait" 30000000000 "max_deliver" -1 "filter_subject" "maintenance.due.>"
+  "deliver_policy" "all" "replay_policy" "instant" "max_ack_pending" 1000 "max_waiting" 512 "metadata" $mark)) -}}
+{{- $out = append $out (dict "stream" "STORE_EVENTS" "name" "maintenance-store-events" "config" (dict
+  "durable_name" "maintenance-store-events" "ack_policy" "explicit" "ack_wait" 30000000000 "max_deliver" $lastDelivery "filter_subject" "store.events"
+  "deliver_policy" "all" "replay_policy" "instant" "max_ack_pending" 1000 "max_waiting" 512 "metadata" $mark)) -}}
+{{- if $v.maintenance.arrivalEnabled -}}
+{{- $out = append $out (dict "stream" "LINEAGE" "name" "maintenance-arrival" "config" (dict
+  "durable_name" "maintenance-arrival" "ack_policy" "explicit" "ack_wait" 30000000000 "max_deliver" $lastDelivery "filter_subject" $v.pubsub.topic
+  "deliver_policy" "new" "replay_policy" "instant" "max_ack_pending" 1000 "max_waiting" 512 "metadata" $mark)) -}}
 {{- end -}}
-
-{{- define "lance.natsAuth" }}
-auth: { secretStore: lance-secrets }
+{{- end -}}
+{{- toJson $out -}}
 {{- end -}}
 
 {{- define "lance.mintsDevCredentials" -}}
@@ -901,20 +903,19 @@ activeDeadlineSeconds: 1800
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat $door (ternary (list (printf "nats-user-%s" $v.services.catalog.appId)) list $dapr) (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" (and $dapr $v.catalog.controlEmit))
-  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat $door (ternary (list (printf "nats-user-%s" $v.services.lineage.appId)) list (and $dapr $v.services.lineage.outbox.enabled)) (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" $dapr) -}}
+  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat $door (ternary (list (printf "nats-user-%s" $v.services.catalog.appId)) list $dapr) (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))))
+  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat $door (ternary (list (printf "nats-user-%s" $v.services.lineage.appId)) list $dapr) (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce)))) -}}
 {{- if $v.maintenance.enabled -}}
-{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat $door (ternary (list "nats-user-maintenance-worker") list $dapr) (ternary (list (printf "nats-user-%s" $v.maintenance.appId)) list (and $dapr (or $v.maintenance.lineageEmit $v.maintenance.controlEmit))) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (and $dapr $v.maintenance.arrivalEnabled)) -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat (ternary (list "nats-user-maintenance-worker") list $dapr) (ternary (list (printf "nats-user-%s" $v.maintenance.appId)) list (and $dapr (or $v.maintenance.lineageEmit $v.maintenance.controlEmit))) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled)))) -}}
 {{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}
-{{- $components := ternary (list (printf "nats-user-%s" .app)) list (and .bus true) -}}
-{{- if or $api $components -}}
-{{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api "components" $components) -}}
+{{- if $api -}}
+{{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api) -}}
 {{- end -}}
 {{- end -}}
 {{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "openbao-seeded" "commit-id-key" "otel-collector-export" "object-store-root" "postgres" "dapr-app-token") -}}
-{{- range $reads }}{{- $held = concat $held .api .components }}{{- end -}}
+{{- range $reads }}{{- $held = concat $held .api }}{{- end -}}
 {{- $lakehouseApps := list $v.services.catalog.appId $v.services.lineage.appId $v.maintenance.appId -}}
 {{- $external := $v.openbao.externalReaders | default dict -}}
 {{- range $app, $reader := $external -}}
@@ -935,7 +936,7 @@ activeDeadlineSeconds: 1800
 {{- if not (regexMatch (include "lance.secretNamePattern" $root) (toString .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is no secret name (a path or a wildcard would widen the store policy)" $app (toString .)) }}{{- end -}}
 {{- if not (or (eq . (printf "nats-user-%s" $app)) (hasPrefix $own .) (hasPrefix "signing-public-" .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is not the reader's own: a reader holds only nats-user-%s, names of its own (%s<name>) and signing-public-<name>" $app . $app $own) }}{{- end -}}
 {{- end -}}
-{{- $_ := set $reads $app (dict "sa" $reader.serviceAccount "api" ($reader.secrets | uniq | sortAlpha) "components" list) -}}
+{{- $_ := set $reads $app (dict "sa" $reader.serviceAccount "api" ($reader.secrets | uniq | sortAlpha)) -}}
 {{- end -}}
 {{- toJson $reads -}}
 {{- end -}}
@@ -1033,11 +1034,20 @@ dapr.io/volume-mounts: "openbao-identity:{{ dir (include "lance.storeTokenFile" 
 {{- end -}}
 
 {{- define "lance.secretReaderComponents" -}}
-{{- $apps := splitList "," (include "lance.secretScopes" .) | compact -}}
-{{- if and .Values.maintenance.enabled (has .Values.maintenance.appId $apps) -}}
-{{- $apps = append $apps "maintenance-worker" -}}
+{{- $components := list -}}
+{{- range (splitList "," (include "lance.secretScopes" .) | compact) -}}
+{{- if not (and $.Values.maintenance.enabled (eq . $.Values.maintenance.appId)) }}{{- $components = append $components . }}
+{{- else if $.Values.dapr.enabled }}{{- $components = append $components "maintenance-worker" }}{{- end -}}
 {{- end -}}
-{{- $apps | uniq | sortAlpha | join "," -}}
+{{- $components | uniq | sortAlpha | join "," -}}
+{{- end -}}
+
+{{- define "lance.sidecarScopes" -}}
+{{- $apps := list -}}
+{{- range (splitList "," (include "lance.secretScopes" .) | compact) -}}
+{{- if not (and $.Values.maintenance.enabled (eq . $.Values.maintenance.appId)) }}{{- $apps = append $apps . }}{{- end -}}
+{{- end -}}
+{{- join "," $apps -}}
 {{- end -}}
 
 {{- define "lance.appTokenEnv" -}}

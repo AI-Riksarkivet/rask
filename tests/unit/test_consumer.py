@@ -1,8 +1,8 @@
-"""Unit tests for the Dapr pub/sub subscription handler (#25).
+"""The handling of one delivery off the bus (#25), with a store that cannot record.
 
-Infra-free: no sidecar, no catalog. A fake store records the ingest; we pin the Dapr ack
-contract: SUCCESS on a clean ingest, RETRY (redeliver) on a transient failure, DROP on a malformed
-payload — and that the CloudEvent envelope's ``data`` is the OpenLineage event.
+Infra-free: no bus, no catalog. A fake store fails the record, and the handling answers the lane to deliver the event
+again (a record is idempotent, so a redelivery is safe), reading the OpenLineage event out of the CloudEvent envelope's
+``data``.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+from lakehouse.bus_delivery import Verdict
 from lakehouse.cloud_events import lineage_envelope
 from lineage.core.metrics import Door
 from lineage.models import RunEvent
@@ -38,10 +39,9 @@ class _FakeRepo:
         self.refusals: list[dict[str, str | None]] = []
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-        """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the store. Captured rather than ignored:
-        several of these tests assert what the refusal path did, and a silent no-op would let a drain
-        that recorded nothing pass as one that did."""
+        """[[LH-182]] The drain RECORDS a settled refusal before retiring the object, so a double that cannot record one
+        does not stand in for the store. Captured rather than ignored: a silent no-op would let a drain that recorded
+        nothing pass as one that did."""
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
     async def record(self, event: RunEvent) -> None:
@@ -51,7 +51,7 @@ class _FakeRepo:
 
 
 def test_handle_retries_on_transient_ingest_failure() -> None:
-    # The catalog down → RETRY; Dapr redelivers per the component backOff (a record is idempotent, so retry is safe).
+    # The catalog down → again; the lane delivers it again after its delay (a record is idempotent, so a retry is safe).
     repo = _FakeRepo(fail=True)
-    status = asyncio.run(handle_cloud_event(cast(Any, repo), _CLOUD_EVENT, door=Door.SUBSCRIBER))
-    assert status == {"status": "RETRY"}
+    verdict = asyncio.run(handle_cloud_event(cast(Any, repo), _CLOUD_EVENT, door=Door.SUBSCRIBER))
+    assert verdict is Verdict.AGAIN

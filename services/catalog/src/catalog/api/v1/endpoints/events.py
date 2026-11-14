@@ -1,14 +1,14 @@
 """``GET /management/v1/events`` — the control-plane change-event poll endpoint (P2).
 
-Serves this replica's in-memory ring buffer (``core/control_buffer.py``, fed by the broadcast Dapr
-subscription in ``api/dapr.py``) to the admin console: events strictly after the caller's ``since`` cursor,
+Serves this replica's in-memory ring buffer (``core/control_buffer.py``, fed by the replica's follow of the
+control topic in ``api/control_lane.py``) to the admin console: events strictly after the caller's ``since`` cursor,
 the new head cursor, and a ``reset`` flag when the cursor fell off the (bounded, drop-oldest) buffer. An
 event is a **refresh hint**, never authoritative data — the console re-reads real state through the normal
 FGA-governed path — so a lost/duplicated/late event only costs a redundant (or slightly delayed) re-read
 (see ``control_buffer.py`` + ``docs/adr/0031-control-events-fail-open-emit-contract.md``).
 
 **Estate-admin gated.** The feed is **estate-wide** — the buffer holds every replica's view of *every*
-project's governance changes (broadcast subscription, no per-tenant partition). Observing it is therefore a
+project's governance changes (every replica follows the whole topic, no per-tenant partition). Observing it is therefore a
 **platform** privilege, not a per-project one: the endpoint checks ``can_observe_events`` on the fixed root
 object (``settings.fga_root_object`` = ``estate:rask``), an owner-tier action, so **authorization
 scope == data scope** — a mere project admin gets a 403 (the #12 fix; the earlier per-project param let any

@@ -35,7 +35,7 @@ _BASE = [
     "--set-string",
     "auth.oidc.issuer=http://dex.local:5556",
 ]
-_MAINTENANCE = ("rask-maintenance",)
+_MAINTENANCE = ("rask-maintenance-worker",)
 
 
 def _render(*extra: str) -> list[dict]:

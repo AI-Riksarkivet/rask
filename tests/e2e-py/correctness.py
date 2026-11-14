@@ -23,14 +23,15 @@ its outbox for the relay. It is read the way its owner reads any table, by a sto
 estate's own warehouse
 (`catalog.services.provenance_namespace`).
 
-EVENTS. Nothing a drive caused parks on the DLQ stream (`bus.messages_since("DLQ", ...)`), and the catalog's two
-outboxes drain: `settled_outbox_depth` is the lineage outbox's depth as lineage's admin door reports it, and
-`settled_control_outbox_depth` the control outbox's, listed as the suites' own store identity, each read once the settle window
-allows its relay to drain what is staged.
+EVENTS. Nothing a drive caused is parked by lineage's ingest lane: `parked_since` reads the deliveries the lane keeps in
+the provenance namespace's ``refusals`` table (`lineage.api.ingest_lane`), the way the edge list is read. And the
+catalog's two outboxes drain: `settled_outbox_depth` is the lineage outbox's depth as lineage's admin door reports it,
+and `settled_control_outbox_depth` the control outbox's, listed as the suites' own store identity, each read once the
+settle window allows its relay to drain what is staged.
 
-Every wait is bounded by ``within``, the scenario's settle window unless a caller needs longer: a delivery its sidecar
-retries waits out a 120 s step (`chart/templates/dapr-resiliency.yaml`), so a drill that takes a dependency down passes
-a window of its own.
+Every wait is bounded by ``within``, the scenario's settle window unless a caller needs longer: a delivery lineage hands
+back waits out its lane's 120 s delay (`services.lineage.delivery.retrySeconds`), so a drill that takes a dependency down
+passes a window of its own.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ import os
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime
 from typing import Any
 
 import bus
@@ -54,13 +56,14 @@ from lakehouse import outbox
 from lakehouse.lineage_events import event_identity
 from lakehouse.naming import uuid_of
 from lakehouse.storage_options import StorageOptions
+from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
+from lineage.api.ingest_lane import STREAM as INGEST_STREAM
+from lineage.services.provenance import PARKED_KEY_PREFIX, REFUSALS
 
 
 #: The namespace the catalog keeps lineage's tables in (`services.lineage.provenanceNamespace`), a namespace of the
 #: estate's own warehouse: its first segment is that warehouse's id.
 PROVENANCE_NAMESPACE = os.environ.get("LANCE_E2E_PROVENANCE_NAMESPACE", "lance_catalog$provenance")
-#: The durable consumer through which lineage records what the catalog announces.
-LINEAGE_DURABLE = "lineage-durable"
 #: The catalog's control outbox (`LANCE_CONTROL_OUTBOX_URI`), and the store the outboxes live in.
 CONTROL_OUTBOX_URI = os.environ.get("LANCE_E2E_CONTROL_OUTBOX_URI", "s3://lance-catalog/_control_outbox")
 STORE = os.environ.get("LANCE_E2E_S3", "")
@@ -98,6 +101,17 @@ class Announcement(BaseModel):
     #: The version and ref the row names; a definition change names no version, and main is no ref.
     version: int | None
     ref: str | None
+
+
+class Parked(BaseModel):
+    """One delivery lineage's ingest lane parked and keeps: the CloudEvent it is kept under, its run, why, and when."""
+
+    model_config = ConfigDict(frozen=True)
+
+    key: str
+    run_id: str | None
+    reason: str
+    refused_at: datetime
 
 
 def rask_properties(properties: Mapping[str, str]) -> dict[str, Any]:
@@ -184,7 +198,7 @@ def recorded_edges(owner: Identity, tables: Iterable[str], *, expected: Iterable
     The edge list keys a governed table by its uuid ([[LH-522]]), so the rows are selected by the tables' uuids, and each
     edge is read by the names its event used (`in_name`, `out_name`), which is what ``expected`` names.
     """
-    bus.wait_until_acked("LINEAGE", (LINEAGE_DURABLE,), bus.last_seq("LINEAGE"), within=within)
+    bus.wait_until_acked(INGEST_STREAM, (INGEST_CONSUMER,), bus.last_seq(INGEST_STREAM), within=within)
     names = {table_uuid: table for table, table_uuid in uuids_of(owner, tables).items()}
     keyed = _sql_list(names)
     wanted = Counter(expected)
@@ -196,6 +210,22 @@ def recorded_edges(owner: Identity, tables: Iterable[str], *, expected: Iterable
         if wanted <= Counter(recorded) or time.monotonic() > deadline:
             return recorded
         time.sleep(2)
+
+
+def parked_since(owner: Identity, since: datetime) -> list[Parked]:
+    """Each delivery lineage's ingest lane parked at or after ``since``, read by the estate's ``owner``, oldest first.
+
+    The lane keeps a parked delivery in the provenance namespace's ``refusals`` table under its CloudEvent id, after the
+    prefix that sets it apart from the outbox relay's refusals, and a park of the same event again lands on that row
+    (`lineage.api.ingest_lane`). A park whose row the feed already held keeps nothing, since nothing of it was lost. The
+    table is read the way its owner reads any table, by a stock client through the namespace, as `recorded_edges` reads
+    the edge list; the lane's own count of the same parks, `lineage.events.processed{outcome="dead_lettered"}`, is in a
+    telemetry store the kind lane does not run.
+    """
+    refusals = lance.dataset(namespace_client=owner.namespace(), table_id=[*PROVENANCE_NAMESPACE.split("$"), REFUSALS])
+    rows = refusals.to_table(columns=["outbox_key", "run_id", "reason", "refused_at"], filter=f"starts_with(outbox_key, '{PARKED_KEY_PREFIX}')").to_pylist()
+    kept = [Parked(key=row["outbox_key"], run_id=row["run_id"], reason=row["reason"], refused_at=row["refused_at"]) for row in rows]
+    return sorted((parked for parked in kept if parked.refused_at >= since), key=lambda parked: parked.refused_at)
 
 
 def feed_of(reader: Identity, run: ScenarioRun) -> list[dict[str, Any]]:

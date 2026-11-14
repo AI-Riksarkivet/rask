@@ -126,7 +126,6 @@ async def _release_one(record: dict[str, Any], *, roots: set[str], live: Livenes
     not expect raises, and :func:`_release_or_hold` holds the record."""
     kind, obj_id = trash.kind_of(record), trash.name_of(record)
     if (reason := _why_held(record, roots=roots, live=live)) is not None:
-        # INFO: the route names every held record at WARNING once per tick.
         log.info("trash_release_held", extra={"kind": kind, "id": obj_id, "reason": reason})
         return HeldRecord(kind=kind, id=obj_id, uuid=trash.object_uuid(record), reason=reason)
     uuid = str(trash.object_uuid(record))

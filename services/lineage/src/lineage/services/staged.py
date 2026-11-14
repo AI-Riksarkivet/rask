@@ -42,7 +42,7 @@ async def republish_staged(publisher: Bus | None, settings: LineageSettings, sta
     """Re-announce a recovered event on the lineage topic, so its SUBSCRIBERS act on it as well as the feed.
 
     Recording alone repairs the feed and leaves its subscribers unaware: a recovered RUN never reaches
-    maintenance's arrival door or a notifier on the bus, and a recovered DDL change never reaches a
+    maintenance's arrival consumer or a notifier on the bus, and a recovered DDL change never reaches a
     notifier's bus lane. ``None`` is a deployment without the outbox, which has
     nothing to re-announce (`api.dependencies.get_publisher`).
 

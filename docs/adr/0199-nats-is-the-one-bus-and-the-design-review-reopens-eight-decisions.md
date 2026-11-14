@@ -2,6 +2,8 @@
 
 **Amended 2026-11-13** by [ADR 0206](0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md): the open question whether projects, warehouses and grants become resources declared in git, and the direction for ADR 0192, are answered by the catalog converging what the chart declares (XC-213); the operator comes later and adds a status per object.
 
+**Amended 2026-11-14** (XC-199 step D4, #787): every lakehouse service takes its deliveries on its own connection to the bus; see the amendment below.
+
 **Status:** accepted as a record of what is decided and what is reopened; no code has changed under it. Source: the owner,
 2026-11-09, during a read-only audit of `packages/lakehouse` and `services/` against the `writing-python` and `fastapi`
 references and of the architecture against the four facts: "ALSO adr WE HAVE CAN BE WRONG AND BE UPDATED FOR BEING MORE
@@ -113,3 +115,16 @@ merge take transaction properties.
 - **Two things wait on the owner and are in no package**: a public, per-project CloudEvents stream for clients (today
   `docs/COMMIT-EVENTS.md` calls the bus topics internal and a client polls the feed), and whether projects, warehouses
   and grants become resources declared in git.
+
+## Amendment (2026-11-14): the services take their deliveries on their own connections
+
+Source: #787 (XC-199), step D4 of track D, which the owner started with `/implement #787`. No event reaches a lakehouse
+service through a sidecar any more: lineage and the maintenance worker pull durable consumers the chart's stream Job
+declares, each catalog replica follows CATALOG_CONTROL by reading it by sequence, and each service does so on the
+connection it already published on (`lakehouse.bus`; the worker's queue connection, ADR 0198 decision 5). So the two bus
+paths this record reopened ADR 0198's decision 5 for are one, and the render's Dapr objects are the secret store
+Component, the cron bindings and the Configurations: no `pubsub.jetstream` Component and no Resiliency remain, and the
+catalog's and lineage's sidecars stay only for their cron ticks until the track's later steps. The reason is the
+sidecar's subscription, which could not be rebound after a configuration change, closed for good after a bus outage of
+about two minutes, set no header, sent no in-progress acknowledgement, and rolled pods on every edit. The reopening of
+ADR 0027 and 0028 is not answered by this: each replica still keeps its own buffer and cursor.

@@ -349,6 +349,8 @@ medium (one model per action); low risk.
   (`crates/lakekeeper/src/service/cache_invalidation/mod.rs:1-4`, `receiver.rs`). rask evicts on the control broadcast
   through a durable per replica (ADR 0182); the binding it caches is immutable and the warehouse status is read live
   (`warehouses.py:413-462`), so a missed eviction is bounded by the binding cache's TTL.
+  Since 2026-11-14 (XC-199 step D4) each replica follows `CATALOG_CONTROL` by reading the stream by sequence
+  (once a second while it holds nothing new), not through a durable per replica.
 - **Idempotency keys** (`crates/lakekeeper/src/service/idempotency.rs`; the `replay` audit shape). rask's keys are a
   per-door seam scoped by a digest of the subject (`services/catalog/src/catalog/api/idempotency.py:1-21`), and a door's
   authorization runs before its replay, so no unauthorized replay needs its own audit shape.

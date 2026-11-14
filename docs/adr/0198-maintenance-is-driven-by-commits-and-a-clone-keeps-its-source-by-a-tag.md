@@ -2,6 +2,8 @@
 
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): decision 5 (maintenance on the bus directly, the other services through Dapr) is two bus paths in one product; it becomes the one path with the move off Dapr.
 
+**Amended 2026-11-14** (XC-199 step D4, #787): the worker pulls the commit announcements itself, and maintenance's web process is gone; see the amendment below.
+
 **Status:** accepted. Owner, 2026-11-08, through the multi-question tool: "Registered, by tag" for how a clone keeps its
 source, and "Ship it, then redesign" for the order (XC-084 shipped first, ADR 0197). Supersedes the discovery decision
 of [ADR 0045](0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md) ("maintenance discovers work by listing
@@ -598,3 +600,17 @@ with the scan) and `maintenance.queue.scanMaxSeconds` (7200). A scan past its bo
 (`MaintenancePassesOverran`), and one that long also holds the audits behind it, which `MaintenanceAuditNotCompleting`
 pages on: the two alerts are the signal that the walk needs splitting by warehouse, which this does not do. A real
 store's latency is not moto's; the slope per table is what to re-read there.
+
+## Amendment, 2026-11-14: the worker pulls the commit announcements, and the web process goes (XC-199 step D4, #787)
+
+Asked at the start of D4, the owner decided on 2026-11-14: "Worker pulls, web goes". This reverses the 2026-11-10
+amendment's statement that the web Deployment keeps the write-event lane: the worker pulls `lineage.events.v1` from a
+durable consumer of its own, `maintenance-arrival` on LINEAGE, which the stream Job declares (begun at the events
+published after it), on its queue connection as `maintenance-worker`, and the `rask-maintenance` web Deployment, its
+Service, its PodDisruptionBudget and the web app (`maintenance.service`) are deleted. The worker is maintenance's only
+process, and its pod runs no sidecar; an announcement it cannot settle is handed back after a growing delay and ended
+on its `queue.maxDeliver`-th delivery, each outcome counted on `maintenance.arrivals.settled`. The reason is the
+sidecar's subscription: it could not be rebound after a configuration change, closed for good after a bus outage of
+about two minutes, set no header and sent no in-progress acknowledgement, and every edit to it rolled pods. Decision 5's
+comparison with `lakehouse.bus_watchdog` no longer holds: the watchdog is deleted, since no sidecar holds a bus
+connection.

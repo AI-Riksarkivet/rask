@@ -279,7 +279,7 @@ JOB_LOGS="$(mktemp)"
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
 # same-tag image only lands on a freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded
 # digest from the node cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha).
-for d in catalog lineage maintenance console; do
+for d in catalog lineage maintenance-worker console; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done
@@ -290,7 +290,6 @@ done
 kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
-kubectl rollout status deploy/"$RELEASE"-maintenance --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-maintenance-worker --timeout=300s
 
 # Every running container of a side-loaded image must serve the archive this run built — the definitive proof the whole
@@ -344,7 +343,6 @@ forward() {
 }
 forward "$RELEASE-catalog" 2333:2333 /tmp/pf-cat.log
 forward "$RELEASE-lineage" 18000:8000 /tmp/pf-lin.log
-forward "$RELEASE-maintenance" 18001:8000 /tmp/pf-mnt.log
 # The object store fixture's StatefulSet and Service, `rask-rustfs` (deploy/fixtures/rustfs).
 forward "$RELEASE-rustfs" 9900:9000 /tmp/pf-rfs.log
 forward "$RELEASE-dex" 5556:5556 /tmp/pf-dex.log
@@ -354,13 +352,12 @@ forward rask-nats 4222:4222 /tmp/pf-nats.log
 for i in $(seq 1 40); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:2333/livez 2>/dev/null || true)
   l=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:18000/livez 2>/dev/null || true)
-  m=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:18001/livez 2>/dev/null || true)
   d=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:5556/dex/.well-known/openid-configuration 2>/dev/null || true)
-  [ "$c" = "200" ] && [ "$l" = "200" ] && [ "$m" = "200" ] && [ "$d" = "200" ] && break
+  [ "$c" = "200" ] && [ "$l" = "200" ] && [ "$d" = "200" ] && break
   sleep 2
 done
-echo "   catalog=$c lineage=$l maintenance=$m dex=$d"
-[ "$c" = "200" ] && [ "$l" = "200" ] && [ "$m" = "200" ] && [ "$d" = "200" ] || { echo "!! services never became ready"; exit 1; }
+echo "   catalog=$c lineage=$l dex=$d"
+[ "$c" = "200" ] && [ "$l" = "200" ] && [ "$d" = "200" ] || { echo "!! services never became ready"; exit 1; }
 
 step "6/9 mint the suites' own store identity"
 # NO ROOT PAIR LEAVES THE STORE ([[XC-081]]). The #3-B data buckets are the provisioning hook's (`catalog.multibase.dataBases`,
