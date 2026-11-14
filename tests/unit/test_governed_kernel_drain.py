@@ -14,8 +14,8 @@ Each test names the finding it closes and fails for that finding's own reason wi
 * ``SKG-12`` — the JWKS fetch carries an explicit timeout, like the discovery fetch beside it.
 * ``SKG-15`` — a secret-store fetch failure is an ERROR, and a non-transport fault is NOT swallowed
   into an empty bundle that reads as "the store holds nothing".
-* ``SKG-10`` — the environment this kernel reads is DECLARED (a settings class, the injected sidecar
-  port), not four bare ``os.environ`` calls three of which name the same variable.
+* ``SKG-10`` — the environment this kernel reads is DECLARED (a settings class), not four bare ``os.environ`` calls
+  three of which name the same variable.
 * ``SKG-16`` — ``_retrying`` is annotated, and ``AuthDeps`` names callables rather than ``Any``.
 
 Uses stdlib ``asyncio.run`` so no pytest-asyncio dependency is needed (matches its sibling suites).

@@ -71,7 +71,7 @@ func (m *Rask) InstallFromEmpty(
 // is a container that can render the chart (withRenderableChart).
 func (m *Rask) pushSourceImages(ctx context.Context, src *dagger.Directory, tool *dagger.Container, registry *dagger.Service) error {
 	images, err := tool.WithExec([]string{"bash", "-c", "RELEASE=rask . scripts/stack_values.sh && helm template rask ./chart \"${HELM_SET[@]}\"" +
-		" --api-versions external-secrets.io/v1/ExternalSecret --api-versions generators.external-secrets.io/v1alpha1/Password --api-versions dapr.io/v1alpha1" +
+		" --api-versions external-secrets.io/v1/ExternalSecret --api-versions generators.external-secrets.io/v1alpha1/Password" +
 		" | uv run python scripts/side_loaded_images.py --tag dev"}).Stdout(ctx)
 	if err != nil {
 		return fmt.Errorf("listing the images the render names: %w", err)

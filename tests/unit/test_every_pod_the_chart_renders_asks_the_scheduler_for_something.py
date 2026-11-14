@@ -1,9 +1,8 @@
 """Every container the chart renders must carry requests/limits — Jobs and init containers included.
 
-[[XC-038]]. The row said the four infra subcharts (GreptimeDB, NATS, Perses, the Dapr control plane)
-get no resources from `values-prod.yaml`. MEASURED 2026-09-16 against the rendered prod overlay: all
-four DO carry them — `chart/values.yaml` supplies every one (greptimedb-standalone:3013, nats:2416,
-perses:3028, dapr:2478) and Helm merges the overlay ON TOP of the base rather than instead of it, so
+[[XC-038]]. The row said the infra subcharts (GreptimeDB, NATS, Perses) get no resources from
+`values-prod.yaml`. MEASURED 2026-09-16 against the rendered prod overlay: they DO carry them —
+`chart/values.yaml` supplied every one (greptimedb-standalone:3013, nats:2416, perses:3028) and Helm merges the overlay ON TOP of the base rather than instead of it, so
 reading `values-prod.yaml` alone answers a different question than "is this container bounded".
 
 WHAT THE SAME RENDER DOES SHOW is 9 of 54 containers unbounded, and not one of them is a subchart:

@@ -295,7 +295,7 @@ jobs:
 
   # THE GUARDED LIVE PROOF (ADR 0001, P0.1: the gap that made every "live-verified" claim in this repo an
   # anecdote). The offline `test` job runs `-m "not e2e"`, so a live suite is guarded only where a lane runs it.
-  # This job boots a REAL governed kind stack (Dex OIDC + OpenFGA + Dapr + NATS + RustFS + OpenBao, with the
+  # This job boots a REAL governed kind stack (Dex OIDC + OpenFGA + NATS + RustFS + OpenBao, with the
   # #3-A/#3-B/#4 flags and maintenance on) and runs every tests/e2e-py module it can serve, then Phase 1's
   # acceptance and its soak, failing on any skip (ADR 0167).
   #

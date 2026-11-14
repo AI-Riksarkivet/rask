@@ -10,7 +10,7 @@ program in the pod may export.
 That is not hypothetical. It was found when a session-scoped fixture in another suite set an engine's
 own bare variable for its connection and never restored it, and five tests in two other suites began
 failing: a client pointed at the fixture's value, because a bare env var it never declared had
-overridden the one it did. The suite made it visible; a sidecar, an operator, or a shell export does
+overridden the one it did. The suite made it visible; an injected container, an operator, or a shell export does
 the same thing to a running pod, where nothing is watching.
 
 The rule this pins: **a settings field answers to no env var it does not declare.**

@@ -1,6 +1,6 @@
 """[[LH-494]] The worker connects to the bus with the credential the store holds for its own user (ADR 0198 decision 5):
 ``nats-user-maintenance-worker``'s ``jwt`` and ``seed``, the two keys the dev store's seed writes for every bus user and
-the chart's other readers take (its ExternalSecret for the store's own user, and each Dapr component's ``seedKey``). A
+the chart's other readers take (its ExternalSecret for the store's own user). A
 store that holds no JWT for it stops the worker before it connects: it fails closed rather than dial the bus without its
 identity. Read from the secret store under the process's own login, as the deployed service reads it; the connection itself is
 the bus lane's.

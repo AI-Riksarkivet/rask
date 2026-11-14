@@ -139,17 +139,6 @@ openbao:
 dex:
   enabled: false
 
-# --- Dapr: the app-API token, the auth secret for the sidecar-delivered routes, is the store's
-# `dapr-app-token`; ESO writes it into `<release>-dapr-app-token` for the injector.
-dapr:
-  # The control plane is the platform's (ADR 0153): it must run HA (multi-replica operator, placement, scheduler and
-  # Sentry, the mTLS CA in the sidecar cert-renewal path) and its injector must set `sidecarDropALLCapabilities`,
-  # or the sidecar keeps NET_RAW while the app container beside it has none. Both are prerequisites
-  # (docs/architecture/deployment.md), not values here.
-  # The sidecar's own hardening: `sidecarRestricted` sets the daprd container's securityContext. A pod is only as
-  # restricted as its loosest container, which is why the injector's drop-ALL above is a prerequisite.
-  sidecarRestricted: true
-
 # --- Infra pod security contexts. Default OFF in values.yaml because the dev loop runs PSA-unlabelled;
 # live-proven on 2026-07-13. Pod IDENTITY is not a switch: every first-party pod runs as its own
 # tokenless SA in every overlay (templates/security-sa.yaml). `scripts/prod_render_check.sh` asserts

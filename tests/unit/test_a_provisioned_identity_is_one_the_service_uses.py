@@ -93,8 +93,8 @@ def test_each_workload_presents_the_store_identity_the_chart_provisions_for_its_
     assert (written.get(f"system:serviceaccount:default:{account}"), declared["Version"]) == (declared, "2012-10-17")
 
 
-#: The lakehouse services whose doors verify a person's token. Maintenance has no human door: its routes take only the
-#: Dapr sidecar's app token.
+#: The lakehouse services whose doors verify a person's token. Maintenance has no human door: its worker serves only its
+#: probes.
 _LAKEHOUSE_DOORS = ("rask-catalog", "rask-lineage")
 
 

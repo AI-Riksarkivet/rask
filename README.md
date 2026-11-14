@@ -60,7 +60,7 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 - `tests/` — cross-service suites: `unit`, `integration` and `e2e-py` (**live**, `-m e2e`, needs a
   deployed stack)
 - `chart/` — the product chart: the lakehouse's services, its console and their configuration, with OpenFGA as its only
-  (optional) subchart. Dapr, NATS JetStream, the CloudNativePG operator, External Secrets, Dex, the object store
+  (optional) subchart. NATS JetStream, the CloudNativePG operator, External Secrets, Dex, the object store
   and observability are prerequisites, installed in development from `deploy/fixtures/` (ADR 0153)
 - `.docker/` — one dockerfile per deployable; `.dagger/` — the build + CI module; `docs/` — Zensical
   source (the depth lives here)
@@ -89,7 +89,7 @@ make dev         # the console with Vite HMR, /config.json from frontend/console
 make dev-k3s     # the same against the in-cluster Gateway and Dex, k3s Traefik on :8080 (reused when it already serves /dex)
 ```
 
-The lakehouse services (catalog, lineage, maintenance) need Dapr, NATS, OpenFGA and an object store, so they run on
+The lakehouse services (catalog, lineage, maintenance) need NATS, OpenFGA and an object store, so they run on
 k3s, and the console reaches them through the cluster's Gateway (`make dev-k3s`).
 
 ## Clusters

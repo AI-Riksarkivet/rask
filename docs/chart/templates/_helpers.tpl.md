@@ -22,8 +22,8 @@ NAMING CONTRACT (the one thing that makes the two planes agree):
 They render the SAME string only because the release is named `rask` AND `fullnameOverride: rask`. That is
 deliberate (ADR 0108: lance object names become `rask-*`), and `lance.fullname`
 is kept on `.Release.Name` rather than delegated to `rask.fullname` because ~40 grafted lance templates
-build sibling object names from a RAW `{{ .Release.Name }}-…` (the `-dapr-app-token`
-Secret, for one). Delegating would
+build sibling object names from a RAW `{{ .Release.Name }}-…` (the `-openbao`
+Service, for one). Delegating would
 move the Deployments but not those, splitting the estate the moment release name ≠ fullnameOverride.
 Install under any other release name and the two planes diverge — keep them equal.
 
@@ -41,100 +41,6 @@ the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20
 ## `{{- define "rask.componentLabels" -}}`
 
 Component labels: pass (list . "<component>")
-
-## `{{- define "rask.daprPodLabels" -}}`
-
-The ONE store's root identity is objectStore.accessKey (a value) and the store's `object-store-secret-key`
-(never a value), held together in `<release>-object-store-root`: the dev store and the provisioning hook
-(`object-store-provisioning.yaml`) are its only readers, since on RustFS the root secret signs every STS session token (ADR 0168).
-
-Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
-estate: the catalog's and lineage's pods (services.yaml) both render
-THIS helper, and the maintenance worker's pod renders none (it runs no sidecar), so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
-  - enabled / app-id / app-port / log-level (the original rask surface)
-  - max-body-size (when dapr.maxBodySize is set — Dapr's 4Mi default rejects multi-image batch uploads)
-  - app-token-secret → the shared <release>-dapr-app-token Secret (ESO-written, external-secrets.yaml,
-    same dapr.enabled gate, so the reference can never dangle); no service reads or checks it, since no
-    sidecar delivers anything to its app
-  - the daprd resource bounds + disable-builtin-k8s-secret-store (+ optional seccomp) via
-    lance.daprSidecarResources
-  - dapr.io/config: lance-tracing — UNCONDITIONAL. The object always renders (the tracing STANZA
-    inside it is what carries the otel gate, and its metric and api-logging bounds hold with
-    telemetry off), so this reference cannot dangle.
-Usage: {{- include "rask.daprAnnotations" (list $root $appId $appPort) | nindent 8 }}
-
----------------------------------------------------------------------------------------------
-DAPR SIDECAR INJECTION.
-
-Dapr's sidecar injector is a MUTATING WEBHOOK, and its MutatingWebhookConfiguration ships
-`failurePolicy: Ignore` by default: a pod created while the injector is unreachable (a restart, an
-outage) is SILENTLY admitted unmutated and comes up with NO daprd container at all. Nothing recreates
-that pod — a CrashLoopBackOff restarts the container inside the SAME pod, which will never gain a
-sidecar, and it stays without one for as long as that pod lives.
-
-Fix, in the control plane rask runs against (a prerequisite; deploy/fixtures/dapr/values.yaml in
-development): `failurePolicy: Fail`, scoped by an `objectSelector` to pods carrying this LABEL. Fail-closed
-admission makes the API server REJECT the create instead of silently dropping the sidecar; the
-ReplicaSet controller retries, and the first retry after the injector is Ready produces a properly
-injected pod. The objectSelector is what makes `Fail` safe: an unscoped fail-closed pod webhook
-would also block the injector's OWN pod (and every infra pod) and wedge the cluster permanently.
-
-The label must therefore appear on EXACTLY the pods that carry the `dapr.io/enabled` ANNOTATION —
-a pod with the annotation but no label is admitted unmutated again (the silent failure, restored),
-and one with the label but no annotation just costs an admission round-trip. That correspondence
-is mechanical, so it is a render guard:
-test_invariants.py::test_every_dapr_annotated_pod_carries_the_injector_webhook_label.
-
-## `dapr.io/log-as-json: "true"`
-
-Hardcoded, deliberately NOT a values knob: the Collector's filelog json_parser is scoped to the
-daprd container and is only correct while this is true. A knob would let someone turn the sidecar
-plane back into unparsed logfmt with no gate firing.
-
-## `checksum/dapr: {{ include "lance.daprDigest" (list $root $appId) | quote }}`
-
-daprd loads its Components once, at boot (HotReload is off), and only a changed pod spec starts a rollout, so an edit to
-one would otherwise reach a sidecar only when something else restarted its pod, which no reconcile does ([[LH-305]],
-[[XC-164]]). Each sidecar's pod carries a digest of every Component its sidecar loads (those scoped to its app, and any
-with no scopes), read from `dapr-component.yaml`, which renders every Component (`lance-secrets`),
-so an edit rolls exactly the pods whose sidecar loads it, as a Configuration's hash-named object does. That template
-renders nothing else: the digest includes it whole, so a Deployment in it would include itself.
-
-## `dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) |...`
-
-THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. The kubelet SIGTERMs every container at
-once, and daprd's own default block is 5 s, while the app is still inside its preStop sleep.
-Derived from the same `lifecycle` block that feeds preStop and the grace period, so the three
-numbers cannot drift — see the arithmetic in values.yaml.
-
-## `{{- if $root.Values.dapr.enabled }}`
-
-DANGLING-REFERENCE GUARD. The `lance-tracing` Configuration renders inside
-`{{- if .Values.dapr.enabled }}` (observability.yaml:18), so the annotation is gated on the same
-predicate. Measured with `dapr.enabled=false` and the annotation on `dapr.enabled` alone:
-14 pods annotated, 0 Configurations rendered — every sidecar referencing an object that does
-not exist. This guard sits on the side that can see both.
-
-## `{{- if has $appId (splitList "," (include "lance.secretScopes" $root)) }}`
-
-THE PER-APP CONFIGURATION WHEN THIS APP-ID MAY USE THE SECRET STORE ([[XC-072]]), else the
-shared one. A sidecar references exactly one `dapr.io/config`, and `spec.secrets.scopes` lives
-only on a Configuration -- so an app-id that reads secrets needs its OWN, carrying the same
-spec body plus a deny-by-default scope. An app-id with no store access has nothing to scope and
-keeps `lance-tracing`, which also keeps the dangling-reference guard above honest: both names
-render under this same `dapr.enabled` condition.
-DERIVED FROM `lance.secretScopes`, the list `lance.sidecarScopes` narrows to the Component's own `scopes:`, so
-a new consumer added there gets its Configuration without a second edit here. The same membership
-mounts the pod's store token into daprd (`lance.storeIdentity`): a sidecar the component is scoped
-to always has the projected token it logs in with, as its app's own container has.
-
-## `{{- define "lance.daprOtlpTarget" -}}`
-
-The Collector's OTLP/HTTP address, `host:port` with no scheme, that each app's Dapr Configuration names as its
-sidecar's `tracing.otel.endpointAddress`; empty unless observability.enabled.
-
-Every plane exports to the in-chart Collector (`lance.otlpEndpoint`), never to a store: the app stays
-backend-agnostic and the Collector adds the backend's headers (`observability.export`).
 
 ## `{{- define "rask.otelResourceAttrs" -}}`
 
@@ -168,8 +74,8 @@ otel-collector.yaml, network-policy.yaml, ha.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
-  age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecarRestricted,
-  sidecarResources.*} · auth.oidc.{issuer,audience} · dex.{enabled,port} · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
+  age.externalHost · auth.enabled · catalog.controlEmit ·
+  auth.oidc.{issuer,audience} · dex.{enabled,port} · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.topic ·
   resources.{default,<component>} · objectStore.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
@@ -313,21 +219,15 @@ telemetry goes after it is `observability.export`, the Collector's business alon
 
 ## `{{- define "lance.otelEnabled" -}}`
 
-Whether the apps carry the OTel SDK wiring (instrument + otelEnv + the lance-tracing Dapr config): exactly when
+Whether the apps carry the OTel SDK wiring (instrument + otelEnv): exactly when
 `observability.enabled` deploys the Collector they export to. Non-empty string = on (helm `if` truthiness).
-
-## `{{- define "lance.daprDashboardEnabled" -}}`
-
-Whether the Dapr dashboard renders: `dapr.enabled` and `dapr.dashboard.enabled` together. Its template, its API-server
-egress (`network-policy.yaml`), its NOTES hint and the real-deployment refusal (`prod-credentials.yaml`) read this one
-answer, so none of them can disagree. Non-empty string = on.
 
 ## `{{- define "lance.platformStoreAddr" -}}`
 
 THE PLATFORM'S STORE IS NAMED, AND OVER TLS ([[XC-149]]). The chart renders no secret store, so with
 `openbao.enabled` off the address is required: each service reads its own secrets from it under its own login, its bus
 credential among them, and a render that names no store would leave each with nothing to log in to.
-An http address is refused because every service and every sidecar presents its ServiceAccount token and its store
+An http address is refused because every service presents its ServiceAccount token and its store
 token to it, in the clear otherwise; the dev store alone is http, inside the namespace.
 
 ## `{{- define "lance.vaultAddrFQDN" -}}`
@@ -409,38 +309,6 @@ Whether the dev OpenBao issues the NATS credentials: the dev store this chart se
 
 The Secrets ESO writes for the NATS pods that read their credential from a file, as JSON {target: [store secrets]}. This chart's ExternalSecrets write `nats-admin-creds`; the ESO policy grants all of them, because the NATS fixture's ExternalSecrets read the other two (nats-box's `monitor` creds, the server's operator config and route credential) from the dev store.
 
-## `{{- define "lance.daprSidecarResources" -}}`
-
-daprd sidecar resource annotations — the app containers are bounded (resources.default), so the
-sidecars must be too (an unbounded daprd per pod × 8 pods can starve a small node). One helper = one
-place to size them.
-
-## `dapr.io/disable-builtin-k8s-secret-store: "true"`
-
-daprd AUTO-REGISTERS a built-in `kubernetes` secret store in k8s mode and initialises it at boot,
-which builds a client from the pod's k8s-API SA token. We never use that store (our only secret store is
-`lance-secrets` — secretstores.hashicorp.vault, scoped per app), but its init is FATAL on failure: the
-per-workload SAs set automountServiceAccountToken=false (security-sa.yaml), so the token
-file is gone, daprd falls back to `stat /home/nonroot/.kube/config`, and EVERY Dapr-injected pod
-CrashLoops ("[INIT_COMPONENT_FAILURE] ... secretstores.kubernetes/v1" — live 2026-07-13; the SA flip was
-unshippable). Disabling the unused store is the fix that KEEPS the audit's intent (no mounted JWT, zero
-API grants) instead of walking it back by re-mounting the token. Always on: the store is unused with the
-flag off too, so this also drops an unnecessary k8s-API surface from the default deployment.
-
-## `dapr.io/sidecar-seccomp-profile-type: RuntimeDefault`
-
-PodSecurity `restricted` compliance for the INJECTED daprd sidecar (our app containers are already
-compliant via lance.securityContext; the sidecar is not by default). RuntimeDefault seccomp is the per-pod
-annotation; drop-ALL-caps is the injector-wide `dapr_sidecar_injector.sidecarDropALLCapabilities` setting of
-the control plane, a prerequisite this chart cannot reach (set it TOGETHER with this flag). OFF by default like
-networkPolicy.enabled: full `restricted` ENFORCE is a prod posture, and on this stack it is additionally
-BLOCKED by the OTel Collector — a single Deployment whose filelog receiver inherently needs hostPath
-(/var/log/pods), which `restricted` forbids and no value fixes. The Collector needs its own namespace at
-`baseline`, or a ServiceAccount
-PSA exemption in the API-server admission config. So: this hardens what the chart owns; full-namespace
-enforce stays parked-by-design (docs/KIND-RUNBOOK §6.4). Live-provable in isolation: flip this + the
-injector value, re-roll, and the daprd container carries drop:[ALL] + RuntimeDefault.
-
 ## `{{- define "lance.otelEnv" -}}`
 
 OTel SDK env for an app (call: include "lance.otelEnv" (list $root "<service.name>")). The apps run
@@ -455,13 +323,12 @@ signals, one SDK, all OTLP" path. NO double-ingest: the app pods carry `lance.de
 Collector's filelog receiver drops that label (a filter processor), so the file-tailed infra logs (no OTel
 SDK) land in the SAME `opentelemetry_logs` table without duplicating the app logs. The filter drops ONLY
 what the SDK also exported: a file-tailed line is a duplicate iff a root-logger handler emitted it, and those
-all begin with an ISO date — so the condition additionally requires `IsMatch(body, "^[0-9]{4}-...")` and
-excludes the `daprd` container. A pre-SDK crash, a uvicorn.error record and the sidecar's own logs therefore
+all begin with an ISO date — so the condition additionally requires `IsMatch(body, "^[0-9]{4}-...")`. A pre-SDK crash and a uvicorn.error record therefore
 survive in `opentelemetry_logs`, unparsed but present.
 
 DO NOT "SIMPLIFY" THAT BACK TO THE LABEL. It is POD-SPEC metadata, stamped by the ReplicaSet at creation, so
-it is never absent during a crash loop. A filter keyed on the label's absence deleted every crash log and every
-daprd line on 10 pods — measured 2026-08-23, 0 survivors of 10.
+it is never absent during a crash loop. A filter keyed on the label's absence deleted every crash log on 10 pods —
+measured 2026-08-23, 0 survivors of 10.
 
 ## `- { name: OTEL_METRIC_EXPORT_INTERVAL, value: "5000" }`
 
@@ -475,13 +342,13 @@ signals.md § Exclude noisy endpoints). The FastAPI instrumentor reads this itse
 Covers every path a probe is pointed at, not just the operational pair — including `/api/health`, which remains
 served as a badge even though no probe asks for it. `/healthz` matches no route any service mounts. A list that leaves
 out a probed path lets every pod trace its own kubelet polls: measured 2026-08-23, 31,916 spans in three hours across
-four services, eight times the Dapr workflow keepalive, and each probe costs several spans, since ASGI instrumentation
+four services, and each probe costs several spans, since ASGI instrumentation
 emits a child per send and receive.
 
 ## `{{- define "lance.preStop" -}}`
 
-Rollout drain: a preStop sleep holds SIGTERM until endpoint removal has propagated to kube-proxy /
-the Dapr sidecar, so in-flight requests drain instead of hitting connection-refused — this is what makes
+Rollout drain: a preStop sleep holds SIGTERM until endpoint removal has propagated to kube-proxy and
+the Gateway, so in-flight requests drain instead of hitting connection-refused — this is what makes
 the apps' /readyz shutting_down branch actually reachable during a rollout. Pairs with pod-level
 terminationGracePeriodSeconds (grace > preStop + app drain). sh exists in every app image
 (python-slim).
@@ -522,7 +389,7 @@ six images documenting a posture production never had. Owner decision 2026-08-27
 carries it.
 
 `127.0.0.1` — uvicorn's own default, and what those CMDs hardcode — is the value you would use
-if the proxy were a sidecar in the same pod. It is the Gateway's data plane, in another pod on
+if the proxy ran in the same pod. It is the Gateway's data plane, in another pod on
 another IP, so the match can never succeed and every forwarded header is silently ignored. Set
 `forwardedAllowIps` to the data plane's pod CIDR to make the client IP real (`deploy/values-local.yaml`
 names k3s's pod CIDR, 10.42.0.0/16, where Traefik runs). The default
@@ -554,7 +421,7 @@ regressed to root fails to start instead of running privileged. drop ALL caps + 
 the RuntimeDefault seccomp profile = the restricted PodSecurity baseline. readOnlyRootFilesystem is on by
 default (values.security.readOnlyRootFilesystem) — each app mounts an emptyDir at /tmp for scratch (pyarrow
 spill, OTel), so nothing needs a writable rootfs. Container-level (NOT pod-level) so it never touches the
-injected daprd sidecar or the busybox wait-age initContainer (which legitimately runs as root).
+busybox wait-age initContainer (which legitimately runs as root).
 
 The same baseline for a container whose IMAGE runs as root, so the uid must be pinned rather than
 inherited. `lance.securityContext` relies on the image's own USER (catalog uid 10001, web `bun`), and
@@ -780,8 +647,8 @@ backups (`JobStoreIdentity`, `job_client`) cannot read the identity under differ
 
 ## `{{- define "lance.serviceAccounts" -}}`
 
-Every ServiceAccount the product chart renders: the `lance.saComponents` accounts, the three a template renders
-beside its own workload (the backup snapshot, the Dapr dashboard, the OTel Collector), and, with `console.enabled`, the
+Every ServiceAccount the product chart renders: the `lance.saComponents` accounts, the two a template renders
+beside its own workload (the backup snapshot, the OTel Collector), and, with `console.enabled`, the
 console's `rask-sa-console` (`console.yaml`). `lance.storeReads` refuses an
 external reader whose role would bind one of them, or the namespace's shared `default`: a role bound to the lakehouse's
 own account hands that reader's reads to a lakehouse pod, and one bound to `default` hands them to every pod that names
@@ -958,16 +825,15 @@ connections it publishes and pulls on)}. Every place that decides a read is a vi
 with no read gets no store at all (`lance.secretScopes`). Two lists that agreed when written are how a read gets
 refused at runtime, or granted past its owner, so nothing restates it.
 
-A service reads its own secrets whatever carries the bus, so its role, its policy and its login render with
-`dapr.enabled` off ([[XC-199]]). What follows that switch is what it renders a reader for: the bus users a process reads
-for itself, since the same switch names each service its bus (`lance.busEnv`) and renders maintenance's worker (its work-queue user, `nats-user-maintenance-worker`).
-Pinned by `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
+Every service is named its bus (`lance.busEnv`, [[XC-199]]), so each reads its own bus user for its own connection,
+and maintenance's worker reads its work-queue user (`nats-user-maintenance-worker`) wherever `maintenance.enabled`
+renders it. Pinned by `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 
 The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
 (a signer's public key), never a copy, so a rotation writes one place. The verifier
 lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
 `signing.doors`), and a signer reads its own pair. A service's read of its bus user restates when its process opens a
-connection: under `dapr.enabled`, the catalog and lineage each (each publishes or pulls on its own), maintenance's
+connection: the catalog and lineage each (each publishes or pulls on its own), maintenance's
 worker for its queue user, and maintenance's own user when the worker emits (`maintenance.lineageEmit`,
 `maintenance.controlEmit`). Maintenance's worker reads the signers' public keys when its write-event lane checks
 signatures (`auth.enabled`, `maintenance.arrivalEnabled`, and `signing.doors` not `off`).
@@ -975,7 +841,7 @@ signatures (`auth.enabled`, `maintenance.arrivalEnabled`, and `signing.doors` no
 A CLIENT'S READER (`openbao.externalReaders`) is an ALLOWLIST, because the store grants by name and a client's values are
 not the lakehouse's to trust: `<app>` may hold only `nats-user-<app>`, names of its own (`<app>-<name>`) and
 `signing-public-<name>`. Each refusal closes one way a client's values could reach a name another identity holds: an
-app id that is no Dapr id, a lakehouse app (enabled or not), one whose own names would cover a family the store issues
+app id that is no lowercase name, a lakehouse app (enabled or not), one whose own names would cover a family the store issues
 per identity (`nats-user-<name>`, for every user of the issued table including a client's own, `signing-key-<name>`,
 `signing-public-<name>`), one whose own names would cover a name ESO, a lakehouse identity or the dev store's seed holds
 (the seed-only names are listed here, beside the ones the table and `lance.esoReads` derive) or another reader's id, a
@@ -990,27 +856,25 @@ SecretStore, `lance.natsFiles`) name, under the same conditions that render them
 
 ## `{{- define "lance.storeRole" -}}`
 
-`<release>-<app id>`: the store role an app and its sidecar log in as. The app's environment names it outright
-(`lance.secretStoreEnv`); the component names it with Dapr's `{appID}` tag, so one component serves every app and each
-sidecar fills in its own id. The release prefix keeps two releases apart in one platform store.
+`<release>-<app id>`: the store role an app logs in as, which its environment names (`lance.secretStoreEnv`). The
+release prefix keeps two releases apart in one platform store.
 
 ## `{{- define "lance.storePolicy" -}}`
 
 A store policy as JSON, which OpenBao reads as HCL: read on each secret's KV v2 data path, and the token's own
-lookup and renewal, which a role with no default policy needs for daprd to renew its session. Nothing else: no list,
+lookup and renewal, which a role with no default policy does not otherwise grant: a service asks about its own token
+to learn the store dropped it. Nothing else: no list,
 no metadata, no write.
 
 ## `{{- define "lance.storeIdentity" -}}`
 
-The token an app and its sidecar log in with, for an app that reads the store: the pod asks the kubelet for a
-ServiceAccount token for `openbao.identity.audience` (600 s, rotated by the kubelet, bound to the pod). The `mounts` part
-puts it in the app's own container and `dapr.io/volume-mounts` in daprd, at the one path the component names in
-`vaultServiceAccountTokenPath` and the app's environment in `RASK_SECRET_STORE_TOKEN_FILE`: both logins are the pod's
-one identity, under one role and one policy. Every part renders from the one membership, because an annotation naming a
-volume the pod lacks is a pod the API server refuses.
+The token an app logs in with, for an app that reads the store: the pod asks the kubelet for a ServiceAccount token
+for `openbao.identity.audience` (600 s, rotated by the kubelet, bound to the pod). The `mounts` part puts it in the app's
+own container alone, at the path its environment names in `RASK_SECRET_STORE_TOKEN_FILE`. Both parts render from the one
+membership, because a mount naming a volume the pod lacks is a pod the API server refuses.
 
-With `openbao.ca.configMap` named, the same three parts carry the platform store's CA: the volume `secret-store-ca` (that
-ConfigMap's key under the file name of `lance.storeCaFile`), mounted into the app and into daprd at that file's directory.
+With `openbao.ca.configMap` named, the same two parts carry the platform store's CA: the volume `secret-store-ca` (that
+ConfigMap's key under the file name of `lance.storeCaFile`), mounted into the app at that file's directory.
 
 ## `{{- define "lance.storeTokenSeconds" -}}`
 
@@ -1028,29 +892,29 @@ the one git declares. The role documents keep the value as it was written.
 
 ## `{{- define "lance.storeTokenFile" -}}/var/run/secrets/rask/openbao/token{{- end -}}`
 
-Where a pod's projected store token is, written once: the volume's file name and its mount in the app and in daprd
-(`lance.storeIdentity`), the app's `RASK_SECRET_STORE_TOKEN_FILE` (`lance.secretStoreEnv`) and the sidecar component's
-`vaultServiceAccountTokenPath` all derive from it, so the two logins cannot come to read two files. The app holds no
+Where a pod's projected store token is, written once: the volume's file name and its mount in the app
+(`lance.storeIdentity`) and the app's `RASK_SECRET_STORE_TOKEN_FILE` (`lance.secretStoreEnv`) both derive from it, so
+the mount and the login cannot come to name two files. The app holds no
 path of its own: `lakehouse.governed.secrets` refuses a store named without one.
 
 ## `{{- define "lance.storeCaFile" -}}/etc/rask/secret-store-ca/ca.crt{{- end -}}`
 
 Where a platform store's CA is in a pod, written once: the ConfigMap volume's file name and its mount
-(`lance.storeIdentity`), the app's `RASK_SECRET_STORE_CA_FILE` and the sidecar component's `caCert` derive from it.
+(`lance.storeIdentity`), and the app's `RASK_SECRET_STORE_CA_FILE` derive from it.
 
 ## `{{- define "lance.storeCaConfigMap" -}}`
 
 The ConfigMap holding the CA a platform store's certificate chains to, or nothing where none is named
 (`openbao.ca`). A CA is public, so a ConfigMap carries it and the platform's own tooling may write it; each of the
-store's three readers is handed it by name: the services (`RASK_SECRET_STORE_CA_FILE`, since Python checks a certificate
-against the bundle it ships with, never the node's), the sidecar's component (`caCert`) and ESO's SecretStore
+store's readers is handed it by name: the services (`RASK_SECRET_STORE_CA_FILE`, since Python checks a certificate
+against the bundle it ships with, never the node's) and ESO's SecretStore
 (`caProvider`). Refused beside `openbao.enabled`: the development store serves plain HTTP inside the namespace, so a CA
 named there would say a store is verified that is not.
 
 ## `{{- define "lance.secretStoreEnv" -}}`
 
 WHERE AN APP'S SECRET STORE IS, AND WHO IT LOGS IN AS ([[XC-199]]). The store's address (`lance.vaultAddr`), the app's own
-role (`lance.storeRole`), the Kubernetes auth mount and the KV mount ESO's SecretStore and the sidecar's component name
+role (`lance.storeRole`), the Kubernetes auth mount and the KV mount ESO's SecretStore names
 too (`externalSecrets.kubernetesAuthPath`, `externalSecrets.kvMount`), and the path of the projected token
 (`lance.storeTokenFile`). A service that is given the address logs in to the store before it serves and fails its start
 closed when the store never admits it, reads every secret under that login, and signs and keys its commit ids from what
@@ -1068,8 +932,7 @@ ServiceAccount, so a token projected for another door would log in to the store.
 ## `{{- define "lance.secretScopes" -}}`
 
 The app-ids that read the secret store: every app with a read in `lance.storeReads`. It has several readers that
-must not drift: `lance.sidecarScopes` below narrows it to the apps whose pods run a sidecar, for the Component's
-`scopes:` and the per-app Configurations, the per-app Configuration a sidecar runs under (`rask.daprAnnotations`), the
+must not drift: the
 store token's volume and the service's own store settings (`lance.secretStoreEnv`) follow it, and the NetworkPolicy
 admits exactly these apps' pods to the store (`lance.secretReaderComponents`). One membership decides them all, so no
 pod is told to read a store it was named no address, role or token for: such a read fails the pod's start closed.
@@ -1078,20 +941,12 @@ Usage: {{ splitList "," (include "lance.secretScopes" .) }}
 
 ## `{{- define "lance.secretReaderComponents" -}}`
 
-The component labels of the pods that dial the store (each service logs in to it, and the catalog's and lineage's
-sidecars do too), for the NetworkPolicies that admit them, and for the bus's client list (`lance.busClients`): the scope above, where an app's id is its pods' component label,
+The component labels of the pods that dial the store (each service logs in to it), for the NetworkPolicies that admit them, and for the bus's client list (`lance.busClients`): the scope above, where an app's id is its pods' component label,
 and `maintenance-worker`, the label of maintenance's worker pods, which run under maintenance's app id (ADR 0198's
 amendment of 2026-11-10) and so appear in no scope of their own. A policy that ranged the scope alone would lock the
 worker out of the store, and its start would fail closed. The worker's label is named only where its Deployment is
-rendered (`maintenance.enabled` with `dapr.enabled`): a label no pod carries admits whoever takes it. The object
+rendered (`maintenance.enabled`): a label no pod carries admits whoever takes it. The object
 store's list (`lance.objectStoreClients`) names it under the same condition.
-
-## `{{- define "lance.sidecarScopes" -}}`
-
-The apps of `lance.secretScopes` whose pods run a sidecar: every one but maintenance, whose worker pod carries no
-`dapr.io/*` annotation and so has no sidecar to load a Component or a Configuration. It scopes `lance-secrets`
-(dapr-component.yaml) and decides which per-app Configurations render (observability.yaml). A scope naming an app no
-sidecar runs for would render a Configuration nothing references.
 
 ## `{{- define "lance.allocatorEnv" -}}`
 
@@ -1111,164 +966,6 @@ serialises every allocation in a 100+ thread process on one lock.
 
 NOT A SECRET: a libc tunable with no confidentiality, read by glibc at startup and by nothing else.
 Pinned by `tests/unit/test_the_lakehouse_bounds_its_allocator_arenas.py`.
-
-## `{{- define "lance.daprConfigSpecBody" -}}`
-
-The Dapr Configuration spec body, rendered identically into `lance-tracing` and into every
-per-app-id `lance-config-<app>-<hash>` ([[XC-072]]). Extracted rather than copied: each stanza is a
-measured decision, and a second copy would drift without anything saying so.
-
-## `features:`
-
-UNCONDITIONAL, and deliberately outside the otel guard below: this loop runs whether or not
-telemetry ships.
-
-Dapr 1.18 promoted HotReload to GA and default-ON, and every sidecar in this estate references
-this Configuration — so each one boots with `Enabled features: HotReload …` and runs a 60-second
-reconcile ticker that diffs the operator's components against its own in-memory store.
-
-For a component whose metadata arrives as a `secretKeyRef` (each bus user's `jwt` and `seedKey`,
-`lance.natsCreds`) that diff can never come out equal: the operator's copy holds the REFERENCE while
-daprd's holds the RESOLVED value, so the reconciler concludes it changed on every single tick.
-Measured on an actor state store (`lance-statestore`), which Dapr will not hot-reload: ~540 ERROR
-lines an hour across the fleet, `Aborting to hot-reload a state store component that is used as
-an actor state store: lance-statestore`, one per sidecar per minute, forever. Nothing is pending
-and nothing is broken; the loop is structurally unable to converge, and it buries real errors.
-
-Turning it off costs nothing this estate was using: a component change here is a coordinated
-chart rollout. The trade is explicit: with HotReload off,
-a Component or Configuration edit reaches running sidecars only when their pods roll, which
-`checksum/dapr` (above) and a Configuration's hash-named object make each edit do.
-
-## `tracing:`
-
-`samplingRate` is a SAMPLING probability, NOT an enable switch. With no `otel:`, no `zipkin:` and
-no `stdout:`, daprd registers its NullExporter: every sidecar span is created, sampled at 100%,
-has its context propagated — and is dropped by an `ExportSpans` that returns nil. No log, no
-error, no metric. Indistinguishable from a collector that is down. Measured 2026-08-22 with no
-exporter configured: no Dapr hop produced a span, not service invocation, pub/sub publish or
-delivery, actor calls, input bindings or workflow steps.
-
-So the sidecars export to the Collector. Dapr's `otel.headers` accepts arbitrary {name,value} (and
-secretKeyRef) pairs, so it could carry a backend's headers, and it does not need to: the Collector
-this chart deploys adds them itself, and its `otlp` receiver listens on 4317 and 4318, wired into
-the traces pipeline.
-
-Gated on otelEnabled, the one predicate every plane's export reads.
-
-## `endpointAddress: {{ . | quote }}`
-
-A BARE host:port. Dapr appends no URL path, so `protocol: http` posts to
-`<endpointAddress>/v1/traces` — exactly the Collector's OTLP/HTTP route on 4318.
-
-## `isSecure: false`
-
-LOAD-BEARING: isSecure DEFAULTS TO TRUE upstream. Omit it and every sidecar attempts TLS
-against a plaintext in-cluster Collector and fails — which fails soft, so the symptom is
-"still no traces" rather than an error anyone sees.
-
-## `protocol: http`
-
-Exactly "http" or "grpc". Anything else is a fatal daprd startup error, not a fallback.
-
-## `metrics:`
-
-SIDECAR METRIC CARDINALITY. Gated on `dapr.enabled` only, deliberately NOT on
-`lance.otelEnabled` — the same argument as the retention stanza below. The sidecar's :9090
-exposition and its log stream exist whether or not this estate ships a collector, so a bound
-that disappears with telemetry is not a bound.
-
-`enabled` is REQUIRED by the CRD (chart/charts/dapr-1.18.1.tgz -> crds/configuration.yaml,
-`required: [enabled]` under spec.metrics); omitting it is refused with
-`spec.metrics.enabled: Required value`.
-
-PLURAL `metrics:` ONLY. The CRD also accepts a legacy `metric:` whose schema is byte-identical
-and states no precedence; daprd resolves it in Go by merging plural over singular field by
-field, so writing both would make that merge the only tiebreak and the manifest would no longer
-say what is in force.
-
-NOTHING VALIDATES THESE FIELD NAMES BEFORE RUNTIME. Helm does not request strict field
-validation, so `recordErrorCode`, `increasedCardinallity` or `obfuscateUrls` would render, apply
-CLEANLY, and be pruned by the API server with no error and no warning — "the setting had no
-effect", the same silent shape as the NullExporter above. Pinned by tests/unit/test_invariants.py
-::test_the_sidecars_non_telemetry_config_survives_telemetry_being_off, which is the only gate
-that fails loudly on a typo here.
-
-## `recordErrorCodes: true`
-
-dapr_error_code_total — a closed set of daprd error codes, so bounded by construction.
-
-## `increasedCardinality: false`
-
-THE POINT OF THIS BLOCK. At the upstream default (still `true` in 1.18.1) the sidecar stamps the
-RAW remainder of a service-invocation URL onto the `path` label, as
-`dapr_http_server_request_count{app_id="<caller>",path="/v1.0/invoke/<app>/method/<the rest of the URL>"}` (measured
-live on this cluster; the series is in git history at `64ef118a9`).
-An invoked catalog or lineage path carries its table, namespace and project ids, so that is one
-series per id, forever, in a store nothing authorizes reads against.
-
-NOT A SUBJECT LEAK, and do not describe it as one. daprd 1.18.1 ALREADY templates actor ids
-(`/v1.0/actors/<type>/{id}/method`) and drops state keys (`/v1.0/state/<store>`) at the default — verified by
-scraping a live sidecar of the actor host the estate then ran, by an active probe with a subject-shaped key, and by a
-real non-templated actor id present in app logs but absent from the metrics body. The OIDC subject never reached a
-metric label. No service in this release hosts an actor or keeps Dapr state.
-
-## `pathMatching:`
-
-With increasedCardinality false the `path` label is the MATCHED pattern or the empty string, so
-these three RESTORE labels that would otherwise be erased outright. Detail is still lost on
-purpose: actor type, pubsub topic and store name collapse into their wildcards. Nothing in this
-repo queries dapr_http_server_* (the dashboards and alerts use the component/actor/scheduler
-families and the app SDK's own http_server_duration_milliseconds_*), so no consumer breaks.
-
-NO `/v1.0/invoke/...` ENTRY, EVER. daprd auto-registers an invoke twin for every non-invoke
-pattern here and registers the lot on a real http.ServeMux, which PANICS at startup on
-conflicting patterns. A catch-all does not conflict with THIS list, but panics the moment anyone
-adds `/` or a bare `/{x...}` to it. One Configuration serves every app-id, so that is the whole
-fleet crash-looping on a one-line edit three lines above, with no recover() on the path and no
-validation anywhere before runtime. It also buys nothing: it only renames the "" bucket. Invoke
-paths therefore label as "", and an invoke hop is read from the UPSTREAM's own
-http_server_duration_milliseconds_* instead — a deliberate erasure, not an oversight.
-
-## `logging:`
-
-NOT SET, and it is a decision rather than an oversight. `latencyDistributionBuckets` is GLOBAL:
-workflow-execution latency shares the HTTP distribution, so one bucket list has to cover both.
-Dapr's default 34 buckets top out at 100s, and a workflow that blocks on
-`ctx.wait_for_external_event` (a person answering) is unbounded BY DESIGN, so no list covers it.
-Consequence to know before trusting a chart: the workflow p95 panel renders +Inf for such a
-lane. Setting a wider ceiling trades a visibly-broken quantile for a silently-wrong one.
-
-## `obfuscateURLs: true`
-
-INSEPARABLE from `enabled` above. With obfuscateURLs false daprd logs the raw
-`method + URL.Path`, and any path segment a caller fills (an actor id keyed by a person, a table id on an invoke)
-lands in the log. With it true daprd logs the matched endpoint NAME instead. This is the one place in this object where
-a subject could reach telemetry, so the two keys ship together or not at all.
-
-## `omitHealthChecks: true`
-
-The kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise.
-
-## `{{- define "lance.daprAppSpec" -}}`
-
-One app-id's Dapr Configuration spec: the Configuration object and its name (`lance.daprAppConfigName`) both derive from THIS.
-
-## `defaultAccess: deny`
-
-DENY, AND ALLOW NONE ([[XC-165]], [[XC-199]]): no app reads a secret through its sidecar, since each logs in to the store
-itself, so the sidecar's secrets API serves the app, and anything else on the pod's loopback, nothing. Dapr applies this
-scope only to the app-facing secrets API (`pkg/api/universal/secrets.go:35`, `IsSecretAllowed`, the same in 1.18.1 and
-1.19.0-rc.4); a component resolving its own `secretKeyRef` goes straight to the store with the sidecar's login
-(`pkg/runtime/processor/secret/secret.go:162-170`), and no component of this chart names one. What the store itself
-refuses is the role's policy, which holds for every login.
-
-Every secret a reader names is known at render. A data base holds no credential of its own ([[LH-286]]),
-and a warehouse record's `credential_ref` is consumed by no door ([[LH-205]]).
-
-## `{{- define "lance.daprAppConfigName" -}}`
-
-Named by the hash of its spec, so an edit renames it; the object and the pod's `dapr.io/config` both use this ([[LH-064]], values.yaml `signing:`).
 
 ## `{{- define "lance.signers" -}}`
 

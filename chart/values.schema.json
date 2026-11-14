@@ -436,65 +436,6 @@
                 }
             }
         },
-        "dapr": {
-            "type": "object",
-            "properties": {
-                "controlPlaneNamespace": {
-                    "description": "Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it.",
-                    "type": "string"
-                },
-                "dashboard": {
-                    "type": "object",
-                    "properties": {
-                        "enabled": {
-                            "description": "Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. Development only: a real deployment refuses it.",
-                            "type": "boolean"
-                        },
-                        "image": {
-                            "description": "Container image for the Dapr dashboard Deployment.",
-                            "type": "string"
-                        }
-                    }
-                },
-                "enabled": {
-                    "description": "Use Dapr: inject a daprd sidecar into the catalog's and lineage's pods and render rask's Components and Configurations. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. Each service is named its bus (`RASK_BUS_URL`, `RASK_BUS_USER`), and the maintenance worker rendered, under this switch too, so off, none publishes or takes a delivery.",
-                    "type": "boolean"
-                },
-                "logLevel": {
-                    "description": "daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error).",
-                    "type": "string"
-                },
-                "maxBodySize": {
-                    "description": "Max request body for Dapr service invocation (`dapr.io/max-body-size`); Dapr's own default is 4Mi.",
-                    "type": "string"
-                },
-                "sidecarResources": {
-                    "type": "object",
-                    "properties": {
-                        "cpuLimit": {
-                            "description": "CPU limit for every injected daprd sidecar (`dapr.io/sidecar-cpu-limit`).",
-                            "type": "string"
-                        },
-                        "cpuRequest": {
-                            "description": "CPU request for every injected daprd sidecar (`dapr.io/sidecar-cpu-request`).",
-                            "type": "string"
-                        },
-                        "memoryLimit": {
-                            "description": "Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`).",
-                            "type": "string"
-                        },
-                        "memoryRequest": {
-                            "description": "Memory request for every injected daprd sidecar (`dapr.io/sidecar-memory-request`).",
-                            "type": "string"
-                        }
-                    }
-                },
-                "sidecarRestricted": {
-                    "description": "Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`.",
-                    "type": "boolean"
-                }
-            }
-        },
         "dex": {
             "type": "object",
             "properties": {
@@ -521,7 +462,7 @@
             "type": "object",
             "properties": {
                 "kubernetesAuthPath": {
-                    "description": "Mount path of the store's Kubernetes auth method, which ESO's SecretStore, every service and every sidecar log in through.",
+                    "description": "Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every service log in through.",
                     "type": "string"
                 },
                 "kvMount": {
@@ -644,16 +585,12 @@
                     "description": "Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first.",
                     "type": "integer"
                 },
-                "sidecarBlockShutdownSeconds": {
-                    "description": "Seconds the Dapr sidecar keeps running after SIGTERM; must lie between preStopSeconds and the grace period.",
-                    "type": "integer"
-                },
                 "teardownSeconds": {
                     "description": "Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this.",
                     "type": "integer"
                 },
                 "terminationGracePeriodSeconds": {
-                    "description": "Pod grace period in seconds; must be at least preStop + `sidecarBlockShutdownSeconds` + 5 s buffer.",
+                    "description": "Pod grace period in seconds; uvicorn's graceful-shutdown bound is this minus preStopSeconds and teardownSeconds.",
                     "type": "integer"
                 }
             }
@@ -1222,7 +1159,7 @@
             "type": "object",
             "properties": {
                 "enabled": {
-                    "description": "Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services, Dapr and OpenFGA to it; needs `export.endpoint`.",
+                    "description": "Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services and OpenFGA to it; needs `export.endpoint`.",
                     "type": "boolean"
                 },
                 "environment": {
@@ -1266,10 +1203,6 @@
                             "type": "string"
                         }
                     }
-                },
-                "samplingRate": {
-                    "description": "Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; \"1\" traces every request.",
-                    "type": "string"
                 }
             }
         },
@@ -1280,7 +1213,7 @@
                     "type": "object",
                     "properties": {
                         "configMap": {
-                            "description": "The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and its sidecar and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`.",
+                            "description": "The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`.",
                             "type": "string"
                         },
                         "key": {
@@ -1298,11 +1231,11 @@
                     "type": "boolean"
                 },
                 "externalAddr": {
-                    "description": "The platform's Vault or OpenBao (https), which the services, the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.",
+                    "description": "The platform's Vault or OpenBao (https), which the services and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.",
                     "type": "string"
                 },
                 "externalReaders": {
-                    "description": "A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id `\u003capp\u003e`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-\u003capp\u003e`, names of its own (`\u003capp\u003e-\u003cname\u003e`) and `signing-public-\u003cname\u003e`; the render refuses an app id that is no Dapr id, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-\u003cname\u003e`, `signing-key-\u003cname\u003e`, `signing-public-\u003cname\u003e`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `\u003crelease\u003e-\u003capp\u003e` is ESO's; and a ServiceAccount the lakehouse renders or `default`.",
+                    "description": "A client that reads the store under a role of its own, keyed by its app id `\u003capp\u003e`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-\u003capp\u003e`, names of its own (`\u003capp\u003e-\u003cname\u003e`) and `signing-public-\u003cname\u003e`; the render refuses an app id that is no lowercase name, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-\u003cname\u003e`, `signing-key-\u003cname\u003e`, `signing-public-\u003cname\u003e`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `\u003crelease\u003e-\u003capp\u003e` is ESO's; and a ServiceAccount the lakehouse renders or `default`.",
                     "type": "object"
                 },
                 "identity": {
@@ -1313,11 +1246,11 @@
                             "type": "string"
                         },
                         "tokenMaxTtl": {
-                            "description": "The longest a renewed store token lives, at most `1h` and no shorter than `tokenTtl`, in the same forms; daprd then logs in again with its current projected token.",
+                            "description": "The store's cap on a token a role issues, at most `1h` and no shorter than `tokenTtl`, in the same forms. A lakehouse service never renews (it logs in again, and its policy grants no renewal); the cap bounds a token an external reader or the secrets operator renews.",
                             "type": "string"
                         },
                         "tokenTtl": {
-                            "description": "Lifetime of the store token a login returns, from `1m` to `1h`, written as `\u003cn\u003es`, `\u003cn\u003em` or `\u003cn\u003eh`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it; daprd renews its own in the background.",
+                            "description": "Lifetime of the store token a login returns, from `1m` to `1h`, written as `\u003cn\u003es`, `\u003cn\u003em` or `\u003cn\u003eh`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it.",
                             "type": "string"
                         }
                     }
@@ -1831,7 +1764,7 @@
                     "type": "object",
                     "properties": {
                         "appId": {
-                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id.",
+                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service.",
                             "type": "string"
                         },
                         "module": {
@@ -1852,7 +1785,7 @@
                     "type": "object",
                     "properties": {
                         "appId": {
-                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service, and, while a sidecar runs, its Dapr app-id.",
+                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service.",
                             "type": "string"
                         },
                         "deliveriesInFlight": {

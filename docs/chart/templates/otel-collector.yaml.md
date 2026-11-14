@@ -9,8 +9,8 @@ OTel-first telemetry hub. A single OpenTelemetry Collector (contrib) that:
   - RECEIVES app OTLP (the apps point OTEL_EXPORTER_OTLP_ENDPOINT here — see lance.otlpEndpoint),
   - TAILS infra-pod stdout via the filelog receiver (the SINGLE log shipper — the Vector subchart is
     retired, owner ruling 2026-07-27), dropping from the app pods (lance.dev/logs=otlp) ONLY the lines
-    their own SDK also exported — the uvicorn/crash/daprd tier on those pods has no OTLP twin and is kept,
-  - SCRAPES the Dapr sidecars' :9090 via the prometheus receiver + k8s SD,
+    their own SDK also exported — the uvicorn/crash tier on those pods has no OTLP twin and is kept,
+  - SCRAPES OpenFGA's :2112 via the prometheus receiver + k8s SD,
 and exports all three signals over OTLP/HTTP to `observability.export.endpoint`, the platform's backend
 (ADR 0153; in development the observability fixture's GreptimeDB). The backend's ingestion headers come from
 values: `export.headers` on every signal, `export.traceHeaders` on traces only and `export.auditHeaders` on the
@@ -64,19 +64,6 @@ writer off that logger is `make lint`: ruff's TID251 bans `AUDIT_LOGGER` and `_l
 string. The filelog receiver feeds only the general pipeline,
 so a container's stdout copy of an audit line is never routed here.
 
-## `filter/drop_keepalive:`
-
-The workflow engine's liveness ping to its own sidecar, dropped before it reaches the store.
-RE-MEASURED 2026-08-23 rather than inherited (two audits put its share 40 points apart):
-3,828 spans in three hours, ninth-largest span name in the estate, carrying nothing anyone
-reads. Scoped to the EXACT name, not a prefix, so a real TaskHubSidecarService call still
-traces. `error_mode: ignore` so a span with no name cannot wedge the pipeline.
-
-Proportion matters here: this is the SMALL half of the trace noise. The kubelet probe spans
-fixed in the same change were 31,916 over the same window, and those are excluded at the SDK
-(lance.otelEnv's OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them — dropping them
-here instead would pay to serialize and ship spans only to discard them at the far end.
-
 ## `otlphttp/traces:`
 
 Traces carry `export.traceHeaders` (GreptimeDB's trace-pipeline header → opentelemetry_traces); metrics/logs
@@ -109,14 +96,9 @@ settings as the shared exporter; only the destination table differs.
 
 ## `traces:`
 
-THE WORKFLOW KEEPALIVE IS FILTERED, by `filter/drop_keepalive` in the traces pipeline
-below. `/TaskHubSidecarService/Hello` is the engine's health ping to its own sidecar and
-carries nothing anyone reads. Two earlier audits put its share of the grpc scope 40
-points apart, so it was re-measured before acting rather than taken on trust: 3,828 spans
-in three hours, the ninth-largest span name in the estate.
-Worth knowing for proportion — it was never the big one. The kubelet probe spans fixed in
-the same change were 31,916 over the same window, and those are excluded at the SDK
-(`lance.otelEnv`'s OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them.
+Every span the planes export, with no filter: the noise worth dropping is the kubelet's probe spans, 31,916 in three
+hours (measured 2026-08-23), and those are excluded at the SDK (`lance.otelEnv`'s OTEL_PYTHON_FASTAPI_EXCLUDED_URLS)
+because the app owns them.
 
 ## `logs/audit:`
 

@@ -6,7 +6,7 @@
 # MANUAL terminal run while `ci.yml` ran `pytest -m "not e2e"`. Nothing guarded them, so a regression
 # tomorrow would be silent. This script makes the live proof an artifact that runs on every push.
 #
-# It brings up the GOVERNED stack (Dex OIDC + OpenFGA + Dapr + NATS + RustFS + OpenBao) on kind with the feature
+# It brings up the GOVERNED stack (Dex OIDC + OpenFGA + NATS + RustFS + OpenBao) on kind with the feature
 # flags the suites need, seeds the exact grants/buckets they assume, then runs every tests/e2e-py module the lane can
 # serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167), on the
 # lakehouse and its platform fixtures alone, with no client installed (XC-183).
@@ -135,7 +135,6 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # tag this script builds and the tag it looks for.
 SIDE_LOADED="$("$(dirname "$0")/helm.sh" template "$RELEASE" ./chart "${HELM_SET[@]}" \
   --api-versions external-secrets.io/v1/ExternalSecret --api-versions generators.external-secrets.io/v1alpha1/Password \
-  --api-versions dapr.io/v1alpha1 \
   | uv run python "$(dirname "$0")/side_loaded_images.py" --tag "$TAG")"
 # AN EXPLICIT CHECK, because an empty set is not an empty amount of work — it means this script is
 # about to deploy images it never built, and every pod that needs one sits in ImagePullBackOff.
@@ -181,15 +180,15 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --con
 # anything later repoints it.
 kind export kubeconfig --name "$CLUSTER"
 export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
-# THE EXTERNAL SECRETS OPERATOR, DAPR AND THE NATS BUS, platform prerequisites the chart refuses to render without
-# ([[XC-004]], [[XC-128]], [[XC-129]]). This throwaway cluster stands in for the platform, so the lane installs them
-# from the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, dapr, nats), each on its own release,
-# before rask. fixtures.sh waits for each, so Dapr's injector is Ready before any rask pod exists. The bus runs with
+# THE EXTERNAL SECRETS OPERATOR AND THE NATS BUS, platform prerequisites the chart refuses to render without
+# ([[XC-004]], [[XC-129]]). This throwaway cluster stands in for the platform, so the lane installs them
+# from the same fixtures `make k3s-up` uses (deploy/fixtures/external-secrets, nats), each on its own release,
+# before rask. fixtures.sh waits for each, so the bus is Ready before any rask pod exists. The bus runs with
 # operator mode off (the fixture's default), so it takes the credentials rask's clients present without checking them.
 # Dex, the dev OIDC issuer the lane mints its tokens from, the dev object store and the dev secret store are fixtures too
 # ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
 # seed scripts are rask's), so fixtures.sh does not wait for them.
-"$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex openbao
+"$(dirname "$0")/fixtures.sh" external-secrets nats dex openbao
 
 step "3/8 side-load the images"
 wait "$BUILD_PID" || { cat "$IMAGE_DIR/build.log"; echo "!! an image build failed (log above)" >&2; exit 1; }
@@ -237,8 +236,8 @@ step "4/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance
 # database, so the server came up Ready immediately and the deadlock never armed. Textbook works-on-my-machine.
 # FIXED IN THE CHART (2026-07-28): the four bootstrap Jobs are ordinary release resources now, applied in the
 # same wave as the servers they unblock — see "BOOTSTRAP JOBS" in chart/templates/_helpers.tpl. `helm install
-# --wait` is safe with no wrapper. This script still omits it, for a DIFFERENT and still-real reason: the Dapr
-# sidecar-injector race below means the app pods that come up in the first wave are recreated anyway, so
+# --wait` is safe with no wrapper. This script still omits it, for a DIFFERENT and still-real reason: the app pods
+# that come up in the first wave are deleted below so a same-tag image is pulled again, so
 # waiting on them here would only buy a wait we then throw away. The explicit rollout waits are the ones that
 # matter. Do not re-read this as "the deadlock is still there".
 # SIDE-LOADED, SO THE CHART HAS TO BE TOLD. The images above are built by Dagger and imported into the

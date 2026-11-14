@@ -5,7 +5,7 @@
 > catalog converges what git declares (XC-213, `services/catalog/src/catalog/api/declaration_converge.py`).
 
 > Research note. Lakekeeper is the reference, never the stack: every proposal below is stated on rask's own stack
-> (Lance and lance-namespace, OpenFGA, Dex, Kubernetes ServiceAccounts, Dapr on NATS JetStream, Helm under Argo CD), and
+> (Lance and lance-namespace, OpenFGA, Dex, Kubernetes ServiceAccounts, NATS JetStream, Helm under Argo CD), and
 > none adopts Lakekeeper's code, Iceberg, or a Postgres catalog database. Every Lakekeeper claim cites
 > `github.com/lakekeeper/lakekeeper` at `main` `e9b202d1f04c579fdcdc2749ac1fe74b0ab8ca41` (2026-11-09); every rask claim
 > cites this repository at `c74060dc3`. Paths without a prefix under "Lakekeeper" are relative to that checkout; rask

@@ -5,7 +5,7 @@
 # install_stack_fixtures [<extra helm args for the dex fixture>...]: the development prerequisites and stand-ins from
 # deploy/fixtures, each its own release, in the order rask's install needs them.
 install_stack_fixtures() {
-  scripts/fixtures.sh external-secrets dapr nats
+  scripts/fixtures.sh external-secrets nats
   scripts/fixtures.sh dex "$@"
   scripts/fixtures.sh openbao
   # The object store runs the upstream RustFS image its fixture pins by digest, which the node pulls itself.

@@ -13,7 +13,6 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 | Prerequisite | What rask renders against it |
 |---|---|
 | **External Secrets Operator** | the ExternalSecrets and SecretStore behind every credential a pod takes as a Kubernetes Secret (§ 8) |
-| **Dapr control plane** | the secret-store Component `lance-secrets`, the Configurations, and the sidecar annotations of the catalog's and lineage's pods, whose sidecars deliver nothing to their apps |
 | **NATS JetStream** | the stream Job that declares rask's streams and durable consumers, and one bus user per app (§ 7) |
 | **CloudNativePG operator** | a `Cluster` only with `age.cnpgCluster.enabled`; see [`CNPG-AGE.md`](CNPG-AGE.md) |
 | **The OTel backend** | the Collector's export endpoint and headers; the store, dashboards and alerting are the platform's |
@@ -139,20 +138,12 @@ and `CATALOG_CONTROL` and the durable consumers (no service creates a stream or 
 object to its declared config on every reconcile and retires the consumers git no longer declares; NACK would remove a
 boot-ordering foot-gun, nothing more, and it would be the platform's operator, not rask's.
 
-## 4 · Do Dapr or Lance need an operator story? (asked 2026-07-11)
+## 4 · Does Lance need an operator story? (asked 2026-07-11)
 
-**Dapr — already covered, nothing to adopt.** Dapr's control plane *is* an operator
-(`dapr-operator`, sidecar-injector, placement, sentry — helm-installed here, already running on
-rask), and rask's Dapr objects are declarative: a `Component` CR (the secret store `lance-secrets`) with per-app scoping. The bus is not wired through Dapr: the stream Job declares its streams and consumers,
-and that is the NACK row above, not a Dapr gap. Also pinned (python-infrastructure
-skill + #115 review): **Dapr Workflow stays un-adopted** — every multi-step path we have
-(bytes-then-commit registration) is token-keyed idempotent, so JetStream's
-redeliver-the-whole-message model suffices; a workflow engine would add a sidecar state store
-dependency for crash-recovery semantics we already get from idempotency keys.
+**No workflow engine.** Every multi-step path the lakehouse has (bytes-then-commit registration) is token-keyed
+idempotent, so JetStream's redeliver-the-whole-message model suffices; a workflow engine would add a state store
+dependency for crash-recovery semantics the idempotency keys already give.
 
-> **Actors.** No service in the estate registers a Dapr actor, so placement holds nothing load-bearing; the one
-> actor host, the notifications inbox, is retired ([ADR 0193](adr/0193-the-inbox-is-retired-and-the-console-joins-the-product.md)).
->
 > **When to reopen this.** If a multi-step path appears whose steps cannot be made idempotent by any
 > caller-chosen key — the honest signal is finding yourself wanting to *generate* an id mid-saga —
 > the argument above stops applying and a workflow engine earns its dependency.
@@ -171,23 +162,22 @@ DOES have are already owned elsewhere:
 | stream/bucket/grant provisioning | chart Jobs + seed scripts (idempotent) | shipped; NACK could absorb the stream half |
 | version/feature pinning (`pylance`, data_storage_version) | image pins + probe-before-callsite (§0) + `lance_docs/` | process, not software |
 
-So: nothing to install for either.
+So: nothing to install.
 
 ## 5 · Secrets: the dev-mode fragility, and the operator plan (added 2026-07-14)
 
 **What we hit (2026-07-14).** Driving the #4 outbox live meant a helm upgrade that (via an unrelated interrupted
 run) restarted the OpenBao pod. OpenBao then ran `server -dev`, its KV store **in memory**, so the restart
 wiped every secret, and the seed that repopulated it was a **post-upgrade hook**, which fires on a helm
-release and not on a bare pod restart. Every app then read its secrets through its sidecar at start, got
-**`500`** from it, and retried with growing backoff: uvicorn stayed at "Waiting for application startup"
-and never bound `:8000`, while daprd sat "waiting for application to listen", a two-sided wait that read
-like a crash and was a **missing secret**. Fixed by re-running the seed and recreating the pod.
+release and not on a bare pod restart. Every app's start then found its secrets missing and retried with growing
+backoff: uvicorn stayed at "Waiting for application startup" and never bound `:8000`, a wait that read like a crash
+and was a **missing secret**. Fixed by re-running the seed and recreating the pod.
 
 **Where it stands.** The seed runs beside the dev server and seeds an in-place restart again (§ 6,
 `chart/templates/openbao-seed.yaml`), so a bare pod restart needs no release. The dev store stays in memory: it is
-the openbao fixture, not for production. No service reads through a sidecar ([[XC-199]]): each logs in to the store
-itself before it serves, asks again for about two minutes, and then fails its start naming its role, so an empty or
-unreachable store shows as a start that failed on its login, never as a pod waiting on its sidecar. The chart renders
+the openbao fixture, not for production. Each service logs in to the store itself before it serves ([[XC-199]]), asks
+again for about two minutes, and then fails its start naming its role, so an empty or unreachable store shows as a
+start that failed on its login. The chart renders
 no secret store ([[XC-149]]): production names the
 platform's Vault or OpenBao, whose operator owns unsealing, durability and rotation, and the External Secrets
 Operator is a prerequisite (docs/architecture/deployment.md, Prerequisite in production: the secret store).
@@ -199,7 +189,7 @@ holds two secrets per identity, named by its key (the signer's ServiceAccount na
 itself is that account's subject, `kubernetes~system:serviceaccount:<ns>:<sa>`): `signing-public-<key>` (field `keys`: comma-separated public NKEYs, current
 first, at most one previous) and `signing-key-<key>` (field `seed`: the NKEY user seed). A signer is Ready only
 while the kid of its own seed is in its list, so the list is always written before the seed it belongs to. Lineage
-reads lists only. The store enforces the same split: each service, and the catalog's and lineage's sidecars, log in as their own ServiceAccount,
+reads lists only. The store enforces the same split: each service logs in as its own ServiceAccount,
 and its role's policy reads only its own app's secrets (XC-165, ADR 0169, XC-199), so reaching :8200 without that login
 reads nothing.
 
@@ -246,7 +236,7 @@ identity afresh and the old public keys go with the old store. Events signed bef
 enforcement is on (acked and counted); every signer re-resolves within 5 minutes once the store admits its login again.
 
 **Every replacement invalidates every store token, a surge one included.** The store's tokens live in memory with it, so
-the token each service and each daprd holds names nothing in the replacement. A service reads under its own login
+the token each service holds names nothing in the replacement. A service reads under its own login
 (XC-199), and its loop has that token ask the store about itself every 15 s (`auth/token/lookup-self`, which the
 rendered policy grants): the replacement answers `403 permission denied`, the pass logs `secret_store_token_dropped`
 and logs in again, and reads are served again within one pass of the replacement admitting the login. Until then a
@@ -254,18 +244,12 @@ read that reaches the store (a holder reading its key again, as the signing key'
 refused and logged `secret_store_read_failed`, and readiness reports `secret-store: unavailable` as `degraded`, which
 keeps the pod in rotation (`lakehouse.governed.secrets`; held offline by
 `packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`). Measured 2026-11-14 on helm
-rev 8 (openbao/openbao:2.2.0, daprd 1.19.0-rc.4; `kubectl rollout restart deploy/rask-openbao` at 10:33:00 UTC): the
+rev 8 (openbao/openbao:2.2.0; `kubectl rollout restart deploy/rask-openbao` at 10:33:00 UTC): the
 replacement was Ready 21 s later with every signing pair and bus user carried (18 of the store's 20 secrets
 byte-identical, the other two the seed's own marker and the re-packed archive of the same bus root), each of the six
 lakehouse pods logged `secret_store_token_dropped` and `secret_store_logged_in` on its first pass after that (1 to 6 s
 later, 22 to 27 s after the restart), no pod restarted or left Ready, the catalog's `/readyz` answered `degraded` for
-5 s, and no read was refused in the five minutes watched. A sidecar reads the store only to resolve its components'
-secrets when it starts, and serves its app none, so its own token is as dead and nothing reads under it: the store's
-replacement alone restarts no pod. In the same drill the store listed one more login per pod, made 21 to 69 s after
-the restart and logged by no service: each daprd logging in again by itself. (Measured 2026-11-07 on the same images,
-while the services still read through their sidecars: the fixture re-applied with a changed pod spec carried every
-signing pair and bus user over a surge, and reads through `lance-secrets` still failed three minutes later, until the
-Dapr pods were restarted.)
+5 s, and no read was refused in the five minutes watched: the store's replacement alone restarts no pod.
 
 During a surge two stores answer at the Service's address, and each refuses the other's tokens. A service whose pass
 logs in to one can then be refused, by the other, the question about the token it has just been issued: its loop logs
@@ -280,13 +264,7 @@ replacement that mints a new bus root still needs the bus and its clients restar
 `kubectl create token <release>-sa-<app> --audience rask-openbao`, presented at `auth/kubernetes/login` as
 `<release>-<app>`), `signing-key-<its key>` reads with a `seed` field, every other identity's key is refused 403, and
 `signing-public-<key>` reads for that signer and for every verifier; lineage's role is refused every private key.
-`tests/e2e-py/test_each_app_reads_only_its_own_secrets.py` asks exactly this of a deployed estate. No sidecar serves its
-app a secret: `GET /v1.0/secrets/lance-secrets/<name>` from inside a pod answers 403 for every name. Each app's Dapr
-Configuration is named by the hash of its spec (`lance-config-<app>-<hash>`) and its pods name it in `dapr.io/config`, so
-a spec edit renames the object and rolls exactly the pods that load it. HotReload is off and Helm applies a Deployment
-before the Configuration it names: a pod that boots first finds no such object, its daprd exits and the kubelet restarts
-it until Helm has applied it, so no pod boots against the old spec. During such an upgrade a rolled pod may show one daprd restart: that is the wait,
-not a fault. Read a pod's Configuration from its `dapr.io/config`, not from the app-id.
+`tests/e2e-py/test_each_app_reads_only_its_own_secrets.py` asks exactly this of a deployed estate.
 
 ## 7 · Bus credentials: one NATS user per app (XC-078)
 
@@ -364,11 +342,11 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
 (XC-165). A real-deployment render refuses both the bundled Dex and the dev OpenBao.
 
 - **Dev (the openbao fixture).** Each generated credential is a Secret of its own, `<release>-dev-credential-<key>`
-  for `object-store-secret-key`, `postgres-password` and `dapr-app-token` (`lance.devCredentials`). On a fresh install ESO's
+  for `object-store-secret-key` and `postgres-password` (`lance.devCredentials`). On a fresh install ESO's
   Password generator creates each once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`), so a credential
   the chart adds later is generated on the next reconcile and the others never again. The OpenBao
-  pod mounts them as one directory, and its seed writes the root to `secret/object-store-root` and each other generated field to its own
-  secret (`postgres`, `dapr-app-token`) as `@file`. No workload's object-store identity is a secret: each signs with
+  pod mounts them as one directory, and its seed writes the root to `secret/object-store-root` and the other generated field to its own
+  secret (`postgres`) as `@file`. No workload's object-store identity is a secret: each signs with
   sessions its own ServiceAccount token is exchanged for (ADR 0197). The Secret outlives an
   OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
   the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
@@ -387,21 +365,18 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
 - **Rotating,** one class at a time, so a server learns a value only after the store and every ExternalSecret
   hold it and its consumers restart right after:
   1. Change the key of the credential's Secret, `<release>-dev-credential-<key>` (a real deployment: the field in the store), with a value
-     generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again". For
-     `dapr-app-token`, delete its Secret instead and reconcile (`make k3s-up`): the chart's Password generator mints the
-     new value in the cluster, so no person sees it.
-  2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `object-store-root`, `observability-s3`,
-     `dapr-app-token`) with the `force-sync`
+     generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again".
+  2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `object-store-root`, `observability-s3`)
+     with the `force-sync`
      annotation, and wait for Ready. Their refresh is otherwise `externalSecrets.refreshInterval`, and a pod
      restarted before it takes the old value.
   3. Tell the server, when one holds the credential: `ALTER ROLE` inside AGE from stdin for `postgres-password`;
      restart `rask-rustfs` for `object-store-secret-key`. RustFS signs every STS session token with the root secret, so
      rotating root invalidates every outstanding session at once: every workload's own and every vended one. Clients
      re-vend, and a long write in flight fails.
-  4. Restart the consumers at once: OpenFGA reads its mounted config file, and a sidecar the injector's app token, at start,
-     so nothing rolls on its own. AGE: OpenFGA (its migrate Job and the backup CronJob read it at their next run).
+  4. Restart the consumers at once: OpenFGA reads its mounted config file at start, so nothing rolls on its own. AGE: OpenFGA (its migrate Job and the backup CronJob read it at their next run).
      The root: the catalog, lineage and maintenance, whose store sessions the old root signed and which exchange a new
-     one at boot rather than at half a session's life. The app token: the catalog and lineage, whose sidecars take it at pod creation.
+     one at boot rather than at half a session's life.
   5. Read it back by refusal: one `ListBuckets` signed with the old root answers 403 `SignatureDoesNotMatch`, and the
      AGE role refuses the old password over the pod's own IP (`password authentication failed`). The image trusts
      loopback, so a login from 127.0.0.1 succeeds with any password and proves nothing. Measured 2026-11-07, rotating
@@ -415,7 +390,3 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   ServiceAccount's subject, `system:serviceaccount:<namespace>:<release>-sa-<component>`, as
   `<release>-object-store-identities` declares it: the provisioning hook writes it on the dev store, and a platform
   store's owner provisions it.
-- **Rotating the Dapr app token.** No service reads or checks it, so a rotation refuses nothing in between.
-  1. Write the new `token` field of the secret `dapr-app-token` (dev: delete its Secret and reconcile, as above).
-  2. Force-sync the `<release>-dapr-app-token` ExternalSecret and wait for Ready.
-  3. `kubectl rollout restart` the catalog's and lineage's Deployments, so each daprd starts with the new token.

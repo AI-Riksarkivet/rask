@@ -1,10 +1,10 @@
 """Maintenance's worker is a process of its own (ADR 0198): it serves no API, only its probes, and they follow its life.
 
-The pod's sidecar is told to block its shutdown and leaves early only when its app turns unhealthy, so the worker's
-liveness must hold through the whole drain while its readiness says it is stopping; a probe server that left at
-SIGTERM would take the sidecar, and the publishes a draining pass still makes, with it. The probes are served from a
-thread, so liveness is the worker's own loop marking that it turns, and a worker asked to stop while it is still
-starting stops there. Driven over a socket, as the kubelet and the sidecar reach it, and through the process's own
+The worker's liveness must hold through the whole drain while its readiness says it is stopping: a probe server that
+left at SIGTERM would fail the kubelet's liveness check, which kills the container before its draining pass and the
+publishes it still makes are done. The probes are served from a thread, so liveness is the worker's own loop marking
+that it turns, and a worker asked to stop while it is still starting stops there. Driven over a socket, as the kubelet
+reaches it, and through the process's own
 ``main`` under a real SIGTERM.
 
 Through a read-only window (``MAINTENANCE_READ_ONLY``, rendered from the chart's one ``readOnlyWindow``) the worker takes

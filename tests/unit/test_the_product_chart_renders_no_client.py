@@ -6,7 +6,7 @@ engine and its companions (ADR 0189): the Ray engine, compute, Kueue, the compac
 a runner uses, and the notifications inbox, retired with the SMTP relay its email channel sent to ([[XC-195]]). The
 console is no client: it is the lakehouse's own UI, which the product chart renders. So nothing the product chart
 renders names a client: no workload, ServiceAccount, route, state-store scope,
-bus user, store user, OpenFGA subject, secret-store role, Dapr component, session or sign-in secret, scrape job, alert
+bus user, store user, OpenFGA subject, secret-store role, session or sign-in secret, scrape job, alert
 or network policy admitting one by label.
 
 Read from the render in the three overlays that ship: the default values, the deployed estate (`values-local.yaml`)

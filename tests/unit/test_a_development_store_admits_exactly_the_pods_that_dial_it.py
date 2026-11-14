@@ -11,9 +11,7 @@ JetStream cluster partitions.
 
 READ FROM THE RENDER of the deployed overlay with the isolation layer on, beside the render of each fixture that shares
 its namespace: a pod dials a store when its spec, or a ConfigMap or Secret it mounts, names the store's Service. A
-`helm test` pod runs only when someone runs `helm test`. Read with `dapr.enabled` and without it ([[XC-199]]): a
-service is named its secret store either way, and its bus only with it, so the bus's door follows that switch and the
-secret store's does not.
+`helm test` pod runs only when someone runs `helm test`.
 """
 
 from __future__ import annotations
@@ -33,9 +31,6 @@ _DEPLOYED: tuple[str, ...] = (
     "--set", "image.localImages=true", "-f", str(chart_render.REPO / "deploy/values-local.yaml"),
     "--set", "networkPolicy.enabled=true", "--set-string", "nats.url=nats://rask-nats:4222",
 )  # fmt: skip
-
-#: The same estate with no service named its bus: the chart refuses control events there, which ride the bus.
-_NO_BUS: tuple[str, ...] = ("--set", "dapr.enabled=false", "--set", "catalog.controlEmit=false")
 
 #: The fixtures a development estate installs into the release's namespace: their pods are governed by the chart's
 #: policies as the release's own are.
@@ -72,9 +67,9 @@ class _Pod(BaseModel):
     spec: str
 
 
-def _namespace(*overlay: str) -> tuple[dict, ...]:
-    """Every document the deployed release, under ``overlay``, and the fixtures sharing its namespace render."""
-    release = chart_render.render(*_DEPLOYED, *overlay)
+def _namespace() -> tuple[dict, ...]:
+    """Every document the deployed release and the fixtures sharing its namespace render."""
+    release = chart_render.render(*_DEPLOYED)
     return release + tuple(doc for fixture in _NAMESPACE_FIXTURES for doc in chart_render.render_fixture(fixture))
 
 
@@ -142,22 +137,12 @@ def _server(pods: list[_Pod], component: str) -> _Pod:
     return server
 
 
-@pytest.mark.parametrize(
-    ("store", "overlay"),
-    [
-        *(pytest.param(store, (), id=f"{store}-with-services-named-their-bus") for store in sorted(_STORES)),
-        # Every door the switch bears on: the bus's follows it, and the other two lose only the maintenance worker,
-        # whose pod is rendered with it.
-        pytest.param("bus", _NO_BUS, id="bus-with-no-service-named-it"),
-        pytest.param("secret store", _NO_BUS, id="secret store-with-no-service-named-its-bus"),
-        pytest.param("object store", _NO_BUS, id="object store-with-no-service-named-its-bus"),
-    ],
-)
-def test_a_development_store_admits_exactly_the_pods_that_dial_it(store: str, overlay: tuple[str, ...]) -> None:
+@pytest.mark.parametrize("store", sorted(_STORES))
+def test_a_development_store_admits_exactly_the_pods_that_dial_it(store: str) -> None:
     """The ingress the chart renders for a development store's servers admits, on its client port, exactly the pods of
     its namespace that dial it, and names no peer that no pod is: a label nobody carries admits whoever takes it."""
     wanted = _STORES[store]
-    docs = _namespace(*overlay)
+    docs = _namespace()
     pods = _pods(docs)
     server = _server(pods, wanted.component)
     peers = _peers([doc for doc in docs if doc.get("kind") == "NetworkPolicy"], server.labels, wanted.port)
@@ -166,8 +151,8 @@ def test_a_development_store_admits_exactly_the_pods_that_dial_it(store: str, ov
     admitted = _admitted(peers, pods) - {server.workload}
     carried_by_no_pod = [way for peer in peers for way in _each_way_in(peer) if not _admitted([way], pods)]
 
-    # The catalog dials every store but a bus it is not named; without it the walk read no pod at all.
-    assert ("Deployment/rask-catalog" in dialers) == (store != "bus" or not overlay), f"{store}: dialers read as {sorted(dialers)}"
+    # The catalog dials every store; without it the walk read no pod at all.
+    assert "Deployment/rask-catalog" in dialers, f"{store}: dialers read as {sorted(dialers)}"
     assert (sorted(admitted - dialers), sorted(dialers - admitted)) == ([], []), f"{store}: admitted and not dialling it, then dialling it and not admitted"
     assert carried_by_no_pod == [], f"{store}: the door admits peers no pod of the namespace is"
 

@@ -157,8 +157,8 @@ def test_every_egress_rule_names_the_peers_it_admits(overlay: str) -> None:
     policies = [doc for doc in chart_render.render(*_OVERLAYS[overlay]) if doc.get("kind") == "NetworkPolicy"]
     rules = [(policy["metadata"]["name"], rule) for policy in policies for rule in policy["spec"].get("egress") or []]
 
-    # The walk reads the isolation layer: default-deny with DNS, the namespace, the Dapr plane, the API server, the Gateway.
-    assert len(rules) >= 5, f"{overlay}: only {len(rules)} egress rules rendered"
+    # The walk reads the isolation layer: default-deny with DNS, the namespace, the API server, the telemetry backend.
+    assert len(rules) >= 4, f"{overlay}: only {len(rules)} egress rules rendered"
     unbounded = [f"{name}: {rule}" for name, rule in rules if not rule.get("to") or any(_admits_everything(peer) for peer in rule["to"])]
     assert unbounded == [], f"{overlay}: egress rules that admit every destination on their ports: {unbounded}"
 

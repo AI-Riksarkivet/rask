@@ -5,19 +5,17 @@ and every first-party service runs as its own ServiceAccount.
 included (a websocket upgrade is a GET), and a pod's own exec, attach or port-forward is the same reach into one pod. No
 first-party pod needs either: the Collector reads pod and node metadata through ordinary reads.
 
-[[XC-076]]. A binding of `secrets: get` to the namespace's `default` ServiceAccount (Dapr's `secretReader` is
-the known case: the dev fixture turns it off, deploy/fixtures/dapr/values.yaml) reaches any pod the chart gives no
-SA of its own, which runs as `default` with its token mounted. Code execution in such a container then reads every
-Secret in the namespace, around the Dapr store's scopes. No sidecar needs the grant: every injected pod disables
-daprd's built-in Kubernetes secret store (`lance.daprSidecarResources`).
+[[XC-076]]. A binding of `secrets: get` to the namespace's `default` ServiceAccount (a subchart or platform chart
+that binds a secret reader to it is the known case) reaches any pod the chart gives no SA of its own, which runs as
+`default` with its token mounted. Code execution in such a container then reads every Secret in the namespace, around
+the secret store's policies.
 
 READ FROM THE RENDER, in the three overlays that ship: the default values, the deployed estate
 (`make k3s-up` layers `values-local.yaml`), and production. A binding is judged by what its role
 grants, so a new subchart that binds a secret-reading role to `default` fails here without anyone
 having listed it.
 
-ONE TEST PER CLOSES-WHEN CLAUSE a render can see: the grants, and one SA per service. The third,
-every sidecar still loading lance-secrets, is read back on the deployed estate; that the dev store its
+ONE TEST PER CLOSES-WHEN CLAUSE a render can see: the grants, and one SA per service. That the dev store its
 readers log in to is seeded before it serves is `test_the_dev_openbao_is_seeded_by_its_own_pod.py`.
 
 MUTATION-CHECKED 2026-10-11 ([[XC-128]]; again with [[XC-130]]). With a template binding a `secrets: get` Role to SA `default` added to the
@@ -91,9 +89,6 @@ _ESTABLISHED = frozenset({"rask-sa-hooks"})
 #: hook's pod still holds its token, and exists only during its own phases.
 _IDENTITY_KINDS = frozenset({"ServiceAccount", "Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"})
 
-_DAPR_ENABLED = "dapr.io/enabled"
-_DAPR_BUILTIN_STORE_OFF = "dapr.io/disable-builtin-k8s-secret-store"
-
 
 class _Pod(BaseModel):
     """One pod template the release runs, reduced to the identity it runs as."""
@@ -107,8 +102,6 @@ class _Pod(BaseModel):
     long_running: bool
     hook_phases: frozenset[str]
     hook_weight: int
-    dapr_injected: bool
-    builtin_secret_store_off: bool
 
 
 class _Binding(BaseModel):
@@ -165,7 +158,6 @@ def _pods(*args: str) -> tuple[_Pod, ...]:
         for template in _templates(doc):
             spec = template.get("spec") or {}
             account = spec.get("serviceAccountName") or "default"
-            annotations = (template.get("metadata") or {}).get("annotations") or {}
             automount = spec.get("automountServiceAccountToken", (service_accounts.get(account) or {}).get("automountServiceAccountToken", True))
             pods.append(
                 _Pod(
@@ -176,8 +168,6 @@ def _pods(*args: str) -> tuple[_Pod, ...]:
                     long_running=doc["kind"] in {"Deployment", "StatefulSet", "DaemonSet"},
                     hook_phases=phases,
                     hook_weight=weight,
-                    dapr_injected=str(annotations.get(_DAPR_ENABLED)).lower() == "true",
-                    builtin_secret_store_off=str(annotations.get(_DAPR_BUILTIN_STORE_OFF)).lower() == "true",
                 )
             )
     return tuple(pods)
@@ -310,9 +300,7 @@ def test_every_first_party_service_runs_as_its_own_service_account(overlay: str)
     admission and its workload never starts, and a hook holds the whole upgrade until its timeout. A
     one-shot Job never borrows a service's identity, no identity (an SA, a role or a binding) is a hook, and a
     first-party pod mounts an API token only when a
-    binding gives its SA something to do with it, since an idle token is only a credential to steal. A
-    tokenless daprd starts only with its built-in Kubernetes secret store off, whose init is fatal without a
-    token. The D1 verifiers (LH-220) validate SA tokens offline against the issuer's JWKS, which the API
+    binding gives its SA something to do with it, since an idle token is only a credential to steal. The D1 verifiers (LH-220) validate SA tokens offline against the issuer's JWKS, which the API
     server serves only to a grant.
     """
     args = _OVERLAYS[overlay]
@@ -344,7 +332,6 @@ def test_every_first_party_service_runs_as_its_own_service_account(overlay: str)
         "an API token no grant uses": sorted(
             f"{pod.workload} ({pod.service_account})" for pod in first_party if pod.token_mounted and pod.service_account not in granted
         ),
-        "daprd that needs a token to start": sorted(pod.workload for pod in pods if pod.dapr_injected and not pod.builtin_secret_store_off),
         "D1 verifiers that cannot read the SA issuer": sorted(verifiers - issuer_readers),
         "issuer discovery granted to `default`": sorted(issuer_readers & {"default"}),
         "identities rendered as hooks": sorted(

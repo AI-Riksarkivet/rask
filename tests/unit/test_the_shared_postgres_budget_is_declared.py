@@ -1,14 +1,13 @@
-"""OpenFGA's connection pool is a declared share of a Postgres three components use, not a driver default.
+"""OpenFGA's connection pool is a declared share of the Postgres it runs on, not a driver default.
 
-[[XC-016]]. `rask-age` serves the lineage graph AND OpenFGA AND Dapr's state store from one server, and
-that server runs Postgres' stock `max_connections=100` — the chart sets nothing. None of the three
-consumers declared a pool bound either, so the estate's whole connection budget was whatever three
-independent driver defaults happened to add up to.
+[[XC-016]]. `rask-age` serves OpenFGA from a server that runs Postgres' stock `max_connections=100` — the
+chart sets nothing — so OpenFGA's pool is a declared share of that server, not whatever its driver's default
+happens to be.
 
 THE ROW'S PREMISE WAS WRONG AND THE MEASUREMENT SAYS SO. It read "every governed read and write blocks
 on a Check against that pool". Sampled 2026-09-23 twelve times over 2.5 minutes, spanning a maintenance
-sweep tick: **28 connections, ALL idle, 0 active, every single sample**; estate-wide 49 of 100
-(openfga 28, daprstate 10, lineage 5, admin 1). There is no contention — raising `maxOpenConns`, which
+sweep tick: **28 connections, ALL idle, 0 active, every single sample**; the server 49 of 100, 21 of
+them held by its other consumers and an operator's session. There is no contention — raising `maxOpenConns`, which
 the row proposed, would change nothing.
 
 WHAT IS REAL IS THE ALLOCATION. One component holds 28% of a shared budget and does no measurable work
@@ -33,9 +32,9 @@ VALUES = REPO / "chart/values.yaml"
 
 #: Postgres' stock ceiling on `rask-age`, which the chart does not override. Measured live 2026-09-23.
 PG_MAX_CONNECTIONS = 100
-#: What the OTHER consumers of this server were measured holding, plus room for an operator's psql.
-#: daprstate 10 + lineage 5 + admin 1, rounded up — neither of those declares a bound of its own yet,
-#: so this is an observation rather than a contract, and it is deliberately generous.
+#: What is kept for every session that is not openfga's pool: its migrate Job, the backup's dump and an operator's psql.
+#: Sized from the 21 connections measured beside openfga's on 2026-09-23, rounded up, so it is an observation rather
+#: than a contract, and it is deliberately generous.
 OTHER_CONSUMERS = 25
 #: The share of the server this arithmetic may claim. A pool can exceed its steady state under burst,
 #: and a refused connection is an outage for every governed read, so the budget is not spent to the rim.

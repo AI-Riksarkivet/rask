@@ -58,7 +58,7 @@ record-store writer; a bump re-runs rask's own writer.
 ## `RUSTFS_ACCESS_KEY_FILE`
 
 The root pair as files from `rask-object-store-root` (`object-store-access-key`, `object-store-secret-key`), which
-ESO writes from rask's dev store (`secret/object-store-root`, which no Dapr app may read): never `env`, where it would be readable in `kubectl get statefulset -o yaml` and
+ESO writes from rask's dev store (`secret/object-store-root`, which no service's store policy names): never `env`, where it would be readable in `kubectl get statefulset -o yaml` and
 `helm get manifest`. Only the `_FILE` pair is set; each is in a clap group with its inline form. The image's
 entrypoint reads each file's first line and refuses an empty or unreadable one. The root secret also signs every STS
 session token, so only this pod and rask's provisioning hook read the Secret.

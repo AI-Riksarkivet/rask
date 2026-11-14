@@ -3,7 +3,7 @@
 > Findings from a read of Lakekeeper's source for its task queues, its events, its process lifecycle and its tests,
 > set against rask's maintenance work queue (ADR 0198), its events (`docs/COMMIT-EVENTS.md`) and its chart. Lakekeeper
 > is the reference, not the stack: every proposal below is stated on rask's own stack (Lance and lance-namespace, NATS
-> JetStream, Dapr while it stays, OpenFGA, Kubernetes) and judged by the four facts, GitOps first. Read 2026-11-09.
+> JetStream, OpenFGA, Kubernetes) and judged by the four facts, GitOps first. Read 2026-11-09.
 > Claims I could not confirm are listed at the end, with where I looked. Paragraphs labelled **Inference** are this
 > note's reasoning, not a source's.
 

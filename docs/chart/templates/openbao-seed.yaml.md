@@ -146,16 +146,11 @@ ONE SECRET PER READER SET ([[XC-165]]): the store grants by secret name, so a fi
 by everyone who may read the bundle. Each secret here has exactly the readers `lance.storeReads` and `lance.esoReads`
 give it, and two readers of one value read one secret, never a copy.
 
-## `bao kv put secret/dapr-app-token token=@"$G/dapr-app-token" >/dev/null`
-
-THE APP-API TOKEN the injector hands each sidecar. ESO alone reads it, writing it into the `<release>-dapr-app-token`
-Secret the sidecar annotation names; no service reads or checks it. One estate-wide token.
-
 ## `bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \`
 
 THE DEVELOPMENT STORE'S ROOT PAIR, at a path of its own and only with `objectStore.enabled`. On RustFS the root
 secret signs every STS session token the store issues (GHSA-m77q-r63m-pj89, intentionally unfixed), so whoever reads it
-can forge any credential the catalog vends (ADR 0168). No Dapr app reads it: no role's policy but ESO's grants it, and
+can forge any credential the catalog vends (ADR 0168). No service reads it: no role's policy but ESO's grants it, and
 ESO writes it into `<release>-object-store-root` for the store and the provisioning hook alone. Both halves sit in one
 object, as the store's non-optional secret volume needs them. No other secret here holds an object-store key: every
 lakehouse workload's store identity is its ServiceAccount token ([[XC-084]], ADR 0170).
@@ -174,7 +169,7 @@ LH-497: the key the catalog derives every announcement's run id under, which onl
 ## `bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kub...`
 
 THE STORE'S KUBERNETES AUTH, which every identity that reads it logs in through: ESO's SecretStore, as the role
-`{{ $.Values.externalSecrets.role }}` bound to ESO's ServiceAccount, and each app (and its sidecar, where one runs), as the role
+`{{ $.Values.externalSecrets.role }}` bound to ESO's ServiceAccount, and each app, as the role
 `<release>-<app id>` bound to that app's ServiceAccount and to the audience its pod's projected token carries
 ([[XC-165]]). Measured 2026-09-08: the operator ran 3/3 with ZERO SecretStores in the cluster while nothing enabled that
 auth backend or created that role, so every ExternalSecret sat in SecretSyncedError, which reads as a broken deploy

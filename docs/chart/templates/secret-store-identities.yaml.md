@@ -13,25 +13,25 @@ the same roles and policies from a production render, and the render gate
 read each secret. They are not in the seed's own ConfigMap because that renders only with `openbao.enabled`, and the
 platform's store needs them most.
 
-## `policy-{{ $role }}.json: {{ include "lance.storePolicy" (list $ $reads.api) | quote }}`
+## `policy-{{ $role }}.json: {{ include "lance.storePolicy" (list $ $reads.api (hasKey ($.Values.openbao.externalReaders | default d...`
 
 EXACTLY THE APP'S READS: the secrets its code reads under its own login (`lakehouse.governed.secrets`), each a named
-KV v2 data path with `read` and nothing else: no list, no other path, no write. The policy also lets the token look itself up and renew
-itself (`auth/token/lookup-self`, `auth/token/renew-self`), which daprd's background renewal needs once the role drops
-the default policy. Zero trust applies to the thing fetching the secrets too.
+KV v2 data path with `read` and nothing else: no list, no other path, no write. The policy also lets the token look itself up
+(`auth/token/lookup-self`), which a service's question about its own token needs once the role drops the default
+policy. A lakehouse service's policy grants no renewal, since a service logs in again and never renews; an external
+reader's does (`auth/token/renew-self`), for a client whose own agent keeps one token alive. Zero trust applies to the thing fetching the secrets too.
 
 ## `role-{{ $role }}.json: {{ dict "bound_service_account_names" (list $reads.sa) "bound_service_account_namespaces" (list $.Release.Namespace) "audience" (include "lance.storeAudience" $) "token_policies" (list $role) "token_ttl" $ttl "token_max_ttl" $maxTtl "token_no_default_policy" true | toJson | quote }}`
 
 THE APP'S OWN ACCOUNT, AND ONLY THE TOKEN PROJECTED FOR THE STORE. The role is `<release>-<app id>`, the name the app's
-environment gives it (`lance.secretStoreEnv`) and the one `lance-secrets` component asks for as `<release>-{appID}`, bound
+environment gives it (`lance.secretStoreEnv`), bound
 to that app's ServiceAccount in the release's namespace and to `openbao.identity.audience`: the kubelet projects a token
-for that audience into the app's container and into daprd (`lance.storeIdentity`), so no other token of the account logs
+for that audience into the app's container (`lance.storeIdentity`), so no other token of the account logs
 in. `token_no_default_policy` keeps the token to its one
 policy (the store's default policy adds cubbyhole, wrapping and the token's own revocation). The token lives
 `openbao.identity.tokenTtl` and at most `tokenMaxTtl`: a service logs in again once half its own token's lease is
-used, on a loop it keeps, uses the held one for nine tenths of the lease while a login is refused, and never renews;
-daprd renews its own in the background and logs in again with its current projected token once
-it can renew no longer (components-contrib#4448, Dapr 1.19). A blank TTL fails the render,
+used, on a loop it keeps, uses the held one for nine tenths of the lease while a login is refused, and never renews.
+A blank TTL fails the render,
 since the store would grant its own default and maximum instead, and so does one outside the minute to the hour a
 service takes a lease in, or in a form the chart cannot read (`lance.storeTokenSeconds`), and a `tokenMaxTtl` under the
 `tokenTtl`, which would have the store issue the shorter of the two. Measured on openbao 2.2.0 through Dagger, 2026-10-18: a
@@ -40,7 +40,7 @@ that app's secret and is refused another's.
 
 ## `policy-{{ $es.role }}.json: {{ include "lance.storePolicy" (list . (include "lance.esoReads" . | fromJsonArray)) | quote }}`
 
-ESO READS EXACTLY WHAT THE CHART'S EXTERNALSECRETS NAME (`lance.esoReads`), for the pods with no sidecar: AGE, OpenFGA, the
-backups, the NATS fixture and each sidecar's app-API token. Its SecretStore logs in with ESO's own pod token
+ESO READS EXACTLY WHAT THE CHART'S EXTERNALSECRETS NAME (`lance.esoReads`), for the pods that do not log in to the store
+themselves: AGE, OpenFGA, the backups and the NATS fixture. Its SecretStore logs in with ESO's own pod token
 (it names no `serviceAccountRef`), so the role binds ESO's account and names no audience. ESO stays one identity for
 every pod it writes for, a residual ADR 0169 names.

@@ -11,7 +11,7 @@ where we are right now, and what's next**. Skim the diagrams; read the section y
 >
 > 📜 **What contract do producers and consumers actually rely on?** See **[`DATA-CONTRACT.md`](DATA-CONTRACT.md)** —
 > "the Lance manifest is the schema, the version is the handshake": the storage/bus/identity
-> contract, its enforcement points, what Dapr+NATS do and don't enforce, and the Lakekeeper comparison.
+> contract, its enforcement points, what NATS does and doesn't enforce, and the Lakekeeper comparison.
 
 
 ---

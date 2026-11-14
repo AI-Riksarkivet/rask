@@ -101,7 +101,7 @@ extend-select = ["TID251", "FAST001"]
 # surviving rule is scoped rather than fixed:
 #   A002   — `filter=`, `id=`, `type=` are the LanceDB/lance-namespace PUBLIC parameter names;
 #            renaming them would break the call contract with the library.
-#   ANN401 — `Any` at the boundaries of pyarrow/lance/dapr, none of which ship precise stubs.
+#   ANN401 — `Any` at the boundaries of pyarrow/lance, neither of which ships precise stubs.
 #   RUF002/3 — typographically correct prose (MINUS SIGN, MULTIPLICATION SIGN, EN DASH) in docstrings
 #            and comments; "fixing" it degrades the writing.
 #   RUF100 — the directives it flags are `# noqa: BLE001` (41) and `# noqa: ANN001` (33), each

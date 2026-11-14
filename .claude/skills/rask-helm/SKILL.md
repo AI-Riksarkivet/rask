@@ -95,8 +95,8 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   answer and … the intended end state". It was deferred, not rejected; ADR 0153 decides it.
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
-  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets dapr nats
-  cloudnative-pg dex rustfs openbao observability marquez`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
+  (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets nats
+  cloudnative-pg dex rustfs openbao observability marquez`: the NATS
   JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
   cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the telemetry chain the Collector exports to ([[XC-127]]), and the OpenLineage graph backend
   `rask-marquez` lineage's forwarder sends to (ADR 0158)). **The Dex fixture** (`deploy/fixtures/dex/chart`) enforces PKCE for every
@@ -121,7 +121,7 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   (XC-192) and are recovered from git history (`64ef118a9`) as each moves to its own repository. A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
-  test can render it through `chart_render.render_fixture`). The e2e lanes install ESO, Dapr and NATS through the same
+  test can render it through `chart_render.render_fixture`). The e2e lanes install ESO and NATS through the same
   script. The §3 handover is automatic: every object the fixture renders that another release (or none) already owns is
   annotated keep and the install takes `--take-ownership`, so run the fixture BEFORE the rask upgrade that stops
   rendering the object. A workload whose selector names the old release (immutable) is re-created instead: a
@@ -240,8 +240,8 @@ provisioned by its operator and attested by `signing.provisioned`).
 
 ## 7. Overridden — do NOT import these from generic Helm advice
 
-The owner's rule, verbatim: *"Never secret through envs. Either from ESO, secret store dapr and STS
-for zero trust."*
+The owner's rule: never a secret through env; a credential comes from ESO, the secret store or STS, for zero
+trust.
 
 | generic advice | here |
 |---|---|
@@ -254,16 +254,11 @@ for zero trust."*
 ## 8. `default` is a shared identity, and a subchart can hand it every Secret
 
 Any pod with no `serviceAccountName` runs as the namespace's `default` SA, and so does every such pod
-of every subchart. A grant to `default` is a grant to all of them. Dapr's chart ships exactly
-that: `dapr_rbac.secretReader` (`enabled: true, namespace: default`) binds `secrets: get` to
-`default`, for daprd's built-in Kubernetes secret store. Measured live 2026-09-25 (audit, read-only),
-while Dapr was still a subchart of rask's release:
-`kubectl auth can-i get secrets --as=system:serviceaccount:default:default` answered yes, and the
-catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mounted token.
+of every subchart. A grant to `default` is a grant to all of them, and a platform chart can ship exactly that: a
+`secrets: get` Role bound to `default` for a built-in secret store of its own. Measured live 2026-09-25 (audit,
+read-only): `kubectl auth can-i get secrets --as=system:serviceaccount:default:default` answered yes, and the catalog,
+lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mounted token.
 
-- **The Dapr control plane is a prerequisite ([[XC-128]]), and the dev fixture sets
-  `dapr_rbac.secretReader.enabled: false`** (deploy/fixtures/dapr/values.yaml). No sidecar uses that store:
-  every injected pod sets `dapr.io/disable-builtin-k8s-secret-store`.
 - **Every first-party pod names its own SA**, and the NATS fixture's server and nats-box run as their own
   (`serviceAccount` values in deploy/fixtures/nats). A shared SA is allowed only where the sharers are one identity
   (`sa-maintenance` for the maintenance service); one-shot Jobs share `sa-jobs`.
@@ -303,9 +298,6 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   (`lance.saAccount`), the token's `sub`, and binds no user to any, and a platform store's operator creates them.
   `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds each workload's token, its policy and the
   store's provider equal.
-- **A tokenless daprd needs `dapr.io/disable-builtin-k8s-secret-store`.** daprd initialises its built-in
-  Kubernetes secret store at boot from the pod's token and treats a failure as fatal, so dropping the
-  annotation from `lance.daprSidecarResources` crash-loops every injected pod (live 2026-07-13).
 - **Changing the dev OpenBao's pod spec empties its store**, because its server keeps it in memory. The server is not
   `server -dev` (which prints its root token and unseal key to its log): it starts uninitialized, and the seed beside
   it initializes it, mints the store's administrator under an id the fixture generates in-cluster (`rask-openbao-root`,
@@ -319,8 +311,8 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   ([[XC-199]], `lakehouse.governed.secrets`; pinned offline by
   `packages/lakehouse/tests/test_a_process_reads_its_secrets_from_the_store_as_itself.py`, and measured on the estate
   2026-11-14, helm rev 8: after `kubectl rollout restart deploy/rask-openbao` all six pods logged in again 22 to 27 s
-  later, none restarted or left Ready, and readiness answered `degraded` for 5 s). No product Component names a secret,
-  so no sidecar holds one, and the store's replacement alone restarts no pod; one that minted a new bus root does (below, docs/OPERATORS.md § 6 and § 7).
+  later, none restarted or left Ready, and readiness answered `degraded` for 5 s). The store's replacement alone
+  restarts no pod; one that minted a new bus root does (below, docs/OPERATORS.md § 6 and § 7).
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
   key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519
   pair (`signing-public-<key name>`, then `signing-key-<key name>`) over from the outgoing pod
@@ -353,21 +345,10 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   rask's SecretStore, so the dev store's ESO policy grants them (`lance.natsFiles`). With the fixture's `nats.auth.server` on, a
   non-surge OpenBao replacement mints a new root that the operator-mode server refuses until the NATS pods restart, which
   empties JetStream: docs/OPERATORS.md § 7 has the switch-over and recovery.
-- **A Dapr Configuration edit reaches a sidecar only when its pod restarts** (HotReload is off), and Helm
-  applies a Deployment before the Configuration it names, so an edit under an unchanged name is loaded
-  stale by a pod that boots first, for its life. A per-app Configuration is therefore NAMED by the hash of
-  its spec, `lance-config-<app>-<10 hex of sha256 of lance.daprAppSpec>` (`lance.daprAppConfigName`, used by
-  the object and by the pod's `dapr.io/config`): an edit renames it, which rolls exactly the pods it changed,
-  and a pod that boots before the new object exists fails closed (daprd exits on a missing named
-  Configuration, Dapr v1.18.1 `pkg/runtime/config.go:252-254`; the injector reads none) and starts once Helm
-  has applied it. Read a pod's Configuration from its `dapr.io/config`, never by a name built from the app-id.
-  The gates: `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` (who may read which secret: no
-  app through its sidecar, whose Configuration denies the secrets API whole, and each role exactly its own at the store) and
-  `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py` (the name follows the spec).
 - **The chart renders no secret store; production names the platform's** ([[XC-149]]): `openbao.enabled` means the
   estate uses the dev OpenBao fixture (a real deployment refuses it), and off it the render requires `openbao.externalAddr`
-  (https only: every service and every sidecar logs in to it with its pod's ServiceAccount token; a store under a
-  private CA names it in `openbao.ca.configMap`, which reaches the services, the sidecars and ESO) and, under
+  (https only: every service logs in to it with its pod's ServiceAccount token; a store under a
+  private CA names it in `openbao.ca.configMap`, which reaches the services and ESO) and, under
   `networkPolicy.enabled`, `openbao.egress`, a rule admitting exactly the pods `lance.secretScopes` names. Setting both is
   refused. The dev store's
   seed stays rask's (owner, 2026-10-16): only rask's values know what to seed.
@@ -383,25 +364,20 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   the secrets its code reads. Each service logs in to the store ITSELF
   ([[XC-199]], `lakehouse.governed.secrets`): Kubernetes auth as its role `<release>-<app>`, which `lance.secretStoreEnv`
   names in its environment (`RASK_SECRET_STORE_ADDR`, `_ROLE`, `_AUTH_MOUNT`, `_KV_MOUNT`, `_TOKEN_FILE`), with a token
-  projected for `openbao.identity.audience` into its own container. The catalog's and lineage's sidecars log in to the
-  same role through the one `lance-secrets` component (`<release>-{appID}`, Dapr 1.19 is the floor) and resolve no
-  secret, since no product Component names one; the maintenance worker runs no sidecar, so `lance.sidecarScopes` leaves
-  it out of the component's scopes; and every Configuration denies the sidecar's secrets API whole, so no secret is
-  served through a sidecar. The table does not hang on `dapr.enabled`: only each service's own bus user (`nats-user-<app>`, which its code reads for its own
-  connection) and maintenance's work-queue user do. Each role's
-  policy reads exactly that app's reads (`lance.storeIdentity` mounts the token). The roles and policies render in every
+  projected for `openbao.identity.audience` into its own container. Each role's
+  policy reads exactly that app's reads, its own bus user `nats-user-<app>` among them (`lance.storeIdentity` mounts the token). The roles and policies render in every
   mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform
   store's operator creates. A new secret a service reads is a row there, or the store's policy refuses its read.
-  A client's sidecar reads through the same table from `openbao.externalReaders` (`<app>: {serviceAccount, secrets}`,
+  A client reads through the same table from `openbao.externalReaders` (`<app>: {serviceAccount, secrets}`,
   supplied from the client's own repository, empty by default), and it is an allowlist: an external reader `<app>` may hold only
   `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`. The render refuses an app id that is
-  no Dapr id, a lakehouse app (catalog, lineage, maintenance, even disabled), one whose own names would cover a family
+  no lowercase name, a lakehouse app (catalog, lineage, maintenance, even disabled), one whose own names would cover a family
   the store issues per identity (`nats-user-<name>` for every user of the issued table, a client's own included,
   `signing-key-<name>`, `signing-public-<name>`), a name ESO, a lakehouse identity or the dev store's seed holds
-  (`nats-root`, `object-store-root`, `postgres`, `dapr-app-token`, `*-s3`, …) or another reader's id, or one whose role
+  (`nats-root`, `object-store-root`, `postgres`, `*-s3`, …) or another reader's id, or one whose role
   `<release>-<app>` is ESO's (`externalSecrets.role`); a ServiceAccount that is no name, one the lakehouse renders
   (`lance.serviceAccounts`) or `default`; and an empty or non-name secret list. An external reader gets a
-  store role and policy but no product Dapr Configuration (`observability.yaml`). The gate is
+  store role and policy. The gate is
   `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 - **OpenFGA and its Postgres are optional, and production names the platform's** ([[XC-132]]): `openfga.enabled` and
   `age.enabled` off, `auth.fgaApiUrl` and `age.externalHost` set (the render refuses either empty). Every FGA client
@@ -410,8 +386,7 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   about OpenFGA lives under `auth`, never under `openfga`.
 - **A real deployment is refused what would expose it** ([[XC-184]]): `templates/prod-credentials.yaml`, on
   `rask.isRealDeployment`, refuses a published dev credential, `auth.enabled=false` (the chart would write the services'
-  `RASK_INSECURE_ALLOW_UNAUTHENTICATED` itself), the Dapr dashboard (off by default; `deploy/values-local.yaml` turns it
-  on), and every platform HTTP address it names that is not https: `auth.fgaApiUrl`, `objectStore.externalEndpoint`,
+  `RASK_INSECURE_ALLOW_UNAUTHENTICATED` itself), and every platform HTTP address it names that is not https: `auth.fgaApiUrl`, `objectStore.externalEndpoint`,
   `vending.endpoint`, `observability.export.endpoint`, `services.lineage.forward.url`. A new platform address joins
   that list with what would cross it. The secret store's and the IdP's https refusals sit in their own helpers.
 - **OpenFGA admits only a projected `rask-openfga` token from a listed ServiceAccount** ([[XC-077]]): OIDC

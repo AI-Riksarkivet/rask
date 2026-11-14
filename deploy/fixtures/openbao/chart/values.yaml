@@ -24,7 +24,6 @@ storeIdentities: rask-secret-store-identities
 # kept, so a credential rask adds is a new Secret and the ones the stores hold are never generated again; the seed reads
 # them as one directory.
 devCredentials:
-  - rask-dev-credential-dapr-app-token
   - rask-dev-credential-object-store-secret-key
   - rask-dev-credential-postgres-password
 resources:

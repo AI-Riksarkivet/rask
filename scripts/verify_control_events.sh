@@ -19,7 +19,7 @@ export RASK_EXPECT_CONTEXT
 #
 # Prereq: kind `lance` up with the stack deployed control-on + auth-on + fga-on, e.g.
 #   make frontend-load
-#   helm upgrade --install lance-ns ./chart --set auth.enabled=true --set dapr.enabled=true
+#   helm upgrade --install lance-ns ./chart --set auth.enabled=true
 #   kubectl rollout restart deploy/lance-ns-dex
 # catalog.controlEmit defaults ON, so the stream Job declares CATALOG_CONTROL and each catalog replica follows it. This
 # script port-forwards read-only; run it OUTSIDE auto mode (or `!`-prefix the invocation).

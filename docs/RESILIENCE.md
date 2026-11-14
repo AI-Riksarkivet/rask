@@ -231,7 +231,7 @@ without it:
 
 ## Prod hardening backlog (delegate-to-platform — NOT dev-blocking)
 
-The 2026-07-05 don't-reinvent audit confirmed we **reinvent nothing k8s/Dapr owns** (zero code to delete), but
+The 2026-07-05 don't-reinvent audit confirmed we **reinvent nothing Kubernetes owns** (zero code to delete), but
 several **native switches are off** — deliberately deferred because they are prod-only (kind's default CNI
 ignores NetworkPolicy) and footgun-sequenced. Full list + fix order in [`docs/adr/0009-12-prod-hardening-backlog-native-switches-off.md`](adr/0009-12-prod-hardening-backlog-native-switches-off.md) §12:
 the big one is **L3 network** (no default-deny; the OpenBao secret store is reachable by any pod today),

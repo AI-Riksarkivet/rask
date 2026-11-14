@@ -101,21 +101,10 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | console.replicas | int | `1` | Replicas of the console's static server. |
 | console.resources | object | `{"limits":{"cpu":"500m","memory":"128Mi"},"requests":{"cpu":"10m","memory":"32Mi"}}` | CPU/memory requests and limits for the console's static server. |
 | console.runAsUser | int | `10001` | The image's non-root uid and gid (`USER 10001` in .docker/frontend.dockerfile), named by number so `runAsNonRoot` can verify it. |
-| dapr.controlPlaneNamespace | string | `"dapr-system"` | Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it. |
-| dapr.dashboard.enabled | bool | `false` | Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. Development only: a real deployment refuses it. |
-| dapr.dashboard.image | string | `"daprio/dashboard:0.15.0"` | Container image for the Dapr dashboard Deployment. |
-| dapr.enabled | bool | `true` | Use Dapr: inject a daprd sidecar into the catalog's and lineage's pods and render rask's Components and Configurations. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. Each service is named its bus (`RASK_BUS_URL`, `RASK_BUS_USER`), and the maintenance worker rendered, under this switch too, so off, none publishes or takes a delivery. |
-| dapr.logLevel | string | `"info"` | daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error). |
-| dapr.maxBodySize | string | `"32Mi"` | Max request body for Dapr service invocation (`dapr.io/max-body-size`); Dapr's own default is 4Mi. |
-| dapr.sidecarResources.cpuLimit | string | `"300m"` | CPU limit for every injected daprd sidecar (`dapr.io/sidecar-cpu-limit`). |
-| dapr.sidecarResources.cpuRequest | string | `"50m"` | CPU request for every injected daprd sidecar (`dapr.io/sidecar-cpu-request`). |
-| dapr.sidecarResources.memoryLimit | string | `"256Mi"` | Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`). |
-| dapr.sidecarResources.memoryRequest | string | `"64Mi"` | Memory request for every injected daprd sidecar (`dapr.io/sidecar-memory-request`). |
-| dapr.sidecarRestricted | bool | `false` | Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`. |
 | dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, and a real deployment refuses it. The chart renders no Dex. |
 | dex.port | int | `5556` | Port of the development Dex's Service. |
 | docs.enabled | bool | `false` | Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster. |
-| externalSecrets.kubernetesAuthPath | string | `"kubernetes"` | Mount path of the store's Kubernetes auth method, which ESO's SecretStore, every service and every sidecar log in through. |
+| externalSecrets.kubernetesAuthPath | string | `"kubernetes"` | Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every service log in through. |
 | externalSecrets.kvMount | string | `"secret"` | Vault/OpenBao KV mount path the SecretStore reads from. |
 | externalSecrets.kvVersion | string | `"v2"` | KV engine version of `kvMount` (`v1` or `v2`). |
 | externalSecrets.namespace | string | `"external-secrets"` | Namespace of the External Secrets Operator ServiceAccount the Vault role is bound to. |
@@ -136,9 +125,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | imagePullSecrets | list | `[]` | List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously. |
 | lifecycle.maintenanceTerminationGracePeriodSeconds | int | `120` | Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed. |
 | lifecycle.preStopSeconds | int | `5` | Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first. |
-| lifecycle.sidecarBlockShutdownSeconds | int | `20` | Seconds the Dapr sidecar keeps running after SIGTERM; must lie between preStopSeconds and the grace period. |
 | lifecycle.teardownSeconds | int | `10` | Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this. |
-| lifecycle.terminationGracePeriodSeconds | int | `40` | Pod grace period in seconds; must be at least preStop + `sidecarBlockShutdownSeconds` + 5 s buffer. |
+| lifecycle.terminationGracePeriodSeconds | int | `40` | Pod grace period in seconds; uvicorn's graceful-shutdown bound is this minus preStopSeconds and teardownSeconds. |
 | maintenance.appId | string | `"maintenance"` | Maintenance's app id: its secret-store role (`<release>-<id>`), the bus user its events are published as (`nats-user-<id>`) and its OTel service. |
 | maintenance.arrivalEnabled | bool | `true` | Run the write-event lane: queue the written table's pass on each announced commit. |
 | maintenance.controlEmit | bool | `false` | Announce each reclamation on the catalog control topic (catalog.control.v1) over the worker's own bus connection. Off by default. |
@@ -210,7 +198,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | objectStore.identity.roleArns.maintenance | string | `"arn:aws:iam::000000000000:role/rask-maintenance"` | The role maintenance's token is exchanged for. |
 | objectStore.identity.sessionSeconds | int | `3600` | How long a workload's session lasts (`*_S3_SESSION_SECONDS`, 900 to 43200 s): a service renews its own at half its life, and a backup run asks for one. |
 | objectStore.port | int | `9000` | S3 API port of the development store's Service. |
-| observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services, Dapr and OpenFGA to it; needs `export.endpoint`. |
+| observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services and OpenFGA to it; needs `export.endpoint`. |
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
 | observability.export.auditHeaders | object | `{}` | Headers added to the export of `lance.audit` records, which leave on their own exporter, so a backend can route the governance trail apart from telemetry. |
 | observability.export.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled. |
@@ -219,16 +207,15 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | observability.export.traceHeaders | object | `{}` | Headers added to the trace export. |
 | observability.lanceLog | string | `"warn,lance::events::file_audit=info,lance::events::dataset_events=info"` | `LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off. |
 | observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
-| observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
-| openbao.ca.configMap | string | `""` | The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and its sidecar and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`. |
+| openbao.ca.configMap | string | `""` | The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`. |
 | openbao.ca.key | string | `"ca.crt"` | The key of `ca.configMap` that holds the CA certificate, in PEM. |
 | openbao.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false. |
 | openbao.enabled | bool | `true` | This estate uses the development store (deploy/fixtures/openbao, Service `<release>-openbao`): in memory, initialized and seeded by the scripts this chart renders (`<release>-openbao-seed`), its administrator token generated in-cluster. A real deployment refuses it. False reads the platform's store at `externalAddr`. |
-| openbao.externalAddr | string | `""` | The platform's Vault or OpenBao (https), which the services, the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`. |
-| openbao.externalReaders | object | `{}` | A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id `<app>`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`; the render refuses an app id that is no Dapr id, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-<name>`, `signing-key-<name>`, `signing-public-<name>`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `<release>-<app>` is ESO's; and a ServiceAccount the lakehouse renders or `default`. |
+| openbao.externalAddr | string | `""` | The platform's Vault or OpenBao (https), which the services and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`. |
+| openbao.externalReaders | object | `{}` | A client that reads the store under a role of its own, keyed by its app id `<app>`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`; the render refuses an app id that is no lowercase name, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-<name>`, `signing-key-<name>`, `signing-public-<name>`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `<release>-<app>` is ESO's; and a ServiceAccount the lakehouse renders or `default`. |
 | openbao.identity.audience | string | `"rask-openbao"` | Audience of the token projected into each pod for its store login; every app's role accepts only this one. |
-| openbao.identity.tokenMaxTtl | string | `"1h"` | The longest a renewed store token lives, at most `1h` and no shorter than `tokenTtl`, in the same forms; daprd then logs in again with its current projected token. |
-| openbao.identity.tokenTtl | string | `"15m"` | Lifetime of the store token a login returns, from `1m` to `1h`, written as `<n>s`, `<n>m` or `<n>h`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it; daprd renews its own in the background. |
+| openbao.identity.tokenMaxTtl | string | `"1h"` | The store's cap on a token a role issues, at most `1h` and no shorter than `tokenTtl`, in the same forms. A lakehouse service never renews (it logs in again, and its policy grants no renewal); the cap bounds a token an external reader or the secrets operator renews. |
+| openbao.identity.tokenTtl | string | `"15m"` | Lifetime of the store token a login returns, from `1m` to `1h`, written as `<n>s`, `<n>m` or `<n>h`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it. |
 | openbao.port | int | `8200` | Port of the development store's Service. |
 | openfga.authn.method | string | `"oidc"` | Subchart passthrough: OpenFGA API authentication method; `oidc` admits only projected ServiceAccount tokens. |
 | openfga.authn.oidc.audience | string | `"rask-openfga"` | Token audience OpenFGA requires; templates/openfga-authn.yaml refuses a render unless it equals `lance.openfgaAudience` (rask-openfga). |
@@ -263,11 +250,11 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | security.infraContexts.enabled | bool | `false` | Applies pinned runAsUser/fsGroup securityContexts to the infra pods (the AGE Postgres). Off by default. |
 | security.readOnlyRootFilesystem | bool | `true` | Read-only root filesystem for every first-party app container; each gets a writable /tmp emptyDir. |
 | security.tmpSizeLimit | string | `"2Gi"` | sizeLimit of each app's /tmp emptyDir (upload spool, Lance spill, OTel queue); stops one pod filling the node's disk. |
-| services.catalog.appId | string | `"catalog"` | The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id. |
+| services.catalog.appId | string | `"catalog"` | The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service. |
 | services.catalog.module | string | `"catalog.main:app"` | uvicorn import path the catalog Deployment runs (templates/services.yaml). |
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
 | services.catalog.replicas | int | `1` | Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count. |
-| services.lineage.appId | string | `"lineage"` | Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id. |
+| services.lineage.appId | string | `"lineage"` | Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service. |
 | services.lineage.deliveriesInFlight | int | `64` | How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `max_ack_pending`, and each replica's bound). |
 | services.lineage.delivery.ackWaitSeconds | int | `300` | The consumer's ack wait, in seconds: how long a delivery a dead replica held waits before another gets it. Lineage cuts a handling 10 s short of it, so the bus never delivers an event beneath a handling still running (LINEAGE_DELIVERY_ACK_WAIT_SECONDS). |
 | services.lineage.delivery.attempts | int | `5` | Deliveries an event is handled on before lineage parks it (LINEAGE_DELIVERY_ATTEMPTS). |

@@ -12,7 +12,7 @@ rask's **own project skills** live in `.claude/skills/` — they describe rask's
 | `rask-styling` | `@rask/ui` — OKLCH tokens, Tailwind 4 `@source`, component authoring |
 | `rask-lance-catalog` | The Lance Namespace spec, the catalog's hierarchy, guards, registries, protection/trash, maintenance |
 | `rask-notifications` | The producer's side of the targeting contract the lakehouse's events publish for any notifier |
-| `rask-dapr` | Which Dapr building blocks the estate uses or refused, and the component-vs-DIY rubric |
+| `rask-dapr` | The ruling that the lakehouse runs no Dapr, and where each need it could meet is met instead |
 | `rask-rustfs` | RustFS as the dev/CI object store: its zero-trust model, S3 behaviour, provisioning, traps |
 | `rask-testing` | rask's pytest wiring, its real-collaborator fixtures, the row rule for adding tests |
 | `rask-helm` | The product chart and its release: the 1 MiB ceiling, upgrade traps, the zero-trust rule |

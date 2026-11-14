@@ -74,7 +74,7 @@ func (m *Rask) provisionLaneStore(ctx context.Context, src *dagger.Directory, st
 	// release of that stack grants.
 	render := `RELEASE=rask . scripts/stack_values.sh && helm template rask ./chart "${HELM_SET[@]}"` +
 		" --api-versions external-secrets.io/v1/ExternalSecret --api-versions generators.external-secrets.io/v1alpha1/Password" +
-		" --api-versions dapr.io/v1alpha1 --show-only templates/object-store-identities.yaml"
+		" --show-only templates/object-store-identities.yaml"
 	_, err := withRenderableChart(m.base(src)).
 		WithServiceBinding(host, store).
 		WithMountedSecret("/run/secrets/rustfs/secret_key", dag.SetSecret("lane-store-root-secret", "rustfsadmin")).

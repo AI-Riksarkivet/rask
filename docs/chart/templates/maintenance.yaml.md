@@ -14,10 +14,10 @@ it against the pod's grace.
 The worker pods: `python -m maintenance.worker`, maintenance's only process, one worker per replica on the shared work
 queue (ADR 0198). It takes its tasks, its fired schedules, the store's change events and, under
 `maintenance.arrivalEnabled`, the commit announcements off the bus on its queue connection (bus user
-`maintenance-worker`), and serves nothing but its probes. Rendered only with `dapr.enabled`: the bus is named to the
-pod only then, for its work queue and for the connection it publishes what a pass emits on. Its bus credentials and its
-signing key it reads from the secret store under its own login. The pod carries no `dapr.io/*` annotation or label: its
-schedules are NATS message schedules on its own work queue. RollingUpdate with no pod
+`maintenance-worker`), and serves nothing but its probes. Rendered with `maintenance.enabled`: the bus is named to the
+pod for its work queue and for the connection it publishes what a pass emits on. Its bus credentials and its
+signing key it reads from the secret store under its own login. Its schedules are NATS message schedules on its own
+work queue. RollingUpdate with no pod
 unavailable: the queue holds one task per table and hands it to one worker at a time, so a surge pod shares the work and
 repeats none.
 

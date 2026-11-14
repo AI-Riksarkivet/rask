@@ -54,7 +54,7 @@ readOnlyWindow: false
 # The peers whose `x-forwarded-*` headers uvicorn may believe, for every pod the cluster route reaches
 # (rendered by rask.proxyHeaderArgs alongside --proxy-headers).
 #
-# 127.0.0.1 is uvicorn's own default: the address of a proxy in the same pod, here the daprd sidecar.
+# 127.0.0.1 is uvicorn's own default: the address of a proxy in the same pod, and no lakehouse pod runs one.
 # The route's proxy is the Gateway's data plane, in another pod on another IP, so at the default every
 # forwarded header from it is ignored and the client IP is the Gateway's: an anonymous rate-limit key is then one
 # bucket for every caller. Set this to the Gateway
@@ -72,7 +72,7 @@ services:
     module: catalog.main:app
     # -- Container and Service port of the Lance catalog.
     port: 2333
-    # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id.
+    # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service.
     appId: catalog
     # -- Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.
     replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
@@ -81,7 +81,7 @@ services:
     module: lineage.main:app
     # -- Container and Service port of the lineage service.
     port: 8000
-    # -- Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service, and, while a sidecar runs, its Dapr app-id.
+    # -- Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service.
     appId: lineage
     # Safe to scale: every replica pulls the one durable consumer `lineage-ingest`, so each event is delivered to one
     # of them, and every record is idempotent anyway: an insert-only merge on the event's key in the feed table lands a
@@ -273,7 +273,7 @@ resources:
     requests: { cpu: 250m, memory: 128Mi }
     limits: { cpu: "1", memory: 512Mi }
   # THE COLLECTOR, which named no tier and therefore silently ran on `default` — 50m CPU — while being
-  # the sole path for every Dapr sidecar's metrics, every infra pod's logs and the whole estate's three
+  # the sole path for OpenFGA's metrics, every infra pod's logs and the whole estate's three
   # signals. Measured 2026-08-23: 45m against a 50m request, i.e. 90% of its request with ~10% headroom.
   # Converging the fleet's OTel env onto this Collector takes it from 10 producers to 16, so this tier is
   # that change's own blast radius rather than an adjacent nicety.
@@ -289,27 +289,13 @@ resources:
     limits: { cpu: "1", memory: 512Mi }
 
 # === Graceful rollouts =============================================================================
-# preStop sleep: endpoint removal must propagate to kube-proxy/the Dapr sidecar BEFORE the app receives
+# preStop sleep: endpoint removal must propagate to kube-proxy and the Gateway BEFORE the app receives
 # SIGTERM, else every rollout connection-refuses in-flight requests (and the apps' /readyz shutting_down
 # branch is dead code). terminationGracePeriodSeconds bounds preStop + the app's own drain; compaction
 # gets a longer budget so an in-flight sweep/Lance write is never SIGKILLed mid-transaction.
 #
-# THE ARITHMETIC, stated rather than implied, because three numbers here have to agree and nothing
+# THE APP'S OWN BOUND, stated rather than implied, because the numbers here have to agree and nothing
 # else forces them to:
-#
-#     terminationGracePeriodSeconds  >=  preStopSeconds              (endpoint removal propagates)
-#                                      + sidecarBlockShutdownSeconds (daprd outlives the app's drain)
-#                                      + buffer (5s)
-#
-# The sidecar term is the one that was missing entirely. `rask.daprAnnotations` said nothing about
-# shutdown, so daprd took its own 5s default — and the kubelet SIGTERMs every container in the pod
-# SIMULTANEOUSLY, so the sidecar was gone before the app's drain window had properly opened. A timer tick
-# still in its handler then ends with an answer no sidecar is left to take.
-#
-# `sidecarBlockShutdownSeconds` must sit BETWEEN the two: longer than preStopSeconds or the sidecar
-# still goes first, shorter than the grace period or the kubelet SIGKILLs it.
-#
-# THE APP'S OWN BOUND, from the same numbers:
 #
 #     uvicorn --timeout-graceful-shutdown  =  the pod's grace - preStopSeconds - teardownSeconds
 #
@@ -332,10 +318,8 @@ resources:
 lifecycle:
   # -- Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first.
   preStopSeconds: 5
-  # -- Pod grace period in seconds; must be at least preStop + `sidecarBlockShutdownSeconds` + 5 s buffer.
+  # -- Pod grace period in seconds; uvicorn's graceful-shutdown bound is this minus preStopSeconds and teardownSeconds.
   terminationGracePeriodSeconds: 40
-  # -- Seconds the Dapr sidecar keeps running after SIGTERM; must lie between preStopSeconds and the grace period.
-  sidecarBlockShutdownSeconds: 20
   # -- Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed.
   maintenanceTerminationGracePeriodSeconds: 120
   # -- Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this.
@@ -368,10 +352,9 @@ security:
   tmpSizeLimit: 2Gi
   # POD IDENTITY is not a value. Every first-party workload runs as its own ServiceAccount
   # (templates/security-sa.yaml), tokenless on the SA object. A first-party pod holds a Kubernetes API
-  # token only when its SA carries a grant it uses: the RBAC-bound Collector, Dapr dashboard and
-  # snapshot pods. `default` is the identity every unnamed pod in the
-  # namespace shares, and a Dapr control plane grants it `secrets: get` unless its `dapr_rbac.secretReader`
-  # is off (deploy/fixtures/dapr/values.yaml). Pinned by
+  # token only when its SA carries a grant it uses: the RBAC-bound Collector and snapshot pods.
+  # `default` is the identity every unnamed pod in the namespace shares, and a subchart or platform chart
+  # may bind `secrets: get` to it. Pinned by
   # tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
   # securityContexts for the INFRA pods (app tier is already hardened via lance.securityContext)
   # + PSA-restricted compliance for the root busybox wait-age init containers (the audit's
@@ -414,7 +397,7 @@ networkPolicy:
   # -- List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination.
   extraEgress: []
   # The pods that call the Kubernetes API (the token verifiers, the dev store's login reviews, the Collector's pod metadata,
-  # the snapshot CronJob, the Dapr dashboard) reach it through these rules and no other pod does. The API server is
+  # the snapshot CronJob) reach it through these rules and no other pod does. The API server is
   # Service-less from a policy's view: the CNI judges the endpoint after the `kubernetes` Service's translation, so
   # state the endpoints `kubectl get endpointslice -n default -l kubernetes.io/service-name=kubernetes` lists, at
   # their port (6443 on k3s and kubeadm, 443 on most managed clusters), e.g.
@@ -1484,58 +1467,6 @@ nats:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.CONSUMER.LIST.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $SYS.REQ.USER.INFO]
         subscribe: [_INBOX.>]
 
-# === Dapr — rask's Components, Configurations and sidecars ========================================
-# The control plane (operator, sentry, placement, scheduler, sidecar injector) is a PREREQUISITE the platform runs
-# once per cluster (ADR 0153), in development the deploy/fixtures/dapr release. The chart renders only rask's own
-# Dapr objects and the sidecar annotations, and refuses to render with `enabled` on when the cluster does not serve
-# dapr.io/v1alpha1. A sidecar delivers nothing to the catalog or lineage: every event is published and taken on the
-# service's own connection to the bus, each fixed timer is a loop of the service's own process, and the maintenance
-# worker runs no sidecar.
-dapr:
-  # -- Use Dapr: inject a daprd sidecar into the catalog's and lineage's pods and render rask's Components and Configurations. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. Each service is named its bus (`RASK_BUS_URL`, `RASK_BUS_USER`), and the maintenance worker rendered, under this switch too, so off, none publishes or takes a delivery.
-  enabled: true
-  # -- Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it.
-  controlPlaneNamespace: dapr-system
-  # -- daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error).
-  logLevel: "info"
-  # Max request body size for Dapr service invocation. Dapr defaults to 4Mi,
-  # which rejects multi-image uploads over service invocation. Raise it
-  # to fit real batches.
-  # -- Max request body for Dapr service invocation (`dapr.io/max-body-size`); Dapr's own default is 4Mi.
-  maxBodySize: "32Mi"
-  # PodSecurity `restricted` compliance for the injected daprd sidecar. OFF by default (prod posture, like
-  # networkPolicy.enabled). Our app containers are already `restricted`-clean (lance.securityContext:
-  # runAsNonRoot + drop:[ALL] + RuntimeDefault); the sidecar is the remaining gap. Turning this on adds the
-  # RuntimeDefault seccomp annotation; the control plane's injector MUST ALSO drop all capabilities
-  # (`dapr_sidecar_injector.sidecarDropALLCapabilities`, a prerequisite setting this chart cannot reach).
-  # NOTE full-namespace `restricted` ENFORCE is still blocked by the OTel Collector (a single Deployment
-  # whose filelog receiver needs hostPath /var/log/pods — `restricted` forbids it, no value fixes it):
-  # give the Collector its own namespace at `baseline`, or a ServiceAccount PSA exemption.
-  # -- Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`.
-  sidecarRestricted: false
-  # The Dapr app-API token is not a value: it is the store's `dapr-app-token`, written by ESO into
-  # `<release>-dapr-app-token` for the injector (templates/external-secrets.yaml), which hands it to each sidecar. No
-  # service reads or checks it: no sidecar delivers anything to a service.
-  # The Dapr dashboard, a web UI over the Dapr resources (components, subscriptions, configurations, the control plane).
-  # A development tool: it authenticates nobody and its ClusterRole reads every pod and its log in the cluster, so a real
-  # deployment refuses it (templates/prod-credentials.yaml) and deploy/values-local.yaml turns it on.
-  dashboard:
-    # -- Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. Development only: a real deployment refuses it.
-    enabled: false
-    # -- Container image for the Dapr dashboard Deployment.
-    image: daprio/dashboard:0.15.0
-  # daprd sidecar resources (first-party keys → the lance.daprSidecarResources annotations). The app
-  # containers are bounded (resources.default); an unbounded daprd on every sidecar'd pod is not.
-  sidecarResources:
-    # -- CPU request for every injected daprd sidecar (`dapr.io/sidecar-cpu-request`).
-    cpuRequest: 50m
-    # -- CPU limit for every injected daprd sidecar (`dapr.io/sidecar-cpu-limit`).
-    cpuLimit: 300m
-    # -- Memory request for every injected daprd sidecar (`dapr.io/sidecar-memory-request`).
-    memoryRequest: 64Mi
-    # -- Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`).
-    memoryLimit: 256Mi
-
 # === OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
 # datastore is the AGE Postgres (it's just postgres), so grants survive a restart. -----------------
 openfga:
@@ -1748,14 +1679,13 @@ openfga:
     # not a side effect of a version bump.
     applyMigrations: false
     waitForMigrations: false
-    # THE SHARE OF A SHARED SERVER, declared rather than inherited ([[XC-016]]). `rask-age` serves the
-    # lineage graph AND openfga AND Dapr's state store from one Postgres running the stock
-    # `max_connections=100` — the chart overrides nothing — and none of the three consumers bounded its
-    # own pool, so the estate's budget was three driver defaults adding up.
+    # THE SHARE OF A SHARED SERVER, declared rather than inherited ([[XC-016]]). `rask-age` serves
+    # openfga from a Postgres running the stock `max_connections=100` — the chart overrides nothing — so
+    # openfga's pool is declared as a share of that server rather than left at the driver's default.
     #
     # MEASURED 2026-09-23, twelve samples over 2.5 minutes spanning a maintenance sweep tick: openfga
-    # held **28 connections, all idle, 0 active, every sample**; estate-wide 49 of 100 (openfga 28,
-    # daprstate 10, lineage 5, admin 1). So there is no contention here, and RAISING the pool — which
+    # held **28 connections, all idle, 0 active, every sample**; the server 49 of 100, 21 of them held
+    # by its other consumers and an operator's session. So there is no contention here, and RAISING the pool — which
     # this row originally proposed — would buy nothing. What is real is that one component holds 28% of
     # a shared budget because pgxpool's default ceiling is 30 and nobody chose it.
     #
@@ -1833,7 +1763,7 @@ dex:
   # -- Port of the development Dex's Service.
   port: 5556
 
-# === The secret store the services, their sidecars and ESO read: the platform's, or the dev OpenBao fixture =====
+# === The secret store the services and ESO read: the platform's, or the dev OpenBao fixture ===================
 # The chart renders no secret store ([[XC-149]], ADR 0153). Production names the platform's Vault or OpenBao; development
 # uses deploy/fixtures/openbao, an in-memory OpenBao that this chart's seed initializes and seeds.
 openbao:
@@ -1841,33 +1771,30 @@ openbao:
   enabled: true
   # -- Port of the development store's Service.
   port: 8200
-  # -- A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id `<app>`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`; the render refuses an app id that is no Dapr id, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-<name>`, `signing-key-<name>`, `signing-public-<name>`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `<release>-<app>` is ESO's; and a ServiceAccount the lakehouse renders or `default`.
+  # -- A client that reads the store under a role of its own, keyed by its app id `<app>`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`; the render refuses an app id that is no lowercase name, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-<name>`, `signing-key-<name>`, `signing-public-<name>`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `<release>-<app>` is ESO's; and a ServiceAccount the lakehouse renders or `default`.
   externalReaders: {}
   # EACH APP LOGS IN AS ITSELF ([[XC-165]], [[XC-199]]). Each lakehouse service logs in to the store with the store's
   # Kubernetes auth method (`externalSecrets.kubernetesAuthPath`), as the role `<release>-<app id>`, presenting a
   # ServiceAccount token the kubelet projects for `audience` into its pod, and reads its own secrets under the store token
   # that login returns, which it holds in memory (`lakehouse.governed.secrets`), and takes one whose lease is a minute to
-  # an hour: a role with no `token_ttl` fails the service's start. Where a sidecar runs (the catalog's and
-  # lineage's) it logs in the same way, through the one `lance-secrets` component (Dapr fills `{appID}` into a
-  # component's metadata), resolves nothing, since no component of this chart names a secret, and serves the app none.
-  # Each role is bound to that app's own ServiceAccount, and its policy reads exactly the secrets the app reads
+  # an hour: a role with no `token_ttl` fails the service's start. Each role is bound to that app's own ServiceAccount, and its policy reads exactly the secrets the app reads
   # (`lance.storeReads`): the dev store's seed writes both, and a
   # platform store's operator creates them from the same render (the `policy-*.json` and `role-*.json` documents of
   # `<release>-secret-store-identities`).
   identity:
     # -- Audience of the token projected into each pod for its store login; every app's role accepts only this one.
     audience: rask-openbao
-    # -- Lifetime of the store token a login returns, from `1m` to `1h`, written as `<n>s`, `<n>m` or `<n>h`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it; daprd renews its own in the background.
+    # -- Lifetime of the store token a login returns, from `1m` to `1h`, written as `<n>s`, `<n>m` or `<n>h`: the render refuses any other, as a service refuses a login with a lease outside it. A service logs in again once half of it is used and uses a token for at most nine tenths of it.
     tokenTtl: 15m
-    # -- The longest a renewed store token lives, at most `1h` and no shorter than `tokenTtl`, in the same forms; daprd then logs in again with its current projected token.
+    # -- The store's cap on a token a role issues, at most `1h` and no shorter than `tokenTtl`, in the same forms. A lakehouse service never renews (it logs in again, and its policy grants no renewal); the cap bounds a token an external reader or the secrets operator renews.
     tokenMaxTtl: 1h
-  # The platform's store is reached over TLS only: every service and every sidecar sends its tokens to it, so the render
-  # refuses an http address. Its certificate is checked against the CA `ca` names, or, with none named, against the public
-  # roots each reader ships with (the services' Python bundle, the sidecar's and ESO's images).
-  # -- The platform's Vault or OpenBao (https), which the services, the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.
+  # The platform's store is reached over TLS only: every service sends its tokens to it, so the render refuses an http
+  # address. Its certificate is checked against the CA `ca` names, or, with none named, against the public roots each
+  # reader ships with (the services' Python bundle and ESO's image).
+  # -- The platform's Vault or OpenBao (https), which the services and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.
   externalAddr: "" # e.g. https://vault.internal:8200
   ca:
-    # -- The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and its sidecar and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`.
+    # -- The ConfigMap in the release's namespace holding the CA certificate the platform store's certificate chains to, for a store under a private CA (a trust-manager Bundle's target, for one). Mounted into each service and named to ESO's SecretStore; empty checks the certificate against public roots; refused beside `enabled`.
     configMap: ""
     # -- The key of `ca.configMap` that holds the CA certificate, in PEM.
     key: ca.crt
@@ -1907,21 +1834,6 @@ openbao:
 # STORE LOSS. A replacement pod with no outgoing pod to carry from mints every identity afresh and the old public
 # keys go with the old store, so an event signed before the loss is refused once enforcement is on (acked and
 # counted); every signer re-resolves within 5 minutes and heals in place.
-#
-# A CONFIGURATION REACHES A SIDECAR THROUGH ITS NAME. daprd reads its Configuration once, at boot
-# (HotReload is off), and Helm applies a Deployment before the dapr.io Configuration it names, so an edit made under an
-# unchanged name is loaded stale by any pod that boots in the gap, for the life of the pod, with every probe green.
-# Each per-app Configuration is therefore named `lance-config-<app>-<first 10 hex of the sha256 of its spec>`
-# (`lance.daprAppConfigName`; the object and the pod's `dapr.io/config` both take it from there) and no checksum
-# annotation exists: the rename is what rolls exactly the pods whose spec changed. A pod that boots before Helm has
-# applied the renamed object names one that does not exist yet, so daprd exits and the kubelet restarts it until it
-# does. Measured in the Dapr v1.18.1 source: pkg/runtime/config.go:252-254 returns the load error, and the default
-# configuration at :256-260 is reached only when no --config was given; cmd/daprd/app/app.go:119-121 is a
-# log.Fatalf; the operator answers a missing object with an error (pkg/operator/api/configurations.go:43-45, a gRPC
-# Unknown that go-grpc-middleware v1.4.0 does not retry, retry/options.go:19, so the exit is immediate); the injector
-# passes the annotation through as `--config <name>` and reads no Configuration but `daprsystem`
-# (pkg/injector/patcher/sidecar_container.go:102-104, pkg/injector/service/pod_patch.go:133-148). Reference a
-# Configuration through the pod's `dapr.io/config`, never by a name built from the app-id.
 #
 # THE STORE HOLDS THE SAME LINE ([[XC-165]]): each service logs in as its own ServiceAccount, and its role's policy reads
 # `signing-key-<key>` only for the app that signs with it, so reaching :8200 without that app's login reads no private key.
@@ -1989,7 +1901,7 @@ externalSecrets:
   kvMount: secret # the Vault KV mount path
   # -- KV engine version of `kvMount` (`v1` or `v2`).
   kvVersion: "v2"
-  # -- Mount path of the store's Kubernetes auth method, which ESO's SecretStore, every service and every sidecar log in through.
+  # -- Mount path of the store's Kubernetes auth method, which ESO's SecretStore and every service log in through.
   kubernetesAuthPath: kubernetes # the Vault Kubernetes auth backend mount
   # -- Vault role the operator's ServiceAccount assumes; also names its read policy.
   role: lance-infra # the Vault role the operator's ServiceAccount assumes (also names its policy)
@@ -2021,7 +1933,7 @@ allocator:
 
 # ==== observability ==========================================================
 # rask's telemetry seam is ONE OpenTelemetry Collector (templates/otel-collector.yaml): it RECEIVES the lakehouse services'
-# OTLP, TAILS infra-pod logs (filelog), SCRAPES the Dapr sidecars, the Dapr control plane and OpenFGA, and
+# OTLP, TAILS infra-pod logs (filelog), SCRAPES OpenFGA, and
 # EXPORTS everything over OTLP/HTTP to the endpoint named here. What stores, graphs and alerts on that telemetry is
 # the platform's (ADR 0153): rask installs no store, no dashboards and no alert evaluator. Its alert rules are an
 # artefact of their own (deploy/alerting/rules.yml), and development gets the chain from
@@ -2035,7 +1947,7 @@ allocator:
 # username, password; the dev OpenBao mints it, a platform store must hold it). GAP, stated: the fixture's GreptimeDB
 # has no user provider, so it ignores the credential.
 observability:
-  # -- Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services, Dapr and OpenFGA to it; needs `export.endpoint`.
+  # -- Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services and OpenFGA to it; needs `export.endpoint`.
   enabled: false
   # -- Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace.
   environment: rask # deployment.environment.name resource attr — override per deploy (dev / staging / prod)
@@ -2066,5 +1978,3 @@ observability:
   # and a create line names its file bare (a manifest's by a placeholder), so the record is whole for data files and manifests.
   # -- `LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off.
   lanceLog: "warn,lance::events::file_audit=info,lance::events::dataset_events=info"
-  # -- Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request.
-  samplingRate: "1" # Dapr trace sampling — full, so the catalog→lineage context always propagates

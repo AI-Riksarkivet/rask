@@ -48,7 +48,7 @@ from test_invariants import _first_party_deployments, _rendered_docs  # noqa: E4
 _TARGET = re.compile(r"^[\w.]+:\w+$")
 
 #: Ambient config that must not leak into the child — the point is the chart's env, not this shell's.
-_SCRUB = ("RASK_", "LANCE_", "LINEAGE_", "OTEL_", "DAPR_")
+_SCRUB = ("RASK_", "LANCE_", "LINEAGE_", "OTEL_")
 
 _CHILD = """
 import importlib, json, sys

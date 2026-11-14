@@ -1,7 +1,7 @@
 """No workload in the chart takes a secret through its environment ([[XC-081]]).
 
-The estate's rule (owner, verbatim): *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
-trust."* Two shapes break it in a pod spec. A `secretKeyRef` env entry injects a Kubernetes Secret into the process
+The estate's rule (owner): never a secret through env; a credential comes from ESO, the secret store or STS, for zero
+trust. Two shapes break it in a pod spec. A `secretKeyRef` env entry injects a Kubernetes Secret into the process
 environment: ESO syncing the value from the secret store fixes where it comes from, not how it is delivered. A literal
 env `value:` holding minted material is worse, since the material then sits in the rendered manifest, the release
 Secret and every GitOps diff. A secret reaches a pod as a mounted file, through the secret store, or not at all (a
@@ -26,7 +26,7 @@ from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_ARGS, PROD_ARGS,
 _MINTED_MATERIAL = re.compile(r"^(?:[0-9a-f]{40}|[A-Za-z0-9]{40})$")
 
 _OVERLAYS = {
-    "default": (*DEFAULT_ARGS, "--set", "dapr.enabled=true", *OBSERVABILITY_ARGS),
+    "default": (*DEFAULT_ARGS, *OBSERVABILITY_ARGS),
     "local": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")),
     "production": PROD_ARGS,
 }

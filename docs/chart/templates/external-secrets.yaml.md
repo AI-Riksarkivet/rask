@@ -19,7 +19,7 @@ credential its server refuses. Each credential is guarded on its own (`$unlocks`
 StatefulSet exists, `object-store-secret-key` while the object store does, which counts only when its StatefulSet and its
 root's Secret, `<release>-object-store-root`, both exist (`$objectStore`). On an upgrade of an estate whose store exists,
 that credential's Secret must already exist: carried forward from the current credential before the first upgrade, and
-rotated in place afterwards (docs/OPERATORS.md 8). A credential no store holds (`dapr-app-token`, or one added later) is
+rotated in place afterwards (docs/OPERATORS.md 8). A credential no store holds (one added later) is
 generated when absent. `lookup` answers only against a cluster, so a cluster-less render and a fresh install, where no
 store exists yet, generate.
 
@@ -69,10 +69,5 @@ The stream Job's NATS credential, the admin user's creds file (values.yaml `nats
 NATS fixture writes nats-box's `monitor` creds and the server's operator-mode and route includes with its own ExternalSecrets.
 
 ## `apiVersion: external-secrets.io/v1`
-
-THE DAPR APP-API TOKEN, for the injector. A pod annotated `dapr.io/app-token-secret: <this>` has the injector hand
-it to its sidecar; no service reads or checks it, since no sidecar delivers anything to its app. Gated on
-`dapr.enabled` or `auth.enabled`, so the annotation's reference cannot dangle. A rotation reaches a sidecar only when
-its pod restarts, since the injector reads the Secret at pod creation (docs/OPERATORS.md).
 
 A third party's credential, provisioned in the store by the operator (values.yaml `secrets`).

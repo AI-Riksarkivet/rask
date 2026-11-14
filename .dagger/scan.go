@@ -151,8 +151,8 @@ func (m *Rask) Audit(
 //
 // The chart is scanned as it RENDERS on a real deployment (scripts/prod_render_check.sh's render, `RENDER_ONLY`), not
 // as a directory: trivy's helm scanner renders `chart/` with no values and no `--api-versions`, which the chart's
-// prerequisite guards refuse, so it skipped the chart with a warning and passed (measured 2026-11-12, trivy 0.73.0:
-// "Skipping chart ... Dapr is a prerequisite"). Scoped to these three deliberately: `trivy config` on the whole repo also
+// prerequisite guards refuse, so it skipped the chart with a warning naming the refused prerequisite and passed
+// (measured 2026-11-12, trivy 0.73.0). Scoped to these three deliberately: `trivy config` on the whole repo also
 // parses every docker-compose file and test fixture, and the resulting noise buries the findings that matter. Needs no
 // image build, so it belongs in the fast PR gate next to Audit.
 func (m *Rask) ScanConfig(

@@ -31,7 +31,7 @@ from tests.unit.test_invariants import _helm_template
 
 def _catalog_env() -> dict[str, str]:
     """The catalog container's rendered environment, on a default-shaped estate."""
-    raw = _helm_template("dapr.enabled=true", "maintenance.enabled=true")
+    raw = _helm_template("maintenance.enabled=true")
     for doc in yaml.safe_load_all(raw):
         if not doc or doc.get("kind") != "Deployment" or not doc["metadata"]["name"].endswith("-catalog"):
             continue

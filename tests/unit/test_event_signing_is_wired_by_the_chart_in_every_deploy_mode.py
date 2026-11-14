@@ -1,6 +1,6 @@
-"""The chart wires event signing the same way in every deploy mode, verifies it where its switches say, and names each Dapr Configuration by its spec.
+"""The chart wires event signing the same way in every deploy mode and verifies it where its switches say.
 
-[[LH-064]], [[XC-078]] (values.yaml `signing:`). Four things the chart decides, each of which fails silently if it is wrong:
+[[LH-064]], [[XC-078]] (values.yaml `signing:`). Three things the chart decides, each of which fails silently if it is wrong:
 
 - The platform's store (`openbao.enabled=false`, `openbao.externalAddr`), which nothing here seeds, mints no key, so every signer would stay not Ready
   and lineage could verify nothing. The render refuses it, naming every secret and the script that creates them, until the
@@ -15,10 +15,6 @@
   refuse what reaches it honestly, or act on what lineage refuses. A mode that verifies is refused at render with no signer at all,
   since such a pod refuses to boot, and with a deployed control-event service no identity holds, since its doors would refuse every
   event that service signs.
-- daprd loads its Configuration once, at boot (HotReload is off), and Helm applies a Deployment before the Configuration it names. A
-  deny-list edit under an unchanged name is therefore loaded stale, for the life of the pod, by any pod that boots in between, with every
-  probe green. A Configuration is named by the hash of its spec instead: a pod that boots before Helm applies the new object finds none
-  and daprd exits (Dapr v1.18.1 pkg/runtime/config.go:252-254) until it exists, and an edit rolls exactly the pods whose list changed.
 """
 
 from __future__ import annotations
@@ -214,87 +210,3 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
     # One expected map for the whole render, so a door host missing a setting, a pod carrying one without hosting a door and a set that
     # differs from the one its door admits all fail on the same diff.
     assert _door_env(docs) == expected, "the doors' settings are not the sets their doors admit, in the asked mode, on exactly the pods that host a door"
-
-
-def _loaded_configurations(docs: tuple[dict, ...]) -> dict[str, tuple[str, dict]]:
-    """`Deployment/name` -> (the Configuration its sidecar is started with, that object's spec), for every pod that names one."""
-    objects = {doc["metadata"]["name"]: doc["spec"] for doc in docs if doc.get("kind") == "Configuration"}
-    loaded: dict[str, tuple[str, dict]] = {}
-    for doc in docs:
-        if doc.get("kind") != "Deployment":
-            continue
-        pod = doc["metadata"]["name"]
-        name = ((doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/config")
-        if name:
-            assert name in objects, f"{pod} starts its sidecar with Configuration {name}, which the render does not contain, so its daprd never boots"
-            loaded[pod] = (name, objects[name])
-    return loaded
-
-
-@pytest.mark.parametrize(
-    ("overlay", "edits"),
-    [
-        # The sidecars' trace sampling is part of every Configuration's spec.
-        pytest.param(("--set-string", "observability.samplingRate=0.25"), True, id="a-value-in-every-spec"),
-        # A secret an app reads is in no Configuration: each denies its sidecar's secrets API whole.
-        pytest.param(("--set", "services.lineage.forward.authSecret.name=probe-forward-auth"), False, id="a-value-in-no-spec"),
-    ],
-)
-def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod_cannot_load_a_stale_one(overlay: tuple[str, ...], edits: bool) -> None:
-    telemetry = ("--set", "observability.enabled=true", "--set-string", "observability.export.endpoint=http://otlp.example:4318")
-    before = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *telemetry))
-    after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *telemetry, *overlay))
-
-    assert before.keys() == after.keys() == {"rask-catalog", "rask-lineage"}, f"the pods that name a Configuration are {sorted(before)}"
-    edited = {pod for pod in before if before[pod][1] != after[pod][1]}
-    renamed = {pod for pod in before if before[pod][0] != after[pod][0]}
-    assert edited == (before.keys() if edits else set()), f"the overlay edited {sorted(edited)}, so one direction below measures nothing"
-    # Helm applies a Deployment before the Configuration it names and daprd reads that Configuration once, at boot: a pod that boots in
-    # between loads whatever already sits under its name. Under a new name there is nothing to load, and daprd exits until Helm applies it.
-    assert not edited - renamed, (
-        f"these pods' Configuration was edited under the name the old one had, so a pod that boots first loads the stale spec: {sorted(edited - renamed)}"
-    )
-    assert not renamed - edited, f"these pods are rolled onto a Configuration whose spec did not change: {sorted(renamed - edited)}"
-
-
-def _loaded_dapr_objects(docs: tuple[dict, ...]) -> dict[str, tuple[str, str]]:
-    """`Deployment/name` -> (its pod's Dapr digest, every Component its sidecar loads), for every Dapr pod.
-
-    An object with no `scopes` is loaded by every sidecar in the namespace."""
-    scoped: list[tuple[list[str], str]] = [(doc.get("scopes") or [], json.dumps(doc, sort_keys=True)) for doc in docs if doc.get("kind") == "Component"]
-    loaded: dict[str, tuple[str, str]] = {}
-    for doc in docs:
-        if doc.get("kind") != "Deployment":
-            continue
-        annotations = (doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}
-        if app := annotations.get("dapr.io/app-id"):
-            objects = sorted(body for scopes, body in scoped if not scopes or app in scopes)
-            loaded[doc["metadata"]["name"]] = (str(annotations.get("checksum/dapr")), "\n".join(objects))
-    return loaded
-
-
-@pytest.mark.parametrize(
-    ("probe", "loaded_by"),
-    [
-        pytest.param("externalSecrets.kvMount=kv2", {"rask-catalog", "rask-lineage"}, id="the-secret-store-every-sidecar-loads"),
-    ],
-)
-def test_a_dapr_object_edit_rolls_exactly_the_pods_whose_sidecar_loads_it(probe: str, loaded_by: set[str]) -> None:
-    """daprd loads its Components once, at boot (HotReload is off), and only a changed pod spec starts a rollout
-    ([[LH-305]], [[XC-164]]): an edit that changed no pod would reach a sidecar only when something else restarted it, which no
-    reconcile does. The secret store is one Component every sidecar loads, so its case edits all of them."""
-    before = _loaded_dapr_objects(chart_render.render(*DEFAULT_ARGS))
-    after = _loaded_dapr_objects(chart_render.render(*DEFAULT_ARGS, "--set", probe))
-
-    edited = {pod for pod in before if before[pod][1] != after[pod][1]}
-    rolled = {pod for pod in before if before[pod][0] != after[pod][0]}
-    assert edited == loaded_by, f"the probe edits what these pods' sidecars load: {sorted(edited)}"
-    assert rolled == edited, f"edited {sorted(edited)}, rolled {sorted(rolled)}: a sidecar whose objects changed keeps the old ones until its pod rolls"
-
-
-def test_every_dapr_object_is_rendered_by_a_template_the_digest_reads() -> None:
-    """`lance.daprDigest` reads the Dapr objects from `dapr-component.yaml`, so a Component rendered by any other template
-    would change no pod's digest, and its edits would reach no sidecar."""
-    sources = {source for source, doc in chart_render.by_source(*DEFAULT_ARGS) if doc["kind"] == "Component"}
-
-    assert sources == {"templates/dapr-component.yaml"}

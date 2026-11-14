@@ -11,8 +11,7 @@ release, before rask's (`make k3s-up`).
 
 The chart takes **no credential as a value** ([[XC-004]]). Every secret lives in a store (the platform's
 Vault or OpenBao in production, the dev OpenBao fixture in development; the next section) and reaches a pod
-from it: a lakehouse service reads its own under its own login to the store, the catalog's and lineage's sidecars
-resolve their components' secrets through the Dapr secret store, and a pod that does neither gets an ExternalSecret. So the **External Secrets
+from it: a lakehouse service reads its own under its own login to the store, and every other pod gets an ExternalSecret. So the **External Secrets
 Operator is a prerequisite**, platform-run like the store, and rask never installs it.
 Install it on its own release first, at the version `deploy/fixtures/external-secrets/fixture.env` names (the one
 rask is tested against; that fixture is also the development install `make k3s-up` runs).
@@ -25,10 +24,10 @@ credentials ESO's Password generator creates in-cluster). A credential passed as
 ## Prerequisite in production: the secret store
 
 The chart renders no secret store ([[XC-149]], ADR 0153). `deploy/values-prod.yaml` sets `openbao.enabled: false`,
-and the deployer names the platform's Vault or OpenBao as `openbao.externalAddr`, over https: every service and every
-sidecar sends its tokens to it, so the render refuses an http address. Its certificate is checked against public roots,
+and the deployer names the platform's Vault or OpenBao as `openbao.externalAddr`, over https: every service sends its
+tokens to it, so the render refuses an http address. Its certificate is checked against public roots,
 or, for a store under a private CA, against the CA the ConfigMap `openbao.ca.configMap` holds, which the chart mounts
-into each service and each sidecar and names to ESO's SecretStore. Under the production NetworkPolicy, `openbao.egress`
+into each service and names to ESO's SecretStore. Under the production NetworkPolicy, `openbao.egress`
 states the store's addresses, and the rule admits only the pods that read it (the apps `lance.secretScopes` lists). The
 render refuses either one empty.
 
@@ -40,23 +39,18 @@ store token that returns in memory and logs in again inside its lifetime, or as 
 longer honours that token ([[XC-199]], `lakehouse.governed.secrets`). It takes a token whose lease is a minute to an
 hour, and the render refuses an `openbao.identity.tokenTtl` or `tokenMaxTtl` outside that range. Each role's policy
 grants its token the question about itself (`auth/token/lookup-self`, as the rendered policy documents do): a service
-asks it of the login it has just made, and its start fails closed while the store refuses it. The
-catalog's and lineage's sidecars log in to their app's role through the one Dapr secret store `lance-secrets`
-(`secretstores.hashicorp.vault`, which names the role `<release>-{appID}`), only for the secrets their components
-resolve; the maintenance worker runs no sidecar. This needs Dapr 1.19 or later,
-the first whose Vault store logs in with Kubernetes auth and renews its session (components-contrib#4448). ESO's SecretStore
+asks it of the login it has just made, and its start fails closed while the store refuses it. ESO's SecretStore
 `<release>-vault` logs in as the role `externalSecrets.role`, bound to ESO's ServiceAccount.
 
 THE ROLES AND POLICIES THE PLATFORM'S STORE MUST HOLD. The chart renders them in every mode, as the documents the dev
 store's seed applies (`<release>-secret-store-identities`, keys `role-<name>.json` and `policy-<name>.json`):
 one role per app that reads the store, `<release>-<app id>`, bound to that app's ServiceAccount in the release's namespace,
-taking only the projected audience, and holding one policy that reads exactly the secrets the app and its components read
-(`lance.storeReads`), plus ESO's role and its policy, which reads exactly the secrets the chart's ExternalSecrets name. A
-role a sidecar cannot log in to fails that sidecar's start closed. A service logs in to the store before it serves,
+taking only the projected audience, and holding one policy that reads exactly the secrets the app reads
+(`lance.storeReads`), plus ESO's role and its policy, which reads exactly the secrets the chart's ExternalSecrets name.
+A service logs in to the store before it serves,
 whichever secrets it goes on to read, and one the store never admits fails its own start closed once its boot budget
 (about two minutes) is spent; with the store named it also refuses to start on an object-store key pair, which no
-acknowledgement lifts. Each app's Dapr Configuration denies its sidecar's secrets API whole, so no secret is served
-through a sidecar.
+acknowledgement lifts.
 
 THE SECRETS THE STORE MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
 unprovisioned secret is a fail-closed outage at first use, not a fallback. Each secret has exactly the readers it is for:
@@ -69,8 +63,6 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   that trust and those policies; on AWS it is an IAM OIDC provider and one role per account
   (`objectStore.identity.roleArns.<component>`), its trust policy naming the subject and its permission policy the
   ConfigMap's document.
-- `dapr-app-token` (field `token`; docs/OPERATORS.md § 8): the app-API token, read by ESO alone, which writes it into
-  the `<release>-dapr-app-token` Secret the injector hands each sidecar. No service reads or checks it.
 - `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
   every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
@@ -90,23 +82,6 @@ so its secret is given to no service. The object store holds none either: verify
 client id, and RustFS reads an OIDC client secret from env alone (no `_FILE` variant,
 `.claude/skills/rask-rustfs/references/security.md` § Web identity), so a store given one would carry a credential in
 its environment.
-
-## Prerequisite: the Dapr control plane
-
-The catalog's and lineage's pods run a Dapr sidecar, so a
-**Dapr control plane is a prerequisite** (ADR 0153), installed once per cluster by the platform, as Dapr documents,
-in `dapr-system`. The chart renders only rask's own Dapr objects (the secret-store Component `lance-secrets` and the
-Configurations) and the sidecar annotations of the catalog's and lineage's pods; with `dapr.enabled` on it refuses to render for a cluster that does not
-serve `dapr.io/v1alpha1` (a cluster-less `helm template` names it: `--api-versions dapr.io/v1alpha1`). Name the
-control plane's namespace in `dapr.controlPlaneNamespace` (default `dapr-system`): the Collector scrapes it there,
-and under NetworkPolicy every rask pod may reach it.
-
-What the control plane must provide, and the version rask is tested against, are in `deploy/fixtures/dapr` (the
-development install `make k3s-up` runs): Dapr 1.19 (1.19.0-rc.4 until its GA release; 1.19 is the floor, since each
-sidecar's store login needs its Kubernetes auth); an injector that fails closed (`webhookFailurePolicy: Fail`)
-scoped to pods labelled `dapr.io/enabled: "true"`, which rask stamps; no `dapr_rbac.secretReader`; Sentry mTLS on.
-In production also HA (`global.ha.enabled`) and an injector that drops every sidecar capability
-(`dapr_sidecar_injector.sidecarDropALLCapabilities`), the pair to rask's `dapr.sidecarRestricted`.
 
 ## Prerequisite: NATS JetStream
 
@@ -163,7 +138,7 @@ reference (`auth.oidc.issuer`, https, and the lakehouse's own `auth.oidc.audienc
 issues to the clients it trusts; `objectStore.externalEndpoint`, https, with the store trusting the cluster's
 ServiceAccount issuer for `objectStore.identity.audience` and holding each workload's canned policy from
 `<release>-object-store-identities`; `openbao.externalAddr`, https).
-A real deployment's render also refuses authentication off, the Dapr dashboard, and every other platform address it
+A real deployment's render also refuses authentication off and every other platform address it
 names over http (`vending.endpoint`, `observability.export.endpoint`, `services.lineage.forward.url`), each with what
 would cross it (`chart/templates/prod-credentials.yaml`, [[XC-184]]).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
@@ -175,7 +150,7 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
   store, one replica on the claim `data-rask-rustfs-0`, S3 on 9000 and the dev NodePort 30900, the upstream
   `rustfs/rustfs` image pinned by digest. `objectStore.enabled` says the estate uses it: rask's dev store issues its
   root pair (`object-store-access-key`/`object-store-secret-key` in `rask-object-store-root`, through ESO from
-  `secret/object-store-root`, which no Dapr app may read), which the server reads as files, never env; rask's
+  `secret/object-store-root`, which no service's store policy names), which the server reads as files, never env; rask's
   provisioning hook (`object-store-provisioning`, on rask's own image) creates its buckets and writes each identity's
   policy (`<release>-object-store-identities`) through RustFS's admin API, and its pruning run removes every user and
   rask policy git does not declare. Its server starts once
@@ -303,12 +278,12 @@ address, token, scrape job, alert or network peer (ADR 0189).
   that is Gateway policy, not route (ADR 0165).
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
   OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA); see *Prerequisites in production*.
-- **Its own configuration of what it does not run**: the Dapr Components and Configurations, the NATS stream
+- **Its own configuration of what it does not run**: the NATS stream
   Job (its streams and durable consumers), the ExternalSecrets and SecretStore, the object store's bucket and user hooks, and the dev OpenBao's seed scripts.
 - **The OTel Collector**, with `observability.enabled` (see below).
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
-`deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, Dapr, NATS, the CloudNativePG operator,
+`deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, NATS, the CloudNativePG operator,
 Dex, RustFS, OpenBao, the telemetry chain and the lineage graph backend. It installs no client; a client's own
 repository supplies its values to a lakehouse install with `-f`. A platform brings its own.
 
@@ -324,6 +299,12 @@ repository supplies its values to a lakehouse install with `-f`. A platform brin
   app id or any name another identity holds), `networkPolicy.objectStoreExtraFrom` and `nats.auth.users`. A client's
   roles on the catalog are grants to its ServiceAccount made at the catalog's access doors ([[LH-563]]), which no
   values file holds.
+- **A client's store login is a published contract.** An `openbao.externalReaders` entry `<app>` gets the store role
+  `<release>-<app>`: Kubernetes auth, bound to the entry's ServiceAccount, for a token of the audience
+  `openbao.identity.audience`, under a policy that reads exactly the entry's secrets and may renew its token. A client
+  whose pods run an agent of their own beside them (a sidecar and its control plane) ships that agent's objects and,
+  under `networkPolicy.enabled`, the NetworkPolicy admitting its pods to its control plane: the product's default-deny
+  selects every pod in the namespace and the product chart admits none to one.
 
 ### The first estate admin
 
@@ -347,7 +328,7 @@ the empty string disables dynamic provisioning, which is why the templates use `
 
 rask's telemetry seam is one **OTel Collector** (`chart/templates/otel-collector.yaml`, `rask-otel-collector`),
 the **single log shipper** (Vector retired, owner ruling 2026-07-27). It receives the fleet's OTLP, tails
-infra-pod logs (filelog), scrapes the Dapr sidecars, the Dapr control plane and OpenFGA, and exports
+infra-pod logs (filelog), scrapes OpenFGA, and exports
 everything over OTLP/HTTP to **`observability.export.endpoint`**, with the backend's ingestion headers from
 `observability.export.{headers,traceHeaders,auditHeaders}` and HTTP basic auth from the store's
 `otel-collector-export` secret (via ESO, as mounted files).

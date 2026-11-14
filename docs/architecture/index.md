@@ -52,7 +52,7 @@ flowchart TB
   `the-lakehouse-knows-no-client`). A compute engine, its companions and a workload's model environment are clients
   outside this repository.
 - **State** is the Lance tables on S3 (RustFS in development), lineage's among them, plus Postgres for OpenFGA. The
-  Helm chart in `chart/` deploys rask's own services; Dapr, NATS, the object store, the secret store and the
+  Helm chart in `chart/` deploys rask's own services; NATS, the object store, the secret store and the
   observability store are prerequisites the platform runs.
 
 ## In this section

@@ -36,10 +36,6 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 #: this address.
 NATS_URL = "nats://bus.example.com:4222"
 
-#: The placeholder daprd fills with its pod's name in a Component value (Dapr 1.18.1 `pkg/runtime/meta/meta.go:88-93`): a
-#: durable carrying it is one each replica names for itself ([[LH-305]]).
-POD_NAME = "{podName}"
-
 #: The API server's address as a platform states it to the NetworkPolicy ([[XC-143]]): a documentation range, so no
 #: other peer a render holds can be mistaken for it.
 API_SERVER_CIDR = "192.0.2.10/32"
@@ -61,8 +57,8 @@ BUS_CIDR = "198.51.100.30/32"
 GRAPH_URL = "https://lineage-graph.example.com"
 GRAPH_CIDR = "203.0.113.40/32"
 
-#: The prerequisites a render names: the APIs the chart checks through `.Capabilities`, the External Secrets Operator
-#: ([[XC-004]]) and Dapr ([[XC-128]]), the NATS bus's address ([[XC-129]]), and the platform's Gateway the routes attach
+#: The prerequisites a render names: the API the chart checks through `.Capabilities`, the External Secrets Operator
+#: ([[XC-004]]), the NATS bus's address ([[XC-129]]), and the platform's Gateway the routes attach
 #: to (ADR 0165). Under `networkPolicy.enabled` the egress to
 #: the API server, the telemetry backend, an external OpenFGA and, on a real deployment, the platform's store, bus and IdP is
 #: the platform's to state too ([[XC-143]], [[XC-202]]). A cluster-less render names the cluster it targets. Without them
@@ -70,7 +66,6 @@ GRAPH_CIDR = "203.0.113.40/32"
 PREREQ_ARGS: tuple[str, ...] = (
     "--api-versions", "external-secrets.io/v1/ExternalSecret",
     "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
-    "--api-versions", "dapr.io/v1alpha1",
     "--set-string", f"nats.url={NATS_URL}",
     "--set-json", 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]',
     "--set-json", f'networkPolicy.apiServerEgress=[{{"to":[{{"ipBlock":{{"cidr":"{API_SERVER_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":6443}}]}}]',

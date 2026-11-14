@@ -140,85 +140,12 @@ data:
         retry_on_failure: { enabled: true }
         operators:
           - type: container
-          # daprd is the ONLY container here with BOTH a fixed schema (dapr.io/log-as-json, set in
-          # _helpers.tpl) and no OTLP twin — Dapr registers a NullExporter for its own signals. Parse it so
-          # `WHERE severity_text = 'ERROR'` finds a sidecar failure and `scope`/`app_id` become queryable.
-          #
-          # SCOPED TO THAT CONTAINER ON PURPOSE. Every other stream on this node has its own shape (NATS,
-          # OpenFGA, CloudNativePG, the Dapr control plane, Dex, uvicorn); an unscoped parser — or the
-          # recombine this deliberately does NOT add — corrupts them. `send_quiet`, not the `send` default:
-          # a JSON line without `level` would otherwise raise once per record.
-          #
-          # `^\\{` needs BOTH backslashes. `^\{` is not a lax pattern, it is a hard startup failure:
-          # `failed to compile expression: invalid char escape` and the Collector exits 1 for the estate.
-          - type: json_parser
-            if: 'resource["k8s.container.name"] == "daprd" and body matches "^\\{"'
-            on_error: send_quiet
-            parse_from: body
-            parse_to: attributes
-            severity:
-              parse_from: attributes.level
-      # Dapr sidecar metrics (:9090). Discover dapr.io/enabled pods, scrape
-      # the dapr-metrics port only (the container port NAME), so app ports don't produce duplicate targets.
       prometheus:
         config:
           scrape_configs:
-            - job_name: dapr-sidecars
-              scrape_interval: 30s
-              kubernetes_sd_configs:
-                - role: pod
-                  namespaces: { names: [{{ .Release.Namespace }}] }
-              relabel_configs:
-                - source_labels: [__meta_kubernetes_pod_annotation_dapr_io_enabled]
-                  action: keep
-                  regex: "true"
-                - source_labels: [__meta_kubernetes_pod_container_port_name]
-                  action: keep
-                  regex: dapr-metrics
-                - source_labels: [__meta_kubernetes_namespace]
-                  target_label: namespace
-                - source_labels: [__meta_kubernetes_pod_name]
-                  target_label: pod
-            # Dapr CONTROL PLANE metrics (:9090) — a SECOND job, because the sidecar job above cannot
-            # reach them: it keeps only pods annotated `dapr.io/enabled=true`, and a control-plane pod
-            # carries `dapr.io/control-plane=<component>` instead. So every control-plane metric was
-            # unscraped, and an alert written on one would have been a rule that can never fire.
-            #
-            # The scheduler is the one that matters. Since Dapr 1.15 REMINDERS
-            # live in the scheduler's own etcd, not in the actor state store — verified on this cluster:
-            # `dapr-scheduler-server` is a 3-replica StatefulSet with a 16 Gi etcd PVC. So it is a
-            # failure domain that can be lost INDEPENDENTLY of the data its reminders bound, and the
-            # symptom of a lost reminder is SILENCE: a lease that never expires, a publish that never
-            # re-drives. `ActorStateTTL` is off on this estate, so there
-            # is no TTL backstop underneath it either.
-            #
-            # `dapr_scheduler_sidecars_connected` is the only Dapr-specific metric the scheduler
-            # exposes (verified against a live pod — the other 38 families are Go runtime/process), and
-            # it is the right one: it counts sidecars that can actually be served, so zero means no
-            # reminder can fire for anyone.
-            - job_name: dapr-control-plane
-              scrape_interval: 30s
-              kubernetes_sd_configs:
-                - role: pod
-                  namespaces: { names: [{{ .Values.dapr.controlPlaneNamespace }}] }
-              relabel_configs:
-                - source_labels: [__meta_kubernetes_pod_annotation_dapr_io_control_plane]
-                  action: keep
-                  regex: ".+"
-                - source_labels: [__meta_kubernetes_pod_container_port_name]
-                  action: keep
-                  regex: metrics
-                - source_labels: [__meta_kubernetes_pod_annotation_dapr_io_control_plane]
-                  target_label: dapr_control_plane
-                - source_labels: [__meta_kubernetes_namespace]
-                  target_label: namespace
-                - source_labels: [__meta_kubernetes_pod_name]
-                  target_label: pod
-            # OPENFGA (:2112) — a THIRD job, because the two above cannot reach it: `dapr-sidecars` and
-            # `dapr-control-plane` both `keep` on a `dapr.io/*` pod annotation at their first relabel
-            # step, and an OpenFGA pod carries neither, so they drop it before any later rule runs.
-            # Every governed read and write in this estate blocks on a Check, so a slow or
-            # datastore-thrashing authz store is the first thing an operator needs to see.
+            # OPENFGA (:2112), the one pod the Collector scrapes: every governed read and write in this
+            # estate blocks on a Check, so a slow or datastore-thrashing authz store is the first thing an
+            # operator needs to see.
             #
             # CARDINALITY IS BOUNDED BEFORE IT LANDS. The store's ceiling is shared, and what matters is
             # UNBOUNDED, not merely large: a family whose series set grows with the workload (per
@@ -270,7 +197,6 @@ data:
             - >-
               resource.attributes["lance.dev/logs"] == "otlp"
               and attributes["log.file.path"] != nil
-              and resource.attributes["k8s.container.name"] != "daprd"
               and IsMatch(body, "^[0-9]{4}-[0-9]{2}-[0-9]{2} ")
       filter/audit_only:
         error_mode: ignore
@@ -283,11 +209,6 @@ data:
           log_record:
             - 'instrumentation_scope.name == "lance.audit"'
       batch: {}
-      filter/drop_keepalive:
-        error_mode: ignore
-        traces:
-          span:
-            - 'name == "/TaskHubSidecarService/Hello"'
     exporters:
       otlphttp/traces:
         endpoint: {{ $endpoint | quote }}
@@ -333,7 +254,7 @@ data:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, k8sattributes, filter/drop_keepalive, batch]
+          processors: [memory_limiter, k8sattributes, batch]
           exporters: [otlphttp/traces]
         metrics:
           receivers: [otlp, prometheus]

@@ -20,9 +20,9 @@ Services (ClusterIP):
   - openfga:   {{ include "lance.openfgaUrl" . }} (authorization model{{ if not .Values.openfga.enabled }}; the platform's OpenFGA{{ end }})
 {{- end }}
 {{- if .Values.openbao.enabled }}
-  - openbao:   {{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} (the openbao fixture's development secret store, read by each service under its own login, by each sidecar for its components, and by ESO)
+  - openbao:   {{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} (the openbao fixture's development secret store, read by each service under its own login and by ESO)
 {{- else }}
-  - secrets:   {{ include "lance.platformStoreAddr" . }} (the platform's secret store, read by each service under its own login, by each sidecar for its components, and by ESO)
+  - secrets:   {{ include "lance.platformStoreAddr" . }} (the platform's secret store, read by each service under its own login and by ESO)
 {{- end }}
 {{- with .Values.dex }}
 {{- if .enabled }}
@@ -50,11 +50,6 @@ Observability (rask's OTel Collector; the store, dashboards and alerting are the
   - collector:  {{ include "lance.fullname" $root }}-otel-collector:4318 (OTLP/HTTP in; also tails infra pod logs)
   - export:     {{ .Values.observability.export.endpoint }}
   - rules:      deploy/alerting/rules.yml, for the platform's alert evaluator
-{{- end }}
-
-{{- if include "lance.daprDashboardEnabled" $root }}
-
-Dapr dashboard:  kubectl port-forward svc/{{ include "lance.fullname" $root }}-dapr-dashboard 8080:8080
 {{- end }}
 
 {{- with .Values.auth }}

@@ -32,61 +32,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: {{ $component }}
 {{- end -}}
 
-{{- define "rask.daprPodLabels" -}}
-{{- if .Values.dapr.enabled -}}
-dapr.io/enabled: "true"
-{{- end }}
-{{- end -}}
-
-{{- define "rask.daprAnnotations" -}}
-{{- $root := index . 0 -}}
-{{- $appId := index . 1 -}}
-{{- $appPort := index . 2 -}}
-{{- $block := int $root.Values.lifecycle.sidecarBlockShutdownSeconds -}}
-{{- if $root.Values.dapr.enabled -}}
-dapr.io/enabled: "true"
-dapr.io/app-id: {{ $appId | quote }}
-dapr.io/app-port: {{ $appPort | quote }}
-dapr.io/log-level: {{ $root.Values.dapr.logLevel | quote }}
-dapr.io/log-as-json: "true"
-{{- with $root.Values.dapr.maxBodySize }}
-dapr.io/max-body-size: {{ . | quote }}
-{{- end }}
-dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
-checksum/dapr: {{ include "lance.daprDigest" (list $root $appId) | quote }}
-dapr.io/block-shutdown-duration: {{ printf "%ds" $block | quote }}
-{{- include "lance.daprSidecarResources" $root | nindent 0 }}
-
-{{- if $root.Values.dapr.enabled }}
-
-{{- if has $appId (splitList "," (include "lance.secretScopes" $root)) }}
-dapr.io/config: {{ include "lance.daprAppConfigName" (list $root $appId) | quote }}
-{{- include "lance.storeIdentity" (list $root $appId "annotation") }}
-{{- else }}
-dapr.io/config: "lance-tracing"
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end -}}
-
-{{- define "lance.daprDigest" -}}
-{{- $root := index . 0 -}}
-{{- $appId := index . 1 -}}
-{{- $loaded := list -}}
-{{- range $doc := splitList "\n---" (include (print $root.Template.BasePath "/dapr-component.yaml") $root) -}}
-{{- $object := fromYaml $doc -}}
-{{- $scopes := get $object "scopes" | default list -}}
-{{- if and (eq (get $object "kind" | toString) "Component") (or (not $scopes) (has $appId $scopes)) -}}
-{{- $loaded = append $loaded (toJson $object) -}}
-{{- end -}}
-{{- end -}}
-{{- join "\n" $loaded | sha256sum | trunc 16 -}}
-{{- end -}}
-
-{{- define "lance.daprOtlpTarget" -}}
-{{- if .Values.observability.enabled -}}{{ include "lance.fullname" . }}-otel-collector:4318{{- end -}}
-{{- end -}}
-
 {{- define "rask.otelResourceAttrs" -}}
 {{- $o := .Values.observability -}}
 {{- printf "service.namespace=rask,deployment.environment.name=%s,service.version=%s" ($o.environment | default .Release.Namespace) .Chart.AppVersion -}}
@@ -193,13 +138,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $clients := list -}}
 {{- range (include "lance.objectStoreIdentities" . | fromJsonArray) }}
 {{- if ne . "maintenance" }}{{- $clients = append $clients . }}
-{{- else if $.Values.dapr.enabled }}{{- $clients = append $clients "maintenance-worker" }}{{- end }}
+{{- else }}{{- $clients = append $clients "maintenance-worker" }}{{- end }}
 {{- end -}}
 {{- toJson $clients -}}
 {{- end -}}
 
 {{- define "lance.busClients" -}}
-{{- toJson (append (ternary (splitList "," (include "lance.secretReaderComponents" .) | compact) list .Values.dapr.enabled) "nats-stream") -}}
+{{- toJson (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "nats-stream") -}}
 {{- end -}}
 
 {{- define "lance.platformEgress" -}}
@@ -210,7 +155,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if $v.openbao.enabled }}{{- $api = append $api "openbao" }}{{- end -}}
 {{- if $v.observability.enabled }}{{- $api = append $api "otel-collector" }}{{- end -}}
 {{- if $v.backups.volumeSnapshot.enabled }}{{- $api = append $api "object-store-backup" }}{{- end -}}
-{{- if include "lance.daprDashboardEnabled" . }}{{- $api = append $api "dapr-dashboard" }}{{- end -}}
 {{- if $api -}}
 {{- $rows = append $rows (dict "name" "apiserver" "value" "networkPolicy.apiServerEgress" "rules" $v.networkPolicy.apiServerEgress "reaches" "the Kubernetes API server's endpoints, at the port a policy sees after the kubernetes Service's translation" "components" $api) -}}
 {{- end -}}
@@ -242,10 +186,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.observability.enabled -}}true{{- end -}}
 {{- end -}}
 
-{{- define "lance.daprDashboardEnabled" -}}
-{{- if and .Values.dapr.enabled .Values.dapr.dashboard.enabled -}}true{{- end -}}
-{{- end -}}
-
 {{- define "lance.vaultAddr" -}}
 {{- if .Values.openbao.enabled -}}http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}
 {{- else -}}{{ include "lance.platformStoreAddr" . }}
@@ -261,7 +201,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "lance.platformStoreAddr" -}}
 {{- $addr := required "openbao.enabled is false, so the secret store is the platform's: set openbao.externalAddr to its Vault or OpenBao (https; docs/architecture/deployment.md, Prerequisites)" .Values.openbao.externalAddr -}}
 {{- if not (hasPrefix "https://" $addr) -}}
-{{- fail (printf "openbao.externalAddr is %q: every service and every sidecar sends its ServiceAccount token and its store token to it, so the platform's secret store is reached over https only" $addr) -}}
+{{- fail (printf "openbao.externalAddr is %q: every service sends its ServiceAccount token and its store token to it, so the platform's secret store is reached over https only" $addr) -}}
 {{- end -}}
 {{- $addr -}}
 {{- end -}}
@@ -354,7 +294,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "lance.devCredentials" -}}
 {{- $root := . -}}
 {{- $out := dict -}}
-{{- range $key := list "object-store-secret-key" "postgres-password" "dapr-app-token" -}}
+{{- range $key := list "object-store-secret-key" "postgres-password" -}}
 {{- $_ := set $out $key (printf "%s-dev-credential-%s" (include "lance.fullname" $root) $key) -}}
 {{- end -}}
 {{- $out | toJson -}}
@@ -372,20 +312,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.objectStore.enabled }}{{- $_ := set $files "object-store-bus-creds" (list "nats-user-object-store") }}{{- end }}
 {{- end -}}
 {{- toJson $files -}}
-{{- end -}}
-
-{{- define "lance.daprSidecarResources" -}}
-{{- $r := .Values.dapr.sidecarResources -}}
-dapr.io/sidecar-cpu-request: {{ $r.cpuRequest | quote }}
-dapr.io/sidecar-cpu-limit: {{ $r.cpuLimit | quote }}
-dapr.io/sidecar-memory-request: {{ $r.memoryRequest | quote }}
-dapr.io/sidecar-memory-limit: {{ $r.memoryLimit | quote }}
-
-dapr.io/disable-builtin-k8s-secret-store: "true"
-{{- if .Values.dapr.sidecarRestricted }}
-
-dapr.io/sidecar-seccomp-profile-type: RuntimeDefault
-{{- end }}
 {{- end -}}
 
 {{- define "lance.otelEnv" -}}
@@ -692,7 +618,7 @@ buckets as the estate's reads already are. */ -}}
 
 {{- define "lance.serviceAccounts" -}}
 {{- $root := . -}}{{- $fullname := include "lance.fullname" . -}}
-{{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-dapr-dashboard" $fullname) (printf "%s-otel-collector" $fullname) -}}
+{{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-otel-collector" $fullname) -}}
 {{- range (include "lance.saComponents" . | fromJsonArray) }}{{- $names = append $names (include "lance.saName" (list $root .)) }}{{- end -}}
 {{- if .Values.console.enabled }}{{- $names = append $names (include "lance.saName" (list $root "console")) }}{{- end -}}
 {{- toJson $names -}}
@@ -898,7 +824,6 @@ activeDeadlineSeconds: 1800
 {{- $v := .Values -}}{{- $root := . -}}
 {{- $reads := dict -}}
 {{- with $v.services.lineage.forward.authSecret.name }}{{- if not (regexMatch (include "lance.secretNamePattern" $root) (toString .)) }}{{- fail (printf "services.lineage.forward.authSecret.name: %q is no secret name (a path or a wildcard would widen lineage's store policy)" (toString .)) }}{{- end }}{{- end -}}
-{{- $dapr := $v.dapr.enabled -}}
 {{- $sa := printf "%s-sa-" (include "lance.fullname" .) -}}
 {{- $doors := ne (($v.signing).doors | toString) "off" -}}
 {{- $everySigner := list -}}
@@ -906,10 +831,10 @@ activeDeadlineSeconds: 1800
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat (ternary (list (printf "nats-user-%s" $v.services.catalog.appId)) list $dapr) (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))))
-  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat (ternary (list (printf "nats-user-%s" $v.services.lineage.appId)) list $dapr) (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce)))) -}}
+  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat (list (printf "nats-user-%s" $v.services.catalog.appId) "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))))
+  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat (list (printf "nats-user-%s" $v.services.lineage.appId)) (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce)))) -}}
 {{- if $v.maintenance.enabled -}}
-{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat (ternary (list "nats-user-maintenance-worker") list $dapr) (ternary (list (printf "nats-user-%s" $v.maintenance.appId)) list (and $dapr (or $v.maintenance.lineageEmit $v.maintenance.controlEmit))) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled)))) -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat (list "nats-user-maintenance-worker") (ternary (list (printf "nats-user-%s" $v.maintenance.appId)) list (or $v.maintenance.lineageEmit $v.maintenance.controlEmit)) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled)))) -}}
 {{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}
@@ -917,12 +842,12 @@ activeDeadlineSeconds: 1800
 {{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api) -}}
 {{- end -}}
 {{- end -}}
-{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "openbao-seeded" "commit-id-key" "otel-collector-export" "object-store-root" "postgres" "dapr-app-token") -}}
+{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "openbao-seeded" "commit-id-key" "otel-collector-export" "object-store-root" "postgres") -}}
 {{- range $reads }}{{- $held = concat $held .api }}{{- end -}}
 {{- $lakehouseApps := list $v.services.catalog.appId $v.services.lineage.appId $v.maintenance.appId -}}
 {{- $external := $v.openbao.externalReaders | default dict -}}
 {{- range $app, $reader := $external -}}
-{{- if not (regexMatch "^[a-z][a-z0-9-]{0,62}$" $app) }}{{- fail (printf "openbao.externalReaders: %q is no Dapr app id" $app) }}{{- end -}}
+{{- if not (regexMatch "^[a-z][a-z0-9-]{0,62}$" $app) }}{{- fail (printf "openbao.externalReaders: %q is no app id" $app) }}{{- end -}}
 {{- if has $app $lakehouseApps }}{{- fail (printf "openbao.externalReaders: %q is the lakehouse's own app" $app) }}{{- end -}}
 {{- $own := printf "%s-" $app -}}
 {{- $claims := list -}}
@@ -949,7 +874,6 @@ activeDeadlineSeconds: 1800
 {{- $reads := list "postgres" -}}
 {{- if $v.objectStore.enabled }}{{- $reads = append $reads "object-store-root" }}{{- end -}}
 {{- if $v.observability.enabled }}{{- $reads = append $reads "otel-collector-export" }}{{- end -}}
-{{- if or $v.dapr.enabled $v.auth.enabled }}{{- $reads = append $reads "dapr-app-token" }}{{- end -}}
 {{- range $files := include "lance.natsFiles" . | fromJson }}{{- $reads = concat $reads $files }}{{- end -}}
 {{- toJson ($reads | uniq | sortAlpha) -}}
 {{- end -}}
@@ -960,7 +884,8 @@ activeDeadlineSeconds: 1800
 
 {{- define "lance.storePolicy" -}}
 {{- $mount := (index . 0).Values.externalSecrets.kvMount -}}
-{{- $paths := dict "auth/token/lookup-self" (dict "capabilities" (list "read")) "auth/token/renew-self" (dict "capabilities" (list "update")) -}}
+{{- $paths := dict "auth/token/lookup-self" (dict "capabilities" (list "read")) -}}
+{{- if index . 2 }}{{- $_ := set $paths "auth/token/renew-self" (dict "capabilities" (list "update")) }}{{- end -}}
 {{- range (index . 1) }}{{- $_ := set $paths (printf "%s/data/%s" $mount .) (dict "capabilities" (list "read")) }}{{- end -}}
 {{- toJson (dict "path" $paths) -}}
 {{- end -}}
@@ -969,9 +894,7 @@ activeDeadlineSeconds: 1800
 {{- $root := index . 0 -}}{{- $appId := index . 1 -}}{{- $part := index . 2 -}}
 {{- if hasKey (include "lance.storeReads" $root | fromJson) $appId -}}
 {{- $ca := include "lance.storeCaConfigMap" $root -}}
-{{- if eq $part "annotation" }}
-dapr.io/volume-mounts: "openbao-identity:{{ dir (include "lance.storeTokenFile" $root) }}{{ if $ca }},secret-store-ca:{{ dir (include "lance.storeCaFile" $root) }}{{ end }}"
-{{- else if eq $part "mounts" }}
+{{- if eq $part "mounts" }}
 - { name: openbao-identity, mountPath: {{ dir (include "lance.storeTokenFile" $root) }}, readOnly: true }
 {{- if $ca }}
 - { name: secret-store-ca, mountPath: {{ dir (include "lance.storeCaFile" $root) }}, readOnly: true }
@@ -1040,17 +963,9 @@ dapr.io/volume-mounts: "openbao-identity:{{ dir (include "lance.storeTokenFile" 
 {{- $components := list -}}
 {{- range (splitList "," (include "lance.secretScopes" .) | compact) -}}
 {{- if not (and $.Values.maintenance.enabled (eq . $.Values.maintenance.appId)) }}{{- $components = append $components . }}
-{{- else if $.Values.dapr.enabled }}{{- $components = append $components "maintenance-worker" }}{{- end -}}
+{{- else }}{{- $components = append $components "maintenance-worker" }}{{- end -}}
 {{- end -}}
 {{- $components | uniq | sortAlpha | join "," -}}
-{{- end -}}
-
-{{- define "lance.sidecarScopes" -}}
-{{- $apps := list -}}
-{{- range (splitList "," (include "lance.secretScopes" .) | compact) -}}
-{{- if not (and $.Values.maintenance.enabled (eq . $.Values.maintenance.appId)) }}{{- $apps = append $apps . }}{{- end -}}
-{{- end -}}
-{{- join "," $apps -}}
 {{- end -}}
 
 {{- define "lance.allocatorEnv" -}}
@@ -1064,51 +979,6 @@ dapr.io/volume-mounts: "openbao-identity:{{ dir (include "lance.storeTokenFile" 
 {{- with $root.Values.observability.lanceLog }}
 - { name: LANCE_LOG, value: {{ . | quote }} }
 {{- end -}}
-{{- end -}}
-
-{{- define "lance.daprConfigSpecBody" -}}
-  {{- /**/}}
-  features:
-    - name: HotReload
-      enabled: false
-{{- if include "lance.otelEnabled" . }}
-  tracing:
-    samplingRate: {{ .Values.observability.samplingRate | quote }}
-{{- with include "lance.daprOtlpTarget" . }}
-    otel:
-      endpointAddress: {{ . | quote }}
-      isSecure: false
-      protocol: http
-      timeout: "30s"
-{{- end }}
-{{- end }}
-  metrics:
-    enabled: true
-    recordErrorCodes: true
-    http:
-      increasedCardinality: false
-      pathMatching:
-        - "/v1.0/state/{storeName}"
-        - "/v1.0/publish/{pubsubName}/{topic...}"
-        - "/v1.0/actors/{actorType}/{actorId}/method/{method}"
-  logging:
-    apiLogging:
-      enabled: true
-      obfuscateURLs: true
-      omitHealthChecks: true
-{{- end -}}
-
-{{- define "lance.daprAppSpec" -}}
-{{- $cfgRoot := index . 0 -}}{{- $app := index . 1 -}}
-{{- include "lance.daprConfigSpecBody" $cfgRoot }}
-  secrets:
-    scopes:
-      - storeName: lance-secrets
-        defaultAccess: deny
-{{- end -}}
-
-{{- define "lance.daprAppConfigName" -}}
-{{- printf "lance-config-%s-%s" (index . 1) (include "lance.daprAppSpec" . | sha256sum | trunc 10) -}}
 {{- end -}}
 
 {{- define "lance.signers" -}}
@@ -1127,7 +997,7 @@ dapr.io/volume-mounts: "openbao-identity:{{ dir (include "lance.storeTokenFile" 
 {{- $keys := list -}}
 {{- range (include "lance.signers" (first .) | fromJsonArray) }}
 {{- if or (eq (len $) 1) (eq .app (index $ 1)) }}
-{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" .key) }}{{- fail (printf "signing key name %q must match ^[a-z0-9][a-z0-9-]*$: it becomes a shell word, an OpenBao path and a Dapr URL segment" .key) }}{{- end }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" .key) }}{{- fail (printf "signing key name %q must match ^[a-z0-9][a-z0-9-]*$: it becomes a shell word and an OpenBao path" .key) }}{{- end }}
 {{- $keys = append $keys .key }}
 {{- end }}
 {{- end -}}

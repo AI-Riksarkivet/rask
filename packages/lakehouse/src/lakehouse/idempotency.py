@@ -1,8 +1,8 @@
 """Converge a REPLAYED write onto the caller's key instead of executing it twice.
 
 WHY THIS EXISTS (§ Q17-32). A write door's failure is replayed by whoever sent it — a client's retry,
-a pipeline's re-run, a request the Gateway's data plane timed out. No Dapr policy replays it, because
-no service invokes the catalog through Dapr. And `python-infrastructure`'s rule
+a pipeline's re-run, a request the Gateway's data plane timed out. No service of the estate replays it,
+because none calls the catalog through a retrying mesh. And `python-infrastructure`'s rule
 offers exactly two outs: *"Always pair retry with an idempotency key OR mark the operation
 non-retryable"*. A replay the estate does not send is not one it can mark, so this is the first: a
 key makes a replay — a 503, a proxy timeout, a client retry — converge rather than

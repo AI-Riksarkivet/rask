@@ -1,6 +1,6 @@
 {{- if .Values.age.enabled }}
-# Apache AGE Postgres — OpenFGA's datastore (db 'openfga'). Lineage keeps no database (ADR 0158), and the lakehouse no
-# Dapr state store. initdb scripts (alphabetical) load AGE into the bootstrap database, then create OpenFGA's.
+# Apache AGE Postgres — OpenFGA's datastore (db 'openfga'). Lineage keeps no database (ADR 0158). initdb scripts
+# (alphabetical) load AGE into the bootstrap database, then create OpenFGA's.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -18,7 +18,7 @@ data:
     -- ...AND the schema must EXIST, which the line above does not give it. `shared_preload_libraries = age`
     -- loads AGE into EVERY backend in the cluster and its hook dereferences ag_catalog, so in a database
     -- without the extension every DROP fails with `schema "ag_catalog" does not exist` (SQLSTATE 3F000) —
-    -- measured 2026-08-15: CREATE TABLE succeeded and DROP TABLE failed here and in the Dapr state db,
+    -- measured 2026-08-15: CREATE TABLE succeeded and DROP TABLE failed here and in a second database without it,
     -- while the same round-trip passed in the lineage db, the only one that had the extension.
     -- That is what wedged OpenFGA at schema v5 (migration 006 drops an index) and failed every upgrade.
     -- Removing age from shared_preload_libraries is not an option; AGE requires it.

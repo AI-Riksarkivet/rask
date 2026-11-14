@@ -6,8 +6,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `{{- range $c := include "lance.saComponents" . | fromJsonArray }}`
 
 ONE ServiceAccount PER FIRST-PARTY SERVICE, each with automountServiceAccountToken: false on the
-SA object, so a pod holds a Kubernetes API token only where its own spec asks for one. The Dapr
-injector's projected Sentry token is a separate volume and is unaffected.
+SA object, so a pod holds a Kubernetes API token only where its own spec asks for one.
 These SAs carry no grant except issuer discovery below; a pod that calls the API keeps its own
 RBAC-bound SA in its template. The list (`lance.saComponents`) names each component the chart runs, and a key under `.Values.services` adds
 none, so a release's values cannot render an identity for a service the chart does not run, such as a client's key a

@@ -3,8 +3,8 @@
 rask is configured through environment variables, read by each service's
 `Settings` (pydantic-settings, through the `lakehouse` library) from the process environment.
 In-cluster, the chart renders them from `chart/values.yaml` into each Deployment's `env`, and every
-credential reaches a pod from the secret store (a service's own login to it, the Dapr secret
-store for its sidecar's components, or an ExternalSecret), never as a chart value. A local `.env`
+credential reaches a pod from the secret store (a service's own login to it, or an
+ExternalSecret), never as a chart value. A local `.env`
 is git-ignored and never committed.
 
 ## Identity and authorization (every governed service)
@@ -27,7 +27,7 @@ The catalog's own settings carry the `LANCE_` prefix (`services/catalog/src/cata
 | Variable | Purpose |
 |---|---|
 | `LANCE_REST_IMPL` / `LANCE_REST_ROOT` | The namespace implementation and the object-store root it serves. |
-| `LANCE_LINEAGE_EMIT_ENABLED` | Announce every committed write on lineage (off in the code default, on in the chart). |
+| `LANCE_LINEAGE_EMIT_ENABLED` | Announce every committed write on lineage (off in the code default, always on in the chart). |
 | `LANCE_LINEAGE_TRANSPORT` / `LANCE_LINEAGE_TOPIC` | How the announcement travels: `bus` (the chart's: published on the topic, on the catalog's own connection) or `http` (a direct POST to lineage). |
 | `LANCE_LINEAGE_OUTBOX_URI` | Stage each lineage event in the object store before publishing it. |
 | `LANCE_CONTROL_EMIT_ENABLED` | Broadcast the catalog's control-plane mutations on `catalog.control.v1`. |

@@ -24,7 +24,6 @@ import re
 import subprocess
 import urllib.parse
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
@@ -67,7 +66,7 @@ def test_every_first_party_deployment_is_hardened() -> None:
     """The docs claim "every Deployment has probes + preStop". The gateway had NEITHER (audit 2026-07-14).
 
     An "every" claim in prose is worth nothing; this loop is what makes it true. It renders the chart and
-    checks each FIRST-PARTY Deployment (third-party subcharts — dapr/nats/openfga/dex — are not ours to
+    checks each FIRST-PARTY Deployment (third-party subcharts — nats/openfga/dex — are not ours to
     template). preStop matters most on the gateway: it is the INGRESS, so without a drain delay a rolling
     update drops in-flight requests while kube-proxy is still routing to the terminating pod.
 
@@ -166,39 +165,30 @@ def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name() -> None:
     assert "" not in buckets and len(buckets) == len(set(buckets)), f"the hook is told to create {buckets}"
 
 
-def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
-    """Fail-closed sidecar injection is only safe if the two markers stay in lockstep.
-
-    Dapr's injector is a mutating webhook shipping `failurePolicy: Ignore`: a pod created while the injector is
-    unreachable is SILENTLY admitted with no daprd container, and nothing recreates it (a CrashLoopBackOff restarts
-    the container inside the same pod), so every governed app in one publishes nothing and takes no delivery and no
-    tick. The Dapr control plane is a prerequisite ([[XC-128]]) whose injector fails closed, scoped by an
-    `objectSelector` to the `dapr.io/enabled` LABEL (deploy/fixtures/dapr; read back on the live webhook), and rask's
-    chart stamps that label. An annotation without the label is never sent to the webhook, so the pod is silently
-    un-injected again: every pod template carrying the annotation must carry the label.
-    """
-    import yaml
-
-    rendered = _helm_template()
-    docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
-
-    annotated = 0
-    missing: list[str] = []
-    for doc in docs:
-        template = (doc.get("spec") or {}).get("template") if isinstance(doc.get("spec"), dict) else None
-        if not isinstance(template, dict):
-            continue
-        meta = template.get("metadata") or {}
-        if (meta.get("annotations") or {}).get("dapr.io/enabled") != "true":
-            continue
-        annotated += 1
-        if (meta.get("labels") or {}).get("dapr.io/enabled") != "true":
-            missing.append(f"{doc.get('kind')}/{(doc.get('metadata') or {}).get('name')}")
-    assert annotated, "no pod template asks for a Dapr sidecar — this guard would pass vacuously"
-    assert not missing, (
-        "these pod templates want a sidecar (dapr.io/enabled ANNOTATION) but do not carry the matching "
-        f"LABEL, so the fail-closed webhook skips them and they come up un-injected: {missing}"
-    )
+@pytest.mark.parametrize(
+    "mode",
+    [
+        pytest.param(chart_render.DEFAULT_ARGS, id="default"),
+        pytest.param((*chart_render.DEFAULT_ARGS, *chart_render.OBSERVABILITY_ARGS, "--set", "networkPolicy.enabled=true"), id="observed-and-isolated"),
+        pytest.param(("-f", str(REPO / "deploy/values-local.yaml"), *chart_render.DEFAULT_ARGS), id="local"),
+        pytest.param(chart_render.PROD_ARGS, id="production"),
+    ],
+)
+def test_no_lakehouse_pod_runs_a_sidecar_and_the_chart_renders_no_dapr_object(mode: tuple[str, ...]) -> None:
+    """The lakehouse runs no Dapr ([[XC-199]]): each service publishes and takes its deliveries on its own bus connection,
+    reads its secrets under its own store login and runs its timers in its own process. So no rendered object is of a
+    `dapr.io` kind, and no object or pod template carries a `dapr.io/` annotation or label, which an injector in the
+    cluster would answer with a sidecar."""
+    found: list[str] = []
+    for doc in chart_render.render(*mode):
+        name = f"{doc.get('kind')}/{(doc.get('metadata') or {}).get('name')}"
+        if str(doc.get("apiVersion", "")).startswith("dapr.io/"):
+            found.append(f"{name}: apiVersion {doc['apiVersion']}")
+        template = chart_render.pod_template(doc)
+        for where, meta in (("", doc.get("metadata") or {}), (" pod", (template or {}).get("metadata") or {})):
+            for part in ("annotations", "labels"):
+                found += [f"{name}{where} {part[:-1]} {key}" for key in (meta.get(part) or {}) if str(key).startswith("dapr.io/")]
+    assert found == []
 
 
 #: A render whose images come from a registry off this node — which `prod-credentials.yaml` reads as a
@@ -507,16 +497,16 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
     assert not bus, f"the render runs part of a NATS bus, which is the platform's: {bus}"
 
 
-def test_the_catalog_is_switched_to_publish_only_where_it_is_named_a_bus() -> None:
+def test_the_catalog_is_switched_to_publish_on_the_bus_it_is_named() -> None:
     """The catalog refuses to start switched to emit on the bus and named none (its settings' own check), and the chart
-    names the bus only under `dapr.enabled`: a render with it off switches the emission off as well, since switched on
-    it would be a catalog that never starts."""
+    names it the bus `nats.url` holds in every render: its lineage announcements are always on, and its control events
+    follow `catalog.controlEmit`."""
     told = {}
-    for label, extra in (("default", ()), ("no bus named", ("dapr.enabled=false", "catalog.controlEmit=false"))):
+    for label, extra in (("default", ()), ("control off", ("catalog.controlEmit=false",))):
         docs = tuple(_rendered_docs(*extra))
         [env] = [env for _, _, container in chart_render.containers(docs) if "LANCE_LINEAGE_TRANSPORT" in (env := chart_render.env_of(container))]
-        told[label] = (env["LANCE_LINEAGE_EMIT_ENABLED"], env["LANCE_CONTROL_EMIT_ENABLED"], env.get("RASK_BUS_URL"))
-    assert told == {"default": ("true", "true", chart_render.NATS_URL), "no bus named": ("false", "false", None)}
+        told[label] = (env["LANCE_LINEAGE_EMIT_ENABLED"], env["LANCE_LINEAGE_TRANSPORT"], env["LANCE_CONTROL_EMIT_ENABLED"], env.get("RASK_BUS_URL"))
+    assert told == {"default": ("true", "bus", "true", chart_render.NATS_URL), "control off": ("true", "bus", "false", chart_render.NATS_URL)}
 
 
 @pytest.mark.parametrize("stand_in", ["dex", "rustfs", "openbao"])
@@ -565,10 +555,9 @@ def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_pla
     fga_urls = {env[k] for _, _, c in chart_render.containers(docs) for k in ("RASK_FGA_API_URL", "FGA_API_URL") if k in (env := chart_render.env_of(c))}
     assert fga_urls == {fga}, fga_urls
 
-    [secrets] = [doc for doc in docs if doc.get("kind") == "Component" and doc["spec"]["type"].startswith("secretstores.")]
-    named = {row["value"] for row in secrets["spec"]["metadata"] if row["name"] == "vaultAddr"}
-    named |= {doc["spec"]["provider"]["vault"]["server"] for doc in docs if doc.get("kind") == "SecretStore"}
-    assert named == {store}, f"the Dapr secret store and ESO's SecretStore read {named}, not the store the deployment names"
+    named = {doc["spec"]["provider"]["vault"]["server"] for doc in docs if doc.get("kind") == "SecretStore"}
+    named |= {env["RASK_SECRET_STORE_ADDR"] for _, _, c in chart_render.containers(docs) if "RASK_SECRET_STORE_ADDR" in (env := chart_render.env_of(c))}
+    assert named == {store}, f"the services and ESO's SecretStore read {named}, not the store the deployment names"
     peer = {"ipBlock": {"cidr": chart_render.SECRET_STORE_CIDR}}
     admitting = [
         doc["spec"]["podSelector"]
@@ -594,80 +583,6 @@ def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_pla
         if isinstance(value, str) and "://" in value and urllib.parse.urlsplit(value).password
     )
     assert not leaked, f"a credential rides in an env value rather than by reference: {leaked}"
-
-
-def _lance_tracing_config(rendered: str) -> dict[str, Any] | None:
-    """The one Dapr `Configuration` every sidecar references, or None if it did not render."""
-    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
-        if doc and doc.get("kind") == "Configuration" and doc.get("metadata", {}).get("name") == "lance-tracing":
-            spec: dict[str, Any] = doc.get("spec") or {}
-            return spec
-    return None
-
-
-def test_the_sidecars_non_telemetry_config_survives_telemetry_being_off() -> None:
-    """A sidecar may reference exactly ONE `dapr.io/config`, so everything per-sidecar lives in one
-    object, and only its tracing stanza is about telemetry. Metric cardinality and api-logging bound the
-    sidecar's `:9090` exposition and its log stream, which both exist whether or not this estate ships a
-    collector, so a bound that vanishes with telemetry is not a bound.
-
-    ASSERTING THE LITERAL KEY NAMES IS THE WHOLE POINT, and it is the only gate there is. Helm does not
-    request strict field validation, so `increasedCardinallity`, `recordErrorCode` or `obfuscateUrls`
-    would render, apply CLEANLY, and be silently pruned by the API server — no error, no warning, no
-    chart-visible signal. The symptom is "the setting had no effect", which is the same shape as the
-    NullExporter defect this file already guards. Measured against the live k3s CRD: a strict-validating
-    client rejects those three, and `--validate=ignore` (what Helm gets) stores the object with every
-    typo dropped.
-
-    `metric` (singular) is a real CRD key with a byte-identical schema and no stated precedence; daprd
-    merges plural over singular field-by-field, so writing both would make that merge the only tiebreak.
-    Plural only, asserted.
-    """
-    spec = _lance_tracing_config(_helm_template("observability.enabled=false"))
-
-    assert spec is not None, "the Configuration vanished with telemetry — every sidecar's config reference now dangles"
-    assert "tracing" not in spec, "tracing must still drop out when telemetry is off"
-
-    metrics = spec.get("metrics")
-    assert isinstance(metrics, dict), (
-        f"no spec.metrics stanza with telemetry off (keys: {sorted(spec)}) — the sidecar still scrapes at :9090, so its cardinality bound must not be otel-gated"
-    )
-    assert "metric" not in spec, (
-        "the legacy singular `metric:` key is also set — daprd merges the two field-by-field, so the manifest no longer says what is in force"
-    )
-    assert metrics.get("enabled") is True, "spec.metrics.enabled is REQUIRED by the CRD — without it the API server refuses the object outright"
-    assert metrics.get("recordErrorCodes") is True, (
-        "recordErrorCodes must sit under `metrics:`, NOT under `metrics.http:` — under http it is an unknown field and is pruned in silence"
-    )
-
-    http = metrics.get("http")
-    assert isinstance(http, dict), "spec.metrics.http is missing"
-    assert http.get("increasedCardinality") is False, (
-        "increasedCardinality is not pinned false. At the upstream default the sidecar stamps the raw remainder of a "
-        "service-invocation URL onto the `path` label — measured live: "
-        'dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/<app-id>/method/<route with its ids>"} — which is one '
-        "series per table, namespace and project id, forever."
-    )
-
-    patterns = http.get("pathMatching")
-    assert isinstance(patterns, list), "pathMatching must be a YAML sequence of strings; a map is refused by the API server"
-    assert patterns, "pathMatching is empty, so every path collapses to the empty label"
-    for pattern in patterns:
-        assert not pattern.startswith("/v1.0/invoke/"), (
-            f"{pattern!r} is a service-invocation pattern. daprd auto-registers an invoke twin for every OTHER entry here "
-            "and registers the lot on a real http.ServeMux, which PANICS at startup on conflicting patterns. One "
-            "Configuration serves every app-id, so that is the whole fleet crash-looping — triggered by a later one-line "
-            "edit adding `/` or a bare `/{x...}` to this same list."
-        )
-
-    api_logging = (spec.get("logging") or {}).get("apiLogging")
-    assert isinstance(api_logging, dict), "spec.logging.apiLogging is missing"
-    assert api_logging.get("obfuscateURLs") is True, (
-        "obfuscateURLs must be true and is INSEPARABLE from apiLogging.enabled: with it false daprd logs the raw "
-        "`method + URL.Path`, and the actor URL carries base64url(<oidc sub>), which `decode_subject` reverses exactly. "
-        "Enabling api logging without it would CREATE a subject exposure."
-    )
-    assert api_logging.get("omitHealthChecks") is True, "the kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise"
 
 
 #: Every deployed app that serves doors and the env var its own config reads for the docs opt-in. The names differ
@@ -753,7 +668,7 @@ def test_the_one_read_only_window_reaches_every_lakehouse_service(window: tuple[
 #:
 #: Two different reasons, kept apart on purpose:
 #:
-#:  * SUBCHARTS — dapr, nats, openfga, dex, rustfs. Not ours to template,
+#:  * SUBCHARTS AND FIXTURES — nats, openfga, dex, rustfs. Not ours to template,
 #:    so not ours to harden.
 #:  * INFRA PODS WE DO TEMPLATE — the OTel collector. Its securityContext is gated behind
 #:    `security.infraContexts.enabled`, which values.yaml defaults OFF and stages explicitly:
@@ -762,7 +677,7 @@ def test_the_one_read_only_window_reaches_every_lakehouse_service(window: tuple[
 #:    silently pre-empt it. It is listed HERE, visibly, rather than being missing from a
 #:    hand-written first-party tuple where nobody could tell the difference.
 _UNCOVERED_DEPLOYMENTS = (
-    "dapr", "nats", "openfga", "dex", "rustfs",
+    "nats", "openfga", "dex", "rustfs",
     "otel-collector",
 )  # fmt: skip
 
@@ -821,25 +736,13 @@ def _env_by_component(docs: list[dict], component: str) -> dict[str, str]:
 def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
     """A `secretKeyRef` to a Secret nothing creates is a pod that never starts, and a GREEN render.
 
-    THE FAILURE THIS PINS. `dapr.enabled=false` is a documented, supported toggle, and
-    `services.yaml`'s own fail message tells an operator to pair it with `catalog.controlEmit=false`.
-    That pair rendered cleanly — and left THIRTEEN Deployments, maintenance and lineage among them,
-    carrying a reference to `-dapr-app-token`, which is gated on
-    `dapr.enabled` and therefore absent. Each fails with CreateContainerConfigError; nothing in the
-    render says why.
-
-    The cause was one Secret doing double duty under two different gates: the Dapr app token
-    (`dapr.enabled`) and `LINEAGE_SERVICE_TOKEN`, the service credential for reading lineage
-    (`auth.enabled`).
-
-    Checked across the TOGGLE COMBINATIONS, not just the default render, because the default is the one
-    configuration this class cannot appear in — every consumer and its Secret are on together there.
+    Such a pod fails with CreateContainerConfigError, and nothing in the render says why. Checked with authentication on and
+    off, not just the default render, because a consumer and its Secret gated on different switches part company only in
+    a combination.
     """
     combinations = [
         ("default", []),
-        ("sidecars off", ["dapr.enabled=false", "catalog.controlEmit=false"]),
         ("auth off", ["auth.enabled=false"]),
-        ("both off", ["dapr.enabled=false", "catalog.controlEmit=false", "auth.enabled=false"]),
     ]
     problems: list[str] = []
     for label, extra in combinations:
@@ -853,9 +756,7 @@ def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
         secrets |= {name.replace("release-name-", "rask-", 1) for name in secrets}
         for doc in docs:
             for name in _secret_refs(doc):
-                # A Dapr Component's secretKeyRef names a key in the SECRET STORE (OpenBao), not a
-                # Kubernetes Secret — a different namespace of names entirely.
-                if doc.get("kind") == "Component" or name in secrets:
+                if name in secrets:
                     continue
                 problems.append(f"[{label}] {doc.get('kind')}/{doc['metadata']['name']} -> missing Secret {name!r}")
     assert not problems, "workloads reference Secrets the render never creates:\n  " + "\n  ".join(sorted(set(problems)))

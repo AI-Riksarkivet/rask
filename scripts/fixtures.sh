@@ -176,8 +176,8 @@ for item in items(sys.stdin.read()):
       kubectl annotate "$kind" "$obj" "${NS[@]}" helm.sh/resource-policy=keep --overwrite >/dev/null
       echo ">> $name: $kind/$obj (release $owner) kept and handed to release $RELEASE"
     done <<<"$held"
-    # --force-conflicts too: an adopted object can carry fields its controller manages at runtime (Dapr's operator
-    # owns its CRDs' conversion-webhook namespace), and Helm 4's server-side apply refuses those as conflicts. The
+    # --force-conflicts too: an adopted object can carry fields its controller manages at runtime (an operator
+    # may own its CRDs' conversion-webhook namespace), and Helm 4's server-side apply refuses those as conflicts. The
     # new owner's controller sets them again once it runs.
     # Helm 3 applies client-side, where a field another manager set is no conflict and the flag does not exist.
     OWN=(--take-ownership)

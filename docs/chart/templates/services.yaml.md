@@ -3,11 +3,6 @@
 Rationale for `chart/templates/services.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}`
-
-The catalog is named its bus under `dapr.enabled` (`lance.busEnv`), so with it off a catalog told to emit control
-events would publish none and follow none. The render refuses the pair rather than ship a switch that does nothing.
-
 ## `apiVersion: apps/v1`
 
 Catalog (producer): creates Lance tables on S3 and publishes its OpenLineage events and its control-plane change events
@@ -107,13 +102,12 @@ asked for: an empty value would reach the writer as an option object_store does 
 recognise, and it drops those silently — plaintext under a config claiming otherwise.
 The catalog REFUSES an invalid pairing at boot rather than passing it on.
 
-## `- { name: LANCE_LINEAGE_EMIT_ENABLED, value: {{ .Values.dapr.enabled | quote }} }`
+## `- { name: LANCE_LINEAGE_EMIT_ENABLED, value: "true" }`
 
-The catalog announces on the bus only where the chart names it one. `lance.busEnv` renders `RASK_BUS_URL` and
-`RASK_BUS_USER` under `dapr.enabled`, and a catalog told to emit on the bus with no bus named refuses to start
-(`catalog.core.config`), so the emit switch is rendered from the same value: a render with no bus is a catalog that
-announces nothing, never one that fails its start. Pinned by
-`tests/unit/test_invariants.py::test_the_catalog_is_switched_to_publish_only_where_it_is_named_a_bus`.
+The catalog announces every committed write on the bus. `lance.busEnv` renders `RASK_BUS_URL` and `RASK_BUS_USER` in
+every render, since `nats.url` is required, and a catalog told to emit on the bus with no bus named refuses to start
+(`catalog.core.config`), so the switch is on wherever the catalog runs. Pinned by
+`tests/unit/test_invariants.py::test_the_catalog_is_switched_to_publish_on_the_bus_it_is_named`.
 
 ## `- { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }`
 

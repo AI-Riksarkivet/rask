@@ -1,13 +1,13 @@
 """Every lineage outcome carries WHICH DOOR the event came through.
 
-ONE COUNTER, THREE DOORS, AND THE ALERT COULD NOT SAY WHICH. `lineage_events_processed_total` is
-written by the Dapr subscriber, by the dead-letter handler and by the HTTP ingest endpoint — all three
+ONE COUNTER, SEVERAL DOORS, AND THE ALERT COULD NOT SAY WHICH. `lineage_events_processed_total` is
+written by the ingest lane's bus consumer, by its dead-letter park and by the HTTP ingest endpoint, all
 in the SAME pod, so no instance or resource attribute separates them. An operator woken by
 `lance_lineage_outcome="refused"` learned that provenance was lost and nothing about where to look,
-and the three doors fail for different reasons and are fixed in different places: the subscriber's
-refusals are a tuple the bus producer lacks, the HTTP door's are a tuple a SIDECAR-LESS producer lacks
+and the doors fail for different reasons and are fixed in different places: the subscriber's
+refusals are a tuple the bus producer lacks, the HTTP door's are a tuple a producer with no bus user lacks
 (a user's pipeline job on its own compute, any external OpenLineage producer), and a dead-letter park
-is the resiliency schedule having given up.
+is the lane having given up.
 
 MEASURED 2026-09-21, which is why this is a gate rather than a nicety. A refused ingest was
 recorded correctly by the HTTP door and could not be found: `unrepairable` stood at 15,398 and rose by

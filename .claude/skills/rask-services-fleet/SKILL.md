@@ -117,8 +117,7 @@ service directly. See `rask-frontend`.
    the client address behind the edge is the real one in every service's logs and audit records.
 7. **NetworkPolicy follows the route.** Each routed lakehouse service admits ingress on its app port only, from any peer
    (`<release>-edge-<component>`, one per `rask.apiRoutes` row): the Gateway's data plane lives in the platform's
-   namespace, and the service authenticates each request itself, while daprd's ports on the same pod stay
-   intra-namespace. The console's pod is admitted the same way on its one port (`<release>-edge-console`), and every
+   namespace, and the service authenticates each request itself. The console's pod is admitted the same way on its one port (`<release>-edge-console`), and every
    egress allow leaves it out: its static server dials nothing.
 8. **No merged `/docs`.** Each service serves its own `/docs`, `/redoc` and `/openapi.json`, and only under
    `docs.enabled` (off by default). Reached through the edge, a service's docs sit under its public prefix after the

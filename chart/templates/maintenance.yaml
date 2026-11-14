@@ -92,7 +92,7 @@
 {{- end -}}
 {{- end -}}
 
-{{- if and .Values.maintenance.enabled .Values.dapr.enabled }}
+{{- if .Values.maintenance.enabled }}
 {{- $root := . }}
 {{- $worker := required "maintenance.worker is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.worker }}
 {{- $probes := required "maintenance.worker.port is required" $worker.port }}

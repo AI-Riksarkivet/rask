@@ -1,6 +1,6 @@
 """A process reads its secrets from the secret store itself, logged in as its own role with the token its pod projects.
 
-[[XC-199]] step D2. No sidecar stands between a service and the store: the process presents its projected
+[[XC-199]] step D2. Nothing stands between a service and the store: the process presents its projected
 ServiceAccount token at the store's Kubernetes auth method, holds the store token that login returns in memory, and reads
 each secret under it. Driven at the store's HTTP API, which respx answers in the shapes measured on the development
 store (the root conftest's `secret_store`); the one claim about TLS runs against a real listener.

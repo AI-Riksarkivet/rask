@@ -1,8 +1,8 @@
 """Maintenance's worker is its only workload: a process of its own, in pods whose grace holds its drain ([[LH-494]], [[XC-199]]).
 
 The worker takes everything it does off the bus on a connection of its own (its tasks, its fired schedules, the
-store's change events and the commit announcements), so its pod serves nothing but its probes: no Service selects it,
-and it runs no sidecar, whose shutdown would otherwise have to be held open across the worker's drain. A stopping
+store's change events and the commit announcements), so its pod serves nothing but its probes: no Service selects it.
+A stopping
 worker lets its running pass finish for `maintenance.queue.drainSeconds`, so the pod's grace must hold preStop, that
 drain and the teardown; the render refuses a drain it cannot hold (`test_invariants.py`), and this holds the rendered
 pod to the same arithmetic with every lifecycle number moved, so only a computed grace passes it.
@@ -27,7 +27,7 @@ from tests.unit.chart_render import DEFAULT_ARGS, REPO, render, selects
         ),
     ],
 )
-def test_the_worker_runs_in_pods_of_its_own_with_no_sidecar_and_a_grace_that_holds_its_drain(moved: dict[str, int]) -> None:
+def test_the_worker_runs_in_pods_of_its_own_with_a_grace_that_holds_its_drain(moved: dict[str, int]) -> None:
     """Its replicas spread over the nodes by their own label, so one node's loss leaves a worker pulling; it takes a
     resources tier of its own, sized from its measured working set; and the audit, the scan and an orphan check are each
     bounded by a value of their own, which reaches the worker's settings as that kind's bound."""
@@ -54,9 +54,8 @@ def test_the_worker_runs_in_pods_of_its_own_with_no_sidecar_and_a_grace_that_hol
         for doc in docs
         if doc.get("kind") == "Service" and selects({"matchLabels": doc["spec"].get("selector") or {"none": "none"}}, worker["metadata"]["labels"])
     ]
-    of_a_sidecar = sorted(key for key in {**worker["metadata"].get("annotations", {}), **worker["metadata"]["labels"]} if key.startswith("dapr.io/"))
     assert process["args"][-3:] == ["python", "-m", "maintenance.worker"]
-    assert (selecting, of_a_sidecar) == ([], [])
+    assert selecting == []
     assert [selects(rule["labelSelector"], worker["metadata"]["labels"]) for rule in worker["spec"]["topologySpreadConstraints"]] == [True]
     assert process["resources"]["requests"]["memory"] == "333Mi"
     bounds = MaintenanceSettings(

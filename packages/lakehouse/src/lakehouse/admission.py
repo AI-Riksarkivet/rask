@@ -9,7 +9,7 @@ first: a caller it refuses is answered then, its body never read, and the caller
 the gate finds it (:func:`admitted_caller`) rather than judging again.
 
 A route is chosen by its dependencies, never by its path, so a door gains the judgement the moment it depends on the
-gate, and the probes and the sidecar's routes, which depend on another gate or none, are left as they are.
+gate, and the probes, which depend on another gate or none, are left as they are.
 """
 
 from __future__ import annotations

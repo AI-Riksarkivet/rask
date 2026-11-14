@@ -26,7 +26,7 @@ make check          # fmt + lint + import contracts + typecheck + knip + fga-tes
 
 ## Run the lakehouse (k3s)
 
-The lakehouse services (catalog, lineage, maintenance) need Dapr sidecars, NATS JetStream, OpenFGA and
+The lakehouse services (catalog, lineage, maintenance) need NATS JetStream, OpenFGA and
 an object store, so they run in-cluster. Development installs those prerequisites from `deploy/fixtures`, each its own
 release, before rask's:
 

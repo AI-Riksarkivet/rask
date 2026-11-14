@@ -1,4 +1,4 @@
-"""Each app reads only its own secrets, from the store and as itself: no sidecar serves it one, and the store refuses another app's.
+"""Each app reads only its own secrets, from the store and as itself, and the store refuses another app's.
 
 [[XC-165]] (#659), [[XC-199]] (#787), read back on the deployed estate. The render holds the same claim offline
 (`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`); this asks the running layers:
@@ -6,11 +6,9 @@
 - the app's own login: inside the pod of each Deployment an app runs (the catalog's, lineage's and the maintenance
   worker's), the process's own read (`lakehouse.governed.secrets`, with the store, the role and the projected token its
   pod was given) returns a secret the app owns and nothing of one another app owns;
-- the Dapr scope: from inside the pod of each app the `lance-secrets` component is scoped to (the catalog and lineage,
-  whose pods run daprd), its daprd answers 403 for both;
-- the store: a token the store issues to one app's ServiceAccount, through the Kubernetes auth role the `lance-secrets`
-  component logs that app in as, reads the app's own secret and is refused another app's; the same account is refused
-  another app's role; and `root`, the token a store in dev mode publishes, reads nothing.
+- the store: a token the store issues to one app's ServiceAccount, through the Kubernetes auth role its Deployment
+  names the app's process (`RASK_SECRET_STORE_ROLE`), reads the app's own secret and is refused another app's; the same
+  account is refused another app's role; and `root`, the token a store in dev mode publishes, reads nothing.
 
 The store is reached from its own seed container, which runs `bao`. A ServiceAccount token, a store token and every secret
 value stay in this process or on a command's stdin, never in an argument list or an assertion message.
@@ -50,20 +48,6 @@ from lakehouse.governed.secrets import read_secret
 print(json.dumps({name: sorted(read_secret(name, retries=1)) for name in sys.argv[1:]}))
 """
 
-#: Asks the pod's own sidecar for each named secret and prints, per secret, the status and the FIELD NAMES it answered.
-_ASK_THE_SIDECAR: Final = """\
-import json, os, sys, urllib.error, urllib.request
-port = os.environ.get("DAPR_HTTP_PORT", "3500")
-answers = {}
-for name in sys.argv[1:]:
-    try:
-        body = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/v1.0/secrets/lance-secrets/{name}", timeout=10).read())
-        answers[name] = [200, sorted(body)]
-    except urllib.error.HTTPError as refused:
-        answers[name] = [refused.code, []]
-print(json.dumps(answers))
-"""
-
 
 def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
     """`kubectl args` in the release's namespace, with ``stdin``; its outcome, which a caller judges without echoing stdin."""
@@ -81,25 +65,6 @@ def _apps() -> dict[str, dict[str, str]]:
         if app is not None and deployment["spec"].get("replicas", 1):
             running[app] = {deployment["metadata"]["name"]: deployment["spec"]["template"]["spec"]["containers"][0]["name"]}
     return running
-
-
-def _scoped() -> dict[str, dict[str, str]]:
-    """app -> each Deployment whose pods run daprd under that app's id and that Deployment's own container, for each app
-    the `lance-secrets` component is scoped to that the release runs a pod of."""
-    scopes = set(json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json")).get("scopes") or [])
-    running: dict[str, dict[str, str]] = {}
-    for deployment in json.loads(chaos.kubectl("get", "deployments", "-o", "json"))["items"]:
-        template = deployment["spec"]["template"]
-        app = ((template.get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
-        if isinstance(app, str) and app in scopes and deployment["spec"].get("replicas", 1):
-            running.setdefault(app, {})[deployment["metadata"]["name"]] = template["spec"]["containers"][0]["name"]
-    return running
-
-
-def _store_component() -> dict[str, str]:
-    """The `lance-secrets` component's metadata, as the cluster serves it."""
-    component = json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json"))
-    return {row["name"]: str(row.get("value", "")) for row in component["spec"]["metadata"]}
 
 
 def _store_pod() -> str:
@@ -148,32 +113,26 @@ def test_each_app_reads_its_own_secret_from_the_store_as_itself_and_none_of_anot
     assert not found, f"an app's own login was refused a secret it owns, or read one it does not: {found}"
 
 
-def test_no_sidecar_serves_its_app_a_secret() -> None:
-    found: dict[str, object] = {}
-    for deployment, ((own, _field, foreign), answers) in _asked_in_each_pod(_ASK_THE_SIDECAR, _scoped()).items():
-        for secret in (own, foreign):
-            if answers[secret][0] != 403:
-                found[f"{deployment}'s sidecar serving {secret}"] = answers[secret]
-    assert not found, f"a sidecar's secrets API answered its app anything but a refusal: {found}"
+def _told(spec: dict) -> dict[str, str]:
+    """What a pod's own container is told of the secret store, by its environment."""
+    return {row["name"]: row["value"] for row in spec["containers"][0].get("env") or [] if row["name"].startswith("RASK_SECRET_STORE_") and "value" in row}
 
 
 def test_the_store_refuses_each_app_s_token_another_app_s_secret_and_role() -> None:
-    meta = _store_component()
-    assert meta.get("vaultAuthMethod") == "kubernetes", f"lance-secrets logs in by {meta.get('vaultAuthMethod')!r}, not as each app's own account"
-    mount, role = meta["vaultKubernetesMountPath"], meta["vaultKubernetesRole"]
     pod = _store_pod()
     specs = {app: json.loads(chaos.kubectl("get", f"deployment/{DEPLOYMENTS[app]}", "-o", "json"))["spec"]["template"]["spec"] for app in SIGNERS}
     keys = {app: f"signing-key-{spec['serviceAccountName']}" for app, spec in specs.items()}
+    roles = {app: _told(spec)["RASK_SECRET_STORE_ROLE"] for app, spec in specs.items()}
     found: dict[str, object] = {}
     for app, foreign in (SIGNERS, SIGNERS[::-1]):
-        account = specs[app]["serviceAccountName"]
+        account, mount = specs[app]["serviceAccountName"], _told(specs[app])["RASK_SECRET_STORE_AUTH_MOUNT"]
         [audience] = [
             source["serviceAccountToken"]["audience"]
             for volume in specs[app]["volumes"]
             if volume["name"] == "openbao-identity"
             for source in volume["projected"]["sources"]
         ]
-        code, token = _login(pod, mount, role.replace("{appID}", app), account, audience)
+        code, token = _login(pod, mount, roles[app], account, audience)
         if code != 0:
             found[f"{app} logging in as itself"] = code
             continue
@@ -181,7 +140,7 @@ def test_the_store_refuses_each_app_s_token_another_app_s_secret_and_role() -> N
             found[f"{app} reading {keys[app]}"] = own
         if (other := _read_as(pod, token, keys[foreign]))[0] == 0 or "permission denied" not in other[1]:
             found[f"{app} reading {keys[foreign]}"] = other
-        if _login(pod, mount, role.replace("{appID}", foreign), account, audience)[0] == 0:
+        if _login(pod, mount, roles[foreign], account, audience)[0] == 0:
             found[f"{app}'s account logging in as {foreign}"] = "admitted"
     published = _read_as(pod, "root", keys["catalog"])
     if published[0] == 0 or "permission denied" not in published[1]:

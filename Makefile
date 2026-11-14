@@ -501,13 +501,12 @@ DEV_STORE_NODE_PORT := $(shell sed -n 's/^nodePort: *//p' deploy/fixtures/rustfs
 DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
-# (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
-# Ready before any pod that wants a sidecar exists; the NATS bus every service dials follows. The CloudNativePG
+# (NOT FOR PRODUCTION; deploy/fixtures/README.md). ESO comes first; the NATS bus every service dials follows. The CloudNativePG
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
 # given the issuer rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's; observability is
 # the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to.
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao observability marquez
+FIXTURES ?= external-secrets nats cloudnative-pg dex rustfs openbao observability marquez
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))
@@ -630,7 +629,7 @@ k3s-down: ## Uninstall the rask release (keep PVCs)
 k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 	$(KUBECTL) delete pvc -A -l app.kubernetes.io/instance=rask --ignore-not-found || true
 	# Stale PVCs left in an old per-component `nats` namespace (NATS runs in the release namespace) that the
-	# label-scoped delete above misses. dapr-system is the dapr FIXTURE's, which k3s-down leaves installed.
+	# label-scoped delete above misses.
 	-$(KUBECTL) delete pvc -n nats --all --ignore-not-found
 
 # ---- kind (throwaway CI-shaped cluster; k3s above is the long-lived local deploy) ----

@@ -13,7 +13,7 @@ The Helm chart that installs the lakehouse itself and nothing else: its services
 _Avoid_: umbrella chart, platform chart, the chart
 
 **Prerequisite**:
-A service rask needs that someone other than rask installs and runs, named by reference: Dapr, NATS JetStream, an OTLP
+A service rask needs that someone other than rask installs and runs, named by reference: NATS JetStream, an OTLP
 endpoint, an object store and an OIDC issuer.
 _Avoid_: dependency, bundled service, platform component
 

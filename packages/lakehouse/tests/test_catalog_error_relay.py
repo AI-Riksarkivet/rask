@@ -15,7 +15,7 @@ detail rides in the message" — is a real and defensible decision for the four 
 upstream body IS the catalog's own redacted problem+json, and relaying it is what turns an opaque 500
 into the answer the direct path would have given. It does not hold for the catch-all, which is the
 branch that fires when the upstream is NOT the catalog: on the failure this actually catches, the
-responder is usually an ingress or a sidecar returning an HTML error page or a proxy diagnostic, and
+responder is usually an ingress or a proxy returning an HTML error page or a diagnostic of its own, and
 that text was being served to the browser.
 
 `exception-handlers.md`: "Never include exception internals in the response body — those leak via logs

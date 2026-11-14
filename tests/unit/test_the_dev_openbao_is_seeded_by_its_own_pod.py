@@ -1,9 +1,9 @@
 """The dev OpenBao serves only a store its own pod seeded, and a signing key outlives the server holding it.
 
-[[XC-076]], the clause every sidecar still loading lance-secrets. `server -dev` keeps its store in memory,
+[[XC-076]]. `server -dev` keeps its store in memory,
 so every new OpenBao server starts empty. A seed that reaches the store through the Service writes to
 whichever pod the Service routes to: during a rollout that is the outgoing pod, whose store is deleted with
-it, and the replacement serves nothing while every sidecar restarting beside it fails on lance-secrets
+it, and the replacement serves nothing while every service logging in beside it is refused
 (the outage XC-005 records, 13 pods for 19 h).
 
 So the seed runs beside the server it seeds, writes only to 127.0.0.1 and writes the key the server's
@@ -25,7 +25,7 @@ pod's store or the one behind the Service, and its JWT while the table grants it
 second credential that admits it; a grant the table changes is issued under the same key, and every credential the key was
 issued up to the stored JWT's issue time is revoked ([[XC-195]]), without touching the trust root. It writes `nats-user-<user>`,
 `nats-server` and those two before the readiness key; a root it cannot read or use stops the seed, because a store that is
-Ready without its users hands every sidecar an empty credential. The bundle is kept like the signing pairs.
+Ready without its users hands every service an empty credential. The bundle is kept like the signing pairs.
 
 [[XC-195]] takes back what rask stops declaring. A bus user's JWT carries no expiry and its account stays trusted, so a
 `nats-user-<user>` the table no longer names, in this pod's store or the outgoing pod's, is revoked by its key in the APP
@@ -93,11 +93,10 @@ exit 1
 _WRITES = ("kv put ", "kv metadata delete ", "auth ", "write ", "delete ", "policy ")
 
 #: What ESO's Password generators write, one Secret each (templates/external-secrets.yaml, `lance.devCredentials`), and the
-#: store secret each lands in: the store's root at a path of its own, which no Dapr app may read (ADR 0168).
+#: store secret each lands in: the store's root at a path of its own, which no service's store policy names (ADR 0168).
 _GENERATED = {
     "object-store-secret-key": ("secret/object-store-root", "object-store-secret-key"),
     "postgres-password": ("secret/postgres", "password"),
-    "dapr-app-token": ("secret/dapr-app-token", "token"),
 }
 
 #: What the stand-in store answers an init with, and the administrator token id the fixture generates: none may reach an

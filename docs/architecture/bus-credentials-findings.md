@@ -172,10 +172,8 @@ choose (b) without a rask change (§ 5).
   ```
 
   Each row keyed by the ServiceAccount the projected token names (`lance.saName`), so the identity is the pod's, never a
-  name it chose. The rows give each service its own inbox prefix (nats-py `inbox_prefix`): today each service's own
-  connection and the worker's reply under `_INBOX_<user>`, and `_INBOX.>` stays granted to `catalog`, `lineage` and
-  `maintenance` for their sidecars' subscription components (`chart/values.yaml`, `nats.auth.users`), which lets one of
-  the three read what another's sidecar is answered.
+  name it chose. The rows give each service its own inbox prefix (nats-py `inbox_prefix`): each service's own
+  connection and the worker's reply under `_INBOX_<user>` (`chart/values.yaml`, `nats.auth.users`).
   Since 2026-11-14 (XC-199 step D4) no service holds `_INBOX.>`: each pulls or follows on its own connection under
   `_INBOX_<user>`, and only `admin`, `monitor` and the development object store reply on the shared `_INBOX.>`.
 - What the chart refuses on a real deployment (the platform's store, `openbao.enabled` false): a `nats.url` that is not

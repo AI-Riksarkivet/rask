@@ -5,11 +5,11 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- range (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "openbao" | uniq) }}`
 
-The dev store's readers are the pods that log in to it (each service, and the catalog's and lineage's sidecars), named by their component labels:
+The dev store's readers are the pods that log in to it (each service), named by their component labels:
 `lance.secretReaderComponents`, which is the store-reads table's apps (`lance.secretScopes`, where an app's id is
 its pods' component label) and maintenance's worker pods, which run under maintenance's app id and carry the label
-`maintenance-worker`. Derived from the same table as the scope of `lance-secrets` (dapr-component.yaml,
-`lance.sidecarScopes`), so the two cannot drift. The store's own pods are admitted too, because the seed reads the signing pairs and the bus root from the
+`maintenance-worker`. Derived from the same table as each service's store login (`lance.secretStoreEnv`), so the two
+cannot drift. The store's own pods are admitted too, because the seed reads the signing pairs and the bus root from the
 outgoing pod through the Service (openbao-seed.yaml).
 
 ## `{{- $platform := include "lance.platformEgress" . | fromJsonArray }}`
@@ -29,7 +29,7 @@ render the policies below, so the requirement and the policy cannot drift.
 ## `{{- $ageClients := list "openfga-migrate" "backup-pg" }}`
 
 The Postgres's component-labelled clients: OpenFGA's migrate Job and the pg backup job (OpenFGA's own pods are
-admitted by their subchart's name label below). No daprd dials it, since the release renders no Dapr state store.
+admitted by their subchart's name label below).
 
 ## `values: {{- toYaml (concat (include "lance.objectStoreClients" . | fromJsonArray) (list "object-store-provisioning" "bucket-events")) | nindent 18 }}`
 
@@ -51,7 +51,7 @@ One policy per platform row, selecting the row's components and admitting them t
 rows' callers, each under the condition its template renders: the API server's are the token verifiers (catalog and
 lineage under `auth.enabled`, reading the service-account issuer's discovery and key set), the issuer mirror, the dev
 store's pod (the openbao fixture's; its Kubernetes auth backend reviews ESO's logins), the Collector (`k8sattributes`
-reads pod metadata), the volume-snapshot CronJob (`kubectl`) and the Dapr dashboard; OpenFGA's are the tuple writers
+reads pod metadata), the volume-snapshot CronJob (`kubectl`); OpenFGA's are the tuple writers
 (`lance.fgaWriters`) and the model hook, the list its in-namespace ingress admits; the secret
 store's are the pods that log in to it (`lance.secretReaderComponents`, as the dev store's ingress lock); the
 telemetry backend's is the Collector; the S3's are the pods holding a store session (`lance.objectStoreClients`), whose
@@ -69,24 +69,17 @@ every destination on its ports, in the cluster and outside it. An empty row is r
 
 ## `- { key: app.kubernetes.io/component, operator: NotIn, values: [console] }`
 
-Every egress allow the namespace shares (DNS, the intra-namespace allow, the Dapr control plane, `networkPolicy.extraEgress`)
-selects every pod but the console's. Its static server dials nothing: it reads its config from a mounted file, has no
-sidecar and calls no door, the browser making every API call itself. So the console's pod keeps default-deny's empty
+Every egress allow the namespace shares (DNS, the intra-namespace allow, `networkPolicy.extraEgress`)
+selects every pod but the console's. Its static server dials nothing: it reads its config from a mounted file and calls
+no door, the browser making every API call itself. So the console's pod keeps default-deny's empty
 egress, and a compromised static server reaches nothing, not even DNS.
-
-## `name: {{ include "lance.fullname" . }}-allow-dapr-control-plane-egress`
-
-Every sidecar dials the Dapr control plane (Sentry for its certificate, placement, the scheduler, the operator's
-API), which is a prerequisite in its own namespace (`dapr.controlPlaneNamespace`, ADR 0153), so the intra-namespace
-egress allow no longer covers it. One rule for the whole namespace rather than per component: the plane's ports are
-the platform's to choose.
 
 ## `name: {{ include "lance.fullname" $ }}-edge-{{ $row.component }}`
 
 One policy per service the cluster route publishes, ranged from the same `rask.apiRoutes` list
 `route.yaml` renders its rules from, so a public prefix and an admitted port cannot drift. The Gateway's
 data plane lives in the platform's namespace, so the source is unrestricted; the bound is
-the PORT: only the app port is admitted, and daprd's ports on the same pod stay intra-namespace. That is
+the PORT: only the app port is admitted. That is
 safe because every one of these services authenticates each request itself, and a request through the
 Gateway reaches the app port directly.
 

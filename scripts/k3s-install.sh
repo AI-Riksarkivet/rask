@@ -5,7 +5,7 @@
 # It also switches on the development Gateway (k3s's Traefik, Gateway API provider). EVERYTHING ELSE comes up with
 # `make k3s-up`: the development fixtures (deploy/fixtures,
 # each its own release; the NVIDIA device plugin is one, for a GPU node), then the Helm
-# chart (chart/Chart.yaml dependencies + templates) with NATS, Dapr,
+# chart (chart/Chart.yaml dependencies + templates) with NATS,
 # OpenFGA, Postgres, RustFS and the rask fleet. k3s and helm are the only bootstrap.
 #
 # Host prerequisite for the GPU: nvidia-container-toolkit (nvidia-ctk) installed,

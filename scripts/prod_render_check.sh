@@ -37,7 +37,7 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA, its secret store, its S3, its
 # bus and its IdP, which no URL can derive ([[XC-143]], [[XC-202]]). image.tags is the pin a released chart carries for each first-party image: the `dev`
 # default names no build, which a real deployment refuses (templates/prod-credentials.yaml, [[XC-164]]).
-COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
+COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set auth.oidc.issuer=https://auth.example.com/dex
         --set-json 'auth.oidc.connectors={"ldap":"corp"}'
         --set image.repository=ghcr.io/example/rask
@@ -105,11 +105,7 @@ grep -q '"https://fga.example.com"' "$OUT" || fail "prod's FGA clients must dial
 grep -qE "^  name: rask-(sa-)?openbao" "$OUT" && fail "prod must not render a secret store (the platform's)"
 grep -q 'https://vault.example.com:8200' "$OUT" || fail "prod's secret readers must read openbao.externalAddr"
 
-# 3. The Dapr control plane is the platform's (ADR 0153): prod renders none of it, only rask's own Dapr objects.
-grep -qE "name: dapr-(sentry|operator|placement-server|scheduler-server|sidecar-injector)$" "$OUT" \
-  && fail "prod must not render a Dapr control plane (it is a prerequisite)"
-grep -q "^kind: Component$" "$OUT" || fail "prod must render rask's own Dapr Components"
-# The NATS bus is the platform's too ([[XC-129]]): prod renders no server, only rask's stream Job against nats.url.
+# 3. The NATS bus is the platform's ([[XC-129]]): prod renders no server, only rask's stream Job against nats.url.
 awk '/^kind: StatefulSet$/{f=1} f&&/^  name: /{print $2; f=0}' "$OUT" | grep -qx 'rask-nats' \
   && fail "prod must not render a NATS server (it is a prerequisite)"
 grep -q 'S="nats://nats.example.com:4222"' "$OUT" || fail "prod's stream Job must provision rask's streams on the bus nats.url names"
@@ -147,8 +143,8 @@ grep -A20 "name: rask-allow-telemetry-export-egress$" "$OUT" | grep -q "cidr: 20
 grep -qE "name: rask-(vmalert|alertmanager|greptimedb-standalone|perses)$" "$OUT" \
   && fail "prod must not render an observability store, dashboard or alert engine (they are the platform's)"
 
-# 8. NO bespoke scraper is shipped — the OTel Collector's prometheus receiver owns the Dapr scrape.
-grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the OTel Collector owns the Dapr scrape)"
+# 8. NO bespoke scraper is shipped — the OTel Collector's prometheus receiver owns every scrape.
+grep -q "name: rask-vmagent$" "$OUT" && fail "vmagent must NOT be shipped (the OTel Collector owns every scrape)"
 
 # 8b. THE EDGE'S FORMERLY-UNAUTHENTICATED DOORS STAY SHUT IN PROD.
 #
@@ -238,8 +234,6 @@ sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
 [ "$automount" -ge 6 ] \
   || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=6 expected; 1 is the baseline)"
-grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
-  || fail "prod must restrict the daprd sidecar (dapr.sidecarRestricted) — a pod is only as restricted as its loosest container"
 
 # TELEMETRY PROVENANCE. `observability.environment` is the `deployment.environment.name` resource
 # attribute on every trace and metric; values.yaml defaults it to `rask` and says "override per deploy",
@@ -249,4 +243,4 @@ grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
 grep -q "deployment.environment.name=prod" "$OUT" \
   || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store external, Dapr control plane external, PDBs=$(wc -l <<<"$pdb_names") (backends named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, object-store-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store+bus external, PDBs=$(wc -l <<<"$pdb_names") (backends named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, object-store-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

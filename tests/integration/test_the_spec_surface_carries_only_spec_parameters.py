@@ -105,13 +105,12 @@ def test_a_hidden_parameter_is_still_bound_on_the_wire(client: TestClient, path:
 
 
 #: Non-spec headers the owner ruled STAY in the document (2026-09-20, `docs/adr/0067-the-three-mesh-headers-stay-in-the-spec-document-and-the.md`). Hiding them
-#: would weaken `generated-client-freshness.test.ts`, which exists because a client that lost
-#: `dapr-caller-app-id` shipped broken for 19 days — so the document keeps them and this bounds the set.
+#: would weaken `generated-client-freshness.test.ts`, which exists because a client that lost a header the document
+#: carried shipped broken for 19 days — so the document keeps them and this bounds the set.
 #: `authorization` is standard HTTP and needs no exception.
 _RECORDED_HEADER_EXCEPTIONS = frozenset(
     {
         "authorization",
-        "dapr-caller-app-id",
         "x-lance-originator",
         "Idempotency-Key",
     }

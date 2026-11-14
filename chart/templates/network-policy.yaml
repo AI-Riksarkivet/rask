@@ -19,7 +19,7 @@
 #   (4) values-prod flips `networkPolicy.enabled` — the LIVE verification runbook is todo_fable
 #       §7a (all pods Ready, e2e suites green, and a negative probe: a request to the secret store
 #       from a pod outside its client list must time out).
-# Egress posture (tier 1): intra-namespace open + DNS + the Dapr control plane; the INGRESS rules do
+# Egress posture (tier 1): intra-namespace open + DNS; the INGRESS rules do
 # the guarding — a connection needs BOTH the source's egress and the destination's ingress to allow.
 # Every egress rule names its peers: each endpoint the platform serves outside the namespace (`lance.platformEgress`:
 # the API server, OpenFGA, the secret store, the telemetry backend, and on a real deployment the S3, the bus and the
@@ -60,7 +60,7 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
 ---
-# Egress within the namespace (every pod but the console's): app→store and bus, sidecar→NATS/placement/sentry, jobs→stores.
+# Egress within the namespace (every pod but the console's): app→store and bus, jobs→stores.
 # The guarded stores' INGRESS policies below are what actually gates who reaches them.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -91,23 +91,6 @@ spec:
         values: {{- toYaml .components | nindent 10 }}
   policyTypes: [Egress]
   egress: {{- include "lance.egressRules" (list .value .rules .reaches) | nindent 4 }}
-{{- end }}
-{{- if .Values.dapr.enabled }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "lance.fullname" . }}-allow-dapr-control-plane-egress
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchExpressions:
-      - { key: app.kubernetes.io/component, operator: NotIn, values: [console] }
-  policyTypes: [Egress]
-  egress:
-    - to:
-        - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: {{ .Values.dapr.controlPlaneNamespace }} }
 {{- end }}
 {{- with .Values.networkPolicy.extraEgress }}
 ---
@@ -275,9 +258,8 @@ spec:
 ---
 # The services the cluster route publishes (`rask.apiRoutes`) accept the Gateway's traffic on their app
 # port and nothing else, from anywhere: the Gateway's data plane lives in the platform's
-# namespace, and every one of these services authenticates each request itself. The port is the bound:
-# daprd's ports on the same pod stay intra-namespace only. The console's static server is admitted
-# the same way, on its one port.
+# namespace, and every one of these services authenticates each request itself. The port is the bound.
+# The console's static server is admitted the same way, on its one port.
 {{- range $row := include "rask.apiRoutes" . | fromJsonArray }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

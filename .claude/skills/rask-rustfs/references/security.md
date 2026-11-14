@@ -197,8 +197,7 @@ entry; an open design choice.
 - [ ] The provisioning hook (`chart/templates/object-store-provisioning.yaml`) is the only root holder besides the store and its dev seeder (the root's own OpenBao
       secret, denied to every app's role, and its own Kubernetes Secret); no `admin:*`, no `s3:ForceDelete*`, no table
       actions in any rask policy. In development the dev OpenBao reads the root to ESO's login alone: each service logs
-      in as its own ServiceAccount and reads only its own secrets, the catalog's and lineage's sidecars log in the same
-      way through `lance-secrets` and resolve no secret, and no token is published (ADR 0169).
+      in as its own ServiceAccount and reads only its own secrets, and no token is published (ADR 0169).
 - [ ] Image pinned by digest at a GA tag.
 
 ## Platform store checklist

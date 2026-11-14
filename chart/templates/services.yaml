@@ -1,7 +1,4 @@
 {{- $root := . }}
-{{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}
-{{- fail "catalog.controlEmit=true requires dapr.enabled=true: the catalog is named its bus under dapr.enabled, so with it off the catalog would publish no control event and follow none. Enable dapr.enabled, or set catalog.controlEmit=false." }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,14 +12,9 @@ spec:
     matchLabels: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
     metadata:
-      annotations:
-        {{- if .Values.dapr.enabled }}
-        {{- include "rask.daprAnnotations" (list $root .Values.services.catalog.appId .Values.services.catalog.port) | nindent 8 }}
-        {{- end }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: catalog
-        {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
@@ -100,7 +92,7 @@ spec:
             - { name: LANCE_S3_SSE_BUCKET_KEY_ENABLED, value: {{ .bucketKeyEnabled | quote }} }
             {{- end }}
             {{- end }}
-            - { name: LANCE_LINEAGE_EMIT_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
+            - { name: LANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: LANCE_LINEAGE_TRANSPORT, value: "bus" }
             - { name: LANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
             - { name: LANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
@@ -135,9 +127,7 @@ spec:
             {{- fail "catalog.commitReconcile.horizonSeconds must be shorter than services.lineage.eventsRetentionDays: a version older than the feed's retention may have had its row pruned, and the reconciler would announce it again" }}
             {{- end }}
             - { name: LANCE_COMMIT_RECONCILE_HORIZON_SECONDS, value: {{ $horizon | quote }} }
-            {{- if .Values.dapr.enabled }}
             {{- include "lance.busEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}
-            {{- end }}
             {{- if not .Values.auth.enabled }}
             {{- include "lance.governedAuthAck" . | nindent 12 }}
             {{- end }}
@@ -196,14 +186,9 @@ spec:
     matchLabels: { app.kubernetes.io/component: lineage, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
     metadata:
-      annotations:
-        {{- if .Values.dapr.enabled }}
-        {{- include "rask.daprAnnotations" (list $root .Values.services.lineage.appId .Values.services.lineage.port) | nindent 8 }}
-        {{- end }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: lineage
-        {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
@@ -238,9 +223,7 @@ spec:
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root "lineage") | nindent 12 }}
             {{- end }}
-            {{- if .Values.dapr.enabled }}
             {{- include "lance.busEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}
-            {{- end }}
             - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: RASK_CATALOG_IDENTITY_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
             - { name: LINEAGE_PROVENANCE_NAMESPACE, value: {{ include "lance.provenanceNamespace" $root | quote }} }

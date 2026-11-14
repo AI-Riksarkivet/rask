@@ -52,9 +52,6 @@ render:
   (`lance.governedAuthAck`), the acknowledgement `assert_authentication_configured` refuses to boot without. On a real
   deployment that would open every governed door with nobody having said so; the open profile stays a development
   render's.
-- `dapr.dashboard.enabled=true`, read as the template renders it (`lance.daprDashboardEnabled`). The Dapr dashboard
-  authenticates nobody, and its ClusterRole reads every pod and its log in the cluster (`dapr-dashboard.yaml`). It is a
-  development tool: off in values.yaml, on in `deploy/values-local.yaml`.
 
 ## `{{- $hops := list -}}`
 

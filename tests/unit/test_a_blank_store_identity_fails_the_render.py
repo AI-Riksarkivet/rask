@@ -5,7 +5,7 @@ store trusts as its identity provider's client, exchanged for the role `objectSt
 (ADR 0170, [[XC-084]]). A blank audience projects a token the store refuses, and a blank role is refused by STS at the
 first exchange, so either is refused at render rather than at a pod's boot.
 
-A sidecar logs in to the secret store with a token projected for one audience, which every app's role is bound to
+A service logs in to the secret store with a token projected for one audience, which every app's role is bound to
 ([[XC-165]]): a role with no audience admits any token of its ServiceAccount, so a blank audience is refused too.
 """
 

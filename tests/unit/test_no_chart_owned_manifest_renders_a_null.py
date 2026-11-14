@@ -109,6 +109,6 @@ def test_no_chart_owned_document_carries_a_null_value(label: str, overlay: tuple
     offenders = [f"{template} -> {obj}{path}" for template, obj, doc in _own_documents(overlay) for path in _null_paths(doc)]
     assert not offenders, (
         f"under the {label} overlay these chart-owned keys render as YAML null, which an API server "
-        f"may refuse as a type error (Dapr's CRDs do). Emit the key only when it has content, or give "
+        f"may refuse as a type error (a CRD's schema does). Emit the key only when it has content, or give "
         f"it an explicit empty value of the right type:\n  " + "\n  ".join(sorted(offenders))
     )

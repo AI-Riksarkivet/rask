@@ -3,7 +3,7 @@
 :class:`CatalogTableReader` reads a table through ``POST /v1/table/{id}/query`` (a scan, paged and pinned to one
 version), ``/count_rows``, ``describe`` (the current version) and ``/version/list``, over a :class:`CatalogTransport`;
 :class:`RestCatalogTransport` is that transport over HTTP. The base URL comes from the caller, never a hard-coded host,
-and the transport carries a urllib3 ``Retry``, so it runs behind a Dapr service invocation or a proxy unchanged.
+and the transport carries a urllib3 ``Retry``, so it runs behind a proxy unchanged.
 
 The ``/query`` door is vector-search-first: it requires a ``vector`` and ``k`` and has no plain-scan verb, so a scan
 is an EMPTY vector, a bounded ``k`` and the filter.
@@ -213,7 +213,7 @@ def translate_catalog_errors() -> Generator[None]:
         # redacted problem+json, and relaying it is what turns an opaque 500 into the answer the direct
         # path gives — their rationale is recorded and correct. This branch is the one that fires when
         # the responder is NOT the catalog, and on the failure it actually catches that is usually an
-        # ingress or sidecar returning an HTML error page or a proxy diagnostic.
+        # ingress or proxy returning an HTML error page or a diagnostic of its own.
         log.exception("catalog_unavailable", extra={"reason": exc.reason, "body": exc.body})
         raise ServiceUnavailableError("the catalog is unavailable") from exc
 
@@ -222,8 +222,8 @@ class RestCatalogTransport:
     """Live REST catalog transport — ``POST /v1/table/{id}/query`` over HTTP.
 
     Host-agnostic (base URL from settings, never hard-coded) + retry-friendly
-    (urllib3 ``Retry`` via the generated ``Configuration``) so it drops into a Dapr
-    service-invocation or proxy-fronted catalog unchanged. Exercised against the catalog app over HTTP by
+    (urllib3 ``Retry`` via the generated ``Configuration``) so it drops into a
+    proxy-fronted catalog unchanged. Exercised against the catalog app over HTTP by
     ``tests/integration/test_a_catalog_reader_reads_a_whole_table_in_bounded_pages.py``.
     """
 

@@ -217,8 +217,8 @@ lineage's first pull consumer takes up exactly where the old subscription's ackn
 it begins at sequence 1. Measured on a scratch nats-server 2.15.2 prepared as the previous revision left the bus,
 2026-11-14: `lineage-ingest` began at the old consumer's ack floor + 1.
 
-The old subscription acknowledged an event as its sidecar dead-lettered it, and only the route that took the dead
-letter (`DLQ/lineage-dlq-durable`) kept it for the estate admin. A dead letter still waiting on that consumer at the
+The previous revision's consumer `LINEAGE/lineage-durable` acknowledged an event as it dead-lettered it, and only the
+consumer that took the dead letter (`DLQ/lineage-dlq-durable`) kept it for the estate admin. A dead letter still waiting on that consumer at the
 cut-over is therefore an event below the ack floor that nothing recorded or kept, and nothing of this revision reads
 `dlq.lineage.events`. So the step reads that consumer too: while it holds a delivery pending or unacknowledged,
 `lineage-ingest` begins at the stream's first message instead, and the lane is handed every retained event again
