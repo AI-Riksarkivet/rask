@@ -1,6 +1,6 @@
 """A staged outbox object read back and re-announced — ONE copy of each step for every reader.
 
-The reconcile relay (`api/reconcile_cron._drain_outbox`) and the DLQ view and replay
+The relay tick (`api/relay_cron._drain_outbox`) and the DLQ view and replay
 (`api/v1/endpoints/dlq`) read the same staged bytes, and the relay and the replay both hand a recovered
 event on to the bus. Separate copies would let one path drop as poison what another ingests, or tell
 subscribers what another withholds, unseen.
@@ -12,7 +12,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from lakehouse import dapr_publish
+from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the relay's republish is a registered publish site
 from lakehouse.cloud_events import lineage_envelope
 from lineage.core.config import LineageSettings
 from lineage.models import DatasetEvent, RunEvent, parse_event
@@ -38,7 +38,7 @@ def parse_staged(event_json: str) -> RunEvent | DatasetEvent:
         raise UnparseableEventError(str(exc)) from exc
 
 
-async def republish_staged(publisher: object | None, settings: LineageSettings, staged: Mapping[str, Any]) -> None:
+async def republish_staged(publisher: Bus | None, settings: LineageSettings, staged: Mapping[str, Any]) -> None:
     """Re-announce a recovered event on the lineage topic, so its SUBSCRIBERS act on it as well as the feed.
 
     Recording alone repairs the feed and leaves its subscribers unaware: a recovered RUN never reaches
@@ -55,10 +55,4 @@ async def republish_staged(publisher: object | None, settings: LineageSettings, 
     """
     if publisher is None:
         return
-    await dapr_publish.publish_event(  # noqa: TID251
-        publisher,
-        lineage_envelope(staged),
-        pubsub_name=settings.dapr_pubsub,
-        topic_name=settings.dapr_topic,
-        timeout_seconds=settings.dapr_publish_timeout_seconds,
-    )
+    await publish_event(publisher, lineage_envelope(staged), topic=settings.events_topic, timeout_seconds=settings.publish_timeout_seconds)

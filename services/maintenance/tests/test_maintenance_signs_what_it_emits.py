@@ -14,23 +14,24 @@ be made is a withheld event and never a failed pass; maintenance stages no contr
 
 The first two claims are driven through what the worker's process starts with (`maintenance.runtime`) behind the
 fleet's own probes, so the key reaches the emitters the way it does in the cluster: the secret store, the holder, the
-emitters and their author. The secret store is answered by the suite's double, the sidecar's publish is a recording
-stand-in, and the store session is exchanged at moto's STS.
+emitters and their author. The secret store is answered by the suite's double, the connection to the bus is a
+recording stand-in, and the store session is exchanged at moto's STS.
 """
 
 from __future__ import annotations
 
-import json
 import logging
+import time
 from collections.abc import AsyncGenerator, Callable, Iterator, Sequence
 from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.bus_double import BusDouble, session_holding
 from tests.secret_store_double import SecretStoreDouble
 
 from lakehouse.control_emit import emit_control
@@ -40,12 +41,8 @@ from lakehouse.lifecycle import mark_started
 from lakehouse.lineage import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
 from lakehouse.lineage_events import DatasetUuids, dataset_uuids
 from lakehouse.supervision import Supervisor
-from maintenance.core.lineage_emit import DaprMaintenanceEmitter
+from maintenance.core.lineage_emit import BusMaintenanceEmitter
 from maintenance.services.purge import ACTOR
-
-
-if TYPE_CHECKING:
-    from dapr.aio.clients import DaprClient
 
 
 #: Maintenance's service-account subject: the author it stamps, and the identity it signs as.
@@ -54,18 +51,6 @@ IDENTITY = "kubernetes~system:serviceaccount:rask:rask-sa-maintenance"
 KEY_NAME = "rask-sa-maintenance"
 #: The uuids the catalog minted for `acme$events` and for `acme`.
 UUIDS = DatasetUuids(table_uuid="0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f", namespace_uuid="3f2e1d0c-4b5a-4968-8776-a5b4c3d2e1f0")
-
-
-class _Sidecar:
-    """What the service does with its Dapr client: publish, and close at shutdown."""
-
-    published: ClassVar[list[dict[str, Any]]] = []
-
-    async def publish_event(self, *, data: str = "", **_kwargs: object) -> None:
-        _Sidecar.published.append(json.loads(data)["data"])
-
-    async def close(self) -> None:
-        return None
 
 
 class _Published:
@@ -85,7 +70,15 @@ type Boot = Callable[[httpx.Response, httpx.Response], TestClient]
 
 
 @pytest.fixture
-def boot(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble, respx_allows_unused_routes: None, moto_url: str, tmp_path: Path) -> Iterator[Boot]:
+def bus() -> BusDouble:
+    """The connection to the bus the worker's events are published on."""
+    return BusDouble()
+
+
+@pytest.fixture
+def boot(  # noqa: PLR0913 — the fixtures a started, signing worker stands on
+    monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble, bus: BusDouble, respx_allows_unused_routes: None, moto_url: str, tmp_path: Path
+) -> Iterator[Boot]:
     """Start what the worker's process stands on, with signing configured, behind the probes it serves: `boot(seed, keys)`
     answers the running client.
 
@@ -106,8 +99,7 @@ def boot(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble, respx
     from maintenance import runtime
     from maintenance.core.config import get_settings
 
-    monkeypatch.setattr(runtime, "DaprClient", _Sidecar)
-    _Sidecar.published = []
+    monkeypatch.setattr(runtime, "bus_session", session_holding(bus))
     get_settings.cache_clear()
 
     @asynccontextmanager
@@ -186,35 +178,50 @@ def _signed(event: dict[str, Any], public: str) -> tuple[str, str, str, DatasetU
     ],
 )
 def test_every_event_the_service_emits_is_authored_and_signed_as_the_service(
-    boot: Boot, event_signer: Any, kind: str, signed: tuple[str, str, str, DatasetUuids]
+    boot: Boot, bus: BusDouble, event_signer: Any, kind: str, signed: tuple[str, str, str, DatasetUuids]
 ) -> None:
     pair = event_signer(IDENTITY)
     client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}))
 
     _emit(client, kind)
 
-    assert len(_Sidecar.published) == 1, "nothing was published"
-    assert _signed(_Sidecar.published[0], pair.public) == signed
+    assert len(bus.events) == 1, "nothing was published"
+    assert _signed(bus.events[0], pair.public) == signed
 
 
 @pytest.mark.parametrize("kind", [pytest.param("failure", id="a-failure"), pytest.param("purge", id="a-trash-purge")])
-def test_a_maintenance_without_its_key_emits_nothing_and_is_not_ready(boot: Boot, kind: str) -> None:
+def test_a_maintenance_without_its_key_emits_nothing_and_is_not_ready(boot: Boot, bus: BusDouble, kind: str) -> None:
     client = boot(httpx.Response(500), httpx.Response(404))
 
     _emit(client, kind)
     readiness = client.get("/readyz")
 
-    assert _Sidecar.published == [], f"a signer without its key published {len(_Sidecar.published)} events"
+    assert bus.sent == [], f"a signer without its key published {len(bus.sent)} events"
     assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["signing"])
+
+
+def test_a_worker_takes_no_task_while_the_connection_its_control_events_go_out_on_is_away(boot: Boot, bus: BusDouble, event_signer: Any) -> None:
+    """Nothing stages a control event, so one the purge emitted while the connection was away would be lost: the worker
+    waits for the connection as it waits for its key."""
+    pair = event_signer(IDENTITY)
+    client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}))
+    held = client.app.state.held
+    deadline = time.monotonic() + 10
+    while not held.ready() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    takes_tasks_while_up = held.ready()
+
+    bus.down = True
+
+    assert (takes_tasks_while_up, held.ready()) == (True, False)
 
 
 def test_an_emitter_refuses_a_key_for_an_identity_it_does_not_stamp_as_its_author() -> None:
     holder = SigningKeyHolder(identity=IDENTITY, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
 
     with pytest.raises(ValueError, match="signer that is not its event's author"):
-        DaprMaintenanceEmitter(
-            cast("DaprClient", _Sidecar()),
-            pubsub="p",
+        BusMaintenanceEmitter(
+            BusDouble(),
             topic="lineage.events.v1",
             job_namespace="lance",
             dataset_namespace="lance-namespace://localhost/api/catalog",

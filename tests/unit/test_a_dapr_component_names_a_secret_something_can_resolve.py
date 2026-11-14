@@ -29,10 +29,16 @@ authenticates only with a user JWT and the NKEY seed that signs the server's non
 through to an unauthenticated connect, silently. So wherever the store is on, every pub/sub Component names its one app's
 `nats-user-<app>` from that store, the store is scoped to that app (a store a sidecar has not loaded leaves the value empty
 too), and the user the dev seed issues may do what the render configures that app to do: consume through each of its
-components' durables, and publish or consume every topic its pods are given. Besides the deployed overlays this renders the two
-that split a shared component only under a flag. A pod that is not a sidecar (the stream Job; nats-box and the servers of the NATS
-fixture, a prerequisite rask never installs) mounts its credential as a file, so that file must be one an ExternalSecret writes
-from the store.
+components' durables, and publish or consume every topic its pods are given.
+
+A SERVICE'S OWN CONNECTION IS HELD TO THE SAME ([[XC-199]], `lakehouse.bus`). Each service publishes as the bus user its
+pod is named (`RASK_BUS_USER`), with the credential its own store login reads, so that login's policy must read
+`nats-user-<user>`; its acknowledgements arrive under `_INBOX_<user>`, which the table must grant to it and to no other
+user; and it believes a duplicate acknowledgement only after reading the stored message back, so it holds the read of
+exactly the streams that take what it publishes. Besides the deployed overlays this renders the two whose publishers
+differ from theirs. A pod that is not a sidecar and reads no store (the stream Job; nats-box and the servers of the NATS
+fixture, a prerequisite rask never installs) mounts its credential as a file, so that file must be one an ExternalSecret
+writes from the store.
 """
 
 from __future__ import annotations
@@ -46,6 +52,8 @@ from collections import defaultdict
 
 import pytest
 
+from lakehouse.bus import BusSettings
+from lakehouse.control_events import CONTROL_TOPIC
 from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, render
 from tests.unit.test_no_chart_owned_manifest_renders_a_null import _overlays
@@ -54,14 +62,17 @@ from tests.unit.test_no_chart_owned_manifest_renders_a_null import _overlays
 REPO = pathlib.Path(__file__).resolve().parents[2]
 STORE = "lance-secrets"
 _POLICY_PATH = re.compile(r'path "[^"/]+/data/([^"]+)"')
-#: The renders where a component two apps would share is split only under a flag: the control topic's optional publishers, and
-#: maintenance's lineage with no write-event lane to give it a component.
-_SPLIT_UNDER_A_FLAG = [
-    (
-        "every-optional-publisher",
-        (*DEFAULT_ARGS, "--set", "maintenance.controlEmit=true"),
-    ),
+#: The JetStream API call that reads one stored message of a stream, before the stream's name.
+_READ_BACK = "$JS.API.STREAM.MSG.GET."
+#: The renders whose publishers differ from the deployed overlays': the control topic's optional publisher, maintenance
+#: with no write-event lane (no component is its own, and only its own connection reaches the bus), and each service with
+#: one of its publishes switched off.
+_OTHER_PUBLISHERS = [
+    ("every-optional-publisher", (*DEFAULT_ARGS, "--set", "maintenance.controlEmit=true")),
     ("no-write-event-lane", (*DEFAULT_ARGS, "--set", "maintenance.arrivalEnabled=false")),
+    ("no-control-lane", (*DEFAULT_ARGS, "--set", "catalog.controlEmit=false")),
+    ("no-lineage-outbox", (*DEFAULT_ARGS, "--set", "services.lineage.outbox.enabled=false")),
+    ("maintenance-emits-nothing", (*DEFAULT_ARGS, "--set", "maintenance.lineageEmit=false")),
 ]
 
 
@@ -142,10 +153,72 @@ def _bus_credential_problems(docs: tuple[dict, ...], components: list[dict]) -> 
             stream = next((s for s, subject in streams.items() if chart_render.captures(topic, subject)), None)
             if topic not in publish and not (stream and _consumes(publish, stream, durables[app])):
                 problems.append(f"{workload} is configured with {topic}, which nats-user-{app} may neither publish nor consume")
+    return problems + _own_connection_problems(docs, users, streams)
+
+
+def _configured_to_publish(env: dict[str, str]) -> set[str]:
+    """The topics a pod's environment has its service publish on a connection of its own: each service's own switch,
+    and the topic variable or the control lane's one topic beside it."""
+    topics: set[str] = set()
+    if env.get("LANCE_LINEAGE_EMIT_ENABLED") == "true" and env.get("LANCE_LINEAGE_TRANSPORT") == "bus":
+        topics.add(env["LANCE_LINEAGE_TOPIC"])
+    if env.get("LINEAGE_OUTBOX_URI"):
+        topics.add(env["LINEAGE_EVENTS_TOPIC"])
+    if env.get("MAINTENANCE_LINEAGE_EMIT_ENABLED") == "true":
+        topics.add(env["MAINTENANCE_LINEAGE_TOPIC"])
+    if "true" in (env.get("LANCE_CONTROL_EMIT_ENABLED"), env.get("MAINTENANCE_CONTROL_EMIT_ENABLED")):
+        topics.add(CONTROL_TOPIC)
+    return topics
+
+
+def _own_connection_problems(docs: tuple[dict, ...], users: dict[str, tuple[frozenset[str], frozenset[str]]], streams: dict[str, str]) -> list[str]:
+    """Every service the render names a bus user connects with settings its process accepts, as a user the seed issues,
+    with a credential its own store login reads, under an inbox no other user reads; and it may publish exactly the
+    topics its pods are configured to, and read back exactly the streams that take them."""
+    envs = [(workload, chart_render.env_of(container)) for workload, _, container in chart_render.containers(docs)]
+    #: Where a sidecar parks a delivery its retries could not get taken: published by the sidecar, which reads nothing back.
+    parked = {value for _, env in envs for key, value in env.items() if key.endswith("DLQ_TOPIC") and value}
+    problems: list[str] = []
+    configured: dict[str, set[str]] = defaultdict(set)
+    for workload, env in envs:
+        user = env.get("RASK_BUS_USER")
+        if user is None:
+            continue
+        configured[user] |= _configured_to_publish(env)
+        try:
+            BusSettings.model_validate({"RASK_BUS_URL": env.get("RASK_BUS_URL", ""), "RASK_BUS_USER": user})
+        except ValueError as refused:
+            problems.append(f"{workload} is named a bus its process refuses to connect to: {refused}")
+        if user not in users:
+            problems.append(f"{workload} connects to the bus as {user}, a user the seed does not issue")
+            continue
+        if f"nats-user-{user}" not in _granted(docs, env.get("RASK_SECRET_STORE_ROLE", "")):
+            problems.append(f"{workload} connects to the bus as {user}, whose credential its own store login may not read")
+    for user, topics in sorted(configured.items()):
+        if user not in users:
+            continue
+        publish, subscribe = users[user]
+        if f"_INBOX_{user}.>" not in subscribe:
+            problems.append(f"{user} may not receive the acknowledgement of a publish it makes on its own connection")
+        overheard = sorted(
+            other for other, (_, theirs) in users.items() if other != user and any(chart_render.captures(f"_INBOX_{user}.reply", s) for s in theirs)
+        )
+        if overheard:
+            problems.append(f"{overheard} may read the replies to {user}'s own connection")
+        stored = {topic for topic in publish - parked if any(chart_render.captures(topic, subject) for subject in streams.values())}
+        if stored != topics:
+            problems.append(f"{user} may publish {sorted(stored)} on its own connection, and its pods are configured to publish {sorted(topics)}")
+        taking = {stream for topic in topics for stream, subject in streams.items() if chart_render.captures(topic, subject)}
+        read_back = {grant.removeprefix(_READ_BACK) for grant in publish if grant.startswith(_READ_BACK)}
+        if read_back != taking:
+            problems.append(f"{user} publishes into {sorted(taking)} on its own connection and may read a stored message back from {sorted(read_back)}")
+    for user, (publish, _) in sorted(users.items()):
+        if user not in configured and any(grant.startswith(_READ_BACK) for grant in publish):
+            problems.append(f"{user} may read stored messages, and no service connects to the bus as it")
     return problems
 
 
-@pytest.mark.parametrize("label,overlay", [*_overlays(), *_SPLIT_UNDER_A_FLAG], ids=lambda v: v if isinstance(v, str) else "")
+@pytest.mark.parametrize("label,overlay", [*_overlays(), *_OTHER_PUBLISHERS], ids=lambda v: v if isinstance(v, str) else "")
 def test_every_referenced_secret_has_a_store_to_resolve_it(label: str, overlay: tuple[str, ...]) -> None:
     try:
         docs = render(*overlay, *OIDC_ARGS)
@@ -288,3 +361,28 @@ def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_
         secret = mounts["StatefulSet/rask-nats/nats"].get(directory)
         assert secret and file in written[secret]["spec"]["target"]["template"]["data"], f"nats.conf includes {target}, a file no mounted ExternalSecret writes"
         assert target in reloader["args"], f"the config reloader does not watch {target}, so a rotated credential never reaches the server"
+
+
+@pytest.mark.parametrize(
+    ("row", "refusal"),
+    [
+        pytest.param(
+            None, "the service maint connects to the bus as the user maint, which nats.auth.users does not declare", id="a-user-the-table-does-not-declare"
+        ),
+        pytest.param(
+            '{"publish":["lineage.events.v1","probe.maint"],"subscribe":["_INBOX.>"]}',
+            "nats.auth.users.maint grants the service maint no inbox of its own (_INBOX_maint.>)",
+            id="a-user-with-only-the-shared-inbox",
+        ),
+    ],
+)
+def test_a_service_whose_bus_user_cannot_take_its_own_connection_fails_the_render(row: str | None, refusal: str) -> None:
+    """A service connects to the bus as the user its app id names. A user the table does not declare has no credential in
+    the store, and one granted only the shared inbox is handed no acknowledgement, so each publish would time out and stay
+    staged with the pod Ready: the render refuses both. Rendered with no write-event lane, so no component names the
+    user first."""
+    renamed = ("--set", "maintenance.appId=maint", "--set", "maintenance.arrivalEnabled=false")
+    declared = ("--set-json", f"nats.auth.users.maint={row}") if row else ()
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render(*DEFAULT_ARGS, *renamed, *declared)
+    assert refusal in refused.value.stderr

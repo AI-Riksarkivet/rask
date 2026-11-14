@@ -291,10 +291,10 @@ resources:
 #
 # The sidecar term is the one that was missing entirely. `rask.daprAnnotations` said nothing about
 # shutdown, so daprd took its own 5s default — and the kubelet SIGTERMs every container in the pod
-# SIMULTANEOUSLY, so the sidecar was gone before the app's drain window had properly opened. An app
-# that finished its Lance write and then called publish_event published at a sidecar that had already
-# stopped: the write landed, the event did not, and nothing distinguishes that from a write that
-# announces nothing.
+# SIMULTANEOUSLY, so the sidecar was gone before the app's drain window had properly opened. A delivery
+# or a timer tick still in its handler then ends with an answer no sidecar is left to carry to the
+# broker: the delivery is redelivered after its ack wait, and nothing distinguishes that from a
+# subscriber that was slow.
 #
 # `sidecarBlockShutdownSeconds` must sit BETWEEN the two: longer than preStopSeconds or the sidecar
 # still goes first, shorter than the grace period or the kubelet SIGKILLs it mid-flush having made it
@@ -643,17 +643,17 @@ catalog:
     # -- Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates.
     dataBases: []
   # Control-plane change-events: every governance/metadata mutation (grants/warehouses/policies/tables)
-  # publishes a CatalogControlEvent onto a DEDICATED broadcast Dapr topic (catalog.control.v1, no
-  # queueGroupName) that EVERY catalog replica buffers, so the admin console live-refreshes via
-  # GET /management/v1/events. ON renders the catalog-control-pubsub Dapr component + the CATALOG_CONTROL NATS
-  # stream + the broadcast subscription, and turns emission on. On by default (parity with lineage emit)
+  # publishes a CatalogControlEvent on catalog.control.v1 over the catalog's own connection to the bus, and
+  # EVERY catalog replica receives it through a DEDICATED broadcast subscription (no queueGroupName) and buffers
+  # it, so the admin console live-refreshes via GET /management/v1/events. ON renders the CATALOG_CONTROL NATS
+  # stream and its broadcast mirror, the catalog-control-pubsub subscription component, and turns emission on. On by default (parity with lineage emit)
   # — best-effort + fail-open, so a bus outage degrades to "no live refresh + the audit trail still
   # records it", never a failed mutation.
   # BOUNDARY: the ring buffer + its cursor are PER-REPLICA (each broadcast subscriber buffers independently).
   # Correct at services.catalog.replicas=1 (the default). Scaling the catalog past one replica needs session
   # affinity (so a client's polls stick to one replica) or a shared buffer — else a load-balanced poll gets
   # inconsistent cursors and degrades to noisy `reset`s (safe, since events are hints, but wasteful).
-  # -- Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort.
+  # -- Publish catalog control events (catalog.control.v1) on the catalog's own bus connection, broadcast to every replica; renders the CATALOG_CONTROL stream and the broadcast subscription component. Best-effort.
   controlEmit: true
   # -- Dead-letter topic of the catalog's control subscription, for deliveries that exhaust their retries; set only with `controlEmit` and `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.
   controlDlqTopic: dlq.catalog.control
@@ -781,19 +781,19 @@ catalog:
     # -- Seconds a `__manifest` version is kept before the reclaim removes it (LANCE_MANIFEST_RETAIN_SECONDS); a dropped id stays readable in the history this long, and the catalog rebuilds each namespace connection after a quarter of it.
     retainSeconds: 3600 # @schema type: integer; minimum: 0
 
-# Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
-# gets its own derived component `<name>-<app-id>` carrying its queue group + deliver policy
-# (dapr-component.yaml); the subscription routes live in app code (/lineage-events and siblings).
+# The lineage topic, and the Dapr pub/sub components its subscribers take it through. Every service PUBLISHES on its
+# own connection to the bus (lakehouse.bus), so no component publishes. Each SUBSCRIBER app gets a component
+# `<name>-<app-id>` carrying its queue group and deliver policy (dapr-component.yaml); the subscription routes live in
+# app code (/lineage-events and siblings).
 pubsub:
-  # -- Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `<name>-<app-id>` component with its own queue group.
+  # -- Prefix of each subscriber app's Dapr pubsub component, `<name>-<app-id>`, which carries that app's queue group.
   name: lineage-pubsub
-  # -- Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC and siblings).
+  # -- Topic OpenLineage events are published and subscribed on (LANCE_LINEAGE_TOPIC and siblings).
   topic: lineage.events.v1
-  # The DEDICATED broadcast component for the catalog's own control-plane change-events (topic
-  # catalog.control.v1). Separate from `name` (the shared lineage publish component) because it carries NO
-  # queueGroupName — every catalog replica receives every event. Must equal the app's LANCE_CONTROL_PUBSUB
-  # default (services/catalog/core/config.py). Rendered only when catalog.controlEmit is on.
-  # -- Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on.
+  # The component each catalog replica SUBSCRIBES to its own control-plane change-events through (topic
+  # catalog.control.v1). It carries NO queueGroupName, so every catalog replica receives every event. Must equal the
+  # app's LANCE_CONTROL_PUBSUB default (services/catalog/core/config.py). Rendered only when catalog.controlEmit is on.
+  # -- Name of the broadcast (no queue group) Dapr pubsub component the catalog subscribes to catalog.control.v1 through; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on.
   controlName: catalog-control-pubsub
 
 # === The medallion tiers (bronze → silver → gold) =================================================
@@ -1087,10 +1087,10 @@ maintenance:
   # estate's dataset count and the tick interval, and inferring one would be guessing. Set it and the
   # tick logs `sweep_budget_exhausted` with what it executed and what it did not reach, which is the
   # starvation this exists to make visible.
-  # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
-  # dapr.enabled — and the component's `scopes` must list this app-id, which the chart does below;
-  # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).
-  # -- Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.
+  # Announce each reclamation on the catalog's control topic (catalog.control.v1), over the worker's own connection
+  # to the bus as `maintenance`: the flag also issues that user the topic and the read-back of its stream
+  # (`nats.auth.flagged`). Emission is best-effort by design.
+  # -- Announce each reclamation on the catalog control topic (catalog.control.v1) over the worker's own bus connection. Off by default.
   controlEmit: false
 
 # === Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
@@ -1335,18 +1335,18 @@ console:
 # One `helm install` brings these up alongside the app. Turn off for a prod
 # install that uses externally-managed infra. Subchart value overrides live
 # under the same key as the toggle.
-# === NATS — JetStream backs the Dapr pubsub.jetstream components ===================================
-# The event fabric (lineage publish, the catalog control broadcast, the DLQ
-# streams) is the chart's default-on data plane and every one of those hops is a Dapr pubsub.jetstream
-# publish. templates/nats-stream-job.yaml provisions the streams on the bus `nats.url` names (Dapr does
-# not auto-create them).
+# === NATS — JetStream, the one bus every event rides ===============================================
+# The event fabric (lineage, the catalog control broadcast, the DLQ streams) is the chart's default-on data
+# plane: each service publishes on its own connection, and the Dapr pubsub.jetstream components subscribe.
+# templates/nats-stream-job.yaml provisions the streams on the bus `nats.url` names (nothing auto-creates
+# them).
 nats:
   # NATS JetStream is a PREREQUISITE (ADR 0153): the platform runs the bus, and rask never installs a server. The chart
   # carries what is rask's: the address it dials, the stream definitions (the stream Job), and the bus users below.
   # Development gets a three-node bus from deploy/fixtures/nats, at `nats://rask-nats:4222` (deploy/values-local.yaml).
-  # -- NATS JetStream address every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.
+  # -- NATS JetStream address every service, every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.
   url: ""
-  # -- NetworkPolicy egress rules ({to, ports}) admitting the bus's clients (every pod with a Dapr sidecar, the stream Job) to the platform's bus at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment, where the bus is the platform's.
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the bus's clients (every pod whose service or sidecar connects to it, the stream Job) to the platform's bus at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment, where the bus is the platform's.
   egress: []
   # Raft replication for every provisioned stream. A streamReplicas above the bus's node count makes `nats stream add`
   # fail outright rather than degrade.
@@ -1363,13 +1363,19 @@ nats:
   # a SYS account, and one APP account that holds JetStream and every user below, verified by the MEMORY resolver against the
   # account key, so issuing or re-issuing a user never touches the server.
   #
-  # THE TABLE (`users`) IS THE ONE DECLARATION: one user per Dapr app-id that holds a pubsub.jetstream Component, plus `admin`
-  # (the stream Job) and `monitor` (nats-box, read-only). The dev seed issues exactly these permissions, each user's secret is
-  # read only by its own app's store login (no app's Configuration lets its code read one), the components name them, and the
-  # attestation below lists them. The rules, from the
+  # THE TABLE (`users`) IS THE ONE DECLARATION: one user per service, named by its Dapr app-id, plus `admin` (the stream
+  # Job) and `monitor` (nats-box, read-only). A service connects as its user twice: its own connection, on which it
+  # publishes (`lakehouse.bus`, RASK_BUS_USER), and its sidecar's pubsub.jetstream Components, through which it
+  # subscribes. The dev seed issues exactly these permissions, each user's secret is read only under its own app's
+  # store login (the service's, and its sidecar's for the components that name it), and the attestation below lists
+  # them. The rules, from the
   # components and the call sites, measured on nats-server 2.14.2 with protocol tracing on 2026-10-04:
-  #   - a publisher may publish its topics and receive on _INBOX.>, where the publish acknowledgement arrives;
-  #   - a subscriber on stream S through durable D also requests $JS.API.STREAM.NAMES (unless its component sets streamName),
+  #   - a service publishes its topics on its own connection and receives each acknowledgement under an inbox prefix of
+  #     its own, `_INBOX_<user>.>`, which no other user holds. It believes a duplicate acknowledgement only once it has
+  #     read back the stored message the acknowledgement names (`$JS.API.STREAM.MSG.GET.<stream>`, on each stream it
+  #     publishes to): a message id names nobody, so any publisher on a topic can store a message under another's id;
+  #   - a sidecar receives on `_INBOX.>` (Dapr exposes no inbox prefix). Subscribing
+  #     on stream S through durable D it also requests $JS.API.STREAM.NAMES (unless its component sets streamName),
   #     $JS.API.CONSUMER.INFO.S.D and $JS.API.CONSUMER.CREATE.S.D.> (the create and the bind's lookup), and acknowledges on
   #     $JS.ACK.S.D.>. The server sends the v1 ack subject `$JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<ts>.<pending>`
   #     (measured, and FeatureFlagJsAckFormatV2 is false at v2.14.2; `js_ack_fc_v2` keeps that default in 2.15, whose
@@ -1382,16 +1388,15 @@ nats:
   #   - only admin (the stream Job's own command set, measured) creates a stream or deletes
   #     a consumer, no app holds $JS.API.>, and monitor reads stream and consumer state but no message and publishes nothing.
   # catalog.control.v1 is published by the catalog and by maintenance under maintenance.controlEmit. A grant that only a
-  # flag's component uses sits under
+  # flag's call site uses (a component it renders, a connection it has a service open) sits under
   # `flagged`, keyed by that flag's value path, and is issued only while the flag is on (lance.natsTable), so with every flag
   # at its default no user holds a grant no call site uses (the broker lane fails a table broader than its call sites). A
   # user's publish and subscribe lists must not be empty: nsc issues an empty list as unrestricted. A missing allowance fails closed and silently (a refused subscribe retries forever while the pod stays
   # Ready), so a changed component, durable or topic changes this table in the same commit: tests/unit/test_a_dapr_component_
   # names_a_secret_something_can_resolve.py fails a render whose components or configured topics a user does not cover.
   #
-  # EACH COMPONENT IS ONE APP'S CONNECTION. A component two apps shared gave both the same credential, so the publish-only
-  # half of each is its own component: maintenance announces on `<pubsub.controlName>-maintenance`, and
-  # maintenance publishes its lineage on `lineage-pubsub-maintenance` even with the write-event lane off.
+  # EACH COMPONENT IS ONE APP'S SUBSCRIPTION, AND NONE PUBLISHES. Every service publishes on its own connection, as its
+  # own user, so a component exists only where an app subscribes, scoped to that app.
   #
   # THE DEV MINT (openbao-seed.yaml; owner ruling R1: the NATS fixture and the dev OpenBao are dev stand-ins, and their
   # durability across a stand-in's loss is not a goal). The dev store is the fixture bus's issuer, and grants ESO read on
@@ -1416,8 +1421,13 @@ nats:
   # client carries its credential either way. The dev fixture's operator mode (deploy/fixtures/nats, `nats.auth.server`) reads
   # the server config and the route credential from this chart's dev store.
   #
-  # RESIDUALS, named: _INBOX.> is shared by the Dapr apps within the APP account (a client could read another's replies;
-  # Dapr exposes no inbox prefix), while the maintenance worker, which connects itself, reads its own; the catalog's grant on CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's durable is
+  # RESIDUALS, named: a service has ONE user, so the connection its process opens may do what its sidecar may, and
+  # each service's user holds `_INBOX.>` for its sidecar beside the inbox of its own: within the APP account one
+  # service's credential could read the replies to another's sidecar (never the replies to a service's own
+  # connection or to the maintenance worker's, which arrive under an inbox of their own); a publisher's read-back
+  # grant ($JS.API.STREAM.MSG.GET.<stream>) reads any message of the stream it publishes into, by sequence, since the
+  # bus scopes that call by stream and no finer; the catalog's grant on
+  # CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's durable is
   # named by its pod, so one replica could ack another's broadcast copy (the same identity, and the copies are hints); and
   # 8222 monitoring is unauthenticated by design.
   auth:
@@ -1425,12 +1435,21 @@ nats:
     provisioned: false
     # -- Extra user grants keyed by a values flag path, or several joined by `,` that must all be true, merged into `nats.auth.users` only while the key holds (lance.natsTable).
     flagged:
+      catalog.controlEmit:
+        catalog:
+          publish: [catalog.control.v1, $JS.API.STREAM.MSG.GET.CATALOG_CONTROL] # its own connection: the topic, and the read-back of a duplicate acknowledgement
       catalog.controlEmit,dapr.resiliency.enabled:
         catalog:
           publish: [dlq.catalog.control] # catalog.controlDlqTopic, where its sidecar parks a control event its retries could not deliver
+      services.lineage.outbox.enabled:
+        lineage:
+          publish: [lineage.events.v1, $JS.API.STREAM.MSG.GET.LINEAGE] # recovered signed bytes, republished on its own connection, and their read-back
+      maintenance.lineageEmit:
+        maintenance:
+          publish: [lineage.events.v1, $JS.API.STREAM.MSG.GET.LINEAGE] # the worker's passes, on a connection of this user beside the queue's, and their read-back
       maintenance.controlEmit:
         maintenance:
-          publish: [catalog.control.v1]
+          publish: [catalog.control.v1, $JS.API.STREAM.MSG.GET.CATALOG_CONTROL] # the worker's own connection: the topic, and the read-back of a duplicate acknowledgement
       maintenance.arrivalEnabled,dapr.resiliency.enabled:
         maintenance:
           publish: [dlq.maintenance.arrival] # maintenance.arrivalDlqTopic
@@ -1440,23 +1459,22 @@ nats:
             - $JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable
             - $JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.>
             - $JS.ACK.LINEAGE.maintenance-durable.>
-    # -- The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty).
+    # -- The bus user table, one user per service (its Dapr app-id) plus admin and monitor, each with publish and subscribe subject lists (never empty).
     users:
       admin:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.STREAM.UPDATE.LINEAGE, $JS.API.STREAM.UPDATE.DLQ, $JS.API.STREAM.UPDATE.CATALOG_CONTROL, $JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST, $JS.API.STREAM.UPDATE.MAINTENANCE_TASKS, $JS.API.STREAM.UPDATE.MAINTENANCE_SCHEDULES, $JS.API.STREAM.UPDATE.STORE_EVENTS, $JS.API.STREAM.UPDATE.KV_MAINTENANCE_CLAIMS, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
         subscribe: [_INBOX.>]
       catalog:
         publish:
-          - lineage.events.v1
-          - catalog.control.v1
+          - lineage.events.v1 # every committed write, on its own connection
+          - $JS.API.STREAM.MSG.GET.LINEAGE # its own connection reads back the stored message a duplicate acknowledgement names (lakehouse.bus)
           - $JS.API.CONSUMER.INFO.CATALOG_CONTROL_BROADCAST.* # each replica's durable, named by its pod
           - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL_BROADCAST.*.>
           - $JS.ACK.CATALOG_CONTROL_BROADCAST.*.>
           - probe.catalog # its sidecar's own connections, probed (lakehouse.bus_watchdog); no stream captures it
-        subscribe: [_INBOX.>]
+        subscribe: [_INBOX.>, _INBOX_catalog.>] # its sidecar's replies, and its own connection's
       lineage:
         publish:
-          - lineage.events.v1 # recovered signed bytes, republished
           - dlq.lineage.events
           - $JS.API.STREAM.NAMES
           - $JS.API.CONSUMER.INFO.LINEAGE.lineage-durable
@@ -1466,13 +1484,12 @@ nats:
           - $JS.API.CONSUMER.CREATE.DLQ.lineage-dlq-durable.>
           - $JS.ACK.DLQ.lineage-dlq-durable.>
           - probe.lineage
-        subscribe: [_INBOX.>]
+        subscribe: [_INBOX.>, _INBOX_lineage.>]
       maintenance:
         publish:
-          - lineage.events.v1
           - $JS.API.STREAM.NAMES
           - probe.maintenance
-        subscribe: [_INBOX.>]
+        subscribe: [_INBOX.>, _INBOX_maintenance.>]
       # The maintenance worker's own user (ADR 0198 decision 5): its app talks to the bus directly, since Dapr's subscription
       # sends no in-progress ack and its publish no schedule header. Pull and ack on its three durables, tasks and schedules
       # published, the two queue streams' info for the audit's count, and the claim a pass holds on its table in the
@@ -1501,7 +1518,7 @@ nats:
           - $KV.MAINTENANCE_CLAIMS.>
           - $JS.API.STREAM.INFO.KV_MAINTENANCE_CLAIMS
           - $JS.API.DIRECT.GET.KV_MAINTENANCE_CLAIMS.>
-        subscribe: [_INBOX_maintenance.>]
+        subscribe: [_INBOX_maintenance-worker.>]
       # The development store's own user (deploy/fixtures/rustfs): it publishes each object write of a rask bucket on
       # store.events, and reads STORE_EVENTS's info, which RustFS checks before it publishes there. A platform's store
       # delivers there by its operator's means (`objectStore.events.provisioned`).
@@ -1521,7 +1538,7 @@ nats:
 # dapr.io/v1alpha1.
 dapr:
   # One switch for "rask uses Dapr". Off runs plain pods with no Components, and services call each other on their Service URLs.
-  # -- Use Dapr: inject a daprd sidecar into every lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it.
+  # -- Use Dapr: inject a daprd sidecar into every lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. Each service is named its bus (`RASK_BUS_URL`, `RASK_BUS_USER`) under this switch too, so off, none publishes.
   enabled: true
   # -- Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it.
   controlPlaneNamespace: dapr-system
@@ -1542,11 +1559,6 @@ dapr:
   # give the Collector its own namespace at `baseline`, or a ServiceAccount PSA exemption.
   # -- Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`.
   sidecarRestricted: false
-  # Bound every DaprClient gRPC call (publish_event has no per-call timeout arg, and the SDK's default
-  # deadline is unset) so a wedged sidecar can't hang a publisher indefinitely — a timeout surfaces as a
-  # publish failure the caller handles instead of a stuck request.
-  # -- Deadline in seconds for every DaprClient gRPC call (DAPR_API_TIMEOUT_SECONDS), so a wedged sidecar fails a publish instead of hanging it.
-  apiTimeoutSeconds: 30
   # The Dapr app-API token is not a value: it is the store's `dapr-app-token`, written by ESO into
   # `<release>-dapr-app-token` for the injector (templates/external-secrets.yaml). Dapr stamps it as
   # `dapr-api-token` on every delivery, so the sidecar-delivered routes reject a forged request.

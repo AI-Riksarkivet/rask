@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 from tests.secret_store_double import SecretStoreDouble
 
 from lakehouse import location_claims
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.lineage.signing import RefusalReason
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from maintenance.api import arrival as route
@@ -329,7 +330,7 @@ def test_a_task_is_queued_only_when_the_door_admits_its_signature(
 
     answered = client.post(
         "/maintenance-arrival",
-        json={"id": "ce-1", "specversion": "1.0", "type": "com.dapr.event.sent", "datacontenttype": "application/json", "data": arrived},
+        json=lineage_envelope(arrived).as_wire(),
         headers={"dapr-api-token": TOKEN},
     )
 
@@ -350,13 +351,7 @@ def test_a_door_that_cannot_read_the_signers_keys_asks_for_the_event_again(*, ar
 
     answered = client.post(
         "/maintenance-arrival",
-        json={
-            "id": "ce-2",
-            "specversion": "1.0",
-            "type": "com.dapr.event.sent",
-            "datacontenttype": "application/json",
-            "data": delegator.sign(_arrived_write(), on_behalf_of=AUTHOR),
-        },
+        json=lineage_envelope(delegator.sign(_arrived_write(), on_behalf_of=AUTHOR)).as_wire(),
         headers={"dapr-api-token": TOKEN},
     )
 

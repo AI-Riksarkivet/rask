@@ -1,6 +1,6 @@
 """The CONTROL lane's relay — the cron tick that re-publishes staged ``catalog.control.v1`` events.
 
-``DaprControlEmitter.emit`` stages every control event to ``LANCE_CONTROL_OUTBOX_URI`` before it
+``BusControlEmitter.emit`` stages every control event to ``LANCE_CONTROL_OUTBOX_URI`` before it
 publishes and drops it only on ack, so a NATS blip leaves the event durable rather than gone. This is
 the other half: the thing that reads that prefix and delivers what it finds.
 
@@ -29,8 +29,8 @@ which is no more than any publisher on the topic could put there itself.
 INGEST — it records each recovered event in the commit feed and the edge list, work only that service
 can do. A control event has no feed to re-ingest into; the only thing owed to it is delivery onto the
 topic it never reached. That makes the producer the right host: the catalog already owns the prefix
-(``LANCE_CONTROL_OUTBOX_URI``), the component name (``LANCE_CONTROL_PUBSUB``), the S3 credentials that
-address the prefix, and a Dapr sidecar. Any other service would have to be taught all four, and a
+(``LANCE_CONTROL_OUTBOX_URI``), the S3 credentials that address the prefix, and the bus user that may
+publish the topic. Any other service would have to be given all three, and a
 second copy of "which prefix does the control lane stage to" is how the two ends drift apart.
 
 **WHY A CRON BINDING, NOT THE JOBS API.** ``.claude/skills/rask-dapr`` records the 2026-08-28 ruling:
@@ -60,7 +60,8 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from catalog.api.cron import mount_cron
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
-from lakehouse import dapr_publish, outbox, outbox_metrics
+from lakehouse import outbox, outbox_metrics
+from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the control relay is a registered publish site
 from lakehouse.cloud_events import CloudEvent, control_envelope
 from lakehouse.control_events import CONTROL_TOPIC
 from lakehouse.governed.dapr_auth import require_dapr_token
@@ -125,19 +126,17 @@ class ControlRelayReport(BaseModel):
     reason: str = ""
 
 
-def get_control_publisher(request: Request) -> object | None:
-    """The lifespan-built Dapr client, or ``None`` when this deployment has no sidecar transport.
+def get_control_publisher(request: Request) -> Bus | None:
+    """This process's connection to the bus, or ``None`` when the chart names it no bus.
 
-    Read off ``app.state`` rather than constructed here: a per-tick client would open and discard a
-    gRPC channel every cron interval, and a deployment with control emission off has no client to build.
-    Typed ``object`` because concrete Dapr clients differ in signature and this module only forwards one
-    to ``dapr_publish``. ``None`` makes the tick a pure OBSERVATION — it still reports depth and age, so
+    Read off ``app.state``, where the lifespan keeps the one connection the process holds (`lakehouse.bus`).
+    ``None`` makes the tick a pure OBSERVATION — it still reports depth and age, so
     a backlog accruing on a mis-wired deployment is visible instead of silently unmeasured.
     """
-    return getattr(request.app.state, "dapr_client", None)
+    return getattr(request.app.state, "bus", None)
 
 
-ControlPublisherDep = Annotated[object | None, Depends(get_control_publisher)]
+ControlPublisherDep = Annotated[Bus | None, Depends(get_control_publisher)]
 
 
 def published_keys(request: Request) -> PublishedKeys:
@@ -199,7 +198,7 @@ def _action_of(event_json: str) -> str | None:
     return bounded(action) if isinstance(action, str) and action else None
 
 
-async def _republish(publisher: object, settings: Settings, envelope: CloudEvent) -> None:
+async def _republish(publisher: Bus, settings: Settings, envelope: CloudEvent) -> None:
     """Deliver ONE staged event onto the control topic, in the envelope derived from the staged event.
 
     Never the envelope of ``event.model_dump()``. Round-tripping through the model re-serializes ``occurred_at``,
@@ -211,12 +210,10 @@ async def _republish(publisher: object, settings: Settings, envelope: CloudEvent
     topic keys on it: the catalog's own ring buffer dedupes on ``event_id``, and a notifier keys what it delivers on it
     too (a ledger on ``<event_id>@<ACTION>``).
     """
-    await dapr_publish.publish_event(  # noqa: TID251
-        publisher, envelope, pubsub_name=settings.control_pubsub, topic_name=CONTROL_TOPIC, timeout_seconds=settings.control_emit_timeout_seconds
-    )
+    await publish_event(publisher, envelope, topic=CONTROL_TOPIC, timeout_seconds=settings.control_emit_timeout_seconds)
 
 
-async def _drain(settings: Settings, publisher: object | None, verify: StagedVerifier | None) -> ControlRelayReport:
+async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifier | None) -> ControlRelayReport:
     """Re-publish and drop every staged control event this catalog may deliver, oldest first, up to :data:`DRAIN_LIMIT`.
 
     PUBLISH BEFORE DROP, never the other way round: a publish that fails must leave the object for the
@@ -244,8 +241,8 @@ async def _drain(settings: Settings, publisher: object | None, verify: StagedVer
         return report
     if publisher is None:
         # No transport, so nothing here can be delivered — and NOTHING is dropped, because the staged
-        # objects are the only copies. Reported rather than silent: a rendered outbox with no sidecar
-        # client is a misconfiguration whose only symptom is a backlog that never falls.
+        # objects are the only copies. Reported rather than silent: a rendered outbox in a process the chart
+        # names no bus is a misconfiguration whose only symptom is a backlog that never falls.
         log.warning("control_relay_no_publisher", extra={"depth": depth, "oldest_age_seconds": report.oldest_age_seconds})
         return report
 

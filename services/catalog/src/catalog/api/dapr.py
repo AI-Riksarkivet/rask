@@ -1,12 +1,11 @@
 """Dapr pub/sub subscription for the catalog's own control-plane change-event stream.
 
-The catalog **publishes** ``CatalogControlEvent``s (``core/control_emit.py``) onto the dedicated broadcast
-component ``catalog-control-pubsub`` (topic ``catalog.control.v1``) and also **subscribes** to it here —
-**without** a ``queueGroupName``, so **every** catalog replica receives **every** event (broadcast fan-out,
-not a competing-consumer group) and appends it to its own per-replica ring buffer
+The catalog publishes ``CatalogControlEvent``s on ``catalog.control.v1`` over its own connection to the bus
+(``lakehouse.control_emit``), and each replica **subscribes** to that topic here, through the dedicated broadcast
+component ``catalog-control-pubsub`` — **without** a ``queueGroupName``, so **every** catalog replica receives
+**every** event (broadcast fan-out, not a competing-consumer group) and appends it to its own per-replica ring buffer
 (``core/control_buffer.py``). The poll endpoint (``GET /management/v1/events``) then serves each replica's buffer to
-the console. There is **no broker client in app code** — the Dapr sidecar owns delivery; this is a plain
-HTTP route the sidecar POSTs each event to.
+the console. The sidecar owns the delivery: this is a plain HTTP route it POSTs each event to.
 
 ``DaprApp(app)`` always serves GET ``/dapr/subscribe`` (the registration the sidecar reads at startup, answered to
 the sidecar's token alone); the

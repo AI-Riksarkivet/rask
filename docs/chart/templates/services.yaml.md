@@ -5,8 +5,8 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `apiVersion: apps/v1`
 
-Catalog (producer) — creates Lance tables on S3 and PUBLISHES OpenLineage events to the Dapr
-pubsub.jetstream component. The daprd sidecar (injected by the annotations) carries the publish to NATS.
+Catalog (producer): creates Lance tables on S3 and publishes its OpenLineage events and its control broadcast on NATS
+JetStream, over a connection of its own as the bus user `lance.busEnv` names it (`lakehouse.bus`).
 
 ## `args:`
 
@@ -101,6 +101,14 @@ asked for: an empty value would reach the writer as an option object_store does 
 recognise, and it drops those silently — plaintext under a config claiming otherwise.
 The catalog REFUSES an invalid pairing at boot rather than passing it on.
 
+## `- { name: LANCE_LINEAGE_EMIT_ENABLED, value: {{ .Values.dapr.enabled | quote }} }`
+
+The catalog announces on the bus only where the chart names it one. `lance.busEnv` renders `RASK_BUS_URL` and
+`RASK_BUS_USER` under `dapr.enabled`, and a catalog told to emit on the bus with no bus named refuses to start
+(`catalog.core.config`), so the emit switch is rendered from the same value: a render with no bus is a catalog that
+announces nothing, never one that fails its start. Pinned by
+`tests/unit/test_invariants.py::test_the_catalog_is_switched_to_publish_only_where_it_is_named_a_bus`.
+
 ## `- { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }`
 
 #4 transactional outbox on the catalog's LINEAGE lane. The emit is inline-awaited and
@@ -124,9 +132,9 @@ the two services cannot name different namespaces.
 
 ## `- { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.cata...`
 
-Control-plane change-events (opt-in, best-effort — the governance/metadata stream). ON →
-mutations publish a CatalogControlEvent onto a DEDICATED broadcast pubsub (no queueGroupName)
-under topic catalog.control.v1; every replica buffers every event for GET /management/v1/events. hasKey+
+Control-plane change-events (opt-in, best-effort: the governance/metadata stream). ON: mutations publish a
+CatalogControlEvent on catalog.control.v1 over the catalog's own connection to the bus, and every replica receives
+every event through a DEDICATED broadcast component (no queueGroupName) and buffers it for GET /management/v1/events. hasKey+
 ternary (NOT `| default`, which treats false as empty) so a key missing under
 `helm upgrade --reuse-values` renders the default, not "" (pydantic bool_parsing crash).
 
@@ -157,11 +165,6 @@ lifespan also asserts it is set when control eventing is on (fail-closed, not si
 
 Same rule as maintenance's: this verifies the header the SIDECAR
 stamps, so without one there is nothing to verify and the Secret is not rendered.
-
-## `- { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }`
-
-Bound the DaprClient gRPC deadline (the SDK env) — the lineage publish is awaited INLINE in
-every write handler, so a wedged sidecar/NATS would otherwise hang every catalog write.
 
 ## `{{- if not .Values.autoscaling.enabled }}`
 
@@ -303,11 +306,6 @@ sidecar retry schedule park here (visibility only — replay-from-stream stays t
 The parking subscription's OWN durable component (dapr-component.yaml, `-dlq` suffix) —
 never the main deliverPolicy=all component, whose replay would re-park the whole retained
 DLQ backlog.
-
-## `- { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }`
-
-Bound every unary call the Dapr client makes to the sidecar (the SDK env). A publish carries a tighter bound of its
-own (`lakehouse.dapr_publish`), and no secret is read through the sidecar.
 
 ## `- { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }`
 

@@ -71,7 +71,7 @@ Dapr's sidecar injector is a MUTATING WEBHOOK, and its MutatingWebhookConfigurat
 `failurePolicy: Ignore` by default: a pod created while the injector is unreachable (a restart, an
 outage) is SILENTLY admitted unmutated and comes up with NO daprd container at all. Nothing recreates
 that pod — a CrashLoopBackOff restarts the container inside the SAME pod, which will never gain a
-sidecar — so the app in it publishes nothing and takes no delivery and no tick, which only a sidecar brings, for
+sidecar — so the app in it takes no delivery and no tick, which only a sidecar brings, for
 as long as that pod lives.
 
 Fix, in the control plane rask runs against (a prerequisite; deploy/fixtures/dapr/values.yaml in
@@ -109,9 +109,9 @@ renders.
 THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. This block emitted nothing about
 shutdown, so daprd took its 5s default while the app was still inside its own preStop sleep —
 and since the kubelet SIGTERMs every container simultaneously, the sidecar was gone before the
-app had begun draining. A handler that finished its Lance write and then published its event at a
-sidecar that had already stopped landed the write and lost the event, which is indistinguishable
-from a write that announces nothing.
+app had begun draining. A delivery or a timer tick still in its handler then ended with an answer no
+sidecar was left to carry to the broker, and was delivered again after its ack wait, which is
+indistinguishable from a subscriber that was slow.
 Derived from the same `lifecycle` block that feeds preStop and the grace period, so the three
 numbers cannot drift — see the arithmetic in values.yaml.
 
@@ -351,11 +351,17 @@ Measured against the live cluster 2026-08-31.
 
 ## `{{- define "lance.busEnv" -}}`
 
-The bus a pod's sidecar connects to, named to the pods whose sidecar holds a `pubsub.jetstream` component (catalog,
-lineage, maintenance). Each service watches its own sidecar with it and restarts the sidecar once one of
-its connections has closed for good and the bus greets a new connection again (`lakehouse.bus_watchdog`, [[XC-095]]):
-Dapr 1.18.1's component never reconnects past nats.go's default 60 attempts (components-contrib#4563). An address, not
-a credential: the sidecar's own connection carries the app's bus user.
+The bus as a service's process reaches it (list $root <user>): its address (`RASK_BUS_URL`) and the bus user the process
+connects as (`RASK_BUS_USER`), for catalog, lineage and maintenance. Each service publishes its events on a connection
+of its own as that user (`lakehouse.bus`, [[XC-199]]), with the credential it reads from the store under its own login
+(`nats-user-<user>`, granted by `lance.storeReads`) and replies arriving under `_INBOX_<user>`, which `nats.auth.users`
+grants to that user alone. The render refuses a user the table does not declare: the store would hold no credential
+for it, and the process would never connect. A name and an address, never a credential.
+
+The address also serves the watch each service keeps on its own sidecar: it restarts the sidecar once one of the
+sidecar's connections has closed for good and the bus greets a new connection again (`lakehouse.bus_watchdog`,
+[[XC-095]]), since Dapr 1.18.1's component never reconnects past nats.go's default 60 attempts
+(components-contrib#4563).
 
 ## `{{- define "lance.subPubsub" -}}`
 
@@ -397,10 +403,6 @@ A pub/sub Component's credential (list $root $appId): its one app's user, from t
 ## `{{- define "lance.natsAuth" -}}`
 
 The store that resolves a Component's credential, only while one exists (a null `auth:` is refused by the CRD).
-
-## `{{- define "lance.publishPubsub" -}}`
-
-A PUBLISH-ONLY pub/sub Component (list $root $name $appId): one app's connection, carrying no consumer settings.
 
 ## `{{- define "lance.mintsDevCredentials" -}}`
 
@@ -946,23 +948,27 @@ there would let lineage read every secret in the store: refused at the render, b
 ## `{{- define "lance.storeReads" -}}`
 
 WHO READS WHAT FROM THE STORE, ONE TABLE ([[XC-165]], ADR 0169): app id -> {its ServiceAccount, `api` (the secrets its
-code reads under its own login to the store, `lakehouse.governed.secrets`), `components` (the secrets its sidecar's own
-components resolve: its bus user)}. Every place that decides a read is a view of it: its store role's policy grants
+code reads under its own login to the store, `lakehouse.governed.secrets`: its bus user among them, for the connection
+it publishes on), `components` (the secrets its sidecar's own components resolve: the same bus user, where a
+subscription component names it)}. Every place that decides a read is a view of it: its store role's policy grants
 `api` and `components` (the seed's `policy-<release>-<app>.json`), its environment names that role
 (`lance.secretStoreEnv`), and an app with neither reads nothing, so it gets no store at all (`lance.secretScopes`). Two
 lists that agreed when written are how a read gets refused at runtime, or granted past its owner, so nothing restates
 it.
 
 THE STORE'S READERS DO NOT HANG ON THE SIDECAR ([[XC-199]]). A service reads its own secrets whatever carries the bus, so
-its role, its policy and its login render with `dapr.enabled` off. Only what a sidecar itself needs follows that
-switch: the app token its Dapr doors check, each component's bus user, and maintenance's work-queue user, which the
-worker the same switch renders reads. Pinned by
+its role, its policy and its login render with `dapr.enabled` off. What follows that switch is what it renders a
+reader for: the app token its Dapr doors check, each subscription component's bus user, and the bus users a process
+reads for itself, since the same switch names each service its bus (`lance.busEnv`) and renders maintenance's worker
+(its work-queue user). Pinned by
 `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 
 The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
 (`dapr-app-token`, a signer's public key), never a copy, so a rotation writes one place. The verifier
 lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
-`signing.doors`), and a signer reads its own pair. The pub/sub condition restates `dapr-component.yaml`'s, so
+`signing.doors`), and a signer reads its own pair. A service's own read of its bus user restates when its process
+opens a connection (the catalog always, lineage with its outbox, maintenance's worker when it emits), and a
+component's restates `dapr-component.yaml`'s subscriptions, so
 `tests/unit/test_a_dapr_component_names_a_secret_something_can_resolve.py` checks, over every overlay CI deploys, that
 each scoped sidecar's own policy reads every secret its components name.
 

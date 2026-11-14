@@ -1,9 +1,8 @@
 """Durable object-store outbox for lineage events (#4) — narrows the loss window to commit→stage.
 
-A producer commits its Lance write and then does a FIRE-AND-FORGET Dapr publish (the sidecar accepts the
-RPC but there is no broker/consumer ack). A crash between the commit and a durable delivery loses the
-lineage event: the data landed but the feed never learns of it. The DLQ only catches events that were
-published *then* failed delivery.
+A producer commits its Lance write and then publishes its event on the bus. A crash between the commit and the
+stream's acknowledgement loses the lineage event: the data landed but the feed never learns of it. The DLQ only
+catches events that were published *then* failed delivery.
 
 The outbox narrows it: the producer stages the FULL event JSON — a ``RunEvent``, or the ``DatasetEvent``
 every catalog DDL change is — under ``<outbox_uri>/<its envelope's id>.json`` BEFORE the publish,
@@ -32,6 +31,7 @@ from contextlib import suppress
 import pyarrow.fs as pafs
 
 from lakehouse import outbox_metrics
+from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the outbox is a registered publish site
 from lakehouse.cloud_events import CloudEvent
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage import split_s3_uri
@@ -261,13 +261,12 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
 
 
 async def publish_with_outbox(
-    publisher: object,
+    bus: Bus,
     envelope: CloudEvent,
     *,
     outbox_uri: str,
     storage_options: StorageOptions,
-    pubsub_name: str,
-    topic_name: str,
+    topic: str,
     timeout_seconds: float,
 ) -> None:
     """Durably publish ANY bus event: stage → publish → drop-on-ack (#4).
@@ -287,7 +286,7 @@ async def publish_with_outbox(
     publish's failures are, so a store refusing every delete shows as itself rather than as a backlog nobody explains.
 
     Args:
-        publisher: The sidecar's client.
+        bus: This process's connection to the bus (`lakehouse.bus`).
         envelope: The event in the envelope its lane derives from it (`lakehouse.cloud_events`). What is staged is the
             event alone, ``envelope.data``, as its producer signed it: the relay that delivers a staged copy derives
             the same envelope from it, so the copy goes out under the id the first publish carried.
@@ -295,16 +294,13 @@ async def publish_with_outbox(
             lineage relay records into the feed), so two lanes on one prefix would feed each relay the other's events.
             Empty publishes unstaged: the outbox is opt-in.
         storage_options: What reaches that prefix.
-        pubsub_name: The pub/sub component to publish through.
-        topic_name: The lane's topic.
+        topic: The lane's topic.
         timeout_seconds: How long the publish may take.
 
     Raises:
         UnpublishedEventError: The publish did not reach the bus; its ``staged`` says whether the relay holds the event.
     """
     from fastapi.concurrency import run_in_threadpool
-
-    from lakehouse import dapr_publish
 
     event_json = json.dumps(envelope.data)
     staged = bool(outbox_uri)
@@ -322,7 +318,7 @@ async def publish_with_outbox(
         else:
             outbox_metrics.record_staged()
     try:
-        await dapr_publish.publish_event(publisher, envelope, pubsub_name=pubsub_name, topic_name=topic_name, timeout_seconds=timeout_seconds)  # noqa: TID251
+        await publish_event(bus, envelope, topic=topic, timeout_seconds=timeout_seconds)
     except Exception as exc:
         # A staged event REMAINS staged — that is the crash window working, not data loss. Counted so a sustained publish
         # outage is visible (rising failures + rising depth) instead of silent. Whether it is staged is this call's to say,

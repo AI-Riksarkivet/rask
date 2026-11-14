@@ -1,7 +1,7 @@
 """The Dapr sidecar must outlive the app's drain, not race it.
 
 open_fastapi-audit — "The Dapr sidecar's shutdown is not bounded against the pod's drain window —
-daprd's 5 s default kills the publish path the app still needs while it drains".
+daprd's 5 s default kills the path the app still needs while it drains".
 
 `rask.daprAnnotations` emits app-id, app-port, log-level, log-as-json, max-body-size,
 app-token-secret, sidecar resources and dapr.io/config — and nothing about shutdown. So daprd takes
@@ -9,12 +9,11 @@ its own 5 s default while the app container is still inside its 5 s preStop slee
 the grace period allows. The kubelet SIGTERMs every container in the pod SIMULTANEOUSLY, so the
 sidecar is gone before the app's drain window has properly opened.
 
-THE CONCRETE FAILURE, and it is silent. A catalog door that is mid-handler when a rollout
-starts finishes its Lance write and then calls `publish_event` to announce it against a sidecar
-that has already stopped: the write landed, the announcement did not, and nothing distinguishes that
-from a write nobody subscribed to. `lakehouse.dapr_publish` bounds a wedged sidecar's hang without making the publish succeed. It
-also undermines the drain gate on a delivered route, whose RETRY verdict has to travel back through
-the sidecar to reach the broker.
+THE CONCRETE FAILURE, and it is silent. A delivery or a cron tick that is mid-handler when a rollout starts ends
+with an answer its sidecar must carry back: the acknowledgement of a delivery, or the drain gate's RETRY verdict,
+which has to travel through the sidecar to reach the broker. Against a sidecar that has already stopped the answer
+goes nowhere: the broker waits out the delivery's ack wait and delivers the event again, and nothing distinguishes
+that from a subscriber that was slow.
 
 TWO NUMBERS, ONE FORMULA. `kubernetes.md` gives the grace budget as
 `preStop + max in-flight + lifespan cleanup + buffer`, and `microservices.md` adds the sidecar term
@@ -60,8 +59,8 @@ def test_every_sidecar_is_told_to_outlive_the_apps_drain() -> None:
     unbounded = sorted(name for name, ann in pods.items() if BLOCK not in ann)
     assert not unbounded, (
         f"these pods run a Dapr sidecar with no {BLOCK}: {unbounded} — daprd takes its 5s default and "
-        f"stops while the app is still draining, so a door's post-write publish_event fires at a "
-        f"sidecar that is already gone"
+        f"stops while the app is still draining, so the answer to a delivery still in flight has no "
+        f"sidecar left to carry it to the broker"
     )
 
 
@@ -118,9 +117,9 @@ def _deployment(docs: tuple[dict, ...], name: str) -> dict:
 )
 def test_the_worker_runs_in_pods_of_its_own_whose_sidecar_outlives_its_drain_and_leaves_with_it(moved: dict[str, int]) -> None:
     """[[LH-494]]: maintenance's queue worker runs in a Deployment of its own, as a process and not a web app's lifespan,
-    and the web pods keep the write-event lane and run no worker. A pass publishes through the sidecar until it ends, so
-    the worker pod's sidecar blocks its shutdown for the pod's grace less the teardown, which holds preStop and the whole
-    drain; and it health-checks the worker's probe port, so it leaves when the worker does rather than at the block's end
+    and the web pods keep the write-event lane and run no worker. The worker pod's sidecar blocks its shutdown for the
+    pod's grace less the teardown, which holds preStop and the whole drain, and it health-checks the worker's probe
+    port, so it leaves when the worker does rather than at the block's end
     (measured on daprd 1.19.0-rc.4: with the check, 3 s after the app; without it, the whole block). A health check also
     gates a sidecar's subscriptions, so only this pod, which subscribes to nothing, has one. The second case moves every
     lifecycle number, so only a computed grace and block pass it. Each Deployment's replicas spread over the nodes by its

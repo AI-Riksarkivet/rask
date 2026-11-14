@@ -1,38 +1,25 @@
 """Unit tests for the control-plane change-event pipeline primitives (P1).
 
 Infra-free: the shared event model, the per-replica ring buffer's cursor/reset/dedupe semantics, and the
-best-effort Dapr emitter (exercised with a fake sidecar client — it MUST swallow failures so a bus outage
-never fails a catalog mutation). The emit sites, the broadcast subscription, and the poll endpoint are
+best-effort emitter (exercised on a double of the process's bus connection — it MUST swallow failures so a bus
+outage never fails a catalog mutation). The emit sites, the broadcast subscription, and the poll endpoint are
 covered by their own tests once wired; these pin the foundation.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any, cast
+from typing import Any
 
 from catalog.core.control_buffer import ControlEventBuffer
 from lakehouse.control_emit import (
-    DaprControlEmitter,
+    BusControlEmitter,
     NoopControlEmitter,
     emit_control,
     make_control_emitter,
 )
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent, ControlAction
-
-
-class _FakeDapr:
-    """A stand-in Dapr client: records publishes, or raises to prove the emitter is best-effort."""
-
-    def __init__(self, *, fail: bool = False) -> None:
-        self.calls: list[dict[str, Any]] = []
-        self.fail = fail
-
-    async def publish_event(self, **kwargs: Any) -> None:
-        if self.fail:
-            raise RuntimeError("sidecar down")
-        self.calls.append(kwargs)
+from tests.bus_double import BusDouble
 
 
 def _evt(action: ControlAction = "grant_added", **over: Any) -> CatalogControlEvent:
@@ -58,7 +45,7 @@ def test_buffer_dedupe_redelivery() -> None:
     buf = ControlEventBuffer(8)
     e = _evt()
     buf.append(e)
-    buf.append(e)  # same event_id (a Dapr redelivery) → ignored, no new cursor
+    buf.append(e)  # same event_id (a redelivery) → ignored, no new cursor
     assert buf.head == 1
     buf.append(_evt(object_id="other"))  # a distinct event advances
     assert buf.head == 2
@@ -78,46 +65,38 @@ def test_buffer_overflow_signals_reset() -> None:
     assert reset2 is True and head2 == 4
 
 
-# ── emitter (best-effort Dapr publish) ───────────────────────────────────────────────────────────────
+# ── emitter (best-effort publish on the bus) ────────────────────────────────────────────────────────────
 
 
-def test_dapr_emitter_publishes_control_topic() -> None:
-    fake = _FakeDapr()
-    em = DaprControlEmitter(cast(Any, fake), pubsub="catalog-control-pubsub", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog", sign=None)
+def test_the_emitter_publishes_on_the_control_topic_under_the_events_own_id() -> None:
+    bus = BusDouble()
+    em = BusControlEmitter(bus, topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog", sign=None)
     e = _evt()
     asyncio.run(em.emit(e))
-    assert len(fake.calls) == 1
-    call = fake.calls[0]
-    assert call["pubsub_name"] == "catalog-control-pubsub"
-    assert call["topic_name"] == CONTROL_TOPIC
-    envelope = json.loads(call["data"])
+    [sent] = bus.sent
     # The control lane's envelope, under the event's own id: a relay's copy of the event is stored once.
-    assert (envelope["id"], envelope["type"]) == (e.event_id, "rask.catalog.control.grant_added.v1")
-    assert CatalogControlEvent.model_validate(envelope["data"]) == e  # pointer payload, round-trips
+    assert (sent.topic, sent.message_id, sent.envelope["id"], sent.envelope["type"]) == (
+        CONTROL_TOPIC,
+        e.event_id,
+        e.event_id,
+        "rask.catalog.control.grant_added.v1",
+    )
+    assert CatalogControlEvent.model_validate(sent.event) == e  # pointer payload, round-trips
 
 
 def test_make_control_emitter_selection() -> None:
-    assert isinstance(
-        make_control_emitter(enabled=True, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5, service="catalog", sign=None),
-        DaprControlEmitter,
-    )
-    # Off, or no sidecar client → the no-op.
-    assert isinstance(
-        make_control_emitter(enabled=False, dapr=cast(Any, _FakeDapr()), pubsub="p", timeout_seconds=5, service="catalog", sign=None),
-        NoopControlEmitter,
-    )
-    assert isinstance(
-        make_control_emitter(enabled=True, dapr=None, pubsub="p", timeout_seconds=5, service="catalog", sign=None),
-        NoopControlEmitter,
-    )
+    assert isinstance(make_control_emitter(enabled=True, bus=BusDouble(), timeout_seconds=5, service="catalog", sign=None), BusControlEmitter)
+    # Off, or no connection to the bus → the no-op.
+    assert isinstance(make_control_emitter(enabled=False, bus=BusDouble(), timeout_seconds=5, service="catalog", sign=None), NoopControlEmitter)
+    assert isinstance(make_control_emitter(enabled=True, bus=None, timeout_seconds=5, service="catalog", sign=None), NoopControlEmitter)
 
 
 # ── the emit helper the endpoints call ───────────────────────────────────────────────────────────────
 
 
 def test_emit_control_builds_and_emits() -> None:
-    fake = _FakeDapr()
-    em = DaprControlEmitter(cast(Any, fake), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog", sign=None)
+    bus = BusDouble()
+    em = BusControlEmitter(bus, topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog", sign=None)
     asyncio.run(
         emit_control(
             em,
@@ -128,5 +107,5 @@ def test_emit_control_builds_and_emits() -> None:
             extra={"from": "t", "to": "t2"},
         )
     )
-    published = CatalogControlEvent.model_validate(json.loads(fake.calls[0]["data"])["data"])
+    published = CatalogControlEvent.model_validate(bus.events[0])
     assert published.action == "table_renamed" and published.extra == {"from": "t", "to": "t2"}

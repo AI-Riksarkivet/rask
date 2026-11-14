@@ -15,13 +15,18 @@ from lakehouse.control_emit import NoopControlEmitter
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services import tasks
-from maintenance.services.queue import TaskQueue, creds_document
+from maintenance.services.queue import TaskQueue
 
 
 #: The worker's bus user, as the chart names its secret.
 _BUS_USER = "nats-user-maintenance-worker"
 #: A bus user's secret as the store holds it.
 _STORED = {"jwt": "eyJ.the-users-jwt", "seed": "SUATHEUSERSSEED"}
+#: The same credential as the document nats-py reads, spelt out as nsc writes one: each value on the line after its marker.
+_CREDENTIALS_DOCUMENT = (
+    "-----BEGIN NATS USER JWT-----\neyJ.the-users-jwt\n------END NATS USER JWT------\n\n"
+    "-----BEGIN USER NKEY SEED-----\nSUATHEUSERSSEED\n------END USER NKEY SEED------\n"
+)
 
 
 class _Connected(Exception):  # noqa: N818 — a signal that stops the worker at its connection, not an error
@@ -58,7 +63,7 @@ async def test_the_worker_connects_with_the_bus_credential_its_store_holds(setti
         async with tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter()):
             pass
 
-    assert connected.value.credentials == creds_document(jwt=_STORED["jwt"], seed=_STORED["seed"])
+    assert connected.value.credentials == _CREDENTIALS_DOCUMENT
 
 
 @pytest.mark.asyncio

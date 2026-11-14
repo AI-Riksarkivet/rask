@@ -30,6 +30,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
+from maintenance.services import queue
 from tests.unit import chart_render
 from tests.unit.chart_render import PREREQ_ARGS
 
@@ -363,18 +364,21 @@ def test_each_queue_consumer_is_declared_one_delivery_past_the_workers_bound() -
 def test_the_worker_reads_the_bus_credential_the_user_table_issues_whatever_its_app_id() -> None:
     """[[LH-494]]: the worker's bus user is `maintenance-worker` in `nats.auth.users`, and the store issues its credential
     under that name. An install that renames maintenance's Dapr app id must still read that secret, or the worker finds
-    none at its start and fails closed."""
+    none at its start and fails closed. The worker's replies arrive under the inbox prefix its connection names
+    (`maintenance.services.queue.INBOX_PREFIX`), so that user's row must grant it: without the grant every fetch and
+    every put waits out its timeout unanswered."""
     renamed = (
         "--set",
         "maintenance.appId=maint",
         "--set-json",
-        'nats.auth.users.maint={"publish":["lineage.events.v1","probe.maint"],"subscribe":["_INBOX.>"]}',
+        'nats.auth.users.maint={"publish":["lineage.events.v1","probe.maint"],"subscribe":["_INBOX.>","_INBOX_maint.>"]}',
     )
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, *renamed)
     maintenance = next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-maintenance"))
     env = {entry["name"]: entry.get("value") for container in maintenance["spec"]["template"]["spec"]["containers"] for entry in container.get("env", [])}
 
     assert env["MAINTENANCE_NATS_CREDENTIALS_SECRET"] == "nats-user-maintenance-worker"
+    assert f"{queue.INBOX_PREFIX}.>" in chart_render.nats_users(docs)["maintenance-worker"][1]
 
 
 def test_no_env_var_is_rendered_twice_on_any_workload() -> None:
@@ -525,8 +529,8 @@ def _rendered_docs(*set_values: str) -> list[dict]:
 
 def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_none() -> None:
     """[[XC-129]]: NATS JetStream is a prerequisite (ADR 0153). The platform runs the bus and rask names it in `nats.url`;
-    every pub/sub Component and the stream Job dial that one address, nothing else reads a NATS address, and no render holds a NATS
-    server or its JetStream volumes (nats-box's CLI, which the stream Job and the dev mint run, is a client). That the
+    every service's own connection, maintenance's work queue, every pub/sub Component and the stream Job dial that one
+    address, and no render holds a NATS server or its JetStream volumes (nats-box's CLI, which the stream Job and the dev mint run, is a client). That the
     render refuses with no bus named is the prerequisite gate in test_no_credential_is_carried_by_the_render.py."""
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "networkPolicy.enabled=true")
     dialled: dict[str, set[str]] = {}
@@ -538,9 +542,11 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
     for workload, _, container in chart_render.containers(docs):
         if workload.startswith("Job/") and "-nats-stream-" in workload:
             dialled.setdefault("stream Job", set()).update(re.findall(r'^\s*S="([^"]+)"', container["command"][-1], re.MULTILINE))
-        if url := chart_render.env_of(container).get("RASK_NATS_URL"):
-            dialled.setdefault("RASK_NATS_URL", set()).add(url)
-    assert dialled == {client: {chart_render.NATS_URL} for client in ("pubsub.jetstream", "stream Job")}, dialled
+        env = chart_render.env_of(container)
+        for named in ("RASK_BUS_URL", "MAINTENANCE_NATS_URL"):
+            if url := env.get(named):
+                dialled.setdefault(named, set()).add(url)
+    assert dialled == {client: {chart_render.NATS_URL} for client in ("pubsub.jetstream", "stream Job", "RASK_BUS_URL", "MAINTENANCE_NATS_URL")}, dialled
 
     bus = sorted(
         f"{workload}/{name} ({container['image']})"
@@ -553,6 +559,18 @@ def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_non
         if doc.get("kind") in {"PersistentVolumeClaim", "StatefulSet"} and "nats" in doc["metadata"]["name"]
     )
     assert not bus, f"the render runs part of a NATS bus, which is the platform's: {bus}"
+
+
+def test_the_catalog_is_switched_to_publish_only_where_it_is_named_a_bus() -> None:
+    """The catalog refuses to start switched to emit on the bus and named none (its settings' own check), and the chart
+    names the bus only under `dapr.enabled`: a render with it off switches the emission off as well, since switched on
+    it would be a catalog that never starts."""
+    told = {}
+    for label, extra in (("default", ()), ("no bus named", ("dapr.enabled=false", "catalog.controlEmit=false"))):
+        docs = tuple(_rendered_docs(*extra))
+        [env] = [env for _, _, container in chart_render.containers(docs) if "LANCE_LINEAGE_TRANSPORT" in (env := chart_render.env_of(container))]
+        told[label] = (env["LANCE_LINEAGE_EMIT_ENABLED"], env["LANCE_CONTROL_EMIT_ENABLED"], env.get("RASK_BUS_URL"))
+    assert told == {"default": ("true", "true", chart_render.NATS_URL), "no bus named": ("false", "false", None)}
 
 
 @pytest.mark.parametrize("stand_in", ["dex", "rustfs", "openbao"])

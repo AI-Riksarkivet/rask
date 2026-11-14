@@ -11,7 +11,7 @@ so they are signed with no delegation.
 DRIVEN THROUGH THE REAL APP over HTTP, on a real `dir` namespace, because the claim spans the whole wiring: the secret
 store, the lifespan that builds the holder, the emitters it is handed, and the door that stamps the author. A test of an
 emitter alone passes with a lifespan that never gives it a key. The secret store is answered by the suite's double and
-the sidecar's publish is a recording stand-in, so what the verifier sees is exactly what the catalog put on the bus.
+the connection to the bus is a recording stand-in, so what the verifier sees is exactly what the catalog put on the bus.
 
 A SIGNER WITHOUT ITS KEY TAKES NO WRITE IT WOULD ANNOUNCE. A write's announcement is signed after its Lance commit, so a
 catalog that cannot sign refuses the write first, ServiceUnavailable, and commits nothing it could not announce
@@ -19,6 +19,10 @@ catalog that cannot sign refuses the write first, ServiceUnavailable, and commit
 announces: a data write under the provenance namespace, whose rows are lineage's record of the announcements
 (`catalog.services.provenance_namespace`). An unsigned control event would never leave the outbox either: the control
 relay delivers only staged bytes this catalog signed (`test_the_control_lane_has_a_relay.py`).
+
+A CONTROL EVENT THE BUS DID NOT TAKE IS DELIVERED BY THE RELAY AS THE CATALOG SIGNED IT. The catalog's start hands its
+relay the connection its emitters publish on and the identity they sign as, so the tick verifies the staged event
+against the keys the catalog publishes and sends it, as staged, on that connection ([[XC-199]]).
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import httpx
 import pyarrow as pa
@@ -55,6 +59,7 @@ from lakehouse.governed.principal import Principal
 from lakehouse.governed.signing_key import signing_key_name
 from lakehouse.lineage import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
 from lakehouse.storage_options import StorageOptions
+from tests.bus_double import BusDouble, session_holding
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -65,6 +70,8 @@ CATALOG = f"kubernetes~{CATALOG_ACCOUNT}"
 PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 LINEAGE_TOPIC = "lineage.events.v1"
+#: The control relay's cron binding, as the chart names it (`catalog.controlOutbox.bindingName`).
+RELAY = "catalog-control-relay-cron"
 #: The namespace the catalog keeps lineage's tables in, as the chart names it (`services.lineage.provenanceNamespace`).
 PROVENANCE = "lance_catalog$provenance"
 
@@ -73,18 +80,6 @@ def _person(key: str) -> PersonPrincipal:
     """The verified caller `key` names, as the catalog's person door resolves it."""
     principal = Principal.parse(key)
     return PersonPrincipal(principal=principal, claims=IDToken(iss="https://dex", sub=principal.subject, aud="lance", exp=1, iat=1))
-
-
-class _Sidecar:
-    """What the catalog does with its Dapr client: publish, and close at shutdown."""
-
-    published: ClassVar[list[tuple[str, dict[str, Any]]]] = []
-
-    async def publish_event(self, *, topic_name: str = "", data: str = "", **_kwargs: object) -> None:
-        _Sidecar.published.append((topic_name, json.loads(data)["data"]))
-
-    async def close(self) -> None:
-        return None
 
 
 class _Published:
@@ -108,8 +103,9 @@ def _rows(count: int = 3) -> bytes:
     return bytes(sink.getvalue().to_pybytes())
 
 
-def _on(topic: str) -> list[dict[str, Any]]:
-    return [event for published_on, event in _Sidecar.published if published_on == topic]
+def _on(bus: BusDouble, topic: str) -> list[dict[str, Any]]:
+    """The events the catalog published on ``topic``, each as it signed it."""
+    return [sent.event for sent in bus.sent if sent.topic == topic]
 
 
 def _control_verdict(event: dict[str, Any], public: str) -> tuple[str, str | None] | RefusalReason:
@@ -130,8 +126,14 @@ def control_outbox(tmp_path: Path) -> str:
 
 
 @pytest.fixture
+def bus() -> BusDouble:
+    """The connection to the bus the booted catalog publishes on."""
+    return BusDouble()
+
+
+@pytest.fixture
 def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
-    tmp_path: Path, control_outbox: str, two_stores: Any, secret_store: SecretStoreDouble, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, control_outbox: str, two_stores: Any, secret_store: SecretStoreDouble, bus: BusDouble, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Boot]:
     """Boot the real catalog with signing configured: `boot(seed, keys, token)` answers the running client. `keys` is
     None where the catalog reads no published list (it stops at a seed the store does not serve).
@@ -151,8 +153,10 @@ def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
         "LANCE_S3_ASSUME_ROLE_ARN": two_stores.role_on(two_stores.estate_bucket),
         "RASK_SIGNING_IDENTITY": CATALOG,
         "LANCE_LINEAGE_EMIT_ENABLED": "true",
-        "LANCE_LINEAGE_TRANSPORT": "dapr",
+        "LANCE_LINEAGE_TRANSPORT": "bus",
         "LANCE_CONTROL_EMIT_ENABLED": "true",
+        "RASK_BUS_URL": "nats://bus.test:4222",
+        "RASK_BUS_USER": "catalog",
         "LANCE_CONTROL_OUTBOX_URI": control_outbox,
         "LANCE_PROVENANCE_NAMESPACE": PROVENANCE,
         "APP_API_TOKEN": "the-estate-app-token",
@@ -166,8 +170,7 @@ def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
     from catalog.api.security import CurrentToken
     from catalog.core.config import get_settings
 
-    monkeypatch.setattr(main, "DaprClient", _Sidecar)
-    _Sidecar.published = []
+    monkeypatch.setattr(main, "bus_session", session_holding(bus))
     get_settings.cache_clear()
     with ExitStack() as stack:
 
@@ -188,6 +191,20 @@ def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def relay(boot: Boot) -> Iterator[str]:
+    """The path of the control relay's tick on the catalog's app. The app is built when its module is imported, from the
+    environment of that moment, so the tick is mounted here as the module mounts it for a pod whose environment names
+    the binding, and taken off again after. After ``boot``, which sets the environment the module is imported under."""
+    from catalog import main
+    from catalog.api.control_relay import mount_control_relay
+
+    built = list(main.app.router.routes)
+    assert mount_control_relay(main.app, RELAY), "the relay's route did not mount"
+    yield f"/{RELAY}"
+    main.app.router.routes[:] = built
+
+
 def _write_a_table_and_a_row(client: TestClient) -> None:
     assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     assert client.post("/v1/table/lance_catalog$db$t/create", content=_rows(0), headers=ARROW_STREAM).status_code == 200
@@ -202,7 +219,7 @@ def _write_a_table_and_a_row(client: TestClient) -> None:
     ],
 )
 def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_authenticated(
-    boot: Boot, event_signer: Any, caller: PersonPrincipal | ServicePrincipal, on_behalf_of: str | None
+    boot: Boot, bus: BusDouble, event_signer: Any, caller: PersonPrincipal | ServicePrincipal, on_behalf_of: str | None
 ) -> None:
     subject = caller.subject
     pair = event_signer(CATALOG)
@@ -210,32 +227,62 @@ def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_
 
     _write_a_table_and_a_row(client)
 
-    lineage = _on(LINEAGE_TOPIC)
+    lineage = _on(bus, LINEAGE_TOPIC)
     shapes = {"DatasetEvent" if "dataset" in event and "run" not in event else "RunEvent" for event in lineage}
     verified = [verify_signature(event, source=_Published(pair.public), signers=frozenset({CATALOG}), delegators=frozenset({CATALOG})) for event in lineage]
     assert shapes == {"DatasetEvent", "RunEvent"}, f"the writes did not announce both event shapes: {sorted(shapes)}"
     assert {(v.identity, v.on_behalf_of) for v in verified} == {(CATALOG, on_behalf_of)}
     # A control event's actor is always the `user:` principal the door resolved, so the catalog declares it even for itself.
-    assert {event["action"]: _control_verdict(event, pair.public) for event in _on(CONTROL_TOPIC)} == {
+    assert {event["action"]: _control_verdict(event, pair.public) for event in _on(bus, CONTROL_TOPIC)} == {
         "namespace_created": (CATALOG, f"user:{subject}"),
         "table_created": (CATALOG, f"user:{subject}"),
     }
 
 
-def test_a_write_nobody_authenticated_is_announced_unsigned_and_its_control_events_signed_as_the_catalog(boot: Boot, event_signer: Any) -> None:
+def test_a_write_nobody_authenticated_is_announced_unsigned_and_its_control_events_signed_as_the_catalog(boot: Boot, bus: BusDouble, event_signer: Any) -> None:
     pair = event_signer(CATALOG)
     client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), None)
 
     _write_a_table_and_a_row(client)
 
-    lineage = _on(LINEAGE_TOPIC)
+    lineage = _on(bus, LINEAGE_TOPIC)
     unsigned = [event for event in lineage if SIGNATURE_FACET not in (event.get("run") or event["dataset"])["facets"]]
     assert lineage, "nothing was announced"
     assert unsigned == lineage, "an event with no author was signed, and a signature on it could never verify"
-    assert {event["action"]: _control_verdict(event, pair.public) for event in _on(CONTROL_TOPIC)} == {
+    assert {event["action"]: _control_verdict(event, pair.public) for event in _on(bus, CONTROL_TOPIC)} == {
         "namespace_created": (CATALOG, None),
         "table_created": (CATALOG, None),
     }
+
+
+def test_a_control_event_the_bus_did_not_take_is_delivered_by_the_relay_as_the_catalog_signed_it(
+    boot: Boot, relay: str, bus: BusDouble, control_outbox: str, event_signer: Any
+) -> None:
+    pair = event_signer(CATALOG)
+    client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), _person(PERSON))
+
+    bus.failing = TimeoutError("the bus did not answer")
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+    staged = [json.loads(body) for _key, body in outbox.list_events(control_outbox, StorageOptions())]
+    bus.failing = None
+    tick = client.post(relay, headers={"dapr-api-token": "the-estate-app-token"})
+
+    assert [(event["action"], _control_verdict(event, pair.public)) for event in staged] == [("namespace_created", (CATALOG, f"user:{PERSON}"))]
+    assert [(sent.topic, sent.message_id, sent.event) for sent in bus.sent] == [(CONTROL_TOPIC, staged[0]["event_id"], staged[0])]
+    assert (tick.json()["republished"], list(outbox.list_events(control_outbox, StorageOptions()))) == (1, []), tick.text
+
+
+def test_the_catalogs_readiness_shows_the_state_of_the_connection_it_publishes_on(boot: Boot, event_signer: Any) -> None:
+    """The bus verdict is the state of the connection this catalog holds, whatever a new connection would be told: no
+    server exists at the address the catalog is named here, and the connection it holds is up."""
+    pair = event_signer(CATALOG)
+    client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), _person(PERSON))
+
+    deadline = time.monotonic() + 10
+    while (readiness := client.get("/readyz")).json()["components"].get("bus") != "healthy" and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    assert readiness.json()["components"].get("bus") == "healthy", readiness.text
 
 
 def _made_natively(root: Path, table: list[str]) -> None:
@@ -295,8 +342,16 @@ def _version(root: Path, table: list[str]) -> int | None:
         pytest.param("DELETE", "/management/v1/projects/list", ["list", "t"], (503, 17), None, id="a-delete-of-an-object-named-like-a-read"),
     ],
 )
-def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(
-    boot: Boot, control_outbox: str, tmp_path: Path, method: str, door: str, table: list[str], answer: tuple[int, int | None], version: int | None
+def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(  # noqa: PLR0913 — the door and its expected answer, by case
+    boot: Boot,
+    bus: BusDouble,
+    control_outbox: str,
+    tmp_path: Path,
+    method: str,
+    door: str,
+    table: list[str],
+    answer: tuple[int, int | None],
+    version: int | None,
 ) -> None:
     """A write it would announce is refused before it commits, so the table stays at its version and a namespace is never
     made; lineage's own write under the provenance namespace, which it never announces, is served."""
@@ -309,7 +364,7 @@ def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(
 
     assert (written.status_code, written.json().get("code") if written.status_code != 200 else None) == answer, written.text
     assert _version(tmp_path / "warehouse", table) == version
-    assert _Sidecar.published == [], f"a catalog without its key announced {len(_Sidecar.published)} events"
+    assert bus.sent == [], f"a catalog without its key announced {len(bus.sent)} events"
     staged = [json.loads(body)["action"] for _key, body in outbox.list_events(control_outbox, StorageOptions())]
     assert staged == [], f"a catalog without its key staged {staged} unsigned, and a staged object proves nothing about who wrote it"
-    assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["namespace", "secret-store", "signing", "store"])
+    assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["bus", "namespace", "secret-store", "signing", "store"])

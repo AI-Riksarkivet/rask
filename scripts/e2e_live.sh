@@ -72,10 +72,10 @@ DEX="$(svc "$RELEASE-dex")"          || true
 FGA="$(svc "$RELEASE-openfga")"      || true
 # The telemetry store is the platform's; on a dev estate, the observability fixture's (deploy/fixtures/observability).
 GREPTIME="$(svc greptimedb observability)" || true
-# THE BUS THE RELEASE'S PUB/SUB COMPONENTS DIAL (`nats.url`), read off one of them and resolved to that Service's
-# ClusterIP like every address above: the NATS fixture's `rask-nats` on a dev estate. A bus that is no Service in this
-# cluster resolves to nothing, and the suites that read the bus skip.
-NATS_HOST="$(kubectl get components.dapr.io lineage-pubsub -o jsonpath='{.spec.metadata[?(@.name=="natsURL")].value}' 2>/dev/null | sed -E 's#^nats://([^:/.]+).*#\1#' || true)"
+# THE BUS THE RELEASE'S SERVICES DIAL (`nats.url`), read off the catalog's own environment and resolved to that
+# Service's ClusterIP like every address above: the NATS fixture's `rask-nats` on a dev estate. A bus that is no Service
+# in this cluster resolves to nothing, and the suites that read the bus skip.
+NATS_HOST="$(kubectl get deployment "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="RASK_BUS_URL")].value}' 2>/dev/null | sed -E 's#^nats://([^:/.]+).*#\1#' || true)"
 NATS=""
 [ -n "$NATS_HOST" ] && NATS="$(svc "$NATS_HOST")" || true
 [ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"

@@ -106,7 +106,7 @@ groups:
       # A CATALOG WRITE WHOSE PROVENANCE DID NOT GET RECORDED, which nothing else in this file can see.
       # The outbox rules above describe events that REACHED the outbox; this counts the emits that never
       # did. `lineage_emit.py` increments it on both transports and the two mean different things — on
-      # `http` the event is gone, on `dapr` the publish goes through the
+      # `http` the event is gone, on `bus` the publish goes through the
       # staged outbox so a failure after staging still leaves a durable copy. The counter cannot tell
       # them apart, so this pages on any sustained increase and the transport label says which to read.
       #
@@ -128,7 +128,7 @@ groups:
           description: >-
             A catalog mutation committed to Lance and its lineage emit failed terminally, so lineage's feed
             does not record that the write happened and a pipeline following `/events` never hears of it.
-            Read the `lance.catalog.transport` label — `http` means the event is gone, `dapr` means it may
+            Read the `lance.catalog.transport` label — `http` means the event is gone, `bus` means it may
             still be staged in the outbox.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 

@@ -9,8 +9,10 @@ dependencies = [
     "pydantic>=2.13",
     "pydantic-settings>=2.14",
     "python-dotenv>=1.0",
-    "dapr>=1.18.1",
+    # The subscription wrapper a sidecar-delivered route is registered through (`lakehouse.governed.dapr_auth`).
     "dapr-ext-fastapi>=1.18.1",
+    # The bus client (`lakehouse.bus`); `nkeys` signs the server's nonce with the user's seed.
+    "nats-py[nkeys]>=2.16",
     # The auth plane (`lakehouse.governed`): the OpenFGA client and its async transport, token verification, the
     # bounded retries and the HTTP client the doors' callers send with.
     "openfga-sdk>=0.10.4",
@@ -49,7 +51,6 @@ dependencies = [
     "opentelemetry-instrumentation-httpx>=0.65b0",
     "opentelemetry-instrumentation-logging>=0.65b0",
     "opentelemetry-instrumentation-requests>=0.65b0",
-    "opentelemetry-instrumentation-grpc>=0.65b0",
     "opentelemetry-instrumentation-aiohttp-client>=0.65b0",
     "opentelemetry-instrumentation-botocore>=0.65b0",
     "opentelemetry-instrumentation-urllib3>=0.65b0",

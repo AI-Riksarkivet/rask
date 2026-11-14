@@ -148,13 +148,15 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     scan_schedule: str = Field(default="0 30 0 * * *", alias="MAINTENANCE_SCAN_SCHEDULE")
 
     # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
-    # were reclaimed, to the lineage graph via Dapr pub/sub. Publishes to the SAME pubsub component + topic the
-    # catalog publishes to and the lineage service subscribes to, so an expiry run shows up in producers()
-    # next to the writes. Off by default; the sidecar owns retry (no DLQ), so a publish never fails a sweep.
+    # were reclaimed, on the bus, over this process's own connection (`lakehouse.bus`). Publishes on the SAME topic
+    # the catalog publishes to and the lineage service subscribes to, so an expiry run shows up in producers()
+    # next to the writes. Off by default; a publish the bus did not take stays staged and never fails a sweep.
     lineage_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_LINEAGE_EMIT_ENABLED")
-    # Bound each Dapr publish so a hung sidecar can't stall a sweep (best-effort → the outage is swallowed).
+    # Bound each publish so a bus that does not answer can't stall a sweep (best-effort → the outage is swallowed).
     publish_timeout_seconds: float = Field(default=5.0, gt=0, alias="MAINTENANCE_PUBLISH_TIMEOUT_SECONDS")
-    lineage_pubsub: str = Field(default="lineage-pubsub", alias="MAINTENANCE_LINEAGE_PUBSUB")
+    #: The Dapr pub/sub component the write-event lane SUBSCRIBES through (`maintenance.api.arrival`): this app's own,
+    #: `<pubsub.name>-<app-id>` as the chart renders it.
+    lineage_pubsub: str = Field(default="lineage-pubsub-maintenance", alias="MAINTENANCE_LINEAGE_PUBSUB")
     lineage_topic: str = Field(default="lineage.events.v1", alias="MAINTENANCE_LINEAGE_TOPIC")
     # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
     # AGE. The job NAME, `expire_versions.<table_id>`, names the operation.
@@ -365,11 +367,10 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
 
     # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself
     # on the SAME broadcast topic the catalog publishes to (`catalog.control.v1`). Off by default and
-    # best-effort when on: a bus outage must never fail — or half-fail — a reclamation. The component
-    # must list this app-id in its `scopes` (chart/templates/dapr-component.yaml) or the sidecar refuses
-    # the publish, and "best-effort" means it would refuse SILENTLY.
+    # best-effort when on: a bus outage must never fail — or half-fail — a reclamation. This service's bus
+    # user must hold the topic among its publish grants (the chart's `nats.auth.flagged`) or the bus refuses
+    # the publish, and "best-effort" means only the emitter's counter and log line would show it.
     control_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_CONTROL_EMIT_ENABLED")
-    control_pubsub: str = Field(default="catalog-control-pubsub", alias="MAINTENANCE_CONTROL_PUBSUB")
 
     # How deep `discover_datasets` walks a bucket looking for the `_versions/` marker. A subtree the
     # walk stops inside becomes an `IncompleteScan`, which blocks `purge.report_is_clean` — and the

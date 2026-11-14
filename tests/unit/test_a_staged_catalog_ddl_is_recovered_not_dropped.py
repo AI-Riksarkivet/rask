@@ -30,6 +30,7 @@ from pydantic import SecretStr
 
 from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse import outbox, outbox_metrics, store_session
+from lakehouse.bus import BusUnavailableError
 from lakehouse.governed import fga
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -45,6 +46,7 @@ from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
 from lineage.services.provenance import feed_key
+from tests.bus_double import BusDouble
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -61,32 +63,6 @@ def _uuids(table: str) -> DatasetUuids:
 #: Bytes `json.loads` refuses with something other than `JSONDecodeError`: a plain `ValueError` past 4300
 #: digits and a `RecursionError` past the nesting limit. Any stager holding the outbox credential can write them.
 _HOSTILE = {"bigint": '{"eventType": ' + "1" * 5000 + "}", "deep": "[" * 100_000 + "]" * 100_000}
-
-
-class _SidecarDown:
-    async def publish_event(self, **_kwargs: object) -> None:
-        raise ConnectionError("sidecar unreachable")
-
-
-class _Publisher:
-    """The Dapr client's `publish_event` signature, so a call the real client would refuse fails here too."""
-
-    def __init__(self) -> None:
-        #: The event each published envelope carried as its `data`.
-        self.published: list[dict[str, Any]] = []
-        self.topics: list[tuple[str, str]] = []
-
-    async def publish_event(
-        self,
-        pubsub_name: str,
-        topic_name: str,
-        data: bytes | str,
-        publish_metadata: dict[str, str] | None = None,
-        metadata: tuple[tuple[str, str | bytes], ...] | None = None,
-        data_content_type: str | None = None,
-    ) -> None:
-        self.topics.append((pubsub_name, topic_name))
-        self.published.append(json.loads(data)["data"])
 
 
 class _Repo:
@@ -226,7 +202,7 @@ def _without_signature(staged_json: str) -> dict[str, Any]:
     return doc
 
 
-def _drain(settings: LineageSettings, repo: _Repo, publisher: _Publisher) -> relay_cron.DrainOutcome:
+def _drain(settings: LineageSettings, repo: _Repo, publisher: BusDouble) -> relay_cron.DrainOutcome:
     return asyncio.run(relay_cron._drain_outbox(_request(), cast("Any", repo), settings, StorageOptions(), publisher))
 
 
@@ -276,14 +252,14 @@ def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path:
     settings = _settings(tmp_path, fga_enabled=True)
     _, staged_json = _stage_a_create(settings, catalog)
     _arm_gate(monkeypatch, writer=_AUTHOR)
-    repo, publisher = _Repo(), _Publisher()
+    repo, publisher = _Repo(), BusDouble()
 
     outcome = _drain(settings, repo, publisher)
 
     assert outcome.drained == 1, f"the staged create was not recovered: {outcome}"
     assert [e.dataset.name for e in repo.datasets] == [_TABLE] and repo.runs == [], "the create did not reach the dataset door"
     assert repo.datasets[0].operation == "create_table"
-    assert publisher.published == [json.loads(staged_json)], "subscribers never hear of the create; the re-publish must carry the staged event"
+    assert publisher.events == [json.loads(staged_json)], "subscribers never hear of the create; the re-publish must carry the staged event"
     assert not list(outbox.list_events(settings.outbox_uri, StorageOptions())), "a recovered event must not stay staged"
 
 
@@ -295,12 +271,12 @@ def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(tmp_path
     staged_json = json.dumps(_without_signature(staged_json))
     _rewrite_staged(settings, key, json.loads(staged_json))
     _arm_gate(monkeypatch, writer=_AUTHOR)
-    repo, publisher = _Repo(), _Publisher()
+    repo, publisher = _Repo(), BusDouble()
 
     outcome = _drain(settings, repo, publisher)
 
     assert outcome.refused == outcome.recorded == 1 and outcome.drained == 0, f"a refused create was not handled as a refusal: {outcome}"
-    assert repo.datasets == [] and repo.runs == [] and publisher.published == [], "a refused create reached the feed or the bus"
+    assert repo.datasets == [] and repo.runs == [] and publisher.events == [], "a refused create reached the feed or the bus"
     # No run to name: the key is what identifies a static change, and `run_id` stays empty rather than lying.
     [refusal] = repo.refusals
     assert "no signature" in str(refusal["reason"]), f"the recorded reason does not say what was refused: {refusal['reason']}"
@@ -341,7 +317,7 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers
     _arm_gate(monkeypatch, writer=None)
     repo = _Repo()
 
-    outcome = _drain(settings, repo, _Publisher())
+    outcome = _drain(settings, repo, BusDouble())
 
     assert (outcome.drained, outcome.refused) == (drained, 1 - drained), f"the relay answered {outcome}"
     assert [(e.dataset.name, e.operation) for e in repo.datasets] == ([(_TABLE, "drop_table")] if drained else [])
@@ -360,7 +336,7 @@ def test_bytes_no_parser_accepts_are_poison_and_do_not_wedge_the_create_behind_t
     monkeypatch.setattr(outbox_metrics, "record_poison_dropped", lambda: poison.append(None))
     repo = _Repo()
 
-    outcome = _drain(settings, repo, _Publisher())
+    outcome = _drain(settings, repo, BusDouble())
 
     assert (outcome.drained, len(poison)) == (1, 1), f"the hostile object was not handled as poison: {outcome}, poison={len(poison)}"
     assert [e.dataset.name for e in repo.datasets] == [_TABLE], "the create staged behind the hostile object was not recovered"
@@ -377,7 +353,7 @@ def test_a_create_whose_ingest_fails_is_stranded_and_the_run_behind_it_still_dra
     monkeypatch.setattr(relay_cron, "enforce_bus_authz", _admit)
     repo = _CreateDoorDown()
 
-    outcome = _drain(settings, repo, _Publisher())
+    outcome = _drain(settings, repo, BusDouble())
 
     assert (outcome.drained, outcome.stranded, outcome.refused) == (1, 1, 0), f"one failed create aborted or misreported the tick: {outcome}"
     assert [event.run.run_id for event in repo.runs] == [run_id], "the run staged behind the failed create was not recovered"
@@ -428,7 +404,7 @@ def test_a_refusal_whose_record_fails_stays_staged_and_the_tick_goes_on(tmp_path
     monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refusing(key, settings))
     repo = _RefusalLedgerDown()
 
-    outcome = _drain(settings, repo, _Publisher())
+    outcome = _drain(settings, repo, BusDouble())
 
     assert (outcome.drained, outcome.refused, outcome.recorded, outcome.stranded) == (1, 1, 0, 0), (
         f"the tick misreported a refusal it could not record: {outcome}"
@@ -452,7 +428,7 @@ def test_a_refusal_whose_retirement_fails_is_recorded_and_the_tick_goes_on(tmp_p
     monkeypatch.setattr(outbox, "drop_event", drop)
     repo = _Repo()
 
-    outcome = _drain(settings, repo, _Publisher())
+    outcome = _drain(settings, repo, BusDouble())
 
     assert (outcome.drained, outcome.refused, outcome.recorded) == (1, 1, 1), f"a failed retirement misreported the tick: {outcome}"
     assert [event.run.run_id for event in repo.runs] == [run_id], "a refusal whose delete failed aborted the tick"
@@ -475,7 +451,7 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
     monkeypatch.setattr(outbox, "drop_event", drop)
     repo = _Repo()
 
-    outcome = _drain(settings, repo, _Publisher())
+    outcome = _drain(settings, repo, BusDouble())
 
     assert outcome.drained == 1 and [e.dataset.name for e in repo.datasets] == [_TABLE], f"a failed poison delete aborted the tick: {outcome}"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "the undeletable poison should wait for the next tick"
@@ -502,7 +478,7 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
     repo = _FeedHoldsIt()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), provenance=repo)))
 
-    outcome = asyncio.run(relay_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, StorageOptions(), _Publisher()))
+    outcome = asyncio.run(relay_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, StorageOptions(), BusDouble()))
 
     assert (outcome.drained, outcome.refused) == (1, 0), f"a redelivered create was filed as lost provenance: {outcome}"
     assert repo.refusals == []
@@ -527,13 +503,13 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
 
     monkeypatch.setattr(fga, "batch_check", see_not_write)
     operator = _person("operator")
-    repo, publisher = _Repo(), _Publisher()
+    repo, publisher = _Repo(), BusDouble()
 
     with pytest.raises(PermissionDeniedError) as refused:
         asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", repo), settings, operator, fga_deps.DatasetFilter(_request(), settings, operator), publisher))
 
     assert isinstance(refused.value, UnverifiedEventError) is unsigned, f"the refusal came from the wrong gate: {refused.value!r}"
-    assert repo.datasets == [] and repo.runs == [] and publisher.published == [], "a refused replay reached the feed or the bus"
+    assert repo.datasets == [] and repo.runs == [] and publisher.events == [], "a refused replay reached the feed or the bus"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "a refused replay must leave the object staged"
 
 
@@ -541,13 +517,13 @@ def test_the_dlq_replay_re_publishes_the_staged_event_to_the_lineage_topic(tmp_p
     """The relay's manual twin tells the SUBSCRIBERS too: a replayed create reaches the bus's subscribers only this way."""
     settings = _settings(tmp_path, fga_enabled=False)
     key, staged_json = _stage_a_create(settings, catalog)
-    publisher = _Publisher()
+    publisher = BusDouble()
 
     out = asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), publisher))
 
     assert out.status == "replayed"
-    assert publisher.published == [json.loads(staged_json)], "subscribers never hear of a replayed create; the re-publish must carry the staged event"
-    assert publisher.topics == [(settings.dapr_pubsub, settings.dapr_topic)], "the replay announced the create somewhere other than the lineage topic"
+    assert publisher.events == [json.loads(staged_json)], "subscribers never hear of a replayed create; the re-publish must carry the staged event"
+    assert [sent.topic for sent in publisher.sent] == [settings.events_topic], "the replay announced the create somewhere other than the lineage topic"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is None, "a replayed event must be dropped"
 
 
@@ -556,7 +532,17 @@ def test_a_replay_whose_publish_fails_leaves_the_object_for_the_relay(tmp_path: 
     key, _ = _stage_a_create(settings, catalog)
 
     with pytest.raises(ServiceUnavailableError, match="re-announcing it failed"):
-        asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), _SidecarDown()))
+        asyncio.run(
+            dlq.replay_dlq(
+                key,
+                _request(),
+                cast("Any", _Repo()),
+                settings,
+                None,
+                fga_deps.DatasetFilter(_request(), settings, None),
+                BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
+            )
+        )
 
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "the drop destroyed the copy the relay would still have re-published"
 
@@ -582,7 +568,7 @@ def test_the_dlq_replay_answers_bytes_no_parser_accepts_as_poison(tmp_path: Path
     flt = fga_deps.DatasetFilter(_request(), settings, None)
 
     with pytest.raises(answer):
-        asyncio.run(dlq.replay_dlq(hostile, _request(), cast("Any", _Repo()), settings, None, flt, _Publisher()))
+        asyncio.run(dlq.replay_dlq(hostile, _request(), cast("Any", _Repo()), settings, None, flt, BusDouble()))
 
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "a poison replay must leave the object for the relay"
 
@@ -595,14 +581,14 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
     stranger = _person("stranger")
     audited: list[tuple[str, str]] = []
     monkeypatch.setattr(dlq.audit, "audit", lambda action, outcome, **_kw: audited.append((action, outcome)))
-    repo, publisher = _Repo(), _Publisher()
+    repo, publisher = _Repo(), BusDouble()
 
     backlog = asyncio.run(dlq.list_dlq(settings, stranger, fga_deps.DatasetFilter(_request(), settings, stranger), limit=100))
     with pytest.raises(TransactionNotFoundError, match=f"no staged lineage event for run {key}"):
         asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", repo), settings, stranger, fga_deps.DatasetFilter(_request(), settings, stranger), publisher))
 
     assert backlog.events == [], f"the view lists a create for a table the caller cannot see: {backlog.events}"
-    assert repo.datasets == [] and publisher.published == [] and audited == []
+    assert repo.datasets == [] and publisher.events == [] and audited == []
 
 
 def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -> None:
@@ -623,9 +609,9 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
     staged_json = json.dumps(event)
     outbox.stage_event(settings.outbox_uri, StorageOptions(), event["run"]["runId"], staged_json)
     [(key, _)] = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
-    publisher = _Publisher()
+    publisher = BusDouble()
 
     out = asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), publisher))
 
     assert out.status == "replayed"
-    assert publisher.published == [event], "a replayed run never reaches the lineage topic"
+    assert publisher.events == [event], "a replayed run never reaches the lineage topic"

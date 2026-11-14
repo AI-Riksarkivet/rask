@@ -145,7 +145,6 @@ extend-select = ["TID251", "FAST001"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
 # `obs.py` measured identically and went the same way 2026-09-10.
-"packages/lakehouse/src/lakehouse/dapr_publish.py" = ["ANN401"]
 "scripts/gen_openapi.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "tests/**" = ["TID251", "A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
 "scripts/**" = ["TID251"]
@@ -159,7 +158,8 @@ extend-select = ["TID251", "FAST001"]
 "packages/lakehouse/src/lakehouse/storage/client.py" = ["TID251"]  # boto3: the S3 client seam
 "packages/lakehouse/src/lakehouse/storage/sts.py" = ["TID251"]  # boto3: the STS client seam
 "packages/lakehouse/src/lakehouse/draining.py" = ["TID251"]  # signal: the drain seam
-"services/maintenance/src/maintenance/services/queue.py" = ["TID251"]  # nats: the work queue's seam, which Dapr cannot serve (ADR 0198 decision 5)
+"packages/lakehouse/src/lakehouse/bus.py" = ["TID251"]  # nats: the lakehouse's one seam to the bus
+"services/maintenance/src/maintenance/services/queue.py" = ["TID251"]  # nats: the work queue's own seam (ADR 0198 decision 5)
 "packages/lakehouse/src/lakehouse/arrow_ipc.py" = ["TID251"]  # arrow ipc: the validating decoder
 "packages/lakehouse/src/lakehouse/lancekit/reader.py" = ["TID251", "A002"]  # decode_arrow_response: the /query reader; `filter=` is the request's own field
 
@@ -171,12 +171,14 @@ extend-select = ["TID251", "FAST001"]
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
 "dapr.ext.fastapi.DaprApp".msg = "Build it with lakehouse.governed.dapr_auth.sidecar_app: a bare DaprApp answers /dapr/subscribe to anyone."
+"dapr.clients".msg = "An event is published through lakehouse.bus and a secret read through lakehouse.governed.secrets, each on the process's own connection."
+"dapr.aio.clients".msg = "An event is published through lakehouse.bus and a secret read through lakehouse.governed.secrets, each on the process's own connection."
 "boto3".msg = "Build S3/STS clients through lakehouse.storage.s3_client / sts_client: a raw boto3 client carries no timeouts."
 "lance.write_dataset".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "catalog.services.warehouses.put_warehouse".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
 "catalog.services.projects.put_project".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
-"lakehouse.dapr_publish.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
+"lakehouse.bus.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
 "signal.signal".msg = "SIGTERM is taken only by lakehouse.draining; a second handler replaces the drain."
 "pyarrow.ipc.open_stream".msg = "Decode an Arrow IPC body only through lakehouse.arrow_ipc: it bounds and validates what a caller sends."
 "pyarrow.ipc.open_file".msg = "Decode an Arrow IPC body only through lakehouse.arrow_ipc: it bounds and validates what a caller sends."
@@ -207,7 +209,7 @@ extend-select = ["TID251", "FAST001"]
 "lakehouse.governed.fga.hierarchy_edge_tuples".msg = "Hierarchy edges are seeded only by fga.py."
 "torch".msg = "No model framework in the lakehouse: a model runs in a client's own environment."
 "pyannote".msg = "No model framework in the lakehouse: a model runs in a client's own environment."
-"nats".msg = "No service talks to the broker directly: events ride Dapr pub/sub."
+"nats".msg = "The broker is reached only through lakehouse.bus (events) and maintenance.services.queue (the work queue)."
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15

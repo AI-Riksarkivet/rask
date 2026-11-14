@@ -6,10 +6,11 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `apiVersion: batch/v1`
 
 Declare the JetStream streams (LINEAGE, subjects lineage.events.>, and DLQ and the catalog's control streams) that the
-Dapr pubsub.jetstream components publish to and consume from. Dapr's jetstream component does NOT auto-create a stream,
-so this Job does it on the bus `nats.url` names, and on every run converges each stream to the config the chart
-declares (`converge_stream` below). The bus is a prerequisite (ADR 0153), and the streams are rask's: without them every
-component would point at a server with no streams and every publish would fail.
+services publish into on their own connections and that their Dapr pubsub.jetstream components consume from. Neither
+creates a stream (Dapr's jetstream component does NOT auto-create one), so this Job does it on the bus `nats.url` names,
+and on every run converges each stream to the config the chart declares (`converge_stream` below). The bus is a
+prerequisite (ADR 0153), and the streams are rask's: without them every publish would fail and every component would
+bind to nothing.
 
 NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. A daprd sidecar subscribes at startup, so an
 absent stream is a startup-time dependency of half the fleet; running the provisioner only after

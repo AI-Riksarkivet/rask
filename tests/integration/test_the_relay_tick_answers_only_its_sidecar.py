@@ -13,15 +13,22 @@ does nothing: it drains, prunes and forwards nothing, and says it paused, so the
 The drain is a door to the feed like the bus and the HTTP ingest, and a refusal there is as final: recorded in the
 refusals table and retired. So a refusal it records moves `lineage.events.processed` under the outcome every door
 counts that refusal by, at the drain's own door, and the alerts reading the outcome see it ([[LH-573]]).
+
+A staged event the drain records is announced again before its staged copy goes: recording repairs the feed and tells
+no subscriber, and a publish that fails must find the object still there for the next tick. It goes out on the
+connection lineage's own start opened, under the id its producer's publish carried, so a stream that already holds
+the event stores the copy once ([[XC-199]]). Driven through lineage's own app and lifespan, where that connection is
+made and handed to the tick.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 
 import httpx
 import pytest
@@ -29,8 +36,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lakehouse import outbox
+from lakehouse.bus import BusUnavailableError
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
+from lineage import main
+from lineage.core.config import get_settings
+from tests.bus_double import BusDouble, session_holding
 from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineage, graph_backend, live_catalog, run_event
 
 
@@ -51,13 +62,11 @@ def _declared(catalog_url: str, table: str) -> str:
 
 
 def test_the_app_mounts_the_tick_only_when_a_binding_names_it() -> None:
-    from lineage.main import mount_relay_cron
-
     bare, mounted = FastAPI(), FastAPI()
     install_problem_handlers(bare, logging.getLogger(__name__))
     install_problem_handlers(mounted, logging.getLogger(__name__))
 
-    assert (mount_relay_cron(bare, None), mount_relay_cron(bare, ""), mount_relay_cron(mounted, RELAY)) == (False, False, True)
+    assert (main.mount_relay_cron(bare, None), main.mount_relay_cron(bare, ""), main.mount_relay_cron(mounted, RELAY)) == (False, False, True)
     assert (TestClient(bare).options(f"/{RELAY}").status_code, TestClient(mounted).options(f"/{RELAY}").status_code) == (404, 200)
 
 
@@ -150,3 +159,67 @@ def test_a_tick_counts_a_refusal_it_records_as_every_door_counts_it(
         tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
 
     assert (tick.json()["outbox_refused"], tick.json()["outbox_refusals_recorded"], processed()) == (1, 1, {("signature_refused", "outbox"): 1})
+
+
+@contextmanager
+def _lineage_as_its_pod_starts_it(catalog_url: str, outbox_uri: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient]:
+    """Lineage's own app under its own lifespan, recording into the catalog at ``catalog_url`` and draining the outbox at
+    ``outbox_uri``, with ``bus`` where the connection its start opens would be.
+
+    The app is built when its module is imported, from the environment of that moment, so the tick is mounted here as
+    the module mounts it for a pod whose environment names the binding, and taken off again after."""
+    for name, value in {
+        "LINEAGE_CATALOG_URL": catalog_url,
+        "LINEAGE_OUTBOX_URI": outbox_uri,
+        "LINEAGE_RELAY_BINDING_NAME": RELAY,
+        "APP_API_TOKEN": "s3cret",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(main, "bus_session", session_holding(bus))
+    get_settings.cache_clear()
+    built = list(main.app.router.routes)
+    main.mount_relay_cron(main.app, get_settings().relay_binding_name)
+    try:
+        with TestClient(main.app) as lineage:
+            yield lineage
+    finally:
+        main.app.router.routes[:] = built
+        get_settings.cache_clear()
+
+
+_RUN = "1d3c5a07-0000-4000-8000-000000000787"
+#: What a producer stages the run's COMPLETE under, and publishes it as: the id of its envelope.
+_STAGED_AS = f"{_RUN}@COMPLETE"
+
+
+@pytest.mark.parametrize(
+    ("failing", "drained", "stranded", "sent", "left"),
+    [
+        pytest.param(None, 1, 0, [("lineage.events.v1", _STAGED_AS)], [], id="the-bus-takes-it"),
+        pytest.param(BusUnavailableError("this process is not connected to the bus"), 0, 1, [], [_STAGED_AS], id="the-bus-is-away"),
+    ],
+)
+def test_a_tick_announces_a_staged_event_on_the_services_own_connection_and_drops_it_only_once_the_bus_took_it(  # noqa: PLR0913 — one case's bus and what the tick must leave
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: Exception | None, drained: int, stranded: int, sent: list[tuple[str, str]], left: list[str]
+) -> None:
+    outbox_uri = f"file://{tmp_path}/outbox"
+    event = run_event(_RUN, "COMPLETE", "2026-11-14T10:00:00+00:00", outputs=[_TABLE])
+    outbox.stage_event(outbox_uri, StorageOptions(), _STAGED_AS, json.dumps(event))
+    staged_at_each_publish: list[int] = []
+
+    class _Bus(BusDouble):
+        @override
+        async def send(self, topic: str, body: bytes, *, message_id: str, timeout: float) -> None:
+            staged_at_each_publish.append(len(list(outbox.list_events(outbox_uri, StorageOptions()))))
+            await super().send(topic, body, message_id=message_id, timeout=timeout)
+
+    bus = _Bus(failing=failing)
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, _lineage_as_its_pod_starts_it(catalog_url, outbox_uri, bus, monkeypatch) as lineage:
+        tick = lineage.post(f"/{RELAY}", headers={"dapr-api-token": "s3cret"})
+
+    assert (tick.json()["outbox_drained"], tick.json()["outbox_stranded"]) == (drained, stranded), tick.text
+    assert [(taken.topic, taken.message_id) for taken in bus.sent] == sent
+    assert [taken.event for taken in bus.sent] == [event] * len(sent)
+    assert (staged_at_each_publish, [key for key, _ in outbox.list_events(outbox_uri, StorageOptions())]) == ([1], left), (
+        "the staged copy went before the bus took the event, or stayed after it had"
+    )

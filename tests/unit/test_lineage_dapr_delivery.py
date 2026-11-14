@@ -35,8 +35,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from catalog.core.config import Settings as CatalogSettings
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.ns_errors import install_problem_handlers
 from lineage.models import RunEvent
+from maintenance.core.config import MaintenanceSettings
 
 
 _VALID = {
@@ -56,8 +59,8 @@ _VALID = {
         }
     ],
 }
-#: Dapr wraps the published data in a CloudEvent envelope; the OpenLineage event rides in ``data``.
-_CLOUD_EVENT = {"id": "ce-1", "source": "catalog", "type": "com.dapr.event.sent", "data": _VALID}
+#: The delivery a subscriber takes: the envelope its publisher built, with the OpenLineage event in ``data``.
+_CLOUD_EVENT = lineage_envelope(_VALID).as_wire()
 
 
 class _FakeRepo:
@@ -116,19 +119,18 @@ def _subs(client: TestClient) -> dict[str, dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 
 
-def test_default_subscription_contract_is_the_one_the_publisher_uses(
+def test_the_default_subscription_takes_the_topic_its_publishers_default_to(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CONTRACT: pubsub ``lineage-pubsub`` / topic ``lineage.events.v1`` / route ``/lineage-events``.
-
-    This is the whole durable ingest path in three strings, and it is a CROSS-PROCESS contract: the
-    catalog publishes to that (component, topic) and the sidecar POSTs that route. Renaming any of them
-    on one side alone loses every event silently — no error, no metric, just an empty feed."""
+    """The topic is the CROSS-PROCESS half of the durable ingest path: the catalog and maintenance publish on it and the
+    sidecar delivers it to this route, so one side's default moved alone loses every event silently, with no error and
+    no metric, only an empty feed. The component is the subscriber's own, and the route the sidecar POSTs."""
     client, _ = _delivery_app(monkeypatch)
     subs = _subs(client)
-    assert set(subs) == {"lineage.events.v1"}  # exactly one subscription without a DLQ configured
+    published = {CatalogSettings.model_fields["lineage_topic"].default, MaintenanceSettings.model_fields["lineage_topic"].default}
+    assert set(subs) == published  # exactly one subscription without a DLQ configured, on the one topic both publish on
     sub = subs["lineage.events.v1"]
-    assert sub["pubsubname"] == "lineage-pubsub"
+    assert sub["pubsubname"] == "lineage-pubsub-lineage"
     assert sub["route"].endswith("/lineage-events")
     assert not sub.get("deadLetterTopic")  # pre-resiliency shape — no silent behaviour change
 

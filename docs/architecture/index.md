@@ -9,7 +9,7 @@ The **catalog** serves the Lance Namespace REST specification (`lance_docs/ns_ca
 on S3, organised as `project > warehouse > namespace > table`. Every write enters through its namespace doors, is
 authorized on **OpenFGA**, and is governed in the catalog's write path, which is where the bronze → silver → gold
 tiers live ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)). The catalog announces each
-committed write as an OpenLineage event over Dapr pub/sub on **NATS JetStream**; **lineage** records it in a durable
+committed write as an OpenLineage event on **NATS JetStream**; **lineage** records it in a durable
 commit feed (`GET /events`) and a table-level edge list, Lance tables in the catalog's provenance namespace, and
 forwards it to a bring-your-own graph backend ([ADR 0158](../adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md)).
 The lakehouse runs no notifier: a client that tells people about the events targets them from the fields the events

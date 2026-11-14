@@ -1,7 +1,7 @@
 """Dapr pub/sub subscription wiring for durable catalog→lineage ingest (#25).
 
-The catalog publishes OpenLineage events to the Dapr ``pubsub.jetstream`` component; the sidecar
-delivers each one to this service over HTTP. ``DaprApp(app)`` also serves GET ``/dapr/subscribe`` (the
+The catalog publishes OpenLineage events on the bus; this service's sidecar delivers each one to it over HTTP,
+through its ``pubsub.jetstream`` subscription. ``DaprApp(app)`` also serves GET ``/dapr/subscribe`` (the
 registration the sidecar reads at startup); it is wired unconditionally — harmless without a sidecar —
 while the actual subscription is registered only when Dapr ingest is enabled, so an HTTP-only deployment
 carries no always-live ingest route.
@@ -201,9 +201,9 @@ def register_dapr(app: FastAPI) -> None:
 
     ``DaprApp(app)`` is always constructed (it adds GET ``/dapr/subscribe``). The subscription itself is
     registered ONLY when Dapr ingest is enabled, so an HTTP-only deployment carries no always-live ingest
-    route. Combined with the token guard above (a request through the cluster route reaches the app port
-    and never carries a sidecar's token) and the pubsub component's publisher scopes, a forged external
-    event cannot reach the feed. When ``dapr_dlq_topic`` is set
+    route. With the token guard above (a request through the cluster route reaches the app port and never carries a
+    sidecar's token) an event from outside the cluster cannot reach the feed; who may publish on the bus is its
+    permission table's to say, and what an event claims is its signature's to prove. When ``dapr_dlq_topic`` is set
     (chart: ``dapr.resiliency.enabled``), the subscription declares a Dapr ``deadLetterTopic`` and the
     parking route is registered — exhausted deliveries become visible instead of vanishing.
 
@@ -215,7 +215,7 @@ def register_dapr(app: FastAPI) -> None:
     if settings.dapr_enabled:
         dapr_app.subscribe(
             pubsub=settings.dapr_pubsub,
-            topic=settings.dapr_topic,
+            topic=settings.events_topic,
             route="/lineage-events",
             dead_letter_topic=settings.dapr_dlq_topic or None,
         )(on_lineage_event)

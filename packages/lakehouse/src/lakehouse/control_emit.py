@@ -1,4 +1,4 @@
-"""Best-effort control-plane change-event emission onto the Dapr/NATS bus, signed by the service that emits.
+"""Best-effort control-plane change-event emission onto the bus, signed by the service that emits.
 
 The publish half of :mod:`lakehouse.control_events`, which owns the wire model. Every producer of a
 governance mutation notice uses THIS module — the catalog (grants, warehouses, policies, namespaces,
@@ -14,7 +14,7 @@ swallowed and counted, so the bus being down can never fail the mutation. The fa
 most where the caller cannot undo its work: maintenance's purge has already deleted bytes and revoked
 tuples by the time it emits, and raising there would fail a reclamation that irreversibly happened.
 
-**Signed at emit** ([[XC-078]]). A bus door authenticates the sidecar that delivered an event, not the service
+**Signed at emit** ([[XC-078]]). A bus door authenticates whatever delivered an event, not the service
 that wrote it, so the actor an event names is a claim until its signature proves which service stamped it. The
 emitter signs each event with its service's own key through the injected ``sign`` (the service binds its own key into
 it) BEFORE the event is staged, so an outbox holds the bytes the bus will
@@ -27,17 +27,17 @@ would sign whatever any other writer of the prefix put there. A service run with
 no secret store) passes ``sign=None`` and publishes unsigned, which only a door verifying nothing acts on: every
 action has a signer (:func:`lakehouse.control_events.control_signer_role`).
 
-**No broker client in app code.** Publishing goes through the local Dapr sidecar
-(:func:`lakehouse.dapr_publish.publish_event`), which owns retry, backoff and DLQ as component
-config. Subscribers take the topic WITHOUT a ``queueGroupName``, so every replica receives every event
+**One seam to the broker.** Publishing goes over this process's own connection to the bus
+(:func:`lakehouse.bus.publish_event`): one bounded attempt, and the outbox's relay is the retry. Subscribers
+take the topic without a queue group, so every replica receives every event
 (broadcast — each replica's cache/ring-buffer stays complete).
 
 Two ways this fails SILENTLY in-cluster, named because "best-effort" hides them:
 
-* the pubsub component's ``scopes`` must list the producer's Dapr app-id, or the sidecar rejects every
-  publish (the same class as the secret-store scoping rule);
-* with control emission disabled, or no sidecar client, this is a no-op that publishes nowhere — never
-  a half-configured transport pretending to emit.
+* the producer's bus user must hold the topic among its publish grants (the chart's ``nats.auth.users``), or the
+  bus refuses every publish, which only this emitter's counter and log line show;
+* with control emission disabled, or in a process the chart names no bus, this is a no-op that publishes
+  nowhere — never a half-configured transport pretending to emit.
 """
 
 from __future__ import annotations
@@ -46,10 +46,10 @@ import logging
 from collections.abc import Callable
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 
 from lakehouse import outbox
+from lakehouse.bus import Bus
 from lakehouse.cloud_events import control_envelope
 from lakehouse.control_events import (
     CONTROL_TOPIC,
@@ -81,20 +81,20 @@ class ControlEmitter(Protocol):
 
 
 class NoopControlEmitter:
-    """The off state (control emission disabled, or no Dapr transport). Every emit is a no-op."""
+    """The off state (control emission disabled, or no bus to publish on). Every emit is a no-op."""
 
     async def emit(self, event: CatalogControlEvent) -> None:
         del event  # off state: no-op (`del`, not a per-line ARG002 suppression, so BOTH ruff and ty accept the unused arg;
         # the param must stay named `event` to structurally match the ControlEmitter protocol)
 
 
-class DaprControlEmitter:
-    """Publish the event to the Dapr ``pubsub.jetstream`` component via the local sidecar, signed by ``sign``.
+class BusControlEmitter:
+    """Publish the event on the control topic over this process's connection to the bus, signed by ``sign``.
 
-    Bounded by a tight per-publish timeout (a hung sidecar must not pin the inline-awaited emit on a
+    Bounded by a tight per-publish timeout (a bus that does not answer must not pin the inline-awaited emit on a
     mutation request path) and fully best-effort — every error swallowed, counted and logged. The
     publish carries no ``authorization``: a subscriber learns which service stamped an event from its
-    signature, because the transport authenticates only the sidecar that delivered it.
+    signature, because the bus says only which of its users published.
 
     ``service`` names the emitting service for telemetry ONLY. It is the single thing that differed
     between the two copies this module replaced, so it is a parameter rather than a reason to fork:
@@ -104,9 +104,8 @@ class DaprControlEmitter:
 
     def __init__(
         self,
-        client: DaprClient,
+        bus: Bus,
         *,
-        pubsub: str,
         topic: str,
         timeout_seconds: float,
         service: str,
@@ -114,8 +113,7 @@ class DaprControlEmitter:
         outbox_uri: str = "",
         storage_options: Callable[[], StorageOptions] | None = None,
     ) -> None:
-        self._client = client
-        self._pubsub = pubsub
+        self._bus = bus
         self._topic = topic
         self._timeout_seconds = timeout_seconds
         self._service = service
@@ -171,12 +169,11 @@ class DaprControlEmitter:
                 return
         try:
             await outbox.publish_with_outbox(
-                self._client,
+                self._bus,
                 control_envelope(wire),
                 outbox_uri=self._outbox_uri,
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
-                pubsub_name=self._pubsub,
-                topic_name=self._topic,
+                topic=self._topic,
                 timeout_seconds=self._timeout_seconds,
             )
         except Exception as exc:
@@ -201,8 +198,7 @@ class DaprControlEmitter:
 def make_control_emitter(
     *,
     enabled: bool,
-    dapr: DaprClient | None,
-    pubsub: str,
+    bus: Bus | None,
     service: str,
     sign: ControlSign | None,
     topic: str = CONTROL_TOPIC,
@@ -210,16 +206,15 @@ def make_control_emitter(
     outbox_uri: str = "",
     storage_options: Callable[[], StorageOptions] | None = None,
 ) -> ControlEmitter:
-    """The chosen control emitter: a Dapr publisher when enabled and a sidecar client is present, else
-    the no-op (dev/off, like lineage). Built once in the service's lifespan onto
+    """The chosen control emitter: a publisher on the bus when enabled and the process holds a connection to it,
+    else the no-op (dev/off, like lineage). Built once in the service's lifespan onto
     ``app.state.control_emitter``.
 
     ``sign`` has no default, so every producer states whether it signs: None publishes unsigned, which only a
     door verifying nothing acts on."""
-    if enabled and dapr is not None:
-        return DaprControlEmitter(
-            dapr,
-            pubsub=pubsub,
+    if enabled and bus is not None:
+        return BusControlEmitter(
+            bus,
             topic=topic,
             timeout_seconds=timeout_seconds,
             service=service,

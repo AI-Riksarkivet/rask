@@ -15,7 +15,6 @@ from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from functools import partial
 
 import httpx
-from dapr.aio.clients import DaprClient
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
@@ -45,6 +44,7 @@ from catalog.core.namespace import NamespaceConnections
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
 from lakehouse.admission import judge_before_the_body
+from lakehouse.bus import Bus, bus_session
 from lakehouse.bus_watchdog import BusWatchdog, start_bus_watchdog
 from lakehouse.control_emit import make_control_emitter
 from lakehouse.governed.auth_lifespan import attach_auth
@@ -155,7 +155,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     bound_lance_scans(settings)
     # EVERYTHING ACQUIRED BELOW IS RELEASED BY THIS STACK, in reverse, whether the start completes or fails part-way
-    # (ADR 0203), so a start that fails after the store session or the sidecar client is built leaves neither open.
+    # (ADR 0203), so a start that fails after the store session or the bus session is opened leaves neither open.
     async with AsyncExitStack() as stack:
         # Every background loop and task this process runs is supervised here: one that ends unasked ends the process.
         loops = await stack.enter_async_context(Supervisor())
@@ -265,20 +265,16 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # cleared at shutdown so nothing in this process outlives the app that configured it.
     base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
     stack.callback(base_judge.install, None)
-    # Lineage emission (opt-in, best-effort). Build the chosen transport: a Dapr pub/sub publisher (the
-    # sidecar persists to NATS) or a direct-HTTP client. The Dapr client targets the local sidecar, so
-    # it's cheap to construct and needs no broker reachability at boot. One client per process, closed by this lifespan.
+    # THIS PROCESS'S ONE CONNECTION TO THE BUS ([[XC-199]]), as the catalog's own bus user, which both emitters and the
+    # control relay publish on (`lakehouse.bus`). A loop of `loops` connects it behind the start and keeps it, so the
+    # catalog serves, and stages what it announces, while the bus is away. Entered before everything that publishes, so
+    # it is drained after them. None for a stack the chart names no bus.
+    bus = await stack.enter_async_context(bus_session(loops, settings.bus))
+    # Lineage emission (opt-in, best-effort) over the chosen transport: the bus, or a direct-HTTP client.
     lineage_http = None
-    dapr_client = None
-    if settings.lineage_emit_enabled and settings.lineage_transport == "dapr":
-        dapr_client = DaprClient()
-    elif settings.lineage_emit_enabled and settings.lineage_url:
+    if settings.lineage_emit_enabled and settings.lineage_transport == "http" and settings.lineage_url:
         lineage_http = httpx.AsyncClient(timeout=settings.lineage_emit_timeout_seconds)
         stack.push_async_callback(closed_quietly, lineage_http.aclose)
-    if dapr_client is None and settings.control_emit_enabled:
-        dapr_client = DaprClient()
-    if dapr_client is not None:
-        stack.push_async_callback(closed_quietly, dapr_client.close)
 
     # WHICH TENANT a write belongs to, for the emitted `rask_lance.project` facet — WATCH targeting's only
     # key. Without it a notifier skips the watcher loop entirely and every catalog write in the
@@ -300,9 +296,8 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         transport=settings.lineage_transport,
         url=settings.lineage_url,
         client=lineage_http,
-        dapr=dapr_client,
-        pubsub=settings.dapr_pubsub,
-        topic=settings.dapr_topic,
+        bus=bus,
+        topic=settings.lineage_topic,
         job_namespace=settings.lineage_job_namespace,
         dataset_namespace=settings.lineage_dataset_namespace,
         timeout_seconds=settings.lineage_emit_timeout_seconds,
@@ -322,20 +317,18 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         signing=signing,
         commit_ids=commit_ids,
     )
-    # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes through
-    # the same local sidecar client, built above when either lane is on. The per-replica ring buffer is ALWAYS
+    # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes on
+    # the same connection to the bus. The per-replica ring buffer is ALWAYS
     # built (plain memory, fed by the broadcast subscription in api/dapr.py); the emitter is a no-op when off.
-    # The sidecar client itself, published for callers that are not the emitter. The control relay
+    # The connection itself, published for callers that are not the emitter. The control relay
     # (api/control_relay.py) re-publishes the STAGED event, never a re-serialization of the model, so it
     # cannot go through `control_emitter`, which would rebuild the event from the model and stage it
-    # again. One client per process, closed by this lifespan; `None` when this deployment has no Dapr
-    # transport at all.
-    app.state.dapr_client = dapr_client
+    # again. `None` when the chart names this process no bus.
+    app.state.bus = bus
     app.state.control_buffer = ControlEventBuffer(settings.control_buffer_size)
     app.state.control_emitter = make_control_emitter(
         enabled=settings.control_emit_enabled,
-        dapr=dapr_client,
-        pubsub=settings.control_pubsub,
+        bus=bus,
         timeout_seconds=settings.control_emit_timeout_seconds,
         service="catalog",
         # SIGNED AS THIS CATALOG ([[XC-078]]), with the holder the lineage emitter signs with, for the person each
@@ -386,17 +379,17 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # surfaces that as a domain error.
     with suppress(LanceNamespaceError):
         app.state.readiness_facts = {"namespace": str(namespace.namespace_id())}
-    app.state.health = HealthWatch(_dependencies(app, settings, bus_watchdog))
+    app.state.health = HealthWatch(_dependencies(app, settings, bus, bus_watchdog))
     app.state.health.watch(loops)
 
 
-def _dependencies(app: FastAPI, settings: Settings, bus_watchdog: BusWatchdog | None) -> list[Dependency]:
+def _dependencies(app: FastAPI, settings: Settings, bus: Bus | None, bus_watchdog: BusWatchdog | None) -> list[Dependency]:
     """What the catalog reads to know it can serve: its store under its own session (the control root's listing), OpenFGA
     under its own credential, the bus where the chart names one, and the secret store its keys are read from."""
     dependencies = [
         store_dependency(settings.registry_root, settings.storage_options, required=True),
         *openfga_dependency(app, required=True),
-        *bus_dependency(bus_watchdog),
+        *bus_dependency(bus, bus_watchdog),
     ]
     if secret_store_configured():
         dependencies.append(secret_store_dependency())

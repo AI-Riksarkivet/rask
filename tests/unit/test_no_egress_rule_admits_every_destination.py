@@ -70,13 +70,12 @@ class _Pod(BaseModel):
 
 
 #: Whether a pod dials each platform endpoint, read off its own spec: a token the API server accepts, the store's or the
-#: IdP's address in its env, and for the bus a Dapr sidecar (every pub/sub Component dials `nats.url`) or a container that
-#: names the bus itself (the stream Job).
+#: IdP's address in its env, and for the bus a container that names the bus (each service, the stream Job).
 _DIALS: dict[str, Callable[[_Pod], bool]] = {
     "api server": lambda pod: pod.holds_an_api_credential,
     "object store": lambda pod: chart_render.OBJECT_STORE_URL in pod.env,
     "issuer": lambda pod: chart_render.ISSUER_URL in pod.env,
-    "bus": lambda pod: pod.labels.get("dapr.io/enabled") == "true" or chart_render.NATS_URL in pod.env or chart_render.NATS_URL in pod.commands,
+    "bus": lambda pod: chart_render.NATS_URL in pod.env or chart_render.NATS_URL in pod.commands,
     "graph backend": lambda pod: chart_render.GRAPH_URL in pod.env,
 }
 

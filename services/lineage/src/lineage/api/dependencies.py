@@ -6,6 +6,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
+from lakehouse.bus import Bus
 from lineage.core.config import LineageSettings, get_settings
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
@@ -39,15 +40,15 @@ def get_bearer(request: Request) -> str | None:
 BearerDep = Annotated[str | None, Depends(get_bearer)]
 
 
-def get_publisher(request: Request) -> object | None:
-    """The Dapr publisher that re-announces a recovered outbox event, or ``None`` without the outbox.
+def get_publisher(request: Request) -> Bus | None:
+    """This process's connection to the bus, which re-announces a recovered outbox event, or ``None`` without the outbox.
 
     ``None`` is a real answer, not a missing dependency: the publisher exists only to re-publish what the
     relay drains or an operator replays, and a deployment with no ``outbox_uri`` does neither. Returning it
     rather than raising keeps ``services.staged.republish_staged`` the single place that decides whether a
     re-publish is possible.
     """
-    return getattr(request.app.state, "dapr", None)
+    return getattr(request.app.state, "bus", None)
 
 
-PublisherDep = Annotated[object | None, Depends(get_publisher)]
+PublisherDep = Annotated[Bus | None, Depends(get_publisher)]

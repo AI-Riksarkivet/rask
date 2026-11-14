@@ -218,7 +218,7 @@ async def _until_signalled(settings: MaintenanceSettings) -> bool:
 
 def _end_unstarted(code: int) -> None:
     """End a process whose start was abandoned, without waiting for it. A start step that runs in a thread (a secret
-    read retried for minutes while the sidecar is down) cannot be cancelled, and the interpreter waits for its thread
+    read retried for minutes while the secret store is down) cannot be cancelled, and the interpreter waits for its thread
     at exit: the pod would stay in Terminating until the read gave up. Nothing was started that needs stopping. What it
     logged is flushed within a bound first, since the Collector keeps no copy of this pod's stdout (`lakehouse.supervision`)."""
     flush_telemetry(FLUSH_SECONDS)

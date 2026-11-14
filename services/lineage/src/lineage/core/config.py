@@ -104,17 +104,19 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings)
     #: (`LINEAGE_SIGNERS`, `LINEAGE_DELEGATORS`), so a settings object made by `model_validate` reads them too.
     signing: Signing = Field(default_factory=Signing)
 
-    # --- Dapr pub/sub durable ingest (opt-in) — the catalog publishes to the Dapr pubsub.jetstream
-    # component and the sidecar delivers each event to this service's subscription handler over HTTP, so
-    # a lineage outage never loses provenance (the sidecar persists to NATS + redelivers per backOff).
+    # --- Durable ingest through the sidecar's subscription (opt-in): the catalog publishes to NATS JetStream, which
+    # keeps each event, and the sidecar delivers it to this service's subscription handler over HTTP and redelivers
+    # per backOff, so a lineage outage never loses provenance.
     # The HTTP /api/v1/lineage endpoint stays for external producers. Off by default (HTTP is dev default).
     dapr_enabled: bool = Field(default=False, alias="LINEAGE_DAPR_ENABLED")
-    dapr_pubsub: str = Field(default="lineage-pubsub", alias="LINEAGE_DAPR_PUBSUB")
-    dapr_topic: str = Field(default="lineage.events.v1", alias="LINEAGE_DAPR_TOPIC")
-    #: Bounds the relay's re-publish of a drained event. An unbounded publish against a hung sidecar would
-    #: stall the tick — the relay failing hardest exactly when a backlog means it matters most, which is the
+    #: The component the subscription is taken through: this app's own, `<pubsub.name>-<app-id>` as the chart renders it.
+    dapr_pubsub: str = Field(default="lineage-pubsub-lineage", alias="LINEAGE_DAPR_PUBSUB")
+    #: The topic lineage's events ride: the one the subscription takes, and the one the relay publishes a recovered event on.
+    events_topic: str = Field(default="lineage.events.v1", alias="LINEAGE_EVENTS_TOPIC")
+    #: Bounds the relay's re-publish of a drained event. An unbounded publish against a bus that does not answer
+    #: would stall the tick — the relay failing hardest exactly when a backlog means it matters most, which is the
     #: same failure the bounded drain was introduced to avoid.
-    dapr_publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_DAPR_PUBLISH_TIMEOUT_SECONDS")
+    publish_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LINEAGE_PUBLISH_TIMEOUT_SECONDS")
     # Dead-letter topic for the ingest subscription (Dapr-native DLQ). "" (default) = none — the
     # pre-existing behavior. Ships together with the chart's Resiliency retry policy (a DLQ without
     # one dead-letters on the FIRST failure per Dapr's documented default). Lineage's recovery story

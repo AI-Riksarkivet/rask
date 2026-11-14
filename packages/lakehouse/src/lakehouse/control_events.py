@@ -25,7 +25,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 
-#: The Dapr pub/sub topic for control-plane events. Versioned (a breaking schema change → a new `.vN`),
+#: The topic control-plane events are published on. Versioned (a breaking schema change → a new `.vN`),
 #: mirroring `lineage.events.v1`. The catalog subscribes to this WITHOUT a queueGroupName, so every replica
 #: receives every event (broadcast → each replica's ring buffer stays complete).
 CONTROL_TOPIC = "catalog.control.v1"

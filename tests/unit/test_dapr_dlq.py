@@ -64,7 +64,7 @@ def _catalog_control_lane(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) 
     from catalog.api.dapr import register_control_dapr
     from catalog.core.config import get_settings
 
-    for key in ("LANCE_CONTROL_EMIT_ENABLED", "LANCE_CONTROL_PUBSUB", "LANCE_CONTROL_DLQ_TOPIC"):
+    for key in ("LANCE_CONTROL_EMIT_ENABLED", "LANCE_CONTROL_PUBSUB", "LANCE_CONTROL_DLQ_TOPIC", "RASK_BUS_URL", "RASK_BUS_USER"):
         if key in env:
             monkeypatch.setenv(key, env[key])
         else:

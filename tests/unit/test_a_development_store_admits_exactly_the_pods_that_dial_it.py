@@ -10,10 +10,10 @@ only an intruder. The bus fixture runs three clustered servers, which reach each
 JetStream cluster partitions.
 
 READ FROM THE RENDER of the deployed overlay with the isolation layer on, beside the render of each fixture that shares
-its namespace: a pod dials a store when its spec, or a ConfigMap or Secret it mounts, names the store's Service, and the
-bus too when it runs a Dapr sidecar, whose pub/sub Component names the bus. A `helm test` pod runs only when someone runs
-`helm test`. Read with the sidecars and without them ([[XC-199]]): a service dials its secret store itself, so that
-store's door does not follow the sidecars, and the bus's does.
+its namespace: a pod dials a store when its spec, or a ConfigMap or Secret it mounts, names the store's Service. A
+`helm test` pod runs only when someone runs `helm test`. Read with `dapr.enabled` and without it ([[XC-199]]): a
+service is named its secret store either way, and its bus only with it, so the bus's door follows that switch and the
+secret store's does not.
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ _DEPLOYED: tuple[str, ...] = (
     "--set", "networkPolicy.enabled=true", "--set-string", "nats.url=nats://rask-nats:4222",
 )  # fmt: skip
 
-#: The same estate with no sidecar: nothing publishes control events, which only a sidecar carries.
-_NO_SIDECARS: tuple[str, ...] = ("--set", "dapr.enabled=false", "--set", "catalog.controlEmit=false")
+#: The same estate with no service named its bus: the chart refuses control events there, which ride the bus.
+_NO_BUS: tuple[str, ...] = ("--set", "dapr.enabled=false", "--set", "catalog.controlEmit=false")
 
 #: The fixtures a development estate installs into the release's namespace: their pods are governed by the chart's
 #: policies as the release's own are.
@@ -127,10 +127,10 @@ def _server(pods: list[_Pod], component: str) -> _Pod:
 @pytest.mark.parametrize(
     ("store", "overlay"),
     [
-        *(pytest.param(store, (), id=f"{store}-with-sidecars") for store in sorted(_STORES)),
-        # The two doors a sidecar bears on: the bus's follows it, and the secret store's does not.
-        pytest.param("bus", _NO_SIDECARS, id="bus-without-sidecars"),
-        pytest.param("secret store", _NO_SIDECARS, id="secret store-without-sidecars"),
+        *(pytest.param(store, (), id=f"{store}-with-services-named-their-bus") for store in sorted(_STORES)),
+        # The two doors the switch bears on: the bus's follows it, and the secret store's does not.
+        pytest.param("bus", _NO_BUS, id="bus-with-no-service-named-it"),
+        pytest.param("secret store", _NO_BUS, id="secret store-with-no-service-named-its-bus"),
     ],
 )
 def test_a_development_store_admits_exactly_the_pods_that_dial_it(store: str, overlay: tuple[str, ...]) -> None:
@@ -142,14 +142,10 @@ def test_a_development_store_admits_exactly_the_pods_that_dial_it(store: str, ov
     server = _server(pods, wanted.component)
     policies = [doc for doc in docs if doc.get("kind") == "NetworkPolicy"]
 
-    dialers = {
-        pod.workload
-        for pod in pods
-        if pod.workload != server.workload and (_names(pod, wanted.service) or (store == "bus" and pod.labels.get("dapr.io/enabled") == "true"))
-    }
+    dialers = {pod.workload for pod in pods if pod.workload != server.workload and _names(pod, wanted.service)}
     admitted = _admitted(policies, server.labels, wanted.port, pods) - {server.workload}
 
-    # The catalog dials every store but a bus no sidecar carries it to; without it the walk read no pod at all.
+    # The catalog dials every store but a bus it is not named; without it the walk read no pod at all.
     assert ("Deployment/rask-catalog" in dialers) == (store != "bus" or not overlay), f"{store}: dialers read as {sorted(dialers)}"
     assert (sorted(admitted - dialers), sorted(dialers - admitted)) == ([], []), f"{store}: admitted and not dialling it, then dialling it and not admitted"
 

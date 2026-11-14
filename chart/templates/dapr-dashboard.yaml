@@ -1,6 +1,6 @@
 {{- if include "lance.daprDashboardEnabled" . }}
-# Dapr dashboard — the web UI for the Dapr stuff: components (lineage-pubsub, lance-secrets,
-# lance-tracing), subscriptions, configurations, and the control plane. Port-forward 8080 to view.
+# Dapr dashboard — the web UI for the Dapr stuff: components (each app's subscription and cron components,
+# lance-secrets), subscriptions, configurations (lance-tracing), and the control plane. Port-forward 8080 to view.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

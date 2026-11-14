@@ -5,13 +5,12 @@ error path, so a misrouted event produces a green deployment, a healthy pod, and
 Nothing about the running system distinguishes "no lineage was emitted" from "nothing has happened
 yet". That is why the wiring has to be asserted at render time rather than observed at runtime.
 
-The lakehouse's producers emit through **Dapr pub/sub**: maintenance and the catalog each publish to
-``<APP>_LINEAGE_TOPIC`` through their own per-subscriber pubsub component (``lance.subPubsub``), and
-``services/lineage`` subscribes on ``LINEAGE_DAPR_TOPIC``. Component names differ per app on purpose (each
-carries its own queueGroupName); the TOPIC must match. ``test_invariants._PINNED_TOPICS`` already pins each
-service's in-code DEFAULT, but it cannot see the chart — and the chart overrides those defaults on every
-deployed pod, so a template that stopped deriving from ``.Values.pubsub.topic`` would satisfy that pin while
-dropping every event. A producer outside the estate posts OpenLineage to lineage's HTTP door with its own
+The lakehouse's producers publish on the bus, each on a connection of its own: maintenance and the catalog on the
+topic their ``<APP>_LINEAGE_TOPIC`` names, and ``services/lineage`` subscribes on ``LINEAGE_EVENTS_TOPIC``. The TOPIC
+must match. The in-code defaults are held equal by
+``test_lineage_dapr_delivery.py::test_the_default_subscription_takes_the_topic_its_publishers_default_to``, which
+cannot see the chart, and the chart overrides those defaults on every deployed pod, so a template that stopped
+deriving from ``.Values.pubsub.topic`` would satisfy that pin while dropping every event. A producer outside the estate posts OpenLineage to lineage's HTTP door with its own
 transport (any OpenLineage client, configured by that producer), which this chart renders nothing for.
 
 Asserted against ``helm template`` output rather than values.yaml, because the rendered manifest is what
@@ -46,11 +45,11 @@ def _env_pairs(rendered: str) -> list[tuple[str, str]]:
 
 
 #: The subscriber. If this is wrong or absent, nothing reaches the graph no matter who publishes.
-_SUBSCRIBER_TOPIC = "LINEAGE_DAPR_TOPIC"
+_SUBSCRIBER_TOPIC = "LINEAGE_EVENTS_TOPIC"
 
-#: Every env var that names the topic a service PUBLISHES lineage to. Each must equal the
-#: subscriber's. `LANCE_DAPR_TOPIC` is the catalog's (it emits its own table-lifecycle runs).
-_PUBLISHER_TOPICS = ("MAINTENANCE_LINEAGE_TOPIC", "LANCE_DAPR_TOPIC")
+#: Every env var that names the topic a service PUBLISHES lineage to. Each must be rendered, and equal the
+#: subscriber's. `LANCE_LINEAGE_TOPIC` is the catalog's (it emits its own table-lifecycle runs).
+_PUBLISHER_TOPICS = ("MAINTENANCE_LINEAGE_TOPIC", "LANCE_LINEAGE_TOPIC")
 
 
 def _render(*set_values: str) -> str:
@@ -87,7 +86,8 @@ def test_every_lineage_publisher_renders_the_subscribers_topic() -> None:
     assert topic, f"{_SUBSCRIBER_TOPIC} rendered EMPTY — the subscription binds to nothing and every event is dropped"
 
     published: dict[str, list[str]] = {name: _env_values(rendered, name) for name in _PUBLISHER_TOPICS}
-    assert any(published.values()), f"no lineage publisher renders a topic at all: {published}"
+    unrendered = sorted(name for name, values in published.items() if not values)
+    assert not unrendered, f"these publishers render no topic, so each publishes on its in-code default while the chart moves the subscriber: {unrendered}"
 
     mismatched = {name: sorted(set(values)) for name, values in published.items() if values and set(values) != {topic}}
     assert not mismatched, (

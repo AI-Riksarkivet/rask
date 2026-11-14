@@ -321,14 +321,11 @@ version = "0.1.0"
 source = { editable = "services/catalog" }
 dependencies = [
     { name = "boto3" },
-    { name = "dapr" },
-    { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lakehouse" },
     { name = "lance-namespace" },
     { name = "openfga-sdk" },
-    { name = "opentelemetry-instrumentation-grpc" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -339,14 +336,11 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
-    { name = "dapr", specifier = ">=1.18.1" },
-    { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lakehouse", editable = "packages/lakehouse" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },
     { name = "openfga-sdk", specifier = ">=0.10.4" },
-    { name = "opentelemetry-instrumentation-grpc", specifier = ">=0.65b0" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
@@ -1123,12 +1117,12 @@ dependencies = [
     { name = "boto3" },
     { name = "certifi" },
     { name = "cryptography" },
-    { name = "dapr" },
     { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lance-namespace" },
     { name = "lance-namespace-urllib3-client" },
+    { name = "nats-py", extra = ["nkeys"] },
     { name = "openfga-sdk" },
     { name = "openlineage-python" },
     { name = "opentelemetry-api" },
@@ -1136,7 +1130,6 @@ dependencies = [
     { name = "opentelemetry-instrumentation-aiohttp-client" },
     { name = "opentelemetry-instrumentation-botocore" },
     { name = "opentelemetry-instrumentation-fastapi" },
-    { name = "opentelemetry-instrumentation-grpc" },
     { name = "opentelemetry-instrumentation-httpx" },
     { name = "opentelemetry-instrumentation-logging" },
     { name = "opentelemetry-instrumentation-requests" },
@@ -1163,12 +1156,12 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "certifi", specifier = ">=2026.10.23" },
     { name = "cryptography", specifier = ">=49" },
-    { name = "dapr", specifier = ">=1.18.1" },
     { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },
     { name = "lance-namespace-urllib3-client", specifier = ">=0.11.0,<0.12" },
+    { name = "nats-py", extras = ["nkeys"], specifier = ">=2.16" },
     { name = "openfga-sdk", specifier = ">=0.10.4" },
     { name = "openlineage-python", specifier = ">=1.52.0" },
     { name = "opentelemetry-api", specifier = ">=1.44.0" },
@@ -1176,7 +1169,6 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-botocore", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.65b0" },
-    { name = "opentelemetry-instrumentation-grpc", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-logging", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-requests", specifier = ">=0.65b0" },
@@ -1289,8 +1281,6 @@ name = "lineage"
 version = "0.1.0"
 source = { editable = "services/lineage" }
 dependencies = [
-    { name = "dapr" },
-    { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
     { name = "lakehouse" },
     { name = "lance-namespace" },
@@ -1305,8 +1295,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dapr", specifier = ">=1.18.1" },
-    { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "lakehouse", editable = "packages/lakehouse" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },
@@ -1324,7 +1312,6 @@ name = "maintenance"
 version = "0.1.0"
 source = { editable = "services/maintenance" }
 dependencies = [
-    { name = "dapr" },
     { name = "fastapi" },
     { name = "lakehouse" },
     { name = "lance-namespace" },
@@ -1339,7 +1326,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dapr", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "lakehouse", editable = "packages/lakehouse" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },
@@ -1989,21 +1975,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/58/71/8ccb9d84bbdbb4798682796dcf20892e404ef9548f58975c4b0dd3d372d6/opentelemetry_instrumentation_fastapi-0.66b2.tar.gz", hash = "sha256:bd226e0196990999eef77380a64527a26f35b621e681c3cad860984ecc3c23f5", size = 26631, upload-time = "2026-10-29T17:38:28.173Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/e3/10338083ccc116e65b0471796baa90fcb817daf96fed67e51eff9fb80d4e/opentelemetry_instrumentation_fastapi-0.66b2-py3-none-any.whl", hash = "sha256:401eb9fe58cc86015ac0a6682dcaf1b4bcea32c428969853d02171d6650d1774", size = 14217, upload-time = "2026-10-29T17:37:30.465Z" },
-]
-
-[[package]]
-name = "opentelemetry-instrumentation-grpc"
-version = "0.66b2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-instrumentation" },
-    { name = "opentelemetry-semantic-conventions" },
-    { name = "wrapt" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/60/64/b030da7c04e9ebba1ec22777531f5f28cd8a76f5ccbe994d04f0033be7ed/opentelemetry_instrumentation_grpc-0.66b2.tar.gz", hash = "sha256:02bda482ef814757d60bb37aafaa756c834c4050378df9b59183abce389e1c56", size = 31922, upload-time = "2026-10-29T17:38:30.187Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/3f/344b4c42f92ceb17398d9a703f6cb80394d5c743980876570e471867d213/opentelemetry_instrumentation_grpc-0.66b2-py3-none-any.whl", hash = "sha256:bfa75d83b7080c46e0abd3f66af3be839d27d5c809a25e40a3fa0dd8012af40d", size = 24260, upload-time = "2026-10-29T17:37:32.599Z" },
 ]
 
 [[package]]

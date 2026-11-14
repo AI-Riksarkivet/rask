@@ -210,13 +210,22 @@ def _envelope_of(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: What a publish carries beside the contract's attributes: its trace context, which is telemetry.
+_TRACE_ATTRIBUTES = frozenset({"traceparent", "tracestate"})
+
+
 def _envelope_errors(message: BusMessage) -> list[str]:
-    """How ``message`` departs from the envelope its event's contract writes, and from being stored under that
-    envelope's id. The trace an envelope carries is telemetry, which `test_observability_e2e.py` reads on an estate
-    that runs the chain (ADR 0167)."""
+    """How ``message`` departs from the envelope its event's contract writes: an attribute the contract writes that
+    differs, one it does not write (whatever carried the publish added it), another content type than the structured
+    envelope's, and another message id than the envelope's. The trace an envelope carries is telemetry, which
+    `test_observability_e2e.py` reads on an estate that runs the chain (ADR 0167)."""
     carried = message.envelope | {"time": _instant(message.envelope.get("time"))}
     expected = _envelope_of(message.event) | {"specversion": "1.0", "datacontenttype": "application/json"}
     errors = [f"{name} is {carried.get(name)!r}, not {value!r}" for name, value in expected.items() if carried.get(name) != value]
+    if added := sorted(set(carried) - set(expected) - {"data"} - _TRACE_ATTRIBUTES):
+        errors.append(f"carries {added}, which the envelope's contract does not write")
+    if message.headers.get("Content-Type") != "application/cloudevents+json":
+        errors.append(f"stored as {message.headers.get('Content-Type')!r}, not as a structured CloudEvent")
     if message.headers.get("Nats-Msg-Id") != carried.get("id"):
         errors.append(f"stored under Nats-Msg-Id {message.headers.get('Nats-Msg-Id')!r}, not its id {carried.get('id')!r}")
     return errors

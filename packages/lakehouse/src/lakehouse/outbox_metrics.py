@@ -12,7 +12,7 @@ The signals, mapped to the four:
   · Errors   — publish_failed (event left staged = the crash window doing its job) + poison_dropped
   · Saturation — DEPTH and OLDEST-AGE gauges: the alertable pair. Depth > 0 sustained means the relay is
     not draining; oldest-age bounds how much lineage is at risk. These are what a human is actually paged on.
-  · Latency  — the publish itself is already covered by the Dapr sidecar's own spans.
+  · Latency  — the publish itself is timed where it is made (`lakehouse.bus`: `messaging.client.operation.duration`).
 
 Bounded cardinality (observability.md): NO run_id / dataset / token labels — those are unbounded and belong
 on spans and logs, not metric attributes. These series carry no attributes at all.

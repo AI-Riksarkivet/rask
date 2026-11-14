@@ -752,7 +752,9 @@ governing their data. The project-scoped surface is the console's project page, 
   no task; its sidecar health-checks its probe port, so it outlives the drain and leaves with the worker. Every worker
   replica runs a pull worker on the chart's durable consumers, as its own bus user
   (`maintenance-worker`) through nats-py rather than Dapr, whose JetStream subscription sends no in-progress ack and whose
-  publish cannot set a schedule header (`maintenance.services.tasks`). It takes one task at a time and heartbeats it
+  publish cannot set a schedule header (`maintenance.services.tasks`). What a pass emits, the worker publishes on a
+  second connection, as the bus user `maintenance` (`lakehouse.bus`, `maintenance.runtime.collaborators`), held only
+  when it emits. It takes one task at a time and heartbeats it
   every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a replica
   whose heartbeats the bus stops answering ends itself before that ack wait runs out (`Worker._tell`), its telemetry
   flushed only within what the lease leaves (`Worker._end_process`), as does one whose heartbeat ends by an error nothing expected (`Worker._keep_alive`), one whose drain

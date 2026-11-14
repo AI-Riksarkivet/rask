@@ -21,9 +21,9 @@ longer than a request.
 
 The worker pods: `python -m maintenance.worker`, a process of its own and not a web app's lifespan, one worker per
 replica on the shared work queue (ADR 0198). A pass that hangs ends its own replica and never the write-event lane's,
-and the two Deployments scale apart (`maintenance.worker.replicas`). Rendered only with Dapr on: the bus its work queue
-is on is named to the pod only then, and what a pass emits is published through its sidecar. Its bus credential and its
-signing key it reads from the secret store under its own login. RollingUpdate with no pod unavailable: the queue holds
+and the two Deployments scale apart (`maintenance.worker.replicas`). Rendered only with `dapr.enabled`: the bus is named
+to the pod only then, for its work queue and for the connection it publishes what a pass emits on. Its two bus
+credentials and its signing key it reads from the secret store under its own login. RollingUpdate with no pod unavailable: the queue holds
 one task per table and hands it to one worker at a time, so a surge pod shares the work and repeats none.
 
 ## `terminationGracePeriodSeconds: {{ $grace }}`
@@ -35,8 +35,8 @@ avoid. Held by `tests/unit/test_invariants.py::test_a_queue_value_the_worker_can
 
 ## `dapr.io/enable-app-health-check: "true"`
 
-A pass publishes through the sidecar until it ends, so this pod's sidecar blocks its shutdown for the grace less the
-teardown, which holds preStop and the whole drain. A blocking sidecar leaves early only when its app turns unhealthy,
+This pod's sidecar blocks its shutdown for the grace less the teardown, which holds preStop and the whole drain, so it
+outlives the worker's drain. A blocking sidecar leaves early only when its app turns unhealthy,
 and it learns that from a health check: with none it holds the pod in Terminating for the whole block however soon the
 worker is done. Measured on daprd 1.19.0-rc.4 (2026-11-10): block 40 s and the app gone after 5 s, the sidecar left at
 40.0 s with no check and at 7.9 s with one (interval 2 s, threshold 2); with the app still up it held the whole block.
@@ -97,13 +97,10 @@ because only then is the route registered.
 
 ## `- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.appId) | quote }} }`
 
-The PER-SUBSCRIBER component, not the shared broadcast one. `queueGroupName` lives on the
-COMPONENT, so subscribing through `pubsub.name` gives every replica every event instead of
-a competing-consumer group — measured 2026-09-03, the arrival route bound to
-`pubsub=lineage-pubsub` and would have planned the same dataset once per replica. Used for
-publishing too (`lance.subPubsub`): the queue group affects
-subscription only. With the write-event lane off it is a publish-only component, maintenance's own
-connection either way (values.yaml `nats.auth`).
+The component the write-event lane SUBSCRIBES through, maintenance's own (`lance.subPubsub`): `queueGroupName` lives on
+the COMPONENT, so the web replicas are one competing-consumer group and a commit holds its table's pass once, not once
+per replica. Rendered with the lane, for the web pods alone: the worker subscribes to nothing, and what a pass emits
+it publishes on its own connection to the bus (`lance.busEnv`, `lakehouse.bus`).
 
 ## `- { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }`
 
@@ -185,8 +182,8 @@ overturning it. Capped because each end is one listing PER RECORD.
 
 ## `- { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }`
 
-The purge announces each reclamation on the catalog's control topic, through maintenance's own
-component (dapr-component.yaml): one the sidecar is not scoped to refuses the publish SILENTLY.
+The purge announces each reclamation on the catalog's control topic, on the worker's own connection as the bus user
+`maintenance`, whose row is granted that topic only while this flag is on (`nats.auth.flagged`).
 
 ## `{{- include "lance.objectStoreSessionEnv" (list $root "MAINTENANCE" "maintenance") | nindent 0 }}`
 

@@ -111,8 +111,10 @@ class Permissions(BaseModel):
 
     @property
     def inbox(self) -> str:
-        """The prefix this user's replies arrive under: the one subject its subscribe grant admits with ``.>``."""
-        (inbox,) = (subject.removesuffix(".>") for subject in self.subscribe if subject.endswith(".>"))
+        """The prefix the replies to this user's own connection arrive under: the inbox its subscribe grant gives it
+        alone (``_INBOX_<user>``) where it has one, else the shared ``_INBOX``."""
+        inboxes = {subject.removesuffix(".>") for subject in self.subscribe if subject.startswith("_INBOX") and subject.endswith(".>")}
+        (inbox,) = inboxes - {"_INBOX"} or inboxes
         return inbox
 
 
@@ -468,6 +470,8 @@ class Delivery(BaseModel):
 
     route: str
     body: dict[str, Any]
+    #: The W3C trace context daprd made the request under; empty when it sent none.
+    traceparent: str = ""
 
 
 class SubscriberApp:
@@ -501,7 +505,7 @@ class SubscriberApp:
             def do_POST(self) -> None:  # noqa: N802 — the stdlib's dispatch name
                 raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 with lock:
-                    app.deliveries.append(Delivery(route=self.path, body=json.loads(raw or b"{}")))
+                    app.deliveries.append(Delivery(route=self.path, body=json.loads(raw or b"{}"), traceparent=self.headers.get("traceparent") or ""))
                 if self.path in failing:
                     self._answer(500)
                 else:

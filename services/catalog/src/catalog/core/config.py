@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from lakehouse.bus import BusSettings
 from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.governed.store_credential import S3KeyPair
@@ -201,13 +202,13 @@ class CatalogControlBusSettings(BaseSettings):
 
     control_root: str = Field(default="", alias="LANCE_CONTROL_ROOT")
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream, distinct from the
-    # OpenLineage data events above). When on, mutations publish a `CatalogControlEvent` onto the DEDICATED
-    # `control_pubsub` component (below, NOT the shared `dapr_pubsub`) under the `catalog.control.v1` topic,
-    # subscribed WITHOUT a queueGroupName so every replica buffers every event for the poll endpoint. Off by
-    # default, like lineage.
+    # OpenLineage data events above). When on, mutations publish a `CatalogControlEvent` on the
+    # `catalog.control.v1` topic over this process's own connection to the bus, and each replica subscribes to it
+    # through the `control_pubsub` component (below) WITHOUT a queueGroupName, so every replica buffers every event
+    # for the poll endpoint. Off by default, like lineage.
     control_emit_enabled: bool = Field(default=False, alias="LANCE_CONTROL_EMIT_ENABLED")
     control_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_CONTROL_EMIT_TIMEOUT_SECONDS")
-    # A DEDICATED Dapr pub/sub component (NOT the shared lineage one) with NO queueGroupName, so the
+    # The Dapr pub/sub component this catalog SUBSCRIBES through, with NO queueGroupName, so the
     # catalog's own subscription is a BROADCAST — every replica receives every event → each replica's ring
     # buffer stays complete. The chart renders it (dapr-component.yaml) + a NATS stream (nats-stream-job).
     control_pubsub: str = Field(default="catalog-control-pubsub", alias="LANCE_CONTROL_PUBSUB")
@@ -222,7 +223,7 @@ class CatalogControlBusSettings(BaseSettings):
     #: by a lane-specific relay that re-ingests what it finds, so sharing would feed each relay the
     #: other lane's events.
     #:
-    #: Why the control lane needs one at all: `DaprControlEmitter.emit` swallows a publish failure by
+    #: Why the control lane needs one at all: `BusControlEmitter.emit` swallows a publish failure by
     #: design — it is called after the change is already made and audited, so raising would turn a
     #: delivered mutation into a 500 — so unstaged, a NATS blip loses the event with every pod green.
     #: Staged, the event survives to be re-published.
@@ -235,21 +236,6 @@ class CatalogControlBusSettings(BaseSettings):
     #: component named one thing and a route mounted at another is a cron that ticks into a 404 while
     #: both halves look right in isolation. Pinned by `tests/unit/test_the_control_lane_relay_is_wired.py`.
     control_relay_binding_name: str = Field(default="", alias="LANCE_CONTROL_RELAY_BINDING_NAME")
-
-
-class CatalogDaprSettings(BaseSettings):
-    """Which Dapr component and topic this catalog publishes its lineage on.
-
-    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
-    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
-    every one of its fields, aliases and defaults.
-    """
-
-    # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
-    # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
-    dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
-    dapr_topic: str = Field(default="lineage.events.v1", alias="LANCE_DAPR_TOPIC")
 
 
 class CatalogLineageSettings(BaseSettings):
@@ -265,11 +251,13 @@ class CatalogLineageSettings(BaseSettings):
     # service on a table write — fire-and-forget + best-effort, so the lineage service being down can
     # never block or fail a catalog write. The catalog is the only component that knows the verified
     # principal, so it is the authoritative source of "who created/changed a table" (author = token.subject).
-    # Transport: ``http`` (direct POST — dev / external producers) or ``dapr`` (publish to the Dapr
-    # ``pubsub.jetstream`` component via the local sidecar — durable, decoupled, the production path).
+    # Transport: ``http`` (direct POST — dev / external producers) or ``bus`` (publish on NATS JetStream over
+    # this process's own connection, `lakehouse.bus` — durable, decoupled, the production path).
     lineage_emit_enabled: bool = Field(default=False, alias="LANCE_LINEAGE_EMIT_ENABLED")
     # Literal (like vending_mode) so pydantic validates the allowed set — one enum-setting idiom in this file.
-    lineage_transport: Literal["http", "dapr"] = Field(default="http", alias="LANCE_LINEAGE_TRANSPORT")
+    lineage_transport: Literal["http", "bus"] = Field(default="http", alias="LANCE_LINEAGE_TRANSPORT")
+    #: The topic the ``bus`` transport publishes on. Versioned: a breaking schema change is a new ``.vN``.
+    lineage_topic: str = Field(default="lineage.events.v1", alias="LANCE_LINEAGE_TOPIC")
     lineage_url: str | None = Field(default=None, alias="LANCE_LINEAGE_URL")
     lineage_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_LINEAGE_EMIT_TIMEOUT_SECONDS")
     lineage_job_namespace: str = Field(default="lance-catalog", alias="LANCE_LINEAGE_JOB_NAMESPACE")
@@ -446,7 +434,6 @@ class Settings(
     CatalogStorageSettings,
     CatalogReadBounds,
     CatalogControlBusSettings,
-    CatalogDaprSettings,
     CatalogLineageSettings,
     CatalogMaintenanceSettings,
     CatalogDeclarationSettings,
@@ -469,6 +456,10 @@ class Settings(
     # deliberately-bare ones (RASK_SIGNING_IDENTITY) still land.
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", alias_generator=env_alias("LANCE"), extra="ignore")
+
+    #: The bus this process is named and the user it connects to it as (`lakehouse.bus`), read with the rest of the
+    #: settings, so the connection the lifespan opens is the one the emission checks below were made about.
+    bus: BusSettings = Field(default_factory=BusSettings)
 
     # Catalog
     impl: str = Field(default="dir", alias="LANCE_REST_IMPL")
@@ -606,9 +597,20 @@ class Settings(
 
     @model_validator(mode="after")
     def _validate_lineage(self) -> Self:
-        """Fail fast on incomplete lineage configuration. The auth invariants are the shared mixin's."""
+        """Fail fast on emission switched on with nowhere to send: it would run as the no-op, every change unannounced
+        and nothing counted. The auth invariants are the shared mixin's."""
         if self.lineage_emit_enabled and self.lineage_transport == "http" and not self.lineage_url:
             raise ValueError("LANCE_LINEAGE_URL is required for the http lineage transport")
+        on_the_bus = [
+            switch
+            for switch, on in (
+                ("LANCE_LINEAGE_EMIT_ENABLED", self.lineage_emit_enabled and self.lineage_transport == "bus"),
+                ("LANCE_CONTROL_EMIT_ENABLED", self.control_emit_enabled),
+            )
+            if on
+        ]
+        if on_the_bus and not self.bus.url:
+            raise ValueError(f"RASK_BUS_URL is required for what {' and '.join(on_the_bus)} publish: this process is named no bus")
         return self
 
     @model_validator(mode="after")

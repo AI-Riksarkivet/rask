@@ -1,7 +1,8 @@
 """Maintenance's work queue on NATS JetStream (ADR 0198 §2): the tasks every replica's worker pulls, and the schedules
 that put a task back on the queue when its time comes.
 
-THE SERVICE TALKS TO THE BROKER HERE, AND ONLY HERE (ADR 0198 decision 5). Dapr's JetStream subscription sends no
+THE WORK QUEUE IS HELD HERE, ON A CONNECTION OF ITS OWN (ADR 0198 decision 5); what a pass emits goes out on the
+service's other connection (`lakehouse.bus`). Dapr's JetStream subscription sends no
 in-progress acknowledgement, so a pass longer than its ack wait would be delivered again beneath itself, and its publish
 sets no header but the message id, so it cannot put a schedule (`pubsub/jetstream/jetstream.go:115-145`, components-contrib
 e90662b02d70). nats-py is the client, and the worker is a pull worker. The streams and their durable consumers
@@ -90,9 +91,11 @@ TASK_CONSUMER: Final = "maintenance-worker"
 DUE_CONSUMER: Final = "maintenance-due"
 STORE_EVENTS_CONSUMER: Final = "maintenance-store-events"
 
-#: The prefix of the worker's reply subjects. Its own, so no other bus user, each of which may read `_INBOX.>`, reads the
-#: tasks it fetches or the answers it gets.
-INBOX_PREFIX: Final = "_INBOX_maintenance"
+#: The bus user the queue is worked as, which names its connection, and the prefix of that user's reply subjects
+#: (`_INBOX_<user>`, as `lakehouse.bus` names each user's), so no other bus user reads the tasks it fetches or the
+#: answers it gets.
+BUS_USER: Final = "maintenance-worker"
+INBOX_PREFIX: Final = f"_INBOX_{BUS_USER}"
 #: The key-value bucket holding the claim a pass takes on its table (the chart's stream Job declares it, its max age the
 #: consumer's ack wait).
 CLAIMS_BUCKET: Final = "MAINTENANCE_CLAIMS"
@@ -347,12 +350,6 @@ async def _unsubscribe(subscription: Subscription | JetStreamContext.PullSubscri
         log.warning("maintenance_unsubscribe_failed", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
-def creds_document(*, jwt: str, seed: str) -> str:
-    """The NATS credentials document nats-py reads (:class:`nats.aio.client.RawCredentials`), from the two values the store
-    holds for a bus user: each sits on the line after its marker."""
-    return f"-----BEGIN NATS USER JWT-----\n{jwt.strip()}\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n{seed.strip()}\n------END USER NKEY SEED------\n"
-
-
 class _Lease(BaseModel):
     """Until when a running task is this worker's, on its monotonic clock: the ack wait from the delivery's arrival, then
     from when the last answered heartbeat and claim renewal were sent. The heartbeat renews it, and every word about the
@@ -376,7 +373,7 @@ class TaskQueue:
 
     @classmethod
     async def connect(cls, url: str, credentials: str, *, name: str, end: EndProcess = end_process) -> TaskQueue:
-        """Connect as the user ``credentials`` names (a NATS creds document, held in memory), reconnecting for ever: a bus
+        """Connect as the user ``credentials`` names (a NATS creds document, `lakehouse.bus.read_credentials`, held in memory), reconnecting for ever: a bus
         outage must leave the worker waiting on the bus, never closed for good.
 
         A bus that refuses the credential, or ends the connection for good, ends the process (``end``). The

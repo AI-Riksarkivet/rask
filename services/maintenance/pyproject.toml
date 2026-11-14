@@ -16,7 +16,6 @@ dependencies = [
     # Imported directly (the plan door's spec error codes), so declared rather than inherited.
     "lance-namespace>=0.11.0,<0.12",
     "pyarrow",
-    "dapr>=1.18.1",
     "opentelemetry-api>=1.44.0",
     "nats-py[nkeys]>=2.16",
 ]

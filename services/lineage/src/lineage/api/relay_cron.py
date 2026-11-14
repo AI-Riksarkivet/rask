@@ -25,6 +25,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel
 
 from lakehouse import outbox, outbox_metrics
+from lakehouse.bus import Bus
 from lakehouse.governed.dapr_auth import add_binding_preflight, require_dapr_token
 from lakehouse.storage_options import StorageOptions
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
@@ -149,9 +150,7 @@ async def _on_cron(
     return report.model_dump()
 
 
-async def _drain_outbox(
-    request: Request, provenance: ProvenanceDep, settings: SettingsDep, opts: StorageOptions, publisher: object | None = None
-) -> DrainOutcome:
+async def _drain_outbox(request: Request, provenance: ProvenanceDep, settings: SettingsDep, opts: StorageOptions, publisher: Bus | None = None) -> DrainOutcome:
     """Re-ingest + delete every staged lineage event (#4) — the full-event recovery half of the outbox.
 
     An unparseable (poison) object is dropped so it can't wedge the drain. A well-formed event is parsed

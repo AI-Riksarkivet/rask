@@ -24,6 +24,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lakehouse.governed.fga import user_object
+from tests.bus_double import BusDouble
 from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineage, live_catalog, run_event
 
 
@@ -33,16 +34,6 @@ _ADMIN = "dex~root"
 _AUTHOR = "dex~alice"
 _TOKEN = {"dapr-api-token": "s3cret"}
 _REPLAY = f"/admin/dlq/parked/{_RUN}/replay"
-
-
-class _Publisher:
-    """Lineage's Dapr publisher (``app.state.dapr``), recording what it would put on the bus."""
-
-    def __init__(self) -> None:
-        self.published: list[dict[str, object]] = []
-
-    async def publish_event(self, **kwargs: object) -> None:
-        self.published.append(kwargs)
 
 
 def _declared(catalog_url: str, table: str) -> str:
@@ -62,7 +53,7 @@ def _event(state: str, table: str, *, outputs: bool) -> dict[str, Any]:
 
 
 @contextmanager
-def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, str, _Publisher]]:
+def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, str, BusDouble]]:
     """Lineage with its parking route mounted, the estate admin granted, and the table the run writes."""
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
@@ -77,8 +68,8 @@ def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[
                 (user_object(_ADMIN), verb, get_settings().fga_root_object) for verb in ("can_read_parked_events", "can_replay_parked_events")
             )
             register_dapr(lineage.app)
-            publisher = _Publisher()
-            lineage.app.state.dapr = publisher
+            publisher = BusDouble()
+            lineage.app.state.bus = publisher
             yield lineage, table, publisher
 
 
@@ -109,7 +100,7 @@ def test_a_refused_complete_is_kept_and_replayed_into_the_feed_once_its_tuple_is
     assert (replayed.status_code, replayed.json()) == (200, {"status": "recovered", "run_id": _RUN}), replayed.text
     assert (again.status_code, left.json()) == (404, {"runs": {}}), "a recovered park is still kept"
     assert recorded, "the feed lacks the COMPLETE the door recovered"
-    assert publisher.published == [], "a replayed park was published again"
+    assert publisher.sent == [], "a replayed park was published again"
 
 
 def test_the_relay_tick_retires_a_kept_park_the_feed_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -18,9 +18,9 @@ its provenance silently and the only symptom was a governance assertion reading
 `expected lineage creator=..., got None`.
 
 THE DEPLOYED ESTATE IS ON THE BUS (`chart/templates/services.yaml` sets
-`LANCE_LINEAGE_TRANSPORT=dapr`), so this is not a production outage — but the HTTP door is a
+`LANCE_LINEAGE_TRANSPORT=bus`), so this is not a production outage — but the HTTP door is a
 DECLARED contract, not a dev convenience. Its own source calls it "the ONLY door for a producer with
-no Dapr sidecar — a user's pipeline job on its own compute, and any external OpenLineage producer".
+no bus user — a user's pipeline job on its own compute, and any external OpenLineage producer".
 
 DRIVEN THROUGH THE REGISTERED ROUTES with the real builder on one side and the real router on the
 other. A test that hand-writes the payload proves only that someone can write a valid one; the

@@ -7,27 +7,27 @@ Drives the async emit with stdlib ``asyncio.run`` (the project convention). Cove
   ``open:``-errored / no-op / unnamed → nothing) and the location each names its table at,
 * the FAIL flood guard (deterministic per-dataset run id; COMPLETE keeps uuid4), the per-tick FAIL cap
   (logged, never silent) and the concurrent (bounded) FAIL fan-out,
-* the emitter factory (no-op when off/unwired; Dapr when wired) and the best-effort publish (a broker
+* the emitter factory (no-op when off or with no bus to publish on) and the best-effort publish (a bus
   outage must never fail a sweep).
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from lakehouse.bus import BusUnavailableError
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
 from lineage.models import RunEvent
 from maintenance.core.lineage_emit import (
     EXPIRE_VERSIONS,
     UNRESOLVED,
-    DaprMaintenanceEmitter,
+    BusMaintenanceEmitter,
     NoopEmitter,
     build_maintenance_event,
     build_maintenance_fail_event,
@@ -36,6 +36,7 @@ from maintenance.core.lineage_emit import (
 )
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.table_pass import emit_pass_lineage
+from tests.bus_double import BusDouble
 from tests.unit.no_store_session import no_store_session
 
 
@@ -204,16 +205,15 @@ def test_emit_pass_lineage_never_raises_even_for_a_broken_emitter() -> None:
 
 
 @pytest.mark.parametrize(
-    ("enabled", "dapr", "emitter_type"),
+    ("enabled", "bus", "emitter_type"),
     [
         pytest.param(False, None, NoopEmitter, id="disabled"),
     ],
 )
-def test_make_emitter_is_noop_when_disabled(enabled: bool, dapr: Any, emitter_type: type) -> None:
+def test_make_emitter_is_noop_when_disabled(enabled: bool, bus: BusDouble | None, emitter_type: type) -> None:
     emitter = make_emitter(
         enabled=enabled,
-        dapr=dapr,
-        pubsub="lineage-pubsub",
+        bus=bus,
         topic="lineage.events.v1",
         job_namespace="compaction",
         dataset_namespace="lance-namespace://localhost/api/catalog",
@@ -221,29 +221,19 @@ def test_make_emitter_is_noop_when_disabled(enabled: bool, dapr: Any, emitter_ty
     assert isinstance(emitter, emitter_type)
 
 
-class _FakeDaprClient:
-    def __init__(self) -> None:
-        self.published: list[dict[str, Any]] = []
-
-    async def publish_event(self, *, pubsub_name: str, topic_name: str, data: str, data_content_type: str) -> None:
-        self.published.append({"pubsub": pubsub_name, "topic": topic_name, "event": json.loads(data)["data"]})
-
-
-def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
-    client = _FakeDaprClient()
-    emitter = DaprMaintenanceEmitter(
-        cast(Any, client),
-        pubsub="lineage-pubsub",
+def test_the_emitter_publishes_on_its_configured_topic() -> None:
+    bus = BusDouble()
+    emitter = BusMaintenanceEmitter(
+        bus,
         topic="lineage.events.v1",
         job_namespace="compaction",
         dataset_namespace="lance-namespace://localhost/api/catalog",
         timeout_seconds=5.0,
     )
     asyncio.run(emitter.emit_maintenance(table_id="ns$a"))
-    assert len(client.published) == 1
-    assert client.published[0]["pubsub"] == "lineage-pubsub"
-    assert client.published[0]["topic"] == "lineage.events.v1"
-    payload = client.published[0]["event"]
+    [sent] = bus.sent
+    assert sent.topic == "lineage.events.v1"
+    payload = sent.event
     assert payload["outputs"][0]["name"] == "ns$a"
     assert payload["run"]["facets"]["rask_lance"]["operation"] == EXPIRE_VERSIONS
 
@@ -256,30 +246,14 @@ def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
         pytest.param("lineage-outbox", no_store_session, False, id="the-store-session-is-gone"),
     ],
 )
-def test_a_dapr_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
+def test_the_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, outbox_at: str, storage_options: Callable[[], StorageOptions] | None, staged: bool
 ) -> None:
-    """A sidecar or broker outage never fails a maintenance sweep, and the line it logs says whether the relay can still
+    """A bus outage never fails a maintenance sweep, and the line it logs says whether the relay can still
     deliver the event ([[LH-573]])."""
-
-    class _BoomClient:
-        """The sidecar's publish, with `dapr.aio.clients.DaprClient.publish_event`'s signature: it fails."""
-
-        async def publish_event(
-            self,
-            pubsub_name: str,
-            topic_name: str,
-            data: bytes | str,
-            publish_metadata: dict[str, str] | None = None,
-            metadata: tuple[tuple[str, str | bytes], ...] | None = None,
-            data_content_type: str | None = None,
-        ) -> None:
-            raise RuntimeError("sidecar down")
-
     (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
-    emitter = DaprMaintenanceEmitter(
-        cast(Any, _BoomClient()),
-        pubsub="p",
+    emitter = BusMaintenanceEmitter(
+        BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
         topic="t",
         job_namespace="compaction",
         timeout_seconds=5.0,
@@ -297,9 +271,9 @@ def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() ->
     # The flood guard (§4): every tick's FAIL for the same dataset carries the SAME run id, so the graph
     # MERGEs one (:Run) node and /events dedups the redelivered terminal — while COMPLETE keeps uuid4
     # (each materially-compacting tick IS a distinct run; §4 says do NOT change that).
-    client = _FakeDaprClient()
-    emitter = DaprMaintenanceEmitter(
-        cast(Any, client), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=5.0, dataset_namespace="lance-namespace://localhost/api/catalog"
+    bus = BusDouble()
+    emitter = BusMaintenanceEmitter(
+        bus, topic="t", job_namespace="compaction", timeout_seconds=5.0, dataset_namespace="lance-namespace://localhost/api/catalog"
     )
 
     async def drive() -> None:
@@ -310,7 +284,7 @@ def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() ->
         await emitter.emit_maintenance(table_id="ns$a")
 
     asyncio.run(drive())
-    run_ids = [p["event"]["run"]["runId"] for p in client.published]
+    run_ids = [event["run"]["runId"] for event in bus.events]
     fail_a1, fail_a2, fail_b, complete_1, complete_2 = run_ids
     assert fail_a1 == fail_a2  # two ticks, one dataset → ONE Run node
     assert fail_b != fail_a1  # per-dataset, not global

@@ -70,6 +70,9 @@ def lane(
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "s")
     monkeypatch.setenv("LANCE_CONTROL_EMIT_ENABLED", "true")
+    # The bus the chart names a catalog that emits; nothing here publishes on it.
+    monkeypatch.setenv("RASK_BUS_URL", "nats://bus.test:4222")
+    monkeypatch.setenv("RASK_BUS_USER", "catalog")
     monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
     get_settings.cache_clear()
     catalog, maintenance = event_signer(CATALOG), event_signer(MAINTENANCE)

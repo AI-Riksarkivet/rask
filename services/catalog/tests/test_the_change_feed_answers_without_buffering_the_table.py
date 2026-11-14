@@ -48,7 +48,6 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.management_router)
-    application.state.dapr_client = None
 
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace

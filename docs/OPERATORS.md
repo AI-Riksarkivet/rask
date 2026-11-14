@@ -293,13 +293,16 @@ not a fault. Read a pod's Configuration from its `dapr.io/config`, not from the 
 The NATS bus is a prerequisite rask never installs (ADR 0153, XC-129); development runs it from `deploy/fixtures/nats`
 (release `nats`, Service `rask-nats`). With the bus in operator mode (the fixture's `nats.auth.server`), a client connects
 only with a user JWT signed under the operator's account, and each user may publish and subscribe only what its row of `nats.auth.users` (values.yaml)
-grants. There is one user per Dapr app-id with a pub/sub component, plus `admin` (the stream Job), `monitor` (nats-box,
-read-only: stream and consumer state, no messages). A grant only a flag's
+grants. There is one user per service: `catalog`, `lineage` and `maintenance` each publish on a connection of their own
+as that user (`lakehouse.bus`), whose replies arrive under `_INBOX_<user>`, a prefix the table grants to that user alone,
+and `maintenance-worker` works the queue the same way. Beside them are `admin` (the stream Job) and `monitor` (nats-box,
+read-only: stream and consumer state, no messages). A grant only a flag's publisher or
 component uses sits under `nats.auth.flagged` and is issued only while that flag is on. Each user's credential is
-`nats-user-<user>` in the store (fields `jwt`, `seed`); every pub/sub Component names its own app's user by
-`secretKeyRef` through `lance-secrets`, which the sidecar resolves with its own login, no app's Dapr Configuration lets
-its code read a `nats-user-*`, and the stream Job (rask's release) and nats-box (the fixture's) take theirs as files written
-by ExternalSecrets.
+`nats-user-<user>` in the store (fields `jwt`, `seed`). A service reads its own under its own store login and holds it in
+memory only, never in a file or its environment, and opens a connection again by itself, with the credential the store
+holds then, when the bus ends the one it had; every pub/sub Component names its own app's user by `secretKeyRef` through
+`lance-secrets`, which the sidecar resolves with its own login; and the stream Job (rask's release) and nats-box (the
+fixture's) take theirs as files written by ExternalSecrets.
 
 **Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Name the bus in
 `nats.url`, create `nats-user-<user>` for every user the chart's table issues, signed by the bus's operator; then
@@ -318,8 +321,8 @@ the operator or the system account and a pod restarted alone into operator mode 
 depth 0); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS
 pod exists; set `nats.auth.server: true` in `deploy/fixtures/nats/chart/values.yaml` and run `scripts/fixtures.sh nats`,
 which restores the three replicas together (each waits for ESO's `rask-nats-auth`); then `make k3s-up`, whose stream Job
-runs as `admin` and recreates the five streams empty; then `kubectl rollout restart` every Deployment with a credentialed
-pub/sub component. Operator mode stays on only while git declares it: `scripts/fixtures.sh` installs with
+runs as `admin` and recreates the five streams empty; then `kubectl rollout restart` every Deployment whose sidecar loads
+a pub/sub component (a service's own connection needs none: it opens again by itself). Operator mode stays on only while git declares it: `scripts/fixtures.sh` installs with
 `--reset-values`, so a `--set` given on one command line is dropped by the next install, which turns operator mode off and
 restarts the bus into an empty JetStream as above.
 
@@ -340,8 +343,13 @@ authorized user and none anonymous; `/connz?state=closed&auth=true` keeps short-
 with no credential is refused ("Authorization Violation") and one with another app's credential on a subject that app
 does not own is refused ("Permissions Violation"), each leaving the stream's last sequence unchanged.
 
-**Residuals, named.** `_INBOX.>` is shared within the account, so a client could read another's replies (Dapr exposes no
-inbox prefix). The catalog's grant on CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's
+**Residuals, named.** `_INBOX.>` stays granted to `catalog`, `lineage` and `maintenance` for their sidecars'
+subscription components (Dapr exposes no inbox prefix), so a holder of one of those credentials could read what another's
+sidecar is answered there; no service's own connection uses it, nor the worker's. A service's own connection is its
+user's, so it also holds what that user's subscription component is granted. Both end with the last subscription
+component (XC-199). A publisher's read-back grant (`$JS.API.STREAM.MSG.GET.<stream>`, with which it checks the stored
+copy a duplicate acknowledgement names) reads any message of the stream it publishes into, since the bus scopes that
+call by stream and no finer. The catalog's grant on CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's
 durable is named by its pod, so one replica could ack another's broadcast copy: the same identity, and the copies are
 hints. Port 8222 is unauthenticated by design.
 

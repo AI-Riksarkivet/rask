@@ -160,10 +160,11 @@ class Door(StrEnum):
     woken by a `refused` rate learned that provenance was lost and nothing about where to look.
     """
 
-    #: The Dapr subscription off `lineage.events.v1` — an in-cluster producer with a sidecar.
+    #: The subscription off `lineage.events.v1`: a producer that publishes on the bus as a user of it, as the
+    #: lakehouse's own services do.
     SUBSCRIBER = "subscriber"
     #: `POST /api/v1/lineage`, the OpenLineage HTTP transport. The ONLY door for a producer with no
-    #: sidecar: a user's pipeline job on its own compute, and any external OpenLineage producer.
+    #: bus user: a user's pipeline job on its own compute, and any external OpenLineage producer.
     HTTP = "http"
     #: The dead-letter handler — not an arrival but a giving-up, and an operator reads it as neither of
     #: the above.

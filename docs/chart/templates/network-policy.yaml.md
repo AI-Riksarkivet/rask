@@ -56,8 +56,8 @@ reads pod metadata), the volume-snapshot CronJob (`kubectl`) and the Dapr dashbo
 store's are the pods that log in to it (`lance.secretReaderComponents`, as the dev store's ingress lock); the
 telemetry backend's is the Collector; the S3's are the pods holding a store session (`lance.objectStoreClients`), whose
 STS answers at addresses the same rules name; the IdP's are the doors verifying a person's token (`lance.tokenVerifiers`);
-the bus's are every pod whose daprd loads a pub/sub Component (`lance.secretReaderComponents`: each injected pod loads
-both components its app is scoped to) and the stream Job (`lance.busClients`); and the graph backend's is lineage, whose
+the bus's are every service pod (`lance.secretReaderComponents`: each dials the bus itself, as its own bus user, and
+through the components its sidecar loads) and the stream Job (`lance.busClients`); and the graph backend's is lineage, whose
 relay forwards to it. `test_no_egress_rule_admits_every_destination.py` compares each row's callers, read off the pods'
 own specs, with the pods its policy admits.
 
@@ -100,7 +100,7 @@ reach, since it serves the public build and `/config.json`, which holds no secre
 ## `values: {{- toYaml $busPeers | nindent 18 }}`
 
 THE DEVELOPMENT BUS ADMITS EXACTLY ITS CLIENTS ([[XC-202]]). Its clients on 4222 are the pods the platform's bus is
-reached from (`lance.busClients`: every pod whose daprd loads a pub/sub Component, carrying `dapr.io/enabled`, and the
+reached from (`lance.busClients`: every service pod, which names the bus in its own environment, and the
 stream Job), the bus fixture's own `nats-box`, and with `objectStore.enabled` the development object store's server
 (component `rustfs`), which publishes each change on `store.events` for maintenance's work queue (ADR 0198); a pod that
 never dials the bus gets no path to it. The servers admit each other on 6222, whose cluster routes the fixture's

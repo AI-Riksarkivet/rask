@@ -271,7 +271,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.busEnv" -}}
-- { name: RASK_BUS_URL, value: {{ include "lance.natsUrl" . | quote }} }
+{{- $root := index . 0 -}}{{- $user := index . 1 -}}
+{{- if not (has $user (include "lance.natsUsers" $root | splitList " ")) }}{{- fail (printf "the service %s connects to the bus as the user %s, which nats.auth.users does not declare" $user $user) }}{{- end -}}
+{{- $inbox := printf "_INBOX_%s.>" $user -}}
+{{- if not (has $inbox ((get (include "lance.natsTable" $root | fromJson) $user).subscribe | default list)) }}{{- fail (printf "nats.auth.users.%s grants the service %s no inbox of its own (%s): the bus would hand it no acknowledgement of a publish, so every event it publishes would stay staged" $user $user $inbox) }}{{- end -}}
+- { name: RASK_BUS_URL, value: {{ include "lance.natsUrl" $root | quote }} }
+- { name: RASK_BUS_USER, value: {{ $user | quote }} }
 {{- end -}}
 
 {{- define "lance.subPubsub" -}}
@@ -330,26 +335,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.natsAuth" }}
 auth: { secretStore: lance-secrets }
-{{- end -}}
-
-{{- define "lance.publishPubsub" -}}
-{{- $root := index . 0 -}}{{- $name := index . 1 -}}{{- $app := index . 2 }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ $name }}
-  labels: {{- include "lance.labels" $root | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" $root }}" }
-    - { name: name, value: "lance-dapr-{{ $name }}" }
-    {{- with include "lance.natsCreds" (list $root $app) }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" $root }}
-scopes:
-  - {{ $app }}
 {{- end -}}
 
 {{- define "lance.mintsDevCredentials" -}}
@@ -916,10 +901,10 @@ activeDeadlineSeconds: 1800
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat $door (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" $dapr)
-  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat $door (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" $dapr) -}}
+  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat $door (ternary (list (printf "nats-user-%s" $v.services.catalog.appId)) list $dapr) (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" (and $dapr $v.catalog.controlEmit))
+  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat $door (ternary (list (printf "nats-user-%s" $v.services.lineage.appId)) list (and $dapr $v.services.lineage.outbox.enabled)) (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" $dapr) -}}
 {{- if $v.maintenance.enabled -}}
-{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat $door (ternary (list "nats-user-maintenance-worker") list $dapr) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (and $dapr (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit)))) -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat $door (ternary (list "nats-user-maintenance-worker") list $dapr) (ternary (list (printf "nats-user-%s" $v.maintenance.appId)) list (and $dapr (or $v.maintenance.lineageEmit $v.maintenance.controlEmit))) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (and $dapr $v.maintenance.arrivalEnabled)) -}}
 {{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}

@@ -86,9 +86,6 @@ def _settings(uri: str) -> Any:  # noqa: ANN401 — a stand-in for the drain's s
     class _S:
         outbox_uri = uri
         outbox_drain_limit = 500
-        dapr_pubsub = "lineage-pubsub"
-        dapr_topic = "lineage.events.v1"
-        dapr_publish_timeout_seconds = 5.0
         fga_enabled = True
 
     return _S()

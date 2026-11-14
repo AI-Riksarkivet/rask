@@ -282,14 +282,15 @@ event rides the envelope its first publish rode.
   event published twice inside it is stored once. A run's `START` and its `COMPLETE` share a run id and are two events,
   which is why the state is part of it. One event is told under one id by design: every failure of maintenance's pass
   over a table carries the run id derived from that table, so a failure repeated inside the window is stored once, as
-  the feed keeps its row once. The id is the key lineage's feed keeps the row of a run's event, and of a signed dataset
+  the feed keeps its row once. A publisher counts a publish the stream answers as a duplicate as delivered only when
+  the stored message carries the same event (`lakehouse.bus` reads it back), so a repeat that differs stays staged
+  where its lane stages, and its relay delivers it once the window has passed. The id is the key lineage's feed keeps the row of a run's event, and of a signed dataset
   change, under, so a reader of the bus and a walker of the feed key those alike; the feed keys an unsigned dataset
   change under the subject it was recorded for as well.
 - **A signature covers `data`, never the envelope.** Verify the event; an envelope attribute is a routing hint that
   anything able to publish can write.
 - **`traceparent` and `tracestate`** (CloudEvents' distributed tracing extension) carry the W3C trace context of the
-  publish. Any other attribute a message holds (`topic`, `pubsubname`, `traceid`) is its transport's and carries no
-  contract.
+  publish. Any other attribute a reader finds on a message carries no contract.
 - **A `type` ends in its version.** A change that breaks a reader of an event or of its envelope is a new version.
 
 ### The names that carry the contract

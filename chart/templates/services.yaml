@@ -1,6 +1,6 @@
 {{- $root := . }}
 {{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}
-{{- fail "catalog.controlEmit=true requires dapr.enabled=true: the /control-events broadcast ingest publishes + receives via the Dapr sidecar and is authenticated by the sidecar-injected APP_API_TOKEN — without it the catalog fails closed at boot. Enable dapr.enabled, or set catalog.controlEmit=false." }}
+{{- fail "catalog.controlEmit=true requires dapr.enabled=true: the catalog is named its bus under dapr.enabled, and each replica receives the control broadcast on /control-events from its Dapr sidecar, a delivery authenticated by the sidecar-injected APP_API_TOKEN, without which the catalog fails closed at boot. Enable dapr.enabled, or set catalog.controlEmit=false." }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -100,11 +100,10 @@ spec:
             - { name: LANCE_S3_SSE_BUCKET_KEY_ENABLED, value: {{ .bucketKeyEnabled | quote }} }
             {{- end }}
             {{- end }}
-            - { name: LANCE_LINEAGE_EMIT_ENABLED, value: "true" }
-            - { name: LANCE_LINEAGE_TRANSPORT, value: "dapr" }
+            - { name: LANCE_LINEAGE_EMIT_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
+            - { name: LANCE_LINEAGE_TRANSPORT, value: "bus" }
             - { name: LANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
-            - { name: LANCE_DAPR_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
-            - { name: LANCE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            - { name: LANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: LANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
             {{- end }}
@@ -141,7 +140,7 @@ spec:
             {{- fail "catalog.commitReconcile.horizonSeconds must be shorter than services.lineage.eventsRetentionDays: a version older than the feed's retention may have had its row pruned, and the reconciler would announce it again" }}
             {{- end }}
             - { name: LANCE_COMMIT_RECONCILE_HORIZON_SECONDS, value: {{ $horizon | quote }} }
-            {{- include "lance.busEnv" $root | nindent 12 }}
+            {{- include "lance.busEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}
             {{- end }}
             {{- if .Values.dapr.enabled }}
 
@@ -150,7 +149,6 @@ spec:
 {{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.appId) | nindent 12 }}
             {{- end }}
             {{- end }}
-            - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
             {{- if not .Values.auth.enabled }}
             {{- include "lance.governedAuthAck" . | nindent 12 }}
             {{- end }}
@@ -254,7 +252,7 @@ spec:
             {{- if .Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}
-            {{- include "lance.busEnv" $root | nindent 12 }}
+            {{- include "lance.busEnv" (list $root $root.Values.services.lineage.appId) | nindent 12 }}
             {{- end }}
             - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: RASK_CATALOG_IDENTITY_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
@@ -274,12 +272,11 @@ spec:
             {{- end }}
             - { name: LINEAGE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
             - { name: LINEAGE_DAPR_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.services.lineage.appId) | quote }} }
-            - { name: LINEAGE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            - { name: LINEAGE_EVENTS_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.dapr.resiliency.enabled }}
             - { name: LINEAGE_DLQ_TOPIC, value: "dlq.lineage.events" }
             - { name: LINEAGE_DLQ_PUBSUB, value: "{{ include "lance.subPubsub" (list $root .Values.services.lineage.appId) }}-dlq" }
             {{- end }}
-            - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
             {{- if .Values.services.lineage.relay.enabled }}
             - { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }
             {{- end }}

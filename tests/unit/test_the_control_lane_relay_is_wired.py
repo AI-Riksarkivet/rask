@@ -85,7 +85,7 @@ def test_the_catalog_stages_control_events_into_a_prefix_its_OWN_relay_drains() 
 
     staged = env.get("LANCE_CONTROL_OUTBOX_URI", "")
     assert staged, (
-        "the catalog Deployment renders no LANCE_CONTROL_OUTBOX_URI, so `DaprControlEmitter.emit` degrades "
+        "the catalog Deployment renders no LANCE_CONTROL_OUTBOX_URI, so `BusControlEmitter.emit` degrades "
         "to a plain publish: a NATS blip during a publication loses `table_published` outright, and with it "
         "the silver->gold hop that event is the only trigger for"
     )

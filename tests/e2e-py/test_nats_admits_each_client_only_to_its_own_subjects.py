@@ -6,15 +6,22 @@ a prerequisite rask never installs) in operator mode with a MEMORY resolver and 
 seed issues (read off the render, so a values.yaml `nats.auth.flagged` grant counts only while its flag is on).
 
 The table is held to two declarations below, written independently of it, because a table checked only against
-itself can never be too broad. `PUBLISHERS` is who may publish each data subject, read off every Dapr publish call
-site and every `deadLetterTopic` (published by that app's own sidecar). `DAPR_SUBSCRIPTIONS`
-is what each sidecar subscribes, read off every `dapr_app.subscribe`. A table that lets anyone else publish a
-subject fails, and so does one that withholds a subject or a JetStream API call a client makes.
+itself can never be too broad. `PUBLISHERS` is who may publish each data subject, read off every publish call site
+(each service's own connection, `lakehouse.bus`) and every `deadLetterTopic` (published by that app's own sidecar).
+`DAPR_SUBSCRIPTIONS` is what each sidecar subscribes, read off every `dapr_app.subscribe`. A table that lets anyone
+else publish a subject fails, and so does one that withholds a subject or a JetStream API call a client makes.
 
-The Dapr half is measured rather than derived: the real daprd the Dapr fixture injects runs each Component shape (publisher-only, durable
-subscriber with a dead-letter topic, the catalog's per-replica broadcast subscriber) from the chart's own render, and
-every subject it used must be one the replay of that app's subscriptions also exercises, so the replay that covers
-every other app cannot drift from what Dapr does.
+Each service's own connection is the seam itself ([[XC-199]]): the real `lakehouse.bus.Bus`, connected as the bus user
+the render names that service, with the credential a stand-in of the secret store holds for it. Each publishes its
+topics once under its event's id and reads a duplicate acknowledgement back, under an inbox no other user may read;
+an id another publisher stored a message under is not taken as delivered; a bus it cannot reach fails its publishes at
+once and is connected to again, by nats-py through a short cut and by the seam's own loop past it; and a credential
+the bus ends is replaced by the one the store holds then, with no restart.
+
+The Dapr half is measured rather than derived: the real daprd the Dapr fixture injects runs each Component shape (a
+durable subscriber with a dead-letter topic, the catalog's per-replica broadcast subscriber) from the chart's own
+render, delivering what the catalog's own connection published, and every subject it used must be one the replay of
+that app's subscriptions also exercises, so the replay that covers every other app cannot drift from what Dapr does.
 
 Run by `dagger call nats-auth` (`make nats-auth`), which provides the binaries and selects this file by path.
 """
@@ -29,11 +36,14 @@ import os
 import re
 import secrets
 import subprocess
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import nats
 import pytest
+import respx
 import yaml
 from nats.js.errors import APIError
 from nats_auth_rig import (
@@ -50,14 +60,22 @@ from nats_auth_rig import (
     client_subjects,
     component_metadata,
     dapr_consumer_config,
+    issue,
     mint,
     run_cli,
     run_stream_job,
     sidecar_component,
     violations,
 )
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
-from tests.unit.chart_render import DEFAULT_ARGS, POD_NAME, containers, nats_users, render, render_fixture
+from lakehouse import bus as seam
+from lakehouse.bus import Bus, BusSettings, BusUnavailableError, bus_session, publish_event
+from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, CloudEvent
+from lakehouse.supervision import Supervisor
+from tests.secret_store_double import SecretStoreDouble
+from tests.unit.chart_render import DEFAULT_ARGS, POD_NAME, containers, env_of, nats_users, render, render_fixture
 
 
 pytestmark = pytest.mark.nats_auth
@@ -78,6 +96,24 @@ LINK_DOWN_SECONDS = 10.0
 BROADCAST_REPLAY = "catalog-control-replay-catalog"
 #: How many times the stream Job runs before the lane gives up on it, inside the chart's `backoffLimit` of 20.
 _JOB_RUNS = 3
+#: The topics a service publishes on its own connection: its lineage events (`lakehouse.outbox`) and the control lane's.
+OWN_CONNECTION_TOPICS = ("lineage.events.v1", "catalog.control.v1")
+#: A bus user of the rig's own whose first credential the bus ends: issued for a minute, then issued again in the store.
+#: Minted beside the table and not a row of it: it may publish lineage, read a stored message back, and receive under an
+#: inbox of its own.
+REISSUED = "rask-test-reissued"
+#: A bus user of the rig's own whose first credential grants it only the shared inbox, as one issued before its row gave it
+#: an inbox of its own would: the bus takes the connection and would hand it no acknowledgement. Minted beside the table.
+UNHEARD = "rask-test-unheard"
+#: How long `REISSUED`'s first credential is good for (nsc's least), and how much longer the seam may take to be told and
+#: to connect again.
+_EXPIRY_SECONDS = 60.0
+_EXPIRY_SLACK_SECONDS = 30.0
+#: The seam's reconnect budget in this run, shortened from the service's (ten attempts two seconds apart, then a pause of
+#: 2 to 15 s) so that a cut of seconds outlasts nats-py's own reconnects: attempts, seconds apart, and the pause's bounds.
+_RECONNECT_ATTEMPTS = 3
+_RECONNECT_WAIT_SECONDS = 1
+_PAUSE_SECONDS = (0.5, 1.0)
 
 
 #: Who may publish each data subject; every other table user must be refused on it.
@@ -169,10 +205,10 @@ def _lane_runs_the_charts_images(tools: Tools, docs: tuple[dict, ...]) -> list[s
     ]
 
 
-def _table_names_every_client(table: dict[str, Permissions], components: list[dict[str, Any]]) -> list[str]:
+def _table_names_every_client(table: dict[str, Permissions], components: list[dict[str, Any]], services: list[str]) -> list[str]:
     findings = [
         f"no table user for {user}, which the render needs a credential for"
-        for user in sorted({s for c in components for s in c.get("scopes", [])} | NON_DAPR_USERS)
+        for user in sorted({s for c in components for s in c.get("scopes", [])} | NON_DAPR_USERS | set(services))
         if user not in table
     ]
     declared = {(app, durable) for app, subscriptions in DAPR_SUBSCRIPTIONS.items() for durable, _ in subscriptions}
@@ -185,6 +221,230 @@ def _table_names_every_client(table: dict[str, Permissions], components: list[di
             if len(_subscriber_component(components, app, durable)) != 1:
                 findings.append(f"{app}'s subscription to {topic} ({durable}) does not resolve to exactly one rendered Component")
     return findings
+
+
+def _services(docs: tuple[dict, ...]) -> list[str]:
+    """The bus users the render names its services, each of which publishes on a connection of its own."""
+    return sorted({env["RASK_BUS_USER"] for _, _, container in containers(docs) if "RASK_BUS_USER" in (env := env_of(container))})
+
+
+def _lane_event(**data: str) -> CloudEvent:
+    """An event of this run's own, under an id no other event carries."""
+    return CloudEvent(id=f"lane-{secrets.token_hex(12)}", source="rask/lane", type="rask.test.lane.v1", data=data)
+
+
+async def _until(holds: Callable[[], bool], within: float) -> bool:
+    """Whether ``holds`` came true within ``within`` seconds."""
+    deadline = asyncio.get_running_loop().time() + within
+    while not holds():
+        if asyncio.get_running_loop().time() > deadline:
+            return False
+        await asyncio.sleep(0.1)
+    return True
+
+
+async def _up(session: Bus) -> bool:
+    """The seam's own readiness verdict of its connection."""
+    try:
+        await session.answering()
+    except ConnectionError:
+        return False
+    return True
+
+
+async def _settles(session: Bus, *, up: bool, within: float) -> bool:
+    """Whether the seam's connection came ``up``, or went down, within ``within`` seconds."""
+    deadline = asyncio.get_running_loop().time() + within
+    while await _up(session) is not up:
+        if asyncio.get_running_loop().time() > deadline:
+            return False
+        await asyncio.sleep(0.1)
+    return True
+
+
+@asynccontextmanager
+async def _connected_as(user: str, url: str) -> AsyncGenerator[Bus]:
+    """A service's own connection to the bus, opened as the chart names it to a pod (`lakehouse.bus.bus_session`) and
+    up: the seam reads ``user``'s credential from the store's stand-in and connects with it."""
+    settings = BusSettings.model_validate({"RASK_BUS_URL": url, "RASK_BUS_USER": user})
+    async with Supervisor() as loops, bus_session(loops, settings) as session:
+        assert session is not None, "the seam opens no connection for a process named a bus"
+        assert await _settles(session, up=True, within=20), f"the seam never connected to the bus as {user}"
+        yield session
+
+
+def _headers(message: dict[str, Any]) -> dict[str, str]:
+    """A stored message's NATS headers, which the stream's API answers as one base64 block of `Name: value` lines under a
+    version line."""
+    lines = base64.b64decode(message.get("hdrs", "")).decode().split("\r\n")[1:]
+    return {name.strip(): value.strip() for name, _, value in (line.partition(":") for line in lines if line)}
+
+
+async def _stream_of(rig: Client, topic: str) -> str:
+    """The one stream that captures ``topic``."""
+    (stream,) = (await rig.request("$JS.API.STREAM.NAMES", {"subject": topic}) or {}).get("streams") or [""]
+    return stream
+
+
+async def _kept_under(rig: Client, stream: str, since: int, message_id: str) -> list[dict[str, Any]]:
+    """The messages ``stream`` took after sequence ``since`` under ``message_id``."""
+    last = (await _last_seqs(rig)).get(stream, since)
+    kept = []
+    for seq in range(since + 1, last + 1):
+        message = ((await rig.request(f"$JS.API.STREAM.MSG.GET.{stream}", {"seq": seq})) or {}).get("message") or {}
+        if _headers(message).get("Nats-Msg-Id") == message_id:
+            kept.append(message)
+    return kept
+
+
+async def _published_once_under_its_id(session: Bus, user: str, topic: str, rig: Client) -> list[str]:
+    """One event published twice on ``user``'s own connection, as its producer and then its relay would: the stream keeps
+    it once, under the event's id and as the structured envelope, and the second publish, which the stream answers as a
+    duplicate, is taken as delivered once the seam has read the stored message back."""
+    stream = await _stream_of(rig, topic)
+    since = (await _last_seqs(rig)).get(stream, -1)
+    event = _lane_event(probe=user)
+    try:
+        await publish_event(session, event, topic=topic, timeout_seconds=5)
+        await publish_event(session, event, topic=topic, timeout_seconds=5)
+    except (BusUnavailableError, TimeoutError) as exc:
+        return [f"{user} publishes {topic} on its own connection, and the bus did not take it: {type(exc).__name__}: {exc}"]
+    kept = await _kept_under(rig, stream, since, event.id)
+    if len(kept) != 1:
+        return [f"{stream} keeps {len(kept)} messages under the id of the one event {user} published twice on {topic}"]
+    carried = (_headers(kept[0]).get("Content-Type"), json.loads(base64.b64decode(kept[0]["data"])))
+    return [] if carried == (STRUCTURED_CONTENT_TYPE, event.as_wire()) else [f"{stream} keeps {user}'s event on {topic} as {carried}"]
+
+
+async def _an_id_another_message_holds_is_not_delivered(session: Bus, user: str, topic: str, squatter: Client) -> list[str]:
+    """A message id names nobody, so a publisher of ``topic`` can store a message of its own under an event's id first, and
+    the stream then drops the event and still acknowledges it. The seam reads the stored message back, finds another
+    event, and does not count its own delivered, so the event stays staged for its relay."""
+    event = _lane_event(probe=user)
+    other = {"specversion": "1.0", "id": event.id, "source": "rask/lane", "type": "rask.test.lane.v1", "data": {"probe": "another publisher"}}
+    await squatter.js.publish(topic, json.dumps(other).encode(), timeout=5, headers={"Nats-Msg-Id": event.id})
+    try:
+        await publish_event(session, event, topic=topic, timeout_seconds=5)
+    except BusUnavailableError:
+        return []
+    return [f"{user}'s event on {topic} was taken as delivered while the stream holds another message under its id"]
+
+
+async def _services_publish_as_themselves(url: str, services: list[str], rig: Client, probes: dict[str, Client]) -> list[str]:
+    """Each service on the seam its events are published with, as the bus user the render names it: every topic it
+    publishes, kept once under its event's id, and an id another publisher of the topic took first."""
+    findings: list[str] = []
+    for user in services:
+        async with _connected_as(user, url) as session:
+            for topic in (topic for topic in OWN_CONNECTION_TOPICS if user in PUBLISHERS[topic]):
+                findings += await _published_once_under_its_id(session, user, topic, rig)
+                squatter = probes[min(PUBLISHERS[topic] - {user}, default=user)]
+                findings += await _an_id_another_message_holds_is_not_delivered(session, user, topic, squatter)
+    return findings
+
+
+async def _a_service_outlasts_a_bus_it_cannot_reach(broker: Broker, user: str, reads: respx.Route, rig: Client) -> list[str]:
+    """``user``'s own connection through a `Link` the test cuts. While the bus cannot be reached a publish fails at once,
+    so its event stays staged and no caller waits. After a short cut nats-py reconnects by itself, on the credential it
+    holds. Past its own attempts it closes for good, and the seam's loop opens another client with a fresh read of the
+    credential, so the process publishes again with no restart."""
+    findings: list[str] = []
+    topic, clock = OWN_CONNECTION_TOPICS[0], asyncio.get_running_loop().time
+    link = Link(broker.port)
+    await link.start()
+    try:
+        async with _connected_as(user, link.url) as session:
+            read_once = reads.call_count
+            await link.stop()
+            if not await _settles(session, up=False, within=10):
+                findings.append(f"{user}'s connection still answers as up 10 s after its bus was cut off")
+            asked = clock()
+            try:
+                await publish_event(session, _lane_event(probe=user), topic=topic, timeout_seconds=30)
+            except BusUnavailableError:
+                if (waited := clock() - asked) > 1:
+                    findings.append(f"a publish with no connection to the bus took {waited:.1f} s to fail")
+            except TimeoutError:
+                findings.append("a publish with no connection to the bus waited out its timeout")
+            else:
+                findings.append("a publish with no connection to the bus was taken as delivered")
+            await link.start()
+            if not await _settles(session, up=True, within=15) or reads.call_count != read_once:
+                findings.append(f"nats-py did not reconnect {user} by itself after a short cut ({reads.call_count - read_once} more credential reads)")
+            findings += await _published_once_under_its_id(session, user, topic, rig)
+
+            await link.stop()
+            if not await _until(lambda: reads.call_count > read_once, 30):
+                findings.append(f"the seam never read {user}'s credential again once nats-py had given its connection up")
+            await link.start()
+            if not await _settles(session, up=True, within=20):
+                findings.append(f"the seam did not connect {user} again once its bus was back")
+            else:
+                findings += await _published_once_under_its_id(session, user, topic, rig)
+    finally:
+        await link.stop()
+    return findings
+
+
+async def _a_credential_the_bus_ends_is_replaced_by_the_stores_current_one(
+    tools: Tools, home: Path, broker: Broker, store: SecretStoreDouble, rig: Client
+) -> list[str]:
+    """A credential good for a minute, issued again in the store meanwhile: the bus ends the session when the first runs
+    out, nats-py closes that client for good, and the seam connects again with the credential the store holds by then,
+    so the process publishes again with no restart."""
+    topic = OWN_CONNECTION_TOPICS[0]
+    grants = Permissions(publish=(topic, f"$JS.API.STREAM.MSG.GET.{await _stream_of(rig, topic)}"), subscribe=(f"_INBOX_{REISSUED}.>",))
+    first = await asyncio.to_thread(issue, tools.nsc, home, f"{REISSUED}-first", grants.model_copy(update={"expiry": "1m"}))
+    again = await asyncio.to_thread(issue, tools.nsc, home, f"{REISSUED}-again", grants)
+    reads = store.hold(f"nats-user-{REISSUED}", {"jwt": first.jwt, "seed": first.seed()})
+    async with _connected_as(REISSUED, broker.url) as session:
+        findings = await _published_once_under_its_id(session, REISSUED, topic, rig)
+        read_once = reads.call_count
+        store.hold(f"nats-user-{REISSUED}", {"jwt": again.jwt, "seed": again.seed()})
+        if not await _until(lambda: reads.call_count > read_once, _EXPIRY_SECONDS + _EXPIRY_SLACK_SECONDS):
+            return [*findings, "the seam never read its credential again after the bus ended the session of the one that ran out"]
+        if not await _settles(session, up=True, within=20):
+            return [*findings, "the seam did not connect again with the credential the store held once its first had run out"]
+        return findings + await _published_once_under_its_id(session, REISSUED, topic, rig)
+
+
+async def _a_credential_with_no_inbox_of_its_own_is_not_connected_with(
+    tools: Tools, home: Path, broker: Broker, store: SecretStoreDouble, rig: Client
+) -> tuple[list[str], set[tuple[str, str]]]:
+    """A credential that grants its user no inbox of its own would connect, and every publish on it would wait out its
+    timeout unacknowledged with the process answering as connected. The seam asks the bus for its inbox when it connects,
+    so it does not connect with such a credential, fails its publishes at once, and connects once the store holds one
+    that grants the inbox. Returns its findings and the subscription the broker must have refused.
+    """
+    findings: list[str] = []
+    topic, clock = OWN_CONNECTION_TOPICS[0], asyncio.get_running_loop().time
+    grants = Permissions(publish=(topic, f"$JS.API.STREAM.MSG.GET.{await _stream_of(rig, topic)}"), subscribe=(f"_INBOX_{UNHEARD}.>",))
+    shared = await asyncio.to_thread(issue, tools.nsc, home, f"{UNHEARD}-shared", grants.model_copy(update={"subscribe": ("_INBOX.>",)}))
+    own = await asyncio.to_thread(issue, tools.nsc, home, f"{UNHEARD}-own", grants)
+    reads = store.hold(f"nats-user-{UNHEARD}", {"jwt": shared.jwt, "seed": shared.seed()})
+    settings = BusSettings.model_validate({"RASK_BUS_URL": broker.url, "RASK_BUS_USER": UNHEARD})
+    async with Supervisor() as loops, bus_session(loops, settings) as session:
+        assert session is not None, "the seam opens no connection for a process named a bus"
+        if not await _until(lambda: reads.call_count >= 2, 20):
+            findings.append("the seam did not read its credential again after one the bus grants no inbox of its own")
+        if await _up(session):
+            findings.append("the seam answers as connected on a credential that would bring it no acknowledgement")
+        asked = clock()
+        try:
+            await publish_event(session, _lane_event(probe=UNHEARD), topic=topic, timeout_seconds=30)
+        except BusUnavailableError:
+            if (waited := clock() - asked) > 1:
+                findings.append(f"a publish on a credential with no inbox of its own took {waited:.1f} s to fail")
+        except TimeoutError:
+            findings.append("a publish on a credential with no inbox of its own waited out its timeout")
+        else:
+            findings.append("a publish on a credential with no inbox of its own was taken as delivered")
+        store.hold(f"nats-user-{UNHEARD}", {"jwt": own.jwt, "seed": own.seed()})
+        if not await _settles(session, up=True, within=20):
+            findings.append("the seam did not connect once the store held a credential that grants its inbox")
+        else:
+            findings += await _published_once_under_its_id(session, UNHEARD, topic, rig)
+    return findings, {(shared.public_key, f"_INBOX_{UNHEARD}.>")}
 
 
 def _run_stream_job(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path, user: str) -> subprocess.CompletedProcess[str] | str:
@@ -268,10 +528,14 @@ async def _permitted_inside_the_window(clients: dict[str, Client]) -> list[str]:
     return findings
 
 
-async def _publish_matrix(url: str, mint_: Mint, table: dict[str, Permissions], rig: Client) -> tuple[list[str], set[tuple[str, str]], dict[str, Client]]:
-    """Every table user against every data subject: an owner's publish is acked, anyone else's must not land.
+async def _publish_matrix(
+    url: str, mint_: Mint, table: dict[str, Permissions], rig: Client
+) -> tuple[list[str], set[tuple[str, str]], set[tuple[str, str]], dict[str, Client]]:
+    """Every table user against every data subject, and against every inbox another user holds alone: an owner's publish
+    is acked, anyone else's must not land, and nobody else may listen for the replies to a user's own connection.
 
-    Returns the publishes that must have been refused; the broker's log, read once it stops, says whether they were.
+    Returns the publishes and the subscriptions that must have been refused; the broker's log, read once it stops, says
+    whether they were.
     """
     clients = {user: await Client.connect(url, mint_.credentials[user], f"probe-{user}", table[user].inbox) for user in table}
     universe = sorted(set(PUBLISHERS) | {_probe_of(s) for p in table.values() for s in p.publish if _is_data_subject(s)})
@@ -285,10 +549,13 @@ async def _publish_matrix(url: str, mint_: Mint, table: dict[str, Permissions], 
     findings += await _permitted_inside_the_window(clients)
     for user, subject in sorted(foreign):
         await clients[user].nc.publish(subject, json.dumps({"probe": user, "refused": marker}).encode())
+    overheard = {(user, f"{table[owner].inbox}.>") for owner in table if table[owner].inbox != "_INBOX" for user in table if user != owner}
+    for user, inbox in sorted(overheard):
+        await clients[user].nc.subscribe(inbox)
     for client in clients.values():
         await client.settle()
     findings += await _landed_in_the_window(rig, before, await _last_seqs(rig), marker)
-    return findings, foreign, clients
+    return findings, foreign, overheard, clients
 
 
 async def _landed_in_the_window(rig: Client, before: dict[str, int], after: dict[str, int], marker: str) -> list[str]:
@@ -314,18 +581,44 @@ async def _landed_in_the_window(rig: Client, before: dict[str, int], after: dict
     return findings
 
 
-async def _publish_until_delivered(sidecar: Sidecar, pubsub: str, topic: str, app: SubscriberApp, route: str, timeout: float = 30.0) -> str | None:
-    """Publish through `sidecar` until `app` receives one of these publishes on `route`: a `deliverPolicy: new` consumer
-    drops what precedes it, and a `deliverPolicy: all` one first delivers what the stream already held."""
+async def _publish_until_delivered(publisher: Bus, topic: str, app: SubscriberApp, route: str, timeout: float = 30.0) -> str | None:
+    """Publish on `publisher`, the catalog's own connection, until `app` receives one of these publishes on `route`: a
+    `deliverPolicy: new` consumer drops what precedes it, and a `deliverPolicy: all` one first delivers what the stream
+    already held."""
     deadline = asyncio.get_running_loop().time() + timeout
     for attempt in range(1_000):
-        await sidecar.publish(pubsub, topic, {"marker": f"{topic}#{attempt}"})
+        await publish_event(publisher, _lane_event(marker=f"{topic}#{attempt}"), topic=topic, timeout_seconds=5)
         await asyncio.sleep(0.5)
         if delivered := [marker for marker in app.markers(route) if marker.startswith(f"{topic}#")]:
             return delivered[0]
         if asyncio.get_running_loop().time() > deadline:
             break
     return None
+
+
+async def _a_delivery_carries_the_trace_its_event_was_published_under(publisher: Bus, topic: str, app: SubscriberApp, route: str) -> list[str]:
+    """An event published inside a span reaches a sidecar's app under that span's trace: the envelope carries the
+    publish's ``traceparent``, and daprd makes its request to the app under the same trace id."""
+    published = SpanContext(trace_id=int(secrets.token_hex(16), 16), span_id=int(secrets.token_hex(8), 16), is_remote=False, trace_flags=TraceFlags(1))
+    marker = f"traced-{secrets.token_hex(4)}"
+    with trace.use_span(NonRecordingSpan(published)):
+        await publish_event(publisher, _lane_event(marker=marker), topic=topic, timeout_seconds=5)
+    if not await _until(lambda: marker in app.markers(route), within=15):
+        return [f"a publish on {topic} inside a span never reached {route}"]
+    delivery = next(d for d in list(app.deliveries) if d.route == route and isinstance(d.body.get("data"), dict) and d.body["data"].get("marker") == marker)
+    wanted = f"{published.trace_id:032x}"
+    carried = (_trace_id(delivery.body.get("traceparent")), _trace_id(delivery.traceparent))
+    if carried != (wanted, wanted):
+        return [
+            f"an event published under trace {wanted} reached {route} with {carried[0] or 'no trace'} in its envelope, in a request under {carried[1] or 'no trace'}"
+        ]
+    return []
+
+
+def _trace_id(traceparent: object) -> str:
+    """The trace id a W3C ``traceparent`` names, or nothing for a value that is none."""
+    parts = str(traceparent or "").split("-")
+    return parts[1] if len(parts) == 4 else ""
 
 
 async def _unacked(rig: Client, streams: tuple[str, ...], metadata: dict[str, str]) -> list[str]:
@@ -347,7 +640,8 @@ async def _unacked(rig: Client, streams: tuple[str, ...], metadata: dict[str, st
 
 
 async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: list[dict[str, Any]], rig: Client, workdir: Path) -> list[str]:
-    """One real daprd per Component shape, each delivering a message end to end with the chart's own Component."""
+    """One real daprd per Component shape, each delivering to its app, through the chart's own Component, what the catalog
+    published on its own connection."""
     findings: list[str] = []
     creds = mint_.credentials
     # Lineage's durable ingest, whose dead letters come back to its parking route on a Component of their own
@@ -361,11 +655,8 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
         ],
         failing=frozenset({"/lineage-events"}),
     )
-    publisher_app, broadcast_app = (
-        SubscriberApp([]),
-        SubscriberApp(
-            [{"pubsubname": "catalog-control-pubsub", "topic": "catalog.control.v1", "route": "/control-events", "deadLetterTopic": "dlq.catalog.control"}]
-        ),
+    broadcast_app = SubscriberApp(
+        [{"pubsubname": "catalog-control-pubsub", "topic": "catalog.control.v1", "route": "/control-events", "deadLetterTopic": "dlq.catalog.control"}]
     )
     link = Link(broker.port)
     await link.start()
@@ -380,19 +671,11 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
         Sidecar(
             tools.daprd,
             "catalog",
-            [sidecar_component(_named(components, "lineage-pubsub"), broker.url, creds["catalog"])],
-            publisher_app,
-            workdir / "publisher",
-        ),
-        Sidecar(
-            tools.daprd,
-            "catalog",
             [sidecar_component(_named(components, "catalog-control-pubsub"), link.url, creds["catalog"])],
             broadcast_app,
             workdir / "broadcast",
         ),
     ]
-    _, publisher, broadcast = sidecars
     try:
         for sidecar in sidecars:
             await sidecar.start()
@@ -404,32 +687,34 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
         await link.stop()
         return findings
     try:
-        marker = await _publish_until_delivered(publisher, "lineage-pubsub", "lineage.events.v1", subscriber_app, "/lineage-events")
-        if marker is None:
-            findings.append("daprd catalog (publisher-only) -> daprd lineage (durable): nothing reached /lineage-events")
-        else:
-            for _ in range(60):
-                if marker in subscriber_app.markers("/lineage-dlq"):
-                    break
-                await asyncio.sleep(0.25)
+        async with _connected_as("catalog", broker.url) as publisher:
+            marker = await _publish_until_delivered(publisher, "lineage.events.v1", subscriber_app, "/lineage-events")
+            if marker is None:
+                findings.append("the catalog's own connection -> daprd lineage (durable): nothing reached /lineage-events")
             else:
-                findings.append(f"daprd lineage never dead-lettered {marker} through dlq.lineage.events back to itself")
-            findings += await _unacked(rig, ("LINEAGE",), component_metadata(ingest))
-            findings += await _unacked(rig, ("DLQ",), component_metadata(parking))
-        if await _publish_until_delivered(broadcast, "catalog-control-pubsub", "catalog.control.v1", broadcast_app, "/control-events") is None:
-            findings.append("daprd catalog (broadcast): nothing reached /control-events")
-        else:
-            # The broadcast's connection is cut for longer than an ephemeral consumer outlives lost interest, and shorter
-            # than nats.go's reconnect budget, so the sidecar reconnects rather than closing ([[LH-305]]).
-            await link.cut(LINK_DOWN_SECONDS)
-            before = set(broadcast_app.markers("/control-events"))
-            for attempt in range(120):
-                await broadcast.publish("catalog-control-pubsub", "catalog.control.v1", {"marker": f"after-cut#{attempt}"})
-                await asyncio.sleep(0.5)
-                if set(broadcast_app.markers("/control-events")) - before:
-                    break
+                for _ in range(60):
+                    if marker in subscriber_app.markers("/lineage-dlq"):
+                        break
+                    await asyncio.sleep(0.25)
+                else:
+                    findings.append(f"daprd lineage never dead-lettered {marker} through dlq.lineage.events back to itself")
+                findings += await _unacked(rig, ("LINEAGE",), component_metadata(ingest))
+                findings += await _unacked(rig, ("DLQ",), component_metadata(parking))
+            if await _publish_until_delivered(publisher, "catalog.control.v1", broadcast_app, "/control-events") is None:
+                findings.append("the catalog's own connection -> daprd catalog (broadcast): nothing reached /control-events")
             else:
-                findings.append(f"daprd catalog (broadcast): nothing reached /control-events once its connection came back after {LINK_DOWN_SECONDS} s")
+                findings += await _a_delivery_carries_the_trace_its_event_was_published_under(publisher, "catalog.control.v1", broadcast_app, "/control-events")
+                # The broadcast's connection is cut for longer than an ephemeral consumer outlives lost interest, and shorter
+                # than nats.go's reconnect budget, so the sidecar reconnects rather than closing ([[LH-305]]).
+                await link.cut(LINK_DOWN_SECONDS)
+                before = set(broadcast_app.markers("/control-events"))
+                for attempt in range(120):
+                    await publish_event(publisher, _lane_event(marker=f"after-cut#{attempt}"), topic="catalog.control.v1", timeout_seconds=5)
+                    await asyncio.sleep(0.5)
+                    if set(broadcast_app.markers("/control-events")) - before:
+                        break
+                else:
+                    findings.append(f"daprd catalog (broadcast): nothing reached /control-events once its connection came back after {LINK_DOWN_SECONDS} s")
     finally:
         for sidecar in sidecars:
             sidecar.stop()
@@ -574,15 +859,18 @@ def _monitor_reads(tools: Tools, broker: Broker, mint_: Mint, home: Path) -> lis
     return findings
 
 
-def _refusals_against_the_matrix(log_text: str, mint_: Mint, foreign: set[tuple[str, str]]) -> list[str]:
-    """The broker must have refused every foreign publish, and nothing else: any other refusal is a missing allowance."""
+def _refusals_against_the_matrix(log_text: str, mint_: Mint, foreign: set[tuple[str, str]], overheard: set[tuple[str, str]]) -> list[str]:
+    """The broker must have refused every foreign publish and every subscription to another user's inbox, and nothing
+    else: any other refusal is a missing allowance."""
     seen = [(mint_.user_of(v.user_key), v) for v in violations(log_text)]
     refused = {(user, v.subject) for user, v in seen if v.kind == "Publish"}
+    unheard = {(user, v.subject) for user, v in seen if v.kind == "Subscription"}
     accepted = [f"{user} published {subject}, which only {sorted(PUBLISHERS.get(subject, ())) or 'nobody'} may" for user, subject in sorted(foreign - refused)]
+    accepted += [f"{user} subscribed to {inbox}, the replies to another user's own connection" for user, inbox in sorted(overheard - unheard)]
     unexpected = {
         f"the broker refused {user} {v.kind.lower()} on {v.subject} (connection {v.connection})"
         for user, v in seen
-        if (user, v.subject) not in foreign and not (user == BLIND_ADMIN and v.subject.startswith("$JS.API.CONSUMER.INFO."))
+        if (user, v.subject) not in foreign | overheard and not (user == BLIND_ADMIN and v.subject.startswith("$JS.API.CONSUMER.INFO."))
     }
     return accepted + sorted(unexpected)
 
@@ -609,35 +897,55 @@ def _daprd_calls_the_replay_misses(log_text: str, mint_: Mint, components: list[
 
 
 @pytest.mark.asyncio
-async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path) -> None:
+async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
     tools = Tools.from_env(os.environ)
     values = _values()
     docs = render(*DEFAULT_ARGS, "-f", str(values))
     table = {user: Permissions(publish=tuple(sorted(pub)), subscribe=tuple(sorted(sub))) for user, (pub, sub) in nats_users(docs).items()}
     assert table, f"the render with {values} issues no NATS user (the dev seed is absent)"
     components = _pubsub_components(docs)
-    findings = [*_lane_runs_the_charts_images(tools, docs), *_table_names_every_client(table, components)]
+    services = _services(docs)
+    findings = [*_lane_runs_the_charts_images(tools, docs), *_table_names_every_client(table, components, services)]
     assert findings == [], "\n".join(findings)
     blind = Permissions(publish=tuple(s for s in table["admin"].publish if not s.startswith("$JS.API.CONSUMER.INFO.")), subscribe=table["admin"].subscribe)
     mint_ = mint(tools.nsc, {**table, RIG: Permissions(publish=("$JS.API.>",), subscribe=("_INBOX.>",)), BLIND_ADMIN: blind}, tmp_path / "nsc")
+    # The store's stand-in holds each service's credential, as the dev seed writes it there; the rig's own HTTP calls, all
+    # to loopback, pass it by.
+    secret_store.router.route(host="127.0.0.1").pass_through()
+    held = {user: secret_store.hold(f"nats-user-{user}", {"jwt": mint_.credentials[user].jwt, "seed": mint_.credentials[user].seed()}) for user in services}
+    monkeypatch.setattr(seam, "_RECONNECT_ATTEMPTS", _RECONNECT_ATTEMPTS)
+    monkeypatch.setattr(seam, "_RECONNECT_WAIT_SECONDS", _RECONNECT_WAIT_SECONDS)
+    monkeypatch.setattr(seam, "_PAUSE_SECONDS", _PAUSE_SECONDS)
     broker = Broker(tools.nats_server, mint_, tmp_path / "broker")
     broker.start()
     try:
         findings += await asyncio.to_thread(_stream_job, tools, docs, broker, mint_, tmp_path)
         rig = await Client.connect(broker.url, mint_.credentials[RIG], RIG, answer_within=10.0)
         findings += await _without_credential(broker.url)
-        matrix, foreign, probes = await _publish_matrix(broker.url, mint_, table, rig)
+        matrix, foreign, overheard, probes = await _publish_matrix(broker.url, mint_, table, rig)
         findings += matrix
-        findings += await _daprd_shapes(tools, broker, mint_, components, rig, tmp_path / "daprd")
-        findings += await _replay_subscriptions(broker.url, mint_, components, probes)
-        findings += await _stream_job_repairs(tools, docs, broker, mint_, rig, tmp_path)
-        findings += await _stream_job_deletes_nothing_it_could_not_read(tools, docs, broker, mint_, rig, tmp_path)
-        findings += await _stream_job_converges_a_changed_ack_wait(tools, values, broker, mint_, rig, tmp_path)
-        findings += await asyncio.to_thread(_monitor_reads, tools, broker, mint_, tmp_path)
+        # Started here and judged last: its first credential takes a minute to run out.
+        reissued = asyncio.create_task(_a_credential_the_bus_ends_is_replaced_by_the_stores_current_one(tools, tmp_path / "nsc", broker, secret_store, rig))
+        try:
+            findings += await _daprd_shapes(tools, broker, mint_, components, rig, tmp_path / "daprd")
+            findings += await _replay_subscriptions(broker.url, mint_, components, probes)
+            findings += await _stream_job_repairs(tools, docs, broker, mint_, rig, tmp_path)
+            findings += await _stream_job_deletes_nothing_it_could_not_read(tools, docs, broker, mint_, rig, tmp_path)
+            findings += await _stream_job_converges_a_changed_ack_wait(tools, values, broker, mint_, rig, tmp_path)
+            findings += await asyncio.to_thread(_monitor_reads, tools, broker, mint_, tmp_path)
+            findings += await _services_publish_as_themselves(broker.url, services, rig, probes)
+            findings += await _a_service_outlasts_a_bus_it_cannot_reach(broker, services[0], held[services[0]], rig)
+            unheard, refused_inbox = await _a_credential_with_no_inbox_of_its_own_is_not_connected_with(tools, tmp_path / "nsc", broker, secret_store, rig)
+            findings += unheard
+            overheard |= refused_inbox
+            findings += await reissued
+        finally:
+            reissued.cancel()
+            await asyncio.gather(reissued, return_exceptions=True)
         for client in [rig, *probes.values()]:
             await client.close()
     finally:
         broker.stop()
-    findings += _refusals_against_the_matrix(broker.log_text(), mint_, foreign)
+    findings += _refusals_against_the_matrix(broker.log_text(), mint_, foreign, overheard)
     findings += _daprd_calls_the_replay_misses(broker.log_text(), mint_, components)
     assert findings == [], "\n".join(findings)

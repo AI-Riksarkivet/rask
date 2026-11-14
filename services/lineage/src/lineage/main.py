@@ -17,6 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.admission import judge_before_the_body
+from lakehouse.bus import bus_session
 from lakehouse.bus_watchdog import BusWatchdog, start_bus_watchdog
 from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.auth_lifespan import attach_auth
@@ -141,16 +142,11 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # 503s that read as a slow feed, not as a broken authorization plane.
     stack.push_async_callback(fga_dispose, app)
     await attach_auth(app, settings, service="lineage", loops=loops, fatal=True)
-    # The RELAY's publisher, and only when the outbox is on. The drain re-publishes a recovered event so a
-    # subscriber that never saw it still acts on it. Built here rather than per drain (one channel per
-    # process), and skipped entirely when `outbox_uri` is empty so a deployment with the outbox off opens no
-    # sidecar channel it will never use.
-    app.state.dapr = None
-    if settings.outbox_uri:
-        from dapr.aio.clients import DaprClient
-
-        app.state.dapr = DaprClient()
-        stack.push_async_callback(closed_quietly, app.state.dapr.close)
+    # THIS PROCESS'S OWN CONNECTION TO THE BUS ([[XC-199]]), as lineage's bus user, and only when the outbox is on: the
+    # relay re-publishes a recovered event on it, so a subscriber that never saw it still acts on it
+    # (`lakehouse.bus`). A loop of `loops` connects it behind the start and keeps it. A deployment with the outbox off
+    # publishes nothing and opens no connection.
+    app.state.bus = await stack.enter_async_context(bus_session(loops)) if settings.outbox_uri else None
     # The forwarder's client, and only when a graph backend is configured: one connection pool per process.
     app.state.forward_client = httpx.AsyncClient(timeout=settings.forward_timeout_seconds) if settings.forward_url else None
     if app.state.forward_client is not None:
@@ -171,7 +167,7 @@ def _dependencies(app: FastAPI, settings: LineageSettings, store: ProvenanceStor
     dependencies = [
         Dependency(name="catalog", read=store.ready, required=True),
         *openfga_dependency(app, required=False),
-        *bus_dependency(bus_watchdog),
+        *bus_dependency(app.state.bus, bus_watchdog),
     ]
     if settings.outbox_on_the_store:
         dependencies.append(store_dependency(settings.outbox_uri, partial(storage_options, settings), required=False))

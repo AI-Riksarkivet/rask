@@ -397,10 +397,10 @@ data:
           "egress": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Publishes by topic and outcome", "description": "success=false is a publish that never reached the bus. Nothing read this before, so a failing producer was invisible unless someone noticed the consumer had gone quiet." },
+              "display": { "name": "Publishes by topic and outcome", "description": "Each service's publishes on its own connection to the bus, counted where they are made. A series with an error_type is a publish the bus did not take, named by what it raised; its event stays staged where the lane has an outbox. A failing producer shows here before anyone notices its consumer has gone quiet." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (topic, success) (rate(dapr_component_pubsub_egress_count_total[5m]))", "seriesNameFormat": {{ "{{topic}} success={{success}}" | quote }} } } } } ]
+                "query": "sum by (messaging_destination_name, error_type) (rate(messaging_client_operation_duration_seconds_count[5m]))", "seriesNameFormat": {{ "{{messaging_destination_name}} {{error_type}}" | quote }} } } } } ]
             }
           },
           "ingress": {

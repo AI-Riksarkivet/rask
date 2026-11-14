@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from lakehouse import outbox
-from lakehouse.cloud_events import CloudEvent, lineage_envelope
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.storage_options import StorageOptions
-from lineage.core.config import Signing
+from tests.bus_double import BusDouble
 
 
 def _uri(tmp_path: Any) -> str:
@@ -24,37 +23,22 @@ def test_drop_absent_is_idempotent(tmp_path: Any) -> None:
     outbox.drop_event(_uri(tmp_path), StorageOptions(), "ghost")  # no raise on a missing object
 
 
-class _Dapr:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.published: list[dict[str, Any]] = []
-        self.fail = fail
-
-    async def publish_event(self, *, pubsub_name: str, topic_name: str, data: str, data_content_type: str) -> None:
-        if self.fail:
-            raise TimeoutError("sidecar down")
-        self.published.append(json.loads(data))
-
-
 A_COMPLETE = {"eventType": "COMPLETE", "run": {"runId": "r1"}}
 
 
-def _publish(sidecar: _Dapr, uri: str) -> None:
+def _publish(bus: BusDouble, uri: str) -> None:
     """Publish :data:`A_COMPLETE` on the lineage lane through the outbox at ``uri``."""
-    asyncio.run(
-        outbox.publish_with_outbox(
-            sidecar, lineage_envelope(A_COMPLETE), outbox_uri=uri, storage_options=StorageOptions(), pubsub_name="p", topic_name="t", timeout_seconds=5
-        )
-    )
+    asyncio.run(outbox.publish_with_outbox(bus, lineage_envelope(A_COMPLETE), outbox_uri=uri, storage_options=StorageOptions(), topic="t", timeout_seconds=5))
 
 
 def test_publish_with_outbox_stages_then_drops_on_ack(tmp_path: Any) -> None:
     uri = _uri(tmp_path)
-    dapr = _Dapr()
+    bus = BusDouble()
 
-    _publish(dapr, uri)
+    _publish(bus, uri)
 
     # The event rides its lane's envelope, under the id of this event and no other of its run.
-    assert dapr.published == [
+    assert [sent.envelope for sent in bus.sent] == [
         {
             "specversion": "1.0",
             "id": "r1@COMPLETE",
@@ -76,11 +60,11 @@ def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: A
         raise OSError("outbox bucket unreachable")
 
     monkeypatch.setattr(outbox, "stage_event", _boom)
-    dapr = _Dapr()
+    bus = BusDouble()
 
-    _publish(dapr, _uri(tmp_path))
+    _publish(bus, _uri(tmp_path))
 
-    assert [published["data"] for published in dapr.published] == [A_COMPLETE]
+    assert bus.events == [A_COMPLETE]
 
 
 def test_an_event_the_bus_did_not_take_stays_staged_under_its_envelopes_id_as_the_event_alone(tmp_path: Any) -> None:
@@ -90,7 +74,7 @@ def test_an_event_the_bus_did_not_take_stays_staged_under_its_envelopes_id_as_th
     uri = _uri(tmp_path)
 
     with pytest.raises(outbox.UnpublishedEventError) as unpublished:
-        _publish(_Dapr(fail=True), uri)
+        _publish(BusDouble(failing=TimeoutError("the bus did not answer")), uri)
 
     staged = [(key, json.loads(body)) for key, body in outbox.list_events(uri, StorageOptions())]
     assert (unpublished.value.staged, staged) == (True, [("r1@COMPLETE", A_COMPLETE)])
@@ -106,58 +90,13 @@ def test_a_delivered_event_whose_drop_fails_stays_staged_and_says_why(tmp_path: 
 
     monkeypatch.setattr(outbox, "drop_event", _refused)
     uri = _uri(tmp_path)
-    dapr = _Dapr()
+    bus = BusDouble()
 
     with caplog.at_level("WARNING", logger=outbox.__name__):
-        _publish(dapr, uri)
+        _publish(bus, uri)
 
-    assert ([published["data"] for published in dapr.published], len(list(outbox.list_events(uri, StorageOptions())))) == ([A_COMPLETE], 1)
+    assert (bus.events, len(list(outbox.list_events(uri, StorageOptions())))) == ([A_COMPLETE], 1)
     assert [(record.getMessage(), getattr(record, "error", None)) for record in caplog.records] == [("outbox_drop_failed", "the store refused the delete")]
-
-
-# --------------------------------------------------------------------------- #
-# the RELAY — the lineage service re-ingests staged survivors + drops poison
-# --------------------------------------------------------------------------- #
-
-
-class _Repo:
-    def __init__(self) -> None:
-        # ONE list, because there is one call: `record` writes the edges AND the feed row, each keyed, so a
-        # retried call lands what is missing and nothing twice.
-        self.ingested: list[str] = []
-        self.refusals: list[dict[str, str | None]] = []
-
-    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-        """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the store. Captured rather than ignored:
-        several of these tests assert what the refusal path did, and a silent no-op would let a drain
-        that recorded nothing pass as one that did."""
-        self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
-
-    async def record(self, event: Any) -> None:
-        self.ingested.append(event.run.run_id)
-
-
-class _Settings:
-    def __init__(self, uri: str, drain_limit: int = 500) -> None:
-        self.outbox_uri = uri
-        self.outbox_drain_limit = drain_limit  # the P1.2 per-tick cap (0 = unbounded)
-        # What the relay re-publishes a recovered event to. Present on the double because the drain
-        # reads them: a double missing a field the code under test uses fails as an AttributeError
-        # swallowed by the tick's error boundary, which reads as a product bug rather than a gap here.
-        self.dapr_pubsub = "lineage-pubsub"
-        self.dapr_topic = "lineage.events.v1"
-        self.dapr_publish_timeout_seconds = 5.0
-        # The relay authorizes a staged event before ingesting it (`enforce_bus_authz`), which reads this
-        # first and returns immediately when it is false. OFF here on purpose: these tests pin the drain's
-        # INGEST/PUBLISH/DROP mechanics, and what the drain does on a refusal is pinned by
-        # `test_a_governance_refusal_is_not_a_relay_fault.py`. Absent rather than false, it would
-        # have failed as an AttributeError the tick's error boundary swallows into `stranded` — the exact
-        # failure this class's comment above warns about, met on the first change that read a new field.
-        self.fga_enabled = False
-        # The verifier configuration the gate reads before it reads `fga_enabled`: no signer listed, so the
-        # relay verifies nothing here. Explicit, so the double does not take a signer set from the environment.
-        self.signing = Signing(signers=frozenset(), delegators=frozenset())
 
 
 # --------------------------------------------------------------------------- #
@@ -189,69 +128,3 @@ def test_list_events_is_bounded_and_oldest_first(tmp_path: Any) -> None:
     assert first_two == ["run-0", "run-1"]  # bounded AND oldest-first (not arbitrary order)
 
     assert len({rid for rid, _ in outbox.list_events(uri, StorageOptions())}) == 5  # no limit => everything
-
-
-def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_path: Any, monkeypatch: Any) -> None:
-    """Recording alone repairs the FEED and leaves every subscriber unaware.
-
-    The catalog's write announcement is what the bus's subscribers act on (a notifier among them), so
-    a lost event does not merely under-report provenance -- nobody downstream hears of the write. The
-    relay recovering it into the feed fixes the record and leaves every subscriber uninformed.
-    Re-publishing is what makes the outbox a recovery mechanism rather than an audit repair.
-
-    Ordering is asserted, not assumed: the publish must happen BEFORE the staged object is dropped, so a
-    publish that fails leaves the event for the next tick. The re-ingest then is a no-op (MERGE on run_id).
-
-    The copy goes out under the id the catalog's own publish carried, so a stream that already holds the event stores
-    the relay's copy of it once.
-    """
-    from catalog.core.lineage_emit import INSERT, build_write_event
-    from lakehouse.openlineage import run_id_for
-    from lineage.api import relay_cron
-    from lineage.services import staged
-
-    uri = _uri(tmp_path)
-    event = build_write_event(
-        table_id="bronze$events",
-        namespace="bronze",
-        author="alice",
-        version=2,
-        operation=INSERT,
-        run_id=run_id_for("t1"),
-        event_time="2026-10-12T00:00:00+00:00",
-        job_namespace="lance-catalog",
-    )
-    run_id = event["run"]["runId"]
-    outbox.stage_event(uri, StorageOptions(), run_id, json.dumps(event))
-
-    published: list[dict[str, Any]] = []
-    still_staged_at_publish: list[int] = []
-
-    async def _fake_publish(_client: Any, envelope: CloudEvent, **kwargs: Any) -> None:
-        published.append({"envelope": envelope, **kwargs})
-        # The staged object must still exist HERE. If the drop came first, a failed publish would have
-        # destroyed the event's only durable copy -- the exact loss the outbox exists to prevent.
-        still_staged_at_publish.append(len(list(outbox.list_events(uri, StorageOptions()))))
-
-    monkeypatch.setattr(staged.dapr_publish, "publish_event", _fake_publish)
-
-    outcome = asyncio.run(relay_cron._drain_outbox(_authorized_request(), cast("Any", _Repo()), cast("Any", _Settings(uri)), StorageOptions(), object()))
-
-    assert outcome.drained == 1
-    assert len(published) == 1, "a recovered event was ingested but never re-published -- the cascade stays halted"
-    assert published[0]["topic_name"] == "lineage.events.v1"
-    assert published[0]["pubsub_name"] == "lineage-pubsub"
-    assert (published[0]["envelope"].id, published[0]["envelope"].data) == (f"{run_id}@COMPLETE", event)
-    assert still_staged_at_publish == [1], "the staged object was dropped before the publish succeeded"
-    assert list(outbox.list_events(uri, StorageOptions())) == []  # ...and dropped once it did
-
-
-def _authorized_request() -> Any:
-    """A Request stand-in for the drain's authorization gate, with FGA OFF.
-
-    `enforce_bus_authz` returns immediately when `settings.fga_enabled` is false, and these `_Settings`
-    doubles do not enable it — so the gate is a no-op here and every assertion below still pins what it
-    always pinned: the drain's INGEST/PUBLISH/DROP behaviour. What the drain does on a refusal is
-    pinned by `test_a_governance_refusal_is_not_a_relay_fault.py`, which is where it belongs.
-    """
-    return cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))

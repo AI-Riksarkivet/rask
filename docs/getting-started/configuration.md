@@ -28,8 +28,18 @@ The catalog's own settings carry the `LANCE_` prefix (`services/catalog/src/cata
 |---|---|
 | `LANCE_REST_IMPL` / `LANCE_REST_ROOT` | The namespace implementation and the object-store root it serves. |
 | `LANCE_LINEAGE_EMIT_ENABLED` | Announce every committed write on lineage (off in the code default, on in the chart). |
+| `LANCE_LINEAGE_TRANSPORT` / `LANCE_LINEAGE_TOPIC` | How the announcement travels: `bus` (the chart's: published on the topic, on the catalog's own connection) or `http` (a direct POST to lineage). |
 | `LANCE_LINEAGE_OUTBOX_URI` | Stage each lineage event in the object store before publishing it. |
 | `LANCE_CONTROL_EMIT_ENABLED` | Broadcast the catalog's control-plane mutations on `catalog.control.v1`. |
+
+## The bus (every service that publishes)
+
+Declared once in `packages/lakehouse/src/lakehouse/bus.py`:
+
+| Variable | Purpose |
+|---|---|
+| `RASK_BUS_URL` | The NATS JetStream address a service publishes its events to, on a connection of its own; empty for a stack with no bus. |
+| `RASK_BUS_USER` | The bus user it connects as. Its credential is the store's `nats-user-<user>`, read under the service's own login and held in memory, and its replies arrive under `_INBOX_<user>`. |
 
 ## The edge
 

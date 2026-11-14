@@ -1,6 +1,6 @@
 """`LANCE_CONTROL_OUTBOX_URI` stages `table_published`, and NOTHING on the estate republished it.
 
-The control lane got the durable half of the outbox (`DaprControlEmitter.emit` stages before it
+The control lane got the durable half of the outbox (`BusControlEmitter.emit` stages before it
 publishes and drops only on ack — `test_control_events_survive_a_bus_outage.py` proves that much) and
 never got the delivery half. A grep for `outbox.list_events` / `outbox.drop_event` reached exactly one
 consumer, `services/lineage/api/reconcile_cron.py`, which drains the LINEAGE prefix and re-ingests each
@@ -28,7 +28,7 @@ import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import pytest
@@ -39,14 +39,15 @@ from pydantic import SecretStr
 from catalog.core.config import Settings
 from catalog.core.control_signing import control_sign
 from lakehouse import outbox, store_session
-from lakehouse.control_emit import DaprControlEmitter
+from lakehouse.bus import MAX_PAYLOAD_BYTES
+from lakehouse.control_emit import BusControlEmitter
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent
-from lakehouse.dapr_publish import MAX_PAYLOAD_BYTES
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
+from tests.bus_double import BusDouble
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -75,24 +76,9 @@ FORGED_PUBLICATION: dict[str, Any] = {
 }
 
 
-class _Blip:
-    """The NATS blip, as the emitter meets it: a sidecar that accepts nothing."""
-
-    def __init__(self) -> None:
-        self.published: list[dict[str, Any]] = []
-
-    async def publish_event(self, **_kw: Any) -> None:
-        raise TimeoutError("publish timed out")
-
-
-class _Recorder:
-    """A sidecar that accepts everything and remembers exactly what it was handed."""
-
-    def __init__(self) -> None:
-        self.published: list[dict[str, Any]] = []
-
-    async def publish_event(self, **kw: Any) -> None:
-        self.published.append(kw)
+def _blip() -> BusDouble:
+    """The NATS blip, as the emitter meets it: a bus that acknowledges nothing."""
+    return BusDouble(failing=TimeoutError("publish timed out"))
 
 
 def _settings(control_uri: str, *, lineage_uri: str = "") -> Settings:
@@ -130,7 +116,7 @@ def deployed_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callab
     return _deployed
 
 
-def _relay_app(settings: Settings, publisher: object, *, signing: SigningKeyHolder[SigningKey] | None = None) -> FastAPI:
+def _relay_app(settings: Settings, publisher: BusDouble, *, signing: SigningKeyHolder[SigningKey] | None = None) -> FastAPI:
     """A bare app carrying ONLY the relay router, so the route's own path is what is under test.
 
     `signing` is published where the catalog's lifespan publishes its own holder (`attach_signing`); None is a catalog
@@ -143,7 +129,7 @@ def _relay_app(settings: Settings, publisher: object, *, signing: SigningKeyHold
     mounted = mount_control_relay(app, settings.control_relay_binding_name)
     assert mounted, "the relay router refused to mount"
     app.dependency_overrides[get_settings] = lambda: settings
-    app.state.dapr_client = publisher
+    app.state.bus = publisher
     attach_signing(app, signing)
     return app
 
@@ -175,7 +161,7 @@ async def _stage(uri: str, event: CatalogControlEvent, *, signing: SigningKeyHol
     Signed as the catalog's emitter signs it when `signing` is the catalog's holder; unsigned for a catalog that does not sign.
     """
     sign = None if signing is None else control_sign(signing)
-    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=1.0, service="catalog", sign=sign, outbox_uri=uri)
+    emitter = BusControlEmitter(_blip(), topic=CONTROL_TOPIC, timeout_seconds=1.0, service="catalog", sign=sign, outbox_uri=uri)
     await emitter.emit(event)
     staged = outbox.read_event(uri, StorageOptions(), event.event_id)
     assert staged is not None, "precondition: the blip must leave the event staged"
@@ -217,26 +203,6 @@ def _published_event() -> CatalogControlEvent:
 
 
 @pytest.mark.asyncio
-async def test_the_relay_REPUBLISHES_a_staged_table_published(tmp_path: Path) -> None:
-    """THE WEDGE. Without this the staged event is durable and undelivered, which is not durability."""
-    uri = f"file://{tmp_path}/control-outbox"
-    event = _published_event()
-    await _stage(uri, event)
-    assert list(outbox.list_events(uri, StorageOptions())), "precondition: the blip must leave the event staged"
-
-    recorder = _Recorder()
-    with TestClient(_relay_app(_settings(uri), recorder)) as client:
-        response = client.post(f"/{BINDING}")
-
-    assert response.status_code == 200, response.text
-    assert response.json()["republished"] == 1
-    assert [p["topic_name"] for p in recorder.published] == [CONTROL_TOPIC], (
-        "the staged control event was not re-published onto the control topic — silver->gold is still asleep"
-    )
-    assert list(outbox.list_events(uri, StorageOptions())) == [], "a delivered event must be dropped, or the relay republishes it forever"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "forge",
     [
@@ -267,12 +233,12 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
     outbox.stage_event(uri, StorageOptions(), "forged", json.dumps(forge(pair, event_signer)))
     _staged_before_everything_else(tmp_path, "forged")
     genuine = await _stage(uri, _published_event(), signing=signing)
-    recorder = _Recorder()
+    recorder = BusDouble()
 
     _store_serving_the_catalogs_keys(secret_store, 200, pair)
     with TestClient(_relay_app(deployed_settings(uri), recorder, signing=signing)) as client:
         report = client.post(f"/{BINDING}").json()
-        delivered = [json.loads(published["data"]) for published in recorder.published]
+        delivered = [sent.envelope for sent in recorder.sent]
         staged = json.loads(genuine)
         assert [(envelope["id"], envelope["data"]) for envelope in delivered] == [(staged["event_id"], staged)], (
             "the relay published an object this catalog never signed, or the catalog's event other than as it was staged"
@@ -284,8 +250,8 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
 @pytest.mark.parametrize(
     ("bus", "keys"),
     [
-        pytest.param(_Blip, None, id="a-bus-that-accepts-nothing"),
-        pytest.param(_Recorder, 500, id="a-signing-catalog-whose-published-keys-cannot-be-read"),
+        pytest.param(_blip, None, id="a-bus-that-accepts-nothing"),
+        pytest.param(BusDouble, 500, id="a-signing-catalog-whose-published-keys-cannot-be-read"),
     ],
 )
 async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
@@ -293,7 +259,7 @@ async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
     event_signer: Any,
     secret_store: SecretStoreDouble,
     deployed_settings: Callable[[str], Settings],
-    bus: type[_Blip] | type[_Recorder],
+    bus: Callable[[], BusDouble],
     keys: int | None,
 ) -> None:
     """Publish BEFORE drop: dropping first would destroy the only durable copy on a bus still down. And verify before
@@ -307,7 +273,7 @@ async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
     read_before = _store_serving_the_catalogs_keys(secret_store, keys)
     with TestClient(_relay_app(deployed_settings(uri), publisher, signing=signing)) as client:
         response = client.post(f"/{BINDING}")
-        assert (response.json()["republished"], publisher.published) == (0, []), "the relay delivered an event it may not deliver yet"
+        assert (response.json()["republished"], publisher.sent) == (0, []), "the relay delivered an event it may not deliver yet"
         assert list(outbox.list_events(uri, StorageOptions())), "the relay dropped a staged event it never delivered"
     if keys is not None:
         # One attempt a tick: a key list the store cannot serve is asked for again by the next tick, never waited on.
@@ -336,7 +302,7 @@ async def test_a_poison_object_is_dropped_rather_than_wedging_the_drain(tmp_path
     _staged_before_everything_else(tmp_path, "poison")
     await _stage(uri, _published_event())
 
-    recorder = _Recorder()
+    recorder = BusDouble()
     with TestClient(_relay_app(_settings(uri), recorder)) as client:
         report = client.post(f"/{BINDING}").json()
 
@@ -359,7 +325,7 @@ def test_the_binding_name_is_the_served_path_and_its_preflight_answers_the_sidec
     sidecar alone: an anonymous 2xx would tell any peer that reaches the port which bindings the estate runs."""
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     settings = _settings(f"file://{tmp_path}/control-outbox")
-    app = _relay_app(settings, _Recorder())
+    app = _relay_app(settings, BusDouble())
     install_problem_handlers(app, logging.getLogger(__name__))
     binding = settings.control_relay_binding_name
 

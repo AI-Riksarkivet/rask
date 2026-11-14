@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+from lakehouse.cloud_events import lineage_envelope
 from lineage.core.metrics import Door
 from lineage.models import RunEvent
 from lineage.services.consumer import handle_cloud_event
@@ -23,8 +24,8 @@ _VALID = {
     "inputs": [{"namespace": "source", "name": "raw"}],
     "outputs": [{"namespace": "bronze", "name": "bronze$x"}],
 }
-# Dapr wraps the published data in a CloudEvent; the OpenLineage event is in ``data``.
-_CLOUD_EVENT = {"id": "ce-1", "source": "catalog", "type": "com.dapr.event.sent", "data": _VALID}
+#: The delivery a subscriber takes: the envelope its publisher built, with the OpenLineage event in ``data``.
+_CLOUD_EVENT = lineage_envelope(_VALID).as_wire()
 
 
 class _FakeRepo:

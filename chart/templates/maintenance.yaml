@@ -13,13 +13,12 @@
 - { name: MAINTENANCE_MAX_BODY_BYTES, value: {{ .Values.maintenance.maxBodyBytes | int64 | quote }} }
 - { name: MAINTENANCE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.maintenance.requestDeadlineSeconds | quote }} }
 - { name: MAINTENANCE_READ_ONLY, value: {{ required "readOnlyWindow is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.readOnlyWindow | quote }} }
-- { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
 - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
 {{- with include "lance.signingEnv" (list $root .Values.maintenance.appId) }}{{ . | nindent 0 }}{{- end }}
 {{- if .Values.dapr.enabled }}
 
 {{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.appId) | nindent 0 }}
-{{- include "lance.busEnv" $root | nindent 0 }}
+{{- include "lance.busEnv" (list $root $root.Values.maintenance.appId) | nindent 0 }}
 {{- end }}
 {{- if $root.Values.maintenance.vendWriteCredentials }}
 - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
@@ -28,15 +27,17 @@
 {{- end }}
 - { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ $arrival | quote }} }
 {{- if $arrival }}
+- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.appId) | quote }} }
 {{- if .Values.dapr.resiliency.enabled }}
 - { name: MAINTENANCE_ARRIVAL_DLQ_TOPIC, value: {{ .Values.maintenance.arrivalDlqTopic | quote }} }
 {{- end }}
 {{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 0 }}{{- end }}
 {{- end }}
+{{- if or $arrival .Values.maintenance.lineageEmit }}
+- { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+{{- end }}
 {{- if .Values.maintenance.lineageEmit }}
 - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
-- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.appId) | quote }} }
-- { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
 - { name: MAINTENANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $root | quote }} }
 {{- if .Values.services.lineage.outbox.enabled }}
 - { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
@@ -59,7 +60,6 @@
 - { name: MAINTENANCE_DISCOVERY_MAX_DEPTH, value: {{ hasKey .Values.maintenance "discoveryMaxDepth" | ternary .Values.maintenance.discoveryMaxDepth 3 | quote }} }
 {{- if .Values.maintenance.controlEmit }}
 - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
-- { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.appId | quote }} }
 {{- end }}
 - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
 {{- if .Values.dapr.enabled }}

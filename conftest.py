@@ -42,7 +42,6 @@ from typing import Final
 
 import pytest
 import respx
-from dapr.conf import settings as dapr_settings
 
 from lakehouse.governed import secret_cache, secrets
 from tests.secret_store_double import SecretStoreDouble
@@ -136,16 +135,10 @@ def _no_harness_telemetry() -> None:
     _strip_harness_otlp()
 
 
-# ── THE PROCESS-GLOBAL STATE THE LAKEHOUSE AND ITS DAPR SDK KEEP, RESET PER TEST ─────────────────────────────────────
-# Each fixture below guards state a lakehouse module or its `dapr` dependency keeps across a process: every test gets
-# its own cache of secret-store reads, no session with a secret store, and the token files a pod's kubelet projects,
-# Dapr's sidecar handshake is bounded, and respx's bare `@respx.mock` is strict.
-
-#: How long any test may let Dapr's sidecar handshake run. The SDK's own default is 60 s, and where there is no sidecar
-#: nothing is cached, so every unstubbed Dapr client construction (`DaprClient`, its HTTP client) pays it again: CI run
-#: 35726435185 spent 8m17s in `wait_for_sidecar` before `--timeout=300` took the offline suite and four e2e lanes with
-#: it.
-DAPR_HANDSHAKE_BUDGET_SECONDS: Final = 1.0
+# -- THE PROCESS-GLOBAL STATE THE LAKEHOUSE KEEPS, RESET PER TEST --
+# Each fixture below guards state a lakehouse module keeps across a process: every test gets its own cache of
+# secret-store reads, no session with a secret store, and the token files a pod's kubelet projects, and respx's bare
+# `@respx.mock` is strict.
 
 #: The doors whose callers read a projected token file, `RASK_<DOOR>_IDENTITY_TOKEN_FILE`.
 PROJECTED_TOKEN_DOORS: Final = ("catalog", "lineage")
@@ -251,18 +244,6 @@ def secret_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
         yield double
     if "respx_allows_unused_routes" not in request.fixturenames:
         assert not double.unread(), f"the store held secrets this test never read: {double.unread()}"
-
-
-@pytest.fixture(autouse=True)
-def _bounded_dapr_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bound the sidecar handshake for each test without stubbing the handshake itself.
-
-    A stub of `DaprHealth.wait_for_sidecar` would swap the handshake production runs for one it never runs; lowering
-    the budget leaves it polling, sleeping and raising as it does, and only stops it costing a minute per call. A test
-    that needs another duration sets its own inside a `MonkeyPatch.context`. The patch raises if the SDK renames the
-    setting, so a rename fails every test rather than silently restoring the 60 s wait.
-    """
-    monkeypatch.setattr(dapr_settings, "DAPR_HEALTH_TIMEOUT", DAPR_HANDSHAKE_BUDGET_SECONDS)
 
 
 class ServiceAccountIssuer:

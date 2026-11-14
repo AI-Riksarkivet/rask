@@ -3,11 +3,10 @@
 A maintenance sweep expires each Lance dataset's superseded versions; when ``lineage_emit_enabled`` is on it records
 each dataset whose versions it reclaimed as an OpenLineage ``RunEvent`` (output = the dataset,
 ``operation=expire_versions``) — and each ``maintain:``-FAILED dataset as a ``FAIL`` event with the standard
-``errorMessage`` facet (§4 failure visibility; deterministic per-dataset run id as the flood guard) — published to the
-**Dapr** ``pubsub.jetstream`` component, the SAME pubsub component + topic the catalog publishes to and the lineage
-service subscribes to, so expiry runs (and failures) land in the feed alongside the writes.
-The sidecar owns retry/backoff + trace-propagation (no DLQ — see docs/RESILIENCE.md gap #2) as component
-config (no broker client here).
+``errorMessage`` facet (§4 failure visibility; deterministic per-dataset run id as the flood guard) — published on
+the bus, on the SAME topic the catalog publishes to and the lineage service subscribes to, so expiry runs (and
+failures) land in the feed alongside the writes. The publish goes over this process's own connection to the bus
+(``lakehouse.bus``), one bounded attempt, with the outbox's relay as its retry.
 
 Self-contained: the maintenance service never imports the catalog (zero cross-service imports — the
 mergeability invariant). The only shared code is ``lakehouse.governed.fga`` for the id↔namespace derivation, so the
@@ -19,7 +18,7 @@ Two deliberate choices:
 * **Versionless.** Expiry is *maintenance*, not a data write, so the event asserts no data version, and with no
   inputs it asserts no edge (``lineage.services.provenance.edges_of``): the feed records the run, and the edge list
   stays the record of what derives from what.
-* **Best-effort.** A sidecar/broker outage logs + drops; auditing must never fail a maintenance sweep.
+* **Best-effort.** A bus outage logs and leaves the event staged; auditing must never fail a maintenance sweep.
 
 This layer is **pure** (builders + emitter transports only); the per-sweep orchestration that needs the
 :class:`~maintenance.services.expiry.DatasetResult` type lives in ``maintenance.services.table_pass`` so ``core``
@@ -34,9 +33,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final, Protocol, runtime_checkable
 
-from dapr.aio.clients import DaprClient
-
 from lakehouse import outbox
+from lakehouse.bus import Bus
 from lakehouse.cloud_events import lineage_envelope
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.lineage import CanonError, SigningKey, attach_signature
@@ -226,21 +224,19 @@ class NoopEmitter:
         return None
 
 
-class DaprMaintenanceEmitter:
-    """Publishes maintenance events to a **Dapr** ``pubsub.jetstream`` component (the production path).
+class BusMaintenanceEmitter:
+    """Publishes maintenance events on the bus, NATS JetStream, over this process's own connection (the production path).
 
-    Publishes to the local Dapr sidecar (``DaprClient.publish_event``); the sidecar persists to NATS
-    JetStream and owns retry/backoff (no DLQ — docs/RESILIENCE.md gap #2) as component config, so the app
-    holds no broker client. Each event rides the envelope derived from it
-    (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context.
-    Best-effort: a sidecar/broker outage logs + drops rather than failing the sweep.
+    One bounded publish per event (`lakehouse.bus.publish_event`): the stream's acknowledgement is the delivery, and
+    an event it did not acknowledge stays in the outbox for lineage's relay. Each event rides the envelope derived
+    from it (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context.
+    Best-effort: a bus outage logs and leaves the event staged rather than failing the sweep.
     """
 
     def __init__(
         self,
-        client: DaprClient,
+        bus: Bus,
         *,
-        pubsub: str,
         topic: str,
         job_namespace: str,
         timeout_seconds: float,
@@ -254,14 +250,13 @@ class DaprMaintenanceEmitter:
             raise ValueError(
                 f"this service signs as {signing.identity!r} but stamps {author!r} as its author: a verifier refuses a signer that is not its event's author"
             )
-        self._client = client
+        self._bus = bus
         #: This service's OWN signing key ([[LH-064]]). None is a service with no store to sign from, which emits
         #: unsigned as it always did. A holder without a key emits nothing at all, never an unsigned event.
         self._signing = signing
         #: The service's OWN identity, stamped on every event it emits — the same string it presents at
         #: the catalog's service door, so the two stores agree about who did the work.
         self._author = author
-        self._pubsub = pubsub
         self._topic = topic
         self._job_namespace = job_namespace
         self._dataset_namespace = dataset_namespace
@@ -329,15 +324,14 @@ class DaprMaintenanceEmitter:
             # STAGED, then published, then dropped on ack (#4) — the twin of the catalog's emit. A
             # sweep's lineage event describes a committed reclamation, so losing one leaves the feed
             # under-reporting work that really happened. Degrades to exactly the previous plain publish
-            # when `outbox_uri` is unset, which is the default, and stays bounded either way so a hung
-            # sidecar cannot stall the sweep.
+            # when `outbox_uri` is unset, which is the default, and stays bounded either way so a bus that
+            # does not answer cannot stall the sweep.
             await outbox.publish_with_outbox(
-                self._client,
+                self._bus,
                 lineage_envelope(event),
                 outbox_uri=self._outbox_uri,
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
-                pubsub_name=self._pubsub,
-                topic_name=self._topic,
+                topic=self._topic,
                 timeout_seconds=self._timeout_seconds,
             )
         except (SigningKeyUnavailableError, CanonError) as exc:
@@ -349,10 +343,9 @@ class DaprMaintenanceEmitter:
 def make_emitter(
     *,
     enabled: bool,
-    dapr: DaprClient | None,
+    bus: Bus | None,
     outbox_uri: str = "",
     storage_options: Callable[[], StorageOptions] | None = None,
-    pubsub: str,
     topic: str,
     job_namespace: str,
     dataset_namespace: str,
@@ -360,12 +353,11 @@ def make_emitter(
     author: str = "",
     signing: SigningKeyHolder[SigningKey] | None = None,
 ) -> MaintenanceEmitter:
-    """Select the emitter: a Dapr pub/sub publisher when enabled + wired, else a no-op (never silently
-    publish nowhere — a half-configured transport stays a no-op rather than pretending to emit)."""
-    if enabled and dapr is not None:
-        return DaprMaintenanceEmitter(
-            dapr,
-            pubsub=pubsub,
+    """Select the emitter: a publisher on the bus when enabled and the process holds a connection to it, else a no-op
+    (never silently publish nowhere — a half-configured transport stays a no-op rather than pretending to emit)."""
+    if enabled and bus is not None:
+        return BusMaintenanceEmitter(
+            bus,
             topic=topic,
             job_namespace=job_namespace,
             dataset_namespace=dataset_namespace,

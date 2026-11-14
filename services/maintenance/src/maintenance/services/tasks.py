@@ -18,15 +18,15 @@ from typing import Final, get_args
 
 from fastapi.concurrency import run_in_threadpool
 
+from lakehouse.bus import read_credentials
 from lakehouse.control_emit import ControlEmitter
-from lakehouse.governed.secrets import read_required_secret
 from lakehouse.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import create_orphan_check_series, create_task_series
 from maintenance.services.audit import run_audit, run_scan
 from maintenance.services.orphan_check import FLOOR, run_orphan_check
-from maintenance.services.queue import SAMPLE_SECONDS, QueueUnavailableError, Task, TaskKind, TaskQueue, Worker, creds_document, sample_queue
+from maintenance.services.queue import BUS_USER, SAMPLE_SECONDS, QueueUnavailableError, Task, TaskKind, TaskQueue, Worker, sample_queue
 from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask, emit_pass_lineage, emit_zero_baselines, run_table_pass
 from maintenance.services.trash_task import run_trash_task
@@ -92,10 +92,7 @@ async def connected_queue(settings: MaintenanceSettings) -> AsyncGenerator[TaskQ
     if not settings.nats_url:
         yield None
         return
-    secret = await run_in_threadpool(read_required_secret, settings.nats_credentials_secret, require="seed")
-    if not secret.get("jwt"):
-        raise RuntimeError(f"secret {settings.nats_credentials_secret!r} gave this process no 'jwt': failing closed (the secret store is the sole source)")
-    queue = await TaskQueue.connect(settings.nats_url, creds_document(jwt=secret["jwt"], seed=secret["seed"]), name="maintenance")
+    queue = await TaskQueue.connect(settings.nats_url, await run_in_threadpool(read_credentials, settings.nats_credentials_secret), name=BUS_USER)
     try:
         yield queue
     finally:

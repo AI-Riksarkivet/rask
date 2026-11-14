@@ -303,5 +303,11 @@ def jetstream_streams(docs: tuple[dict, ...]) -> dict[str, str]:
 
 
 def captures(subject: str, declared: str) -> bool:
-    """NATS subject matching for the two forms the stream Job declares: a `>` tail or a literal."""
-    return subject.startswith(declared[:-1]) if declared.endswith(".>") else subject == declared
+    """Whether the NATS subject pattern ``declared`` matches ``subject``: `*` is one token, a final `>` one or more."""
+    wanted, tokens = declared.split("."), subject.split(".")
+    for index, token in enumerate(wanted):
+        if token == ">":
+            return len(tokens) > index
+        if index >= len(tokens) or token not in ("*", tokens[index]):
+            return False
+    return len(tokens) == len(wanted)

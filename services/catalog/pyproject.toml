@@ -22,9 +22,6 @@ dependencies = [
     # Declared for the `botocore.exceptions` imports (`ClientError` handling in the credentials door
     # and the warehouse registry). Every CLIENT — S3 and STS alike — is built by `lakehouse.storage`.
     "boto3>=1.35",
-    "dapr>=1.18.1",
-    "dapr-ext-fastapi>=1.18.1",
-    "opentelemetry-instrumentation-grpc>=0.65b0",
 ]
 
 [build-system]

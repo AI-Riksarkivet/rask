@@ -3,7 +3,7 @@
 The web process (:mod:`maintenance.service`) serves the write-event lane, and the worker process
 (:mod:`maintenance.worker`) runs the queue's tasks. Both read the store under this service's session and both carry a
 sidecar whose bus connections are watched (:func:`standing`); only the worker signs and emits, so only it holds the
-signing key, the sidecar client and the two emitters (:func:`collaborators`). Each is built once at its process's
+signing key, the connection its events are published on and the two emitters (:func:`collaborators`). Each is built once at its process's
 start and stopped at its end, and a start that fails part-way stops what it had started.
 """
 
@@ -13,17 +13,16 @@ from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING
 
-from dapr.aio.clients import DaprClient
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse.bus import Bus, bus_session
 from lakehouse.bus_watchdog import start_bus_watchdog
 from lakehouse.control_emit import ControlEmitter, ControlSign, make_control_emitter
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency
 from lakehouse.health import Dependency, HealthWatch, store_dependency
 from lakehouse.lance_metrics import instrument_lance_if_available
-from lakehouse.lifecycle import closed_quietly
 from lakehouse.lineage import SigningKey, attach_control_signature, parse_published_keys
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.store_session import require_env_pair, start_store_session
@@ -65,10 +64,14 @@ class Collaborators(BaseModel):
     signing: SigningKeyHolder[SigningKey] | None
     lineage: MaintenanceEmitter
     control: ControlEmitter
+    #: The connection the purge's control events go out on, or ``None`` for a worker that emits none. Nothing stages a
+    #: control event here, so one emitted while that connection is away would be lost.
+    announcing_on: Bus | None
 
     def ready(self) -> bool:
-        """Whether what a pass emits can be signed: a worker waiting for its key takes no task."""
-        return self.signing is None or self.signing.ready
+        """Whether what a pass emits can be signed, and what nothing stages can be sent: a worker waiting for its key,
+        or for the connection its control events go out on, takes no task."""
+        return (self.signing is None or self.signing.ready) and (self.announcing_on is None or self.announcing_on.connected)
 
 
 def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
@@ -108,15 +111,15 @@ async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Superviso
 
 @asynccontextmanager
 async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[Collaborators]:
-    """Build what the worker emits with (its signing key, the sidecar client and the two emitters), publish the key on
-    ``app.state`` for the readiness probe that reads it there, keep the key's loop on ``loops``, and stop it all on the
-    way out."""
+    """Build what the worker emits with (its signing key, its connection to the bus for events and the two emitters),
+    publish the key on ``app.state`` for the readiness probe that reads it there, keep the key's and the connection's
+    loops on ``loops``, and stop it all on the way out."""
     async with AsyncExitStack() as stack:
-        # ONE sidecar client for both emitters, lineage (data) and control (governance). Built when either is on; the
-        # sidecar is local, so construction is cheap and needs no broker reachability at start.
-        dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled) else None
-        if dapr_client is not None:
-            stack.push_async_callback(closed_quietly, dapr_client.close)
+        # ONE CONNECTION TO THE BUS for both emitters, lineage (data) and control (governance), as this service's own
+        # bus user ([[XC-199]], `lakehouse.bus`), beside the work queue's (ADR 0198). Held when either emits; a loop of
+        # `loops` connects it behind the start, so a pass runs, and stages what it emits, while the bus is away.
+        emits = settings.lineage_emit_enabled or settings.control_emit_enabled
+        bus = await stack.enter_async_context(bus_session(loops)) if emits else None
         # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), or None for a stack with no store or no identity. It is also the
         # author every event stamps, which the emitter checks at construction: a verifier refuses a signer that is not
         # its event's author.
@@ -124,8 +127,7 @@ async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supe
         attach_signing(app, signing)
         lineage = make_emitter(
             enabled=settings.lineage_emit_enabled,
-            dapr=dapr_client,
-            pubsub=settings.lineage_pubsub,
+            bus=bus,
             topic=settings.lineage_topic,
             job_namespace=settings.lineage_job_namespace,
             dataset_namespace=settings.lineage_dataset_namespace,
@@ -142,8 +144,7 @@ async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supe
         # when off, never a half-configured transport that looks like it publishes.
         control = make_control_emitter(
             enabled=settings.control_emit_enabled,
-            dapr=dapr_client,
-            pubsub=settings.control_pubsub,
+            bus=bus,
             timeout_seconds=settings.publish_timeout_seconds,
             service="maintenance",
             # SIGNED AS THIS SERVICE ([[XC-078]]) with the holder its lineage signs with; None for a stack with no store
@@ -157,4 +158,4 @@ async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supe
         if signing is not None:
             await signing.start(loops)
             stack.push_async_callback(signing.stop)
-        yield Collaborators(signing=signing, lineage=lineage, control=control)
+        yield Collaborators(signing=signing, lineage=lineage, control=control, announcing_on=bus if settings.control_emit_enabled else None)

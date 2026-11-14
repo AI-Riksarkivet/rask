@@ -9,7 +9,6 @@ operation string is shared by both sides).
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -18,13 +17,14 @@ import httpx
 import pytest
 
 from catalog.core.commit_ids import commit_run_id
+from catalog.core.config import Settings
 from catalog.core.lineage_emit import (
     CREATE_TABLE,
     DROP_TABLE,
     INSERT,
     MERGE_INSERT,
     PUBLISH_TABLE,
-    DaprEmitter,
+    BusEmitter,
     HttpLineageEmitter,
     InputPin,
     InputRef,
@@ -35,10 +35,12 @@ from catalog.core.lineage_emit import (
     make_emitter,
 )
 from catalog.core.run_context import RunContext
+from lakehouse.bus import BusUnavailableError
 from lakehouse.lineage_events import LANCE_FACET, DatasetUuids
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE
 from lakehouse.storage_options import StorageOptions
 from lineage.models import RunEvent
+from tests.bus_double import BusDouble
 from tests.unit.no_store_session import no_store_session
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -350,6 +352,24 @@ def test_http_emitter_swallows_failures() -> None:
     asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1))  # no raise
 
 
+@pytest.mark.parametrize(
+    ("transport", "missing"),
+    [
+        pytest.param("http", "LANCE_LINEAGE_URL", id="http-with-no-door-to-post-to"),
+        pytest.param("bus", "RASK_BUS_URL", id="the-bus-with-no-bus-named"),
+    ],
+)
+def test_an_emission_the_catalog_is_given_no_way_to_make_is_refused_at_boot(monkeypatch: pytest.MonkeyPatch, transport: str, missing: str) -> None:
+    """Emission switched on over a transport with nowhere to send would run as the no-op, every write unannounced and
+    nothing counted, so the settings are refused when they are read."""
+    monkeypatch.setenv("LANCE_LINEAGE_EMIT_ENABLED", "true")
+    monkeypatch.setenv("LANCE_LINEAGE_TRANSPORT", transport)
+    monkeypatch.delenv(missing, raising=False)
+
+    with pytest.raises(ValueError, match=missing):
+        Settings()
+
+
 def test_make_emitter_selects_implementation() -> None:
     client = cast(httpx.AsyncClient, object())
 
@@ -359,8 +379,7 @@ def test_make_emitter_selects_implementation() -> None:
             "transport": "http",
             "url": "http://lineage",
             "client": client,
-            "dapr": None,
-            "pubsub": "lineage-pubsub",
+            "bus": None,
             "topic": "lineage.events.v1",
             "job_namespace": "lance-catalog",
             "dataset_namespace": DEFAULT_DATASET_NAMESPACE,
@@ -371,39 +390,24 @@ def test_make_emitter_selects_implementation() -> None:
     assert isinstance(_make(), HttpLineageEmitter)
     assert isinstance(_make(enabled=False), NoopEmitter)  # disabled → no-op
     assert isinstance(_make(url=None), NoopEmitter)  # http transport unwired → no-op
-    assert isinstance(_make(transport="dapr", dapr=object()), DaprEmitter)  # durable Dapr transport
-    assert isinstance(_make(transport="dapr", dapr=None), NoopEmitter)  # dapr unwired → no-op
+    assert isinstance(_make(transport="bus", bus=BusDouble()), BusEmitter)  # the durable transport
+    assert isinstance(_make(transport="bus", bus=None), NoopEmitter)  # no connection to the bus → no-op
 
 
-class _FakeDapr:
-    """Just enough of the async DaprClient to capture a publish_event (or fail one)."""
-
-    def __init__(self, *, fail: bool = False) -> None:
-        self.published: list[dict[str, Any]] = []
-        self._fail = fail
-
-    async def publish_event(self, *, pubsub_name: str, topic_name: str, data: str, data_content_type: str) -> None:
-        if self._fail:
-            raise RuntimeError("sidecar down")
-        self.published.append({"pubsub": pubsub_name, "topic": topic_name, "event": json.loads(data)["data"]})
-
-
-def test_dapr_emitter_publishes_event_to_topic() -> None:
-    dapr = _FakeDapr()
-    emitter = DaprEmitter(
-        cast(Any, dapr),
-        "lineage-pubsub",
+def test_the_bus_emitter_publishes_the_event_on_its_topic() -> None:
+    bus = BusDouble()
+    emitter = BusEmitter(
+        bus,
         "lineage.events.v1",
         job_namespace="lance-catalog",
         dataset_namespace=DEFAULT_DATASET_NAMESPACE,
         timeout_seconds=5.0,
     )
     asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1))
-    assert len(dapr.published) == 1
-    pub = dapr.published[0]
-    assert pub["pubsub"] == "lineage-pubsub" and pub["topic"] == "lineage.events.v1"
-    assert _written(pub["event"])["name"] == "a$b"  # the spec-correct OpenLineage event is the envelope's data
-    assert _facets(pub["event"])["rask_author"]["sub"] == "alice"  # the verified catalog author
+    [sent] = bus.sent
+    assert sent.topic == "lineage.events.v1"
+    assert _written(sent.event)["name"] == "a$b"  # the spec-correct OpenLineage event is the envelope's data
+    assert _facets(sent.event)["rask_author"]["sub"] == "alice"  # the verified catalog author
 
 
 @pytest.mark.parametrize(
@@ -414,15 +418,14 @@ def test_dapr_emitter_publishes_event_to_topic() -> None:
         pytest.param("lineage-outbox", no_store_session, False, id="the-store-session-is-gone"),
     ],
 )
-def test_a_dapr_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
+def test_the_bus_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, outbox_at: str, storage_options: Callable[[], StorageOptions] | None, staged: bool
 ) -> None:
-    """A sidecar or broker outage at publish never breaks the catalog write, and the line it logs says whether the relay
+    """A bus outage at publish never breaks the catalog write, and the line it logs says whether the relay
     can still deliver the event ([[LH-573]])."""
     (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
-    emitter = DaprEmitter(
-        cast(Any, _FakeDapr(fail=True)),
-        "lineage-pubsub",
+    emitter = BusEmitter(
+        BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
         "lineage.events.v1",
         job_namespace="x",
         dataset_namespace=DEFAULT_DATASET_NAMESPACE,

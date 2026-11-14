@@ -340,7 +340,8 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   account's `*` revocation sits one second before the oldest JWT a declared user
   holds, taking back whatever earlier reseeds left (measured 2026-11-07, nats-server 2.14.2, nsc 2.15.0, nats.go 1.39.1:
   a client holding a revoked JWT is closed after two refused reconnects, the state `lakehouse.bus_watchdog` restarts a
-  sidecar from); a non-dev store waits for
+  sidecar from and a service's own connection opens again from, with the credential the store holds then,
+  `lakehouse.bus`); a non-dev store waits for
   `nats.auth.provisioned`. **The seed revokes every APP bus user the release stops declaring**: it lists the
   `nats-user-*` secrets in its own store and the one behind the Service, reads each undeclared user's key out of its
   stored JWT, adds it to the APP account's revocations (carried to the bus in `resolver_preload`), and deletes its
@@ -385,7 +386,9 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   projected for `openbao.identity.audience` into its own container. Its sidecar logs in to the same role through the one
   `lance-secrets` component (`<release>-{appID}`, Dapr 1.19 is the floor), only for its components' secrets, and its
   Configuration denies the sidecar's secrets API whole, so no secret is served through a sidecar. The table does not hang
-  on `dapr.enabled`: only the app token, the components' bus users and maintenance's work-queue user do. Each role's
+  on `dapr.enabled`: only the app token, each service's own bus user (`nats-user-<app>`, which its code reads for its
+  own connection wherever it publishes, and its sidecar's subscription component resolves) and maintenance's work-queue
+  user do. Each role's
   policy reads exactly that app's reads (`lance.storeIdentity` mounts the token). The roles and policies render in every
   mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform
   store's operator creates. A new secret a service reads is a row there, or the store's policy refuses its read.

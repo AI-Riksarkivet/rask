@@ -108,7 +108,7 @@ revocation.
 A DECLARED USER KEEPS ITS KEY PAIR AND ITS JWT while its grants match. The seed reads the user's stored JWT and seed
 from this pod's store, else from the store behind the Service; when the JWT was issued by the APP account and its
 publish and subscribe grants equal the table's, both are kept as they are, so a reseed changes no credential a running
-sidecar holds. A changed grant is reissued under the SAME key, and the JWT it replaces is revoked `--at` that JWT's issue
+client holds. A changed grant is reissued under the SAME key, and the JWT it replaces is revoked `--at` that JWT's issue
 time (`nsc revocations add-user -u <key> --at <iat>`), which refuses the old credential and admits the new one, issued at
 least a second later. A user with no stored JWT gets a fresh pair from `nk`.
 
@@ -125,7 +125,8 @@ that left the table with no stored secret left to name it) while every credentia
 the table holds now is newer and keeps admitting. Written only when the bound moves.
 
 Measured 2026-11-07 on nats-server 2.14.2, nsc 2.15.0 and nats.go 1.39.1: a client holding a revoked JWT is closed after
-two refused reconnects, which is the closed connection `lakehouse.bus_watchdog` restarts a sidecar from.
+two refused reconnects, which is the closed connection `lakehouse.bus_watchdog` restarts a sidecar from, and the one a
+service's own connection opens again from with the credential the store holds then (`lakehouse.bus`).
 
 ## `G=$DEV_CREDENTIALS`
 

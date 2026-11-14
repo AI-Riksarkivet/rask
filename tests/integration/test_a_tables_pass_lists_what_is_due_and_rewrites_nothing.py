@@ -11,8 +11,9 @@ The catalog's vend door is a double here, and only the named table is asked. A t
 uuid gets no pass, and its due record goes with it.
 
 The lineage event for the expiry names the table's uuid, from the claim the catalog took on its location, and its
-namespace's, from the namespace's own `__manifest` row (ADR 0173 §6, §10). The sidecar it publishes to is a recording
-stand-in, and so is the queue the pass schedules its next pass on, which has `TaskQueue`'s own signatures.
+namespace's, from the namespace's own `__manifest` row (ADR 0173 §6, §10). The worker's connection to the bus is a
+recording stand-in (`tests.bus_double`), and so is the queue the pass schedules its next pass on, which has
+`TaskQueue`'s own signatures.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any, ClassVar, cast
+from typing import cast
 
 import boto3
 import httpx
@@ -48,6 +49,7 @@ from maintenance.core.config import get_settings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.table_pass import TableTask, run_table_pass
 from maintenance.services.tasks import run_task
+from tests.bus_double import BusDouble, session_holding
 
 
 BUCKET = "lake"
@@ -115,20 +117,14 @@ def estate(moto_url: str) -> Iterator[StorageOptions]:
             s3.delete_object(Bucket=BUCKET, Key=entry["Key"])
 
 
-class _Sidecar:
-    """The Dapr client the service publishes its lineage through: it keeps every event, and closes at shutdown."""
-
-    published: ClassVar[list[dict[str, Any]]] = []
-
-    async def publish_event(self, *, data: str = "", **_kwargs: object) -> None:
-        _Sidecar.published.append(json.loads(data)["data"])
-
-    async def close(self) -> None:
-        return None
+@pytest.fixture
+def bus() -> BusDouble:
+    """The worker's connection to the bus, keeping every event a pass publishes."""
+    return BusDouble()
 
 
 @pytest.fixture
-def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch, bus: BusDouble) -> Iterator[TestClient]:
     for key, value in {
         "MAINTENANCE_LINEAGE_EMIT_ENABLED": "true",
         "MAINTENANCE_S3_ENDPOINT": moto_url,
@@ -144,8 +140,7 @@ def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Test
     get_settings.cache_clear()
     from maintenance import runtime
 
-    monkeypatch.setattr(runtime, "DaprClient", _Sidecar)
-    _Sidecar.published = []
+    monkeypatch.setattr(runtime, "bus_session", session_holding(bus))
 
     @asynccontextmanager
     async def _started(app: FastAPI) -> AsyncGenerator[None]:
@@ -191,7 +186,9 @@ class _RecordingQueue:
         return True
 
 
-def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and_holds_its_next(estate: StorageOptions, maintenance: TestClient) -> None:
+def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and_holds_its_next(
+    estate: StorageOptions, maintenance: TestClient, bus: BusDouble
+) -> None:
     before = lance.dataset(URI, storage_options=estate.in_clear())
     fragments = [fragment.fragment_id for fragment in before.get_fragments()]
     asked: list[str] = []
@@ -225,8 +222,8 @@ def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and
         "tasks": 1,
         "target_rows_per_fragment": 1000,
     }
-    named = [dataset_uuids(output) for event in _Sidecar.published for output in event["outputs"] if output["name"] == TABLE]
-    assert named == [DatasetUuids(table_uuid=LOCATION, namespace_uuid=NAMESPACE_UUID)], json.dumps(_Sidecar.published)
+    named = [dataset_uuids(output) for event in bus.events for output in event["outputs"] if output["name"] == TABLE]
+    assert named == [DatasetUuids(table_uuid=LOCATION, namespace_uuid=NAMESPACE_UUID)], json.dumps(bus.events)
     assert [held for held, _ in queue.held] == [task], "the pass did not hold the table's next one"
 
 

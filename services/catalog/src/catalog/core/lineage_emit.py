@@ -12,11 +12,10 @@ fail a catalog write. Two transports sit behind the same :class:`LineageEmitter`
 
 * :class:`HttpLineageEmitter` — direct HTTP POST (the OpenLineage default transport; simple, but the
   event is lost if the lineage service is down when we POST). Good for dev / external producers.
-* :class:`DaprEmitter` — publish to the **Dapr** ``pubsub.jetstream`` component (the production
-  transport, ``LANCE_LINEAGE_TRANSPORT=dapr``). We publish to our local Dapr sidecar; the sidecar
-  persists to NATS JetStream and owns retry/backoff/trace-propagation as **component config** (no broker
-  client in app code) — the decoupled microservice path. A delivery the subscriber can't process after its
-  retry budget dead-letter-parks on a ``dlq.*`` topic (Dapr-native DLQ, default-on via the
+* :class:`BusEmitter` — publish on the bus, NATS JetStream (the production transport,
+  ``LANCE_LINEAGE_TRANSPORT=bus``), over this process's own connection (``lakehouse.bus``): one bounded
+  attempt whose acknowledgement means the stream holds the event. A delivery the subscriber can't process after
+  its retry budget dead-letter-parks on a ``dlq.*`` topic (the subscriber's sidecar parks it, default-on via the
   ``dapr.resiliency.enabled`` chart resiliency; the subscriber's ``/dlq-event`` route ERROR-logs + acks —
   park-and-alert, not replay — docs/RESILIENCE.md gap #2, fixed 2026-07-12). The lineage
   service subscribes via its own sidecar. With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
@@ -39,7 +38,6 @@ from typing import Any, NamedTuple, Protocol, TypedDict, Unpack, runtime_checkab
 
 import httpx
 import lance
-from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 from pydantic import BaseModel
 
@@ -47,6 +45,7 @@ from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, 
 from catalog.core.identifiers import warehouse_of
 from catalog.core.run_context import RunContext
 from lakehouse import outbox
+from lakehouse.bus import Bus
 from lakehouse.cloud_events import lineage_envelope
 from lakehouse.governed import fga
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
@@ -83,7 +82,7 @@ _emit_failed = _meter.create_counter(
     "catalog.lineage_emit.failed",
     unit="{event}",
     description="Best-effort catalog lineage emits that failed terminally, by transport. On `http` the "
-    "event is simply gone; on `dapr` the publish goes through the staged "
+    "event is simply gone; on `bus` the publish goes through the staged "
     "outbox, so a failure AFTER staging leaves a durable copy the relay can still drain and a failure "
     "at staging does not. The counter cannot tell those apart, which is why any increase is worth a look.",
 )
@@ -800,17 +799,14 @@ class HttpLineageEmitter(_BaseLineageEmitter):
             log.warning("lineage_emit_failed", extra={"operation": operation, "table": table_id, "error": str(exc)})
 
 
-class DaprEmitter(_BaseLineageEmitter):
-    """Publishes OpenLineage events to a **Dapr** ``pubsub.jetstream`` component.
+class BusEmitter(_BaseLineageEmitter):
+    """Publishes OpenLineage events on the bus, NATS JetStream, over this process's own connection.
 
-    We publish to the local Dapr **sidecar** (``DaprClient.publish_event``); the sidecar persists to NATS
-    JetStream and owns retry/backoff (retry exhaustion dead-letter-parks on the subscriber's ``dlq.*``
-    topic — Dapr-native DLQ, default-on via the ``dapr.resiliency.enabled`` chart resiliency, park-and-alert
-    not replay; docs/RESILIENCE.md gap #2, fixed 2026-07-12)
-    as *component config*, so the app holds no broker client (the decoupled microservice path). Each event rides
+    One bounded publish per event (`lakehouse.bus.publish_event`): the stream's acknowledgement is the delivery, and
+    an event it did not acknowledge stays in the outbox for lineage's relay. Each event rides
     the envelope derived from it (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context. The topic
-    is versioned (``lineage.events.v1``). ``authorization`` is unused: the topic authenticates the sidecar that
-    delivered an event and not the producer that wrote it, so the ``author`` stamped inside is a claim until the
+    is versioned (``lineage.events.v1``). ``authorization`` is unused: the bus says which of its users published
+    an event and not which person the producer wrote it for, so the ``author`` stamped inside is a claim until the
     event is signed. A catalog holding a signing key signs each authored event as itself (:meth:`_signed`), and
     where signing is enforced the subscriber admits an event only when that signature verifies against the keys
     the catalog publishes (the anti-forgery ``enforce_author`` guard is only for the open HTTP endpoint).
@@ -818,8 +814,7 @@ class DaprEmitter(_BaseLineageEmitter):
 
     def __init__(
         self,
-        client: DaprClient,
-        pubsub: str,
+        bus: Bus,
         topic: str,
         *,
         job_namespace: str,
@@ -829,8 +824,7 @@ class DaprEmitter(_BaseLineageEmitter):
         storage_options: Callable[[], StorageOptions] | None = None,
         signing: SigningKeyHolder[SigningKey] | None = None,
     ) -> None:
-        self._client = client
-        self._pubsub = pubsub
+        self._bus = bus
         self._topic = topic
         self._job_namespace = job_namespace
         self._dataset_namespace = dataset_namespace
@@ -882,21 +876,20 @@ class DaprEmitter(_BaseLineageEmitter):
             #
             # Degrades to exactly the previous plain publish when `outbox_uri` is empty, which is the
             # default — so this is inert until a deployment sets LANCE_LINEAGE_OUTBOX_URI. Bounded by
-            # the same timeout, so a hung sidecar still cannot pin the request path.
+            # the same timeout, so a bus that does not answer still cannot pin the request path.
             await outbox.publish_with_outbox(
-                self._client,
+                self._bus,
                 lineage_envelope(event),
                 outbox_uri=self._outbox_uri,
                 storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
-                pubsub_name=self._pubsub,
-                topic_name=self._topic,
+                topic=self._topic,
                 timeout_seconds=self._timeout_seconds,
             )
         except (SigningKeyUnavailableError, CanonError) as exc:
-            _emit_failed.add(1, {"lance.catalog.transport": "dapr"})
+            _emit_failed.add(1, {"lance.catalog.transport": "bus"})
             log.warning("lineage_emit_withheld_unsigned", extra={"operation": operation, "table": table_id, "error": str(exc)})
         except Exception as exc:
-            _emit_failed.add(1, {"lance.catalog.transport": "dapr"})
+            _emit_failed.add(1, {"lance.catalog.transport": "bus"})
             log.warning("lineage_publish_failed", extra={"operation": operation, "table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)})
 
 
@@ -906,8 +899,7 @@ def make_emitter(
     transport: str,
     url: str | None,
     client: httpx.AsyncClient | None,
-    dapr: DaprClient | None,
-    pubsub: str,
+    bus: Bus | None,
     topic: str,
     job_namespace: str,
     dataset_namespace: str,
@@ -921,7 +913,7 @@ def make_emitter(
     unannounced: Callable[[str, str], bool] | None = None,
     commit_ids: CommitIds | None = None,
 ) -> LineageEmitter:
-    """Select the lineage transport: ``dapr`` (durable pub/sub via the sidecar) or ``http`` (direct POST);
+    """Select the lineage transport: ``bus`` (the durable stream, over this process's own connection) or ``http`` (direct POST);
     no-op when disabled or unwired (a half-configured transport must never silently become the other).
 
     ``unannounced`` answers, for a write's parent namespace and operation, whether it goes unannounced (the provenance
@@ -929,17 +921,16 @@ def make_emitter(
     ``dataset_namespace`` is the catalog's endpoint, every dataset's namespace ([[LH-553]])."""
     if not enabled:
         return NoopEmitter()
-    if transport == "dapr" and dapr is not None:
-        emitter: _BaseLineageEmitter = DaprEmitter(
-            dapr,
-            pubsub,
+    if transport == "bus" and bus is not None:
+        emitter: _BaseLineageEmitter = BusEmitter(
+            bus,
             topic,
             job_namespace=job_namespace,
             dataset_namespace=dataset_namespace,
             timeout_seconds=timeout_seconds,
             outbox_uri=outbox_uri,
             storage_options=storage_options,
-            # ONLY THE DAPR TRANSPORT SIGNS, and that is the whole surface that needs it: the HTTP
+            # ONLY THE BUS TRANSPORT SIGNS, and that is the whole surface that needs it: the HTTP
             # emitter posts to lineage's own door, which runs `enforce_author` against a real bearer —
             # a principal the bus door does not have and the signature exists to supply.
             signing=signing,
@@ -984,7 +975,7 @@ async def emit_write_event(
 ) -> None:
     """Publish a best-effort lineage event for a catalog mutation, awaited INLINE in the handler.
 
-    Awaited (not queued via FastAPI ``BackgroundTasks``) so the event reaches the durable Dapr/JetStream
+    Awaited (not queued via FastAPI ``BackgroundTasks``) so the event reaches the durable JetStream
     transport BEFORE the response returns — ``BackgroundTasks`` have no retry and die with the worker
     (fastapi anti-pattern). ``emit_write`` is best-effort (it swallows a publish failure), so awaiting it
     never fails the catalog write; JetStream message-durability + the feed's insert-only merge on its key

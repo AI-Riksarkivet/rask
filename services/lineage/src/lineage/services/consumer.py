@@ -1,7 +1,7 @@
 """Dapr pub/sub subscriber — the durable ingest path for catalog→lineage events (#25).
 
-The catalog publishes OpenLineage events to the Dapr ``pubsub.jetstream`` component; the Dapr sidecar
-persists them to NATS JetStream and delivers each to this service over HTTP (a CloudEvent envelope). The
+The catalog publishes OpenLineage events to NATS JetStream, which keeps them, and this service's sidecar delivers
+each to it over HTTP (a CloudEvent envelope). The
 handler records it in the commit feed and the edge list and returns a Dapr status: ``SUCCESS`` (ack), ``RETRY`` (transient — the
 sidecar redelivers per the component's ``backOff``/``maxDeliver``, then dead-letter-parks (see below); the
 stream retains it and this consumer's ``deliverPolicy: all`` re-sees it on restart), or ``DROP`` (a

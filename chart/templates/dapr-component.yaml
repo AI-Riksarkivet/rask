@@ -2,25 +2,6 @@
 {{- fail "Dapr is a prerequisite: dapr.enabled is on and this cluster does not serve dapr.io/v1alpha1. Install the Dapr control plane on its own release before rask (docs/architecture/deployment.md, Prerequisites; development: deploy/fixtures/dapr); rask never installs it. A cluster-less render names the API it targets: --api-versions dapr.io/v1alpha1" }}
 {{- end }}
 {{- if .Values.dapr.enabled }}
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.pubsub.name }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
-    - { name: name, value: "lance-dapr" }
-    {{- with include "lance.natsCreds" (list . .Values.services.catalog.appId) }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" . }}
-scopes:
-  - {{ .Values.services.catalog.appId }}
-
-{{- if and .Values.maintenance.enabled .Values.maintenance.lineageEmit (not .Values.maintenance.arrivalEnabled) }}
-{{- include "lance.publishPubsub" (list . (include "lance.subPubsub" (list . .Values.maintenance.appId)) .Values.maintenance.appId) }}
-{{- end }}
 {{- if .Values.catalog.controlEmit }}
 ---
 apiVersion: dapr.io/v1alpha1
@@ -42,10 +23,6 @@ spec:
 {{- include "lance.natsAuth" . }}
 scopes:
   - {{ .Values.services.catalog.appId }}
-
-{{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}
-{{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.appId) .Values.maintenance.appId) }}
-{{- end }}
 
 {{- end }}
 

@@ -13,7 +13,7 @@ What happens when a service goes down, can we get corrupted state, and how do we
 
 ## The core guarantee: at-least-once + idempotent → no corruption, no loss (within bounds)
 
-The event-driven path is `catalog --Dapr publish--> JetStream (LINEAGE / CATALOG_CONTROL streams) --> subscriber`.
+The event-driven path is `catalog --publish on its own connection--> JetStream (LINEAGE / CATALOG_CONTROL streams) --> sidecar --> subscriber`.
 Two properties make it safe:
 
 1. **Durable buffer.** Both streams use **Limits retention** (messages persist after ack, up to `max-age`
@@ -35,7 +35,7 @@ whole run, outage and recovery included, on the e2e-stack kind lane (run 3904982
 | Object store (`rask-rustfs`)¹ | scaled to zero | A write through the catalog's insert door is refused 503 code 17, or gets no answer within the bound the catalog's own store timeouts set (2 × 6 listings × (retries + 1) × max(connect, request): 60 s at the defaults). It never lands while the store is gone. | 24 s |
 | OpenFGA | scaled to zero | A governed write answers 503 code 17 at its authorization check: never an allow, and never a deny that would read as a missing grant. | 20 s |
 | Lineage | scaled to zero | Commits go on landing; its durable consumer resumes where it stopped and records each announcement once. | 39 s |
-| The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. The outage closes every sidecar's connection for good (below), and each service restarts its own sidecar once the bus greets a connection again. | 320 s, 150 s of it the outage |
+| The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. The outage closes every sidecar's connection for good (below), and each service restarts its own sidecar once the bus greets a connection again; each service's own publishing connection is opened again by its own loop (`lakehouse.bus`). | 320 s, 150 s of it the outage |
 | Dex | its Service cut from its pod | A door holding the issuer's key set (300 s) accepts an existing token. A door that must fetch the key set answers 503 code 17, never 401, and accepts the token again once Dex is back, with no restart. | 69 s |
 | The secret store (`rask-openbao`) | sealed in place | Within one re-read of its key (300 s) the catalog drops its signing key, then refuses every write it would announce with 503 code 17 before committing it. The store's contents survive the seal, so nothing is minted again. | 290 s, most of it the re-read |
 | The catalog | its uvicorn SIGKILLed, four writers committing through `version/create` | Every acknowledged commit lands once, a commit whose answer the kill lost lands at most once, and no run lands twice: Lance's put-if-not-exists of each `_versions/` manifest keeps one history. | 168 s |
@@ -45,7 +45,7 @@ again on the estate rebuilt on RustFS from empty the same day (helm rev 1, "XC-1
 
 **A bus outage longer than about two minutes stops every sidecar's pub/sub until the sidecar restarts.** Dapr 1.18.1's
 `pubsub.jetstream` component connects with none of nats.go's reconnect options, so each NATS client gives up after its
-default 60 attempts 2 s apart and closes for good. Its subscriptions are gone, every publish answers
+default 60 attempts 2 s apart and closes for good. Its subscriptions are gone, a publish through the sidecar answers
 `nats: connection closed`, and the pod stays Ready, because daprd's liveness is a TCP check and its readiness reads no
 component. Measured on the kind lane before the fix: with NATS held down 150 s, lineage's and notifications' durables
 acknowledged nothing for the sixteen minutes that followed and both outboxes kept their backlog. The feed and the edge
@@ -55,8 +55,13 @@ The fix is upstream (components-contrib#4563; #4564, `MaxReconnects(-1)`, unmerg
 catalog, lineage and maintenance each run `lakehouse.bus_watchdog` over their own sidecar. The watchdog probes every
 `pubsub.jetstream` component every 30 s on `probe.<app-id>`, a subject no stream captures. When a probe answers that the
 connection is closed, the watchdog waits until the bus greets a new connection, then asks the sidecar to shut down, and
-the kubelet restarts it. A shorter outage needs none of this: a client still reconnecting buffers its publishes and
-sends them once the bus is back.
+the kubelet restarts it. A shorter outage needs none of this: the sidecar's client reconnects by itself.
+
+A service's own publishes ride none of it. Each publishes on a connection of its own (`lakehouse.bus`): while that
+connection is away a publish fails at once, so its event stays staged in the outbox for its relay, and the connection
+is made again by nats-py through a short cut and, past its attempts, by the service's own loop, with the credential the
+secret store holds then. Measured against a three-node bus on the nats-auth lane
+(`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`).
 
 ## Chaos experiments (all recovered with zero loss)
 
@@ -86,9 +91,9 @@ semantics, so it must not undercut the slowest handler. Either way the window co
 
 1. **The catalog outbox gap (the #1 weakness).** The catalog emits lineage **inline-awaited + best-effort**
    *after* the Lance write commits to S3 (`services/catalog/src/catalog/core/lineage_emit.py`) — awaited (not a
-   BackgroundTasks fire-and-forget) so the event reaches the durable Dapr/JetStream transport before the
+   BackgroundTasks fire-and-forget) so the event reaches JetStream, over the catalog's own connection, before the
    response returns, but its errors are swallowed so a lineage outage never fails the write. If the catalog
-   crashes (or its sidecar is down) **between the S3 write and the publish**, the data exists on storage but
+   crashes (or the bus cannot be reached) **between the S3 write and the publish**, the data exists on storage but
    **the lineage event is lost** — the feed under-reports that write. No corruption, but a provenance hole.
    *Mitigation (shipped):* the **object-store outbox** (`lakehouse.outbox`, opt-in via the
    catalog's `LANCE_LINEAGE_OUTBOX_URI` and the relay's `LINEAGE_OUTBOX_URI`) narrows the window to commit→stage
@@ -122,7 +127,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    `/dlq-event` — measured at **481.1s** end to end on helm revision 156, against the 480s the policy
    specifies. **A policy change reaches a sidecar only on
    restart** (`HotReload: false`), so rolling the chart is not enough: every subscriber app-id was
-   rollout-restarted before this was re-measured. The once-planned **durable PULL consumer** is RETIRED (2026-07-12): PULL means consuming NATS directly (nats-py), i.e. leaving Dapr pub/sub — which contradicts the pinned Dapr-first rule — and its target gaps (cursor loss, silent exhaustion) are since covered by durable push cursors + sidecar Resiliency retries + this DLQ. Revisit only if a live delivery-semantics gap appears that Dapr's model cannot express.
+   rollout-restarted before this was re-measured.
 
 3. **Durable cursors; lineage full-stream-replay by design.** The `new` subscribers pair `deliverPolicy: new`
    with a `durableName` (`chart/templates/dapr-component.yaml`): the consumer cursor survives pod death and
@@ -150,7 +155,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
      authz checks fail (lineage's ingest gate answers `RETRY`, so events stay buffered). Lineage keeps no database: its tables live in the object store behind the catalog.
    - **The catalog** — lineage's feed and edge list are read and written through its doors. Down → lineage
      ingest answers `RETRY` (buffered) and lineage's `/readyz` reports the catalog unavailable.
-   - **NATS / JetStream** — three nodes, `streamReplicas=3`, each on its own volume; the Dapr pub/sub backbone. All
+   - **NATS / JetStream** — three nodes, `streamReplicas=3`, each on its own volume; the one bus every event rides. All
      down → no event flows: the catalog's writes still land and stage their announcements in its outboxes, which the
      relays deliver once the bus is back.
    - **The object store** (the RustFS fixture in development) — the S3 data plane. Down → no Lance read/write.
@@ -199,8 +204,8 @@ chart and live-verified on kind.
 - **Graceful rollout drain.** Every app Deployment has a `preStop` sleep + `terminationGracePeriodSeconds`
   (maintenance gets a longer budget, so a running table pass finishes inside `maintenance.queue.drainSeconds`) so endpoint removal propagates before SIGTERM —
   in-flight requests drain instead of connection-refusing (`lance.preStop`, `lifecycle.*`).
-- **Bounded Dapr publishes.** Every `publish_event` is wrapped in `asyncio.timeout`
-  (`lakehouse/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
+- **Bounded publishes.** Every `lakehouse.bus.publish_event` runs under its caller's `timeout_seconds`, and a publish
+  with no connection fails at once, so a bus that does not answer cannot hold a write handler.
 - **Liveness + readiness probes on every workload.** App pods get an HTTP `readinessProbe` (`/readyz`,
   dependency-aware) **and** `livenessProbe` (`/livez`, process-up only — never restarts on a slow backend);
   a workload with no HTTP health route gets a `tcpSocket` probe (`lance.appProbes` / `lance.tcpProbes`).

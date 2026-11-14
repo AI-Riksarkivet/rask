@@ -5,24 +5,17 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `apiVersion: dapr.io/v1alpha1`
 
-Dapr pub/sub components — the catalog→lineage topic and the control broadcast on NATS JetStream. The
-sidecar owns retry/backoff here (config, not app code); subscriptions are programmatic (each app
-serves GET /dapr/subscribe via dapr-ext-fastapi), so no declarative Subscription CRDs.
-
-PUBLISH-only component: the catalog publishes through it. Consumer
-metadata (queue group / deliver policy) lives on the per-SUBSCRIBER components below, never here.
-Every pub/sub component is one app's NATS connection, with that app's credential (values.yaml `nats.auth`).
-
-## `{{- if and .Values.maintenance.enabled .Values.maintenance.lineageEmit (not .Values.maintenance.arrivalEnabled) }}`
-
-Maintenance publishes its lineage through its own component; one is rendered for it here when the write-event lane does not give it one.
-
-## `apiVersion: dapr.io/v1alpha1`
+Dapr pub/sub components: the subscriptions on NATS JetStream, and nothing else. EVERY COMPONENT IS ONE APP'S
+SUBSCRIPTION, AND NONE PUBLISHES: each service publishes its events on its own connection to the bus (`lakehouse.bus`,
+`lance.busEnv`), so a component exists only where an app's sidecar subscribes, scoped to that app and carrying that
+app's credential (values.yaml `nats.auth`). The sidecar owns delivery retry and backoff here (config, not app code);
+subscriptions are programmatic (each app serves GET /dapr/subscribe via dapr-ext-fastapi), so no declarative
+Subscription CRDs.
 
 BROADCAST component for the catalog's OWN control-plane change-events (grants/warehouses/policies/tables).
-DEDICATED (not the shared lineage-pubsub) and with NO queueGroupName → jetstream sets no DeliverGroup, so
+DEDICATED and with NO queueGroupName, so jetstream sets no DeliverGroup and
 EVERY catalog replica receives EVERY event and appends it to its per-replica ring buffer (GET /management/v1/events).
-The catalog is BOTH publisher (core/control_emit.py) and subscriber (api/dapr.py) on this one component.
+The catalog subscribes through it (api/dapr.py); it publishes the events on its own connection (`lakehouse.control_emit`).
 deliverPolicy=new: a booting/redeployed replica must NOT replay 168h of past governance events into a fresh in-memory
 buffer — the buffer is a live-refresh hint window, not a log.
 
@@ -42,8 +35,8 @@ The durables live on a mirror of CATALOG_CONTROL whose consumer limit reaps a de
 `catalog.controlConsumerInactiveSeconds`. Dapr gives a consumer no inactivity threshold, and a stream's limit applies to
 every consumer on it (nats-server v2.14.2 `consumer.go:663-667`), so on CATALOG_CONTROL it would reap every other
 consumer of the control topic as well. Naming the stream also makes Dapr skip its subject lookup, which would answer CATALOG_CONTROL (a mirror
-captures no subject). The catalog still publishes through this component onto CATALOG_CONTROL, since a publish names
-only its subject.
+captures no subject). The catalog's own publish names only the subject, so it lands on CATALOG_CONTROL, which the
+mirror copies.
 
 ## `{{- include "lance.brokerWindows" . | nindent 4 }}`
 
@@ -52,13 +45,8 @@ delivery its retries cannot get taken on `catalog.controlDlqTopic` (`LANCE_CONTR
 this component, so while the sidecar spends its 480 s schedule the broker must hold the delivery: unset, components-contrib
 v1.19.0 sets no `AckWait` or `MaxDeliver` on the consumer (`pubsub/jetstream/jetstream.go:174-181`), nats-server's 30 s
 ack window redelivers underneath the retry, and its unlimited `MaxDeliver` redelivers a poison event without end. The park
-is published through this component like the catalog's own events; a publish names only its subject, so it lands on the
+is the one publish the sidecar makes through this component; a publish names only its subject, so it lands on the
 DLQ stream (`dlq.>`), and `CatalogControlLaneDeadLettering` pages on the sidecar's count of it.
-
-## `{{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}`
-
-The control topic's other publisher, on its own component and so as its own NATS user: maintenance's #79 purge
-announcements. A publisher a component does not scope is refused by its sidecar, silently.
 
 ## `{{- $subscribers := list (dict "appId" .Values.services.lineage.appId "deliverPolicy" "all") }}`
 
@@ -143,7 +131,7 @@ this component only renders when resiliency is on, which is also the only time L
 exists.
 
 Dapr secret store fronting the dev OpenBao or the platform's Vault or OpenBao (Vault-API compatible), for the secrets a
-sidecar's own components resolve by `secretKeyRef` (each pub/sub component's bus user). No app reads a secret through
+sidecar's own components resolve by `secretKeyRef` (each subscription component's bus user). No app reads a secret through
 it ([[XC-199]]): each service logs in to the store itself (`lakehouse.governed.secrets`), and every per-app Configuration
 denies the sidecar's secrets API whole (`lance.daprAppSpec`). The chart renders no store ([[XC-149]]): it names the dev
 fixture's (`openbao.enabled`) or the platform's (`openbao.externalAddr`).
@@ -213,7 +201,7 @@ The catalog control relay cron binding (from its own rationale below).
 
 THE CONTROL LANE'S RELAY (the other half of the #4 outbox, for `catalog.control.v1`).
 The catalog STAGES every control event to `LANCE_CONTROL_OUTBOX_URI` before publishing and drops
-it only on ack, so a NATS blip leaves the event durable. Until this Component existed nothing read
+it only once the stream acknowledged it, so a NATS blip leaves the event durable. Until this Component existed nothing read
 that prefix: the estate's only outbox drain is lineage's reconcile cron, which parses each staged
 object as an OpenLineage RunEvent and DELETES what it cannot — so a control event handed to it is
 destroyed as poison rather than relayed. (The catalog now refuses to boot with the two prefixes

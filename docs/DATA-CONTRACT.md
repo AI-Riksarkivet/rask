@@ -63,9 +63,9 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
   are named only in the writer's own OpenLineage run. ADR 0156 makes the run and inputs part of the write itself,
   carried in the spec `Context` and stamped by the catalog (LH-225, #180), and a table's tier the `rask.tier`
   namespace property judged at every write door (LH-470, #595).
-- **The claim-check rule is convention + spot-enforcement, not a universal guard.** There is no payload-size guard
-  at EVERY publish site yet, and no cap on facet metadata bloat for thousand-column tables. NATS's ~1 MB message limit
-  is the physical backstop.
+- **The claim-check rule is a guard on size, not on shape.** Every publish goes through `lakehouse.bus.publish_event`,
+  which refuses an envelope past 900 KiB and logs one past 64 KiB; nothing below that caps facet metadata bloat for
+  thousand-column tables. NATS's ~1 MB message limit is the physical backstop.
 - **The quality gate is a floor**: row count, key non-null, blob resolution, declared columns. Real deployments add
   domain assertions in their own pipelines.
 
@@ -84,9 +84,9 @@ makes the data contract *checkable*:
   `maintenance.queue.storeEventsMaxBytes` (128 MiB), dropping its oldest (`chart/templates/nats-stream-job.yaml`). Its ~1 MB
   message bound is *why* the claim-check rule exists: the bus physically cannot carry data, so
   events must be pointers — a contract enforced by constraint.
-- **Dapr** supplies the pub/sub abstraction, the SUCCESS/RETRY/DROP ack semantics, the
+- **Dapr** supplies the subscription side: delivery to each app's route, the SUCCESS/RETRY/DROP ack semantics, the
   app-api-token on subscription routes (a forged event cannot reach a subscriber), and the 30s ack
-  window that shapes every handler.
+  window that shapes every handler. Each service publishes on a connection of its own (`lakehouse.bus`).
 - The **data** contract itself is enforced by Lance (manifest schema + CAS commit) and by the
   catalog at the gates above. The bus's job is narrower: an event arrives at least once, and because every
   handler is idempotent (deterministic run ids, feed dedup), at-least-once is as good as exactly-once. The bus is
@@ -122,9 +122,9 @@ publish site is caught by review alone.
 
 ### 7.1 Envelope: CloudEvents, built by the lakehouse
 
-Every publish goes through the one bounded wrapper `packages/lakehouse/src/lakehouse/dapr_publish.py::publish_event`,
-which takes the event in its envelope and sends it in structured mode (`application/cloudevents+json`), so the
-sidecar passes it through as it is. The envelope is derived from the event alone
+Every publish goes through the one bounded seam `packages/lakehouse/src/lakehouse/bus.py::publish_event`, which
+takes the event in its envelope and sends it on the process's own connection in structured mode
+(`application/cloudevents+json`), under the envelope's `id` as the message's `Nats-Msg-Id`. The envelope is derived from the event alone
 (`packages/lakehouse/src/lakehouse/cloud_events.py`; its attributes are `docs/COMMIT-EVENTS.md` § The envelope on
 the bus), so a relay's copy of an event carries the `id` its first publish carried, the message id a stream
 deduplicates on. Consumers
@@ -136,7 +136,7 @@ untrusted `Any` and guard with `isinstance` before touching `data`.
 
 | Topic | Producer → consumer | Schema (the pydantic model) | Where the name lives |
 |---|---|---|---|
-| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage and, under `maintenance.arrivalEnabled`, maintenance's arrival lane, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `MAINTENANCE_LINEAGE_TOPIC` in each service's `core/config.py` |
+| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage and, under `maintenance.arrivalEnabled`, maintenance's arrival lane, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_EVENTS_TOPIC` / `LANCE_LINEAGE_TOPIC` / `MAINTENANCE_LINEAGE_TOPIC` in each service's `core/config.py` |
 | `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse/src/lakehouse/control_emit.py`, each signed as `control_signer_role` names → every catalog replica (broadcast, no `queueGroupName`), each verifying the signature | `lakehouse.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/lakehouse/src/lakehouse/control_events.py`, imported by every producer and by the catalog subscriber |
 | `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
 

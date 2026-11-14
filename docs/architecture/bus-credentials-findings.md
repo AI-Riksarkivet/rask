@@ -172,8 +172,10 @@ choose (b) without a rask change (§ 5).
   ```
 
   Each row keyed by the ServiceAccount the projected token names (`lance.saName`), so the identity is the pod's, never a
-  name it chose. The rows give each service its own inbox prefix (nats-py `inbox_prefix`): today every row but
-  `maintenance-worker` subscribes `_INBOX.>` (`chart/values.yaml:100-139`), which lets any service read another's replies.
+  name it chose. The rows give each service its own inbox prefix (nats-py `inbox_prefix`): today each service's own
+  connection and the worker's reply under `_INBOX_<user>`, and `_INBOX.>` stays granted to `catalog`, `lineage` and
+  `maintenance` for their sidecars' subscription components (`chart/values.yaml`, `nats.auth.users`), which lets one of
+  the three read what another's sidecar is answered.
 - What the chart refuses on a real deployment (the platform's store, `openbao.enabled` false): a `nats.url` that is not
   `tls://`; no CA; an empty `nats.auth.audience`; a table row with `>` or `$JS.API.>` in `publish`, or an empty list.
 - **The dev stand-in in `deploy/fixtures/nats`**: operator mode on (`auth.server`), the `AUTH` account, the sentinel as
@@ -199,9 +201,10 @@ One `lakehouse` seam owns the connection. It is mechanism-agnostic: the same cod
   a message published after the rebuild reached the new subscription at once (§ 6.2). Messages held unacknowledged are
   redelivered after the durable's `ack_wait`, counted in `num_delivered` (§ 6.2). So a handler acks only through the client
   that is current, treats a failed ack as "will be redelivered", and stays idempotent per message id.
-- **Publishing.** Every publish carries `Nats-Msg-Id` (#787 item 1) and is retried on timeout; a duplicate PubAck counts as
-  delivered. Measured: publishes that timed out while the bus refused the client were retried with the same id, and the
-  stream held each message once (§ 6.4).
+- **Publishing.** Every publish carries `Nats-Msg-Id` (#787 item 1); one that times out stays staged, and its relay
+  sends it again under the same id. A duplicate PubAck counts as delivered once the stored message is read back and
+  carries the same event (`lakehouse.bus`). Measured: publishes that timed out while the bus refused the client were
+  retried with the same id, and the stream held each message once (§ 6.4).
 
 ## 6. Measurements, 2026-11-10
 

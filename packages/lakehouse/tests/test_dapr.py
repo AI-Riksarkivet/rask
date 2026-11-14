@@ -1,12 +1,4 @@
-"""The lakehouse's Dapr wiring — the shared door guard on sidecar-delivered routes (no sidecar needed).
-
-The CLIENT FACTORY that used to be tested here is gone. It built
-`DaprClient("http://127.0.0.1:3500")` — the sidecar's HTTP port handed to a gRPC client — and the
-test below it asserted that wrong constant as though it were the contract, which is how a defect
-acquires a green gate. Two re-verifications found no caller at all: every service that publishes
-builds its own client. The settings survive because other code reads the same environment variables;
-only the factory and its dependency are gone.
-"""
+"""The lakehouse's Dapr wiring: the shared door guard on sidecar-delivered routes (no sidecar needed)."""
 
 import pytest
 
