@@ -26,7 +26,8 @@ from tests.unit.chart_render import DEFAULT_ARGS, bus_jobs, render
 #: The stand-in CLI: it answers only a call presenting the token in `token` as the connection `admin`, as the signer
 #: admits the stream Job; `stream info` finds the streams named in `exists/`, `stream edit` records the config it is handed and
 #: refuses it when `refuse` holds a reason, a stream's info request answers the config it was last added or edited with, a
-#: consumer read finds none, and a consumer add is accepted.
+#: consumer the bus holds is the one `held/<stream>-<consumer>.json` describes (none otherwise), and a consumer add or edit
+#: records the config it is handed.
 _NATS = r"""#!/bin/sh
 server=$2
 [ "$1 $3 $4" = "--server --connection-name admin" ] && shift 4 || { echo "nats: error: Authorization Violation" >&2; exit 1; }
@@ -40,8 +41,12 @@ case "$1 $2" in
     if [ -s "$FAKE_NATS/refuse" ]; then echo "nats: error: could not edit Stream $3: $(cat "$FAKE_NATS/refuse")" >&2; exit 1; fi
     echo "Stream $3 was updated"; exit 0 ;;
   "stream add") cp "$4" "$FAKE_NATS/added-$(basename "$4")"; exit 0 ;;
-  "consumer ls"|"consumer rm"|"consumer edit"|"consumer add") exit 0 ;;
-  "consumer info") echo "nats: error: consumer not found" >&2; exit 1 ;;
+  "consumer ls"|"consumer rm") exit 0 ;;
+  "consumer edit"|"consumer add") cp "$6" "$FAKE_NATS/declared-$3-$4.json"; exit 0 ;;
+  "consumer info") [ -f "$FAKE_NATS/held/$3-$4.json" ] && exit 0; echo "nats: error: consumer not found" >&2; exit 1 ;;
+  'req $JS.API.CONSUMER.INFO.'*)
+    held="$FAKE_NATS/held/$(echo "${2#\$JS.API.CONSUMER.INFO.}" | tr . -).json"
+    if [ -f "$held" ]; then printf '{"config":%s}' "$(cat "$held")"; else echo '{"err_code":10014}'; fi; exit 0 ;;
   'req $JS.API.STREAM.INFO.'*)
     declared=$(ls "$FAKE_NATS/edited-${2#\$JS.API.STREAM.INFO.}.json" "$FAKE_NATS/added-${2#\$JS.API.STREAM.INFO.}.json" 2>/dev/null | head -n 1)
     printf '{"config":%s}' "$(cat "$declared")"; exit 0 ;;
@@ -75,6 +80,43 @@ LINEAGE = {
 REFUSAL = "stream configuration update can not change retention policy to/from workqueue (10052)"
 
 
+def _run_declare(tmp_path: Path, *render_args: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """The declare phase's rendered script run against the stand-in, on a bus holding what ``tmp_path / "nats"`` lays out."""
+    script = bus_jobs(render(*DEFAULT_ARGS, *render_args))["declare"]
+    bin_dir, state = tmp_path / "bin", tmp_path / "nats"
+    (state / "exists").mkdir(parents=True, exist_ok=True)
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "nats").write_text(_NATS)
+    (bin_dir / "nats").chmod(0o755)
+    (state / "token").write_text("the stream Job's projected bus token")
+    done = subprocess.run(
+        ["sh", "-c", script],
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path), "FAKE_NATS": str(state), "BUS_TOKEN_FILE": str(state / "token")},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return done, state
+
+
+@pytest.mark.parametrize(
+    ("held", "begins"),
+    [pytest.param(None, 1, id="a-new-consumer-begins-at-the-first-message"), pytest.param(7, 7, id="a-held-consumer-keeps-its-start")],
+)
+def test_lineages_consumer_is_declared_at_the_start_it_holds_or_at_the_streams_first_message(tmp_path: Path, held: int | None, begins: int) -> None:
+    """JetStream refuses to change a consumer's start in place, so the Job declares `lineage-ingest` back at the start
+    the bus holds for it, and a consumer the bus does not hold yet begins at the stream's first message."""
+    if held is not None:
+        (tmp_path / "nats" / "held").mkdir(parents=True)
+        (tmp_path / "nats" / "held" / "LINEAGE-lineage-ingest.json").write_text(json.dumps({"durable_name": "lineage-ingest", "opt_start_seq": held}))
+
+    done, state = _run_declare(tmp_path)
+
+    declared = json.loads((state / "declared-LINEAGE-lineage-ingest.json").read_text()) if (state / "declared-LINEAGE-lineage-ingest.json").exists() else {}
+    assert (done.returncode, declared.get("opt_start_seq"), declared.get("deliver_policy")) == (0, begins, "by_start_sequence"), f"{done.stdout}{done.stderr}"
+
+
 @pytest.mark.parametrize(
     ("refusal", "exit_code", "reported"),
     [
@@ -88,24 +130,12 @@ REFUSAL = "stream configuration update can not change retention policy to/from w
     ],
 )
 def test_an_existing_stream_is_edited_to_its_declared_config_or_the_job_fails_naming_why(refusal: str, exit_code: int, reported: str, tmp_path: Path) -> None:
-    script = bus_jobs(render(*DEFAULT_ARGS, "--set", "nats.streamMaxAgeSeconds=259200"))["declare"]
-    bin_dir, state = tmp_path / "bin", tmp_path / "nats"
+    state = tmp_path / "nats"
     (state / "exists").mkdir(parents=True)
-    bin_dir.mkdir()
-    (bin_dir / "nats").write_text(_NATS)
-    (bin_dir / "nats").chmod(0o755)
     (state / "exists" / "LINEAGE").touch()
     (state / "refuse").write_text(refusal)
-    (state / "token").write_text("the stream Job's projected bus token")
 
-    done = subprocess.run(
-        ["sh", "-c", script],
-        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path), "FAKE_NATS": str(state), "BUS_TOKEN_FILE": str(state / "token")},
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    done, state = _run_declare(tmp_path, "--set", "nats.streamMaxAgeSeconds=259200")
 
     edited = {path.name.removeprefix("edited-").removesuffix(".json"): json.loads(path.read_text()) for path in state.glob("edited-*.json")}
     assert edited.get("LINEAGE") == LINEAGE, f"the Job edited {sorted(edited)}:\n{done.stdout}"

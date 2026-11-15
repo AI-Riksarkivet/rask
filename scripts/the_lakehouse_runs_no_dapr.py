@@ -5,8 +5,7 @@ render test hold those two. What they do not see is the rest of the code: a fixt
 the Makefile could install, annotate or call one. A rule about what files say is a lint, so this runs in `make lint` and
 `dagger call lint`.
 
-The guards themselves name it, and so do two tests that quote an error an API server answered when the chart still
-rendered such objects (provenance); `GUARDS` lists those files. The research and the decisions (`docs/`, the ADRs) and
+The guards themselves name it; `GUARDS` lists those files. The research and the decisions (`docs/`, the ADRs) and
 the agent instructions are not code and are not judged.
 """
 
@@ -31,15 +30,12 @@ OWN_NAME = "the_lakehouse_runs_no_dapr"
 #: The code trees, and the root files that are code.
 CODE_TREES = ("packages", "services", "tests", "chart", "deploy", "scripts", "frontend", ".dagger", ".docker", ".github")
 CODE_FILES = ("conftest.py", "Makefile", "pyproject.toml", "prek.toml", ".importlinter", ".vulture-whitelist.py")
-#: The files that name it to keep it out, or to quote what an API server answered: the ruff ban, the import contract,
-#: the render test, an error two tests cite, a type-check gate's measured failure, this lint and its own test.
+#: The files that name it to keep it out: the ruff ban, the import contract, the render test, this lint and its own test.
 GUARDS = frozenset(
     {
         "pyproject.toml",
         ".importlinter",
-        "prek.toml",
         "tests/unit/test_invariants.py",
-        "tests/unit/test_no_chart_owned_manifest_renders_a_null.py",
         "scripts/the_lakehouse_runs_no_dapr.py",
         "tests/unit/test_the_lakehouse_runs_no_dapr.py",
     }

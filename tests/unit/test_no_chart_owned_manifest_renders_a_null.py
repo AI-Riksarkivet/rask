@@ -2,12 +2,11 @@
 
 A bare `key:` whose only content sits behind a guard is YAML null, not an empty mapping or list, and
 the difference is invisible until an API server reads it. Measured 2026-09-24, two of them were live
-at once and each took out a whole stack on the server-side apply:
+at once in objects of a custom resource the chart then rendered, and each took out a whole stack on the
+server-side apply:
 
-    Configuration.dapr.io "lance-config-catalog" is invalid:
     spec.secrets.scopes[0].deniedSecrets: Invalid value: "null": must be of type array: "null"
 
-    Component.dapr.io "lance-statestore" is invalid:
     auth: Invalid value: "null": auth in body must be of type object: "null"
 
 The first was a list computed as `all - mine` for an app that owned every identity, the second a block

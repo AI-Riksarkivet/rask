@@ -1658,7 +1658,8 @@ async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path, 
         unreadable, blind = await _the_retire_phase_removes_nothing_it_could_not_read(bus, retired, tmp_path, rig)
         findings += unreadable
         findings += await _the_retire_phase_removes_what_git_declares_no_longer(bus, retired, tmp_path, rig)
-        # The next reconcile's declare, after the retire: the lane keeps its place.
+        # The next reconcile's declare, after the retire, changes nothing. That a held start other than the first message
+        # is declared back is the stream Job unit test's (test_the_stream_job_converges_each_stream_to_its_declared_config.py).
         findings += [f"after the retire: {finding}" for finding in await _a_second_declare_changes_nothing(bus, retired, tmp_path, rig)]
         findings += await _a_pod_presents_only_its_token(bus)
         matrix, foreign, overheard, probes = await _publish_matrix(bus, table, rig)
