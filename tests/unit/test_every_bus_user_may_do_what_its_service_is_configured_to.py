@@ -368,10 +368,8 @@ _MAINT = ("--set", "maintenance.appId=maint")
             "nats.auth.users.client.serviceAccount: \"default\" is the lakehouse's own ServiceAccount or the namespace's shared default",
             id="a-client-row-naming-default",
         ),
-        pytest.param(
-            ("--set", "nats.auth.sessionSeconds=600"), "at '/nats/auth/sessionSeconds': maximum: got 600, want 599", id="a-session-outliving-its-token"
-        ),
-        pytest.param(("--set", "nats.auth.sessionSeconds=30"), "at '/nats/auth/sessionSeconds': minimum: got 30, want 60", id="a-session-under-a-minute"),
+        pytest.param(("--set", "nats.auth.sessionSeconds=600"), "sessionSeconds:599", id="a-session-outliving-its-token"),
+        pytest.param(("--set", "nats.auth.sessionSeconds=30"), "sessionSeconds:60", id="a-session-under-a-minute"),
     ],
 )
 def test_a_service_whose_bus_user_cannot_take_its_own_connection_fails_the_render(sets: tuple[str, ...], refusal: str) -> None:
@@ -382,7 +380,11 @@ def test_a_service_whose_bus_user_cannot_take_its_own_connection_fails_the_rende
     session must fit inside the token it is granted for: the render refuses each."""
     with pytest.raises(subprocess.CalledProcessError) as refused:
         render(*DEFAULT_ARGS, *sets)
-    assert refusal in refused.value.stderr
+    # A schema refusal is worded by helm, and its wording differs between releases (3.16.4, the lanes' pin: "Must be
+    # less than or equal to 599"; 3.22.0: "maximum: got 600, want 599"), so it is read as the value and the bound it
+    # names. Every other refusal is the chart's own `fail` text, read whole.
+    value, _, bound = refusal.partition(":")
+    assert (value in refused.value.stderr and bound in refused.value.stderr) if bound.isdigit() else refusal in refused.value.stderr
 
 
 def _fixture_operator_mode(docs: tuple[dict, ...]) -> dict[str, object]:
