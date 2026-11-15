@@ -1,5 +1,7 @@
 # 0198. Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08)
 
+**Amended 2026-11-15** by [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md): decision 5 — every service is on the bus directly; the worker presents its pod's token and renews its session on the same client.
+
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): decision 5 (maintenance on the bus directly, the other services through Dapr) is two bus paths in one product; it becomes the one path with the move off Dapr.
 
 **Amended 2026-11-14** (XC-199 step D4, #787): the worker pulls the commit announcements itself, and maintenance's web process is gone; see the amendment below.

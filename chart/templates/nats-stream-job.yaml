@@ -183,15 +183,7 @@ spec:
               held=$(consumer_of {{ .stream }} {{ .name }}) || exit 1
               START=$(echo "$held" | sed -n 's/.*"opt_start_seq":\([0-9]*\).*/\1/p')
               if [ -z "$START" ]; then
-                # ONE-DEPLOY MIGRATION ([[XC-199]]), removed with the next change to this Job: lineage's first pull
-                # consumer begins after the last event the subscription it replaces had acknowledged. That subscription
-                # acknowledged an event as it dead-lettered it, so where one of its dead letters still waits undelivered
-                # the consumer begins at the stream's first message instead, and the lane is handed that event again.
-                held=$(consumer_of {{ .stream }} lineage-durable) || exit 1
-                START=$(( $(echo "$held" | sed -n 's/.*"ack_floor":{"consumer_seq":[0-9]*,"stream_seq":\([0-9]*\).*/\1/p' | grep . || echo 0) + 1 ))
-                parked=$(consumer_of DLQ lineage-dlq-durable) || exit 1
-                waiting=$(( $(echo "$parked" | sed -n 's/.*"num_ack_pending":\([0-9]*\).*/\1/p' | grep . || echo 0) + $(echo "$parked" | sed -n 's/.*"num_pending":\([0-9]*\).*/\1/p' | grep . || echo 0) ))
-                [ "$waiting" -eq 0 ] || START=1
+                START=1
                 echo "consumer {{ .stream }}/{{ .name }}: begins at stream sequence $START"
               fi
               printf '{"opt_start_seq":%s,%s' "$START" '{{ trimPrefix "{" (toRawJson .config) }}' > "$HOME/{{ .stream }}-{{ .name }}.json"
@@ -222,18 +214,6 @@ spec:
                   esac
                 done
               done
-              # ONE-DEPLOY MIGRATION ([[XC-199]]), removed with the next change to this Job: the consumers the services'
-              # subscriptions were held on, which carry no mark, and the mirror the catalog's replicas read from.
-              for old in LINEAGE/lineage-durable LINEAGE/maintenance-durable DLQ/lineage-dlq-durable; do
-                info=$(consumer_of "${old%/*}" "${old#*/}") || exit 1
-                [ -n "$info" ] || continue
-                bus consumer rm "${old%/*}" "${old#*/}" -f >/dev/null || { echo "!! FAILED to remove consumer $old"; exit 1; }
-                echo "consumer $old: removed"
-              done
-              if bus stream info CATALOG_CONTROL_BROADCAST >/dev/null 2>&1; then
-                bus stream rm CATALOG_CONTROL_BROADCAST -f >/dev/null || { echo "!! FAILED to remove stream CATALOG_CONTROL_BROADCAST"; exit 1; }
-                echo "stream CATALOG_CONTROL_BROADCAST: removed"
-              fi
               echo "retired what git declares no longer"
               {{- end }}
 {{- end }}

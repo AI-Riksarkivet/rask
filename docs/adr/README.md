@@ -96,7 +96,7 @@ with its client to that client's own repository.
 | [0083](0083-a-service-is-the-serviceaccount-its-projected-token-names.md) |  | A service is the ServiceAccount its projected token names (LH-220, D1, 2026-10-02) (reopened by 0199) |
 | [0084](0084-lineage-events-are-signed-with-ed25519-the-keys-in-the.md) |  | Lineage events are signed with Ed25519, the keys in the store (LH-064, owner 2026-10-02) |
 | [0085](0085-the-bus-doors-verify-lh-064-s-signatures-before-they-act-xc.md) |  | The bus doors verify LH-064's signatures before they act (XC-078 slice 1, owner 2026-10-04) (amended 2026-11-14, XC-199) |
-| [0086](0086-nats-authenticates-every-client-one-user-per-app-xc-078.md) |  | NATS authenticates every client, one user per app (XC-078 slices 2 and 3, owner 2026-10-04/05) (amended 2026-11-14, XC-199) |
+| [0086](0086-nats-authenticates-every-client-one-user-per-app-xc-078.md) |  | NATS authenticates every client, one user per app (XC-078 slices 2 and 3, owner 2026-10-04/05) (amended 2026-11-14, XC-199, superseded in its credential mechanism by 0207) |
 | [0087](0087-the-notifications-reconciler-reads-the-whole-run-feed.md) |  | The notifications reconciler reads the whole run feed through a rung of its own (CTL-021, 2026-10-05) |
 | [0088](0088-a-ray-stage-run-is-a-plan-closed-by-its-job-s-report-or-the.md) |  | A Ray stage run is a plan, closed by its job's report or the sweep (CP-029 S1, 2026-10-05) |
 | [0089](0089-a-warehouse-in-another-object-store-is-refused-until-its.md) |  | A warehouse in another object store is refused until its credential is consumed (LH-205, 2026-10-05) |
@@ -167,7 +167,7 @@ with its client to that client's own repository.
 | [0163](0163-an-erasure-is-an-obligation-a-job-fulfils-and-the-catalog-verifies.md) | LH-493 | An erasure is an obligation a bring-your-own job fulfils and the catalog verifies (2026-10-15) |
 | [0164](0164-a-stock-client-commits-on-a-branch-through-create-table-version.md) | LH-490 | A stock client commits on a branch through `CreateTableVersion`; `CreateTableBranch` creates it (2026-10-15) |
 | [0165](0165-the-edge-is-the-platforms-gateway-api.md) | XC-150 | The edge is the platform's Gateway: HTTPRoutes with a prefix rewrite, one `RASK_EDGE_URL`, Traefik's Gateway provider in development (2026-10-16) |
-| [0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) | XC-082 | A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16) (reopened by 0199) |
+| [0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) | XC-082 | A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16) (reopened by 0199, amended by 0207) |
 | [0167](0167-the-deployed-estate-is-driven-per-deploy-not-on-a-clock.md) | XC-033 | The deployed estate is driven per deploy, not on a clock; the e2e lane runs every module it can serve (2026-10-18) |
 | [0168](0168-the-development-object-store-is-rustfs.md) | XC-163 | The development and CI object store is RustFS; MinIO leaves the repo (2026-10-18) (superseded in part by 0196) |
 | [0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md) | XC-165 | Each app reads only its own secrets: every sidecar logs in to the store as its own ServiceAccount (2026-10-18) (amended 2026-11-14, XC-199) |
@@ -199,8 +199,8 @@ with its client to that client's own repository.
 | [0195](0195-the-three-kits-fold-into-one-lakehouse-library.md) | owner | The three kits fold into one lakehouse library: one package by module, no extras, no audience contracts, nothing a client imports (2026-11-07) (reopened by 0199) |
 | [0196](0196-an-install-from-git-converges-under-argo-cd.md) | XC-164 | An install from git converges under Argo CD, and a changed input converges on the next sync (2026-11-07) (reopened by 0199, amended 2026-11-14, XC-199) |
 | [0197](0197-maintenance-writes-only-under-a-vend-and-no-workload-holds-a-store-key.md) | XC-084, LH-219, LH-238 | Maintenance writes only under a vend, and no workload holds a store key (2026-11-08) (amended by 0204) |
-| [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) | owner | Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08) (reopened by 0199, amended 2026-11-14, XC-199) |
-| [0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) | owner | NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09) (amended by 0206, and 2026-11-14, XC-199) |
+| [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) | owner | Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08) (reopened by 0199, amended 2026-11-14, XC-199, amended by 0207) |
+| [0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) | owner | NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09) (amended by 0206, and 2026-11-14, XC-199, track D closed by 0207) |
 | [0200](0200-the-workbench-dock-is-horizon-layout.md) | owner | The workbench's dock is horizon-layout: dockview 8 moved keyboard control into a separately licensed package (2026-11-11) |
 | [0201](0201-the-console-holds-its-api-client-and-graph-views.md) | owner | The console holds its API client and graph views; `@rask/ui` is the one package, read from source (2026-11-11) |
 | [0202](0202-the-console-has-one-navigation-and-filters-by-project-in-the-url.md) | owner | The console has one navigation, the sidebar, and filters its lists by project in the URL in place of an active project (2026-11-11) |
@@ -208,3 +208,4 @@ with its client to that client's own repository.
 | [0204](0204-maintenances-commits-are-the-catalogs-and-its-vend-puts-nothing.md) | LH-575 | Maintenance's commits are the catalog's, at maintainer doors, and its vend gets and deletes and puts nothing of a table (2026-11-12) |
 | [0205](0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md) | LH-576 | A change's announcements are filed before it, and a failed door's are finished by the catalog (2026-11-12) |
 | [0206](0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md) | owner | The tenant stays above the warehouse, names belong to the warehouse, and the catalog converges what git declares; the operator comes later (2026-11-13) |
+| [0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md) | XC-199 | The lakehouse runs no Dapr, and each pod asks the bus for a session with its own token (2026-11-15) |

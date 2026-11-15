@@ -1,5 +1,7 @@
 # 0199. NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09)
 
+**Track D closed 2026-11-15** by [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md): the lakehouse runs no Dapr.
+
 **Amended 2026-11-13** by [ADR 0206](0206-the-tenant-stays-above-the-warehouse-names-belong-to-the-warehouse-and-the-catalog-converges-what-git-declares.md): the open question whether projects, warehouses and grants become resources declared in git, and the direction for ADR 0192, are answered by the catalog converging what the chart declares (XC-213); the operator comes later and adds a status per object.
 
 **Amended 2026-11-14** (XC-199 step D4, #787): every lakehouse service takes its deliveries on its own connection to the bus; see the amendment below.

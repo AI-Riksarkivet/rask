@@ -46,11 +46,11 @@ length (`nats_auth_rig.Pod`).
   connection, nothing lost and nothing handled twice.
 
 The chart's stream Job runs as `admin`, presenting its pod's token to the nats CLI with no creds file, both phases with
-their rendered scripts, on a bus prepared as the previous revision left it: the declare phase creates and converges every stream and consumer, starts lineage's ingest consumer
-after the last event the subscription it replaces acknowledged, and edits a changed lane in place; the retire phase
-removes what this release declares no longer and what the previous revision's subscriptions held, leaves what another
-subscriber holds, removes no stream, and removes nothing it could not read (`admin`'s key scoped in place without its
-consumer reads for that run).
+their rendered scripts, on a bus that already holds events on three of the declared streams and consumers of other
+subscribers: the declare phase creates and converges every stream and consumer, begins lineage's ingest consumer at the
+stream's first message, and edits a changed lane in place; the retire phase removes what this release declares no
+longer, leaves what another subscriber holds, removes no stream, and removes nothing it could not read (`admin`'s key
+scoped in place without its consumer reads for that run).
 
 After the run, no file a service's pod was given and no environment a service ran in holds an NKEY seed, a NATS user
 JWT or (in an environment) a bus token, and no signer logged a token.
@@ -118,7 +118,7 @@ log = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parents[2]
 #: The rig's own observer, a static user every JetStream call and every ack granted: it reads stream and consumer state
-#: and lays out the bus the previous revision left, so no table user's call set carries the test's bookkeeping. It is
+#: and lays out the bus the stream Job first runs on, so no table user's call set carries the test's bookkeeping. It is
 #: minted beside the table and is not a row of it.
 RIG = "rask-test-rig"
 #: How many times the stream Job runs before the lane gives up on it, inside the chart's `backoffLimit` of 20.
@@ -169,8 +169,8 @@ _ARRIVAL_RETIRED = ("--set", "maintenance.arrivalEnabled=false")
 #: The release mark the stream Job writes on each consumer it declares, and another release's.
 _MARK = "rask.dev/release"
 _RELEASE = "rask"
-#: How many messages the previous revision's lineage subscription had acknowledged, of how many on the stream.
-_ACKED_BEFORE, _HELD_BEFORE = 3, 5
+#: How many events the lineage stream holds before the stream Job first declares lineage's ingest consumer.
+_HELD_BEFORE = 5
 #: How many control events a burst carries, and how large each is.
 _BURST, _BURST_BYTES = 2000, 2048
 #: Headers a user the bus admits to a topic can give a message, each of which a client that reads headers as the bus's
@@ -559,44 +559,25 @@ def _declared(docs: tuple[dict, ...]) -> set[str]:
 
 
 def _prepared(home: Path, name: str, config: dict[str, Any]) -> str:
-    path = home / "previous-revision" / f"{name.replace('/', '-')}.json"
+    path = home / "laid-out" / f"{name.replace('/', '-')}.json"
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps(config))
     return str(path)
 
 
-async def _a_bus_the_previous_revision_left(bus: Rig, home: Path, rig: Client) -> list[str]:
-    """The bus as the revision before pull consumers left it, laid out with the nats CLI as the rig's superuser: lineage's
-    push subscription `lineage-durable` having acknowledged the first `_ACKED_BEFORE` of `_HELD_BEFORE` events,
-    maintenance's `maintenance-durable`, lineage's parking `DLQ/lineage-dlq-durable` and the catalog's mirror
-    `CATALOG_CONTROL_BROADCAST`, none carrying a release mark; beside them a consumer of another subscriber's with no
-    mark (`lane-stranger`) and one carrying another release's (`lane-other-release`)."""
+async def _a_bus_holding_events_and_other_subscribers(bus: Rig, home: Path, rig: Client) -> list[str]:
+    """The bus the stream Job first runs on, laid out with the nats CLI as the rig's superuser: three of the streams it
+    declares (LINEAGE holding `_HELD_BEFORE` events), and on LINEAGE a consumer of another subscriber's with no mark
+    (`lane-stranger`) and one carrying another release's (`lane-other-release`)."""
     limits = {"retention": "limits", "max_consumers": -1, "max_msgs": -1, "max_bytes": -1, "max_msgs_per_subject": -1, "max_msg_size": -1}
     stored = {**limits, "storage": "file", "discard": "old", "num_replicas": 3, "duplicate_window": 120_000_000_000}
     streams = {
         "LINEAGE": {**stored, "name": "LINEAGE", "subjects": ["lineage.events.>"]},
         "DLQ": {**stored, "name": "DLQ", "subjects": ["dlq.>"]},
         CONTROL_STREAM: {**stored, "name": CONTROL_STREAM, "subjects": ["catalog.control.>"]},
-        "CATALOG_CONTROL_BROADCAST": {**stored, "name": "CATALOG_CONTROL_BROADCAST", "mirror": {"name": CONTROL_STREAM}},
     }
-    pushed = {"ack_policy": "explicit", "replay_policy": "instant", "ack_wait": 60_000_000_000}
     pulled = {"ack_policy": "explicit", "replay_policy": "instant", "deliver_policy": "all", "filter_subject": LINEAGE_TOPIC}
     consumers = {
-        "LINEAGE/lineage-durable": {
-            **pushed,
-            **{"durable_name": "lineage-durable", "deliver_subject": "_INBOX.previous-lineage", "deliver_group": "lineage"},
-            **{"deliver_policy": "all", "filter_subject": LINEAGE_TOPIC},
-        },
-        "LINEAGE/maintenance-durable": {
-            **pushed,
-            **{"durable_name": "maintenance-durable", "deliver_subject": "_INBOX.previous-maintenance", "deliver_group": "maintenance"},
-            **{"deliver_policy": "new", "filter_subject": LINEAGE_TOPIC},
-        },
-        "DLQ/lineage-dlq-durable": {
-            **pushed,
-            **{"durable_name": "lineage-dlq-durable", "deliver_subject": "_INBOX.previous-dlq", "deliver_group": "lineage"},
-            **{"deliver_policy": "all", "filter_subject": "dlq.lineage.events"},
-        },
         "LINEAGE/lane-stranger": {**pulled, "durable_name": "lane-stranger"},
         "LINEAGE/lane-other-release": {**pulled, "durable_name": "lane-other-release", "metadata": {_MARK: "another"}},
     }
@@ -612,7 +593,7 @@ async def _a_bus_the_previous_revision_left(bus: Rig, home: Path, rig: Client) -
             if done.returncode == 0 or "config" in (await rig.request(info) or {}):
                 return []
             printed = done.stdout + done.stderr
-        return [f"the previous revision's {name} could not be laid out: {printed[-400:]}"]
+        return [f"{name} could not be laid out: {printed[-400:]}"]
 
     for name, config in streams.items():
         findings += await laid_out(name, ["stream", "add", name, "--config", _prepared(home, name, config)], f"$JS.API.STREAM.INFO.{name}")
@@ -623,24 +604,10 @@ async def _a_bus_the_previous_revision_left(bus: Rig, home: Path, rig: Client) -
     if findings:
         return findings
     catalog = await bus.client("catalog", answer_within=10.0)
-    subscription = await rig.nc.subscribe("_INBOX.previous-lineage", queue="lineage")
     try:
         for n in range(_HELD_BEFORE):
-            await catalog.js.publish(LINEAGE_TOPIC, json.dumps(_lane_event(previous=str(n)).as_wire()).encode(), timeout=10)
-        for _ in range(_HELD_BEFORE):
-            message = await subscription.next_msg(timeout=10)
-            if message.metadata.sequence.stream <= _ACKED_BEFORE:
-                await message.ack()
-        await rig.settle()
-        floor = 0
-        for _ in range(50):
-            info = await rig.request("$JS.API.CONSUMER.INFO.LINEAGE.lineage-durable") or {}
-            if (floor := int((info.get("ack_floor") or {}).get("stream_seq", 0))) == _ACKED_BEFORE:
-                break
-            await asyncio.sleep(0.1)
-        findings += [] if floor == _ACKED_BEFORE else [f"the previous revision's lineage-durable acknowledged up to {floor}, not {_ACKED_BEFORE}"]
+            await catalog.js.publish(LINEAGE_TOPIC, json.dumps(_lane_event(held=str(n)).as_wire()).encode(), timeout=10)
     finally:
-        await subscription.unsubscribe()
         await catalog.close()
     return findings
 
@@ -741,9 +708,8 @@ async def _a_consumer_not_declared_yet_is_pulled_once_declared(
     bus: Rig, docs: tuple[dict, ...], home: Path, rig: Client, caplog: pytest.LogCaptureFixture
 ) -> tuple[list[str], str]:
     """A lineage replica that starts before the stream Job has declared its consumer asks for it again, said once, and
-    pulls it once the Job declares it there. The Job's first run on the previous revision's bus begins the consumer
-    after the last event the subscription it replaces acknowledged, so the replica is handed exactly the events that
-    subscription had not. Returns the findings and what the Job printed."""
+    pulls it once the Job declares it there. The Job's first run begins the consumer at the stream's first message, so
+    the replica is handed every event the stream held. Returns the findings and what the Job printed."""
     findings: list[str] = []
     lane = _IngestLane()
     async with AsyncExitStack() as stack:
@@ -755,8 +721,8 @@ async def _a_consumer_not_declared_yet_is_pulled_once_declared(
         # before the Job declares it: the seam pauses that long between a pull the bus refused and the next.
         await asyncio.sleep(seam._PULL_SECONDS + 2)
         job, printed = await asyncio.to_thread(_stream_job, bus, stream_job_script(docs, bus.url), home)
-        findings += [f"the declare phase, first run on the previous revision's bus: {finding}" for finding in job]
-        wanted = list(range(_ACKED_BEFORE + 1, _HELD_BEFORE + 1))
+        findings += [f"the declare phase, first run: {finding}" for finding in job]
+        wanted = list(range(1, _HELD_BEFORE + 1))
         if not await _until(lambda: sorted(h.sequence for h in lane.handled) == wanted, 30):
             findings.append(
                 f"a consumer the Job had not declared yet: once declared the replica was handed {sorted(h.sequence for h in lane.handled)}, not {wanted}"
@@ -768,14 +734,14 @@ async def _a_consumer_not_declared_yet_is_pulled_once_declared(
             )
         await replicas.stop_all()
     start = (await _consumer(rig, INGEST_STREAM, INGEST_CONSUMER)).get("config", {}).get("opt_start_seq")
-    if start != _ACKED_BEFORE + 1:
-        findings.append(f"the declare phase began {INGEST_CONSUMER} at stream sequence {start}, not after lineage-durable's ack floor {_ACKED_BEFORE}")
+    if start != 1:
+        findings.append(f"the declare phase began {INGEST_CONSUMER} at stream sequence {start}, not at the stream's first message")
     return findings, printed
 
 
-def _the_first_run_made_what_the_previous_revision_lacked(printed: str, declared: set[str]) -> list[str]:
-    """The declare phase's first run creates every declared object the previous revision's bus lacked, and converges the
-    ones it held (LINEAGE, DLQ and CATALOG_CONTROL)."""
+def _the_first_run_made_what_the_bus_lacked(printed: str, declared: set[str]) -> list[str]:
+    """The declare phase's first run creates every declared object the bus lacked, and converges the ones it held
+    (LINEAGE, DLQ and CATALOG_CONTROL)."""
     held = {"LINEAGE", "DLQ", CONTROL_STREAM}
     created = {line.split()[1].removesuffix(":") for line in printed.splitlines() if line.startswith(("stream ", "consumer ")) and line.endswith(": created")}
     converged = {
@@ -814,7 +780,7 @@ async def _a_changed_lane_is_edited_in_place(bus: Rig, changed: tuple[dict, ...]
     if was is None or now is None:
         return [*findings, f"the declare phase on a changed lane: {name} is not on the bus ({was}, {now})"]
     held = (now.created, now.config.get("ack_wait"), now.config.get("max_ack_pending"), now.config.get("opt_start_seq"))
-    if held != (was.created, _ACK_WAIT_SECONDS * 1_000_000_000, _DELIVERIES_IN_FLIGHT, _ACKED_BEFORE + 1):
+    if held != (was.created, _ACK_WAIT_SECONDS * 1_000_000_000, _DELIVERIES_IN_FLIGHT, 1):
         findings.append(f"the declare phase on a changed lane left {name} at (created, ack_wait, max_ack_pending, opt_start_seq) {held}")
     others = sorted(n for n in before.keys() | after.keys() if n != name and before.get(n) != after.get(n))
     return findings + ([f"the declare phase on a changed lane changed {others} besides {name}"] if others else [])
@@ -845,13 +811,12 @@ async def _the_retire_phase_removes_nothing_it_could_not_read(bus: Rig, retired:
 
 async def _the_retire_phase_removes_what_git_declares_no_longer(bus: Rig, retired: tuple[dict, ...], home: Path, rig: Client) -> list[str]:
     """The retire phase on a render that no longer declares the commit lane (`maintenance.arrivalEnabled=false`) removes
-    that consumer, which carries the release's mark, and the previous revision's three subscriptions and its mirror
-    stream (the one-deploy migration), each under admin's own grants. It leaves the consumer that carries no mark and
-    the one that carries another release's, and removes no other stream."""
+    that consumer, which carries the release's mark, under admin's own grants. It leaves the consumer that carries no
+    mark and the one that carries another release's, and removes no stream."""
     before = await _bus_objects(rig)
     findings, _ = await asyncio.to_thread(_stream_job, bus, stream_job_script(retired, bus.url, retire=True), home)
     after = await _bus_objects(rig)
-    removed = {"LINEAGE/maintenance-arrival", "LINEAGE/lineage-durable", "LINEAGE/maintenance-durable", "DLQ/lineage-dlq-durable", "CATALOG_CONTROL_BROADCAST"}
+    removed = {"LINEAGE/maintenance-arrival"}
     if sorted(before.keys() - after.keys()) != sorted(removed):
         findings.append(f"the retire phase removed {sorted(before.keys() - after.keys())}, not {sorted(removed)}")
     kept = {"LINEAGE/lane-stranger", "LINEAGE/lane-other-release", *(_declared(retired))}
@@ -1683,17 +1648,17 @@ async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path, 
     bus.start()
     try:
         rig = await bus.client(RIG, answer_within=10.0)
-        findings += await _a_bus_the_previous_revision_left(bus, tmp_path, rig)
+        findings += await _a_bus_holding_events_and_other_subscribers(bus, tmp_path, rig)
         assert findings == [], "\n".join(findings)
         undeclared, printed = await _a_consumer_not_declared_yet_is_pulled_once_declared(bus, docs, tmp_path, rig, caplog)
         findings += undeclared
-        findings += _the_first_run_made_what_the_previous_revision_lacked(printed, _declared(docs))
+        findings += _the_first_run_made_what_the_bus_lacked(printed, _declared(docs))
         findings += await _a_second_declare_changes_nothing(bus, docs, tmp_path, rig)
         findings += await _a_changed_lane_is_edited_in_place(bus, changed, tmp_path, rig)
         unreadable, blind = await _the_retire_phase_removes_nothing_it_could_not_read(bus, retired, tmp_path, rig)
         findings += unreadable
         findings += await _the_retire_phase_removes_what_git_declares_no_longer(bus, retired, tmp_path, rig)
-        # The next reconcile's declare, with the subscription the lane's start was taken from gone: the lane keeps its place.
+        # The next reconcile's declare, after the retire: the lane keeps its place.
         findings += [f"after the retire: {finding}" for finding in await _a_second_declare_changes_nothing(bus, retired, tmp_path, rig)]
         findings += await _a_pod_presents_only_its_token(bus)
         matrix, foreign, overheard, probes = await _publish_matrix(bus, table, rig)

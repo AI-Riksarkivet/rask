@@ -36,6 +36,8 @@ func (m *Rask) Lint(
 		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/lakehouse_names_no_client.py"}).
 		// The code names no reference product: a comparison with another product is research, kept in docs/ and ADRs.
 		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/code_names_no_reference_product.py"}).
+		// No code outside the guards that keep the sidecar framework out names it ([[XC-199]], ADR 0207).
+		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/the_lakehouse_runs_no_dapr.py"}).
 		// The compliance trail has one writer: no code but lakehouse.governed.audit names the `lance.audit` logger (the
 		// import and attribute half is ruff's TID251 ban).
 		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/one_audit_writer.py"}).

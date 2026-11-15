@@ -1,5 +1,7 @@
 # 0166. A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16)
 
+**Amended 2026-11-15** by [ADR 0207](0207-the-lakehouse-runs-no-dapr-and-each-pod-asks-the-bus-for-a-session.md): the shared cache has no implementation (each holder re-reads its secret on its own period), and the bus seed and app token it served are gone.
+
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the bus seed and the shared app token this serves never expire; their replacement follows the move off Dapr.
 
 **Status:** accepted; amended by [ADR 0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md), under which the

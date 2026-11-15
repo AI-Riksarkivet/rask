@@ -5,7 +5,7 @@ description: "The ruling that the lakehouse runs no Dapr, and where each need a 
 
 # rask × Dapr — the lakehouse runs none
 
-**The ruling** ([[XC-199]], #787, ADR 0199): the lakehouse runs no Dapr. No lakehouse pod runs a sidecar, the product
+**The ruling** ([[XC-199]], #787, ADR 0207): the lakehouse runs no Dapr. No lakehouse pod runs a sidecar, the product
 chart renders no `dapr.io` object and no `dapr.io/` annotation or label in any mode, the repository installs no Dapr
 control plane, and no lakehouse package imports `dapr`. `tests/unit/test_invariants.py::test_no_lakehouse_pod_runs_a_sidecar_and_the_chart_renders_no_dapr_object`
 holds the render to it in the default, local and production modes.
@@ -30,6 +30,8 @@ on a sidecar.
 - ruff `TID251`: `"dapr"` is a banned API in the root `pyproject.toml` (`[tool.ruff.lint.flake8-tidy-imports.banned-api]`).
 - import-linter: `.importlinter` forbids `dapr` as an external package for every lakehouse package (`make lint-imports`).
 - the render test above, over the chart's own templates.
+- `scripts/the_lakehouse_runs_no_dapr.py` (`make lint`, `dagger call lint`): no code file outside those guards names
+  Dapr, so no fixture chart, Dagger lane, script or Makefile target installs, annotates or calls one.
 
 ## Clients
 

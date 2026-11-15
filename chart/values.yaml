@@ -1447,9 +1447,6 @@ nats:
           - $JS.API.CONSUMER.INFO.*.*
           - $JS.API.CONSUMER.CREATE.*.>
           - $JS.API.CONSUMER.DELETE.*.*
-          # ONE-DEPLOY MIGRATION ([[XC-199]]), removed with the stream Job's own migration lines: the retire phase removes
-          # the mirror stream the catalog's replicas read their control events from before each followed the topic itself.
-          - $JS.API.STREAM.DELETE.CATALOG_CONTROL_BROADCAST
         subscribe: [_INBOX.>]
       catalog:
         publish:

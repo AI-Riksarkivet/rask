@@ -219,22 +219,10 @@ measured 2026-11-14 as above), so a config naming any other start than the one t
 the Job reads the `opt_start_seq` the consumer
 holds and writes it into the config it converges: the edit keeps the start and applies everything else.
 
-## `held=$(consumer_of {{ .stream }} lineage-durable) || exit 1`
+## `START=1`
 
-ONE-DEPLOY MIGRATION ([[XC-199]]), labelled in the script and removed with the next change to this Job. When
-`lineage-ingest` does not exist yet, it begins after the ack floor of `lineage-durable`, the consumer it replaces, so
-lineage's first pull consumer takes up exactly where the old subscription's acknowledgements end; with no such consumer
-it begins at sequence 1. Measured on a scratch nats-server 2.15.2 prepared as the previous revision left the bus,
-2026-11-14: `lineage-ingest` began at the old consumer's ack floor + 1.
-
-The previous revision's consumer `LINEAGE/lineage-durable` acknowledged an event as it dead-lettered it, and only the
-consumer that took the dead letter (`DLQ/lineage-dlq-durable`) kept it for the estate admin. A dead letter still waiting on that consumer at the
-cut-over is therefore an event below the ack floor that nothing recorded or kept, and nothing of this revision reads
-`dlq.lineage.events`. So the step reads that consumer too: while it holds a delivery pending or unacknowledged,
-`lineage-ingest` begins at the stream's first message instead, and the lane is handed every retained event again
-(each already recorded lands nothing new; the one that was parked is recorded, or parked into the refusals table).
-Measured with the rendered scripts on a scratch nats-server 2.15.2, 2026-11-14: with one dead letter pending the
-consumer began at sequence 1, with none at the ack floor + 1, and a declare after the retire kept either start.
+A consumer that starts by stream sequence and does not exist yet begins at the stream's first message: `lineage-ingest`
+is handed every event the stream retains, and each one lineage has already recorded lands nothing new.
 
 ## `MARK='"rask.dev/release":"{{ $.Release.Name }}"'`
 
@@ -244,19 +232,10 @@ phase writes on each consumer it converges. A consumer with no mark, or another 
 subscriber's and is never touched, and no stream is ever removed: a subscriber outside the release may hold a consumer
 on any stream, and a stream holds data. Measured on a scratch nats-server 2.15.2, 2026-11-14: with
 `maintenance.arrivalEnabled=false` the retire phase removes `maintenance-arrival`, and it leaves a consumer of another
-subscriber. `nats consumer rm` and `nats stream rm` of an absent object exit 1 (natscli 0.5.1, 2026-11-14), so each
-removal is of an object the phase has just read.
+subscriber. `nats consumer rm` of an absent object exits 1 (natscli 0.5.1, 2026-11-14), so each removal is of a
+consumer the phase has just read.
 
 The phase runs after the sync (a Helm `post-install,post-upgrade` hook, an Argo CD `PostSync` hook), so nothing of the
 new revision still pulls what it removes. Neither Helm's wait nor Argo CD's health waits for the previous revision's
 terminating pods, so one of those may still be stopping: its pulls of a consumer that is gone are refused, which its
 lane waits out until the pod ends (`lakehouse.bus` says a refused pull once and asks again).
-
-## `for old in LINEAGE/lineage-durable LINEAGE/maintenance-durable DLQ/lineage-dlq-durable; do`
-
-ONE-DEPLOY MIGRATION ([[XC-199]]), labelled in the script and removed with the next change to this Job. The consumers
-the services' subscriptions were held on carry no mark, so the mark rule leaves them, and the mirror stream
-`CATALOG_CONTROL_BROADCAST` is a stream, which the rule never removes. This step removes the three named consumers and
-that mirror by name, each only when it exists (`admin` holds `$JS.API.STREAM.DELETE.CATALOG_CONTROL_BROADCAST` for
-it, on a line of its own in `nats.auth.users` labelled for removal with this step). Measured on a scratch nats-server 2.15.2 prepared as the previous revision left the bus, 2026-11-14: the phase
-removed the three consumers and the mirror and left a consumer of another subscriber.
