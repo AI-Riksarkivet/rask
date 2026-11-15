@@ -352,12 +352,12 @@ def test_each_queue_consumer_is_declared_one_delivery_past_the_workers_bound() -
     }
 
 
-def test_the_worker_reads_the_bus_credential_the_user_table_issues_whatever_its_app_id() -> None:
-    """[[LH-494]]: the worker's bus user is `maintenance-worker` in `nats.auth.users`, and the store issues its credential
-    under that name. An install that renames maintenance's app id must still read that secret, or the worker finds
-    none at its start and fails closed. The worker's replies arrive under the inbox prefix its connection names
-    (`maintenance.services.queue.INBOX_PREFIX`), so that user's row must grant it: without the grant every fetch and
-    every put waits out its timeout unanswered."""
+def test_the_worker_connects_as_the_session_user_the_table_admits_whatever_its_app_id() -> None:
+    """[[LH-494]]: the worker's queue connects as `maintenance-worker` in `nats.auth.users`, a session user the signer
+    admits for maintenance's ServiceAccount. An install that renames maintenance's app id must still have the table bind
+    that user to the worker's ServiceAccount and the worker present its bus token, or the signer refuses it at its start.
+    The worker's replies arrive under the inbox prefix its connection names (`maintenance.services.queue.INBOX_PREFIX`), so
+    that user's row must grant it: without the grant every fetch and every put waits out its timeout unanswered."""
     renamed = (
         "--set",
         "maintenance.appId=maint",
@@ -366,10 +366,13 @@ def test_the_worker_reads_the_bus_credential_the_user_table_issues_whatever_its_
     )
     docs = chart_render.render(*chart_render.DEFAULT_ARGS, *renamed)
     maintenance = next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-maintenance-worker"))
-    env = {entry["name"]: entry.get("value") for container in maintenance["spec"]["template"]["spec"]["containers"] for entry in container.get("env", [])}
+    pod = maintenance["spec"]["template"]["spec"]
+    env = {entry["name"]: entry.get("value") for container in pod["containers"] for entry in container.get("env", [])}
+    table = chart_render.bus_sessions(docs)
 
-    assert env["MAINTENANCE_NATS_CREDENTIALS_SECRET"] == "nats-user-maintenance-worker"
-    assert f"{queue.INBOX_PREFIX}.>" in chart_render.nats_users(docs)["maintenance-worker"][1]
+    assert "MAINTENANCE_NATS_CREDENTIALS_SECRET" not in env and env["RASK_BUS_TOKEN_FILE"].endswith(f"/{table['audience']}/token")
+    assert table["users"][queue.BUS_USER]["serviceAccount"] == f"system:serviceaccount:default:{pod['serviceAccountName']}"
+    assert f"{queue.INBOX_PREFIX}.>" in table["users"][queue.BUS_USER]["subscribe"]
 
 
 def test_no_env_var_is_rendered_twice_on_any_workload() -> None:

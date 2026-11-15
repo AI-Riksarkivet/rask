@@ -121,14 +121,17 @@ sed -n "$((2 * n - 1)),$((2 * n))p" "$NK_PAIRS"
 """
 
 
-#: nsc 2.15's calls the dev seed makes ([[XC-078]]), measured as uid 65532 in natsio/nats-box:0.19.7 on 2026-10-04, against state
-#: kept under the `-H` directory so a carried root is just that directory again. A JWT is `eyJ.<base64 of a JSON claim>`: an
-#: account's names its key and the user keys revoked in it (`revocations`, key -> the time credentials issued up to are
-#: refused, now unless `--at` names one, `*` for every key; a later revocation of a key replaces its time) and a `jti` that
-#: every revocation moves, as nsc signs the account again for each, and a user's carries its issue
-#: time, issuer, key and the grants it was given, sorted, with `>` written `\u003e`, as nsc 2.15.0 writes them (measured
-#: 2026-11-07); the tests decode them. Keys are base32, as nkeys are. Every call is
-#: appended to $NSC_CALLS, a non-empty $NSC_FAIL fails them all, and anything else the seed has no business calling fails loudly.
+#: nsc 2.15's calls the dev seed makes ([[XC-078]]), measured as uid 65532 in natsio/nats-box:0.19.7 on 2026-10-04 and on nsc
+#: 2.15.0 on 2026-11-15, against state kept under the `-H` directory so a carried root is just that directory again. A JWT
+#: is `eyJ.<base64 of a JSON claim>`. An account's names its key (`account`), the user keys revoked in it (`revocations`,
+#: key -> the time credentials issued up to are refused, now unless `--at` names one, `*` for every key; a later
+#: revocation of a key replaces its time), its signing keys (`signing_keys`: in APP each a scope object, `kind`, `key`,
+#: `role` and `template` in that order, as nsc writes them; in AUTH each a key) and AUTH's callout (`authorization`), and a
+#: `jti` that each edit moves, as nsc signs the account again for each. `generate nkey --account --store` prints the new
+#: public key and keeps its seed as keys/A/<two characters>/<key>.nk, where nsc keeps it. A user's carries its issue time,
+#: issuer, key and the grants it was given, sorted, with `>` written `\u003e`, as nsc 2.15.0 writes them (measured
+#: 2026-11-07); the tests decode them. Keys are base32, as nkeys are. Every call is appended to $NSC_CALLS, a non-empty
+#: $NSC_FAIL fails them all, and anything else the seed has no business calling fails loudly.
 NSC = """\
 #!/bin/sh
 [ "$1" = -H ] || { echo "nsc stand-in: -H <dir> must come first: $*" >&2; exit 99; }
@@ -136,32 +139,73 @@ d=$2; shift 2
 echo "$*" >> "$NSC_CALLS"
 [ -z "$NSC_FAIL" ] || { echo "nsc: boom" >&2; exit 1; }
 jwt() { printf 'eyJ.%s' "$(printf '%s' "$1" | base64 | tr -d '\\n=')"; }
-key() { printf '%s%s' "$1" "$(od -An -N28 -tx1 /dev/urandom | tr -d ' \\n' | tr 0-9a-f A-P | cut -c1-55)"; }
-allow() { printf '%s' "$1" | tr ',' '\\n' | sort | sed 's/>/\\\\u003e/g; s/.*/"&"/' | paste -sd, -; }
+key() { printf '%s%s' "$1" "$(od -An -N28 -tx1 /dev/urandom | tr -d ' \\n' | tr 0-9a-f A-P | cut -c1-$2)"; }
+allow() { printf '%s' "$1" | tr ',' '\\n' | grep . | sort -u | sed 's/>/\\\\u003e/g; s/.*/"&"/' | paste -sd, -; }
 account() { [ -f "$d/$1.pub" ] || { echo "Error: account $1 not found" >&2; exit 1; }; }
+sign() {
+  n=$(( $(cat "$d/jti" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/jti"
+  rev=$( [ -f "$d/$1.revoked" ] && awk '{at[$1] = $2} END {for (k in at) printf "%s\\"%s\\":%s", (n++ ? "," : ""), k, at[k]}' "$d/$1.revoked")
+  sk=
+  if [ "$1" = APP ]; then
+    for k in $(cat "$d/APP.sk" 2>/dev/null); do
+      sk="$sk${sk:+,}{\\"kind\\":\\"user_scope\\",\\"key\\":\\"$k\\",\\"role\\":\\"$(cat "$d/scope/$k.role" 2>/dev/null)\\",\\"template\\":{\\"pub\\":{\\"allow\\":[$(allow "$(cat "$d/scope/$k.pub" 2>/dev/null)")]},\\"sub\\":{\\"allow\\":[$(allow "$(cat "$d/scope/$k.sub" 2>/dev/null)")]},\\"subs\\":-1,\\"data\\":-1,\\"payload\\":-1},\\"description\\":\\"\\"}"
+    done
+  else
+    sk=$(sed 's/.*/"&"/' "$d/$1.sk" 2>/dev/null | paste -sd, -)
+  fi
+  authz=$(cat "$d/$1.authz" 2>/dev/null)
+  jwt "{\\"jti\\":\\"$n\\",\\"account\\":\\"$(cat "$d/$1.pub")\\",\\"nats\\":{\\"revocations\\":{$rev},\\"signing_keys\\":[$sk],\\"authorization\\":{$authz}}}" > "$d/$1.jwt"
+}
+drop() { grep -vxF "$2" "$1" > "$1.new" 2>/dev/null; mv "$1.new" "$1"; }
 case "$*" in
-  "add operator -n rask --sys") jwt "{\\"operator\\":\\"$(key O)\\"}" > "$d/operator"
-    key A > "$d/SYS.pub"; jwt "{\\"account\\":\\"$(cat "$d/SYS.pub")\\"}" > "$d/SYS.jwt" ;;
-  "add account -n APP") key A > "$d/APP.pub"; jwt "{\\"account\\":\\"$(cat "$d/APP.pub")\\"}" > "$d/APP.jwt" ;;
+  "add operator -n rask --sys") jwt "{\\"operator\\":\\"$(key O 55)\\"}" > "$d/operator"
+    key A 55 > "$d/SYS.pub"; sign SYS ;;
+  "add account -n APP"|"add account -n AUTH") [ ! -f "$d/$4.pub" ] || { echo "Error: account $4 exists" >&2; exit 1; }; key A 55 > "$d/$4.pub"; sign "$4" ;;
   "edit account -n APP --js-tier 0 --js-disk-storage -1 --js-mem-storage 0 --js-streams -1 --js-consumer -1") account APP ;;
   "delete user -a SYS -n sys") account SYS ;;
   "describe operator --raw") cat "$d/operator" ;;
-  "describe account -n SYS --raw"|"describe account -n APP --raw") account "$4"; cat "$d/$4.jwt" ;;
-  "describe account -n SYS --field sub"|"describe account -n APP --field sub") account "$4"; printf '"%s"\\n' "$(cat "$d/$4.pub")" ;;
+  "describe account -n SYS --raw"|"describe account -n APP --raw"|"describe account -n AUTH --raw") account "$4"; cat "$d/$4.jwt" ;;
+  "describe account -n SYS --field sub"|"describe account -n APP --field sub"|"describe account -n AUTH --field sub") account "$4"; printf '"%s"\\n' "$(cat "$d/$4.pub")" ;;
+  "generate nkey --account --store")
+    k=$(key A 55); mkdir -p "$d/keys/A/$(printf '%s' "$k" | cut -c2-3)"; key SA 56 > "$d/keys/A/$(printf '%s' "$k" | cut -c2-3)/$k.nk"
+    printf '%s\\n' "$k"; echo "account key stored $d/keys/A/$k.nk" >&2 ;;
+  "edit account -n "*" --sk "*) [ "$#" -eq 6 ] || { echo "nsc stand-in: unexpected edit: $*" >&2; exit 99; }; account "$4"; echo "$6" >> "$d/$4.sk"; sign "$4" ;;
+  "edit account -n "*" --rm-sk "*) [ "$#" -eq 6 ] || { echo "nsc stand-in: unexpected edit: $*" >&2; exit 99; }; account "$4"; drop "$d/$4.sk" "$6"; rm -f "$d/scope/$6".*; sign "$4" ;;
+  "edit signing-key -a APP --sk "*" --rm "*)
+    [ "$#" -eq 8 ] || { echo "nsc stand-in: unexpected edit: $*" >&2; exit 99; }
+    for x in $(printf '%s' "$8" | tr ',' ' '); do for f in pub sub; do [ ! -f "$d/scope/$6.$f" ] || { tr ',' '\\n' < "$d/scope/$6.$f" | grep -vxF "$x" | paste -sd, - > "$d/scope/$6.$f.new"; mv "$d/scope/$6.$f.new" "$d/scope/$6.$f"; }; done; done
+    sign APP ;;
+  "edit signing-key -a APP --sk "*" --role "*" --allow-pub "*" --allow-sub "*)
+    [ "$#" -eq 12 ] || { echo "nsc stand-in: unexpected edit: $*" >&2; exit 99; }
+    grep -qxF "$6" "$d/APP.sk" || { echo "Error: $6 is not a signing key of APP" >&2; exit 1; }
+    mkdir -p "$d/scope"; printf '%s' "$8" > "$d/scope/$6.role"
+    printf '%s,%s' "$(cat "$d/scope/$6.pub" 2>/dev/null)" "${10}" > "$d/scope/$6.pub"; printf '%s,%s' "$(cat "$d/scope/$6.sub" 2>/dev/null)" "${12}" > "$d/scope/$6.sub"
+    sign APP ;;
   "add user -a APP -n "*" -k "*" --allow-pub "*" --allow-sub "*)
     [ "$#" -eq 12 ] || { echo "nsc stand-in: unexpected add user: $*" >&2; exit 99; }
     account APP; mkdir -p "$d/users"
     [ ! -f "$d/users/$6.jwt" ] || { echo "Error: user $6 already exists" >&2; exit 1; }
     jwt "{\\"iat\\":$(date +%s),\\"iss\\":\\"$(cat "$d/APP.pub")\\",\\"name\\":\\"$6\\",\\"sub\\":\\"$8\\",\\"nats\\":{\\"pub\\":{\\"allow\\":[$(allow "${10}")]},\\"sub\\":{\\"allow\\":[$(allow "${12}")]},\\"type\\":\\"user\\",\\"version\\":2}}" > "$d/users/$6.jwt" ;;
+  "add user -a AUTH -n callout -k "*" --allow-sub \\$SYS.REQ.USER.AUTH --deny-pub > --allow-pub-response")
+    account AUTH; mkdir -p "$d/users"
+    jwt "{\\"iat\\":$(date +%s),\\"iss\\":\\"$(cat "$d/AUTH.pub")\\",\\"name\\":\\"callout\\",\\"sub\\":\\"$8\\",\\"nats\\":{\\"pub\\":{\\"deny\\":[\\"\\\\u003e\\"]},\\"sub\\":{\\"allow\\":[\\"\\$SYS.REQ.USER.AUTH\\"]},\\"resp\\":{\\"max\\":1,\\"ttl\\":0},\\"type\\":\\"user\\",\\"version\\":2}}" > "$d/users/AUTH-callout.jwt" ;;
+  "add user -a AUTH -n sentinel --bearer --deny-pubsub >")
+    account AUTH; mkdir -p "$d/users"
+    jwt "{\\"iat\\":$(date +%s),\\"iss\\":\\"$(cat "$d/AUTH.pub")\\",\\"name\\":\\"sentinel\\",\\"sub\\":\\"$(key U 55)\\",\\"nats\\":{\\"pub\\":{\\"deny\\":[\\"\\\\u003e\\"]},\\"sub\\":{\\"deny\\":[\\"\\\\u003e\\"]},\\"subs\\":-1,\\"data\\":-1,\\"payload\\":-1,\\"bearer_token\\":true,\\"type\\":\\"user\\",\\"version\\":2}}" > "$d/users/AUTH-sentinel.jwt" ;;
   "describe user -a APP -n "*" --raw") cat "$d/users/$6.jwt" ;;
-  "revocations add-user -a APP -u "*)
+  "describe user -a AUTH -n "*" --raw") cat "$d/users/AUTH-$6.jwt" ;;
+  "edit authcallout -a AUTH --auth-user "*" --allowed-account "*)
+    [ "$#" -eq 8 ] || { echo "nsc stand-in: unexpected callout: $*" >&2; exit 99; }
+    account AUTH; printf '"auth_users":["%s"],"allowed_accounts":["%s"]' "$6" "$8" > "$d/AUTH.authz"; sign AUTH ;;
+  "edit authcallout -a AUTH --rm-auth-user "*|"edit authcallout -a AUTH --rm-allowed-account "*)
+    account AUTH; sed "s/\\"$6\\"//; s/\\[,/[/; s/,\\]/]/; s/,,/,/" "$d/AUTH.authz" > "$d/AUTH.authz.new"; mv "$d/AUTH.authz.new" "$d/AUTH.authz"; sign AUTH ;;
+  "revocations add-user -a APP -u "*|"revocations add-user -a AUTH -u "*)
     case "$#" in
       6) at=$(date +%s) ;;
       8) [ "$7" = --at ] || { echo "nsc stand-in: unexpected revocation: $*" >&2; exit 99; }; at=$8 ;;
       *) echo "nsc stand-in: unexpected revocation: $*" >&2; exit 99 ;;
     esac
-    account APP; echo "$6 $at" >> "$d/APP.revoked"
-    jwt "{\\"jti\\":\\"$(wc -l < "$d/APP.revoked" | tr -d ' ')\\",\\"account\\":\\"$(cat "$d/APP.pub")\\",\\"revocations\\":{$(awk '{at[$1] = $2} END {for (k in at) printf "%s\\"%s\\":%s", (n++ ? "," : ""), k, at[k]}' "$d/APP.revoked")}}" > "$d/APP.jwt" ;;
+    account "$4"; echo "$6 $at" >> "$d/$4.revoked"; sign "$4" ;;
   *) echo "nsc stand-in: unhandled call: $*" >&2; exit 99 ;;
 esac
 """

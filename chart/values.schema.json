@@ -599,7 +599,7 @@
             "type": "object",
             "properties": {
                 "appId": {
-                    "description": "Maintenance's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), the bus user its events are published as (`nats-user-\u003cid\u003e`) and its OTel service.",
+                    "description": "Maintenance's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), the bus user its events are published as and its OTel service.",
                     "type": "string"
                 },
                 "arrivalEnabled": {
@@ -815,6 +815,10 @@
                 "auth": {
                     "type": "object",
                     "properties": {
+                        "audience": {
+                            "description": "Audience of the ServiceAccount token each session user's pod projects and presents to the bus; the signer's TokenReview names it.",
+                            "type": "string"
+                        },
                         "flagged": {
                             "description": "Extra user grants keyed by a values flag path, or several joined by `,` that must all be true, merged into `nats.auth.users` only while the key holds (lance.natsTable).",
                             "type": "object",
@@ -914,11 +918,17 @@
                             }
                         },
                         "provisioned": {
-                            "description": "Attests the platform's store holds every `nats-user-\u003cuser\u003e`; required when the store is the platform's (`openbao.enabled` false).",
+                            "description": "Attests the platform's signer admits each session user of `\u003crelease\u003e-nats-permissions` and its store holds each static user's `nats-user-\u003cuser\u003e`; required when the store is the platform's (`openbao.enabled` false).",
                             "type": "boolean"
                         },
+                        "sessionSeconds": {
+                            "description": "Longest a session the signer grants lives, in seconds: at least 60 and below the projected token's 600 s.",
+                            "type": "integer",
+                            "maximum": 599,
+                            "minimum": 60
+                        },
                         "users": {
-                            "description": "The bus user table, one user per connection a service opens (named by its app id) plus admin and monitor, each with publish and subscribe subject lists (never empty).",
+                            "description": "The bus user table, one user per connection a service opens (named by its app id) plus admin, monitor and object-store, each with publish and subscribe subject lists (never empty); a row supplied by values may name its `serviceAccount` to be a session user.",
                             "type": "object",
                             "properties": {
                                 "admin": {
@@ -1027,6 +1037,19 @@
                         }
                     }
                 },
+                "ca": {
+                    "type": "object",
+                    "properties": {
+                        "configMap": {
+                            "description": "ConfigMap in the release's namespace holding the CA bundle the bus's TLS certificate chains to, mounted read-only into every pod that connects as a session user. Empty: the system trust store.",
+                            "type": "string"
+                        },
+                        "key": {
+                            "description": "Key of `nats.ca.configMap` that holds the CA bundle.",
+                            "type": "string"
+                        }
+                    }
+                },
                 "egress": {
                     "description": "NetworkPolicy egress rules ({to, ports}) admitting the bus's clients (every pod whose service connects to it, the stream Job) to the platform's bus at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment, where the bus is the platform's.",
                     "type": "array"
@@ -1041,7 +1064,7 @@
                     "type": "integer"
                 },
                 "url": {
-                    "description": "NATS JetStream address every service and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.",
+                    "description": "NATS JetStream address every service and the stream Job connect to (e.g. tls://nats.internal:4222; a comma-separated list for several servers). Required: empty fails the render, and a real deployment refuses any scheme but tls://, whose server must take the TLS handshake first.",
                     "type": "string"
                 }
             }
@@ -1764,7 +1787,7 @@
                     "type": "object",
                     "properties": {
                         "appId": {
-                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service.",
+                            "description": "The catalog's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user and its OTel service.",
                             "type": "string"
                         },
                         "module": {
@@ -1785,7 +1808,7 @@
                     "type": "object",
                     "properties": {
                         "appId": {
-                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user (`nats-user-\u003cid\u003e`) and its OTel service.",
+                            "description": "Lineage's app id: its secret-store role (`\u003crelease\u003e-\u003cid\u003e`), its bus user and its OTel service.",
                             "type": "string"
                         },
                         "deliveriesInFlight": {

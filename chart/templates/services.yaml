@@ -150,6 +150,7 @@ spec:
             {{- include "lance.saVerifier" (list $root "mounts" "catalog") | nindent 12 }}
             {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
             {{- include "lance.identityTokens" (list "mounts" (include "lance.objectStoreAudience" .)) | nindent 12 }}
+            {{- include "lance.busIdentity" (list $root "mounts") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.services.catalog.appId "volumes") | nindent 8 }}
@@ -159,6 +160,7 @@ spec:
         {{- include "lance.saVerifier" (list $root "volumes" "catalog") | nindent 8 }}
         {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
         {{- include "lance.identityTokens" (list "volumes" (include "lance.objectStoreAudience" .)) | nindent 8 }}
+        {{- include "lance.busIdentity" (list $root "volumes") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service
@@ -278,11 +280,13 @@ spec:
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 12 }}
             {{- include "lance.storeIdentity" (list $root .Values.services.lineage.appId "mounts") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "lineage") | nindent 12 }}
+            {{- include "lance.busIdentity" (list $root "mounts") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.services.lineage.appId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "lineage") | nindent 8 }}
+        {{- include "lance.busIdentity" (list $root "volumes") | nindent 8 }}
 ---
 apiVersion: v1
 kind: Service

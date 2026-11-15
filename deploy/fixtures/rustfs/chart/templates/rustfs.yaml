@@ -75,6 +75,10 @@ spec:
             - { name: RUSTFS_NOTIFY_NATS_ADDRESS_PRIMARY, value: {{ .busAddress | quote }} }
             - { name: RUSTFS_NOTIFY_NATS_SUBJECT_PRIMARY, value: store.events }
             - { name: RUSTFS_NOTIFY_NATS_CREDENTIALS_FILE_PRIMARY, value: /run/secrets/rustfs-bus/nats.creds }
+            {{- if .busCa }}
+            - { name: RUSTFS_NOTIFY_NATS_TLS_REQUIRED_PRIMARY, value: "on" }
+            - { name: RUSTFS_NOTIFY_NATS_TLS_CA_PRIMARY, value: /run/secrets/rustfs-bus-ca/ca.crt }
+            {{- end }}
             - { name: RUSTFS_NOTIFY_NATS_QUEUE_DIR_PRIMARY, value: /queue }
             - { name: RUSTFS_NOTIFY_NATS_JETSTREAM_ENABLE_PRIMARY, value: "on" }
             - { name: RUSTFS_NOTIFY_NATS_JETSTREAM_STREAM_NAME_PRIMARY, value: STORE_EVENTS }
@@ -114,6 +118,9 @@ spec:
             - { name: bus-credentials, mountPath: /run/secrets/rustfs-bus, readOnly: true }
             - { name: event-queue, mountPath: /queue }
             {{- end }}
+            {{- if and .Values.events.busAddress .Values.events.busCa }}
+            - { name: bus-ca, mountPath: /run/secrets/rustfs-bus-ca, readOnly: true }
+            {{- end }}
       volumes:
         - name: root-credentials
           secret:
@@ -133,6 +140,9 @@ spec:
             items:
               - { key: nats.creds, path: nats.creds }
         - { name: event-queue, emptyDir: { sizeLimit: "1Gi" } }
+        {{- end }}
+        {{- if and .Values.events.busAddress .Values.events.busCa }}
+        - { name: bus-ca, configMap: { name: {{ .Values.events.busCa | quote }} } }
         {{- end }}
   volumeClaimTemplates:
     - metadata:

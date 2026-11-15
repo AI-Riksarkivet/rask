@@ -157,7 +157,7 @@ asked for again by the lane that met it, on the numbers that lane names (`lakeho
    - **The object store** (the RustFS fixture in development) — the S3 data plane. Down → no Lance read/write.
    - **The secret store / OpenFGA / Dex** — one pod each in development (the store and Dex are fixtures; production
      names the platform's). The store sealed: a signer drops its key within one re-read (300 s) and the catalog refuses
-     every write it would announce, and a bus credential is read again at the next connect. OpenFGA down: every governed door answers 503 code 17. Dex down: a door that still holds
+     every write it would announce, and the bus is dialled with the pod's own token, not a credential read from the store. OpenFGA down: every governed door answers 503 code 17. Dex down: a door that still holds
      its key set accepts the tokens it verifies for up to 300 s, and one that must fetch the key set answers 503 code 17.
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).

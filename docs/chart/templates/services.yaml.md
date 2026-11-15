@@ -84,8 +84,8 @@ deployment needs its regional STS endpoint here, for which the chart has no valu
 ## `{{- include "lance.secretStoreEnv" (list $root .Values.services.catalog.appId) | nindent 12 }}`
 
 THE CATALOG LOGS IN TO THE SECRET STORE AS ITSELF ([[XC-199]]). The store's address, its role `<release>-catalog`, the
-mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its secrets (its signing key, its
-commit-id key, its bus credential) come ONLY from the store, read under the
+mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its secrets (its signing key and its
+commit-id key) come ONLY from the store, read under the
 process's own login at boot and again on a TTL (ADR 0166). None is in pod env. Lineage's Deployment carries
 the same include for its own role.
 

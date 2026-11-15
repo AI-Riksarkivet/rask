@@ -4,10 +4,10 @@
 module that publishes one. What a real broker does with it is the nats-auth lane's to show
 (`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`): a service connected as its own user under the
 permission table, its event kept once under its id as the structured envelope, an id another message holds, a bus that
-goes away and comes back, a credential the bus ends. Here are the rules no broker is needed for, or that one cannot be
-made to show: the sizes an envelope is held to, how a stored copy is compared, what a publish is timed and counted as,
-and what the loop keeping the connection does with each way an attempt can fail and a session can end. The broker's
-client is a double carrying nats-py's own signatures, and the secret store is the suite's double.
+goes away and comes back, a session the bus ends and one asked for again in time. Here are the rules no broker is
+needed for, or that one cannot be made to show: the sizes an envelope is held to, how a stored copy is compared, what a
+publish is timed and counted as, what a connect presents, and what the loop keeping the connection does with each way
+an attempt can fail and a session can end. The broker's client is a double carrying nats-py's own signatures.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, call, create_autospec
 
-import nkeys
 import pytest
 import pytest_asyncio
 from nats.aio.client import Client
@@ -37,19 +37,11 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, Trace
 from lakehouse import bus, bus_metrics
 from lakehouse.cloud_events import CloudEvent
 from lakehouse.supervision import EndProcess, Supervisor
-from tests.secret_store_double import SecretStoreDouble
 
 
 #: The W3C Trace Context specification's own example.
 TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 TOPIC = "lineage.events.v1"
-#: What the store holds for the bus user `catalog`: public test values no bus issued.
-CREDENTIAL = {"jwt": "eyJ0eXAiOiJKV1QifQ.catalog", "seed": "SUATESTSEEDCATALOG"}
-#: The same credential as the document nats-py reads, spelt out as nsc writes one: each value on the line after its marker.
-CREDENTIALS_DOCUMENT = (
-    "-----BEGIN NATS USER JWT-----\neyJ0eXAiOiJKV1QifQ.catalog\n------END NATS USER JWT------\n\n"
-    "-----BEGIN USER NKEY SEED-----\nSUATESTSEEDCATALOG\n------END USER NKEY SEED------\n"
-)
 
 type Points = Callable[[str], list[tuple[dict[str, object], int]]]
 
@@ -58,6 +50,7 @@ def _client(*, stored_as: int = 7) -> MagicMock:
     """A connected client as nats-py's own class specifies it, whose stream stores each publish at ``stored_as``."""
     client = create_autospec(Client, instance=True)
     client.is_connected = True
+    client.is_reconnecting = False
     stream = create_autospec(JetStreamContext, instance=True)
     stream.publish.return_value = PubAck(stream="LINEAGE", seq=stored_as)
     client.jetstream.return_value = stream
@@ -65,11 +58,13 @@ def _client(*, stored_as: int = 7) -> MagicMock:
 
 
 class _Opened:
-    """One connection the seam opened: with which credential, and the callback that tells it the client ended."""
+    """One connection the seam opened, and the way its client tells the seam it has closed for good."""
 
-    def __init__(self, credentials: str, ended: Callable[[], Awaitable[None]]) -> None:
-        self.credentials = credentials
-        self.ended = ended
+    def __init__(self, session: Any) -> None:
+        self._session = session
+
+    async def ended(self) -> None:
+        self._session.ended.set()
 
 
 class _Broker:
@@ -84,9 +79,10 @@ class _Broker:
         """Answer the next opens with ``outcomes``, in order."""
         self._outcomes.extend(outcomes)
 
-    async def open(self, settings: bus.BusSettings, credentials: str, *, ended: Callable[[], Awaitable[None]], said: set[str]) -> Client:
+    async def open(self, settings: bus.BusSettings, session: Any, *, said: set[str]) -> Client:
         del settings, said
-        self.opened.append(_Opened(credentials, ended))
+        session.began = asyncio.get_running_loop().time()
+        self.opened.append(_Opened(session))
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -101,13 +97,15 @@ async def _until(holds: Callable[[], bool], *, within: float = 5.0) -> None:
 
 
 @pytest.fixture
-def as_catalog(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> SecretStoreDouble:
-    """This process is the bus user `catalog`, as the chart names it to a pod, and the store holds that user's credential."""
+def as_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """This process is the bus user `catalog`, as the chart names it to a pod; the file its pod's token for the bus is on."""
+    token = tmp_path / "bus-token"
+    token.write_text("the-pods-token\n")
     monkeypatch.setenv("RASK_BUS_URL", "nats://bus.test:4222")
     monkeypatch.setenv("RASK_BUS_USER", "catalog")
+    monkeypatch.setenv("RASK_BUS_TOKEN_FILE", str(token))
     monkeypatch.setattr(bus, "_PAUSE_SECONDS", (0.0, 0.0))
-    secret_store.hold("nats-user-catalog", CREDENTIAL)
-    return secret_store
+    return token
 
 
 @pytest.fixture
@@ -119,7 +117,7 @@ def broker(monkeypatch: pytest.MonkeyPatch) -> _Broker:
 
 
 @pytest_asyncio.fixture
-async def connected(broker: _Broker, as_catalog: SecretStoreDouble) -> AsyncIterator[tuple[bus.Bus, MagicMock]]:
+async def connected(broker: _Broker, as_catalog: Path) -> AsyncIterator[tuple[bus.Bus, MagicMock]]:
     """A session connected as `catalog`, and the client it holds."""
     del as_catalog
     client = _client()
@@ -316,22 +314,22 @@ async def test_each_publish_is_timed_under_its_topic_and_how_it_ended(
             ["bus_error", "bus_disconnected", "bus_not_connected"],
             id="no-server-takes-the-connection",
         ),
-        pytest.param(None, nkeys.ErrInvalidSeed(), ["bus_disconnected", "bus_not_connected"], id="the-store-holds-a-seed-that-signs-nothing"),
+        pytest.param(None, ValueError("raised by no client code"), ["bus_disconnected", "bus_not_connected"], id="a-fault-outside-the-clients-own-errors"),
     ],
 )
 @pytest.mark.asyncio
 async def test_a_connection_that_cannot_be_opened_is_tried_again_and_each_fault_reported_once(
     monkeypatch: pytest.MonkeyPatch,
-    as_catalog: SecretStoreDouble,
+    as_catalog: Path,
     caplog: pytest.LogCaptureFixture,
     said: Exception | None,
     failure: Exception,
     logged: list[str],
 ) -> None:
     """Whatever kept an attempt from a connection, the next attempt is the only way to one: a bus that takes none, and a
-    credential nats-py cannot sign with (it raises that outside its own errors), each leave the process running and
-    unconnected. What the bus says on every attempt of one outage is logged once, and so are the attempts' closed
-    clients and the outage; the session's own closing of its connection, at the end, is not told as a disconnection."""
+    fault raised outside nats-py's own errors, each leave the process running and unconnected. What the bus says on
+    every attempt of one outage is logged once, and so are the attempts' closed clients and the outage; the session's
+    own closing of its connection, at the end, is not told as a disconnection."""
     del as_catalog
     outcomes: list[Exception | None] = [failure, failure, None]
     clients: list[MagicMock] = []
@@ -365,27 +363,110 @@ async def test_a_connection_that_cannot_be_opened_is_tried_again_and_each_fault_
 
 
 @pytest.mark.asyncio
-async def test_a_store_that_holds_no_credential_for_the_user_leaves_the_bus_unconnected_and_is_asked_again(
-    broker: _Broker, as_catalog: SecretStoreDouble, caplog: pytest.LogCaptureFixture
+async def test_each_connect_presents_the_token_the_pod_holds_then_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch, as_catalog: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A user the seed has not issued yet, or issued without its JWT: nothing is opened on half a credential, and the
-    store is read again until it holds one, which the connection is then opened with."""
-    as_catalog.hold("nats-user-catalog", {"seed": CREDENTIAL["seed"]})
-    broker.will(_client())
+    """The pod's token is all a connect presents, under the user's name and its own inbox, read as nats-py builds each
+    connect: a pod whose token is not there yet is not connected and is tried again, and the token the kubelet has
+    written by then is the one presented."""
+    as_catalog.unlink()
+    presented: list[dict[str, Any]] = []
+
+    def client() -> MagicMock:
+        made = _client()
+
+        async def connect(**options: Any) -> None:
+            presented.append({"token": options["token"](), **{name: options.get(name) for name in ("name", "inbox_prefix", "user_credentials", "tls")}})
+
+        made.connect.side_effect = connect
+        return made
+
+    monkeypatch.setattr(bus, "Client", client)
 
     with caplog.at_level(logging.WARNING, logger=bus.__name__):
         async with Supervisor() as loops, bus.bus_session(loops) as session:
             assert session is not None
             await _until(lambda: [record.message for record in caplog.records] == ["bus_not_connected"])
-            opened_on_half = len(broker.opened)
-            as_catalog.hold("nats-user-catalog", CREDENTIAL)
+            as_catalog.write_text("the-token-the-kubelet-wrote-next\n")
             await _until(lambda: session.connected)
 
-    assert (opened_on_half, [opened.credentials for opened in broker.opened]) == (0, [CREDENTIALS_DOCUMENT])
+    assert presented == [
+        {"token": "the-token-the-kubelet-wrote-next", "name": "catalog", "inbox_prefix": "_INBOX_catalog", "user_credentials": None, "tls": None}
+    ]
 
 
 @pytest.mark.asyncio
-async def test_a_process_whose_connection_is_not_up_says_so_and_publishes_nothing(broker: _Broker, as_catalog: SecretStoreDouble) -> None:
+async def test_a_bus_dialled_over_tls_is_sent_nothing_until_it_has_proved_itself(monkeypatch: pytest.MonkeyPatch, as_catalog: Path) -> None:
+    """A server at a `tls://` address that greets in plaintext, asks for no encryption and keeps the socket open, as
+    one standing in the path would: nats-py's own client opens with its TLS handshake, so the pod's token never leaves
+    the process, and the opening is given up within its bound for the loop to try again."""
+    monkeypatch.setattr(bus, "_OPEN_WITHIN_SECONDS", 1.0)
+    monkeypatch.setattr(bus, "_CLOSE_SECONDS", 0.5)
+    received = bytearray()
+    peers: list[asyncio.StreamWriter] = []
+
+    async def greet(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        peers.append(writer)
+        writer.write(b'INFO {"server_id":"x","version":"2.15.2","proto":1,"max_payload":1048576}\r\n')
+        with contextlib.suppress(ConnectionError):
+            await writer.drain()
+            while chunk := await reader.read(4096):
+                received.extend(chunk)
+                if b"PING" in chunk:
+                    writer.write(b"PONG\r\n")
+                    await writer.drain()
+
+    server = await asyncio.start_server(greet, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    settings = bus.BusSettings.model_validate({"RASK_BUS_URL": f"tls://127.0.0.1:{port}", "RASK_BUS_USER": "catalog", "RASK_BUS_TOKEN_FILE": str(as_catalog)})
+    opened: Client | None = None
+    try:
+        async with asyncio.timeout(20):
+            with contextlib.suppress(OSError, bus.NatsError, TimeoutError):
+                opened = await bus._open(settings, bus._Session(), said=set())
+    finally:
+        if opened is not None:
+            await opened.close()
+        for peer in peers:
+            peer.close()
+        server.close()
+
+    assert (opened, b"the-pods-token" in received, b"auth_token" in received) == (None, False, False)
+
+
+@pytest.mark.asyncio
+async def test_a_publish_that_meets_a_session_being_asked_for_again_waits_for_it(monkeypatch: pytest.MonkeyPatch, broker: _Broker, as_catalog: Path) -> None:
+    """A session is asked for again before its time is up, on the client that holds it, and that client is back in a
+    round trip: a publish that meets it is sent once it is up and not left to its relay."""
+    del as_catalog
+    monkeypatch.setenv("RASK_BUS_SESSION_SECONDS", "20")
+    monkeypatch.setattr(bus, "_RENEW_MARGIN_SECONDS", (19.9, 19.9))
+    client = _client()
+    broker.will(client)
+    asking = asyncio.Event()
+
+    def back() -> None:
+        client.is_connected, client.is_reconnecting = True, False
+
+    async def connect_again() -> None:
+        if asking.is_set():
+            return
+        client.is_connected, client.is_reconnecting = False, True
+        asyncio.get_running_loop().call_later(0.1, back)
+        asking.set()
+
+    client.force_reconnect.side_effect = connect_again
+
+    async with Supervisor() as loops, bus.bus_session(loops) as session:
+        assert session is not None
+        await asking.wait()
+        await bus.publish_event(session, _envelope(run="r1"), topic=TOPIC, timeout_seconds=5)
+
+    assert ([sent["subject"] for sent in _sent(client)], len(broker.opened)) == ([TOPIC], 1)
+
+
+@pytest.mark.asyncio
+async def test_a_process_whose_connection_is_not_up_says_so_and_publishes_nothing(broker: _Broker, as_catalog: Path) -> None:
     """The verdict a readiness report shows for the bus, and what a publish is answered, while no server takes the connection."""
     del as_catalog
     broker.will(*[NoServersError() for _ in range(10_000)])
@@ -410,7 +491,7 @@ async def test_a_process_whose_connection_is_not_up_says_so_and_publishes_nothin
 )
 @pytest.mark.asyncio
 async def test_a_session_that_ends_closes_its_connection_within_a_bound_and_opens_no_other(
-    broker: _Broker, as_catalog: SecretStoreDouble, up: bool, flushed: Exception | None, flushes: list[Any]
+    broker: _Broker, as_catalog: Path, up: bool, flushed: Exception | None, flushes: list[Any]
 ) -> None:
     """The bus is given a bounded time to take what was sent on a connection that is up, and the connection is closed
     whether or not it answered; nats-py then calls the closed callback, which must not be read as the bus ending the
@@ -435,7 +516,7 @@ async def test_a_session_that_ends_closes_its_connection_within_a_bound_and_open
 
 @pytest.mark.parametrize("lands", [pytest.param("as-its-loop-ends", id="as-its-loop-ends"), pytest.param("as-it-flushes", id="as-it-flushes")])
 @pytest.mark.asyncio
-async def test_a_session_cancelled_as_it_ends_still_closes_its_connection(broker: _Broker, as_catalog: SecretStoreDouble, lands: str) -> None:
+async def test_a_session_cancelled_as_it_ends_still_closes_its_connection(broker: _Broker, as_catalog: Path, lands: str) -> None:
     """A cancellation that lands while the session ends is its task's to end on, and the connection is closed first all
     the same: while the session waits for its loop to end, and while it waits for the bus to take what was sent."""
     del as_catalog
@@ -469,7 +550,7 @@ async def test_a_session_cancelled_as_it_ends_still_closes_its_connection(broker
 
 @pytest.mark.asyncio
 async def test_a_session_that_ends_leaves_a_connection_whose_socket_is_never_let_go(
-    monkeypatch: pytest.MonkeyPatch, broker: _Broker, as_catalog: SecretStoreDouble, caplog: pytest.LogCaptureFixture
+    monkeypatch: pytest.MonkeyPatch, broker: _Broker, as_catalog: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """nats-py closes by waiting for the socket's buffer to empty, which a peer that died without closing never lets
     it: the session ends inside its bound all the same, and says what it left."""
@@ -492,9 +573,7 @@ async def test_a_session_that_ends_leaves_a_connection_whose_socket_is_never_let
 
 
 @pytest.mark.asyncio
-async def test_a_session_that_ends_while_it_connects_ends_whatever_releasing_the_connection_raises(
-    monkeypatch: pytest.MonkeyPatch, as_catalog: SecretStoreDouble
-) -> None:
+async def test_a_session_that_ends_while_it_connects_ends_whatever_releasing_the_connection_raises(monkeypatch: pytest.MonkeyPatch, as_catalog: Path) -> None:
     """A connect cancelled part-way releases its socket, and a release that raises must not stand in for the
     cancellation: the loop would take it for one more failed attempt and never end, and the session with it."""
     del as_catalog
@@ -528,18 +607,20 @@ async def test_a_process_the_chart_names_no_bus_holds_no_session(monkeypatch: py
 
 
 @pytest.mark.parametrize(
-    "user",
+    ("user", "token_file", "names"),
     [
-        pytest.param("", id="no-user"),
-        pytest.param("Catalog_1", id="a-user-the-store-can-hold-no-credential-for"),
+        pytest.param("", "/var/run/token", "RASK_BUS_USER", id="no-user"),
+        pytest.param("Catalog_1", "/var/run/token", "RASK_BUS_USER", id="a-user-that-is-no-subject-token"),
+        pytest.param("catalog", "", "RASK_BUS_TOKEN_FILE", id="no-token-to-present"),
     ],
 )
-def test_a_bus_named_without_a_user_it_can_connect_as_is_refused_at_start(monkeypatch: pytest.MonkeyPatch, user: str) -> None:
-    """A half-configured bus must not read as a process that simply publishes nowhere, and a user whose name is no
-    secret name has no credential the store could hold: both are refused when the settings are read, not in the loop
-    that connects."""
+def test_a_bus_named_without_who_connects_to_it_is_refused_at_start(monkeypatch: pytest.MonkeyPatch, user: str, token_file: str, names: str) -> None:
+    """A half-configured bus must not read as a process that simply publishes nowhere: a bus with no user, with a user
+    whose name cannot be a subject token, or with no token to present there is refused when the settings are read, not
+    in the loop that connects."""
     monkeypatch.setenv("RASK_BUS_URL", "nats://bus.test:4222")
     monkeypatch.setenv("RASK_BUS_USER", user)
+    monkeypatch.setenv("RASK_BUS_TOKEN_FILE", token_file)
 
-    with pytest.raises(ValueError, match="RASK_BUS_USER"):
+    with pytest.raises(ValueError, match=names):
         bus.BusSettings()

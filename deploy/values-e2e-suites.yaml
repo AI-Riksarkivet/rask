@@ -29,6 +29,23 @@ objectStore:
             - "arn:aws:s3:::*/*-outside/*"
             - "arn:aws:s3:::*/unstable_*"
 
+# The live suites' bus session ([[XC-199]]): on a bus in operator mode the suites read and publish as this session user,
+# under the same ServiceAccount (`kubectl create token rask-e2e-suites --audience <nats.auth.audience>`,
+# scripts/e2e_live.sh, tests/e2e-py/bus.py). It reads any stream's state and messages by sequence and any consumer's
+# state, and publishes on the two event topics, where a door refuses an event its producer did not sign.
+nats:
+  auth:
+    users:
+      e2e-suites:
+        serviceAccount: rask-e2e-suites
+        publish:
+          - lineage.events.v1
+          - catalog.control.v1
+          - $JS.API.STREAM.INFO.*
+          - $JS.API.STREAM.MSG.GET.*
+          - $JS.API.CONSUMER.INFO.*.*
+        subscribe: [_INBOX_e2e-suites.>]
+
 # The tenants the live suites read back as declared in git (XC-213, ADR 0206;
 # tests/e2e-py/test_the_estate_is_what_git_declares.py): two projects, a warehouse in each and one grant to a principal
 # that is not a person, which the catalog converges with no call to any door. A list replaces the chart's own, so the

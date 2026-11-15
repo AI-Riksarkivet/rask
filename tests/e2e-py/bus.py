@@ -6,9 +6,13 @@ consumer on a stream the estate's subscribers share. A write is a plain publish,
 consumer on its own connection exactly as it pulls a producer's. `declared` and `wait_until_acked` read a durable
 consumer's info (`$JS.API.CONSUMER.INFO`) and change nothing.
 
-THE CLIENT IS ANONYMOUS unless `LANCE_E2E_NATS_CREDS` names a creds file. Both targets' bus takes a client with no
-credential (the NATS fixture's default, `nats.auth.server` off); a bus in operator mode needs a user whose
-permissions cover the streams read and the subjects written (docs/OPERATORS.md § 7).
+THE CLIENT HOLDS NO BUS CREDENTIAL. A bus that takes anyone (the NATS fixture's default, `nats.auth.server` off, as the
+e2e-stack lane runs it) is dialled with nothing. A bus in operator mode (`tls://`, the dev estate's) is dialled as its
+services dial it: presenting a ServiceAccount token for the bus's audience (`LANCE_E2E_NATS_TOKEN_FILE`, minted by
+`scripts/e2e_live.sh` with a TokenRequest) under the name of a session user the estate's values declare for these
+suites (`LANCE_E2E_NATS_USER`), over TLS verified against the bus's CA (`LANCE_E2E_NATS_CA_FILE`) under the name its
+certificate carries (`LANCE_E2E_NATS_TLS_NAME`, since the address is the Service's cluster IP). That user's row covers
+the streams read and the subjects written here (deploy/values-e2e-suites.yaml, docs/OPERATORS.md § 7).
 """
 
 from __future__ import annotations
@@ -16,9 +20,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import ssl
 import time
 from collections.abc import Iterable
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import nats
@@ -30,9 +36,14 @@ if TYPE_CHECKING:
     from nats.aio.client import Client as NatsClient
 
 
-#: The bus, `nats://<host>:4222`.
+#: The bus, `nats://<host>:4222`, or `tls://<host>:4222` for one in operator mode.
 NATS = os.environ.get("LANCE_E2E_NATS_URL", "")
-NATS_CREDS = os.environ.get("LANCE_E2E_NATS_CREDS", "")
+#: What a bus in operator mode is presented with: the session user asked for, the file its ServiceAccount's token is
+#: on, the bus's CA, and the name the bus's certificate carries.
+NATS_USER = os.environ.get("LANCE_E2E_NATS_USER", "")
+NATS_TOKEN_FILE = os.environ.get("LANCE_E2E_NATS_TOKEN_FILE", "")
+NATS_CA_FILE = os.environ.get("LANCE_E2E_NATS_CA_FILE", "")
+NATS_TLS_NAME = os.environ.get("LANCE_E2E_NATS_TLS_NAME", "")
 
 
 class BusMessage(BaseModel):
@@ -54,7 +65,18 @@ class BusMessage(BaseModel):
 
 
 async def _connect() -> NatsClient:
-    return await nats.connect(NATS, connect_timeout=10, user_credentials=NATS_CREDS or None)
+    if not NATS.startswith("tls://"):
+        return await nats.connect(NATS, connect_timeout=10)
+    return await nats.connect(
+        NATS,
+        connect_timeout=10,
+        token=Path(NATS_TOKEN_FILE).read_text(encoding="utf-8").strip(),
+        name=NATS_USER,
+        inbox_prefix=f"_INBOX_{NATS_USER}",
+        tls=ssl.create_default_context(cafile=NATS_CA_FILE),
+        tls_hostname=NATS_TLS_NAME,
+        tls_handshake_first=True,
+    )
 
 
 async def _messages_since(stream: str, since: datetime) -> list[BusMessage]:

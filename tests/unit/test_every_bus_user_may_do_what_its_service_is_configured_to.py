@@ -5,10 +5,12 @@ quietly: a refused pull is asked again for as long as the pod runs, a publish wi
 and the pod stays Ready throughout. So the table the dev seed issues is held here to what each render configures.
 
 A SERVICE'S OWN CONNECTION ([[XC-199]], `lakehouse.bus`). Each service connects as the bus user its pod is named
-(`RASK_BUS_USER`), with the credential its own store login reads, so that login's policy must read `nats-user-<user>`;
+(`RASK_BUS_USER`), a session user: it holds no bus credential, and presents the ServiceAccount token its pod projects
+for the bus's audience, so the signer's table (`<release>-nats-permissions`) must bind that user to the pod's own
+ServiceAccount, the pod must project that token where `RASK_BUS_TOKEN_FILE` names it, and no bus Secret may be mounted;
 its acknowledgements arrive under `_INBOX_<user>`, which the table must grant to it and to no other user; and it
 believes a duplicate acknowledgement only after reading the stored message back, so it holds the read of exactly the
-streams that take what it publishes.
+streams that take what it publishes. Maintenance's work queue connects the same way, as its own user.
 
 ITS LANE. A service takes its deliveries from a durable consumer the stream Job declares. The user that pulls one holds
 its pull and its settling (`$JS.API.CONSUMER.MSG.NEXT.<stream>.<consumer>`, `$JS.ACK.<stream>.<consumer>.>`), no other
@@ -16,10 +18,11 @@ user holds either, and no user holds them for a consumer the render does not dec
 topic by reading its stream by sequence, so where it does its user holds that stream's read, and no user but the stream
 Job's may create a consumer anywhere or answer one's flow control.
 
-Besides the deployed overlays this renders the ones whose publishers and lanes differ from theirs. A pod that reads no
-store (the stream Job; nats-box and the servers of the NATS fixture, a prerequisite rask never installs) mounts its
-credential as a file, so that file must be one an ExternalSecret writes from the store. What the bus itself admits and
-refuses under the table is the `nats-auth` lane's.
+Besides the deployed overlays this renders the ones whose publishers and lanes differ from theirs. No pod of rask's
+mounts a bus credential, the stream Job included, which presents its token as `admin`; the NATS fixture (a prerequisite
+rask never installs) mounts its server config, nats-box's static `monitor` creds and its stand-in signer's keys as
+files, so each must be one an ExternalSecret writes from the store. What the bus itself admits and refuses under the
+table is the `nats-auth` lane's.
 """
 
 from __future__ import annotations
@@ -65,14 +68,15 @@ _WORKERS = frozenset(
     }
 )
 #: The renders whose publishers and lanes differ from the deployed overlays': the control topic's optional publisher,
-#: maintenance with no write-event lane (its worker pulls no announcement), and each service with one of its publishes
-#: switched off.
+#: maintenance with no write-event lane (its worker pulls no announcement), each service with one of its publishes
+#: switched off, and a real deployment, whose store and signer are the platform's.
 _OTHER_PUBLISHERS = [
     ("every-optional-publisher", (*DEFAULT_ARGS, "--set", "maintenance.controlEmit=true")),
     ("no-write-event-lane", (*DEFAULT_ARGS, "--set", "maintenance.arrivalEnabled=false")),
     ("no-control-lane", (*DEFAULT_ARGS, "--set", "catalog.controlEmit=false")),
     ("no-lineage-outbox", (*DEFAULT_ARGS, "--set", "services.lineage.outbox.enabled=false")),
     ("maintenance-emits-nothing", (*DEFAULT_ARGS, "--set", "maintenance.lineageEmit=false")),
+    ("production", chart_render.PROD_ARGS),
 ]
 
 type Users = dict[str, tuple[frozenset[str], frozenset[str]]]
@@ -93,27 +97,63 @@ def _configured_to_publish(env: dict[str, str]) -> set[str]:
     return topics
 
 
+def _session_problems(doc: dict, container: dict, user: str, sessions: dict, token: str = "RASK_BUS_TOKEN_FILE") -> list[str]:
+    """A pod connecting as ``user`` holds no bus credential: the signer's table binds the user to the pod's own
+    ServiceAccount, the pod projects its token for the table's audience where ``token`` names it, a service is told the
+    session the table grants (`RASK_BUS_SESSION_SECONDS`, which it refreshes by), and no bus Secret is mounted."""
+    workload = f"{doc['kind']}/{doc['metadata']['name']}"
+    pod = (chart_render.pod_template(doc) or {})["spec"]
+    env = chart_render.env_of(container)
+    row = (sessions.get("users") or {}).get(user)
+    account = f"system:serviceaccount:default:{pod.get('serviceAccountName')}"
+    if row is None:
+        return [f"{workload} connects to the bus as {user}, which the signer's table does not admit as a session user"]
+    problems = [] if row["serviceAccount"] == account else [f"{workload} runs as {account}, and the signer admits {user} only to {row['serviceAccount']}"]
+    projected = {
+        posixpath.join(m["mountPath"], src["serviceAccountToken"]["path"]): src["serviceAccountToken"].get("audience")
+        for v in pod.get("volumes") or []
+        for m in container.get("volumeMounts") or []
+        if m["name"] == v["name"] and "projected" in v
+        for src in v["projected"]["sources"]
+        if "serviceAccountToken" in src
+    }
+    if projected.get(env.get(token, "")) != sessions["audience"]:
+        problems.append(f"{workload} presents {env.get(token)}, which is no token it projects for the bus's audience {sessions['audience']}")
+    if token == "RASK_BUS_TOKEN_FILE" and env.get("RASK_BUS_SESSION_SECONDS") != str(sessions["sessionSeconds"]):
+        problems.append(f"{workload} is told its session lasts {env.get('RASK_BUS_SESSION_SECONDS')} s, and the signer grants {sessions['sessionSeconds']} s")
+    secrets = {v["name"] for v in pod.get("volumes") or [] if "secret" in v and "nats" in v["secret"]["secretName"]}
+    if mounted := sorted(m["name"] for m in container.get("volumeMounts") or [] if m["name"] in secrets):
+        problems.append(f"{workload} mounts the bus Secret {mounted}, and a session user holds no bus credential")
+    return problems
+
+
 def _own_connection_problems(docs: tuple[dict, ...], users: Users, streams: dict[str, str]) -> list[str]:
-    """Every service the render names a bus user connects with settings its process accepts, as a user the seed issues,
-    with a credential its own store login reads, under an inbox no other user reads; and it may publish exactly the
-    topics its pods are configured to, and read back exactly the streams that take them."""
-    envs = [(workload, chart_render.env_of(container)) for workload, _, container in chart_render.containers(docs)]
+    """Every service the render names a bus user connects with settings its process accepts, as a session user the signer
+    admits for its own ServiceAccount, under an inbox no other user reads; and it may publish exactly the topics its pods
+    are configured to, and read back exactly the streams that take them."""
+    sessions = chart_render.bus_sessions(docs)
     problems: list[str] = []
     configured: dict[str, set[str]] = defaultdict(set)
-    for workload, env in envs:
-        user = env.get("RASK_BUS_USER")
-        if user is None:
+    for doc in docs:
+        if chart_render.pod_template(doc) is None:
             continue
-        configured[user] |= _configured_to_publish(env)
-        try:
-            BusSettings.model_validate({"RASK_BUS_URL": env.get("RASK_BUS_URL", ""), "RASK_BUS_USER": user})
-        except ValueError as refused:
-            problems.append(f"{workload} is named a bus its process refuses to connect to: {refused}")
-        if user not in users:
-            problems.append(f"{workload} connects to the bus as {user}, a user the seed does not issue")
-            continue
-        if f"nats-user-{user}" not in _granted(docs, env.get("RASK_SECRET_STORE_ROLE", "")):
-            problems.append(f"{workload} connects to the bus as {user}, whose credential its own store login may not read")
+        for container in (chart_render.pod_template(doc) or {})["spec"]["containers"]:
+            env = chart_render.env_of(container)
+            workload = f"{doc['kind']}/{doc['metadata']['name']}"
+            if "MAINTENANCE_NATS_URL" in env:
+                problems += _session_problems(doc, container, queue.BUS_USER, sessions)
+            user = env.get("RASK_BUS_USER")
+            if user is None:
+                continue
+            configured[user] |= _configured_to_publish(env)
+            try:
+                BusSettings.model_validate({k: v for k, v in env.items() if k.startswith("RASK_BUS_")})
+            except ValueError as refused:
+                problems.append(f"{workload} is named a bus its process refuses to connect to: {refused}")
+            if user not in users:
+                problems.append(f"{workload} connects to the bus as {user}, a user the render does not declare")
+                continue
+            problems += _session_problems(doc, container, user, sessions)
     for user, topics in sorted(configured.items()):
         if user not in users:
             continue
@@ -184,10 +224,16 @@ def test_every_bus_user_may_do_what_its_service_is_configured_to_and_no_more(lab
         # reintroduces it fails here — and a bare CalledProcessError shows a 400-character argv and
         # none of the message written to explain the fix. Measured while mutation-checking this gate.
         pytest.fail(f"the {label} overlay no longer renders:\n{(exc.stderr or exc.stdout or '').strip()[:800]}")
-    users = chart_render.nats_users(docs)
-    assert users, f"under the {label} overlay the dev seed issues no bus user, so no service's credential can resolve"
+    users = chart_render.bus_users(docs)
+    assert users, f"under the {label} overlay the render declares no bus user, so no service can connect"
 
     problems = _own_connection_problems(docs, users, chart_render.jetstream_streams(docs)) + _lane_problems(docs, users)
+    rendered = json.dumps(docs)
+    problems += [
+        f"the render names nats-user-{user}, a credential no session user holds"
+        for user in chart_render.bus_sessions(docs)["users"]
+        if f"nats-user-{user}" in rendered
+    ]
 
     assert not problems, f"under the {label} overlay a service would connect as nobody, or as a user that may not do its job:\n  " + "\n  ".join(problems)
 
@@ -228,22 +274,22 @@ def _credential_mounts(docs: tuple[dict, ...]) -> dict[str, dict[str, str]]:
 @pytest.mark.parametrize(
     ("release", "expected"),
     [
-        pytest.param("rask", {"Job/rask-nats-stream-r1/nats", "Job/rask-nats-stream-retire-r1/nats"}, id="rask-the-stream-job"),
+        pytest.param("rask", set(), id="rask-mounts-none"),
         pytest.param(
             "bus",
-            {"Deployment/rask-nats-box/nats-box", "StatefulSet/rask-nats/nats", "StatefulSet/rask-nats/reloader"},
+            {"Deployment/rask-nats-box/nats-box", "StatefulSet/rask-nats/nats", "StatefulSet/rask-nats/reloader", "Deployment/rask-nats-signer/signer"},
             id="the-fixture-bus-in-operator-mode",
         ),
     ],
 )
 def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_from_the_store(release: str, expected: set[str]) -> None:
-    """Both phases of rask's stream Job mount the admin user's creds file; the NATS fixture (deploy/fixtures/nats) in operator
-    mode mounts its server config and nats-box's `monitor` creds, written by its own ExternalSecrets from rask's dev store
-    ([[XC-129]]). Each file is written from keys the dev seed provides and the store's policy lets ESO read, so a pod that
-    mounts it starts."""
+    """No pod of rask's mounts a bus credential: both phases of the stream Job connect as the session user `admin`,
+    presenting the token they project for the bus's audience, by the name the signer admits. The NATS fixture
+    (deploy/fixtures/nats) in operator mode mounts its server config, nats-box's static `monitor` creds and its stand-in
+    signer's keys, written by its own ExternalSecrets from rask's dev store ([[XC-129]]). Each file is written from keys the
+    dev seed provides and the store's policy lets ESO read, so a pod that mounts it starts."""
     rask = render(*DEFAULT_ARGS)
-    users = chart_render.nats_users(rask)
-    seeded = {f"nats-user-{user}" for user in users} | {"nats-server", "nats-route"}
+    seeded = {f"nats-user-{user}" for user in chart_render.nats_users(rask)} | {"nats-server", "nats-route", "nats-callout"}
     readable = _eso_reads(rask)
     docs = rask if release == "rask" else chart_render.render_fixture("nats", "--set", "nats.auth.server=true")
     written = {doc["spec"]["target"]["name"]: doc for doc in docs if doc.get("kind") == "ExternalSecret"}
@@ -253,25 +299,25 @@ def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_
     for pod, paths in mounts.items():
         for secret in paths.values():
             assert secret in written, f"{pod} mounts {secret}, which no ExternalSecret writes, so the pod never starts"
-            fetched = {(item["remoteRef"]["key"], item["remoteRef"]["property"]) for item in written[secret]["spec"]["data"]}
-            assert {key for key, _ in fetched} <= seeded, (
-                f"{secret} is written from {sorted(fetched)}, a secret neither the seed nor an attesting operator provides"
-            )
-            assert {key for key, _ in fetched} <= readable, f"{secret} is written from {sorted({k for k, _ in fetched} - readable)}, which ESO may not read"
-            template = json.dumps(written[secret]["spec"]["target"]["template"]["data"])
+            spec = written[secret]["spec"]
+            fetched = {item["remoteRef"]["key"] for item in spec.get("data") or []} | {item["extract"]["key"] for item in spec.get("dataFrom") or []}
+            assert fetched <= seeded, f"{secret} is written from {sorted(fetched)}, a secret neither the seed nor an attesting operator provides"
+            assert fetched <= readable, f"{secret} is written from {sorted(fetched - readable)}, which ESO may not read"
+            template = json.dumps(spec["target"]["template"].get("data") or {})
             assert all(f"{{{{ .{field} }}}}" in template for field in _fields(written[secret])), f"{secret}'s template drops a field it fetches"
 
     if release == "rask":
-        for phase in sorted(expected):
-            workload = phase.rsplit("/", 1)[0]
-            [job] = [c for found, _, c in chart_render.containers(docs) if found == workload]
-            [(path, secret)] = mounts[phase].items()
-            assert {(item["remoteRef"]["key"], item["remoteRef"]["property"]) for item in written[secret]["spec"]["data"]} == {
-                ("nats-user-admin", "jwt"),
-                ("nats-user-admin", "seed"),
-            }, f"{workload}'s credential is not the admin user's"
-            assert chart_render.env_of(job).get("NATS_CREDS") in {f"{path}/{key}" for key in written[secret]["spec"]["target"]["template"]["data"]}, (
-                f"{workload}'s nats CLI is not pointed at the credential file it mounts"
+        sessions = chart_render.bus_sessions(docs)
+        jobs = [doc for doc in docs if doc.get("kind") == "Job" and "-nats-stream-" in doc["metadata"]["name"]]
+        assert len(jobs) == 2, f"the stream Job renders {[j['metadata']['name'] for j in jobs]}, not its two phases"
+        for job in jobs:
+            [container] = job["spec"]["template"]["spec"]["containers"]
+            assert not [v for v in job["spec"]["template"]["spec"]["volumes"] if "secret" in v], f"{job['metadata']['name']} mounts a Secret"
+            script = container["command"][-1]
+            problems = _session_problems(job, container, _ADMIN, sessions, token="BUS_TOKEN_FILE")
+            assert not problems, f"{job['metadata']['name']}: {problems}"
+            assert 'NATS_TOKEN=$(cat "$BUS_TOKEN_FILE") nats --server "$S" --connection-name admin' in script, (
+                f"{job['metadata']['name']}'s nats CLI does not present its token by the name the signer admits it under"
             )
         return
 
@@ -293,24 +339,92 @@ def test_every_nats_credential_a_pod_mounts_is_a_file_an_external_secret_writes_
         assert target in reloader["args"], f"the config reloader does not watch {target}, so a rotated credential never reaches the server"
 
 
+_MAINT = ("--set", "maintenance.appId=maint")
+
+
 @pytest.mark.parametrize(
-    ("row", "refusal"),
+    ("sets", "refusal"),
     [
         pytest.param(
-            None, "the service maint connects to the bus as the user maint, which nats.auth.users does not declare", id="a-user-the-table-does-not-declare"
+            _MAINT, "the service maint connects to the bus as the user maint, which nats.auth.users does not declare", id="a-user-the-table-does-not-declare"
         ),
         pytest.param(
-            '{"publish":["lineage.events.v1"],"subscribe":["_INBOX.>"]}',
+            (*_MAINT, "--set-json", 'nats.auth.users.maint={"publish":["lineage.events.v1"],"subscribe":["_INBOX.>"]}'),
             "nats.auth.users.maint grants the service maint no inbox of its own (_INBOX_maint.>)",
             id="a-user-with-only-the-shared-inbox",
         ),
+        pytest.param(
+            ("--set", "nats.auth.users.catalog.serviceAccount=elsewhere"),
+            "nats.auth.users.catalog.serviceAccount: the lakehouse's own bus user takes its ServiceAccount from the chart",
+            id="a-lakehouse-row-naming-a-service-account",
+        ),
+        pytest.param(
+            ("--set-json", 'nats.auth.users.client={"serviceAccount":"rask-sa-catalog","publish":["client.x"],"subscribe":["_INBOX_client.>"]}'),
+            'nats.auth.users.client.serviceAccount: "rask-sa-catalog" is the lakehouse\'s own ServiceAccount',
+            id="a-client-row-naming-a-lakehouse-service-account",
+        ),
+        pytest.param(
+            ("--set-json", 'nats.auth.users.client={"serviceAccount":"default","publish":["client.x"],"subscribe":["_INBOX_client.>"]}'),
+            "nats.auth.users.client.serviceAccount: \"default\" is the lakehouse's own ServiceAccount or the namespace's shared default",
+            id="a-client-row-naming-default",
+        ),
+        pytest.param(
+            ("--set", "nats.auth.sessionSeconds=600"), "at '/nats/auth/sessionSeconds': maximum: got 600, want 599", id="a-session-outliving-its-token"
+        ),
+        pytest.param(("--set", "nats.auth.sessionSeconds=30"), "at '/nats/auth/sessionSeconds': minimum: got 30, want 60", id="a-session-under-a-minute"),
     ],
 )
-def test_a_service_whose_bus_user_cannot_take_its_own_connection_fails_the_render(row: str | None, refusal: str) -> None:
-    """A service connects to the bus as the user its app id names. A user the table does not declare has no credential in
-    the store, and one granted only the shared inbox is handed no acknowledgement, so each publish would time out and stay
-    staged with the pod Ready: the render refuses both."""
-    declared = ("--set-json", f"nats.auth.users.maint={row}") if row else ()
+def test_a_service_whose_bus_user_cannot_take_its_own_connection_fails_the_render(sets: tuple[str, ...], refusal: str) -> None:
+    """A service connects to the bus as the user its app id names, a session user bound to the pod's own ServiceAccount.
+    A user the table does not declare is admitted by no signer, and one granted only the shared inbox is handed no
+    acknowledgement, so each publish would time out and stay staged with the pod Ready; a lakehouse user takes its
+    ServiceAccount from the chart, a client's row may bind no lakehouse identity and not the shared `default`, and a
+    session must fit inside the token it is granted for: the render refuses each."""
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        render(*DEFAULT_ARGS, "--set", "maintenance.appId=maint", *declared)
+        render(*DEFAULT_ARGS, *sets)
     assert refusal in refused.value.stderr
+
+
+def _fixture_operator_mode(docs: tuple[dict, ...]) -> dict[str, object]:
+    """What the NATS fixture renders for a session user to connect: TLS on the client port from a CA it publishes, the
+    default sentinel in the server's config, and the stand-in signer with the TokenReview rights it checks tokens by."""
+    by = {(doc.get("kind"), doc["metadata"]["name"]): doc for doc in docs}
+    [conf] = [doc["data"]["nats.conf"] for doc in docs if doc.get("kind") == "ConfigMap" and doc["metadata"]["name"] == "rask-nats-config"]
+    auth = by.get(("ExternalSecret", "rask-nats-auth"))
+    server = auth["spec"]["target"]["template"]["data"]["server.conf"] if auth else ""
+    return {
+        "tls": '"cert_file": "/etc/nats-certs/nats/tls.crt"' in conf,
+        "ca": ("ConfigMap", "rask-nats-ca") in by and ("Secret", "rask-nats-tls") in by,
+        "sentinel": "default_sentinel" in server,
+        "signer": by.get(("Deployment", "rask-nats-signer")),
+        "review": [
+            doc
+            for doc in docs
+            if doc.get("kind") == "ClusterRoleBinding"
+            and doc["roleRef"]["name"] == "system:auth-delegator"
+            and doc["subjects"] == [{"kind": "ServiceAccount", "name": "rask-nats-signer", "namespace": "default"}]
+        ],
+    }
+
+
+def test_the_fixture_bus_admits_session_users_only_in_operator_mode() -> None:
+    """In operator mode the NATS fixture serves TLS on its client port from a CA it makes and publishes as `rask-nats-ca`,
+    hands every connection without a NATS JWT to the auth callout (`default_sentinel`), and runs the stand-in signer: two
+    replicas under a ServiceAccount of its own bound to `system:auth-delegator`, hardened, reading rask's permission table
+    and dialling the bus over TLS. Off, it renders none of them."""
+    on = _fixture_operator_mode(chart_render.render_fixture("nats", "--set", "nats.auth.server=true"))
+    off = _fixture_operator_mode(chart_render.render_fixture("nats"))
+
+    assert on["tls"] and on["ca"] and on["sentinel"] and on["review"], f"operator mode lacks TLS, its CA, the sentinel or the signer's TokenReview right: {on}"
+    signer = on["signer"]
+    assert isinstance(signer, dict) and signer["spec"]["replicas"] == 2, "operator mode runs no replicated stand-in signer"
+    pod = signer["spec"]["template"]["spec"]
+    [container] = pod["containers"]
+    args = container["args"]
+    assert "command" not in container and pod["serviceAccountName"] == "rask-nats-signer" and pod["automountServiceAccountToken"] is True
+    assert "--url=tls://rask-nats:4222" in args and "--ca=/etc/bus-signer/ca/ca.crt" in args, f"the signer does not dial the bus over TLS: {args}"
+    volumes = {v["name"]: v for v in pod["volumes"]}
+    assert volumes["table"]["configMap"]["name"] == "rask-nats-permissions" and volumes["ca"]["configMap"]["name"] == "rask-nats-ca"
+    context = container["securityContext"]
+    assert (context["readOnlyRootFilesystem"], context["allowPrivilegeEscalation"], context["capabilities"]["drop"]) == (True, False, ["ALL"])
+    assert off == {"tls": False, "ca": False, "sentinel": False, "signer": None, "review": []}, f"with operator mode off the fixture renders {off}"

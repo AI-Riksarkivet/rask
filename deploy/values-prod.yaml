@@ -182,7 +182,7 @@ observability:
 # externalSecrets:                                   # the platform's ESO role on its store (see `openbao` above)
 #   role: lance
 # nats (the platform's JetStream, REQUIRED):        # a prerequisite rask never installs (ADR 0153); bus down =
-#   url: nats://nats.internal:4222                   # no lineage ingest, no cascade. The stream Job provisions
+#   url: tls://nats.internal:4222                    # no lineage ingest, no cascade. The stream Job provisions
 #   streamReplicas: 3                                # rask's streams on it (needs a 3+ node cluster)
 #   egress:                                          # the bus's clients reach it here; refused empty under the
 #     - to: [{ipBlock: {cidr: 10.0.1.50/32}}]        # NetworkPolicy ([[XC-202]])

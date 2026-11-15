@@ -63,10 +63,13 @@ gates who reads it.
 
 The in-chart Collector's credential for the audit store, mounted as files (otel-collector.yaml).
 
-## `{{- if hasKey (include "lance.natsFiles" . | fromJson) "nats-admin-creds" }}`
+## `{{- if hasKey (include "lance.natsFiles" . | fromJson) "object-store-bus-creds" }}`
 
-The stream Job's NATS credential, the admin user's creds file (values.yaml `nats.auth`). The bus is a prerequisite (ADR 0153): the
-NATS fixture writes nats-box's `monitor` creds and the server's operator-mode and route includes with its own ExternalSecrets.
+The development object store's NATS credential, a creds file: the static user `object-store` (values.yaml `nats.auth`),
+which publishes each object write on `store.events`. A static user has its JWT and seed in the dev store as
+`nats-user-object-store`, which the object store reads as a file, never an env value. The stream Job and every lakehouse pod are
+session users and have no such file. The NATS fixture writes nats-box's `monitor` creds, the server's operator-mode
+config and the stand-in signer's keys with its own ExternalSecrets.
 
 ## `apiVersion: external-secrets.io/v1`
 

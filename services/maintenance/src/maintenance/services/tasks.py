@@ -18,7 +18,7 @@ from typing import Final, get_args
 
 from fastapi.concurrency import run_in_threadpool
 
-from lakehouse.bus import read_credentials
+from lakehouse.bus import BusSettings
 from lakehouse.control_emit import ControlEmitter
 from lakehouse.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceSettings
@@ -96,15 +96,15 @@ async def connected_queue(settings: MaintenanceSettings) -> AsyncGenerator[TaskQ
     """The work queue, connected as this service's own bus user and drained on the way out; ``None`` for a stack with no
     bus.
 
-    The credential is read from the store, never the environment, and held only in this process.
+    The worker holds no bus credential: its connection presents this pod's own token (`lakehouse.bus.BusSettings`).
 
     Raises:
-        RuntimeError: The store holds no credential for the worker's bus user, or one without its JWT (failing closed).
+        OSError: The pod's token is not there to read.
     """
     if not settings.nats_url:
         yield None
         return
-    queue = await TaskQueue.connect(settings.nats_url, await run_in_threadpool(read_credentials, settings.nats_credentials_secret), name=BUS_USER)
+    queue = await TaskQueue.connect(settings.nats_url, BusSettings(), name=BUS_USER)
     try:
         yield queue
     finally:
@@ -135,7 +135,7 @@ async def running_worker(
     bus refuses its cadences or holds no claims bucket, leaves the connection closed all the same.
 
     Raises:
-        RuntimeError: The store holds no credential for the worker's bus user, or one without its JWT (failing closed).
+        OSError: The pod's token is not there to read.
         ClaimsBucketMissingError: The bus holds no claims bucket.
     """
     async with connected_queue(settings) as queue:

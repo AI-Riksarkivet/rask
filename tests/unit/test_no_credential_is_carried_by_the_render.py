@@ -90,13 +90,24 @@ def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
             'openbao.externalAddr is "http://vault.example.com:8200": every service sends its ServiceAccount token',
             id="the-platforms-secret-store-over-http",
         ),
+        pytest.param(
+            ("--set-string", "nats.url=nats://bus.example.com:4222"),
+            "nats.url names nats://bus.example.com:4222, which is not tls:// — every service and the stream Job present their ServiceAccount token",
+            id="the-platforms-bus-in-the-clear",
+        ),
+        pytest.param(
+            ("--set-string", "nats.url=tls://a.example.com:4222\\,nats://b.example.com:4222"),
+            "nats.url names nats://b.example.com:4222, which is not tls://",
+            id="one-server-of-the-bus-in-the-clear",
+        ),
     ],
 )
 def test_a_real_deployment_refuses_what_would_expose_it(setting: tuple[str, ...], reason: str) -> None:
     """The production overlay with one setting that would expose the estate once installed is refused, naming it.
 
     The bundled Dex's static users and client secret are published in this repository, so it is a development render's
-    alone. Authentication off makes the chart write the acknowledgement the services refuse to boot without, so on a real
+    alone. Each pod presents its ServiceAccount token to the bus in CONNECT, so a bus server named in the clear would hand
+    it to whoever reads the path. Authentication off makes the chart write the acknowledgement the services refuse to boot without, so on a real
     deployment nobody would have said so.
     """
     with pytest.raises(subprocess.CalledProcessError) as refused:

@@ -1,10 +1,11 @@
 """What maintenance's work queue costs: tasks per second, a task's wait and the queue's own time per task, at 1, 2 and 4
 workers (ADR 0198's amendment of 2026-11-13, [[LH-571]]).
 
-The bus is the nats-auth lane's (`tests/e2e-py/nats_auth_rig.py`): three nats-servers in operator mode, the streams the
-chart's stream Job declares at the chart's default timings, and the worker's own bus user. A burst of tasks, each for a
-table of its own, is queued first; then the workers start, each on a connection of its own, in this one process, and run
-every task as a sleep of the stated length. A task's wait is counted from the workers' start to its run's start.
+The bus is the nats-auth lane's (`tests/e2e-py/nats_auth_rig.py`): three nats-servers in operator mode, its signers, the
+streams the chart's stream Job declares at the chart's default timings, and the worker's own bus user, each connection
+presenting a pod's token. A burst of tasks, each for a table of its own, is queued first; then the workers start, each on
+a connection of its own, in this one process, and run every task as a sleep of the stated length. A task's wait is
+counted from the workers' start to its run's start.
 
 Run, with the lane's binaries exported as `dagger call nats-auth` lays them out (`.dagger/nats_auth.go`):
 
@@ -16,22 +17,21 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import statistics
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Final, NoReturn
 
-from nats_auth_rig import VALUES_ENV, Broker, Credential, Permissions, Tools, mint, run_stream_job
+from nats_auth_rig import RENDER_ARGS, VALUES_ENV, Rig, Tools, bus_users, stream_job_script
 from pydantic import BaseModel
 
 from maintenance.services.queue import TASKS_STREAM, Task, TaskQueue, Worker
-from tests.unit.chart_render import DEFAULT_ARGS, nats_users, render
+from tests.unit.chart_render import DEFAULT_ARGS, render
 
 
 REPO: Final = Path(__file__).resolve().parents[1]
-_USERS: Final = ("admin", "maintenance-worker", "object-store")
+_WORKER: Final = "maintenance-worker"
 #: Each case: the pass's length in seconds and the burst's size, run at every worker count, `_RUNS` times.
 _CASES: Final = ((0.0, 200), (0.5, 80))
 _WORKERS: Final = (1, 2, 4)
@@ -56,21 +56,22 @@ class Measurement(BaseModel):
     wait_p95_seconds: float
 
 
-def _declare(tools: Tools, docs: tuple[dict[str, Any], ...], broker: Broker, admin: Credential, home: Path) -> None:
-    """Run the chart's stream Job against ``broker`` as ``admin``, again while it fails, as Kubernetes runs a failed Job."""
-    job = next(d for d in docs if d.get("kind") == "Job" and "-nats-stream-" in d["metadata"]["name"])
-    script = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
-    rendered = re.search(r'S="(nats://[^"]+)"', script)
-    if rendered is None:
-        raise RuntimeError("the stream Job's script names no broker")
+def _declare(bus: Rig, docs: tuple[dict[str, Any], ...], home: Path) -> None:
+    """Run the chart's stream Job against the rig's bus as `admin`, again while it fails, as Kubernetes runs a failed Job."""
+    script = stream_job_script(docs, bus.url)
     for _ in range(3):
-        done = run_stream_job(tools.job_cli, script.replace(rendered.group(1), broker.url), admin, home, 300.0)
+        done = bus.run_stream_job(script, home, 300.0)
         if done.returncode == 0:
             return
     raise RuntimeError(f"the stream Job exited {done.returncode}: {(done.stdout + done.stderr)[-800:]}")
 
 
-async def _drain(url: str, creds: str, *, workers: int, tasks: int, pass_seconds: float, tag: str, run: int) -> Measurement:
+async def _connected(bus: Rig) -> TaskQueue:
+    """A worker's queue connection, presenting the token of a pod of its own."""
+    return await TaskQueue.connect(bus.url, bus.pod(_WORKER).settings(bus.url, bus.table.session_seconds), name=_WORKER)
+
+
+async def _drain(bus: Rig, *, workers: int, tasks: int, pass_seconds: float, tag: str, run: int) -> Measurement:
     clock = asyncio.get_running_loop().time
     started: dict[str, float] = {}
     ended: set[str] = set()
@@ -83,11 +84,11 @@ async def _drain(url: str, creds: str, *, workers: int, tasks: int, pass_seconds
     def ends_its_process(event: str, **extra: object) -> NoReturn:
         raise RuntimeError(f"a worker ended its process: {event} {extra}")
 
-    feeder = await TaskQueue.connect(url, creds, name="feeder")
+    feeder = await _connected(bus)
     for i in range(tasks):
         if not await feeder.enqueue(Task(kind="table", uuid=f"{tag}-{i}", location=f"s3://bucket/{tag}-{i}")):
             raise RuntimeError(f"the queue refused {tag}-{i}")
-    queues = [await TaskQueue.connect(url, creds, name=f"worker-{n}") for n in range(workers)]
+    queues = [await _connected(bus) for _ in range(workers)]
     fleet = [
         Worker(
             queue,
@@ -133,23 +134,19 @@ async def main(out: Path) -> None:
     """Measure every case at every worker count on a bus of this run's own, and write the measurements to ``out``."""
     home = Path(tempfile.mkdtemp(prefix="maintenance-queue-"))
     tools = Tools.from_env(os.environ)
-    docs = render(*DEFAULT_ARGS, "-f", os.environ.get(VALUES_ENV) or str(REPO / "chart" / "values.yaml"))
-    issued = nats_users(docs)
-    grants = {user: Permissions(publish=tuple(sorted(issued[user][0])), subscribe=tuple(sorted(issued[user][1]))) for user in _USERS}
-    minted = mint(tools.nsc, grants, home / "nsc")
-    broker = Broker(tools.nats_server, minted, home / "broker")
-    broker.start()
+    docs = render(*DEFAULT_ARGS, "-f", os.environ.get(VALUES_ENV) or str(REPO / "chart" / "values.yaml"), *RENDER_ARGS)
+    bus = Rig(tools, docs, home / "rig", session_seconds=bus_users(docs)[0].session_seconds)
+    bus.start()
     measured: list[Measurement] = []
     try:
-        await asyncio.to_thread(_declare, tools, docs, broker, minted.credentials["admin"], home)
-        creds = minted.credentials["maintenance-worker"].creds_file.read_text()
+        await asyncio.to_thread(_declare, bus, docs, home)
         for pass_seconds, tasks in _CASES:
             for workers in _WORKERS:
                 for run in range(1, _RUNS + 1):
-                    measured.append(await _drain(broker.url, creds, workers=workers, tasks=tasks, pass_seconds=pass_seconds, tag=f"b{len(measured)}", run=run))
+                    measured.append(await _drain(bus, workers=workers, tasks=tasks, pass_seconds=pass_seconds, tag=f"b{len(measured)}", run=run))
                     sys.stdout.write(measured[-1].model_dump_json() + "\n")
     finally:
-        broker.stop()
+        bus.stop()
     out.write_text(json.dumps([m.model_dump() for m in measured], indent=1))
 
 

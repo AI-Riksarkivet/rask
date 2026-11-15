@@ -200,6 +200,9 @@ def _projected_identity_tokens(tmp_path: pathlib.Path, monkeypatch: pytest.Monke
     store_token = tmp_path / "projected-secret-store-token"
     store_token.write_text("projected-for-the-secret-store")
     monkeypatch.setenv("RASK_SECRET_STORE_TOKEN_FILE", str(store_token))
+    bus_token = tmp_path / "projected-bus-token"
+    bus_token.write_text("projected-for-the-bus")
+    monkeypatch.setenv("RASK_BUS_TOKEN_FILE", str(bus_token))
 
 
 @pytest.fixture

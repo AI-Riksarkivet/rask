@@ -32,9 +32,10 @@ _DEPLOYED: tuple[str, ...] = (
     "--set", "networkPolicy.enabled=true", "--set-string", "nats.url=nats://rask-nats:4222",
 )  # fmt: skip
 
-#: The fixtures a development estate installs into the release's namespace: their pods are governed by the chart's
-#: policies as the release's own are.
-_NAMESPACE_FIXTURES = ("dex", "marquez", "nats", "openbao", "rustfs")
+#: The fixtures a development estate installs into the release's namespace, each with the values that run all its pods
+#: (the bus in operator mode runs its stand-in signer): their pods are governed by the chart's policies as the release's
+#: own are.
+_NAMESPACE_FIXTURES: dict[str, tuple[str, ...]] = {"dex": (), "marquez": (), "nats": ("--set", "nats.auth.server=true"), "openbao": (), "rustfs": ()}
 
 #: The cluster-routes port of the bus fixture's servers (the upstream nats chart's default).
 _CLUSTER_PORT = 6222
@@ -70,7 +71,7 @@ class _Pod(BaseModel):
 def _namespace() -> tuple[dict, ...]:
     """Every document the deployed release and the fixtures sharing its namespace render."""
     release = chart_render.render(*_DEPLOYED)
-    return release + tuple(doc for fixture in _NAMESPACE_FIXTURES for doc in chart_render.render_fixture(fixture))
+    return release + tuple(doc for fixture, values in _NAMESPACE_FIXTURES.items() for doc in chart_render.render_fixture(fixture, *values))
 
 
 def _pods(docs: tuple[dict, ...]) -> list[_Pod]:

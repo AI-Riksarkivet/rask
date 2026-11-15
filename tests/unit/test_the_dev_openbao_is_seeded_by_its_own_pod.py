@@ -16,20 +16,23 @@ its list refuses the seed, a list without its key is a rotation that prepends an
 the candidate; keeps it before the first write; and writes the public list first. A failed mint costs that
 identity its key and never the readiness key. No seed reaches an argument list or an output stream.
 
-[[XC-078]] puts the bus credentials through it too (values.yaml `nats.auth`), and they are a set, not a pair per name: one
-trust root (an operator, its SYS account and the APP account every user belongs to) that the server is configured with, and
-a user per table entry that only that root can issue. The `mint` init container copies nsc and nk out of nats-box for the
-seed; the seed carries the root (`nats-root`, the operator and account keys) and the route credential (`nats-route`) from the
-store behind the Service, else mints a root, and issues each user of the table under it. A user keeps its key pair from this
-pod's store or the one behind the Service, and its JWT while the table grants it what the JWT does, so a reseed leaves no
-second credential that admits it; a grant the table changes is issued under the same key, and every credential the key was
-issued up to the stored JWT's issue time is revoked ([[XC-195]]), without touching the trust root. It writes `nats-user-<user>`,
-`nats-server` and those two before the readiness key; a root it cannot read or use stops the seed, because a store that is
-Ready without its users hands every service an empty credential. The bundle is kept like the signing pairs.
+[[XC-078]] puts the bus's trust root through it too (values.yaml `nats.auth`): an operator, its SYS account, the APP
+account every user belongs to and the AUTH account of the signer, which the server is configured with. The `mint` init
+container copies nsc and nk out of nats-box for the seed; the seed carries the root (`nats-root`, the operator's and the
+accounts' keys, every signing key's among them) and the route credential (`nats-route`) from the store behind the Service,
+else mints a root. Under it the seed gives each session user one scoped signing key in APP (role: the user, scope: its
+row) and issues no credential for it, and gives the signer its user, a bearer sentinel denied every subject (the server's
+`default_sentinel`), one signing key and the callout naming them (`nats-callout`, with each session user's scoped seed as
+`key-<user>`). It issues each static user of the table: a user keeps its key pair from this pod's store or the one behind
+the Service, and its JWT while the table grants it what the JWT does, so a reseed leaves no second credential that admits
+it; a grant the table changes is issued under the same key, and every credential the key was issued up to the stored JWT's
+issue time is revoked ([[XC-195]]), without touching the trust root. It writes `nats-user-<static user>`, `nats-server`,
+`nats-callout` and those two before the readiness key; a root it cannot read or use stops the seed, because a store that is
+Ready without its users hands the bus an empty config. The bundle is kept like the signing pairs.
 
 [[XC-195]] takes back what rask stops declaring. A bus user's JWT carries no expiry and its account stays trusted, so a
-`nats-user-<user>` the table no longer names, in this pod's store or the outgoing pod's, is revoked by its key in the APP
-account the server preloads, and its secret is deleted from this pod's store; a store role or policy the release no longer
+`nats-user-<user>` the seed does not issue (a session user's among them), in this pod's store or the outgoing pod's, is
+revoked by its key in the APP account the server preloads, and its secret is deleted from this pod's store; a store role or policy the release no longer
 renders is deleted. A store holding nothing undeclared revokes and deletes nothing.
 
 [[XC-003]] puts the in-chart Collector's audit-store credential through it: `otel-collector-export` is kept, else carried
@@ -288,13 +291,14 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str], 
 def _arrange_undeclared(case: str, stores: Path, event_signer: Any) -> dict[str, Any]:
     """What an earlier render's seed left that this render no longer declares; returns each bus user's pair by name.
 
-    A bus user in this pod's store (an in-place seed of a changed render finds it there) and one in the outgoing pod's behind
-    the Service (a surge finds it there), each as the seed writes it, and a reader's role and policy in this pod's store.
+    A bus user in this pod's store (an in-place seed of a changed render finds it there; `catalog`, a session user an earlier
+    render issued a credential) and one in the outgoing pod's behind the Service (a surge finds it there), each as the seed
+    writes it, and a reader's role and policy in this pod's store.
     Empty for every other case.
     """
     if case != "undeclared":
         return {}
-    left = {"gone": (stores / "local", event_signer("gone")), "departed": (stores / "served", event_signer("departed"))}
+    left = {"catalog": (stores / "local", event_signer("catalog")), "departed": (stores / "served", event_signer("departed"))}
     for user, (store, pair) in left.items():
         # Compact, as nsc's JWTs are (Go's json.Marshal) and as the stand-in issues them.
         claim = json.dumps({"iss": "A-an-earlier-account", "sub": pair.public, "pub": f"dlq.{user}", "subscribe": "_INBOX.>"}, separators=(",", ":"))
@@ -318,6 +322,38 @@ def _arrange_unreadable(case: str, stores: Path, users: dict[str, Any], event_si
     (stores / "local" / "secret").mkdir(parents=True, exist_ok=True)
     (stores / "local" / "secret" / f"nats-user-{user}").write_text(f"jwt=eyJ.{token}\nseed=not-a-seed\n")
     return user, pair
+
+
+def _signer_problems(docs: tuple[dict, ...], signer: dict[str, str], root: dict[str, str], accounts: dict[str, str], app: str, auth: str, users: dict) -> None:
+    """Each session user of the signer's table has one scoped signing key in APP, its role the user and its scope the
+    user's row, whose seed the signer holds as `key-<user>`, and no credential of its own; AUTH names the signer's user
+    and APP in its callout and signs with a key whose seed the signer holds; and the server's default sentinel is AUTH's
+    bearer user denied every subject."""
+    sessions = chart_render.bus_sessions(docs)["users"]
+    scopes = {scope["role"]: scope for scope in _claim(accounts[app])["nats"]["signing_keys"]}
+    assert set(scopes) == set(sessions), f"APP holds scoped keys for {sorted(scopes)}, and the signer's table names {sorted(sessions)}"
+    for user, row in sessions.items():
+        template = scopes[user]["template"]
+        assert (set(template["pub"]["allow"]), set(template["sub"]["allow"])) == (set(row["publish"]), set(row["subscribe"])), (
+            f"{user}'s signing key is scoped to {template}, not its row: the bus would enforce another grant than the table's"
+        )
+        assert signer.get(f"key-{user}", "").startswith("SA"), f"the signer holds no scoped seed for {user}, so it can sign no session"
+        assert user not in users, f"{user} is a session user and is issued a static credential beside its sessions"
+    assert {field.removeprefix("key-") for field in signer if field.startswith("key-")} == set(sessions), (
+        "the signer holds a key of a user that is no session user"
+    )
+    claim = _claim(accounts[auth])["nats"]
+    callout = _claim(signer["jwt"])
+    assert callout["iss"] == auth and claim["authorization"] == {"auth_users": [callout["sub"]], "allowed_accounts": [app]}, (
+        f"AUTH's callout names {claim['authorization']}, not the signer's user {callout['sub']} and APP"
+    )
+    assert len(claim["signing_keys"]) == 1 and signer.get("issuer_seed", "").startswith("SA"), (
+        f"AUTH signs with {claim['signing_keys']}, and the signer holds no seed"
+    )
+    sentinel = _claim(root.get("default_sentinel", "eyJ.e30"))
+    assert sentinel.get("iss") == auth and sentinel["nats"].get("bearer_token") and sentinel["nats"]["pub"] == sentinel["nats"]["sub"] == {"deny": [">"]}, (
+        f"the server's default sentinel is {sentinel}, not AUTH's bearer user denied every subject"
+    )
 
 
 @pytest.mark.parametrize(
@@ -405,9 +441,11 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     regranted = min(users) if case == "nats-carried" else None
     unreadable = _arrange_unreadable(case, stores, users, event_signer)
     minted = [pair for user, pair in bus_pairs.items() if user != regranted]
+    # The signer's own user, issued after the static users from the next pair.
+    callout = event_signer("bus-callout")
     # A changed seed mints a candidate per identity again, and keeps every user it issued.
     again = [event_signer(f"again-{i}") for i in range(len(ids))] if local == "change" else []
-    (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in [*pool[: len(ids)], *minted, *again]))
+    (tmp_path / "pairs").write_text("".join(f"{pair.seed}\n{pair.public}\n" for pair in [*pool[: len(ids)], *minted, callout, *again]))
     scripts = tmp_path / "seed-scripts"
     scripts.mkdir()
     for name, text in chart_render.seed_scripts(docs).items():
@@ -502,7 +540,11 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     calls = calls_text.splitlines()
     nsc_calls = (tmp_path / "nsc-calls").read_text() if (tmp_path / "nsc-calls").exists() else ""
     streams = minted.stdout + minted.stderr + ran.stdout + ran.stderr + calls_text + nsc_calls
-    leaked = [pair.seed for pair in [*pool, *bus_pairs.values(), *undeclared.values()] if pair.seed in streams]
+    signer = _store(stores, "local", "secret/nats-callout")
+    scoped = [value for field, value in signer.items() if field.startswith("key-") or field == "issuer_seed"]
+    leaked = [pair.seed for pair in [*pool, *bus_pairs.values(), *undeclared.values(), callout] if pair.seed in streams] + [
+        seed for seed in scoped if seed in streams
+    ]
     assert not leaked, "a private seed reached an output stream, a bao argument list or an nsc argument list"
     exposed = [key for key, value in generated.items() if value in streams]
     assert not exposed, f"the generated {exposed} reached an output stream or a bao argument list"
@@ -559,10 +601,12 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     route = _store(stores, "local", "secret/nats-route")
     assert root.get("operator", "").startswith("eyJ") and root.get("system_account"), f"the store holds no trust root for the server: {root}"
     accounts = json.loads(root.get("resolver_preload", "{}"))
-    assert root["system_account"] in accounts and len(accounts) == 2, f"the server would preload {sorted(accounts)}, not the SYS and APP accounts"
+    assert root["system_account"] in accounts and len(accounts) == 3, f"the server would preload {sorted(accounts)}, not the SYS, APP and AUTH accounts"
     assert route.get("user") and route.get("password"), f"the store holds no route credential: {route}"
-    [app] = set(accounts) - {root["system_account"]}
-    revoked = _claim(accounts[app]).get("revocations", {})
+    app, auth = signer.get("app_account", ""), signer.get("auth_account", "")
+    assert {app, auth} == set(accounts) - {root["system_account"]}, f"the signer is told APP {app} and AUTH {auth}, not the accounts the server preloads"
+    _signer_problems(docs, signer, root, accounts, app, auth, users)
+    revoked = _claim(accounts[app])["nats"]["revocations"]
     assert set(revoked) == {"*"} | {pair.public for pair in undeclared.values()} | ({bus_pairs[regranted].public} if regranted else set()) | (
         {unreadable[1].public} if unreadable else set()
     ), (
@@ -585,14 +629,18 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         )
     issued_as = dict(line.removeprefix("NATS user ").split(": ", 1) for line in ran.stdout.splitlines() if line.startswith("NATS user "))
     how = {regranted: "reissued", **({unreadable[0]: "replaced"} if unreadable else {})}
-    assert issued_as == {user: "kept" if local == "change" else how.get(user, "minted") for user in users}, f"the seed issued the bus users as {issued_as}"
+    assert issued_as == {user: "kept" if local == "change" else how.get(user, "minted") for user in [*users, "callout", "sentinel"]}, (
+        f"the seed issued the bus users as {issued_as}"
+    )
+    if local == "change":
+        assert signer == _store(stores, "first-secret", "nats-callout"), "a seed rask changed gave the signer another key, though nothing it declares changed"
     kept = sorted(user for user in undeclared if _store(stores, "local", f"secret/nats-user-{user}"))
     assert not kept, f"this pod's store still serves {kept}, users rask no longer declares"
     told = [line for line in ran.stdout.splitlines() if line.startswith(("revoked NATS user ", "deleted "))]
     assert sorted(line.split(",")[0] for line in told) == sorted(
         [
             *(f"revoked NATS user {user} ({pair.public})" for user, pair in undeclared.items()),
-            *(["deleted secret/nats-user-gone", "deleted the store policy rask-gone", "deleted the store role rask-gone"] if undeclared else []),
+            *(["deleted secret/nats-user-catalog", "deleted the store policy rask-gone", "deleted the store role rask-gone"] if undeclared else []),
         ]
     ), f"the seed logs {told}, not each revocation and deletion by name"
     assert _store(stores, "local", "secret/nats-root").get("nsc"), (

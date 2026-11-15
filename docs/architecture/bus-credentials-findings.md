@@ -1,6 +1,6 @@
 # Bus credentials: how a lakehouse pod proves itself to NATS, read and measured
 
-> Research note for the bus-credentials step of #787 (D7), read with [ADR 0199](../adr/0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md)
+> Research note for the bus-credentials step of #787 (D7), which builds mechanism (f) below; read with [ADR 0199](../adr/0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md)
 > and [ADR 0198](../adr/0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md). Primary sources only,
 > fetched 2026-11-10 into the session's scratch folder (`…/scratchpad/bus-creds/src`): nats-server `v2.15.2`
 > (`5a815f11a`), nats.py `v2.16.0` (`3547a63b2`, byte-identical to the `nats/aio/client.py` in this repository's `.venv`),
@@ -19,9 +19,10 @@ the bus audience, and answers with a user that the service's scoped signing key 
 scope on that key, not the callout's code, is the permission the server enforces. Measured: when a user expires, nats-py
 closes for good (it never reconnects), so the client must refresh (`force_reconnect()` before expiry) and rebuild on
 close; with both, a JetStream pull worker ran across 3 to 6 expiries per run with no restart, no lost acknowledged message
-and no duplicate. **The interim**, until the platform's callout runs, is what #787 decided: each pod reads its static bus
-credential from the store into memory under its own store login. That credential is mechanism (a) below and fails "short-lived"
-until D7 lands.
+and no duplicate. **What is built** is mechanism (f): a lakehouse pod holds no bus credential and presents its projected
+ServiceAccount token over TLS; the platform's signer, or the stand-in in `deploy/fixtures/nats`, answers with a session of
+at most `nats.auth.sessionSeconds` signed by the user's scoped key (§ 4). A static user's JWT and seed, mechanism (a) below,
+remains for `monitor`, `object-store` and a client's row without a `serviceAccount`, which no lakehouse pod is.
 
 ## 1. The standard each option is judged by
 
@@ -108,13 +109,13 @@ SPIFFE/SPIRE integration exists in nats-server or the NATS docs (searched both t
 
 ## 3. The mechanisms compared
 
-| | (a) static user JWT + seed, no expiry (today) | (b) short `exp` user JWT from a platform signer, pod's nkey in memory | (c) auth callout, operator mode, SA token as `auth_token` (+ `default_sentinel`) | (d) mTLS client certs mapped to users (`verify_and_map`) | (e) per-service scoped signing key in the store, app mints its own user | (f) (c) with one scoped signing key per service |
+| | (a) static user JWT + seed, no expiry | (b) short `exp` user JWT from a platform signer, pod's nkey in memory | (c) auth callout, operator mode, SA token as `auth_token` (+ `default_sentinel`) | (d) mTLS client certs mapped to users (`verify_and_map`) | (e) per-service scoped signing key in the store, app mints its own user | (f) (c) with one scoped signing key per service |
 |---|---|---|---|---|---|---|
 | Identity proof | possession of a seed copied from the store | SA token to the signer (TokenReview); nonce signed by an in-memory key at connect | SA token checked by the callout at every connect (TokenReview) | a certificate's chain and subject | the store login (SA token) once; then the key itself | as (c) |
 | Scope | the user's JWT, as minted | the signing key's scope (scoped key) or the signer's code | the minted user's permissions, or the key's scope | the configured user's permissions | the key's scope | the key's scope: the server enforces it whatever the callout writes |
 | Lifetime | unlimited | minutes (`exp`) | minutes (`exp` of the minted user) | the certificate's | whatever the app writes | minutes |
 | Revocation | account revocation pushed to the resolver | at `exp`; sooner only by revoking the key or the user nkey | next connect refused once TokenReview fails (pod deleted); live session by `exp`, account revocation, or removing the key | CRL/OCSP or expiry | remove the key: closes every session it signed (`accounts.go:4040-4056`) | as (c), and removing one service's key ends only that service's sessions |
-| Secret the pod holds at rest | the seed (today in the store, read into memory) | none (projected token; seed generated in memory) | none (projected token; with `default_sentinel`, no NATS JWT either) | the private key on a volume | none at rest; the signing key in memory for its life | none |
+| Secret the pod holds at rest | the seed (in the store, read into memory) | none (projected token; seed generated in memory) | none (projected token; with `default_sentinel`, no NATS JWT either) | the private key on a volume | none at rest; the signing key in memory for its life | none |
 | What the platform runs | operator mode, resolver | operator mode + a signer service (HTTP), with TokenReview rights and the signing keys | operator mode + a callout service on the bus (AUTH account), with TokenReview rights and the signing keys | config mode only, a CA, cert-manager | operator mode; the store holds a signing seed per service | as (c) |
 | Rotation without restart | n/a (never rotates) | yes: refresh, or rebuild on close (§ 6) | yes: measured (§ 6) | rebuild the client with a new `SSLContext` (not measured) | yes, app-side | yes |
 | Works in operator mode | yes | yes | yes (ADR-26; § 6) | no: operator mode refuses configured users (`jwt.go:97-98`); only through a callout | yes | yes |
@@ -150,37 +151,48 @@ choose (b) without a rask change (§ 5).
 
 **rask's (in git, in the product chart).**
 
-- `nats.url` with the `tls://` scheme, and a value naming the CA (a ConfigMap or the platform's trust bundle).
-- `nats.auth.audience`: the bus audience, projected per pod through `lance.identityTokens`
-  (`chart/templates/_helpers.tpl:507-519`, today `expirationSeconds: 600`, mounted at
-  `/var/run/secrets/rask/identity/<audience>/token`).
-- The permission table `nats.auth.users`, rendered as one object the platform reads, for example a ConfigMap
-  `<release>-nats-permissions`:
+- `nats.url` with the `tls://` scheme, and `nats.ca.configMap` (key `nats.ca.key`, default `ca.crt`) naming the ConfigMap that
+  holds the CA the bus's certificate chains to, mounted read-only into every session user's pod (`lance.busIdentity`,
+  `RASK_BUS_CA_FILE`); empty means the system trust store.
+- `nats.auth.audience` (default `rask-bus`): the bus audience, projected per pod through `lance.identityTokens`
+  (`chart/templates/_helpers.tpl`, `expirationSeconds: 600`), mounted at
+  `/var/run/secrets/rask/identity/<audience>/token` (`RASK_BUS_TOKEN_FILE`). `nats.auth.sessionSeconds` (default 300, at
+  least 60, below 600) is the longest a session lives (`RASK_BUS_SESSION_SECONDS`).
+- The permission table `nats.auth.users`, rendered for the signer as ConfigMap `<release>-nats-permissions`
+  (`permissions.json`, `chart/templates/nats-permissions.yaml`, in every mode):
 
   ```json
   {
     "audience": "<nats.auth.audience>",
-    "maxLifetimeSeconds": 600,
-    "services": {
-      "system:serviceaccount:<ns>:<release>-sa-catalog": {
-        "role": "catalog",
-        "publish": ["lineage.events.v1", "catalog.control.v1", "..."],
-        "subscribe": ["_INBOX.catalog.>"]
+    "sessionSeconds": 300,
+    "users": {
+      "catalog": {
+        "serviceAccount": "system:serviceaccount:<ns>:<release>-sa-catalog",
+        "publish": ["lineage.events.v1", "..."],
+        "subscribe": ["_INBOX_catalog.>"]
       }
     }
   }
   ```
 
-  Each row keyed by the ServiceAccount the projected token names (`lance.saName`), so the identity is the pod's, never a
-  name it chose. The rows give each service its own inbox prefix (nats-py `inbox_prefix`): each service's own
-  connection and the worker's reply under `_INBOX_<user>` (`chart/values.yaml`, `nats.auth.users`).
-  Since 2026-11-14 (XC-199 step D4) no service holds `_INBOX.>`: each pulls or follows on its own connection under
-  `_INBOX_<user>`, and only `admin`, `monitor` and the development object store reply on the shared `_INBOX.>`.
-- What the chart refuses on a real deployment (the platform's store, `openbao.enabled` false): a `nats.url` that is not
-  `tls://`; no CA; an empty `nats.auth.audience`; a table row with `>` or `$JS.API.>` in `publish`, or an empty list.
-- **The dev stand-in in `deploy/fixtures/nats`**: operator mode on (`auth.server`), the `AUTH` account, the sentinel as
-  `default_sentinel`, TLS from the dev CA, and a stand-in callout Deployment in the fixture with TokenReview rights, reading
-  rask's rendered table; the nats-auth lane (`.dagger/nats_auth.go`) proves rask's client against it as § 6 does.
+  Each session user is a row with a ServiceAccount (`lance.natsSessions`): the lakehouse's own users take theirs from the
+  chart, never from values, so the identity is the pod's and never a name it chose; a client's row names its own with
+  `serviceAccount`. The connection's name is the bus user, and the signer admits a token only under the name of a user
+  bound to that token's ServiceAccount. Each service has its own inbox prefix (nats-py `inbox_prefix`, `_INBOX_<user>`);
+  only `admin`, `monitor` and the development object store reply on the shared `_INBOX.>` (`chart/values.yaml`,
+  `nats.auth.users`).
+- What the chart refuses: on a real deployment a `nats.url` that is not `tls://` (`templates/prod-credentials.yaml`); an
+  `nats.auth.audience` that is not a lowercase name; `nats.auth.sessionSeconds` outside 60 to 599; a session user's
+  `serviceAccount` that is a lakehouse ServiceAccount or `default`; a lakehouse user given a `serviceAccount` by values; a
+  service whose bus user is not a session user or whose row grants no inbox of its own; and, against the platform's store,
+  a render without `nats.auth.provisioned` (`templates/nats-provisioned.yaml`), which attests that the signer admits each
+  session user of the table and that each static user's `nats-user-<user>` exists.
+- **The dev stand-in in `deploy/fixtures/nats`**: operator mode on (`nats.auth.server`, which `make k3s-up` sets), the `AUTH`
+  account, the sentinel as `default_sentinel`, TLS from a CA the fixture makes (`rask-nats-ca`), and the stand-in signer
+  Deployment `rask-nats-signer` (`deploy/fixtures/nats/callout`, two replicas, bound to `system:auth-delegator`) reading
+  rask's rendered table and the scoped seeds of rask's dev store (`nats-callout`); the dev seed
+  (`chart/templates/openbao-seed.yaml`) mints the accounts, the sentinel and one scoped signing key per session user. The
+  nats-auth lane (`.dagger/nats_auth.go`) is the lane that runs rask's client against a bus of this shape.
 
 ## 5. How the client is written
 
@@ -190,8 +202,9 @@ One `lakehouse` seam owns the connection. It is mechanism-agnostic: the same cod
   rotates it at 80% of its TTL; the file is read at each connect, measured with five rotations in § 6.3). Under (b), also
   `user_jwt_cb` returning the JWT the signer last returned and `signature_cb` signing the nonce with a key generated in
   memory at start (`nkeys.encode_seed(os.urandom(32), PREFIX_BYTE_USER)`), never written anywhere.
-- **Refresh before expiry.** The seam knows the user's lifetime (the table's `maxLifetimeSeconds`, or the JWT's `exp`
-  under (b)) and calls `force_reconnect()` at a fixed fraction of it. Under (b) it fetches the new JWT first and reconnects
+- **Refresh before expiry.** The seam knows the session's length (`RASK_BUS_SESSION_SECONDS`, the table's `sessionSeconds`,
+  or the JWT's `exp` under (b)) and calls `force_reconnect()` shortly before it ends (`BusSettings.renew_after_seconds`:
+  the length less 10 percent of it, bounded to 5 to 30 seconds). Under (b) it fetches the new JWT first and reconnects
   only once it holds one, so a signer outage costs nothing until `exp`.
 - **Rebuild on close.** `closed_cb` builds a new client, a new JetStream context and a new `pull_subscribe_bind` on the
   same durables, in-process, with backoff; `max_reconnect_attempts=-1` so a refused connect is retried. The process ends
@@ -274,7 +287,7 @@ margin), and the callout runs replicated.
   is invisible. Under (b) a pod holding a JWT reconnects until `exp` without the signer.
 - **Projected token rotation.** Read on every connect, so a rotated file is used at the next connect (§ 6.3). The token's
   `expirationSeconds` must exceed the bus user's lifetime plus the refresh margin, so a connect never presents a token about
-  to lapse: today's 600 s (`_helpers.tpl:514`) with a 300 s user leaves the kubelet's 80% rotation inside the window.
+  to lapse: the chart's 600 s (`lance.identityTokens`) with a 300 s session leaves the kubelet's 80% rotation inside the window.
 - **Clock skew.** The server measures `exp` on its own clock (`client.go:1384`); the signer writes `exp` on its clock. A
   skew of seconds shortens or lengthens each session by that much; with lifetimes of minutes and NTP on both, it is harmless.
   A refresh scheduled by the client's clock uses the lifetime as a duration, not `exp`'s absolute time.
@@ -291,25 +304,29 @@ margin), and the callout runs replicated.
 
 ## 8. Not confirmed
 
-- **A three-node cluster.** Every measurement ran on one server; expiry and callout on a clustered, R3 bus (the estate's
-  shape) were not run. Looked: the measurement scripts only.
-- **TokenReview from the callout.** The stand-in accepted tokens from a table; a real TokenReview, its latency, and the
-  `system:auth-delegator` binding were not exercised. Looked: the Kubernetes docs (§ 2) only.
-- **TLS.** No run used TLS; nats-py's TLS against a platform CA, and whether that CA chains to Python's trust store, were not
-  measured.
-- **xkey encryption** of callout requests and responses (ADR-26:204-235) was not set up; nkeys 0.2.1 ships `nacl.public`,
-  so a Python callout could, unmeasured.
-- **Revocation and key rotation live.** Closing sessions on a removed scoped key and on an account revocation is read from
-  `accounts.go:4016-4056`, not measured.
+What the nats-auth lane measures against the stand-in signer is recorded with the lane. Not measured by any run, or
+measured only on one server (§ 6):
+
+- **A three-node cluster.** The § 6 measurements ran on one server. Expiry and a callout answering on a clustered, R3 bus
+  (the estate's shape) are not part of § 6.
+- **The platform's signer.** Whether the platform runs a callout, with which NATS version and TLS, is outside this
+  repository; the owner's or the platform team's to state. rask's chart declares what that signer reads (the table) and
+  refuses what a real deployment must not carry (a bus that is not `tls://`); it does not prove a signer it does not run.
+- **TokenReview latency and load.** The stand-in checks each token with a TokenReview; the callout's two-second answer
+  limit (nats-server) against a slow API server was not measured.
+- **TLS against a platform CA.** Whether the platform's CA chains to Python's trust store when `nats.ca.configMap` is empty
+  was not measured.
+- **xkey encryption** of callout requests and responses (ADR-26:204-235) is not set up; nkeys 0.2.1 ships `nacl.public`, so
+  a Python callout could, unmeasured.
+- **Account revocation of a callout user live.** Closing a session on an account revocation is read from
+  `accounts.go:4016-4033`, not measured.
 - **Mechanism (b) with a signer outage**, and its signer as an HTTP service: (b) was measured with an in-process minter; that
-  a pre-fetched JWT keeps the session through an outage is read from `aio/client.py:1814-1848`, not measured.
+  a pre-fetched JWT keeps the session through an outage is read from `aio/client.py:1814-1848`, not measured. rask builds (f).
 - **(d) mTLS** was not measured; that operator mode cannot map certificates to users is read from `jwt.go:97-98` and
   `auth.go:933-960`.
 - **The operator-mode callout's official prose** is "Coming soon!" (`auth_callout.md:157-159`); nothing in nats.docs states
   operator-mode callout as production guidance beyond ADR-26. nats-by-example's callout examples were not read (the tree
   listing through `gh api` returned nothing for `callout`).
-- **The platform's NATS version, TLS and whether it will run a callout**: outside this repository; the owner's or the
-  platform team's to state.
 - **OpenBao transit as the signer's key holder**: transit's ed25519 signing is read from the builtin registry only; whether its
-  signature format and the nkey public key line up was not tried.
+  signature format and the nkey public key line up was not tried. The stand-in holds every scoped seed in its pod.
 - **How the nats Go client treats `User Authentication Expired`** (as a comparison) was not read.

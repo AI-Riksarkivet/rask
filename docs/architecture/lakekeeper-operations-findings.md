@@ -236,8 +236,8 @@ order (`lakekeeper-events-kafka/src/lib.rs:120-149`). Delivery is at most once e
 **What rask does.** Better on every guarantee. The catalog stages each event in an object-store outbox before it
 publishes, delivery into the feed is at least once, lineage records each event once by its key, a crash before the stage
 is closed by the reconcile timer from the table's version log, and every event's identity is derived, never minted
-(`docs/COMMIT-EVENTS.md:150-180`, `:277-292`; `packages/lakehouse/src/lakehouse/outbox.py:1-20`). Bus credentials come
-from the secret store, never the environment (`tasks.py:81-84`). Readers order one table's writes by
+(`docs/COMMIT-EVENTS.md:150-180`, `:277-292`; `packages/lakehouse/src/lakehouse/outbox.py:1-20`). A pod holds no bus
+credential: it presents its ServiceAccount token to the bus (`lakehouse.bus`). Readers order one table's writes by
 `rask_lance.version`, not by arrival (`COMMIT-EVENTS.md:176-177`).
 
 **Lesson for XC-199.** Nothing in Lakekeeper's delivery is worth taking. Two things in its shape are: the routing

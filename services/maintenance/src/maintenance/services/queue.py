@@ -39,7 +39,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 
 import nats
-from nats.aio.client import Client, RawCredentials
+from nats.aio.client import Client
 from nats.aio.msg import Msg
 from nats.errors import Error as NatsError
 from nats.js.errors import (
@@ -55,7 +55,7 @@ from opentelemetry import propagate, trace
 from opentelemetry.trace import Link, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse.bus import pull
+from lakehouse.bus import BusSettings, pull
 from lakehouse.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
 from maintenance.core.metrics import (
     ArrivalOutcome,
@@ -147,9 +147,6 @@ _VOUCH_RETRY: Final = 1.0
 #: reconnects to a live node and its heartbeats are answered again (nats-py's default, 120 s x 2, outlasts the lease).
 _PING_INTERVAL: Final = 10.0
 _MAX_OUTSTANDING_PINGS: Final = 2
-#: What nats-server answers a connect whose credential it refuses (revoked, unknown, or past its expiry); nats-py hands it
-#: to the error callback while it reconnects. A session the server ends for its credential closes the client instead.
-_REFUSED: Final = "authorization violation"
 
 type TaskKind = Literal["table", "trash", "audit", "scan", "orphans"]
 #: The kinds a schedule of its own holds per table or trash record, which :meth:`TaskQueue.held` reads.
@@ -348,28 +345,57 @@ class _Lease(BaseModel):
 class TaskQueue:
     """The worker's one connection to the bus, as its own user, and the publishes the passes make on it."""
 
-    def __init__(self, client: Client, closing: asyncio.Event) -> None:
+    def __init__(self, client: Client, closing: asyncio.Event, renewing: asyncio.Task[None]) -> None:
         self._client = client
         self._closing = closing
+        self._renewing = renewing
         self._js: JetStreamContext = client.jetstream()
         self._claims: KeyValue | None = None
 
     @classmethod
-    async def connect(cls, url: str, credentials: str, *, name: str, end: EndProcess = end_process) -> TaskQueue:
-        """Connect as the user ``credentials`` names (a NATS creds document, `lakehouse.bus.read_credentials`, held in memory), reconnecting for ever: a bus
+    async def connect(cls, url: str, presenting: BusSettings, *, name: str, end: EndProcess = end_process) -> TaskQueue:
+        """Connect as the bus user ``name``, presenting this pod's token (`lakehouse.bus`), and reconnect for ever: a bus
         outage must leave the worker waiting on the bus, never closed for good.
 
-        A bus that refuses the credential, or ends the connection for good, ends the process (``end``). The
-        store's seed issues a user a new credential when its grants change and revokes the old one, and nats-py keeps the
-        credential it was given: it closes for good on a session the server ends, and retries a credential the server
-        refuses for ever (nats-py 2.16 ``Client._process_err`` and ``_attempt_reconnect``). Started again, the replica
-        reads the credential the store holds now."""
+        The worker holds no bus credential. Each connect presents the token the kubelet last wrote, and the bus's signer
+        answers it with a session as ``name`` that the bus ends after ``presenting.session_seconds``; the connection is
+        made again shortly before that, on the same client, so the tasks it holds and its subscriptions carry over. A
+        connect the bus does not take is tried again and said once for as long as the connection is away, whatever the
+        fault: a signer that is away shows as a connect that times out, since the bus refuses it only six seconds on
+        and nats-py gives a connect two (measured 2026-11-15, nats-server 2.15.2, nats-py 2.16.0). A pass in course is
+        held to its lease as through any outage. A session the bus ends all the same closes the client for good
+        (nats-py 2.16 ``Client._process_err``), which ends the process (``end``): started again, the replica asks for a
+        session again.
+
+        Args:
+            url: The bus.
+            presenting: The token this pod presents, the CA the bus's certificate is verified against, and how long a
+                session lasts.
+            name: The bus user the signer is asked for a session as.
+            end: Ends the process.
+
+        Raises:
+            OSError: The token, or the CA bundle, is not there to read.
+        """
         closing = asyncio.Event()
+        clock = asyncio.get_running_loop()
+        began = clock.time()
+        held: Client | None = None
+        #: Whether the outage in course has been said: nats-py reports every failed attempt, two seconds apart.
+        away = False
 
         async def errored(exc: Exception) -> None:
-            if _REFUSED in str(exc).lower():
-                end("maintenance_bus_refused", error=str(exc)[:300])
+            nonlocal away
+            if held is None or not held.is_connected:
+                if away:
+                    return
+                away = True
             log.warning("maintenance_bus_error", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
+
+        async def reconnected() -> None:
+            nonlocal began, away
+            began = clock.time()
+            away = False
 
         async def closed() -> None:
             if not closing.is_set():
@@ -377,7 +403,9 @@ class TaskQueue:
 
         client = await nats.connect(
             servers=[url],
-            user_credentials=RawCredentials(credentials),
+            token=presenting.token,
+            tls=presenting.trust(),
+            tls_handshake_first=url.startswith("tls://"),
             name=name,
             max_reconnect_attempts=-1,
             reconnect_time_wait=2,
@@ -385,9 +413,25 @@ class TaskQueue:
             max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
             inbox_prefix=INBOX_PREFIX,
             error_cb=errored,
+            reconnected_cb=reconnected,
             closed_cb=closed,
         )
-        return cls(client, closing)
+        held = client
+        away = False
+        began = clock.time()
+
+        async def renew() -> None:
+            nonlocal began
+            while True:
+                due = began + presenting.renew_after_seconds - clock.time()
+                if due > 0:
+                    await asyncio.sleep(due)
+                    continue
+                # Counted from now, so a connect the bus is slow to take is not asked for again on every turn.
+                began = clock.time()
+                await client.force_reconnect()
+
+        return cls(client, closing, asyncio.create_task(renew(), name="maintenance-bus-session"))
 
     async def enqueue(self, task: Task, *, carried: Mapping[str, str] | None = None) -> bool:
         """Put ``task`` on the queue; ``False`` when its table already has one queued or in flight, which covers it. The
@@ -682,6 +726,8 @@ class TaskQueue:
         bus cannot take a drain on (it is reconnecting, or gone) is closed as it is: nothing in flight can be sent on
         it, and an error here would hide whatever ended the block that closes it."""
         self._closing.set()
+        self._renewing.cancel()
+        await asyncio.gather(self._renewing, return_exceptions=True)
         try:
             await self._client.drain()
         except NatsError as exc:

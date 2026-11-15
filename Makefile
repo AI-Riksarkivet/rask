@@ -508,8 +508,15 @@ DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 # the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to.
 FIXTURES ?= external-secrets nats cloudnative-pg dex rustfs openbao observability marquez
 
+# The dev estate's bus enforces what a platform's does: operator mode, TLS on the client port and the stand-in signer
+# (deploy/fixtures/nats, `nats.auth.server`), which deploy/values-local.yaml's `nats.url` and `nats.ca` name. The dev
+# object store publishes its events there over the same CA.
+DEV_BUS_CA := rask-nats-ca
+
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
-	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))
+	$(if $(filter-out dex nats rustfs,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex nats rustfs,$(FIXTURES)))
+	$(if $(filter nats,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh nats -- --set nats.auth.server=true)
+	$(if $(filter rustfs,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh rustfs -- --set-string events.busCa=$(DEV_BUS_CA))
 	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER))
 
 k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture

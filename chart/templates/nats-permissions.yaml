@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "lance.fullname" . }}-nats-permissions
+  labels: {{- include "lance.labels" . | nindent 4 }}
+data:
+  permissions.json: |
+    {{- include "lance.natsPermissions" . | nindent 4 }}

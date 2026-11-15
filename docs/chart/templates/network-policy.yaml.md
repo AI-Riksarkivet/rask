@@ -94,7 +94,8 @@ reach, since it serves the public build and `/config.json`, which holds no secre
 
 THE DEVELOPMENT BUS ADMITS EXACTLY ITS CLIENTS ([[XC-202]]). Its clients on 4222 are the pods the platform's bus is
 reached from (`lance.busClients`: every service pod, which names the bus in its own environment, and the
-stream Job), the bus fixture's own `nats-box`, and with `objectStore.enabled` the development object store's server
+stream Job), the bus fixture's own `nats-box` and its stand-in signer (`bus-signer`, which answers the server's auth
+callout over a connection of its own), and with `objectStore.enabled` the development object store's server
 (component `rustfs`), which publishes each change on `store.events` for maintenance's work queue (ADR 0198); a pod that
 never dials the bus gets no path to it. The servers admit each other on 6222, whose cluster routes the fixture's
 three-node JetStream cluster runs on; without it a cluster under the isolation layer partitions. 7422 (leafnodes) and

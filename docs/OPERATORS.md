@@ -258,7 +258,7 @@ logs in to one can then be refused, by the other, the question about the token i
 then left is replaced within one more pass. Each further login the store refuses in turn waits twice the passes the
 last did (1, 3, 7, then 15, four minutes), and the store's first answer ends that. The drill of 2026-11-14 did not
 meet this case: the outgoing pod left the Service as the replacement joined it, and each service logged in once. A
-replacement that mints a new bus root still needs the bus and its clients restarted (§ 7).
+replacement that mints a new bus root still needs the NATS pods restarted and the stream Job run again (§ 7).
 
 **Reading it back.** Logged in to the store as an app's own account and role (a token from
 `kubectl create token <release>-sa-<app> --audience rask-openbao`, presented at `auth/kubernetes/login` as
@@ -266,62 +266,123 @@ replacement that mints a new bus root still needs the bus and its clients restar
 `signing-public-<key>` reads for that signer and for every verifier; lineage's role is refused every private key.
 `tests/e2e-py/test_each_app_reads_only_its_own_secrets.py` asks exactly this of a deployed estate.
 
-## 7 · Bus credentials: one NATS user per app (XC-078)
+## 7 · Bus users: a session per pod, no stored credential (XC-078, XC-199)
 
 The NATS bus is a prerequisite rask never installs (ADR 0153, XC-129); development runs it from `deploy/fixtures/nats`
-(release `nats`, Service `rask-nats`). With the bus in operator mode (the fixture's `nats.auth.server`), a client connects
-only with a user JWT signed under the operator's account, and each user may publish and subscribe only what its row of `nats.auth.users` (values.yaml)
-grants. There is one user per connection a service opens: `catalog` and `lineage` each publish and take their
-deliveries on a connection of their own as that user (`lakehouse.bus`), whose replies arrive under `_INBOX_<user>`, a
-prefix the table grants to that user alone; `maintenance-worker` works the queue and pulls the write-event lane the
-same way; and `maintenance` exists only while the worker publishes (`maintenance.lineageEmit`,
-`maintenance.controlEmit`). Each service binds to the durable consumer the stream Job declares for it and may create,
-edit or delete none. Beside them are `admin` (the stream Job) and `monitor` (nats-box,
+(release `nats`, Service `rask-nats`). It runs in operator mode, and each connection may publish and subscribe only what
+its user's row of `nats.auth.users` (values.yaml) grants. There is one user per connection a service opens: `catalog` and
+`lineage` each publish and take their deliveries on a connection of their own as that user (`lakehouse.bus`), whose
+replies arrive under `_INBOX_<user>`, a prefix the table grants to that user alone; `maintenance-worker` works the queue
+and pulls the write-event lane the same way; and `maintenance` exists only while the worker publishes
+(`maintenance.lineageEmit`, `maintenance.controlEmit`). Each service binds to the durable consumer the stream Job
+declares for it and may create, edit or delete none. Beside them are `admin` (the stream Job) and `monitor` (nats-box,
 read-only: stream and consumer state, no messages). A grant only a flag's call site uses sits under `nats.auth.flagged`
-and is issued only while that flag is on. Each user's credential is
-`nats-user-<user>` in the store (fields `jwt`, `seed`). A service reads its own under its own store login and holds it in
-memory only, never in a file or its environment, and opens a connection again by itself, with the credential the store
-holds then, when the bus ends the one it had; the stream Job (rask's release) and nats-box (the
-fixture's) take theirs as files written by ExternalSecrets.
+and is issued only while that flag is on.
 
-**Production (owner ruling R1): the platform runs NATS and its store; rask owns no trust root.** Name the bus in
-`nats.url`, create `nats-user-<user>` for every user the chart's table issues, signed by the bus's operator; then
-`--set nats.auth.provisioned=true`. Until then a render naming the platform's store (openbao.enabled=false) fails and
-names every secret it needs. The server's own config and route credential are the platform's.
+**A session user holds no credential.** A row with a ServiceAccount is a session user: the lakehouse's own rows take
+theirs from the chart (`catalog` -> `<release>-sa-catalog`, `lineage` -> `<release>-sa-lineage`, `maintenance` and
+`maintenance-worker` -> `<release>-sa-maintenance`, `admin` -> `<release>-sa-jobs`), and a row supplied by values names
+its own with `serviceAccount` (a ServiceAccount of the release's namespace, never one the lakehouse renders or
+`default`). Its pod projects the ServiceAccount token for the audience `nats.auth.audience` (default `rask-bus`, 600 s,
+at `/var/run/secrets/rask/identity/<audience>/token`, `lance.busIdentity`) and presents it as the connection's token,
+under the user's name, over TLS. The bus hands the connection to its signer, which checks the token with a TokenReview
+for that audience and answers with a session as that user that ends within `nats.auth.sessionSeconds` (default 300,
+at least 60 and below 600), signed by that user's scoped signing key; the bus enforces the key's scope, which is the
+user's row. The client asks for a new session shortly before the old one ends, on the same connection (`lakehouse.bus`;
+the maintenance worker's queue does the same in `maintenance.services.queue`). No `nats-user-<user>` secret exists for a
+session user: none is minted, read, mounted or attested. The pod is given `RASK_BUS_URL`, `RASK_BUS_USER`,
+`RASK_BUS_TOKEN_FILE`, `RASK_BUS_SESSION_SECONDS` and, with `nats.ca.configMap`, `RASK_BUS_CA_FILE` (`lance.busEnv`).
+The stream Job runs `nats` with `NATS_TOKEN` read from the projected token file on every call and
+`--connection-name admin`.
 
-**The dev OpenBao mints the fixture bus's trust root.** It writes `nats-server` and `nats-route`, which the fixture's
-ExternalSecrets read into the server's config through rask's SecretStore. Its seed carries `nats-root` (operator and
-account keys) and `nats-route` from the outgoing pod over a surge rollout, keeps every declared user's key and credential under that root while its grants match (issuing a changed grant under the same key and revoking the old credential, and a new pair for a user whose stored seed is unreadable), revokes every user rask stops declaring, and writes the users before its readiness
-key. A replacement with no outgoing pod mints a new root: a server in operator mode then refuses every client until the
-NATS pods restart onto the new `nats-server`, and that restart starts an empty JetStream. Restart the NATS pods, rerun
-the stream Job and restart every credentialed client after any non-surge OpenBao replacement.
+**The signer's table.** The chart renders every session user's ServiceAccount, publish and subscribe lists, with the
+audience and `sessionSeconds`, as ConfigMap `<release>-nats-permissions` (key `permissions.json`,
+`templates/nats-permissions.yaml`) in every mode. The signer picks the user whose ServiceAccount equals the token's and
+whose name equals the connection's name, and refuses a connection whose name matches none.
 
-**Switching it on (or after a trust-root change)** takes the bus down for a few minutes, because a reload cannot change
-the operator or the system account and a pod restarted alone into operator mode cannot join the others: quiesce (outboxes at
-depth 0); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS
-pod exists; set `nats.auth.server: true` in `deploy/fixtures/nats/chart/values.yaml` and run `scripts/fixtures.sh nats`,
-which restores the three replicas together (each waits for ESO's `rask-nats-auth`); then `make k3s-up`, whose stream Job
-runs as `admin` and recreates the streams and their durable consumers empty; each service's own connection opens again
-by itself, and its consumer is pulled again once the stream Job has declared it. Operator mode stays on only while git declares it: `scripts/fixtures.sh` installs with
-`--reset-values`, so a `--set` given on one command line is dropped by the next install, which turns operator mode off and
-restarts the bus into an empty JetStream as above.
+**A static user is a row with no ServiceAccount** (`monitor`, `object-store`, a client's row without `serviceAccount`):
+its credential is `nats-user-<user>` in the store (fields `jwt`, `seed`), read by a development fixture (nats-box's
+`monitor` and the object store's `object-store` creds are files written by ExternalSecrets) or by a client under its own
+store login (`openbao.externalReaders`). No lakehouse pod is one.
+
+**TLS is required on a real deployment.** Each pod's token crosses in `CONNECT`, so a render on a real deployment
+refuses a `nats.url` whose scheme is not `tls://` (`templates/prod-credentials.yaml`). `nats.ca.configMap` (key
+`nats.ca.key`, default `ca.crt`) names a ConfigMap of the release's namespace holding the CA the bus's certificate
+chains to; it is mounted read-only into every session user's pod. Empty means the system trust store.
+
+**A `tls://` server takes the TLS handshake before its greeting** (nats-server `tls { handshake_first: true }`, or
+`auto` to serve clients of both kinds; the NATS fixture sets `auto`). Every client of the release opens with the
+handshake (`lakehouse.bus`, the maintenance worker's queue, the stream Job's `--tlsfirst`), because a NATS client that
+waits for the greeting encrypts only when that unencrypted line asks it to: a server that leaves the request out, or
+anyone on the path who removes it, is then sent the pod's token in the clear (measured on nats-py 2.16.0, 2026-11-15,
+`packages/lakehouse/tests/test_a_process_publishes_to_the_bus_as_itself.py`). Against a server that greets first the
+handshake fails and nothing is sent: the pods stay unconnected and say `bus_not_connected`.
+
+**Production (owner ruling R1): the platform runs NATS, its TLS, its signer and its store; rask owns no trust root.**
+Name the bus in `nats.url` (`tls://`), its CA in `nats.ca`, and have the signer read ConfigMap
+`<release>-nats-permissions`: for every session user it admits a token of that ServiceAccount for the audience, only
+under that user's name, with a session of at most `sessionSeconds` signed by a signing key scoped to the user's row; a
+changed row changes that key's scope. Create `nats-user-<user>` for each static user the table lists, signed by the bus's
+operator. Then `--set nats.auth.provisioned=true`. Until then a render naming the platform's store
+(openbao.enabled=false) fails and names every session user and static user it needs. The server's own config, operator
+and route credential are the platform's.
+
+**The dev OpenBao mints the fixture bus's trust root.** It writes `nats-server` (operator, system account,
+`resolver_preload`, the `default_sentinel`), `nats-route` and `nats-callout`, which the fixture's ExternalSecrets read into
+the server's config and the stand-in signer through rask's SecretStore. The trust root `nats-root` holds the operator, the
+SYS, APP and AUTH accounts and their keys. In APP the seed converges one scoped signing key per session user (role: the
+user's name; scope: its row), re-scoping the same key when a row changes and removing the key of a user that is no
+session user, which closes that user's sessions. In AUTH it keeps the signer's user `callout`, a bearer `sentinel` denied
+every subject (the server's `default_sentinel`, so a pod presents no NATS JWT), one signing key for the signer's answers,
+and the callout naming `callout` and APP. It issues each static user's JWT and seed as `nats-user-<user>`, keeping a
+user's key and credential while its grants match (issuing a changed grant under the same key and revoking the old
+credential, and a new pair for a user whose stored seed is unreadable), revokes every static user rask stops issuing, and
+writes the bundle before its readiness key. A replacement with no outgoing pod mints a new root: a server in operator
+mode then refuses every client until the NATS pods restart onto the new `nats-server`, and that restart starts an empty
+JetStream. After any non-surge OpenBao replacement, restart the NATS pods (the signer reads its keys from `nats-callout`
+through its own ExternalSecret) and rerun the stream Job; each service's own connection opens again by itself.
+
+**The dev estate runs the bus like a platform's.** `make k3s-up` installs the NATS fixture with `nats.auth.server=true`
+(`k3s-fixtures` in the Makefile): operator mode, TLS on the client port from a CA and certificate the fixture makes once
+and keeps (Secret `rask-nats-tls`; the CA alone in ConfigMap `rask-nats-ca`, which `deploy/values-local.yaml` names in
+`nats.ca.configMap` beside `nats.url: tls://rask-nats:4222`), and the stand-in signer `rask-nats-signer`
+(`deploy/fixtures/nats/callout`, two replicas, bound to `system:auth-delegator` for the TokenReview). The development
+object store publishes its events over the same CA (`events.busCa`, `deploy/fixtures/rustfs`) as the static user
+`object-store`. The stand-in logs one line per decision (user, ServiceAccount, granted or the reason it refused) and never
+a token.
+
+**Switching operator mode on (or after a trust-root change)** takes the bus down for a few minutes, because a reload
+cannot change the operator or the system account and a pod restarted alone into operator mode cannot join the others:
+quiesce (outboxes at depth 0); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS pod exists; run
+`make k3s-up`, whose `k3s-fixtures` installs the fixture with `nats.auth.server=true` and restores the three replicas
+together (each waits for ESO's `rask-nats-auth`) and whose stream Job runs as `admin` and recreates the streams and
+their durable consumers empty; each service's own connection opens again by itself, and its consumer is pulled again once
+the stream Job has declared it. Operator mode stays on only while git declares it: `scripts/fixtures.sh nats` run by hand
+installs with `--reset-values`, so a `--set` given on one command line is dropped by the next install, which turns
+operator mode off and restarts the bus into an empty JetStream as above.
+
+**Revoking a service** is a change of the table: remove its row, or its `serviceAccount`, and the signer's key for it goes
+at the next reconcile (the dev seed removes the key of a user that is no session user), which closes every session that
+key signed; a new connect is refused. A deleted pod's token fails its TokenReview, so its next connect is refused, and a
+session it holds ends within `sessionSeconds`.
 
 **A consumer removal** (RESILIENCE.md gap #3, the lineage rebuild) needs `admin`, because nats-box runs as `monitor`.
-Write a creds file into the nats-box pod from the store, without printing it:
+Ask the bus for a session as `admin` the way the stream Job does, with a token for its ServiceAccount, without printing
+it:
 
 ```
-JWT=$(kubectl exec deploy/rask-openbao -c seed -- bao kv get -field=jwt secret/nats-user-admin)
-SEED=$(kubectl exec deploy/rask-openbao -c seed -- bao kv get -field=seed secret/nats-user-admin)
-printf -- '-----BEGIN NATS USER JWT-----\n%s\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n%s\n------END USER NKEY SEED------\n' "$JWT" "$SEED" \
-  | kubectl exec -i deploy/rask-nats-box -- sh -c 'umask 077; cat > /tmp/admin.creds'
-kubectl exec deploy/rask-nats-box -- nats --no-context --server nats://rask-nats:4222 --creds /tmp/admin.creds consumer rm <STREAM> <consumer> -f
-kubectl exec deploy/rask-nats-box -- rm -f /tmp/admin.creds
+kubectl get configmap rask-nats-ca -o jsonpath='{.data.ca\.crt}' | kubectl exec -i deploy/rask-nats-box -- sh -c 'umask 077; cat > /tmp/ca.crt'
+kubectl create token <release>-sa-jobs --audience rask-bus --duration 10m \
+  | kubectl exec -i deploy/rask-nats-box -- sh -c 'NATS_TOKEN=$(cat) nats --no-context --server tls://rask-nats:4222 --connection-name admin --tlsfirst --tlsca /tmp/ca.crt consumer rm <STREAM> <consumer> -f'
+kubectl exec deploy/rask-nats-box -- rm -f /tmp/ca.crt
 ```
 
 **Reading it back.** On each node's monitoring port, `/connz?auth=true` lists every client connection with an
-authorized user and none anonymous; `/connz?state=closed&auth=true` keeps short-lived ones. A publish
-with no credential is refused ("Authorization Violation") and one with another app's credential on a subject that app
-does not own is refused ("Permissions Violation"), each leaving the stream's last sequence unchanged.
+authorized user and none anonymous; `/connz?state=closed&auth=true` keeps short-lived ones; each connection's `name` is
+its bus user. The signer's log (`kubectl logs deploy/rask-nats-signer`) names each decision: the user, its ServiceAccount
+and granted, or the reason it refused. A connection with no token, or whose name matches no session user of the token's
+ServiceAccount, is refused and leaves the stream's last sequence unchanged; a publish on a subject outside the user's row
+is refused ("Permissions Violation") and the connection is kept.
 
 **Residuals, named.** `admin`, `monitor` and the development object store receive their replies on the shared
 `_INBOX.>`, so within the account each of the three could read the replies to another (answers about streams and

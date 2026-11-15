@@ -34,7 +34,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 
 #: The bus a render names ([[XC-129]]): NATS JetStream is a prerequisite rask never installs, so every client dials
 #: this address.
-NATS_URL = "nats://bus.example.com:4222"
+NATS_URL = "tls://bus.example.com:4222"
 
 #: The API server's address as a platform states it to the NetworkPolicy ([[XC-143]]): a documentation range, so no
 #: other peer a render holds can be mistaken for it.
@@ -241,7 +241,7 @@ def selects(selector: dict, labels: dict[str, str]) -> bool:
     return True
 
 
-#: One NATS user as the dev OpenBao's seed issues it: `nats_user <name> '<publish,...>' '<subscribe,...>'`.
+#: One static NATS user as the dev OpenBao's seed issues it: `nats_user <name> '<publish,...>' '<subscribe,...>'`.
 _NATS_USER = re.compile(r"^\s*nats_user ([a-z0-9][a-z0-9-]*) '([^']*)' '([^']*)'$", re.MULTILINE)
 #: A stream the NATS stream Job declares and converges, never a commented-out one.
 _STREAM = re.compile(r'^[^\S\n]*declare_stream ([A-Z_]+) "([^"]+)"', re.MULTILINE)
@@ -287,7 +287,7 @@ def with_dev_store(docs: tuple[dict, ...]) -> tuple[dict, ...]:
 
 
 def nats_users(docs: tuple[dict, ...]) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
-    """Each NATS user the dev OpenBao's seed issues, as (publish, subscribe) permissions; empty when the render issues none.
+    """Each static NATS user the dev OpenBao's seed issues, as (publish, subscribe) permissions; empty when the render issues none.
 
     Read off the seed script rask renders, so it is the table as the chart passes it to nsc (values.yaml `nats.auth.users`).
     """
@@ -295,6 +295,20 @@ def nats_users(docs: tuple[dict, ...]) -> dict[str, tuple[frozenset[str], frozen
     for user, publish, subscribe in _NATS_USER.findall(seed_scripts(docs).get("open-and-seed.sh", "")):
         issued[user] = (frozenset(publish.split(",")), frozenset(subscribe.split(",")))
     return issued
+
+
+def bus_sessions(docs: tuple[dict, ...]) -> dict[str, Any]:
+    """The table the bus's signer reads (`<release>-nats-permissions`, `permissions.json`): its audience, its longest
+    session and each session user's ServiceAccount, publish and subscribe lists; empty when the render holds none."""
+    found = [d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"].endswith("-nats-permissions")]
+    return json.loads(found[0]["data"]["permissions.json"]) if found else {}
+
+
+def bus_users(docs: tuple[dict, ...]) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
+    """Every bus user of the render as (publish, subscribe): each session user of the signer's table and each static user
+    the dev seed issues (`nats_users`)."""
+    sessions = {user: (frozenset(row["publish"]), frozenset(row["subscribe"])) for user, row in (bus_sessions(docs).get("users") or {}).items()}
+    return {**nats_users(docs), **sessions}
 
 
 def jetstream_streams(docs: tuple[dict, ...]) -> dict[str, str]:

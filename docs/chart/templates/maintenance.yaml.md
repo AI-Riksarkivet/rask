@@ -15,8 +15,9 @@ The worker pods: `python -m maintenance.worker`, maintenance's only process, one
 queue (ADR 0198). It takes its tasks, its fired schedules, the store's change events and, under
 `maintenance.arrivalEnabled`, the commit announcements off the bus on its queue connection (bus user
 `maintenance-worker`), and serves nothing but its probes. Rendered with `maintenance.enabled`: the bus is named to the
-pod for its work queue and for the connection it publishes what a pass emits on. Its bus credentials and its
-signing key it reads from the secret store under its own login. Its schedules are NATS message schedules on its own
+pod for its work queue and for the connection it publishes what a pass emits on, with the pod's projected bus token and
+the session length (`lance.busEnv`, `lance.busIdentity`). It holds no bus credential: each connection presents the
+token, and its signing key it reads from the secret store under its own login. Its schedules are NATS message schedules on its own
 work queue. RollingUpdate with no pod
 unavailable: the queue holds one task per table and hands it to one worker at a time, so a surge pod shares the work and
 repeats none.
@@ -182,9 +183,10 @@ catalog vend:
 ## `{{- include "lance.secretStoreEnv" (list $root .Values.maintenance.appId) | nindent 0 }}`
 
 MAINTENANCE LOGS IN TO THE SECRET STORE AS ITSELF ([[XC-199]]). The store's address, its role `<release>-maintenance`, the
-mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its signing key and its work queue's
-bus credential come ONLY from the store, read under the process's own login at boot and again while it runs ([[XC-082]],
-ADR 0166), never from pod env. A store that does not serve them fails the start closed.
+mounts and the projected token's path (`lance.secretStoreEnv`, `_helpers.tpl.md`): its signing key comes ONLY
+from the store, read under the process's own login at boot and again while it runs ([[XC-082]], ADR 0166), never from
+pod env. Its work queue's connection holds no stored credential: it presents the pod's bus token as the bus user
+`maintenance-worker`. A store that does not serve them fails the start closed.
 
 ## `{{- $extra := list }}`
 

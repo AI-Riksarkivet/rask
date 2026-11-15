@@ -4,8 +4,9 @@ ADR 0198 §2).
 The service's own worker (`maintenance.services.queue.Worker` over `TaskQueue`) on the bus the lane stands up: the NATS
 fixture's three-node nats-server cluster in operator mode, the chart's stream Job run as `admin`, which declares
 MAINTENANCE_TASKS, MAINTENANCE_SCHEDULES and their two durables at the chart's default replicas, a copy on every server as
-on the estate, and every worker connected as `maintenance-worker` with the grants the dev seed issues, so a call the chart
-does not grant fails here as it would on the estate. Only what a task runs is the
+on the estate, and every worker connected as `maintenance-worker`, presenting only its pod's token and granted a session
+by the stand-in signer under the scoped key of the row the render issues, so a call the chart does not grant fails here
+as it would on the estate. Only what a task runs is the
 test's: it records which worker ran it, and holds while the test holds it. The render shortens the consumer's ack wait to
 `_ACK_WAIT` seconds, so a dead worker's task moves within the test.
 
@@ -54,15 +55,17 @@ Each test claims one behaviour:
   the claim's read on every delivery, delivered again after its delivery's retry delay and ended on the worker's last.
   This lane is the only proof of that loop: no offline test drives it.
 
-A replica started as the service starts it (`maintenance.services.tasks.running_worker`, its bus credential read from a
-stand-in of the store's secrets API) keeps its loops and its schedules: a loop that ends before the replica stops, with an
+A replica started as the service starts it (`maintenance.services.tasks.running_worker`, its queue presenting the token
+its pod was given and reading no bus credential from anywhere) keeps its loops and its schedules: a loop that ends before the replica stops, with an
 error or without, ends the replica's process; the audit's and the scan's schedules are asserted at its start, and put
 back on the cadence the replica asserts them on once the bus loses them; and where its settings turn the commit lane on,
 it pulls that lane, so an announced write holds its table's pass.
 
-A worker whose credential the bus takes no longer ends its process (exit 70), whether the bus ends the session holding it
-or refuses it at a reconnect: the store issues a new credential when a user's grants change and revokes the old one, and
-the worker, started again, reads the new one.
+A worker's queue asks for its session again before the bus ends it, on the same client, while a pass runs across two
+session lengths and more: the pass runs once and is acknowledged. A worker whose session the bus ends all the same (its
+pod told a longer session than the signer grants) ends its process (exit 70, `maintenance_bus_closed`), and started
+again asks for a session again; a worker whose renewal the signers cannot answer is refused, says so once, and goes on
+asking, with its process kept, until they answer.
 
 Run by `dagger call nats-auth` (`make nats-auth`), beside the bus's permission proof, whose rig it shares.
 """
@@ -89,19 +92,17 @@ import pytest_asyncio
 from measured_metrics import Measured
 from nats.aio.msg import Msg
 from nats_auth_rig import (
+    RENDER_ARGS,
     VALUES_ENV,
-    Broker,
     Client,
-    Credential,
     Link,
-    Mint,
     Permissions,
+    Pod,
+    Rig,
     Tools,
     Violation,
     client_calls,
-    issue,
-    mint,
-    run_stream_job,
+    secrets_in,
     stream_job_script,
     violations,
 )
@@ -113,7 +114,6 @@ from pydantic import BaseModel, SecretStr
 
 from lakehouse import location_claims, store_session
 from lakehouse.control_emit import NoopControlEmitter
-from lakehouse.governed import secrets
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lineage_events import LANCE_FACET, DatasetUuids, with_dataset_uuids
 from lakehouse.supervision import EndProcess, end_process
@@ -142,8 +142,7 @@ from maintenance.services.queue import (
     sample_queue,
 )
 from maintenance.services.store_events import StoreEvents
-from tests.secret_store_double import SecretStoreDouble
-from tests.unit.chart_render import DEFAULT_ARGS, nats_users, render
+from tests.unit.chart_render import DEFAULT_ARGS, render
 
 
 pytestmark = pytest.mark.nats_auth
@@ -157,6 +156,12 @@ _STORE = "object-store"
 #: The test's own user, every JetStream call granted: it reads and purges what the worker's schedules leave on the bus,
 #: sees and replays the workers' pulls, and fires a schedule as the bus fires one.
 _RIG = "rask-test-rig"
+#: How long a session lasts in every test but the session tests': longer than the module runs.
+_LONG_SESSION = 3600
+#: The session tests' session, as short as `BusSettings.session_seconds` allows: renewed 15 s in.
+_SHORT_SESSION = 20
+#: How long the signers stay away when a worker's renewal falls in the stretch: past the renewal and the session's end.
+_SIGNERS_AWAY = 15.0
 _RIG_GRANTS = Permissions(publish=("$JS.API.>", "$JS.ACK.>", "maintenance.due.>"), subscribe=("_INBOX.>", "$JS.API.CONSUMER.MSG.NEXT.>", f"{INBOX_PREFIX}.>"))
 #: The consumer's ack wait the render is given, and the heartbeat each worker beats inside it.
 _ACK_WAIT = 4
@@ -181,17 +186,13 @@ _FETCH_SECONDS = 5.0
 #: How long the link holds each frame a worker sends on its way to the broker: the time a slow path to the stream's leader
 #: adds, short of the heartbeat, within which a worker's claim and heartbeat must be answered.
 _PULL_TRANSIT = 0.3
-#: A credential with the worker's grants that runs out a minute after it is issued (nsc's least expiry). From then on the
-#: bus takes it no longer, as it takes a revoked one no longer: it ends a session holding it, and refuses it at a connect.
-_EXPIRING = "maintenance-worker-expiring"
-_EXPIRY = 60.0
 #: A worker in a process of its own, its pass bound the third argument: it says which task it runs, then holds it until
 #: it is killed, its bound ends the process, `finish` on its stdin ends the pass, or `stop` there drains the worker. Its
 #: records go over OTLP to a Collector that takes the connection and never answers, as one behind a cut does, so an end
 #: that waited for its flush would outlive the worker's hold on its task.
 _DOOMED = f"""
 import asyncio, logging, socket, sys
-from pathlib import Path
+from lakehouse.bus import BusSettings
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
@@ -207,8 +208,8 @@ provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter(endpoi
 set_logger_provider(provider)
 logging.getLogger().addHandler(LoggingHandler(logger_provider=provider))
 
-async def main(url: str, creds: str, max_pass: float) -> None:
-    queue = await TaskQueue.connect(url, Path(creds).read_text(), name="doomed")
+async def main(url: str, max_pass: float) -> None:
+    queue = await TaskQueue.connect(url, BusSettings(), name="maintenance-worker")
 
     finish = asyncio.Event()
 
@@ -229,20 +230,21 @@ async def main(url: str, creds: str, max_pass: float) -> None:
         finish.set()
     await worker.drain([pulling], {_DOOMED_DRAIN})
 
-asyncio.run(main(sys.argv[1], sys.argv[2], float(sys.argv[3])))
+asyncio.run(main(sys.argv[1], float(sys.argv[2])))
 """
-#: A process of its own that connects to the bus as a worker does, says so, and holds the connection.
+#: A process of its own that connects to the bus as a worker does, presenting the token its environment names, says so,
+#: and holds the connection.
 _HOLDING = """
 import asyncio, sys
-from pathlib import Path
+from lakehouse.bus import BusSettings
 from maintenance.services.queue import TaskQueue
 
-async def main(url: str, creds: str) -> None:
-    await TaskQueue.connect(url, Path(creds).read_text(), name="holding")
+async def main(url: str) -> None:
+    await TaskQueue.connect(url, BusSettings(), name="maintenance-worker")
     print("connected", flush=True)
     await asyncio.sleep(3600)
 
-asyncio.run(main(sys.argv[1], sys.argv[2]))
+asyncio.run(main(sys.argv[1]))
 """
 
 
@@ -279,9 +281,10 @@ class _Replica:
     consumer's lease. Where the worker would end its process, the replica stops its loops instead and keeps the reason
     in `ended`, so the run fails on a named claim rather than losing the test runner."""
 
-    def __init__(self, queue: TaskQueue, name: str, runs: _Runs, *, ready: Callable[[], bool]) -> None:
+    def __init__(self, queue: TaskQueue, name: str, runs: _Runs, *, ready: Callable[[], bool], ended: list[str]) -> None:
         self.name = name
-        self.ended: list[str] = []
+        #: Each reason the replica ended where a worker ends its process, its queue's closing among them.
+        self.ended = ended
         self._queue = queue
         self._worker = Worker(
             queue,
@@ -297,8 +300,15 @@ class _Replica:
         self._loops = [asyncio.create_task(self._worker.run_tasks()), asyncio.create_task(self._worker.run_due())]
 
     @classmethod
-    async def start(cls, url: str, credential: Credential, name: str, runs: _Runs, *, ready: Callable[[], bool]) -> _Replica:
-        return cls(await TaskQueue.connect(url, credential.creds_file.read_text(), name=name), name, runs, ready=ready)
+    async def start(cls, url: str, pod: Pod, name: str, runs: _Runs, *, ready: Callable[[], bool], session_seconds: int) -> _Replica:
+        ended: list[str] = []
+
+        def closed(event: str, **_: object) -> NoReturn:
+            ended.append(event)
+            raise _Ended(event)
+
+        queue = await TaskQueue.connect(url, pod.settings(url, session_seconds), name=_WORKER, end=closed)
+        return cls(queue, name, runs, ready=ready, ended=ended)
 
     def _end_process(self, event: str, **extra: object) -> NoReturn:
         self.ended.append(event)
@@ -320,21 +330,32 @@ class _Replica:
         await self._queue.close()
 
 
-async def _doomed(url: str, credential: Credential, max_pass_seconds: float) -> asyncio.subprocess.Process:
+def _pods_environment(pod: Pod, session_seconds: int) -> dict[str, str]:
+    """The environment a worker's process runs in: this one's, less what names a bus, and its pod's token, CA and session."""
+    inherited = {name: value for name, value in os.environ.items() if not name.startswith("RASK_BUS_")}
+    return {**inherited, **pod.presenting(session_seconds)}
+
+
+async def _doomed(url: str, pod: Pod, max_pass_seconds: float) -> asyncio.subprocess.Process:
     """A worker in a process of its own, its pass bound ``max_pass_seconds``."""
     return await asyncio.create_subprocess_exec(
-        *(sys.executable, "-c", _DOOMED, url, str(credential.creds_file), str(max_pass_seconds)),
+        *(sys.executable, "-c", _DOOMED, url, str(max_pass_seconds)),
         cwd=REPO,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
+        env=_pods_environment(pod, _LONG_SESSION),
     )
 
 
-async def _holding(url: str, credential: Credential, log: Path) -> asyncio.subprocess.Process:
+async def _holding(url: str, pod: Pod, log: Path, session_seconds: int) -> asyncio.subprocess.Process:
     """A connection to the bus as a worker makes it, held in a process of its own that writes what it logs to ``log``."""
     with log.open("wb") as logged:
         return await asyncio.create_subprocess_exec(
-            *(sys.executable, "-c", _HOLDING, url, str(credential.creds_file)), cwd=REPO, stdout=asyncio.subprocess.PIPE, stderr=logged
+            *(sys.executable, "-c", _HOLDING, url),
+            cwd=REPO,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=logged,
+            env=_pods_environment(pod, session_seconds),
         )
 
 
@@ -357,53 +378,50 @@ async def _until(done: Callable[[], bool | Awaitable[bool]], seconds: float) -> 
         await asyncio.sleep(0.2)
 
 
-def _declare_the_queue(tools: Tools, docs: tuple[dict[str, Any], ...], broker: Broker, admin: Credential, home: Path) -> None:
+def _declare_the_queue(bus: Rig, home: Path) -> None:
     """The chart's stream Job, run as `admin` against this broker, as the estate runs it before maintenance starts: a run
     that fails is run again, as Kubernetes runs a failed Job's pod again (the chart's `backoffLimit`). Creating a stream
     copied to three servers can outlast the CLI's request deadline on a loaded host (measured 2026-11-09), and the Job is
     idempotent, so a second run finishes what the first began."""
-    script = stream_job_script(docs, broker.url)
-    runs = [run_stream_job(tools.job_cli, script, admin, home, 300.0)]
+    script = stream_job_script(bus.docs, bus.url)
+    runs = [bus.run_stream_job(script, home, 300.0)]
     while runs[-1].returncode and len(runs) < _JOB_RUNS:
-        runs.append(run_stream_job(tools.job_cli, script, admin, home, 300.0))
+        runs.append(bus.run_stream_job(script, home, 300.0))
     done = runs[-1]
     assert done.returncode == 0, f"the stream Job exited {done.returncode} on each of {len(runs)} runs: {(done.stdout + done.stderr)[-800:]}"
 
 
-def _the_bus(tmp_path: Path, extra: dict[str, Permissions] | None = None) -> tuple[Tools, tuple[dict[str, Any], ...], Mint, Broker]:
-    """The bus as the chart declares it, at the lane's short timings: `admin`, the worker's user, the store's and the
-    catalog's (which announces each commit) minted with the grants the render issues (and ``extra`` users the test needs
-    for itself), and the three-node cluster started."""
+def _the_bus(tmp_path: Path) -> Rig:
+    """The bus as the chart declares it, at the lane's short timings: every user the render issues (`admin`, the worker's
+    and the catalog's, which announces each commit, session users; the store's static), the rig's own observer, and the
+    three-node cluster and its signers started."""
     tools = Tools.from_env(os.environ)
     values = Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
     queue_values = (
         *("--set", f"maintenance.queue.ackWaitSeconds={_ACK_WAIT}", "--set", f"maintenance.queue.heartbeatSeconds={_HEARTBEAT}"),
         *("--set", f"maintenance.queue.maxDeliver={_MAX_DELIVER}"),
     )
-    docs = render(*DEFAULT_ARGS, "-f", str(values), *queue_values)
-    issued = nats_users(docs)
-    rendered = {"admin", _WORKER, _STORE, _CATALOG}
-    table = {user: Permissions(publish=tuple(sorted(issued[user][0])), subscribe=tuple(sorted(issued[user][1]))) for user in rendered if user in issued}
-    assert set(table) == rendered, f"the render with {values} issues no {sorted(rendered - set(table))}"
-    mint_ = mint(tools.nsc, {**table, **(extra or {})}, tmp_path / "nsc")
-    broker = Broker(tools.nats_server, mint_, tmp_path / "broker")
-    broker.start()
-    return tools, docs, mint_, broker
+    docs = render(*DEFAULT_ARGS, "-f", str(values), *RENDER_ARGS, *queue_values)
+    bus = Rig(tools, docs, tmp_path / "rig", static={_RIG: _RIG_GRANTS}, session_seconds=_LONG_SESSION)
+    issued = {"admin", _WORKER, _CATALOG} & set(bus.table.users) | {_STORE} & set(bus.static)
+    assert issued == {"admin", _WORKER, _STORE, _CATALOG}, f"the render with {values} issues no {sorted({'admin', _WORKER, _STORE, _CATALOG} - issued)}"
+    bus.start()
+    return bus
 
 
-def _replica_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broker: Broker) -> MaintenanceSettings:
-    """A replica's settings as the service reads them: a secret store it logs in to as itself, an object-store identity
-    that is its ServiceAccount token as the pod's is, and the store session its lifespan exchanges that token for already
-    held: no test here reads an object."""
+def _replica_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bus: _Bus) -> tuple[MaintenanceSettings, Pod]:
+    """A replica's settings as the service reads them, and its pod: the bus's token, CA and session length the chart
+    hands the pod, an object-store identity that is its ServiceAccount token as the pod's is, and the store session its
+    lifespan exchanges that token for already held: no test here reads an object."""
     (token := tmp_path / "token").write_text("a projected token")
     monkeypatch.setenv("MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE", str(token))
     monkeypatch.setenv("MAINTENANCE_S3_STS_ENDPOINT", "http://store.example:9000")
-    # Where a replica's secret store is said to be; the suite's double answers there (`_start_replica`).
-    monkeypatch.setenv("RASK_SECRET_STORE_ADDR", SecretStoreDouble.ADDRESS)
-    monkeypatch.setenv("RASK_SECRET_STORE_ROLE", SecretStoreDouble.ROLE)
+    pod = bus.rig.pod(_WORKER)
+    for name, value in pod.presenting(_LONG_SESSION).items():
+        monkeypatch.setenv(name, value)
     settings = MaintenanceSettings.model_validate(
         {
-            **{"s3_bucket": "b", "nats_url": broker.url, "drain_seconds": 5},
+            **{"s3_bucket": "b", "nats_url": bus.rig.url, "drain_seconds": 5},
             **{"task_heartbeat_seconds": _HEARTBEAT, "task_ack_wait_seconds": _ACK_WAIT, "task_max_deliver": _MAX_DELIVER},
         }
     )
@@ -414,22 +432,17 @@ def _replica_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, broker: B
     assert identity is not None, "the service holds no web identity, so it would sign with no session"
     session = S3KeyPair(access_key_id="TESTSESSION", secret_access_key=SecretStr("test-only"), session_token=SecretStr("test-only"))
     sessions.hold(identity, session, asked_at=sessions.now(), lifetime_seconds=3600)
-    return settings
+    return settings, pod
 
 
-async def _start_replica(stack: AsyncExitStack, settings: MaintenanceSettings, worker: Credential, *, end: EndProcess = end_process) -> TaskQueue:
-    """A replica started as the service starts it (`tasks.running_worker`), its bus credential read from a stand-in of the
-    store's secrets API, run until ``stack`` closes; the queue it runs on. Every task it is handed runs nothing."""
-    # Each replica logs in for itself, as each pod does: the process's one session is forgotten first.
-    secrets.forget_secret_store()
-    store = SecretStoreDouble()
-    credential = store.hold(settings.nats_credentials_secret, {"jwt": worker.jwt, "seed": worker.seed()})
-    with store.router:
-        lane = await stack.enter_async_context(tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), end=end))
-        # Read while the router answers: stopping it rolls each route's calls back to what they were when it started.
-        asked = (store.login.call_count, credential.call_count)
-    assert asked == (1, 1), "the replica did not read its bus credential under a login of its own"
+async def _start_replica(stack: AsyncExitStack, replica: tuple[MaintenanceSettings, Pod], bus: _Bus, *, end: EndProcess = end_process) -> TaskQueue:
+    """A replica started as the service starts it (`tasks.running_worker`), its queue presenting the token its pod was
+    given, run until ``stack`` closes; the queue it runs on. Every task it is handed runs nothing. No secret store is
+    named to it, so a bus credential it read from anywhere would fail its start."""
+    settings, pod = replica
+    lane = await stack.enter_async_context(tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), end=end))
     assert lane is not None, "the replica started with no bus"
+    assert bus.rig.reviewer.reviews_of(pod.token_file.read_text()) >= 1, "the replica's queue did not present the token its pod was given"
     return lane
 
 
@@ -490,28 +503,33 @@ async def _break_the_renewal(_rig: Client, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 class _Bus:
-    """The module's bus: the cluster, the users minted for it, the render its stream Job came from, and what the servers
-    had logged when the running test began, so a test reads only its own lines."""
+    """The module's bus: the cluster, its signers and the users minted for it, the render its stream Job came from, and
+    what the servers had logged when the running test began, so a test reads only its own lines."""
 
-    def __init__(self, tools: Tools, docs: tuple[dict[str, Any], ...], mint_: Mint, broker: Broker, home: Path) -> None:
-        self.tools, self.docs, self.mint, self.broker, self.home = tools, docs, mint_, broker, home
+    def __init__(self, rig: Rig, home: Path) -> None:
+        self.rig, self.home = rig, home
+        self.docs, self.broker = rig.docs, rig.broker
         self._before: Counter[str] = Counter()
 
-    @property
-    def worker(self) -> Credential:
-        return self.mint.credentials[_WORKER]
+    async def queue(self, url: str | None = None, *, session_seconds: int = _LONG_SESSION) -> TaskQueue:
+        """A worker's queue connection as a pod of its own opens it, presenting that pod's token."""
+        target = url or self.rig.url
+        return await TaskQueue.connect(target, self.rig.pod(_WORKER).settings(target, session_seconds), name=_WORKER)
 
-    async def rig(self) -> Client:
-        return await Client.connect(self.broker.url, self.mint.credentials[_RIG], _RIG, answer_within=10.0)
+    async def client(self, user: str, **kwargs: Any) -> Client:
+        return await self.rig.client(user, **kwargs)
+
+    async def observer(self) -> Client:
+        return await self.rig.client(_RIG, answer_within=10.0)
 
     def declare(self) -> None:
         """The chart's stream Job, run as `admin` (`_declare_the_queue`)."""
-        _declare_the_queue(self.tools, self.docs, self.broker, self.mint.credentials["admin"], self.home)
+        _declare_the_queue(self.rig, self.home)
 
     async def declare_afresh(self) -> None:
         """Delete the maintenance streams, the claims bucket and the stream the commit lane reads, then have the stream Job
         declare them again: no message, delivery count, consumer state or claim survives into the next test."""
-        rig = await self.rig()
+        rig = await self.observer()
         try:
             for stream in (TASKS_STREAM, SCHEDULES_STREAM, STORE_EVENTS_STREAM, f"KV_{CLAIMS_BUCKET}", ARRIVALS_STREAM):
                 await rig.request(f"$JS.API.STREAM.DELETE.{stream}")
@@ -528,17 +546,21 @@ class _Bus:
     def refusals(self) -> list[Violation]:
         """What the broker refused the worker's user since the running test began: a call the chart's table does not
         grant."""
-        return [v for v in violations(self.logged_since()) if self.mint.user_of(v.user_key) == _WORKER]
+        return [v for v in violations(self.logged_since()) if self.rig.mint.user_of(v.user_key) == _WORKER]
+
+    def granted(self) -> int:
+        """How many sessions the signers have granted the worker's user."""
+        return sum(1 for d in self.rig.signers.decisions() if (d.event, d.user) == ("bus_session_granted", _WORKER))
 
 
 @pytest.fixture(scope="module")
 def bus(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Bus]:
     home = tmp_path_factory.mktemp("bus")
-    tools, docs, mint_, broker = _the_bus(home, {_RIG: _RIG_GRANTS})
+    rig = _the_bus(home)
     try:
-        yield _Bus(tools, docs, mint_, broker, home)
+        yield _Bus(rig, home)
     finally:
-        broker.stop()
+        rig.stop()
 
 
 @pytest_asyncio.fixture
@@ -578,28 +600,37 @@ class _Fleet:
         #: Loops the test runs itself, cancelled first.
         self.on_stop: list[asyncio.Task[None]] = []
 
-    async def lane(self, name: str = "commit-lane") -> TaskQueue:
-        queue = await TaskQueue.connect(self.bus.broker.url, self.bus.worker.creds_file.read_text(), name=name)
+    async def lane(self) -> TaskQueue:
+        """A queue connection of the worker's user that runs no worker: what a test puts tasks on and reads with."""
+        queue = await self.bus.queue()
         self.queues.append(queue)
         return queue
 
-    async def start(self, name: str, runs: _Runs, *, ready: Callable[[], bool] = lambda: True, url: str | None = None) -> _Replica:
-        replica = await _Replica.start(url or self.bus.broker.url, self.bus.worker, name, runs, ready=ready)
+    async def start(
+        self, name: str, runs: _Runs, *, ready: Callable[[], bool] = lambda: True, url: str | None = None, session_seconds: int = _LONG_SESSION
+    ) -> _Replica:
+        target = url or self.bus.rig.url
+        replica = await _Replica.start(target, self.bus.rig.pod(_WORKER), name, runs, ready=ready, session_seconds=session_seconds)
         self.replicas.append(replica)
         return replica
 
     async def doomed(self, max_pass_seconds: float, url: str | None = None) -> asyncio.subprocess.Process:
-        process = await _doomed(url or self.bus.broker.url, self.bus.worker, max_pass_seconds)
+        process = await _doomed(url or self.bus.rig.url, self.bus.rig.pod(_WORKER), max_pass_seconds)
         self.processes.append(process)
         return process
 
     async def rig(self) -> Client:
-        client = await self.bus.rig()
+        client = await self.bus.observer()
+        self.clients.append(client)
+        return client
+
+    async def client(self, user: str, **kwargs: Any) -> Client:
+        client = await self.bus.client(user, **kwargs)
         self.clients.append(client)
         return client
 
     async def link(self) -> Link:
-        link = Link(self.bus.broker.port)
+        link = Link(self.bus.broker.port, self.bus.rig.pki)
         await link.start()
         self.links.append(link)
         return link
@@ -1110,9 +1141,9 @@ async def test_a_loop_that_ends_ends_its_replica(
 
     monkeypatch.setattr(tasks, "run_task", _runs_nothing)
     monkeypatch.setattr(Worker, "run_due", loop)
-    settings = _replica_settings(tmp_path, monkeypatch, declared.broker)
+    settings = _replica_settings(tmp_path, monkeypatch, declared)
     async with AsyncExitStack() as stack:
-        await _start_replica(stack, settings, declared.worker, end=cast("EndProcess", record_the_end))
+        await _start_replica(stack, settings, declared, end=cast("EndProcess", record_the_end))
         assert await _until(lambda: bool(ended), 20), "the loop moving fired schedules ended and its replica went on"
     assert ended == [("background_work_ended", "maintenance-due")]
 
@@ -1128,10 +1159,10 @@ async def _cadences_held(reader: Client) -> list[bool]:
 @pytest.mark.asyncio
 async def test_a_replica_starts_with_the_audits_and_the_scans_schedules(fleet: _Fleet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tasks, "run_task", _runs_nothing)
-    settings = _replica_settings(tmp_path, monkeypatch, fleet.bus.broker)
+    settings = _replica_settings(tmp_path, monkeypatch, fleet.bus)
     reader = await fleet.rig()
     async with AsyncExitStack() as stack:
-        await _start_replica(stack, settings, fleet.bus.worker)
+        await _start_replica(stack, settings, fleet.bus)
         held = await _cadences_held(reader)
     assert held == [True, True], "a replica started without the audit's and the scan's schedules"
 
@@ -1140,10 +1171,10 @@ async def test_a_replica_starts_with_the_audits_and_the_scans_schedules(fleet: _
 async def test_a_replica_puts_back_the_schedules_the_bus_lost(fleet: _Fleet, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tasks, "run_task", _runs_nothing)
     monkeypatch.setattr(tasks, "_CADENCE_SECONDS", 2.0)
-    settings = _replica_settings(tmp_path, monkeypatch, fleet.bus.broker)
+    settings = _replica_settings(tmp_path, monkeypatch, fleet.bus)
     reader = await fleet.rig()
     async with AsyncExitStack() as stack:
-        await _start_replica(stack, settings, fleet.bus.worker)
+        await _start_replica(stack, settings, fleet.bus)
         assert await _until(lambda: _all_held(reader), 10), "a replica started without the audit's and the scan's schedules"
         for subject in _CADENCES:
             await reader.request(f"$JS.API.STREAM.PURGE.{SCHEDULES_STREAM}", {"filter": subject})
@@ -1156,32 +1187,84 @@ async def _all_held(reader: Client) -> bool:
     return await _cadences_held(reader) == [True, True]
 
 
+# --- a worker's session ----------------------------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("through_a_cut", [pytest.param(False, id="the-bus-ends-its-session"), pytest.param(True, id="the-bus-refuses-it-at-a-reconnect")])
-async def test_a_worker_whose_credential_the_bus_takes_no_longer_ends_itself(fleet: _Fleet, tmp_path: Path, through_a_cut: bool) -> None:
-    """nats-py keeps the credential a worker read at start: it closes for good on a session the server ends, and retries a
-    credential the server refuses for ever. So a worker the bus takes its credential from no longer ends its process, and
-    its pod, started again, reads the credential the store then holds. A connection held while its credential runs out
-    is ended by the server; one cut through a `Link` until the credential has run out is refused when it reconnects."""
-    bus = fleet.bus
-    publish, subscribe = nats_users(bus.docs)[_WORKER]
-    grants = Permissions(publish=tuple(sorted(publish)), subscribe=tuple(sorted(subscribe)), expiry="1m")
-    credential = issue(bus.tools.nsc, bus.home / "nsc", f"{_EXPIRING}-{'cut' if through_a_cut else 'held'}", grants)
-    link = await fleet.link()
-    log = tmp_path / "holding.log"
-    holding = await _holding(link.url if through_a_cut else bus.broker.url, credential, log)
-    fleet.processes.append(holding)
-    assert await _said(holding) == ["connected"], "a worker could not connect with its own credential"
+async def test_a_worker_renews_its_session_on_its_client_while_a_pass_runs(fleet: _Fleet) -> None:
+    """A replica on sessions of `_SHORT_SESSION` s, as its table and its pod are both told, holds a pass across two
+    session lengths and more: its queue asks for a session again before each ends, on the same client, so the bus never
+    ends one, the replica is never ended, its heartbeats keep the task its own, and the pass runs once and is
+    acknowledged once it is done."""
+    bus, runs = fleet.bus, _Runs()
+    release = runs.held["renewing"] = asyncio.Event()
+    lane = await fleet.lane()
+    with bus.rig.sessions_of(_SHORT_SESSION):
+        replica = await fleet.start("renewing", runs, session_seconds=_SHORT_SESSION)
+        granted = bus.granted()
+        assert await lane.enqueue(_task("renewing")) is True, fleet.bus.refusals()
+        assert await _until(lambda: runs.times("renewing") == 1, 15), f"the task never ran; refused: {fleet.bus.refusals()}"
+        renewed = await _until(lambda: bus.granted() - granted >= 2, 2 * _SHORT_SESSION + 15)
+        release.set()
+        rig = await fleet.rig()
 
-    if through_a_cut:
-        await link.cut(_EXPIRY + 15)
-        ended = await _until(lambda: holding.returncode is not None, 30)
-    else:
-        ended = await _until(lambda: holding.returncode is not None, _EXPIRY + 30)
+        async def acknowledged() -> bool:
+            state = await rig.request(f"$JS.API.CONSUMER.INFO.{TASKS_STREAM}.{TASK_CONSUMER}") or {}
+            return (state.get("num_pending"), state.get("num_ack_pending")) == (0, 0)
 
-    assert ended and holding.returncode == _HUNG_EXIT, (
-        f"a worker whose credential the bus took no longer kept its process (exit {holding.returncode}): {log.read_text()[-600:]}"
+        settled = await _until(acknowledged, 15)
+    expired = [line for line in bus.logged_since().splitlines() if f'/APP/user:{_WORKER}" - ->> [-ERR' in line and "User Authentication Expired" in line]
+    assert (renewed, replica.ended, expired, runs.times("renewing"), settled) == (True, [], [], 1, True), (
+        f"renewed twice: {renewed}, ended: {replica.ended}, the bus ended {len(expired)} sessions, ran {runs.times('renewing')} times, acknowledged: {settled}"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_session_the_bus_ends_ends_its_process(fleet: _Fleet, tmp_path: Path) -> None:
+    """A worker told a longer session than the signer grants (its pod not rolled after the table shortened the sessions)
+    never asks for one again before the bus ends it; nats-py closes for good on that end, and the worker ends its process
+    (exit 70, `maintenance_bus_closed`), so its pod, started again, asks for a session afresh."""
+    bus = fleet.bus
+    log = tmp_path / "holding.log"
+    with bus.rig.sessions_of(_SHORT_SESSION):
+        holding = await _holding(bus.rig.url, bus.rig.pod(_WORKER), log, _LONG_SESSION)
+        fleet.processes.append(holding)
+        assert await _said(holding) == ["connected"], f"a worker could not connect presenting its pod's token: {log.read_text()[-600:]}"
+        ended = await _until(lambda: holding.returncode is not None, _SHORT_SESSION + 20)
+    assert (ended, holding.returncode, "maintenance_bus_closed" in log.read_text()) == (True, _HUNG_EXIT, True), (
+        f"a worker whose session the bus ended kept its process or ended otherwise (exit {holding.returncode}): {log.read_text()[-600:]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_renewal_the_signers_cannot_answer_says_so_once_and_asks_again(fleet: _Fleet, tmp_path: Path) -> None:
+    """The signers away from before a worker's renewal until past its session's end: the renewal drops the session and
+    no connect is taken, which the worker says once and goes on retrying with its process kept; once they answer it
+    connects again presenting its pod's token, which a new review of that token shows. Its process's environment and
+    its pod's files hold no seed, no NATS user JWT and no token."""
+    bus = fleet.bus
+    log, pod = tmp_path / "holding.log", bus.rig.pod(_WORKER)
+    token = pod.token_file.read_text()
+    with bus.rig.sessions_of(_SHORT_SESSION):
+        holding = await _holding(bus.rig.url, pod, log, _SHORT_SESSION)
+        fleet.processes.append(holding)
+        began = asyncio.get_running_loop().time()
+        assert await _said(holding) == ["connected"], f"a worker could not connect presenting its pod's token: {log.read_text()[-600:]}"
+        environment = dict(line.split("=", 1) for line in Path(f"/proc/{holding.pid}/environ").read_text(errors="replace").split("\0") if "=" in line)
+        # The renewal falls 15 s in; the signers leave 5 s before it and stay away past the session's end.
+        await asyncio.sleep(max(0.0, began + _SHORT_SESSION - 10 - asyncio.get_running_loop().time()))
+        await asyncio.to_thread(bus.rig.signers.stop)
+        away = await _until(lambda: holding.returncode is not None, _SIGNERS_AWAY)
+        reviewed = bus.rig.reviewer.reviews_of(token)
+        await asyncio.to_thread(bus.rig.signers.start)
+        again = await _until(lambda: bus.rig.reviewer.reviews_of(token) > reviewed, 20)
+        kept = not await _until(lambda: holding.returncode is not None, 5)
+    said = log.read_text()
+    assert (away, again, kept, said.count("maintenance_bus_error")) == (False, True, True, 1), (
+        f"exited while the signers were away: {away}, connected again after: {again}, kept its process: {kept}, said its"
+        f" bus was away {said.count('maintenance_bus_error')} times (exit {holding.returncode}): {said[-600:]}"
+    )
+    assert secrets_in([pod.home, log], {"the worker's process": environment}, bus.rig.reviewer.tokens()) == []
 
 
 # --- store events -----------------------------------------------------------------------------------------------------
@@ -1215,7 +1298,7 @@ class _StoreEvents:
         )
 
     async def deliver(self, body: bytes) -> None:
-        queue = await self.fleet.lane("store-events")
+        queue = await self.fleet.lane()
         replica = StoreEvents(MaintenanceSettings(s3_bucket="b", control_root=str(self.control), commit_pass_delay_seconds=3600), queue)
         loop = asyncio.get_running_loop()
 
@@ -1235,8 +1318,7 @@ class _StoreEvents:
             store_events=handle,
         )
         self._loops.append(asyncio.create_task(worker.run_store_events()))
-        store = await Client.connect(self.fleet.bus.broker.url, self.fleet.bus.mint.credentials[_STORE], _STORE)
-        self.fleet.clients.append(store)
+        store = await self.fleet.client(_STORE)
         await store.nc.publish("store.events", body)
         await store.settle()
 
@@ -1341,7 +1423,7 @@ class _Announcements(_StoreEvents):
     (`maintenance.queue.maxDeliver`); the consumer the render declares allows one more."""
 
     async def deliver(self, body: bytes) -> None:
-        queue = await self.fleet.lane("arrivals")
+        queue = await self.fleet.lane()
         arrivals = Arrivals(MaintenanceSettings(s3_bucket="b", control_root=str(self.control), commit_pass_delay_seconds=3600), queue)
         loop = asyncio.get_running_loop()
 
@@ -1361,8 +1443,7 @@ class _Announcements(_StoreEvents):
             arrivals=handle,
         )
         self._loops.append(asyncio.create_task(worker.run_arrivals()))
-        catalog = await Client.connect(self.fleet.bus.broker.url, self.fleet.bus.mint.credentials[_CATALOG], _CATALOG, f"_INBOX_{_CATALOG}", answer_within=10.0)
-        self.fleet.clients.append(catalog)
+        catalog = await self.fleet.client(_CATALOG, answer_within=10.0)
         await catalog.js.publish("lineage.events.v1", body, timeout=10)
 
     async def settled_after(self, deliveries: int, seconds: float) -> bool:
@@ -1378,7 +1459,7 @@ class _Announcements(_StoreEvents):
 
     def lane_calls(self) -> set[str]:
         """The worker's calls on the commit lane's consumer since the test began, each settle folded to its grant."""
-        key = self.fleet.bus.worker.public_key
+        key = self.fleet.bus.rig.mint.who(_WORKER)
         calls = {call.subject for call in client_calls(self.fleet.bus.logged_since()).get(key, set()) if f".{ARRIVALS_STREAM}." in call.subject}
         return {f"$JS.ACK.{ARRIVALS_STREAM}.{ARRIVALS_CONSUMER}.>" if subject.startswith("$JS.ACK.") else subject for subject in calls}
 
@@ -1442,7 +1523,8 @@ async def test_a_replica_whose_commit_lane_is_on_holds_the_pass_an_announced_wri
     (`MAINTENANCE_ARRIVAL_ENABLED`, the chart's `maintenance.arrivalEnabled`): a write the catalog announced holds its
     table's pass."""
     monkeypatch.setattr(tasks, "run_task", _runs_nothing)
-    settings = _replica_settings(tmp_path, monkeypatch, fleet.bus.broker).model_copy(update={"arrival_enabled": True})
+    plain, pod = _replica_settings(tmp_path, monkeypatch, fleet.bus)
+    settings = (plain.model_copy(update={"arrival_enabled": True}), pod)
     table = "5d0a6c0e-7c1b-4e0a-9f4e-3b1f6f0c2a55"
     location = {"name": "s3://b/announced", "uri": "s3://b/announced"}
     output = with_dataset_uuids(
@@ -1451,15 +1533,14 @@ async def test_a_replica_whose_commit_lane_is_on_holds_the_pass_an_announced_wri
     event = {"eventType": "COMPLETE", "run": {"runId": "r-1", "facets": {LANCE_FACET: {"operation": "append"}}}, "outputs": [output]}
     body = json.dumps({"specversion": "1.0", "id": "announced-to-a-replica", "source": "rask/lane", "type": "rask.test.lane.v1", "data": event}).encode()
     reader = await fleet.rig()
-    catalog = await Client.connect(fleet.bus.broker.url, fleet.bus.mint.credentials[_CATALOG], _CATALOG, f"_INBOX_{_CATALOG}", answer_within=10.0)
-    fleet.clients.append(catalog)
+    catalog = await fleet.client(_CATALOG, answer_within=10.0)
     held_at = Task(kind="table", uuid=table).follow_up_subject("schedule")
 
     async def held() -> bool:
         return _held_at(await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": held_at})) is not None
 
     async with AsyncExitStack() as stack:
-        await _start_replica(stack, settings, fleet.bus.worker)
+        await _start_replica(stack, settings, fleet.bus)
         await catalog.js.publish("lineage.events.v1", body, timeout=10)
         passed = await _until(held, 30)
 
@@ -1479,7 +1560,7 @@ def _ends_its_process(event: str, **extra: object) -> NoReturn:
 
 async def _failing_worker(fleet: _Fleet, failure: type[BaseException], runs: list[float]) -> TaskQueue:
     """A worker whose every run raises ``failure``, each run's time kept in ``runs``; the queue it pulls on."""
-    queue = await fleet.lane("failing")
+    queue = await fleet.lane()
     loop = asyncio.get_running_loop()
 
     async def fails(task: Task) -> None:
@@ -1569,8 +1650,7 @@ async def test_an_ended_tasks_next_try_is_held_a_recheck_out(fleet: _Fleet, monk
 async def test_a_message_on_the_queue_that_is_no_task_is_ended_without_running(fleet: _Fleet, maintenance_metrics: Measured) -> None:
     runs: list[float] = []
     await _failing_worker(fleet, RuntimeError, runs)
-    writer = await Client.connect(fleet.bus.broker.url, fleet.bus.worker, "garbage", inbox=INBOX_PREFIX)
-    fleet.clients.append(writer)
+    writer = await fleet.client(_WORKER, inbox=INBOX_PREFIX)
 
     await writer.nc.publish("maintenance.task.table.garbage", b"no task")
     await writer.settle()
@@ -1615,8 +1695,8 @@ async def test_a_task_a_pull_answers_as_its_worker_stops(fleet: _Fleet, maintena
     the delivery the hand-back causes is counted as a redelivery, though no run failed."""
     ran: list[str] = []
     pulls = await fleet.pulls()
-    stopping = _counting_worker(await fleet.lane("stopping"), "stopping", allowed, ran)
-    lane = await fleet.lane("next")
+    stopping = _counting_worker(await fleet.lane(), "stopping", allowed, ran)
+    lane = await fleet.lane()
     first = asyncio.create_task(stopping.run_tasks())
     fleet.on_stop.append(first)
     # Its first pull is out, and waits up to five seconds for a task.
@@ -1638,7 +1718,7 @@ async def test_a_task_a_pull_answers_as_its_worker_stops(fleet: _Fleet, maintena
 @pytest.mark.asyncio
 async def test_a_connection_whose_bus_is_gone_still_closes(fleet: _Fleet) -> None:
     link = await fleet.link()
-    queue = await TaskQueue.connect(link.url, fleet.bus.worker.creds_file.read_text(), name="orphaned")
+    queue = await fleet.bus.queue(link.url)
     await fleet.links.pop().stop()
 
     closed: BaseException | None = None
@@ -1667,7 +1747,7 @@ async def test_an_idle_worker_stops_and_closes_its_connection_at_once(fleet: _Fl
     async def handled(_body: bytes) -> int:
         return 0
 
-    queue = await TaskQueue.connect(fleet.bus.broker.url, fleet.bus.worker.creds_file.read_text(), name="idle")
+    queue = await fleet.bus.queue()
     idle = Worker(
         queue,
         run=_never_run,
@@ -1814,11 +1894,11 @@ async def test_a_worker_whose_claims_bucket_is_gone_ends_its_task_loop(fleet: _F
     runs = _Runs()
     lane = await fleet.lane()
     rig = await fleet.rig()
-    queue = await fleet.lane("unclaiming")
+    queue = await fleet.lane()
     await queue.bind_claims()
     deleted = await rig.request(f"$JS.API.STREAM.DELETE.KV_{CLAIMS_BUCKET}")
     assert deleted is not None and deleted.get("success") is True, f"the claims bucket was not deleted: {deleted}"
-    replica = _Replica(queue, "unclaiming", runs, ready=lambda: True)
+    replica = _Replica(queue, "unclaiming", runs, ready=lambda: True, ended=[])
     fleet.replicas.append(replica)
 
     assert await lane.enqueue(_task("unclaimed")) is True
@@ -1864,7 +1944,7 @@ async def _a_task_run_past_twice_the_checks_bound(fleet: _Fleet, task: Task) -> 
     runs = _Runs()
     ended: list[str] = []
     runs.held[task.uuid] = asyncio.Event()
-    queue = await fleet.lane("bounded")
+    queue = await fleet.lane()
     lane = await fleet.lane()
 
     def ends_its_process(event: str, **extra: object) -> NoReturn:
@@ -2014,7 +2094,7 @@ async def test_a_fired_schedule_the_queue_refuses_is_counted_and_given_back(flee
     rig = await fleet.rig()
     dropped = await rig.request(f"$JS.API.STREAM.DELETE.{TASKS_STREAM}")
     assert dropped is not None and dropped.get("success") is True, f"the task stream was not removed: {dropped}"
-    queue = await fleet.lane("mover")
+    queue = await fleet.lane()
     mover = Worker(
         queue,
         run=_never_run,
@@ -2056,7 +2136,7 @@ class _Backlog:
         self.queued_at = self.started_at = self.published_at = 0.0
 
     async def build(self, *, with_a_store_event: bool) -> TaskQueue:
-        lane = await self.fleet.lane("sampler")
+        lane = await self.fleet.lane()
         await self.fleet.start("running", self.runs)
         self.queued_at = self.clock()
         assert await lane.enqueue(_task("running")) is True
@@ -2066,8 +2146,7 @@ class _Backlog:
         self.published_at = self.clock()
         if with_a_store_event:
             rig = await self.fleet.rig()
-            store = await Client.connect(self.fleet.bus.broker.url, self.fleet.bus.mint.credentials[_STORE], _STORE)
-            self.fleet.clients.append(store)
+            store = await self.fleet.client(_STORE)
             await store.js.publish("store.events", _write_event("t/data/a.lance"), timeout=10)
             events = await rig.js.pull_subscribe_bind(durable="maintenance-store-events", stream=STORE_EVENTS_STREAM)
             await (await events.fetch(1, timeout=5))[0].nak()

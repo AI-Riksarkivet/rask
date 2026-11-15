@@ -75,8 +75,10 @@ GREPTIME="$(svc greptimedb observability)" || true
 # THE BUS THE RELEASE'S SERVICES DIAL (`nats.url`), read off the catalog's own environment and resolved to that
 # Service's ClusterIP like every address above: the NATS fixture's `rask-nats` on a dev estate. A bus that is no Service
 # in this cluster resolves to nothing, and the suites that read the bus skip.
-NATS_HOST="$(kubectl get deployment "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="RASK_BUS_URL")].value}' 2>/dev/null | sed -E 's#^nats://([^:/.]+).*#\1#' || true)"
+NATS_HOST="$(kubectl get deployment "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[*].env[?(@.name=="RASK_BUS_URL")].value}' 2>/dev/null | sed -E 's#^(nats|tls)://([^:/.,]+).*#\1 \2#' || true)"
 NATS=""
+NATS_SCHEME="${NATS_HOST%% *}"
+NATS_HOST="${NATS_HOST##* }"
 [ -n "$NATS_HOST" ] && NATS="$(svc "$NATS_HOST")" || true
 [ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"
 printf '   catalog=%s lineage=%s edge=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$EDGE" "$S3"
@@ -130,7 +132,26 @@ url LANCE_E2E_S3_ENDPOINT     "$S3"
 url LANCE_E2E_DEX             "$DEX" /dex
 url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
-if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
+# A BUS IN OPERATOR MODE (`tls://`) ADMITS ONLY A SESSION ITS SIGNER GRANTS ([[XC-199]]), so the suites read and publish as
+# the session user the estate's values declare for them (`e2e-suites`, deploy/values-e2e-suites.yaml): a TokenRequest for that
+# user's ServiceAccount and the bus's audience, both read off the permission table the release renders, written to the
+# file the suites present (`bus-token`); no secret is stored. The CA is the ConfigMap the catalog mounts for the bus.
+if [ -n "$NATS" ] && [ "$NATS_SCHEME" = "tls" ]; then
+  PERMISSIONS="$(kubectl get configmap "$RELEASE-nats-permissions" -o jsonpath='{.data.permissions\.json}' 2>/dev/null || true)"
+  BUS_AUDIENCE="$(jq -r '.audience // empty' <<<"$PERMISSIONS" 2>/dev/null || true)"
+  BUS_ACCOUNT="$(jq -r '.users["e2e-suites"].serviceAccount // empty' <<<"$PERMISSIONS" 2>/dev/null || true)"
+  BUS_CA="$(kubectl get deployment "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.volumes[?(@.name=="bus-ca")].configMap.name}' 2>/dev/null || true)"
+  if [ -n "$BUS_AUDIENCE" ] && [ -n "$BUS_ACCOUNT" ] && [ -n "$BUS_CA" ]; then
+    minted="$(kubectl create token "${BUS_ACCOUNT##*:}" --audience "$BUS_AUDIENCE" --duration 2h)" \
+      || fail "could not mint a $BUS_AUDIENCE token for ${BUS_ACCOUNT##*:}"
+    keep bus-token "$minted"
+    keep bus-ca.crt "$(kubectl get configmap "$BUS_CA" -o jsonpath='{.data.ca\.crt}')"
+    export LANCE_E2E_NATS_URL="tls://$NATS" LANCE_E2E_NATS_USER=e2e-suites LANCE_E2E_NATS_TLS_NAME="$NATS_HOST"
+    export LANCE_E2E_NATS_TOKEN_FILE="$CREDENTIALS/bus-token" LANCE_E2E_NATS_CA_FILE="$CREDENTIALS/bus-ca.crt"
+  else
+    _missing="$_missing LANCE_E2E_NATS_URL(no-e2e-suites-session-user)"
+  fi
+elif [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip, which fails the run):%s\n' "$_missing"
 if [ -n "$FGA" ]; then
   # OPENFGA ADMITS ONLY A PROJECTED `rask-openfga` TOKEN ([[XC-077]]), so this runner and the suites speak

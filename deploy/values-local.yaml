@@ -97,9 +97,13 @@ observability:
       x-greptime-log-table-name: lance_audit
 
 # The bus is the platform's (ADR 0153); on a dev estate it is the nats fixture (deploy/fixtures/nats, release `nats`
-# in this namespace), which `make k3s-up` installs first.
+# in this namespace), which `make k3s-up` installs first, in operator mode (`nats.auth.server`, the Makefile's
+# `k3s-fixtures`): its client port serves TLS under the CA it publishes as `rask-nats-ca`, and its stand-in signer
+# admits each session user.
 nats:
-  url: nats://rask-nats:4222
+  url: tls://rask-nats:4222
+  ca:
+    configMap: rask-nats-ca
 
 services:
   lineage:

@@ -72,7 +72,7 @@ services:
     module: catalog.main:app
     # -- Container and Service port of the Lance catalog.
     port: 2333
-    # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service.
+    # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service.
     appId: catalog
     # -- Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.
     replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
@@ -81,7 +81,7 @@ services:
     module: lineage.main:app
     # -- Container and Service port of the lineage service.
     port: 8000
-    # -- Lineage's app id: its secret-store role (`<release>-<id>`), its bus user (`nats-user-<id>`) and its OTel service.
+    # -- Lineage's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service.
     appId: lineage
     # Safe to scale: every replica pulls the one durable consumer `lineage-ingest`, so each event is delivered to one
     # of them, and every record is idempotent anyway: an insert-only merge on the event's key in the feed table lands a
@@ -772,7 +772,7 @@ maintenance:
     replicas: 2 # @schema type: integer; minimum: 1
     # -- Port a worker pod serves its probes on, for the kubelet.
     port: 8001 # @schema type: integer; minimum: 1
-  # -- Maintenance's app id: its secret-store role (`<release>-<id>`), the bus user its events are published as (`nats-user-<id>`) and its OTel service.
+  # -- Maintenance's app id: its secret-store role (`<release>-<id>`), the bus user its events are published as and its OTel service.
   appId: maintenance
   # THE WORK QUEUE (ADR 0198 §2). The chart's stream Job declares MAINTENANCE_TASKS, MAINTENANCE_SCHEDULES, STORE_EVENTS
   # (the store's change events) and their durable consumers; the worker binds to them as its own bus user
@@ -847,8 +847,7 @@ maintenance:
   # What it buys is the FAILURE surface named below. Left off, a persistently failing dataset was
   # visible only in OTel spans and the cron response body — and this estate spent 2026-08-16 proving
   # how well that hides (the sweep's own summary reached no sink at all for the life of the renamed
-  # service). Enabling it also issues maintenance's bus user its grants and its store read (`nats.auth.flagged`,
-  # `lance.storeReads`), both conditioned on this same value, so there is no second switch to forget.
+  # service). Enabling it also grants maintenance's bus user its subjects (`nats.auth.flagged`), conditioned on this same value, so there is no second switch to forget.
   #
   # COVERAGE IS EVERY TABLE THE CATALOG'S `__manifest` NAMES, its branches included, and nothing else ([[LH-520]]): the
   # sweep names a dataset by the row whose location it is, so the Dataset name is the catalog's table name. A dataset no
@@ -1281,9 +1280,13 @@ console:
 nats:
   # NATS JetStream is a PREREQUISITE (ADR 0153): the platform runs the bus, and rask never installs a server. The chart
   # carries what is rask's: the address it dials, the stream and consumer definitions (the stream Job), and the bus
-  # users below. Development gets a three-node bus from deploy/fixtures/nats, at `nats://rask-nats:4222`
-  # (deploy/values-local.yaml).
-  # -- NATS JetStream address every service and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.
+  # users below. Development gets a three-node bus from deploy/fixtures/nats: `tls://rask-nats:4222` with its CA
+  # `rask-nats-ca` in operator mode (deploy/values-local.yaml), `nats://rask-nats:4222` out of it.
+  # A `tls://` SERVER MUST TAKE THE TLS HANDSHAKE BEFORE ITS GREETING (nats-server `tls { handshake_first: true }` or
+  # `auto`). Every client of the release opens with it: one that waits for the greeting encrypts only when that
+  # unencrypted line asks it to, so whoever answers without the request is sent the pod's token in the clear. Against a
+  # server that greets first the handshake fails, and nothing is sent.
+  # -- NATS JetStream address every service and the stream Job connect to (e.g. tls://nats.internal:4222; a comma-separated list for several servers). Required: empty fails the render, and a real deployment refuses any scheme but tls://, whose server must take the TLS handshake first.
   url: ""
   # -- NetworkPolicy egress rules ({to, ports}) admitting the bus's clients (every pod whose service connects to it, the stream Job) to the platform's bus at `url`, at the port a policy sees. Required under networkPolicy.enabled on a real deployment, where the bus is the platform's.
   egress: []
@@ -1295,17 +1298,35 @@ nats:
   # exists (XC-164). A stream drops a message older than this, which bounds how far back a rebuild replays.
   # -- Seconds a message is kept on the LINEAGE, DLQ and CATALOG_CONTROL streams before the stream drops it (max_age).
   streamMaxAgeSeconds: 604800 # @schema type: integer; minimum: 1
-  # === Bus authentication ([[XC-078]] slice 2): every client connects as its own NATS user =========================
-  # EVERY CLIENT IS A USER OF ONE ACCOUNT. The server runs in operator mode: one operator, a SYS account, and one APP
-  # account that holds JetStream and every user below, verified by the MEMORY resolver against the account key, so
-  # issuing or re-issuing a user never touches the server. A client presents its user JWT and signs the server's nonce
-  # with the NKEY seed beside it.
+  ca:
+    # -- ConfigMap in the release's namespace holding the CA bundle the bus's TLS certificate chains to, mounted read-only into every pod that connects as a session user. Empty: the system trust store.
+    configMap: ""
+    # -- Key of `nats.ca.configMap` that holds the CA bundle.
+    key: ca.crt
+  # === Bus authentication: every connection is a user of the APP account =========================================
+  # THE TABLE (`auth.users`) IS THE ONE DECLARATION: one user per connection a service opens, named by the service's app
+  # id (`maintenance-worker` for the work queue's), plus `admin` (the stream Job), `monitor` (nats-box, read-only) and
+  # `object-store` (the development store's publisher). The server runs in operator mode: one operator, a SYS account,
+  # the APP account that holds JetStream and every user, and an AUTH account whose external authorization (auth callout)
+  # decides each connection that presents no user JWT of its own.
   #
-  # THE TABLE (`users`) IS THE ONE DECLARATION: one user per connection a service opens, named by the service's app id
-  # (`maintenance-worker` for the work queue's), plus `admin` (the stream Job) and `monitor` (nats-box, read-only). The
-  # dev seed issues exactly these permissions, each user's secret is read only under its own app's store login, and the
-  # attestation below lists them. The rules, from the call sites (the publish rows measured on nats-server 2.14.2 with
-  # protocol tracing on 2026-10-04, the pull and follow rows on nats-server 2.15.2 with nats-py 2.16.0 on 2026-11-14):
+  # A SESSION USER is a row with a ServiceAccount: the lakehouse's own rows take theirs from the chart (`catalog`,
+  # `lineage`, `maintenance` and `maintenance-worker` -> `<release>-sa-<component>`, `admin` -> `<release>-sa-jobs`), and
+  # a row supplied by values names its own with `serviceAccount` (a ServiceAccount of this namespace, never one the
+  # lakehouse renders or `default`). Its pod holds no bus credential: it presents its projected ServiceAccount token
+  # (audience `auth.audience`, 600 s) as the connection's token, over TLS, under its user's name; the server hands the
+  # connection to the platform's signer, which checks the token with a TokenReview and answers with a user that expires
+  # within `auth.sessionSeconds`, signed by that user's scoped signing key in APP, so the scope the server enforces is the
+  # key's. The pod asks for a new session before its own runs out. The signer reads ConfigMap `<release>-nats-permissions`
+  # (`permissions.json`: the audience, the session lifetime and every session user's ServiceAccount, publish and subscribe
+  # lists), which renders in every mode.
+  #
+  # A STATIC USER is a row with no ServiceAccount (`monitor`, `object-store`, a client's row without `serviceAccount`):
+  # a JWT and seed in the store as `nats-user-<user>`, read by a development fixture or by a client under its own store
+  # login (`openbao.externalReaders`). No lakehouse pod is one.
+  #
+  # The rules, from the call sites (the publish rows measured on nats-server 2.14.2 with protocol tracing on 2026-10-04,
+  # the pull and follow rows on nats-server 2.15.2 with nats-py 2.16.0 on 2026-11-14):
   #   - a service publishes its topics and receives each acknowledgement under an inbox prefix of its own,
   #     `_INBOX_<user>.>`, which no other user holds. It believes a duplicate acknowledgement only once it has read back
   #     the stored message the acknowledgement names (`$JS.API.STREAM.MSG.GET.<stream>`, on each stream it publishes
@@ -1334,27 +1355,36 @@ nats:
   # or configured topics a user does not cover.
   #
   # THE DEV MINT (openbao-seed.yaml; owner ruling R1: the NATS fixture and the dev OpenBao are dev stand-ins, and their
-  # durability across a stand-in's loss is not a goal). The dev store is the fixture bus's issuer, and grants ESO read on
-  # `nats-server`, `nats-route` and `nats-user-monitor`, which the fixture's ExternalSecrets write into its config. The `mint` init container copies nsc and nk out of nats-box; the seed carries the trust root
-  # (`nats-root`: the operator and account keys nsc keeps, never a user's) and the route credential (`nats-route`: user,
-  # password) from the store behind the Service, else mints them, then issues every user of the table afresh under that root
-  # and writes `nats-user-<user>` (jwt, seed) and `nats-server` (operator, system_account, resolver_preload: public) before the
-  # readiness key. A root it cannot read or use stops the seed, because a store that is Ready without its users hands every
-  # service an empty credential. A surge rollout therefore keeps the root the server trusts; a replacement with no outgoing pod
-  # mints a new one, which a server in operator mode refuses until its pods restart onto the new `nats-server` (a reload cannot
-  # change the operator or the system account), and that restart starts an empty JetStream. A user's earlier JWT stays valid until
-  # the root changes (no expiry, no revocation list), and a service takes a re-issued one when it next opens its connection.
-  # The APP account's JetStream disk is unlimited and memory 0: each server's max_file_store (1Gi) is the bound, as it is for
-  # the global account today. An account limit counts every replica (measured: an R3 stream reserving 400MB is refused under a
+  # durability across a stand-in's loss is not a goal). The dev store is the fixture bus's issuer. The `mint` init
+  # container copies nsc and nk out of nats-box; the seed carries the trust root (`nats-root`: the operator's and the
+  # accounts' keys, the scoped signing keys among them, never a user's) and the route credential (`nats-route`) from the
+  # store behind the Service, else mints them. Under that root it converges, on every run: in APP one scoped signing key
+  # per session user (role: the user's name; scope: its row), a changed row re-scoped on the same key and the key of a user that is no
+  # session user removed, which closes its sessions; in AUTH the signer's own user `callout`, a bearer `sentinel`
+  # denied every subject (the server's `default_sentinel`, so a pod presents no NATS JWT), one signing key for the
+  # signer's answers, and the callout naming `callout` and APP. It issues every static user (`nats-user-<user>`: jwt,
+  # seed), keeping a user's pair and JWT while its grants match, and writes `nats-server` (operator, system_account,
+  # resolver_preload, default_sentinel) and `nats-callout` (the signer's: its user's jwt and seed, the AUTH signing seed
+  # as issuer_seed, app_account, auth_account, and `key-<user>`, each session user's scoped seed) before the readiness
+  # key. ESO alone reads `nats-server`, `nats-route`, `nats-callout` and `nats-user-monitor`, for the fixture's
+  # ExternalSecrets (`lance.natsFiles`). A `nats-user-*` the release does not issue (a session user's among them) is
+  # revoked by its key in APP and deleted from this pod's store. A root it cannot read or use stops the seed, because a
+  # store that is Ready without its users would hand the bus an empty config. A surge rollout keeps the root the server
+  # trusts; a replacement with no outgoing pod mints a new one, which a server in operator mode refuses until its pods
+  # restart onto the new `nats-server` (a reload cannot change the operator or the system account), and that restart
+  # starts an empty JetStream. The APP account's JetStream disk is unlimited and memory 0: each server's max_file_store
+  # (1Gi) is the bound. An account limit counts every replica (measured: an R3 stream reserving 400MB is refused under a
   # 1G limit), so a 1Gi limit would hold a third of what the disks do.
   #
-  # PRODUCTION (R1): the platform runs NATS and its store; rask names the credentials and owns no trust root. The platform's
-  # store (openbao.enabled=false), which this chart does not seed, fails the render until `provisioned` attests that every
-  # `nats-user-<user>` exists, issued by the bus's operator with this table's permissions.
+  # PRODUCTION (R1): the platform runs NATS, its TLS, its signer and its store; rask names the bus (`url`, `tls://`
+  # only on a real deployment, since each pod's token crosses in `CONNECT`), its CA, the audience and the table, and owns
+  # no trust root. The platform's store (openbao.enabled=false), which this chart does not seed, fails the render until
+  # `provisioned` attests that the signer admits each session user of `<release>-nats-permissions` and that each static
+  # user's `nats-user-<user>` exists.
   #
-  # THE SERVER'S MODE is the bus's setting, not rask's: off, a server takes anyone and ignores a presented credential, so every
-  # client carries its credential either way. The dev fixture's operator mode (deploy/fixtures/nats, `nats.auth.server`) reads
-  # the server config and the route credential from this chart's dev store.
+  # THE SERVER'S MODE is the bus's setting, not rask's: off, a server takes anyone and ignores a presented token. The dev
+  # fixture's operator mode (deploy/fixtures/nats, `nats.auth.server`) reads the server config and the route credential
+  # from this chart's dev store and runs the development stand-in signer.
   #
   # RESIDUALS, named: admin, monitor and the development object store receive their replies on the shared `_INBOX.>`, so
   # within the APP account each of the three could read the replies to another (answers about streams and consumers,
@@ -1365,8 +1395,12 @@ nats:
   # let its holder have the bus copy a stream's messages onto a subject it may not publish (measured on nats-server
   # 2.15.2, 2026-11-14: a consumer delivering to `store.events` was created, and STORE_EVENTS kept its delivery).
   auth:
-    # -- Attests the platform's store holds every `nats-user-<user>`; required when the store is the platform's (`openbao.enabled` false).
+    # -- Attests the platform's signer admits each session user of `<release>-nats-permissions` and its store holds each static user's `nats-user-<user>`; required when the store is the platform's (`openbao.enabled` false).
     provisioned: false
+    # -- Audience of the ServiceAccount token each session user's pod projects and presents to the bus; the signer's TokenReview names it.
+    audience: rask-bus
+    # -- Longest a session the signer grants lives, in seconds: at least 60 and below the projected token's 600 s.
+    sessionSeconds: 300 # @schema type: integer; minimum: 60; maximum: 599
     # -- Extra user grants keyed by a values flag path, or several joined by `,` that must all be true, merged into `nats.auth.users` only while the key holds (lance.natsTable).
     flagged:
       catalog.controlEmit:
@@ -1393,7 +1427,7 @@ nats:
             - $JS.API.CONSUMER.MSG.NEXT.LINEAGE.maintenance-arrival # the write-event lane's pulls
             - $JS.ACK.LINEAGE.maintenance-arrival.>
             - $JS.API.CONSUMER.INFO.LINEAGE.maintenance-arrival # the sampler's read of the lane's backlog
-    # -- The bus user table, one user per connection a service opens (named by its app id) plus admin and monitor, each with publish and subscribe subject lists (never empty).
+    # -- The bus user table, one user per connection a service opens (named by its app id) plus admin, monitor and object-store, each with publish and subscribe subject lists (never empty); a row supplied by values may name its `serviceAccount` to be a session user.
     users:
       admin:
         publish:

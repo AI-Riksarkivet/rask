@@ -39,7 +39,10 @@ Declared once in `packages/lakehouse/src/lakehouse/bus.py`:
 | Variable | Purpose |
 |---|---|
 | `RASK_BUS_URL` | The NATS JetStream address a service publishes its events to, on a connection of its own; empty for a stack with no bus. |
-| `RASK_BUS_USER` | The bus user it connects as. Its credential is the store's `nats-user-<user>`, read under the service's own login and held in memory, and its replies arrive under `_INBOX_<user>`. |
+| `RASK_BUS_USER` | The bus user it connects as: the name it asks the bus's signer for a session under, and its replies arrive under `_INBOX_<user>`. |
+| `RASK_BUS_TOKEN_FILE` | The file the kubelet keeps the pod's ServiceAccount token (audience `nats.auth.audience`) in. Required with `RASK_BUS_URL`. The pod holds no other bus credential: each connect presents the token the file holds then. |
+| `RASK_BUS_SESSION_SECONDS` | How long the bus keeps a session before it ends it (default 300, at least 20). The service asks for a new session shortly before. |
+| `RASK_BUS_CA_FILE` | The CA bundle the bus's certificate chains to; empty for the system's trust store. |
 
 ## The edge
 

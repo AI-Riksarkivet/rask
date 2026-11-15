@@ -1,7 +1,8 @@
 {{- if .Values.openbao.enabled }}
 {{- $signers := include "lance.signingKeys" (list .) | splitList " " | compact }}
 {{- $nats := include "lance.natsMints" . }}
-{{- $natsUsers := include "lance.natsUsers" . | splitList " " | compact }}
+{{- $natsUsers := include "lance.natsStaticUsers" . | splitList " " | compact }}
+{{- $natsSessions := include "lance.natsSessionUsers" . | splitList " " | compact }}
 {{- $natsTable := include "lance.natsTable" . | fromJson }}
 {{- $otelSeed := .Values.observability.enabled }}
 apiVersion: v1
@@ -80,6 +81,14 @@ data:
       if got=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field="$2" "secret/$1" 2>&1); then return 0; fi
       case "$got" in
         "No value found at"*|*"connect: connection refused") got=; return 3 ;;
+      esac
+      echo "cannot read secret/$1 behind the Service, refusing to write over it: $got" >&2
+      exit 1
+    }
+    svc_field() {
+      if got=$(BAO_ADDR=http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }} BAO_CLIENT_TIMEOUT=5s bao kv get -field="$2" "secret/$1" 2>&1); then return 0; fi
+      case "$got" in
+        "No value found at"*|*"connect: connection refused"|"Field \"$2\" not present in secret"*) got=; return 3 ;;
       esac
       echo "cannot read secret/$1 behind the Service, refusing to write over it: $got" >&2
       exit 1
@@ -199,12 +208,13 @@ data:
       (umask 077; printf '%s' "$s" > "$B/users/$1.seed")
       echo "NATS user $1: $made"
     }
-    # A user rask stops declaring is revoked in the APP account, so the credential it was issued stops admitting it:
-    # nothing else would, since a user JWT carries no expiry and the account that signed it stays trusted. Measured on
-    # nats-server 2.14.2 with nsc 2.15.0, 2026-11-07: a key revoked in a root that holds no users is refused once the
-    # account reaches the MEMORY resolver's resolver_preload and the server reloads its config (SIGHUP, which the bus
-    # fixture's reloader sends when its auth Secret changes), a client connected as it is dropped at that reload, and the
-    # other users keep connecting; a restart keeps it.
+    # A user rask stops issuing is revoked in the APP account, so the credential it was issued stops admitting it:
+    # nothing else would, since a user JWT carries no expiry and the account that signed it stays trusted. A session
+    # user falls under it, since the seed issues it no credential. Measured on nats-server 2.14.2 with nsc 2.15.0,
+    # 2026-11-07: a key revoked in a root that holds no users is refused once the account reaches the MEMORY resolver's
+    # resolver_preload and the server reloads its config (SIGHUP, which the bus fixture's reloader sends when its auth
+    # Secret changes), a client connected as it is dropped at that reload, and the other users keep connecting; a
+    # restart keeps it.
     revoke_undeclared() {
       : > "$B/revoked"
       store_list "$BAO_ADDR" kv list -format=json secret/; here=$listed
@@ -217,10 +227,10 @@ data:
         pub_shaped "$key" || { echo "secret/$name holds no user JWT naming its key, so the seed cannot revoke it" >&2; exit 1; }
         err=$(nsc revocations add-user -a APP -u "$key" 2>&1) || { echo "nsc could not revoke NATS user $u: $err" >&2; exit 1; }
         printf '%s\n' "$u" >> "$B/revoked"
-        echo "revoked NATS user $u ($key), which rask no longer declares"
+        echo "revoked NATS user $u ($key), which rask does not issue"
       done
     }
-    # Every user credential issued before the oldest one a declared user holds is revoked, whatever its key: the ones an
+    # Every user credential issued before the oldest one a static user holds is revoked, whatever its key: the ones an
     # earlier seed issued and replaced, which no store still names. Measured 2026-11-07 on nats-server 2.14.2 with nsc
     # 2.15.0: the account's `*` revocation at a time refuses every user JWT issued up to it and admits the later ones.
     # Written only when that time moves, so a seed that changes nothing leaves the account as it was.
@@ -235,12 +245,140 @@ data:
       before=$((oldest - 1))
       [ "$(jwt_claim "$(nsc describe account -n APP --raw)" 's/.*"revocations":{[^}]*"\*":\([0-9]*\).*/\1/p')" != "$before" ] || return 0
       err=$(nsc revocations add-user -a APP -u '*' --at "$before" 2>&1) || { echo "nsc could not revoke the NATS credentials issued before $before: $err" >&2; exit 1; }
-      echo "revoked every NATS user credential issued up to $before, before the oldest one a declared user holds"
+      echo "revoked every NATS user credential issued up to $before, before the oldest one a static user holds"
+    }
+    apub_shaped() { nkey_shaped "$1" A 56; }
+    aseed_shaped() { nkey_shaped "$1" SA 58; }
+    # nsc keeps each account key's seed in its keystore as keys/A/<two characters>/<public key>.nk (measured on nsc
+    # 2.15.0, `generate nkey --account --store`), which the trust root carries, so a reseed keeps every signing key.
+    seed_file() { f=$(find "$B/nsc/keys/A" -name "$1.nk" 2>/dev/null | head -n 1); [ -n "$f" ] && aseed_shaped "$(tr -d ' \n' < "$f")" && printf '%s' "$f"; }
+    new_signing_key() {
+      sk=$(nsc generate nkey --account --store 2>/dev/null | head -n 1)
+      apub_shaped "$sk" && [ -n "$(seed_file "$sk")" ] || { echo "nsc made no signing key for $1" >&2; exit 1; }
+      err=$(nsc edit account -n "$2" --sk "$sk" 2>&1) || { echo "nsc could not add a signing key for $1 to $2: $err" >&2; exit 1; }
+    }
+    keep_seed() { (umask 077; tr -d ' \n' < "$(seed_file "$1")" > "$2"); }
+    listed() { printf '%s' "$1" | sed -n "s/.*\"$2\":\[\([^]]*\)\].*/\1/p" | tr -d '"' | tr ',' ' '; }
+    # The signer's own account: its user `callout`, which may take the server's requests and answer them and nothing
+    # else; a bearer `sentinel` denied every subject, the server's default_sentinel, so a pod presents no NATS JWT; one
+    # signing key for the signer's answers; and the callout naming `callout` and APP. Each is kept while it is what this
+    # root issued, so a reseed changes nothing the server holds. Measured 2026-11-15 on nsc 2.15.0 and nats-server 2.15.2.
+    converge_auth() {
+      if ! nsc describe account -n AUTH --raw >/dev/null 2>&1; then
+        err=$(nsc add account -n AUTH 2>&1) || { echo "nsc could not add the NATS account AUTH: $err" >&2; exit 1; }
+        echo "NATS account AUTH: added"
+      fi
+      auth=$(nsc describe account -n AUTH --field sub | tr -d '"')
+      issuer=
+      for k in $(listed "$(jwt_claim "$(nsc describe account -n AUTH --raw)" p)" signing_keys); do
+        if [ -z "$issuer" ] && [ -n "$(seed_file "$k")" ]; then issuer=$k; continue; fi
+        err=$(nsc edit account -n AUTH --rm-sk "$k" 2>&1) || { echo "nsc could not remove the AUTH signing key $k: $err" >&2; exit 1; }
+      done
+      [ -n "$issuer" ] || { new_signing_key "the signer's answers" AUTH; issuer=$sk; echo "NATS signing key of AUTH: added"; }
+      keep_seed "$issuer" "$B/issuer.seed"
+      j=; s=
+      if j=$(bao kv get -field=jwt secret/nats-callout 2>/dev/null); then
+        s=$(bao kv get -field=seed secret/nats-callout 2>/dev/null) || s=
+      elif svc_get nats-callout jwt; then
+        j=$got; if svc_get nats-callout seed; then s=$got; fi
+      fi
+      callout=
+      if [ -n "$j" ]; then
+        jwt_key "$j"
+        if [ "$(jwt_claim "$j" 's/.*"iss":"\([A-Z2-7]*\)".*/\1/p')" = "$auth" ]; then
+          if seed_shaped "$s" && [ "$(grants_of "$j" sub)" = '$SYS.REQ.USER.AUTH' ]; then
+            callout=$key; printf '%s' "$j" > "$B/callout.jwt"; (umask 077; printf '%s' "$s" > "$B/callout.seed")
+          elif pub_shaped "$key"; then
+            err=$(nsc revocations add-user -a AUTH -u "$key" 2>&1) || { echo "nsc could not revoke the signer's user $key: $err" >&2; exit 1; }
+          fi
+        fi
+      fi
+      if [ -z "$callout" ]; then
+        out=$("$NATS_TOOLS/nk" -gen user -pubout 2>/dev/null) || { echo "nk failed for the signer's user" >&2; exit 1; }
+        s=; callout=
+        for w in $out; do
+          if seed_shaped "$w"; then s=$w; elif pub_shaped "$w"; then callout=$w; fi
+        done
+        [ -n "$s" ] && [ -n "$callout" ] || { echo "nk made no key pair for the signer's user" >&2; exit 1; }
+        err=$(nsc add user -a AUTH -n callout -k "$callout" --allow-sub '$SYS.REQ.USER.AUTH' --deny-pub '>' --allow-pub-response 2>&1) \
+          || { echo "nsc could not issue the signer's user: $err" >&2; exit 1; }
+        nsc describe user -a AUTH -n callout --raw > "$B/callout.jwt"
+        (umask 077; printf '%s' "$s" > "$B/callout.seed")
+        echo "NATS user callout: minted"
+      else
+        echo "NATS user callout: kept"
+      fi
+      authz=$(jwt_claim "$(nsc describe account -n AUTH --raw)" 's/.*"authorization":{\([^}]*\)}.*/\1/p')
+      if [ "$authz" != "\"auth_users\":[\"$callout\"],\"allowed_accounts\":[\"$account\"]" ]; then
+        for u in $(listed "$authz" auth_users); do
+          [ "$u" = "$callout" ] || nsc edit authcallout -a AUTH --rm-auth-user "$u" >/dev/null 2>&1 || { echo "nsc could not remove the callout's user $u" >&2; exit 1; }
+        done
+        for a in $(listed "$authz" allowed_accounts); do
+          [ "$a" = "$account" ] || nsc edit authcallout -a AUTH --rm-allowed-account "$a" >/dev/null 2>&1 || { echo "nsc could not remove the callout's account $a" >&2; exit 1; }
+        done
+        err=$(nsc edit authcallout -a AUTH --auth-user "$callout" --allowed-account "$account" 2>&1) || { echo "nsc could not set the callout: $err" >&2; exit 1; }
+        echo "NATS callout: names callout and APP"
+      fi
+      t=
+      if t=$(bao kv get -field=default_sentinel secret/nats-server 2>/dev/null); then :; elif svc_field nats-server default_sentinel; then t=$got; else t=; fi
+      if [ -n "$t" ] && [ "$(jwt_claim "$t" 's/.*"iss":"\([A-Z2-7]*\)".*/\1/p')" = "$auth" ] \
+        && [ -n "$(jwt_claim "$t" '/"bearer_token":true/p')" ] && [ -n "$(jwt_claim "$t" '/"pub":{"deny":\["\\u003e"\]},"sub":{"deny":\["\\u003e"\]}/p')" ]; then
+        printf '%s' "$t" > "$B/sentinel"; echo "NATS user sentinel: kept"
+      else
+        err=$(nsc add user -a AUTH -n sentinel --bearer --deny-pubsub '>' 2>&1) || { echo "nsc could not issue the sentinel: $err" >&2; exit 1; }
+        nsc describe user -a AUTH -n sentinel --raw > "$B/sentinel"
+        echo "NATS user sentinel: minted"
+      fi
+      printf '%s' "$auth" > "$B/auth_account"
+      printf '%s' "$account" > "$B/app_account"
+    }
+    # One line per scoped signing key of APP: its key, its role, and its scope's publish and subscribe lists, sorted.
+    app_scopes() {
+      { jwt_claim "$(nsc describe account -n APP --raw)" p; echo; } | sed 's/{"kind":"user_scope"/~&/g' | tr '~' '\n' | while read -r l; do
+        case "$l" in '{"kind":"user_scope"'*) ;; *) continue ;; esac
+        printf '%s %s %s %s\n' "$(printf '%s' "$l" | sed -n 's/^{"kind":"user_scope","key":"\([A-Z2-7]*\)".*/\1/p')" \
+          "$(printf '%s' "$l" | sed -n 's/.*"role":"\([a-z0-9-]*\)".*/\1/p')" "$(allow_of "$l" pub)" "$(allow_of "$l" sub)"
+      done
+    }
+    allow_of() {
+      printf '%s' "$1" | sed -n "s/.*\"$2\":{\"allow\":\[\([^]]*\)\].*/\1/p" | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g' | tr -d '"' | tr ',' '\n' | sort | paste -sd, -
+    }
+    # One scoped signing key per session user, its role the user's name and its scope the user's row, which the server
+    # enforces on every session the signer signs with it. A key whose role names no session user, or whose seed this
+    # root does not hold, is removed, which closes every session it signed (nats-server 2.15.2, accounts.go:4040-4056).
+    drop_scopes() {
+      app_scopes > "$B/scopes"
+      roles=" "
+      while read -r k r rest; do
+        if [ -n "$r" ] && case " {{ join " " $natsSessions }} " in *" $r "*) true ;; *) false ;; esac; then
+          case "$roles" in *" $r "*) ;; *) if [ -n "$(seed_file "$k")" ]; then roles="$roles$r "; continue; fi ;; esac
+        fi
+        err=$(nsc edit account -n APP --rm-sk "$k" 2>&1) || { echo "nsc could not remove the signing key $k: $err" >&2; exit 1; }
+        f=$(find "$B/nsc/keys/A" -name "$k.nk" 2>/dev/null); [ -z "$f" ] || rm -f $f
+        echo "NATS signing key of ${r:-no role}: removed"
+      done < "$B/scopes"
+      app_scopes > "$B/scopes"
+    }
+    scope_user() {
+      held=$(awk -v r="$1" '$2 == r { print; exit }' "$B/scopes")
+      if [ -z "$held" ]; then
+        new_signing_key "$1" APP; k=$sk; scoped=added
+      else
+        k=${held%% *}; rest=${held#* }; rest=${rest#* }; was_pub=${rest%% *}; was_sub=${rest#* }
+        if [ "$was_pub" = "$(grants "$2")" ] && [ "$was_sub" = "$(grants "$3")" ]; then
+          keep_seed "$k" "$B/keys/$1"; echo "NATS signing key of $1: kept"; return 0
+        fi
+        err=$(nsc edit signing-key -a APP --sk "$k" --rm "$was_pub,$was_sub" 2>&1) || { echo "nsc could not clear the scope of $1: $err" >&2; exit 1; }
+        scoped=rescoped
+      fi
+      err=$(nsc edit signing-key -a APP --sk "$k" --role "$1" --allow-pub "$2" --allow-sub "$3" 2>&1) || { echo "nsc could not scope the signing key of $1: $err" >&2; exit 1; }
+      keep_seed "$k" "$B/keys/$1"
+      echo "NATS signing key of $1: $scoped"
     }
     nats_bundle() {
       K="$HOME/seed/nats"; B="$K.new"; how=kept
       if [ ! -f "$K/done" ]; then
-        rm -rf "$B"; mkdir -p "$B/users" "$B/nsc"
+        rm -rf "$B"; mkdir -p "$B/users" "$B/keys" "$B/nsc"
         if svc_get nats-root nsc; then
           { printf '%s' "$got" | base64 -d | tar -xzf - -C "$B/nsc" && nsc describe account -n APP --raw; } >/dev/null 2>&1 \
             || { echo "secret/nats-root behind the Service is malformed, refusing to replace the trust root the bus holds" >&2; exit 1; }
@@ -260,25 +398,35 @@ data:
         nats_user {{ . }} '{{ join "," $p.publish }}' '{{ join "," $p.subscribe }}'
         {{- end }}
         revoke_older
+        converge_auth
+        drop_scopes
+        {{- range $natsSessions }}
+        {{- $p := index $natsTable . }}
+        scope_user {{ . }} '{{ join "," $p.publish }}' '{{ join "," $p.subscribe }}'
+        {{- end }}
         jwt=$(nsc describe operator --raw); printf '%s' "$jwt" > "$B/operator"
         sys=$(nsc describe account -n SYS --field sub | tr -d '"'); app=$(nsc describe account -n APP --field sub | tr -d '"')
-        [ -n "$sys" ] && [ -n "$app" ] || { echo "the NATS trust root names no SYS or APP account" >&2; exit 1; }
+        [ -n "$sys" ] && [ -n "$app" ] && [ -n "$auth" ] || { echo "the NATS trust root names no SYS, APP or AUTH account" >&2; exit 1; }
         printf '%s' "$sys" > "$B/system_account"
-        printf '{"%s":"%s","%s":"%s"}' "$sys" "$(nsc describe account -n SYS --raw)" "$app" "$(nsc describe account -n APP --raw)" > "$B/resolver_preload"
+        printf '{"%s":"%s","%s":"%s","%s":"%s"}' "$sys" "$(nsc describe account -n SYS --raw)" "$app" "$(nsc describe account -n APP --raw)" \
+          "$auth" "$(nsc describe account -n AUTH --raw)" > "$B/resolver_preload"
         rm -rf "$B/nsc/creds" "$B/nsc/keys/U" "$B"/nsc/*/accounts/*/users "$B/nsc/users"
         tar -czf - -C "$B/nsc" . | base64 | tr -d '\n' > "$B/root"
         rm -rf "$B/nsc"; : > "$B/done"; rm -rf "$K"; mv "$B" "$K"
       fi
       bao kv put secret/nats-root nsc=@"$K/root" >/dev/null
-      bao kv put secret/nats-server operator=@"$K/operator" system_account=@"$K/system_account" resolver_preload=@"$K/resolver_preload" >/dev/null
+      bao kv put secret/nats-server operator=@"$K/operator" system_account=@"$K/system_account" resolver_preload=@"$K/resolver_preload" \
+        default_sentinel=@"$K/sentinel" >/dev/null
       bao kv put secret/nats-route user=@"$K/route.user" password=@"$K/route.password" >/dev/null
+      bao kv put secret/nats-callout jwt=@"$K/callout.jwt" seed=@"$K/callout.seed" issuer_seed=@"$K/issuer.seed" \
+        app_account=@"$K/app_account" auth_account=@"$K/auth_account"{{ range $natsSessions }} key-{{ . }}=@"$K/keys/{{ . }}"{{ end }} >/dev/null
       [ ! -f "$K/revoked" ] || while read -r u; do
         if bao kv get -field=jwt "secret/nats-user-$u" >/dev/null 2>&1; then
-          bao kv metadata delete "secret/nats-user-$u" >/dev/null; echo "deleted secret/nats-user-$u, which rask no longer declares"
+          bao kv metadata delete "secret/nats-user-$u" >/dev/null; echo "deleted secret/nats-user-$u, which rask does not issue"
         fi
       done < "$K/revoked"
       for u in {{ join " " $natsUsers }}; do bao kv put "secret/nats-user-$u" jwt=@"$K/users/$u.jwt" seed=@"$K/users/$u.seed" >/dev/null; done
-      echo "NATS trust root $how, {{ len $natsUsers }} users"
+      echo "NATS trust root $how, {{ len $natsUsers }} static users, {{ len $natsSessions }} session users"
     }
     {{- end }}
     G=$DEV_CREDENTIALS

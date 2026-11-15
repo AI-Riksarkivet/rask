@@ -1,4 +1,4 @@
-{{- $creds := hasKey (include "lance.natsFiles" . | fromJson) "nats-admin-creds" }}
+{{- include "lance.busSessionUser" (list . "admin") }}
 {{- $replicas := (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }}
 {{- $consumers := include "lance.busConsumers" . | fromJsonArray }}
 {{- range $phase := list "declare" "retire" }}
@@ -32,23 +32,20 @@ spec:
       serviceAccountName: {{ include "lance.fullname" $ }}-sa-jobs
       volumes:
         {{- include "lance.tmpVolume" $ | nindent 8 }}
-        {{- if $creds }}
-        - { name: nats-creds, secret: { secretName: {{ include "lance.fullname" $ }}-nats-admin-creds } }
-        {{- end }}
+        {{- include "lance.busIdentity" (list $ "volumes") | nindent 8 }}
       containers:
         - name: nats
           image: natsio/nats-box:0.20.2
           {{- include "lance.rootSecurityContext" $ | nindent 10 }}
           env:
             - { name: HOME, value: /tmp }
-            {{- if $creds }}
-            - { name: NATS_CREDS, value: /etc/nats-creds/nats.creds }
+            - { name: BUS_TOKEN_FILE, value: {{ include "lance.busTokenFile" $ | quote }} }
+            {{- if include "lance.busCaConfigMap" $ }}
+            - { name: BUS_CA_FILE, value: {{ include "lance.busCaFile" $ | quote }} }
             {{- end }}
           volumeMounts:
             {{- include "lance.tmpMount" $ | nindent 12 }}
-            {{- if $creds }}
-            - { name: nats-creds, mountPath: /etc/nats-creds, readOnly: true }
-            {{- end }}
+            {{- include "lance.busIdentity" (list $ "mounts") | nindent 12 }}
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
             limits: { cpu: "200m", memory: "128Mi" }
@@ -57,14 +54,16 @@ spec:
             - -c
             - |
               S="{{ include "lance.natsUrl" $ }}"
-              until err=$(nats --server "$S" stream ls 2>&1 >/dev/null); do
+              case "$S" in tls://*) FIRST=--tlsfirst ;; *) FIRST= ;; esac
+              bus() { NATS_TOKEN=$(cat "$BUS_TOKEN_FILE") nats --server "$S" --connection-name admin $FIRST ${BUS_CA_FILE:+--tlsca "$BUS_CA_FILE"} "$@"; }
+              until err=$(bus stream ls 2>&1 >/dev/null); do
                 case "$err" in *[Aa]uthoriz*|*[Aa]uthentic*|*[Pp]ermission*) echo "!! NATS refused the stream Job's credential: $err"; exit 1 ;; esac
                 echo wait-nats; sleep 3
               done
               consumer_of() {
                 tries=0
                 while :; do
-                  got=$(nats --server "$S" req "\$JS.API.CONSUMER.INFO.$1.$2" '' 2>/dev/null | tr -d ' \n')
+                  got=$(bus req "\$JS.API.CONSUMER.INFO.$1.$2" '' 2>/dev/null | tr -d ' \n')
                   case "$got" in
                     *'"err_code":10014'*) return 0 ;;
                     *'"config":'*) echo "$got"; return 0 ;;
@@ -90,12 +89,12 @@ spec:
               #             REBUILD replays (a consumer started at the stream's first message) is gone.
               # Interest edits back to limits in place; work refuses, and the Job fails naming why.
               converge_stream() {
-                if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
-                  out=$(nats --server "$S" stream edit "$1" --config "$HOME/$1.json" -f 2>&1) \
+                if bus stream info "$1" >/dev/null 2>&1; then
+                  out=$(bus stream edit "$1" --config "$HOME/$1.json" -f 2>&1) \
                     || { echo "!! stream $1 cannot be edited to the declared config in place: $(echo "$out" | grep -i error)"; echo "!! Drain it and run: nats --server $S stream rm $1   then re-run this Job."; exit 1; }
                   echo "stream $1: converged to the declared config"
                 else
-                  nats --server "$S" stream add --config "$HOME/$1.json" >/dev/null \
+                  bus stream add --config "$HOME/$1.json" >/dev/null \
                     || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
                   echo "stream $1: created"
                 fi
@@ -104,8 +103,8 @@ spec:
               # bucket's stream, a question `-f` does not answer and a Job cannot, and `nats kv edit` cannot keep rollups off.
               # The request exits 0 however it is answered, so the answer is read (docs/chart/templates/nats-stream-job.yaml.md).
               converge_bucket() {
-                if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
-                  got=$(nats --server "$S" req "\$JS.API.STREAM.UPDATE.$1" "$(cat "$HOME/$1.json")" 2>&1)
+                if bus stream info "$1" >/dev/null 2>&1; then
+                  got=$(bus req "\$JS.API.STREAM.UPDATE.$1" "$(cat "$HOME/$1.json")" 2>&1)
                   case "$got" in
                     *'"error":'*)
                       echo "!! stream $1 cannot be edited to the declared config in place: $(echo "$got" | grep -F '"error":')"
@@ -116,7 +115,7 @@ spec:
                   echo "!! the bus did not take stream $1's update, so re-run this Job: $(echo "$got" | grep -v -e 'Sending request' -e 'Received with rtt')"
                   exit 1
                 fi
-                nats --server "$S" stream add --config "$HOME/$1.json" >/dev/null \
+                bus stream add --config "$HOME/$1.json" >/dev/null \
                   || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
                 echo "stream $1: created"
               }
@@ -131,12 +130,12 @@ spec:
               # against nats-server 2.15.2, 2026-11-14: an edit to an unchanged config exits 0, a changed ack_wait or
               # max_ack_pending is applied, and a changed start or max_waiting exits 1 (`... can not be updated (10012)`).
               converge_consumer() {
-                if nats --server "$S" consumer info "$1" "$2" >/dev/null 2>&1; then
-                  out=$(nats --server "$S" consumer edit "$1" "$2" --config "$HOME/$1-$2.json" -f 2>&1) \
+                if bus consumer info "$1" "$2" >/dev/null 2>&1; then
+                  out=$(bus consumer edit "$1" "$2" --config "$HOME/$1-$2.json" -f 2>&1) \
                     || { echo "!! consumer $1/$2 cannot be edited to the declared config in place: $(echo "$out" | grep -i error)"; exit 1; }
                   echo "consumer $1/$2: converged to the declared config"
                 else
-                  nats --server "$S" consumer add "$1" "$2" --config "$HOME/$1-$2.json" >/dev/null \
+                  bus consumer add "$1" "$2" --config "$HOME/$1-$2.json" >/dev/null \
                     || { echo "!! FAILED to create consumer $1/$2 — its service could take nothing from it"; exit 1; }
                   echo "consumer $1/$2: created"
                 fi
@@ -156,7 +155,7 @@ spec:
               # A server older than 2.12 drops `allow_msg_schedules` from the config it is given and reports the stream
               # created, after which no schedule ever fires. Read from the server's own answer, since a client re-serialising
               # the config can drop a field it does not know.
-              got=$(nats --server "$S" req '$JS.API.STREAM.INFO.MAINTENANCE_SCHEDULES' '' 2>/dev/null | tr -d ' \n')
+              got=$(bus req '$JS.API.STREAM.INFO.MAINTENANCE_SCHEDULES' '' 2>/dev/null | tr -d ' \n')
               case "$got" in
                 *'"allow_msg_schedules":true'*) echo "stream MAINTENANCE_SCHEDULES: message schedules allowed" ;;
                 *'"config":'*) echo "!! stream MAINTENANCE_SCHEDULES does not allow message schedules: the bus ignored allow_msg_schedules, so no maintenance schedule would fire. Message schedules need nats-server 2.12 or later."; exit 1 ;;
@@ -210,15 +209,15 @@ spec:
               # nats-server 2.15.2, 2026-11-14.
               DECLARED="{{ range $consumers }}{{ .stream }}/{{ .name }} {{ end }}"
               MARK='"rask.dev/release":"{{ $.Release.Name }}"'
-              streams=$(nats --server "$S" stream ls --names 2>&1) || { echo "!! could not list the bus's streams: $streams"; exit 1; }
+              streams=$(bus stream ls --names 2>&1) || { echo "!! could not list the bus's streams: $streams"; exit 1; }
               for st in $streams; do
-                names=$(nats --server "$S" consumer ls "$st" --names 2>&1) || { echo "!! could not list the consumers of $st: $names"; exit 1; }
+                names=$(bus consumer ls "$st" --names 2>&1) || { echo "!! could not list the consumers of $st: $names"; exit 1; }
                 for c in $names; do
                   case " $DECLARED " in *" $st/$c "*) continue ;; esac
                   info=$(consumer_of "$st" "$c") || exit 1
                   case "$info" in
                     *"$MARK"*)
-                      nats --server "$S" consumer rm "$st" "$c" -f >/dev/null || { echo "!! FAILED to remove consumer $st/$c"; exit 1; }
+                      bus consumer rm "$st" "$c" -f >/dev/null || { echo "!! FAILED to remove consumer $st/$c"; exit 1; }
                       echo "consumer $st/$c: this release declares it no longer — removed" ;;
                   esac
                 done
@@ -228,11 +227,11 @@ spec:
               for old in LINEAGE/lineage-durable LINEAGE/maintenance-durable DLQ/lineage-dlq-durable; do
                 info=$(consumer_of "${old%/*}" "${old#*/}") || exit 1
                 [ -n "$info" ] || continue
-                nats --server "$S" consumer rm "${old%/*}" "${old#*/}" -f >/dev/null || { echo "!! FAILED to remove consumer $old"; exit 1; }
+                bus consumer rm "${old%/*}" "${old#*/}" -f >/dev/null || { echo "!! FAILED to remove consumer $old"; exit 1; }
                 echo "consumer $old: removed"
               done
-              if nats --server "$S" stream info CATALOG_CONTROL_BROADCAST >/dev/null 2>&1; then
-                nats --server "$S" stream rm CATALOG_CONTROL_BROADCAST -f >/dev/null || { echo "!! FAILED to remove stream CATALOG_CONTROL_BROADCAST"; exit 1; }
+              if bus stream info CATALOG_CONTROL_BROADCAST >/dev/null 2>&1; then
+                bus stream rm CATALOG_CONTROL_BROADCAST -f >/dev/null || { echo "!! FAILED to remove stream CATALOG_CONTROL_BROADCAST"; exit 1; }
                 echo "stream CATALOG_CONTROL_BROADCAST: removed"
               fi
               echo "retired what git declares no longer"

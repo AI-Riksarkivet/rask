@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Annotated, Self
 from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.governed.secrets import secret_store_configured
+from lakehouse.bus import BusSettings
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import StoreTimeouts, lance_storage_options
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
@@ -79,11 +79,10 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # --- The work queue (ADR 0198 §2). Each table's pass, each trash record's release and the hourly audit are tasks on
     # NATS JetStream, which every replica's worker pulls from; the streams and their durable consumers are the chart's
     # (`chart/templates/nats-stream-job.yaml`), so the worker binds to them and creates nothing.
-    #: The bus the worker connects to; empty runs no worker, for a stack with no NATS and for the tests.
+    #: The bus the worker connects to; empty runs no worker, for a stack with no NATS and for the tests. The worker
+    #: presents its pod's token there (`lakehouse.bus.BusSettings`), and the session it is granted carries the chart's
+    #: `nats.auth.users` row: pull and ack on its consumers, publish tasks and schedules.
     nats_url: str = Field(default="", alias="MAINTENANCE_NATS_URL")
-    #: The store secret holding the worker's own bus user (`jwt`, `seed`), read once at start and never from env. Its
-    #: permissions are the chart's `nats.auth.users` row: pull and ack on its consumers, publish tasks and schedules.
-    nats_credentials_secret: str = Field(default="nats-user-maintenance-worker", alias="MAINTENANCE_NATS_CREDENTIALS_SECRET")
     #: How often a running task tells JetStream it is still being worked on, well inside the consumer's ack wait (the
     #: chart's `maintenance.queue.ackWaitSeconds`), so a long pass is never redelivered beneath itself while its worker lives.
     task_heartbeat_seconds: float = Field(default=20.0, gt=0, alias="MAINTENANCE_TASK_HEARTBEAT_SECONDS")
@@ -421,12 +420,10 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
         return self
 
     @model_validator(mode="after")
-    def _a_bus_needs_the_store(self) -> Self:
-        """Refuse a bus address without the secret store: the worker's bus credential is read from the store alone."""
-        if self.nats_url and not secret_store_configured():
-            raise ValueError(
-                "MAINTENANCE_NATS_URL needs a secret store (RASK_SECRET_STORE_ADDR): the worker's bus credential is read from the store, never env"
-            )
+    def _a_bus_needs_the_pods_token(self) -> Self:
+        """Refuse a bus address without a token to present there: the worker holds no other proof of who it is."""
+        if self.nats_url and not BusSettings().token_file:
+            raise ValueError("MAINTENANCE_NATS_URL needs the pod's token for the bus (RASK_BUS_TOKEN_FILE): the worker presents nothing else there")
         return self
 
     def s3_key_pair(self) -> S3KeyPair:

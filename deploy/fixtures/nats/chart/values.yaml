@@ -1,12 +1,25 @@
 # NOT FOR PRODUCTION (deploy/fixtures/README.md). A three-node NATS JetStream cluster for rask, from the upstream nats
-# 2.15.2 chart, plus the ExternalSecrets that write its operator-mode config from rask's dev OpenBao.
+# 2.15.2 chart, plus, in operator mode, the ExternalSecrets that write its config from rask's dev OpenBao, the TLS its
+# client port serves and the development stand-in signer.
 
 # The rask release this bus serves: its dev OpenBao's SecretStore (`<rask>-vault`) holds `nats-server` and
 # `nats-route`, which operator mode reads.
 rask:
   release: rask
-  # Refresh interval of the ExternalSecrets that write the server's config and nats-box's credential.
+  # Refresh interval of the ExternalSecrets that write the server's config, nats-box's credential and the signer's keys.
   refreshInterval: "1h"
+
+# The development stand-in for the platform's signer, run only in operator mode (`nats.auth.server`). It answers the
+# server's auth callout: it checks the token a connection presents with a TokenReview for the audience rask's
+# `<rask>-nats-permissions` names, admits only a connection whose name is a session user of that table bound to the
+# token's ServiceAccount, and answers with a user that expires within the table's `sessionSeconds`, signed by that
+# user's scoped signing key, so the bus enforces the key's scope. It is a stand-in: it holds every scoped signing seed
+# in its pod (a platform's signer may keep them in a KMS or transit engine instead), runs from a development image, and
+# is proved by the nats-auth lane, not supported for any other use. Its keys are rask's dev store's `nats-callout`.
+signer:
+  # The stand-in signer's image (`.docker/bus-signer.dockerfile`, binary `/bus-signer`), from the dev registry.
+  image: localhost:5000/bus-signer:dev
+  replicas: 2
 
 nats:
   # rask's `nats.url` names this Service (`nats://rask-nats:4222`). The name also fixes the JetStream claims
@@ -19,7 +32,32 @@ nats:
   # operator mode cannot join the other two, and a new system account starts an empty JetStream (docs/OPERATORS.md § 7).
   auth:
     server: false
+  # Operator mode serves TLS on the client port, since each pod presents its ServiceAccount token in CONNECT: the CA is
+  # the one templates/tls.yaml makes and keeps (`<fullname>-ca`, `ca.crt`, the ConfigMap rask's `nats.ca.configMap`
+  # names), and the chart writes it into nats-box's context and the client port's `tls` block.
+  tlsCA:
+    enabled:
+      $tplYaml: |
+        {{ .Values.auth.server }}
+    configMapName:
+      $tplYaml: |
+        {{- if .Values.auth.server }}{{ include "nats.fullname" . }}-ca{{ end }}
   config:
+    # Operator mode: the client port serves the certificate templates/tls.yaml makes for the Service's names. Route
+    # traffic stays as `cluster` sets it.
+    nats:
+      tls:
+        enabled:
+          $tplYaml: |
+            {{ .Values.auth.server }}
+        secretName:
+          $tplYaml: |
+            {{- if .Values.auth.server }}{{ include "nats.fullname" . }}-tls{{ end }}
+        # A client may open with its TLS handshake, before the server's greeting, and rask's do: one that waits for the
+        # greeting takes the server's unencrypted word for whether to encrypt, and would send its token in the clear to
+        # whoever answered without it. `auto` serves both, since the development object store's client waits.
+        merge:
+          handshake_first: auto
     # JetStream on a file store; the PVC size is each server's max_file_store bound.
     jetstream:
       enabled: true

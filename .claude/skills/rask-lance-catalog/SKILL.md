@@ -761,8 +761,10 @@ governing their data. The project-scoped surface is the console's project page, 
   ends with a pass still running ends there (`Worker.drain`), each pull has a subscription of its own, and a pass
   holds a claim on its table in the MAINTENANCE_CLAIMS bucket that another pass waits out (`Worker._claim`), so two
   passes of one table never overlap; a claim that finds the bucket gone ends the replica's task loop
-  (`TaskQueue.claim`); a replica whose credential the bus takes no longer (revoked when its grants changed,
-  or expired) ends itself and starts again on the store's current one (`TaskQueue.connect`); a pass
+  (`TaskQueue.claim`); a replica whose session the bus ends for good (the signing key scoped to its bus user
+  withdrawn) ends itself and starts again, asking the bus's signer for a session with its pod's token; a signer that
+  refuses or does not answer a connect is logged once and retried, and a session near its end is asked for again on the same
+  connection (`TaskQueue.connect`); a pass
   past twice `maxPassSeconds` ends its replica, and a task that outlived its worker on all `maxDeliver` deliveries is
   ended unrun on the one more the consumer allows. The worker counts each task retried, delivered past its first delivery
   (`maintenance.tasks.redelivered`, a worker's death included), ended, completed (and its time from claim to ack), each

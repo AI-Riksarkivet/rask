@@ -10,9 +10,8 @@
 {{- end }}
 - { name: MAINTENANCE_READ_ONLY, value: {{ required "readOnlyWindow is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.readOnlyWindow | quote }} }
 {{- with include "lance.signingEnv" (list $root .Values.maintenance.appId) }}{{ . | nindent 0 }}{{- end }}
-{{- if or .Values.maintenance.lineageEmit .Values.maintenance.controlEmit }}
-{{- include "lance.busEnv" (list $root $root.Values.maintenance.appId) | nindent 0 }}
-{{- end }}
+{{- include "lance.busSessionUser" (list $root "maintenance-worker") }}
+{{- include "lance.busEnv" (list $root (ternary $root.Values.maintenance.appId "" (or .Values.maintenance.lineageEmit .Values.maintenance.controlEmit))) | nindent 0 }}
 {{- if $root.Values.maintenance.vendWriteCredentials }}
 - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
 - { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
@@ -51,7 +50,6 @@
 - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
 {{- $queue := required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue }}
 - { name: MAINTENANCE_NATS_URL, value: {{ include "lance.natsUrl" . | quote }} }
-- { name: MAINTENANCE_NATS_CREDENTIALS_SECRET, value: "nats-user-maintenance-worker" }
 - { name: MAINTENANCE_TASK_HEARTBEAT_SECONDS, value: {{ required "maintenance.queue.heartbeatSeconds is required" $queue.heartbeatSeconds | quote }} }
 - { name: MAINTENANCE_TASK_ACK_WAIT_SECONDS, value: {{ required "maintenance.queue.ackWaitSeconds is required" $queue.ackWaitSeconds | quote }} }
 - { name: MAINTENANCE_TASK_MAX_DELIVER, value: {{ required "maintenance.queue.maxDeliver is required" $queue.maxDeliver | quote }} }
@@ -151,8 +149,10 @@ spec:
             {{- include "lance.tmpMount" . | nindent 12 }}
             {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 12 }}
             {{- include "lance.storeIdentity" (list . .Values.maintenance.appId "mounts") | nindent 12 }}
+            {{- include "lance.busIdentity" (list $root "mounts") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.maintenance.appId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
+        {{- include "lance.busIdentity" (list $root "volumes") | nindent 8 }}
 {{- end }}

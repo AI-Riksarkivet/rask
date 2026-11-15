@@ -1,11 +1,14 @@
-"""Each NATS client reaches exactly its own subjects, a client with no credential reaches nothing, and each service takes
-its deliveries on its own connection ([[XC-078]], [[XC-199]]).
+"""Each NATS client reaches exactly its own subjects, a client with no credential reaches nothing, each service's pod
+presents only its ServiceAccount token and is granted a short session it renews, and each service takes its deliveries
+on its own connection ([[XC-078]], [[XC-199]]).
 
 Closes-when clause 1 ("a publish from a pod without its app's credential is refused on every cascade, control and
 lineage subject"), proved offline: the nats-server the NATS fixture deploys (deploy/fixtures/nats, a prerequisite rask
-never installs) in operator mode with a MEMORY resolver and JetStream, test-only keys minted with nsc, and one user per
-row of the permission table the chart's dev seed issues (read off the render, so a values.yaml `nats.auth.flagged`
-grant counts only while its flag is on).
+never installs) in operator mode with a MEMORY resolver, JetStream and TLS on the client port, test-only keys minted
+with nsc, and one bus user per row of the permission table the chart renders (read off the render, so a values.yaml
+`nats.auth.flagged` grant counts only while its flag is on): a scoped signing key per session user, whose scope the
+bus enforces on every session the stand-in signer (`deploy/fixtures/nats/callout`, two processes) grants, and a static
+user per other row (`nats_auth_rig.bus_users`).
 
 The table is held to a declaration written independently of it and to what the run measures, because a table checked
 only against itself can never be too broad. `PUBLISHERS` is who may publish each data subject, read off every publish
@@ -14,12 +17,22 @@ client makes is read off the broker's trace: a call the table refuses fails the 
 this module drives that no call of that user used.
 
 Each service's own connection is the seam itself: the real `lakehouse.bus.Bus`, connected as the bus user the render
-names that service, with the credential a stand-in of the secret store holds for it.
+names that service, handed what the chart hands its pod and nothing else: a token file, the bus's CA and the session's
+length (`nats_auth_rig.Pod`).
 
+* Its pod presents only its token, over TLS verified against the bus's CA (a CA the bus's certificate does not chain to
+  is not connected with), and its session carries exactly its row's grants. A token asking for another user's name, a
+  token no TokenReview authenticates, and a connection with no token at all are each refused.
 * It publishes each of its topics once under its event's id, under an inbox no other user may read; an id another
   publisher stored a message under is not taken as delivered; a bus it cannot reach fails its publishes at once and is
-  connected to again, by nats-py through a short cut and by the seam's own loop past it; and a credential the bus ends
-  is replaced by the one the store holds then, with no restart.
+  connected to again, by nats-py through a short cut and by the seam's own loop past it; a session whose key grants
+  its user no inbox of its own is not held, and is once the key's scope is changed in place to grant it.
+* Its session is asked for again before the bus ends it, on the same client, for three session lengths while it
+  publishes and its lane pulls: nothing acknowledged is lost or doubled. A session it cannot renew (the signers away
+  across the renewal), and one the bus ends unrenewed (the signer grants shorter sessions than the pod was told), each
+  leave it without a connection until the signers answer, and it opens a new one in-process and delivers what it
+  staged meanwhile. A user whose scoped key is withdrawn from the account loses its sessions and is refused, and the
+  other users keep theirs.
 * Lineage pulls its ingest consumer (`Bus.consume`): a delivery is handled once under the trace it was published
   under; a body no parser reads is handed on and ends no lane; one its handling asks for again comes back after the
   lane's delay and is parked on its last; one whose
@@ -32,11 +45,15 @@ names that service, with the credential a stand-in of the secret store holds for
 * Through an outage longer than nats-py's own reconnects, a pulling lane and a following one deliver again on the rebuilt
   connection, nothing lost and nothing handled twice.
 
-The chart's stream Job runs as `admin`, both phases with their rendered scripts, on a bus prepared as the previous
-revision left it: the declare phase creates and converges every stream and consumer, starts lineage's ingest consumer
+The chart's stream Job runs as `admin`, presenting its pod's token to the nats CLI with no creds file, both phases with
+their rendered scripts, on a bus prepared as the previous revision left it: the declare phase creates and converges every stream and consumer, starts lineage's ingest consumer
 after the last event the subscription it replaces acknowledged, and edits a changed lane in place; the retire phase
 removes what this release declares no longer and what the previous revision's subscriptions held, leaves what another
-subscriber holds, removes no stream, and removes nothing it could not read.
+subscriber holds, removes no stream, and removes nothing it could not read (`admin`'s key scoped in place without its
+consumer reads for that run).
+
+After the run, no file a service's pod was given and no environment a service ran in holds an NKEY seed, a NATS user
+JWT or (in an environment) a bus token, and no signer logged a token.
 
 Run by `dagger call nats-auth` (`make nats-auth`), which provides the binaries and selects this file by path.
 """
@@ -49,7 +66,9 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import subprocess
+from collections import Counter
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from itertools import pairwise
@@ -58,24 +77,21 @@ from typing import Any
 
 import nats
 import pytest
-import respx
 import yaml
 from nats.js.errors import APIError
 from nats_auth_rig import (
+    RENDER_ARGS,
     VALUES_ENV,
-    Broker,
     Client,
-    Credential,
     Link,
-    Mint,
     Permissions,
+    Pki,
+    Pod,
+    Rig,
     Tools,
     client_calls,
-    issue,
     matches,
-    mint,
-    run_cli,
-    run_stream_job,
+    secrets_in,
     stream_job_script,
     unused_grants,
     violations,
@@ -93,8 +109,7 @@ from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, Cl
 from lakehouse.supervision import Supervisor
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
-from tests.secret_store_double import SecretStoreDouble
-from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, nats_users, render, render_fixture
+from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render, render_fixture
 
 
 pytestmark = pytest.mark.nats_auth
@@ -102,13 +117,10 @@ pytestmark = pytest.mark.nats_auth
 log = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parents[2]
-#: The rig's own observer, every JetStream call and every ack granted: it reads stream and consumer state and lays out
-#: the bus the previous revision left, so no table user's call set carries the test's bookkeeping. It is minted beside
-#: the table and is not a row of it.
+#: The rig's own observer, a static user every JetStream call and every ack granted: it reads stream and consumer state
+#: and lays out the bus the previous revision left, so no table user's call set carries the test's bookkeeping. It is
+#: minted beside the table and is not a row of it.
 RIG = "rask-test-rig"
-#: `admin`'s grants without `$JS.API.CONSUMER.INFO`, so every consumer read the stream Job makes fails as a read during a
-#: JetStream leader move does, while it may still list and delete ([[LH-343]]). Minted beside the table, not a row of it.
-BLIND_ADMIN = "rask-test-blind-admin"
 #: How many times the stream Job runs before the lane gives up on it, inside the chart's `backoffLimit` of 20.
 _JOB_RUNS = 3
 #: The topics a service publishes on its own connection: its lineage events (`lakehouse.outbox`) and the control lane's.
@@ -116,17 +128,21 @@ OWN_CONNECTION_TOPICS = ("lineage.events.v1", "catalog.control.v1")
 LINEAGE_TOPIC, CONTROL_TOPIC = OWN_CONNECTION_TOPICS
 #: The stream the catalog's control events are kept on, which each catalog replica follows (`catalog.api.control_lane`).
 CONTROL_STREAM = "CATALOG_CONTROL"
-#: A bus user of the rig's own whose first credential the bus ends: issued for a minute, then issued again in the store.
-#: Minted beside the table and not a row of it: it may publish lineage, read a stored message back, and receive under an
-#: inbox of its own.
-REISSUED = "rask-test-reissued"
-#: A bus user of the rig's own whose first credential grants it only the shared inbox, as one issued before its row gave it
-#: an inbox of its own would: the bus takes the connection and would hand it no acknowledgement. Minted beside the table.
+#: A session user of the rig's own, of a ServiceAccount of its own, whose scoped key first grants it only the shared
+#: inbox, as a key scoped before its row gave it an inbox of its own would: the bus grants the session and would hand it
+#: no acknowledgement. Minted beside the table and not a row of it: it may publish lineage and read a stored message back.
 UNHEARD = "rask-test-unheard"
-#: How long `REISSUED`'s first credential is good for (nsc's least), and how much longer the seam may take to be told and
-#: to connect again.
-_EXPIRY_SECONDS = 60.0
-_EXPIRY_SLACK_SECONDS = 30.0
+#: How long a session lasts in every leg but the renewal legs: longer than the module runs, so a probe connected at its
+#: start keeps its session to the end.
+_LONG_SESSION = 3600
+#: The renewal legs' session, as the table and the pod are both told it: `BusSettings.session_seconds`'s least, renewed
+#: 15 s in (the seam's least margin is 5 s), and how many lengths the leg outlives.
+_SHORT_SESSION = 20
+_SESSION_LENGTHS = 3
+#: How often the renewal leg publishes.
+_PUBLISH_EVERY = 0.25
+#: How long the signers stay away in the legs that hold them stopped: past a short session's renewal and its end.
+_SIGNERS_AWAY = 14.0
 #: The seam's reconnect budget in this run, shortened from the service's (ten attempts two seconds apart, then a pause of
 #: 2 to 15 s) so that a cut of seconds outlasts nats-py's own reconnects: attempts, seconds apart, and the pause's bounds.
 #: `lakehouse.bus` takes them from no setting, so the run sets the module's own.
@@ -209,6 +225,9 @@ PUBLISHERS: dict[str, frozenset[str]] = {
 #: The clients beside the services the table must also name: the stream Job, nats-box, maintenance's worker and the dev
 #: store.
 OTHER_CLIENTS = frozenset({"admin", "monitor", "maintenance-worker", "object-store"})
+#: How each client the render names connects: a session user's pod presents its token, a static user its creds. The
+#: lakehouse's own pods hold no bus credential; the static users are the development fixtures' and nats-box's.
+SESSION_USERS = frozenset({"admin", "catalog", "lineage", "maintenance", "maintenance-worker"})
 #: The users every grant of which this module's legs exercise; the worker's queue calls are its own module's.
 DRIVEN = frozenset({"admin", "monitor", "catalog", "lineage", "maintenance", "object-store"})
 #: Calls outside a service's row, each of which the broker must refuse: another service's consumer pulled, a consumer
@@ -242,20 +261,30 @@ def _is_data_subject(subject: str) -> bool:
 
 
 def _lane_runs_the_charts_images(tools: Tools, docs: tuple[dict, ...]) -> list[str]:
-    """Every binary the lane runs comes from an image the estate deploys: rask's render, or the NATS fixture's server."""
+    """Every binary the lane runs comes from what the estate deploys: an image rask's render or the NATS fixture runs, or,
+    for one the lane builds (named by its dockerfile), the dockerfile of an image the NATS fixture runs in operator mode,
+    which is where its stand-in signer runs."""
     deployed = {c["image"] for _, _, c in containers((*docs, *render_fixture("nats")))}
-    return [
-        f"the lane runs {tool} from {image}, which neither the chart nor a fixture deploys"
-        for tool, image in sorted(tools.images.items())
-        if image not in deployed
+    signing = {c["image"].rpartition("/")[2].partition(":")[0] for _, _, c in containers(render_fixture("nats", "--set", "nats.auth.server=true"))}
+    findings = []
+    for tool, source in sorted(tools.images.items()):
+        if source.endswith(".dockerfile"):
+            if not (REPO / source).is_file() or Path(source).stem not in signing:
+                findings.append(f"the lane builds {tool} from {source}, of which the NATS fixture runs no image")
+        elif source not in deployed:
+            findings.append(f"the lane runs {tool} from {source}, which neither the chart nor a fixture deploys")
+    return findings + [
+        f"the lane names no source for {tool}" for tool in sorted({"nsc", "nats-server", "bus-signer", "job/nats", "box/nats"} - tools.images.keys())
     ]
 
 
-def _table_names_every_client(table: dict[str, Permissions], services: list[str]) -> list[str]:
-    """The table issues one user per client and none beyond: each service the render names a bus user, and the others."""
+def _table_names_every_client(table: dict[str, Permissions], services: list[str], sessions: set[str]) -> list[str]:
+    """The table issues one user per client and none beyond: each service the render names a bus user, and the others;
+    and each of the lakehouse's own is a session user, every other a static one."""
     clients = OTHER_CLIENTS | set(services)
     findings = [f"no table user for {user}, which the render needs a credential for" for user in sorted(clients - set(table))]
-    return findings + [f"the table issues {user}, which no client connects as" for user in sorted(set(table) - clients)]
+    findings += [f"the table issues {user}, which no client connects as" for user in sorted(set(table) - clients)]
+    return findings + ([f"the session users are {sorted(sessions)}, not {sorted(SESSION_USERS)}"] if sessions != SESSION_USERS else [])
 
 
 def _data_grants_beyond_the_publishers(table: dict[str, Permissions]) -> list[str]:
@@ -309,12 +338,19 @@ async def _settles(session: Bus, *, up: bool, within: float) -> bool:
 
 
 @asynccontextmanager
-async def _connected_as(user: str, url: str) -> AsyncGenerator[Bus]:
-    """A service's own connection to the bus, opened as the chart names it to a pod (`lakehouse.bus.bus_session`) and
-    up: the seam reads ``user``'s credential from the store's stand-in and connects with it."""
-    settings = BusSettings.model_validate({"RASK_BUS_URL": url, "RASK_BUS_USER": user})
+async def _session_of(settings: BusSettings) -> AsyncGenerator[Bus]:
+    """A service's own connection to the bus, as the chart names it to a pod (`lakehouse.bus.bus_session`), up or not."""
     async with Supervisor() as loops, bus_session(loops, settings) as session:
         assert session is not None, "the seam opens no connection for a process named a bus"
+        yield session
+
+
+@asynccontextmanager
+async def _connected_as(rig: Rig, user: str, url: str | None = None, *, session_seconds: int = _LONG_SESSION, pod: Pod | None = None) -> AsyncGenerator[Bus]:
+    """A service's own connection to the bus, opened as the chart names it to a pod and up: the seam is handed a pod of
+    ``user``'s (its token file and the bus's CA, nothing else) and presents its token."""
+    settings = (pod or rig.pod(user)).settings(url or rig.url, session_seconds)
+    async with _session_of(settings) as session:
         assert await _settles(session, up=True, within=20), f"the seam never connected to the bus as {user}"
         yield session
 
@@ -378,12 +414,12 @@ async def _an_id_another_message_holds_is_not_delivered(session: Bus, user: str,
     return [f"{user}'s event on {topic} was taken as delivered while the stream holds another message under its id"]
 
 
-async def _services_publish_as_themselves(url: str, services: list[str], rig: Client, probes: dict[str, Client]) -> list[str]:
+async def _services_publish_as_themselves(bus: Rig, services: list[str], rig: Client, probes: dict[str, Client]) -> list[str]:
     """Each service on the seam its events are published with, as the bus user the render names it: every topic it
     publishes, kept once under its event's id, and an id another publisher of the topic took first."""
     findings: list[str] = []
     for user in services:
-        async with _connected_as(user, url) as session:
+        async with _connected_as(bus, user) as session:
             for topic in (topic for topic in OWN_CONNECTION_TOPICS if user in PUBLISHERS[topic]):
                 findings += await _published_once_under_its_id(session, user, topic, rig)
                 squatter = probes[min(PUBLISHERS[topic] - {user}, default=user)]
@@ -391,18 +427,23 @@ async def _services_publish_as_themselves(url: str, services: list[str], rig: Cl
     return findings
 
 
-async def _a_service_outlasts_a_bus_it_cannot_reach(broker: Broker, user: str, reads: respx.Route, rig: Client) -> list[str]:
-    """``user``'s own connection through a `Link` the test cuts. While the bus cannot be reached a publish fails at once,
-    so its event stays staged and no caller waits. After a short cut nats-py reconnects by itself, on the credential it
-    holds. Past its own attempts it closes for good, and the seam's loop opens another client with a fresh read of the
-    credential, so the process publishes again with no restart."""
+def _ended(caplog: pytest.LogCaptureFixture, user: str) -> int:
+    """How many connections of ``user``'s the seam has said closed for good, its loop then opening another."""
+    return sum(1 for r in caplog.records if r.name == seam.__name__ and r.getMessage() == "bus_connection_ended" and r.__dict__.get("user") == user)
+
+
+async def _a_service_outlasts_a_bus_it_cannot_reach(bus: Rig, user: str, rig: Client, caplog: pytest.LogCaptureFixture) -> list[str]:
+    """``user``'s own connection through a `Link` the test cuts. While the bus cannot be reached a publish fails at once, so its
+    event stays staged and no caller waits out its own timeout. After a short cut nats-py reconnects by itself, on the same client.
+    Past its own attempts it closes for good, and the seam's loop opens another client, presenting the token the pod's
+    file holds then, so the process publishes again with no restart."""
     findings: list[str] = []
     topic, clock = LINEAGE_TOPIC, asyncio.get_running_loop().time
-    link = Link(broker.port)
+    link = Link(bus.broker.port, bus.pki)
     await link.start()
     try:
-        async with _connected_as(user, link.url) as session:
-            read_once = reads.call_count
+        async with _connected_as(bus, user, link.url) as session:
+            ended_once, first = _ended(caplog, user), session._client
             await link.stop()
             if not await _settles(session, up=False, within=10):
                 findings.append(f"{user}'s connection still answers as up 10 s after its bus was cut off")
@@ -417,13 +458,13 @@ async def _a_service_outlasts_a_bus_it_cannot_reach(broker: Broker, user: str, r
             else:
                 findings.append("a publish with no connection to the bus was taken as delivered")
             await link.start()
-            if not await _settles(session, up=True, within=15) or reads.call_count != read_once:
-                findings.append(f"nats-py did not reconnect {user} by itself after a short cut ({reads.call_count - read_once} more credential reads)")
+            if not await _settles(session, up=True, within=15) or session._client is not first or _ended(caplog, user) != ended_once:
+                findings.append(f"nats-py did not reconnect {user} by itself after a short cut ({_ended(caplog, user) - ended_once} connections ended)")
             findings += await _published_once_under_its_id(session, user, topic, rig)
 
             await link.stop()
-            if not await _until(lambda: reads.call_count > read_once, 30):
-                findings.append(f"the seam never read {user}'s credential again once nats-py had given its connection up")
+            if not await _until(lambda: _ended(caplog, user) > ended_once, 30):
+                findings.append(f"the seam never opened another client for {user} once nats-py had given its connection up")
             await link.start()
             if not await _settles(session, up=True, within=20):
                 findings.append(f"the seam did not connect {user} again once its bus was back")
@@ -434,85 +475,58 @@ async def _a_service_outlasts_a_bus_it_cannot_reach(broker: Broker, user: str, r
     return findings
 
 
-async def _a_credential_the_bus_ends_is_replaced_by_the_stores_current_one(
-    tools: Tools, home: Path, broker: Broker, store: SecretStoreDouble, rig: Client
-) -> list[str]:
-    """A credential good for a minute, issued again in the store meanwhile: the bus ends the session when the first runs
-    out, nats-py closes that client for good, and the seam connects again with the credential the store holds by then,
-    so the process publishes again with no restart."""
-    topic = LINEAGE_TOPIC
-    grants = Permissions(publish=(topic, f"$JS.API.STREAM.MSG.GET.{await _stream_of(rig, topic)}"), subscribe=(f"_INBOX_{REISSUED}.>",))
-    first = await asyncio.to_thread(issue, tools.nsc, home, f"{REISSUED}-first", grants.model_copy(update={"expiry": "1m"}))
-    again = await asyncio.to_thread(issue, tools.nsc, home, f"{REISSUED}-again", grants)
-    reads = store.hold(f"nats-user-{REISSUED}", {"jwt": first.jwt, "seed": first.seed()})
-    async with _connected_as(REISSUED, broker.url) as session:
-        findings = await _published_once_under_its_id(session, REISSUED, topic, rig)
-        read_once = reads.call_count
-        store.hold(f"nats-user-{REISSUED}", {"jwt": again.jwt, "seed": again.seed()})
-        if not await _until(lambda: reads.call_count > read_once, _EXPIRY_SECONDS + _EXPIRY_SLACK_SECONDS):
-            return [*findings, "the seam never read its credential again after the bus ended the session of the one that ran out"]
-        if not await _settles(session, up=True, within=20):
-            return [*findings, "the seam did not connect again with the credential the store held once its first had run out"]
-        return findings + await _published_once_under_its_id(session, REISSUED, topic, rig)
-
-
-async def _a_credential_with_no_inbox_of_its_own_is_not_connected_with(
-    tools: Tools, home: Path, broker: Broker, store: SecretStoreDouble, rig: Client
-) -> tuple[list[str], set[tuple[str, str]]]:
-    """A credential that grants its user no inbox of its own would connect, and every publish on it would wait out its
+async def _a_session_with_no_inbox_of_its_own_is_not_held(bus: Rig, rig: Client) -> tuple[list[str], set[tuple[str, str]]]:
+    """A session whose key grants its user no inbox of its own would connect, and every publish on it would wait out its
     timeout unacknowledged with the process answering as connected. The seam asks the bus for its inbox when it connects,
-    so it does not connect with such a credential, fails its publishes at once, and connects once the store holds one
-    that grants the inbox. Returns its findings and the subscription the broker must have refused.
+    so it does not hold such a session and fails its publishes at once; once the key's scope is changed in place to grant
+    the inbox (the same key), the seam's next session is held. Returns its findings and the subscription the broker must
+    have refused.
     """
     findings: list[str] = []
     topic, clock = LINEAGE_TOPIC, asyncio.get_running_loop().time
-    grants = Permissions(publish=(topic, f"$JS.API.STREAM.MSG.GET.{await _stream_of(rig, topic)}"), subscribe=(f"_INBOX_{UNHEARD}.>",))
-    shared = await asyncio.to_thread(issue, tools.nsc, home, f"{UNHEARD}-shared", grants.model_copy(update={"subscribe": ("_INBOX.>",)}))
-    own = await asyncio.to_thread(issue, tools.nsc, home, f"{UNHEARD}-own", grants)
-    reads = store.hold(f"nats-user-{UNHEARD}", {"jwt": shared.jwt, "seed": shared.seed()})
-    settings = BusSettings.model_validate({"RASK_BUS_URL": broker.url, "RASK_BUS_USER": UNHEARD})
-    async with Supervisor() as loops, bus_session(loops, settings) as session:
-        assert session is not None, "the seam opens no connection for a process named a bus"
-        if not await _until(lambda: reads.call_count >= 2, 20):
-            findings.append("the seam did not read its credential again after one the bus grants no inbox of its own")
+    granted = len([d for d in bus.signers.decisions() if (d.event, d.user) == ("bus_session_granted", UNHEARD)])
+    async with _session_of(bus.pod(UNHEARD).settings(bus.url, _LONG_SESSION)) as session:
+        if not await _until(lambda: len([d for d in bus.signers.decisions() if (d.event, d.user) == ("bus_session_granted", UNHEARD)]) >= granted + 2, 20):
+            findings.append("the seam did not ask for a session again after one whose key grants it no inbox of its own")
         if await _up(session):
-            findings.append("the seam answers as connected on a credential that would bring it no acknowledgement")
+            findings.append("the seam answers as connected on a session that would bring it no acknowledgement")
         asked = clock()
         try:
             await publish_event(session, _lane_event(probe=UNHEARD), topic=topic, timeout_seconds=30)
         except BusUnavailableError:
             if (waited := clock() - asked) > 1:
-                findings.append(f"a publish on a credential with no inbox of its own took {waited:.1f} s to fail")
+                findings.append(f"a publish on a session with no inbox of its own took {waited:.1f} s to fail")
         except TimeoutError:
-            findings.append("a publish on a credential with no inbox of its own waited out its timeout")
+            findings.append("a publish on a session with no inbox of its own waited out its timeout")
         else:
-            findings.append("a publish on a credential with no inbox of its own was taken as delivered")
-        store.hold(f"nats-user-{UNHEARD}", {"jwt": own.jwt, "seed": own.seed()})
-        if not await _settles(session, up=True, within=20):
-            findings.append("the seam did not connect once the store held a credential that grants its inbox")
+            findings.append("a publish on a session with no inbox of its own was taken as delivered")
+        own = bus.permissions(UNHEARD).model_copy(update={"subscribe": (f"_INBOX_{UNHEARD}.>",)})
+        findings += [f"the servers did not take {UNHEARD}'s key scoped to its own inbox: {unheard}" for unheard in await bus.scope(UNHEARD, own)]
+        if not await _settles(session, up=True, within=30):
+            findings.append("the seam did not connect once the key's scope granted its inbox")
         else:
             findings += await _published_once_under_its_id(session, UNHEARD, topic, rig)
-    return findings, {(shared.public_key, f"_INBOX_{UNHEARD}.>")}
+    return findings, {(UNHEARD, f"_INBOX_{UNHEARD}.>")}
 
 
 # --- the stream Job ----------------------------------------------------------------------------------------------------
 
 
-def _stream_job(tools: Tools, script: str, broker: Broker, mint_: Mint, home: Path, user: str = "admin") -> tuple[list[str], str]:
-    """One phase of the chart's stream Job, run as ``user`` against this broker; it must exit 0 within the runs Kubernetes
+def _stream_job(bus: Rig, script: str, home: Path) -> tuple[list[str], str]:
+    """One phase of the chart's stream Job, run as `admin` against this broker; it must exit 0 within the runs Kubernetes
     would give it: a failed run is run again (the chart's `backoffLimit`), since creating a stream copied to three
     servers can outlast the CLI's request deadline on a loaded host (measured 2026-11-09), and each phase is idempotent.
     Returns the findings and what the runs printed."""
     printed = ""
     for _ in range(_JOB_RUNS):
         try:
-            done = run_stream_job(tools.job_cli, script, mint_.credentials[user], home, 300.0)
+            done = bus.run_stream_job(script, home, 300.0)
         except subprocess.TimeoutExpired as exc:
-            return [f"the stream Job did not finish as {user} (its readiness loop retries a refused connection): {str(exc.stdout or '')[-600:]}"], printed
+            return [f"the stream Job did not finish as admin (its readiness loop retries a refused connection): {str(exc.stdout or '')[-600:]}"], printed
         printed += done.stdout + done.stderr
         if done.returncode == 0:
             return [], printed
-    return [f"the stream Job exited {done.returncode} as {user} on each of {_JOB_RUNS} runs: {(done.stdout + done.stderr)[-800:]}"], printed
+    return [f"the stream Job exited {done.returncode} as admin on each of {_JOB_RUNS} runs: {(done.stdout + done.stderr)[-800:]}"], printed
 
 
 class _Object(BaseModel):
@@ -551,7 +565,7 @@ def _prepared(home: Path, name: str, config: dict[str, Any]) -> str:
     return str(path)
 
 
-async def _a_bus_the_previous_revision_left(tools: Tools, broker: Broker, mint_: Mint, home: Path, rig: Client) -> list[str]:
+async def _a_bus_the_previous_revision_left(bus: Rig, home: Path, rig: Client) -> list[str]:
     """The bus as the revision before pull consumers left it, laid out with the nats CLI as the rig's superuser: lineage's
     push subscription `lineage-durable` having acknowledged the first `_ACKED_BEFORE` of `_HELD_BEFORE` events,
     maintenance's `maintenance-durable`, lineage's parking `DLQ/lineage-dlq-durable` and the catalog's mirror
@@ -587,7 +601,6 @@ async def _a_bus_the_previous_revision_left(tools: Tools, broker: Broker, mint_:
         "LINEAGE/lane-other-release": {**pulled, "durable_name": "lane-other-release", "metadata": {_MARK: "another"}},
     }
     findings: list[str] = []
-    rigged = mint_.credentials[RIG]
 
     async def laid_out(name: str, args: list[str], info: str) -> list[str]:
         """Add one stream or consumer with the nats CLI, and again when the bus did not answer in time: one copied to
@@ -595,7 +608,7 @@ async def _a_bus_the_previous_revision_left(tools: Tools, broker: Broker, mint_:
         the bus finished after the CLI gave up shows as the object being there."""
         printed = ""
         for _ in range(_JOB_RUNS):
-            done = await asyncio.to_thread(run_cli, tools.box_cli, args, rigged, broker.url, home)
+            done = await asyncio.to_thread(bus.run_cli, args, RIG, home)
             if done.returncode == 0 or "config" in (await rig.request(info) or {}):
                 return []
             printed = done.stdout + done.stderr
@@ -609,7 +622,7 @@ async def _a_bus_the_previous_revision_left(tools: Tools, broker: Broker, mint_:
         findings += await laid_out(name, args, f"$JS.API.CONSUMER.INFO.{stream}.{consumer}")
     if findings:
         return findings
-    catalog = await Client.connect(broker.url, mint_.credentials["catalog"], "previous-catalog", "_INBOX_catalog", answer_within=10.0)
+    catalog = await bus.client("catalog", answer_within=10.0)
     subscription = await rig.nc.subscribe("_INBOX.previous-lineage", queue="lineage")
     try:
         for n in range(_HELD_BEFORE):
@@ -689,12 +702,12 @@ class _IngestLane:
 class _Replicas:
     """Lineage replicas each pulling the ingest consumer on a connection of its own, as the bus user `lineage`."""
 
-    def __init__(self, stack: AsyncExitStack, url: str, lane: _IngestLane) -> None:
-        self._stack, self._url, self.lane = stack, url, lane
+    def __init__(self, stack: AsyncExitStack, bus: Rig, lane: _IngestLane) -> None:
+        self._stack, self._bus, self.lane = stack, bus, lane
         self.pulling: dict[str, asyncio.Task[None]] = {}
 
     async def start(self, replica: str, lane: Lane = _LANE) -> Bus:
-        session = await self._stack.enter_async_context(_connected_as("lineage", self._url))
+        session = await self._stack.enter_async_context(_connected_as(self._bus, "lineage"))
         self.pulling[replica] = asyncio.create_task(session.consume(lane, self.lane.handle_of(replica), park=self.lane.park), name=f"lane-{replica}")
         return session
 
@@ -725,7 +738,7 @@ async def _settled_ingest(rig: Client, sequence: int, within: float = 15.0) -> d
 
 
 async def _a_consumer_not_declared_yet_is_pulled_once_declared(
-    tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path, rig: Client, caplog: pytest.LogCaptureFixture
+    bus: Rig, docs: tuple[dict, ...], home: Path, rig: Client, caplog: pytest.LogCaptureFixture
 ) -> tuple[list[str], str]:
     """A lineage replica that starts before the stream Job has declared its consumer asks for it again, said once, and
     pulls it once the Job declares it there. The Job's first run on the previous revision's bus begins the consumer
@@ -734,14 +747,14 @@ async def _a_consumer_not_declared_yet_is_pulled_once_declared(
     findings: list[str] = []
     lane = _IngestLane()
     async with AsyncExitStack() as stack:
-        replicas = _Replicas(stack, broker.url, lane)
+        replicas = _Replicas(stack, bus, lane)
         await replicas.start("early")
         if not await _until(lambda: any(r.name == seam.__name__ and r.getMessage() == "bus_pull_failed" for r in caplog.records), 20):
             findings.append("a consumer the Job had not declared yet: the replica never said its pull failed")
         # Nothing marks a line that is not logged again, so the replica is left one more pull at the absent consumer
         # before the Job declares it: the seam pauses that long between a pull the bus refused and the next.
         await asyncio.sleep(seam._PULL_SECONDS + 2)
-        job, printed = await asyncio.to_thread(_stream_job, tools, stream_job_script(docs, broker.url), broker, mint_, home)
+        job, printed = await asyncio.to_thread(_stream_job, bus, stream_job_script(docs, bus.url), home)
         findings += [f"the declare phase, first run on the previous revision's bus: {finding}" for finding in job]
         wanted = list(range(_ACKED_BEFORE + 1, _HELD_BEFORE + 1))
         if not await _until(lambda: sorted(h.sequence for h in lane.handled) == wanted, 30):
@@ -777,11 +790,11 @@ def _the_first_run_made_what_the_previous_revision_lacked(printed: str, declared
     return []
 
 
-async def _a_second_declare_changes_nothing(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path, rig: Client) -> list[str]:
+async def _a_second_declare_changes_nothing(bus: Rig, docs: tuple[dict, ...], home: Path, rig: Client) -> list[str]:
     """The declare phase run again on a bus it declared converges every object to the config it already holds: no
     stream or consumer is made again or changed."""
     before = await _bus_objects(rig)
-    findings, _ = await asyncio.to_thread(_stream_job, tools, stream_job_script(docs, broker.url), broker, mint_, home)
+    findings, _ = await asyncio.to_thread(_stream_job, bus, stream_job_script(docs, bus.url), home)
     after = await _bus_objects(rig)
     changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
     return [f"the declare phase, second run: {finding}" for finding in findings] + (
@@ -789,12 +802,12 @@ async def _a_second_declare_changes_nothing(tools: Tools, docs: tuple[dict, ...]
     )
 
 
-async def _a_changed_lane_is_edited_in_place(tools: Tools, changed: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path, rig: Client) -> list[str]:
+async def _a_changed_lane_is_edited_in_place(bus: Rig, changed: tuple[dict, ...], home: Path, rig: Client) -> list[str]:
     """The declare phase on a render whose lane changed (`services.lineage.delivery.ackWaitSeconds`,
     `services.lineage.deliveriesInFlight`) edits the ingest consumer in place: the same consumer, its new ack wait and
     cap, its start kept, and nothing else changed."""
     before = await _bus_objects(rig)
-    findings, _ = await asyncio.to_thread(_stream_job, tools, stream_job_script(changed, broker.url), broker, mint_, home)
+    findings, _ = await asyncio.to_thread(_stream_job, bus, stream_job_script(changed, bus.url), home)
     after = await _bus_objects(rig)
     name = f"{INGEST_STREAM}/{INGEST_CONSUMER}"
     was, now = before.get(name), after.get(name)
@@ -807,32 +820,36 @@ async def _a_changed_lane_is_edited_in_place(tools: Tools, changed: tuple[dict, 
     return findings + ([f"the declare phase on a changed lane changed {others} besides {name}"] if others else [])
 
 
-async def _the_retire_phase_removes_nothing_it_could_not_read(
-    tools: Tools, retired: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path, rig: Client
-) -> list[str]:
+async def _the_retire_phase_removes_nothing_it_could_not_read(bus: Rig, retired: tuple[dict, ...], home: Path, rig: Client) -> tuple[list[str], set[str]]:
     """A retire run that can read no consumer fails and removes nothing: a consumer it could not read is not one it knows
-    to be this release's."""
-    before = await _bus_objects(rig)
+    to be this release's. For the run, `admin`'s scoped key is scoped in place without `$JS.API.CONSUMER.INFO`, so every
+    consumer read the Job makes fails as a read during a JetStream leader move does, while it may still list and delete
+    ([[LH-343]]); its scope is restored after. Returns the findings and the broker's log lines of that run, whose
+    consumer-read refusals are the ones it asked for."""
+    granted = bus.permissions("admin")
+    blind = granted.model_copy(update={"publish": tuple(s for s in granted.publish if not s.startswith("$JS.API.CONSUMER.INFO."))})
+    before, logged = await _bus_objects(rig), set(bus.broker.log_text().splitlines())
+    findings = [f"the servers did not take admin's key scoped without its consumer reads: {unheard}" for unheard in await bus.scope("admin", blind)]
     try:
-        done = await asyncio.to_thread(
-            run_stream_job, tools.job_cli, stream_job_script(retired, broker.url, retire=True), mint_.credentials[BLIND_ADMIN], home, 300.0
-        )
+        done = await asyncio.to_thread(bus.run_stream_job, stream_job_script(retired, bus.url, retire=True), home, 300.0)
     except subprocess.TimeoutExpired as exc:
-        return [f"the retire phase that can read no consumer did not finish: {str(exc.stdout or '')[-600:]}"]
+        findings.append(f"the retire phase that can read no consumer did not finish: {str(exc.stdout or '')[-600:]}")
+    else:
+        if done.returncode == 0:
+            findings.append(f"the retire phase exited 0 though it could read no consumer: {(done.stdout + done.stderr)[-600:]}")
+    finally:
+        findings += [f"the servers did not take admin's key scoped back to its row: {unheard}" for unheard in await bus.scope("admin", granted)]
     gone = sorted(before.keys() - (await _bus_objects(rig)).keys())
-    findings = [f"the retire phase removed {gone}, though it could read no consumer"] if gone else []
-    return findings + ([f"the retire phase exited 0 though it could read no consumer: {(done.stdout + done.stderr)[-600:]}"] if done.returncode == 0 else [])
+    return findings + ([f"the retire phase removed {gone}, though it could read no consumer"] if gone else []), set(bus.broker.log_text().splitlines()) - logged
 
 
-async def _the_retire_phase_removes_what_git_declares_no_longer(
-    tools: Tools, retired: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path, rig: Client
-) -> list[str]:
+async def _the_retire_phase_removes_what_git_declares_no_longer(bus: Rig, retired: tuple[dict, ...], home: Path, rig: Client) -> list[str]:
     """The retire phase on a render that no longer declares the commit lane (`maintenance.arrivalEnabled=false`) removes
     that consumer, which carries the release's mark, and the previous revision's three subscriptions and its mirror
     stream (the one-deploy migration), each under admin's own grants. It leaves the consumer that carries no mark and
     the one that carries another release's, and removes no other stream."""
     before = await _bus_objects(rig)
-    findings, _ = await asyncio.to_thread(_stream_job, tools, stream_job_script(retired, broker.url, retire=True), broker, mint_, home)
+    findings, _ = await asyncio.to_thread(_stream_job, bus, stream_job_script(retired, bus.url, retire=True), home)
     after = await _bus_objects(rig)
     removed = {"LINEAGE/maintenance-arrival", "LINEAGE/lineage-durable", "LINEAGE/maintenance-durable", "DLQ/lineage-dlq-durable", "CATALOG_CONTROL_BROADCAST"}
     if sorted(before.keys() - after.keys()) != sorted(removed):
@@ -852,12 +869,16 @@ async def _last_seqs(rig: Client) -> dict[str, int]:
     return {name: int(info.get("state", {}).get("last_seq", -1)) for name, info in infos.items()}
 
 
-async def _without_credential(url: str) -> list[str]:
-    """A client presenting nothing must be turned away at CONNECT, for the reason auth gives and no other."""
+async def _without_credential(bus: Rig) -> list[str]:
+    """A client presenting nothing over TLS is the servers' sentinel, which grants nothing: the signer refuses it a
+    session, and it is turned away at CONNECT, for the reason auth gives and no other."""
     try:
-        nc = await nats.connect(url, name="no-credential", allow_reconnect=False, max_reconnect_attempts=0, connect_timeout=3)
+        nc = await nats.connect(bus.url, name="no-credential", tls=bus.pki.trust(), allow_reconnect=False, max_reconnect_attempts=0, connect_timeout=5)
     except Exception as exc:  # noqa: BLE001 — which exception carries the refusal is the client's choice; the text is the server's
-        return [] if "authorization violation" in repr(exc).lower() else [f"a client with no credential failed to connect, but not on authorization: {exc!r}"]
+        if "authorization violation" not in repr(exc).lower():
+            return [f"a client with no credential failed to connect, but not on authorization: {exc!r}"]
+        said = [d.reason for d in bus.signers.decisions() if d.event == "bus_session_refused" and d.user == "no-credential"]
+        return [] if said == ["no token presented"] else [f"the signer refused the client with no credential with {said}, not once for presenting no token"]
     landed = []
     for subject in PUBLISHERS:
         try:
@@ -867,6 +888,40 @@ async def _without_credential(url: str) -> list[str]:
         landed.append(f"a client with no credential published {subject} (stream {ack.stream} seq {ack.seq})")
     await nc.close()
     return landed or ["a client with no credential connected"]
+
+
+async def _refused_a_session(bus: Rig, settings: BusSettings, reason: str) -> list[str]:
+    """The seam, handed ``settings``, is refused a session for ``reason`` (the signer's word) and holds no connection."""
+    refused = len([d for d in bus.signers.decisions() if d.reason == reason])
+    async with _session_of(settings) as session:
+        if not await _until(lambda: len([d for d in bus.signers.decisions() if d.reason == reason]) > refused, 20):
+            return [f"the signer never refused {settings.user} a session for {reason!r}: {bus.signers.decisions()[-3:]}"]
+        return [f"the seam connected as {settings.user} though the signer refused it for {reason!r}"] if await _up(session) else []
+
+
+async def _a_pod_presents_only_its_token(bus: Rig) -> list[str]:
+    """A pod's process is handed its token file and the bus's CA and nothing else, and connects over TLS verified against
+    that CA: with a CA the bus's certificate does not chain to it is never connected and the signer is never asked. A
+    token of one ServiceAccount asking for another user's name, and a token no TokenReview authenticates, are each
+    refused a session by the signer, the seam holding no connection; a client presenting nothing is refused too."""
+    findings: list[str] = []
+    stranger = Pki.make(bus.home / "stranger-pki")
+    pod = bus.pod("catalog")
+    shutil.copyfile(stranger.ca, pod.ca_file)
+    reviewed = bus.reviewer.reviewed(bus.table.users["catalog"].service_account)
+    async with _session_of(pod.settings(bus.url, _LONG_SESSION)) as session:
+        if await _settles(session, up=True, within=8):
+            findings.append("the seam connected to a bus whose certificate does not chain to the CA its pod was given")
+    if bus.reviewer.reviewed(bus.table.users["catalog"].service_account) != reviewed:
+        findings.append("a pod that could not verify the bus's certificate had its token reviewed: it was sent before the bus was verified")
+    lineage = bus.table.users["lineage"]
+    findings += await _refused_a_session(
+        bus, bus.pod("lineage", account=bus.table.users["catalog"].service_account).settings(bus.url, _LONG_SESSION), "service account is not that bus user's"
+    )
+    forged = bus.pod("lineage", account=lineage.service_account)
+    forged.token_file.write_text(f"forged-{secrets.token_urlsafe(16)}")
+    findings += await _refused_a_session(bus, forged.settings(bus.url, _LONG_SESSION), "token review: not authenticated")
+    return findings + await _without_credential(bus)
 
 
 async def _owner_publish(client: Client, user: str, subject: str) -> list[str]:
@@ -898,15 +953,16 @@ async def _permitted_inside_the_window(clients: dict[str, Client]) -> list[str]:
 
 
 async def _publish_matrix(
-    url: str, mint_: Mint, table: dict[str, Permissions], rig: Client
+    bus: Rig, table: dict[str, Permissions], rig: Client
 ) -> tuple[list[str], set[tuple[str, str]], set[tuple[str, str]], dict[str, Client]]:
     """Every table user against every data subject, and against every inbox another user holds alone: an owner's publish
-    is acked, anyone else's must not land, and nobody else may listen for the replies to a user's own connection.
+    is acked, anyone else's must not land, and nobody else may listen for the replies to a user's own connection. A
+    session user's probe presents a token of its ServiceAccount, so what it may do is its scoped key's scope.
 
     Returns the publishes and the subscriptions that must have been refused; the broker's log, read once it stops, says
     whether they were.
     """
-    clients = {user: await Client.connect(url, mint_.credentials[user], f"probe-{user}", table[user].inbox) for user in table}
+    clients = {user: await bus.client(user, name=f"probe-{user}") for user in table}
     findings: list[str] = []
     # The development store reads its stream's info before it publishes there (deploy/fixtures/rustfs).
     if await clients["object-store"].request("$JS.API.STREAM.INFO.STORE_EVENTS") is None:
@@ -1094,7 +1150,7 @@ async def _two_replicas_share_the_consumer_within_its_cap(publisher: Bus, replic
     )
 
 
-async def _a_replica_handles_no_more_at_once_than_its_lane_allows(url: str, publisher: Bus, rig: Client) -> list[str]:
+async def _a_replica_handles_no_more_at_once_than_its_lane_allows(bus: Rig, publisher: Bus, rig: Client) -> list[str]:
     """One replica whose lane handles one delivery at a time, on a consumer that hands out more: it holds the first and
     asks for no other until that one is settled."""
     lane = _IngestLane()
@@ -1104,7 +1160,7 @@ async def _a_replica_handles_no_more_at_once_than_its_lane_allows(url: str, publ
         lane.gates[event.id] = gate
     findings: list[str] = []
     async with AsyncExitStack() as stack:
-        replicas = _Replicas(stack, url, lane)
+        replicas = _Replicas(stack, bus, lane)
         await replicas.start("alone", _LANE.model_copy(update={"in_flight": 1}))
         for event in events:
             await publish_event(publisher, event, topic=LINEAGE_TOPIC, timeout_seconds=10)
@@ -1126,14 +1182,12 @@ async def _a_replica_handles_no_more_at_once_than_its_lane_allows(url: str, publ
     return findings
 
 
-async def _a_body_that_is_no_envelope_does_not_end_the_lane(
-    url: str, publisher: Bus, lane: _IngestLane, exporter: InMemorySpanExporter, catalog: Credential
-) -> list[str]:
+async def _a_body_that_is_no_envelope_does_not_end_the_lane(bus: Rig, publisher: Bus, lane: _IngestLane, exporter: InMemorySpanExporter) -> list[str]:
     """Each body of `_HOSTILE_BODIES` and each message of `_STATUS_HEADED`, published by a user the bus admits to the
     topic, is handed to a replica once, as a delivery that names no event and under a span that carries no message id,
     and the event behind them is handled: no body or header ends a lane, or is passed over as a word of the bus's."""
     before = len(exporter.get_finished_spans())
-    raw = await Client.connect(url, catalog, "nested-catalog", "_INBOX_catalog", answer_within=10.0)
+    raw = await bus.client("catalog", answer_within=10.0)
     try:
         stored = [(await raw.js.publish(LINEAGE_TOPIC, body, timeout=10)).seq for body in _HOSTILE_BODIES]
         stored += [(await raw.js.publish(LINEAGE_TOPIC, body, timeout=10, headers=headers)).seq for body, headers in _STATUS_HEADED]
@@ -1155,22 +1209,22 @@ async def _a_body_that_is_no_envelope_does_not_end_the_lane(
     return findings
 
 
-async def _lineages_ingest_lane(url: str, publisher: Bus, exporter: InMemorySpanExporter, rig: Client, catalog: Credential) -> list[str]:
+async def _lineages_ingest_lane(bus: Rig, publisher: Bus, exporter: InMemorySpanExporter, rig: Client) -> list[str]:
     """Lineage's replicas on the ingest consumer the stream Job declared, each pulling it on its own connection."""
     lane = _IngestLane()
     findings: list[str] = []
     async with AsyncExitStack() as stack:
-        replicas = _Replicas(stack, url, lane)
+        replicas = _Replicas(stack, bus, lane)
         await replicas.start("one")
         findings += await _a_delivery_is_handled_once_under_its_publishs_trace(publisher, lane, exporter, rig)
-        findings += await _a_body_that_is_no_envelope_does_not_end_the_lane(url, publisher, lane, exporter, catalog)
+        findings += await _a_body_that_is_no_envelope_does_not_end_the_lane(bus, publisher, lane, exporter)
         findings += await _a_delivery_asked_for_again_comes_back_after_the_delay_and_is_parked_on_its_last(publisher, lane, rig)
         await replicas.start("two")
         findings += await _a_handling_cut_hands_its_delivery_back_at_once(publisher, replicas, rig)
         await replicas.start("three")
         findings += await _two_replicas_share_the_consumer_within_its_cap(publisher, replicas, rig)
         await replicas.stop_all()
-    return findings + await _a_replica_handles_no_more_at_once_than_its_lane_allows(url, publisher, rig)
+    return findings + await _a_replica_handles_no_more_at_once_than_its_lane_allows(bus, publisher, rig)
 
 
 # --- the catalog's control lane ----------------------------------------------------------------------------------------
@@ -1204,13 +1258,13 @@ async def _control_consumers(rig: Client) -> set[str]:
     return set((await rig.request(f"$JS.API.CONSUMER.NAMES.{CONTROL_STREAM}") or {}).get("consumers") or [])
 
 
-async def _followers(stack: AsyncExitStack, url: str, followed: _Followed, replicas: tuple[str, ...], publisher: Bus) -> dict[str, asyncio.Task[None]]:
+async def _followers(stack: AsyncExitStack, bus: Rig, followed: _Followed, replicas: tuple[str, ...], publisher: Bus) -> dict[str, asyncio.Task[None]]:
     """``replicas`` following the control topic, each on a connection of its own as `catalog`, once each has begun: a
     follower begins after the stream's last message as its connection is up, so an event is published until each
     follower has been handed the latest one."""
     following = {}
     for replica in replicas:
-        session = await stack.enter_async_context(_connected_as("catalog", url))
+        session = await stack.enter_async_context(_connected_as(bus, "catalog"))
         following[replica] = asyncio.create_task(session.follow(CONTROL_STREAM, CONTROL_TOPIC, followed.handle_of(replica)), name=f"follow-{replica}")
     for n in range(30):
         (latest,) = await _publish_control(publisher, 1, f"begun-{n}")
@@ -1228,7 +1282,7 @@ async def _publish_control(publisher: Bus, count: int, leg: str) -> list[str]:
     return ids
 
 
-async def _the_catalogs_control_lane(url: str, publisher: Bus, catalog: Credential, rig: Client, caplog: pytest.LogCaptureFixture) -> list[str]:
+async def _the_catalogs_control_lane(bus: Rig, publisher: Bus, rig: Client, caplog: pytest.LogCaptureFixture) -> list[str]:
     """Two catalog replicas following the control topic: each is handed every event published after it began, once and
     in the stream's order, and none it began after; an event whose handling fails, or is cancelled from within while
     nobody asked the follower to stop, is said and the events behind it are handed on; a message whose publisher gave
@@ -1238,7 +1292,7 @@ async def _the_catalogs_control_lane(url: str, publisher: Bus, catalog: Credenti
     followed = _Followed()
     held = await _publish_control(publisher, 2, "held-before")
     async with AsyncExitStack() as stack:
-        following = await _followers(stack, url, followed, ("one", "two"), publisher)
+        following = await _followers(stack, bus, followed, ("one", "two"), publisher)
         began = {replica: len(followed.ids(replica)) for replica in following}
         if any(set(held) & set(followed.ids(replica)) for replica in following) or not all(began.values()):
             return [f"control lane: the followers began with {followed.handed}, having begun after {held}"]
@@ -1258,7 +1312,7 @@ async def _the_catalogs_control_lane(url: str, publisher: Bus, catalog: Credenti
             findings.append(
                 f"control lane, a handling that fails: it was said {len(unhandled)} times, not {len(followed.failing)} times by each of the {len(following)} followers"
             )
-        raw = await Client.connect(url, catalog, "burst-catalog", "_INBOX_catalog", answer_within=10.0)
+        raw = await bus.client("catalog", answer_within=10.0)
         try:
             for body, headers in _STATUS_HEADED:
                 await raw.js.publish(CONTROL_TOPIC, body, timeout=10, headers=headers)
@@ -1305,20 +1359,20 @@ async def _the_catalogs_control_lane(url: str, publisher: Bus, catalog: Credenti
 # --- an outage past nats-py's own reconnects ---------------------------------------------------------------------------
 
 
-async def _a_pulling_and_a_following_lane_deliver_again_after_an_outage(broker: Broker, held: dict[str, respx.Route], publisher: Bus, rig: Client) -> list[str]:
+async def _a_pulling_and_a_following_lane_deliver_again_after_an_outage(bus: Rig, publisher: Bus, rig: Client, caplog: pytest.LogCaptureFixture) -> list[str]:
     """A lineage replica pulling and a catalog replica following, each through a `Link` the test cuts for longer than
-    nats-py reconnects by itself: each connection closes for good and the seam's loop opens another with a fresh read of
-    the credential. Events published while they are cut off are handed on once the bus is back, on the rebuilt
-    connections and with no process started again: none lost, none handed twice, the followed ones in order."""
+    nats-py reconnects by itself: each connection closes for good and the seam's loop opens another, presenting its pod's
+    token again. Events published while they are cut off are handed on once the bus is back, on the rebuilt connections
+    and with no process started again: none lost, none handed twice, the followed ones in order."""
     lane, followed = _IngestLane(), _Followed()
-    links = {"lineage": Link(broker.port), "catalog": Link(broker.port)}
+    links = {"lineage": Link(bus.broker.port, bus.pki), "catalog": Link(bus.broker.port, bus.pki)}
     findings: list[str] = []
     for link in links.values():
         await link.start()
     try:
         async with AsyncExitStack() as stack:
-            puller = await stack.enter_async_context(_connected_as("lineage", links["lineage"].url))
-            follower = await stack.enter_async_context(_connected_as("catalog", links["catalog"].url))
+            puller = await stack.enter_async_context(_connected_as(bus, "lineage", links["lineage"].url))
+            follower = await stack.enter_async_context(_connected_as(bus, "catalog", links["catalog"].url))
             loops = [
                 asyncio.create_task(puller.consume(_LANE, lane.handle_of("puller"), park=lane.park)),
                 asyncio.create_task(follower.follow(CONTROL_STREAM, CONTROL_TOPIC, followed.handle_of("follower"))),
@@ -1326,12 +1380,11 @@ async def _a_pulling_and_a_following_lane_deliver_again_after_an_outage(broker: 
             ready = await _published(publisher, leg="before-the-outage")
             if not await _until(lambda: bool(lane.of(ready.id)), 15):
                 findings.append("outage: the pulling lane handled nothing before the outage")
-            reads = {user: held[user].call_count for user in links}
+            ended = {user: _ended(caplog, user) for user in links}
             for link in links.values():
                 await link.stop()
-            # A fresh read of the credential is the seam's loop opening a client after nats-py closed its own for good.
-            if not await _until(lambda: all(held[user].call_count > reads[user] for user in links), _OUTAGE_WITHIN):
-                findings.append(f"outage: the seam never opened a new client for {[u for u in links if held[u].call_count == reads[u]]}")
+            if not await _until(lambda: all(_ended(caplog, user) > ended[user] for user in links), _OUTAGE_WITHIN):
+                findings.append(f"outage: the seam never gave up a client for {[u for u in links if _ended(caplog, u) == ended[u]]}")
             pulled = [await _published(publisher, leg="in-the-outage", n=str(n)) for n in range(3)]
             controlled = await _publish_control(publisher, 3, "in-the-outage")
             for link in links.values():
@@ -1357,10 +1410,187 @@ async def _a_pulling_and_a_following_lane_deliver_again_after_an_outage(broker: 
     return findings
 
 
+# --- a session's length ------------------------------------------------------------------------------------------------
+
+
+def _granted(bus: Rig, user: str) -> int:
+    """How many sessions the signers granted ``user``."""
+    return sum(1 for d in bus.signers.decisions() if (d.event, d.user) == ("bus_session_granted", user))
+
+
+def _expired(log_text: str, user: str) -> int:
+    """How many of ``user``'s sessions the bus ended at their length: the error it sends the client as it ends one, as its
+    trace shows it."""
+    return sum(1 for line in log_text.splitlines() if f'/APP/user:{user}" - ->> [-ERR' in line and "User Authentication Expired" in line)
+
+
+async def _ids_kept(rig: Client, stream: str, since: int) -> Counter[str]:
+    """How many messages ``stream`` holds after sequence ``since`` under each message id."""
+    kept: Counter[str] = Counter()
+    for seq in range(since + 1, (await _last_seqs(rig)).get(stream, since) + 1):
+        message = ((await rig.request(f"$JS.API.STREAM.MSG.GET.{stream}", {"seq": seq})) or {}).get("message") or {}
+        kept[_headers(message).get("Nats-Msg-Id", "")] += 1
+    return kept
+
+
+class _Delivered(BaseModel):
+    """One event a leg published as its relay would: asked for, acknowledged (or not), and how many publishes it took."""
+
+    model_config = ConfigDict(frozen=True)
+
+    event_id: str
+    asked: float
+    acknowledged: float | None
+    publishes: int
+
+
+async def _published_until_taken(session: Bus, event: CloudEvent, within: float) -> _Delivered:
+    """Publish ``event`` again under its id until the bus takes it, as an outbox relay does, for up to ``within`` s."""
+    clock = asyncio.get_running_loop().time
+    asked, publishes = clock(), 0
+    while clock() - asked < within:
+        publishes += 1
+        try:
+            await publish_event(session, event, topic=LINEAGE_TOPIC, timeout_seconds=5)
+        except (BusUnavailableError, TimeoutError):
+            await asyncio.sleep(0.2)
+            continue
+        return _Delivered(event_id=event.id, asked=asked, acknowledged=clock(), publishes=publishes)
+    return _Delivered(event_id=event.id, asked=asked, acknowledged=None, publishes=publishes)
+
+
+async def _a_session_is_renewed_on_the_same_client(bus: Rig, rig: Client, caplog: pytest.LogCaptureFixture) -> tuple[list[str], dict[str, float]]:
+    """A lineage process on sessions of `_SHORT_SESSION` s, as its table and its pod are both told, publishing every
+    `_PUBLISH_EVERY` s and pulling its ingest consumer on the same connection for `_SESSION_LENGTHS` lengths and more: its
+    session is asked for again before each ends, the connection never closes for good, and the client is the one it
+    opened. Every event the bus acknowledged is stored once and handled once. Returns the findings and what it measured:
+    the longest a publish waited for its acknowledgement and the longest from an acknowledgement to the handling."""
+    findings: list[str] = []
+    lane, clock, user = _IngestLane(), asyncio.get_running_loop().time, "lineage"
+    since = (await _last_seqs(rig))[INGEST_STREAM]
+    delivered: list[_Delivered] = []
+    with bus.sessions_of(_SHORT_SESSION):
+        async with _connected_as(bus, user, session_seconds=_SHORT_SESSION) as session:
+            first, ended, granted, expired = session._client, _ended(caplog, user), _granted(bus, user), _expired(bus.broker.log_text(), user)
+            pulling = asyncio.create_task(session.consume(_LANE, lane.handle_of("renewing"), park=lane.park), name="lane-renewing")
+            began = clock()
+            while clock() - began < _SESSION_LENGTHS * _SHORT_SESSION + 5:
+                delivered.append(await _published_until_taken(session, _lane_event(leg="renewal", n=str(len(delivered))), 30))
+                await asyncio.sleep(_PUBLISH_EVERY)
+            taken = [d for d in delivered if d.acknowledged is not None]
+            if not await _until(lambda: all(lane.of(d.event_id) for d in taken), 45):
+                findings.append(f"renewal: {sum(1 for d in taken if not lane.of(d.event_id))} acknowledged events were never handled")
+            pulling.cancel()
+            await asyncio.gather(pulling, return_exceptions=True)
+            renewed = _granted(bus, user) - granted
+            if session._client is not first or _ended(caplog, user) != ended:
+                findings.append(f"renewal: the connection closed for good {_ended(caplog, user) - ended} times across {_SESSION_LENGTHS} session lengths")
+            if renewed < _SESSION_LENGTHS or _expired(bus.broker.log_text(), user) != expired:
+                findings.append(
+                    f"renewal: {renewed} sessions granted and {_expired(bus.broker.log_text(), user) - expired} ended by the bus, not one per renewal and none"
+                )
+    if lost := [d.event_id for d in delivered if d.acknowledged is None]:
+        findings.append(f"renewal: {len(lost)} events were never acknowledged in 30 s")
+    kept = await _ids_kept(rig, INGEST_STREAM, since)
+    if doubled := {d.event_id: kept[d.event_id] for d in taken if kept[d.event_id] != 1}:
+        findings.append(f"renewal: events stored other than once: {doubled}")
+    if handled := {d.event_id: len(lane.of(d.event_id)) for d in taken if len(lane.of(d.event_id)) != 1}:
+        findings.append(f"renewal: events handled other than once: {handled}")
+    measured = {
+        "renewals": float(renewed),
+        "events": float(len(delivered)),
+        "publishes_retried": float(sum(1 for d in taken if d.publishes > 1)),
+        "longest_publish_seconds": max(d.acknowledged - d.asked for d in taken if d.acknowledged is not None),
+        "longest_acknowledged_to_handled_seconds": max(lane.of(d.event_id)[0].at - (d.acknowledged or 0) for d in taken if lane.of(d.event_id)),
+        "handled_on_a_later_delivery": float(sum(1 for d in taken if any(h.attempt > 1 for h in lane.of(d.event_id)))),
+    }
+    return findings, measured
+
+
+async def _a_session_it_cannot_renew_is_opened_again(bus: Rig, rig: Client, caplog: pytest.LogCaptureFixture) -> tuple[list[str], dict[str, float]]:
+    """Twice, a catalog process on sessions of `_SHORT_SESSION` s loses its session while the signers are away for
+    `_SIGNERS_AWAY` s: once at its renewal (its pod told the session's true length, so its own renewal drops the session
+    the signers cannot replace), and once at the session's end (its pod told a longer one, as a pod not yet rolled after
+    the table shortened its sessions, so it never asks and the bus ends the session). Its publishes fail at once while it
+    has no session and stay staged; the kubelet rotates its token meanwhile. Once the signers answer again it opens a new
+    connection in-process, presenting the rotated token, and delivers what it staged, each event stored once. Returns the
+    findings and how long each stretch was without a connection after the signers were back."""
+    findings: list[str] = []
+    measured: dict[str, float] = {}
+    clock, user = asyncio.get_running_loop().time, "catalog"
+    account = bus.table.users[user].service_account
+    for stretch, told, lost_at in (("renewal", _SHORT_SESSION, _SHORT_SESSION - 5), ("end", _LONG_SESSION, _SHORT_SESSION)):
+        since = (await _last_seqs(rig))[INGEST_STREAM]
+        with bus.sessions_of(_SHORT_SESSION):
+            pod = bus.pod(user)
+            async with _connected_as(bus, user, session_seconds=told, pod=pod) as session:
+                began, ended, expired = clock(), _ended(caplog, user), _expired(bus.broker.log_text(), user)
+                await asyncio.sleep(max(0.0, began + lost_at - 3 - clock()))
+                await asyncio.to_thread(bus.signers.stop)
+                rotated = bus.reviewer.issue(account)
+                pod.token_file.write_text(rotated)
+                staged, away_until = [], clock() + _SIGNERS_AWAY
+                while clock() < away_until:
+                    event = _lane_event(leg=f"staged-at-the-{stretch}", n=str(len(staged)))
+                    try:
+                        await publish_event(session, event, topic=LINEAGE_TOPIC, timeout_seconds=5)
+                    except (BusUnavailableError, TimeoutError):
+                        staged.append(event)
+                    await asyncio.sleep(0.5)
+                if await _up(session):
+                    findings.append(f"the {stretch}: the process still had a connection after its session was lost with the signers away")
+                await asyncio.to_thread(bus.signers.start)
+                returned = clock()
+                if not await _settles(session, up=True, within=30):
+                    findings.append(f"the {stretch}: the process never connected again once the signers were back")
+                    continue
+                measured[f"{stretch}_without_a_connection_after_the_signers_returned_seconds"] = clock() - returned
+                if bus.reviewer.reviews_of(rotated) == 0:
+                    findings.append(f"the {stretch}: the new connection did not present the token the kubelet rotated in")
+                if stretch == "end" and (_expired(bus.broker.log_text(), user) == expired or _ended(caplog, user) == ended):
+                    findings.append("the end: the bus did not end the session at its length, or the seam did not open another client")
+                if not staged:
+                    findings.append(f"the {stretch}: no publish failed while the process had no connection")
+                late = [await _published_until_taken(session, event, 30) for event in staged]
+                if unsent := [d.event_id for d in late if d.acknowledged is None]:
+                    findings.append(f"the {stretch}: {len(unsent)} staged events were not delivered once the process connected again")
+        kept = await _ids_kept(rig, INGEST_STREAM, since)
+        if doubled := {event.id: kept[event.id] for event in staged if kept[event.id] != 1}:
+            findings.append(f"the {stretch}: staged events stored other than once: {doubled}")
+    return findings, measured
+
+
+async def _a_withdrawn_key_ends_its_users_sessions(bus: Rig, caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Withdrawing lineage's scoped key from the account (its new JWT pushed to every server) ends lineage's session, and
+    every session the signer goes on granting it is refused by the bus, whose account no longer holds the key; the
+    catalog's connection, signed by its own key, stays up on the same client and publishes."""
+    findings: list[str] = []
+    async with _connected_as(bus, "lineage") as withdrawn, _connected_as(bus, "catalog") as kept:
+        first, ended, granted = kept._client, _ended(caplog, "catalog"), _granted(bus, "lineage")
+        findings += [f"the servers did not take APP without lineage's key: {unheard}" for unheard in await bus.withdraw("lineage")]
+        if not await _settles(withdrawn, up=False, within=10):
+            findings.append("a withdrawn key: lineage's connection stayed up")
+        deadline = asyncio.get_running_loop().time() + 15
+        while asyncio.get_running_loop().time() < deadline:
+            if await _up(withdrawn):
+                findings.append("a withdrawn key: lineage connected again")
+                break
+            await asyncio.sleep(0.2)
+        if _granted(bus, "lineage") <= granted:
+            findings.append("a withdrawn key: the signer was never asked for lineage again, so its refusal was not the bus's")
+        if not await _up(kept) or kept._client is not first or _ended(caplog, "catalog") != ended:
+            findings.append("a withdrawn key: the catalog's connection, signed by its own key, did not stay up on its client")
+        try:
+            await publish_event(kept, _lane_event(probe="kept"), topic=LINEAGE_TOPIC, timeout_seconds=10)
+        except (BusUnavailableError, TimeoutError) as exc:
+            findings.append(f"a withdrawn key: the catalog could not publish: {type(exc).__name__}: {exc}")
+    return findings
+
+
 # --- what the run measured ---------------------------------------------------------------------------------------------
 
 
-def _monitor_reads(tools: Tools, broker: Broker, mint_: Mint, home: Path) -> list[str]:
+def _monitor_reads(bus: Rig, home: Path) -> list[str]:
     """nats-box's read-only operator view, as `monitor`: the streams, their consumers, one consumer, and the account."""
     findings: list[str] = []
     reads = (
@@ -1373,16 +1603,18 @@ def _monitor_reads(tools: Tools, broker: Broker, mint_: Mint, home: Path) -> lis
         ["account", "info"],
     )
     for args in reads:
-        done = run_cli(tools.box_cli, list(args), mint_.credentials["monitor"], broker.url, home)
+        done = bus.run_cli(list(args), "monitor", home)
         if done.returncode:
             findings.append(f"nats {' '.join(args)} as monitor exited {done.returncode}: {(done.stdout + done.stderr)[-400:]}")
     return findings
 
 
-def _refusals_against_the_expected(log_text: str, mint_: Mint, foreign: set[tuple[str, str]], overheard: set[tuple[str, str]]) -> list[str]:
+def _refusals_against_the_expected(log_text: str, bus: Rig, foreign: set[tuple[str, str]], overheard: set[tuple[str, str]], blind: set[str]) -> list[str]:
     """The broker must have refused every foreign publish, every subscription to another user's inbox and every call
-    outside a row, and nothing else: any other refusal is a missing allowance."""
-    seen = [(mint_.user_of(v.user_key), v) for v in violations(log_text)]
+    outside a row, and nothing else: any other refusal is a missing allowance. The consumer reads of the stream Job's run
+    under a key scoped without them (``blind``, its log lines) are the refusals that run asked for."""
+    asked = [v for line in blind for v in violations(line) if v.subject.startswith("$JS.API.CONSUMER.INFO.")]
+    seen = [(bus.mint.user_of(v.user_key), v) for v in violations("\n".join(line for line in log_text.splitlines() if line not in blind))]
     refused = {(user, v.subject) for user, v in seen if v.kind == "Publish"}
     unheard = {(user, v.subject) for user, v in seen if v.kind == "Subscription"}
     accepted = [f"{user} published {subject}, which only {sorted(PUBLISHERS.get(subject, ())) or 'nobody'} may" for user, subject in sorted(foreign - refused)]
@@ -1390,44 +1622,55 @@ def _refusals_against_the_expected(log_text: str, mint_: Mint, foreign: set[tupl
     unexpected = {
         f"the broker refused {user} {v.kind.lower()} on {v.subject} (connection {v.connection})"
         for user, v in seen
-        if (user, v.subject) not in foreign | overheard and not (user == BLIND_ADMIN and v.subject.startswith("$JS.API.CONSUMER.INFO."))
+        if (user, v.subject) not in foreign | overheard
     }
-    return accepted + sorted(unexpected)
+    asked_of = {bus.mint.user_of(v.user_key) for v in asked}
+    return (
+        accepted
+        + sorted(unexpected)
+        + ([] if asked and asked_of == {"admin"} else [f"the stream Job's blind run was refused its consumer reads as {asked_of}"])
+    )
 
 
-def _grants_no_call_used(log_text: str, mint_: Mint, table: dict[str, Permissions], refused: set[tuple[str, str]]) -> list[str]:
+def _grants_no_call_used(log_text: str, bus: Rig, table: dict[str, Permissions], refused: set[tuple[str, str]]) -> list[str]:
     """Each grant of a user this module drives that no call of that user used: a row broader than what its client does.
     A call the broker refused, which the run sent to prove a refusal, uses no grant."""
     calls = client_calls(log_text)
     findings: list[str] = []
     for user in sorted(DRIVEN & set(table)):
-        made = {call for call in calls.get(mint_.credentials[user].public_key, set()) if (user, call.subject) not in refused}
+        made = {call for call in calls.get(bus.mint.who(user), set()) if (user, call.subject) not in refused}
         log.info("%s called %s", user, sorted((call.kind, call.subject) for call in made))
         findings += [f"{user} holds {grant}, which no call of its own used" for grant in unused_grants(table[user], made)]
     return findings
 
 
+def _the_runs_secrets_stayed_with_the_rig(bus: Rig) -> list[str]:
+    """No file a pod was given and no environment its process ran in holds a seed, a NATS user JWT or (in the environment)
+    a token, and no signer logged a token. The in-process services ran in this process, so its environment is theirs."""
+    findings = secrets_in([bus.home / "pods"], {"the test process, where the services ran": dict(os.environ)}, bus.reviewer.tokens())
+    logged = bus.signers.log_text()
+    return findings + [f"a signer logged a token it was asked about ({token[:4]}…)" for token in bus.reviewer.tokens() if token in logged]
+
+
 @pytest.mark.asyncio
-async def test_nats_admits_each_client_only_to_its_own_subjects(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     tools = Tools.from_env(os.environ)
     values = _values()
-    docs = render(*DEFAULT_ARGS, "-f", str(values))
-    changed = render(*DEFAULT_ARGS, "-f", str(values), *_CHANGED_LANE)
-    retired = render(*DEFAULT_ARGS, "-f", str(values), *_CHANGED_LANE, *_ARRIVAL_RETIRED)
-    table = {user: Permissions(publish=tuple(sorted(pub)), subscribe=tuple(sorted(sub))) for user, (pub, sub) in nats_users(docs).items()}
+    docs = render(*DEFAULT_ARGS, "-f", str(values), *RENDER_ARGS)
+    changed = render(*DEFAULT_ARGS, "-f", str(values), *RENDER_ARGS, *_CHANGED_LANE)
+    retired = render(*DEFAULT_ARGS, "-f", str(values), *RENDER_ARGS, *_CHANGED_LANE, *_ARRIVAL_RETIRED)
+    unheard = Permissions(publish=(LINEAGE_TOPIC, f"$JS.API.STREAM.MSG.GET.{INGEST_STREAM}"), subscribe=("_INBOX.>",))
+    rig_grants = Permissions(publish=("$JS.API.>", "$JS.ACK.>"), subscribe=("_INBOX.>",))
+    bus = Rig(tools, docs, tmp_path / "rig", sessions={UNHEARD: unheard}, static={RIG: rig_grants}, session_seconds=_LONG_SESSION)
+    table = {**{user: row.permissions() for user, row in bus.rendered.users.items()}, **bus.rendered_static}
     assert table, f"the render with {values} issues no NATS user (the dev seed is absent)"
     services = _services(docs)
-    findings = [*_lane_runs_the_charts_images(tools, docs), *_table_names_every_client(table, services), *_data_grants_beyond_the_publishers(table)]
+    findings = [
+        *_lane_runs_the_charts_images(tools, docs),
+        *_table_names_every_client(table, services, set(bus.rendered.users)),
+        *_data_grants_beyond_the_publishers(table),
+    ]
     assert findings == [], "\n".join(findings)
-    blind = Permissions(publish=tuple(s for s in table["admin"].publish if not s.startswith("$JS.API.CONSUMER.INFO.")), subscribe=table["admin"].subscribe)
-    rig_grants = Permissions(publish=("$JS.API.>", "$JS.ACK.>"), subscribe=("_INBOX.>",))
-    mint_ = mint(tools.nsc, {**table, RIG: rig_grants, BLIND_ADMIN: blind}, tmp_path / "nsc")
-    # The store's stand-in holds each service's credential, as the dev seed writes it there; the rig's own HTTP calls, all
-    # to loopback, pass it by.
-    secret_store.router.route(host="127.0.0.1").pass_through()
-    held = {user: secret_store.hold(f"nats-user-{user}", {"jwt": mint_.credentials[user].jwt, "seed": mint_.credentials[user].seed()}) for user in services}
     monkeypatch.setattr(seam, "_RECONNECT_ATTEMPTS", _RECONNECT_ATTEMPTS)
     monkeypatch.setattr(seam, "_RECONNECT_WAIT_SECONDS", _RECONNECT_WAIT_SECONDS)
     monkeypatch.setattr(seam, "_PAUSE_SECONDS", _PAUSE_SECONDS)
@@ -1436,50 +1679,51 @@ async def test_nats_admits_each_client_only_to_its_own_subjects(
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     monkeypatch.setattr(seam, "tracer", provider.get_tracer(seam.__name__))
     caplog.set_level(logging.WARNING, logger=seam.__name__)
-    broker = Broker(tools.nats_server, mint_, tmp_path / "broker")
-    broker.start()
+    measured: dict[str, float] = {}
+    bus.start()
     try:
-        rig = await Client.connect(broker.url, mint_.credentials[RIG], RIG, answer_within=10.0)
-        admin = await Client.connect(broker.url, mint_.credentials["admin"], "admin", answer_within=10.0)
-        findings += await _a_bus_the_previous_revision_left(tools, broker, mint_, tmp_path, rig)
+        rig = await bus.client(RIG, answer_within=10.0)
+        findings += await _a_bus_the_previous_revision_left(bus, tmp_path, rig)
         assert findings == [], "\n".join(findings)
-        undeclared, printed = await _a_consumer_not_declared_yet_is_pulled_once_declared(tools, docs, broker, mint_, tmp_path, rig, caplog)
+        undeclared, printed = await _a_consumer_not_declared_yet_is_pulled_once_declared(bus, docs, tmp_path, rig, caplog)
         findings += undeclared
         findings += _the_first_run_made_what_the_previous_revision_lacked(printed, _declared(docs))
-        findings += await _a_second_declare_changes_nothing(tools, docs, broker, mint_, tmp_path, rig)
-        findings += await _a_changed_lane_is_edited_in_place(tools, changed, broker, mint_, tmp_path, rig)
-        findings += await _the_retire_phase_removes_nothing_it_could_not_read(tools, retired, broker, mint_, tmp_path, rig)
-        findings += await _the_retire_phase_removes_what_git_declares_no_longer(tools, retired, broker, mint_, tmp_path, rig)
+        findings += await _a_second_declare_changes_nothing(bus, docs, tmp_path, rig)
+        findings += await _a_changed_lane_is_edited_in_place(bus, changed, tmp_path, rig)
+        unreadable, blind = await _the_retire_phase_removes_nothing_it_could_not_read(bus, retired, tmp_path, rig)
+        findings += unreadable
+        findings += await _the_retire_phase_removes_what_git_declares_no_longer(bus, retired, tmp_path, rig)
         # The next reconcile's declare, with the subscription the lane's start was taken from gone: the lane keeps its place.
-        findings += [f"after the retire: {finding}" for finding in await _a_second_declare_changes_nothing(tools, retired, broker, mint_, tmp_path, rig)]
-        findings += await _without_credential(broker.url)
-        matrix, foreign, overheard, probes = await _publish_matrix(broker.url, mint_, table, rig)
+        findings += [f"after the retire: {finding}" for finding in await _a_second_declare_changes_nothing(bus, retired, tmp_path, rig)]
+        findings += await _a_pod_presents_only_its_token(bus)
+        matrix, foreign, overheard, probes = await _publish_matrix(bus, table, rig)
         findings += matrix
-        # Started here and judged last: its first credential takes a minute to run out.
-        reissued = asyncio.create_task(_a_credential_the_bus_ends_is_replaced_by_the_stores_current_one(tools, tmp_path / "nsc", broker, secret_store, rig))
-        try:
-            outside, refused = await _calls_outside_a_row_are_refused(probes)
-            findings += outside
-            foreign |= refused
-            async with _connected_as("catalog", broker.url) as publisher:
-                findings += await _lineages_ingest_lane(broker.url, publisher, exporter, rig, mint_.credentials["catalog"])
-                findings += await _the_catalogs_control_lane(broker.url, publisher, mint_.credentials["catalog"], rig, caplog)
-                findings += await _a_pulling_and_a_following_lane_deliver_again_after_an_outage(broker, held, publisher, rig)
-            findings += await asyncio.to_thread(_monitor_reads, tools, broker, mint_, tmp_path)
-            findings += await _services_publish_as_themselves(broker.url, services, rig, probes)
-            findings += await _a_service_outlasts_a_bus_it_cannot_reach(broker, services[0], held[services[0]], rig)
-            unheard, refused_inbox = await _a_credential_with_no_inbox_of_its_own_is_not_connected_with(tools, tmp_path / "nsc", broker, secret_store, rig)
-            findings += unheard
-            overheard |= refused_inbox
-            findings += await reissued
-        finally:
-            reissued.cancel()
-            await asyncio.gather(reissued, return_exceptions=True)
-        for client in [rig, admin, *probes.values()]:
+        outside, refused = await _calls_outside_a_row_are_refused(probes)
+        findings += outside
+        foreign |= refused
+        async with _connected_as(bus, "catalog") as publisher:
+            findings += await _lineages_ingest_lane(bus, publisher, exporter, rig)
+            findings += await _the_catalogs_control_lane(bus, publisher, rig, caplog)
+            findings += await _a_pulling_and_a_following_lane_deliver_again_after_an_outage(bus, publisher, rig, caplog)
+        findings += await asyncio.to_thread(_monitor_reads, bus, tmp_path)
+        findings += await _services_publish_as_themselves(bus, services, rig, probes)
+        findings += await _a_service_outlasts_a_bus_it_cannot_reach(bus, services[0], rig, caplog)
+        unheard_findings, refused_inbox = await _a_session_with_no_inbox_of_its_own_is_not_held(bus, rig)
+        findings += unheard_findings
+        overheard |= refused_inbox
+        renewed, renewal = await _a_session_is_renewed_on_the_same_client(bus, rig, caplog)
+        findings += renewed
+        lost, regained = await _a_session_it_cannot_renew_is_opened_again(bus, rig, caplog)
+        findings += lost
+        measured |= renewal | regained
+        findings += await _a_withdrawn_key_ends_its_users_sessions(bus, caplog)
+        for client in [rig, *probes.values()]:
             await client.close()
     finally:
-        broker.stop()
-    log_text = broker.log_text()
-    findings += _refusals_against_the_expected(log_text, mint_, foreign, overheard)
-    findings += _grants_no_call_used(log_text, mint_, table, foreign | overheard)
+        bus.stop()
+        log.warning("bus sessions measured: %s", json.dumps(measured, sort_keys=True))
+    log_text = bus.broker.log_text()
+    findings += _refusals_against_the_expected(log_text, bus, foreign, overheard, blind)
+    findings += _grants_no_call_used(log_text, bus, table, foreign | overheard)
+    findings += _the_runs_secrets_stayed_with_the_rig(bus)
     assert findings == [], "\n".join(findings)

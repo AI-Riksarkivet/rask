@@ -12,19 +12,34 @@ a subject in the stream's order, read by sequence with no consumer on the bus: w
 may take from another. Both wait for a connection, and take up again on the next one when
 the bus ends theirs.
 
-A PROCESS CONNECTS AS ITS OWN BUS USER. The chart names the user (``RASK_BUS_USER``), the store holds its credential
-as ``nats-user-<user>`` (a JWT and the seed that signs the server's nonce), and the process reads it under its own store
-login and hands it to nats-py in memory: no file and no environment variable ever holds the seed. The user's replies
-arrive under an inbox prefix of its own (``_INBOX_<user>``), which the permission table grants to it alone, so no other
-user reads a publish's acknowledgement. The seam asks the bus for that inbox as it connects and holds no connection
-the bus refuses it on: every publish on one would wait out its timeout unacknowledged.
+A PROCESS CONNECTS AS ITS OWN BUS USER AND HOLDS NO BUS CREDENTIAL. The chart names the user (``RASK_BUS_USER``) and
+the file the kubelet writes the pod's ServiceAccount token to, for the bus's audience (``RASK_BUS_TOKEN_FILE``). Each
+connection presents that token as it is on the file then, under the user's name, and the bus's signer answers with a
+session as that user, scoped to the user's row of the permission table and ended by the bus after
+``RASK_BUS_SESSION_SECONDS`` (ADR 26 of nats-architecture-and-design, auth callout; docs/architecture/bus-credentials-findings.md).
+The process holds no key and no seed: what it presents proves which pod it is, and lasts ten minutes. The token is a
+bearer credential, so a bus outside development is dialled over TLS (``tls://``), verified against the CA the chart
+names (``RASK_BUS_CA_FILE``) or the system's, AND THE HANDSHAKE COMES BEFORE THE SERVER'S GREETING. nats-py otherwise
+encrypts only when the greeting, which arrives unencrypted, asks it to, whatever the address says: a server that leaves
+the request out, or anyone on the path who removes it, is then sent the token in the clear (measured on nats-py 2.16.0,
+2026-11-15). A ``tls://`` bus therefore serves the handshake first (nats-server ``tls { handshake_first }``).
+
+The user's replies arrive under an inbox prefix of its own (``_INBOX_<user>``), which the permission table grants to it
+alone, so no other user reads a publish's acknowledgement. The seam asks the bus for that inbox as it connects and
+holds no connection the bus refuses it on: every publish on one would wait out its timeout unacknowledged.
+
+A SESSION IS ASKED FOR AGAIN BEFORE THE BUS ENDS IT. nats-py presents a token only as it connects, and closes for good
+when the bus ends a session (measured on nats-py 2.16.0 against nats-server 2.15.2), so the loop that keeps the
+connection has the client connect again shortly before the session's time is up: the same client, its subscriptions and
+the messages it holds unsettled carried over, under the token the file holds then. It asks late, since a signer that is
+away then costs the rest of the session.
 
 THE CONNECTION IS KEPT BY A LOOP, NEVER AWAITED BY A START (:meth:`Bus.keep_connected`). A service must start, serve and
 stage its events while the bus is away, so nothing waits on the first connection: a publish with no connection fails at
-once, and its event stays in its outbox for the relay. nats-py reconnects by itself through a short outage. Past that,
-or when the bus ends the session (a credential it revoked or let expire, measured on nats-py 2.16: the client then
-closes for good), the loop opens a new client with the credential the store holds at that moment. So a process is never
-left with a closed client and a healthy face, and a re-issued credential is taken up without a restart.
+once, and its event stays in its outbox for the relay. The one wait is for a session being asked for again: a publish
+that meets it waits up to ``_RENEWED_WITHIN_SECONDS`` for the connection to be back. nats-py reconnects by itself through a short outage. Past that,
+or when the bus ends the session (its time ran out unasked, or the signer's key for the user was withdrawn: the client
+then closes for good), the loop opens a new client. So a process is never left with a closed client and a healthy face.
 
 THE ENVELOPE IS THE BODY (`lakehouse.cloud_events`), in structured mode under ``application/cloudevents+json``, and its
 ``id`` is the message's ``Nats-Msg-Id``: inside the stream's duplicate window a second publish of one event is stored
@@ -49,13 +64,14 @@ import asyncio
 import json
 import logging
 import random
+import ssl
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager, suppress
-from functools import partial
+from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, Self
 
-from nats.aio.client import Client, RawCredentials
+from nats.aio.client import Client
 from nats.aio.msg import Msg
 from nats.errors import Error as NatsError
 from nats.js.api import Header, PubAck
@@ -68,7 +84,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from lakehouse.bus_delivery import Delivery, Handle, Lane, Outcome, Park, Settlement, being_cancelled, envelope_of, judged
 from lakehouse.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_refusal
 from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
-from lakehouse.governed.secrets import read_required_secret
 from lakehouse.lifecycle import closed_quietly
 
 
@@ -87,15 +102,27 @@ WARN_PAYLOAD_BYTES: Final = 64 * 1024
 #: refused, and none over it could have been delivered.
 MAX_PAYLOAD_BYTES: Final = 900 * 1024
 
-#: What the store holds a bus user's credential as, before the user's name, and the prefix of its reply subjects, likewise.
-_STORED_AS: Final = "nats-user-"
+#: The prefix of a bus user's reply subjects, before the user's name.
 _INBOX_PREFIX: Final = "_INBOX_"
+#: How long before a session's time is up it is asked for again: this share of its length, within these bounds. A
+#: connect the signer answers is back in milliseconds (measured 2026-11-15 on nats-server 2.15.2 with two signers: a
+#: publish that met a renewal waited 3.2 ms), so the margin is what a slow answer may use; a signer that is away gives
+#: none, and the bus then refuses the connect six seconds after it began.
+_RENEW_SHARE: Final = 0.1
+_RENEW_MARGIN_SECONDS: tuple[float, float] = (5.0, 30.0)
+#: How long after a session is asked for again a publish waits for the connection before it is called undelivered.
+_RENEWED_WITHIN_SECONDS: Final = 2.0
 
 #: How long nats-py reconnects by itself: this many attempts at each server, this far apart. Past them the client
-#: closes, and the loop opens another with a fresh read of the credential.
+#: closes, and the loop opens another.
 _RECONNECT_ATTEMPTS: Final = 10
 _RECONNECT_WAIT_SECONDS: Final = 2
 _CONNECT_TIMEOUT_SECONDS: Final = 2
+#: How long one opening of a connection may take, its attempts at every server and the asking for its inbox together. A
+#: peer that answers a TLS handshake with something else and keeps the socket open holds nats-py's connect for good
+#: (measured on nats-py 2.16.0, 2026-11-15: no error past the first, and no return), and the loop must come round to
+#: the next opening.
+_OPEN_WITHIN_SECONDS: Final = 45.0
 #: How often the client asks its server whether it is still there, and how many unanswered asks drop the connection: a
 #: node that dies without closing it is left within 30 s (nats-py's default, 120 s x 2, leaves it for four minutes).
 _PING_INTERVAL_SECONDS: Final = 10
@@ -112,7 +139,7 @@ _CLOSE_SECONDS: Final = 3
 #: What the faults told of an outage hold once its disconnection has been logged.
 _DISCONNECTED: Final = "disconnected"
 #: The bounds of the random wait between one failed connection and the next, so a release's replicas do not ask the
-#: store and the bus in step.
+#: bus in step.
 _PAUSE_SECONDS: tuple[float, float] = (2.0, 15.0)
 
 _MESSAGING: Final = {"messaging.system": "nats", "messaging.operation.name": "publish"}
@@ -135,7 +162,6 @@ _FOLLOW_EVERY_SECONDS: Final = 1.0
 #: JetStream's error code for a read by sequence that found no message (`JSNoMessageFoundErr`).
 _NO_MESSAGE_FOUND: Final = 10037
 
-type Ended = Callable[[], Awaitable[None]]
 #: What a followed subject's messages are handed to, one at a time.
 type Follow = Callable[[Delivery], Awaitable[None]]
 
@@ -151,62 +177,85 @@ class BusSettings(BaseSettings):
 
     #: One NATS URL, or several separated by commas. Empty for a stack with no bus.
     url: str = Field(default="", alias="RASK_BUS_URL")
-    #: The tail of a secret's name and one subject token: the store holds the credential as ``nats-user-<user>``, and
-    #: the inbox prefix is built from it.
+    #: One subject token: the name the connection asks the signer for a session under, and the tail of its inbox prefix.
     user: str = Field(default="", alias="RASK_BUS_USER", pattern=r"^([a-z0-9][a-z0-9-]{0,242})?$")
+    #: The file the kubelet keeps this pod's ServiceAccount token in, for the bus's audience.
+    token_file: str = Field(default="", alias="RASK_BUS_TOKEN_FILE")
+    #: The CA bundle the bus's certificate chains to; empty for the system's trust store.
+    ca_file: str = Field(default="", alias="RASK_BUS_CA_FILE")
+    #: How long the bus keeps a session before it ends it, as the chart tells the signer and the pod alike.
+    session_seconds: int = Field(default=300, ge=20, alias="RASK_BUS_SESSION_SECONDS")
 
     @model_validator(mode="after")
-    def _a_bus_names_its_user(self) -> Self:
+    def _a_bus_names_who_connects(self) -> Self:
         if self.url and not self.user:
             raise ValueError("RASK_BUS_URL names a bus and RASK_BUS_USER names no user to connect to it as")
+        if self.url and not self.token_file:
+            raise ValueError("RASK_BUS_URL names a bus and RASK_BUS_TOKEN_FILE names no token to present to it")
         return self
-
-    @property
-    def user_secret(self) -> str:
-        """The secret the store holds this user's credential as."""
-        return f"{_STORED_AS}{self.user}"
 
     @property
     def inbox_prefix(self) -> str:
         """The prefix of this user's reply subjects, which the permission table grants to it alone."""
         return f"{_INBOX_PREFIX}{self.user}"
 
+    @property
+    def renew_after_seconds(self) -> float:
+        """How long into a session it is asked for again: its length less a margin the next connect fits in."""
+        low, high = _RENEW_MARGIN_SECONDS
+        return self.session_seconds - min(max(self.session_seconds * _RENEW_SHARE, low), high)
 
-def read_credentials(secret: str, *, attempts: int | None = None) -> str:
-    """The credentials of the bus user the store holds as ``secret``, read now under this process's own store login: the
-    document nats-py takes in memory (:class:`nats.aio.client.RawCredentials`), its JWT and its seed each on the line
-    after its marker.
+    def token(self) -> str:
+        """The pod's token as the file holds it now. nats-py calls this as it builds each connect, so a token the
+        kubelet has replaced is the one presented.
+
+        Raises:
+            OSError: The file is not there to read.
+        """
+        return Path(self.token_file).read_text(encoding="utf-8").strip()
+
+    @property
+    def encrypted(self) -> bool:
+        """Whether every server of the bus is dialled over TLS, the handshake before anything else."""
+        return all(server.strip().startswith("tls://") for server in self.url.split(",") if server.strip())
+
+    def trust(self) -> ssl.SSLContext | None:
+        """What the bus's certificate is verified against: the named CA bundle as the file holds it now, or the
+        system's trust store for a ``tls://`` bus that names none; None for a bus dialled in plaintext.
+
+        Raises:
+            OSError: The bundle is not there to read.
+            ssl.SSLError: It holds no certificate.
+        """
+        if self.ca_file:
+            return ssl.create_default_context(cafile=self.ca_file)
+        return ssl.create_default_context() if self.encrypted else None
+
+
+class _Session(BaseModel):
+    """What one client tells the loop that keeps it."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    #: Set once the client has closed for good: its reconnects ran out, or the bus ended its session.
+    ended: asyncio.Event = Field(default_factory=asyncio.Event)
+    #: When the bus last took the client's connect, on the loop's clock: the start of the session it holds.
+    began: float = 0.0
+
+
+async def _open(settings: BusSettings, session: _Session, *, said: set[str]) -> Client:
+    """Connect to the bus as ``settings.user``, presenting this pod's token, and hold the connection once the bus has
+    granted it the user's own inbox.
 
     Args:
-        secret: The secret's name (``nats-user-<user>``).
-        attempts: How many reads to make before giving up; the store read's start budget when not given.
-
-    Raises:
-        RuntimeError: The store did not serve the credential, or holds it without its seed or its JWT.
-    """
-    read = read_required_secret if attempts is None else partial(read_required_secret, retries=attempts)
-    held = read(secret, require="seed")
-    if not held.get("jwt"):
-        raise RuntimeError(f"secret {secret!r} gave this process no 'jwt': failing closed (the secret store is the sole source)")
-    return (
-        f"-----BEGIN NATS USER JWT-----\n{held['jwt'].strip()}\n------END NATS USER JWT------\n\n"
-        f"-----BEGIN USER NKEY SEED-----\n{held['seed'].strip()}\n------END USER NKEY SEED------\n"
-    )
-
-
-async def _open(settings: BusSettings, credentials: str, *, ended: Ended, said: set[str]) -> Client:
-    """Connect to the bus as ``settings.user`` with ``credentials``, a credentials document held in memory, and hold the
-    connection once the bus has granted it the user's own inbox.
-
-    Args:
-        settings: Where the bus is and who connects.
-        credentials: The user's credentials document (:func:`read_credentials`).
-        ended: Called once the client has closed for good: its reconnects ran out, or the bus ended its session.
+        settings: Where the bus is, who connects and what it presents.
+        session: Told when the bus takes a connect of this client, and when the client has closed for good.
         said: The faults the outage in course has been told of, which this connection's own are added to.
 
     Raises:
-        nats.errors.Error: No server took the connection, or the bus refused the credential.
-        OSError: The same, from the socket.
+        nats.errors.Error: No server took the connection, or the bus refused the token.
+        OSError: The same, from the socket; or the token or the CA bundle is not there to read.
+        TimeoutError: The opening took longer than ``_OPEN_WITHIN_SECONDS``.
         BusUnavailableError: The bus took the connection and grants its user no inbox of its own.
     """
     unheard: list[str] = []
@@ -228,18 +277,25 @@ async def _open(settings: BusSettings, credentials: str, *, ended: Ended, said: 
             log.warning("bus_disconnected", extra={"user": settings.user})
 
     async def reconnected() -> None:
+        session.began = asyncio.get_running_loop().time()
         said.clear()
         log.info("bus_reconnected", extra={"user": settings.user})
+
+    async def ended() -> None:
+        session.ended.set()
 
     client = Client()
     async with AsyncExitStack() as failed:
         # A connect that fails, or is cancelled part-way, leaves its socket and tasks to be released here. Quietly: a
         # release that raised would be raised in place of what ended the connect, and a cancellation replaced that way
         # is one the loop never ends on.
-        failed.push_async_callback(closed_quietly, client.close)
+        failed.push_async_callback(_released, client)
+        opening = await failed.enter_async_context(asyncio.timeout(_OPEN_WITHIN_SECONDS))
         await client.connect(
             servers=[server.strip() for server in settings.url.split(",") if server.strip()],
-            user_credentials=RawCredentials(credentials),
+            token=settings.token,
+            tls=settings.trust(),
+            tls_handshake_first=settings.encrypted,
             name=settings.user,
             inbox_prefix=settings.inbox_prefix,
             allow_reconnect=True,
@@ -253,7 +309,7 @@ async def _open(settings: BusSettings, credentials: str, *, ended: Ended, said: 
             reconnected_cb=reconnected,
             closed_cb=ended,
         )
-        # THE USER'S OWN INBOX IS ASKED FOR BEFORE THE CONNECTION IS HELD. A credential issued before its row granted the
+        # THE USER'S OWN INBOX IS ASKED FOR BEFORE THE CONNECTION IS HELD. A session granted under a row without the
         # inbox connects all the same, and the process would answer as connected while each publish waited out its
         # timeout. TWO round trips: nats-py writes a flush's ping ahead of what its buffer still holds, so the first
         # pong comes back before the bus has read the subscription, and the second ping leaves after it (the broker's
@@ -264,8 +320,18 @@ async def _open(settings: BusSettings, credentials: str, *, ended: Ended, said: 
         await inbox.unsubscribe()
         if unheard:
             raise BusUnavailableError(f"the bus grants the user {settings.user} no inbox of its own ({settings.inbox_prefix}.>)")
+        opening.reschedule(None)
         failed.pop_all()
+    session.began = asyncio.get_running_loop().time()
     return client
+
+
+async def _released(client: Client) -> None:
+    """Let go of a client whose opening failed, within ``_CLOSE_SECONDS``: nats-py's close waits on the socket, which a
+    peer that keeps it open never lets it finish."""
+    with suppress(TimeoutError):
+        async with asyncio.timeout(_CLOSE_SECONDS):
+            await closed_quietly(client.close)
 
 
 class Bus:
@@ -280,17 +346,19 @@ class Bus:
         self._said: set[str] = set()
         #: Set while a connection is held, for the consumers waiting for one.
         self._held = asyncio.Event()
+        #: Until when, on the loop's clock, a publish waits for the connection a renewal is bringing back.
+        self._renewed_by = 0.0
 
     async def keep_connected(self) -> None:
-        """Hold a connection until cancelled: open one, and open another whenever the one held has closed for good.
+        """Hold a connection until cancelled: open one, ask for its session again before the bus ends it, and open
+        another whenever the one held has closed for good.
 
-        Each connection is opened with the credential the store holds at that moment, so a user the store's seed issued
-        again is connected as again without a restart. A bus or a store that does not answer is tried again after a
-        random pause, and reported once per outage.
+        Each connect presents the token the pod holds at that moment. A bus that does not answer, or refuses the
+        token, is tried again after a random pause, and reported once per outage.
         """
         while True:
-            ended = asyncio.Event()
-            client = await self._opened(ended)
+            session = _Session()
+            client = await self._opened(session)
             if client is None:
                 await asyncio.sleep(random.uniform(*_PAUSE_SECONDS))  # noqa: S311 — spreads replicas, guards nothing
                 continue
@@ -299,26 +367,39 @@ class Bus:
             self._said.clear()
             self._held.set()
             log.info("bus_connected", extra={"user": self._settings.user})
-            await ended.wait()
+            await self._kept(client, session)
             self._held.clear()
             log.warning("bus_connection_ended", extra={"user": self._settings.user})
 
-    async def _opened(self, ended: asyncio.Event) -> Client | None:
-        """A client connected as this process's user, or None when the store gave no credential or the bus no connection."""
+    async def _kept(self, client: Client, session: _Session) -> None:
+        """Wait until ``client`` has closed for good, having it connect again each time its session nears its end."""
+        clock = asyncio.get_running_loop()
+        while not session.ended.is_set():
+            due = session.began + self._settings.renew_after_seconds - clock.time()
+            if due > 0:
+                with suppress(TimeoutError):
+                    async with asyncio.timeout(due):
+                        await session.ended.wait()
+                continue
+            # Counted from now, so a connect the bus is slow to take is not asked for again on every turn; the bus
+            # taking it sets the session's true start.
+            session.began = clock.time()
+            # The client's own dropping of its connection is no disconnection to report.
+            self._said.add(_DISCONNECTED)
+            self._renewed_by = clock.time() + _RENEWED_WITHIN_SECONDS
+            log.info("bus_session_renewing", extra={"user": self._settings.user})
+            await client.force_reconnect()
 
-        async def end() -> None:
-            ended.set()
-
+    async def _opened(self, session: _Session) -> Client | None:
+        """A client connected as this process's user, or None when the bus gave no connection."""
         try:
-            credentials = await asyncio.to_thread(read_credentials, self._settings.user_secret, attempts=1)
-            return await _open(self._settings, credentials, ended=end, said=self._said)
-        except (NatsError, OSError, RuntimeError) as exc:
+            return await _open(self._settings, session, said=self._said)
+        except (NatsError, OSError) as exc:
             self._report(f"{type(exc).__name__}: {exc}"[:300])
         except Exception as exc:
-            # Whatever kept this attempt from a connection, the next attempt is the only way to one. A credential nats-py
-            # cannot sign with is raised outside its own errors (`nkeys`), and the loop this runs on must outlive it: a
-            # loop that ended would end the process over a bus the service is built to do without. Its type alone is
-            # said, since such a fault's text is not known to leave the credential out.
+            # Whatever kept this attempt from a connection, the next attempt is the only way to one, and the loop this
+            # runs on must outlive it: a loop that ended would end the process over a bus the service is built to do
+            # without. Its type alone is said, since such a fault's text is not known to leave the token out.
             self._report(type(exc).__name__)
         return None
 
@@ -346,6 +427,15 @@ class Bus:
         client = self._client
         return client if client is not None and client.is_connected else None
 
+    async def _up(self) -> Client | None:
+        """The connection when it is up. One that is asking for its session again is waited for, up to
+        ``_RENEWED_WITHIN_SECONDS`` from the asking: it is back in a round trip, and a publish that met it need not be
+        left to its relay. A connection that is away for any other reason is not waited for."""
+        clock = asyncio.get_running_loop()
+        while (client := self._client) is not None and client.is_reconnecting and clock.time() < self._renewed_by:
+            await asyncio.sleep(0.02)
+        return self._connected()
+
     async def send(self, topic: str, body: bytes, *, message_id: str, timeout: float) -> None:
         """Publish ``body`` on ``topic`` under ``message_id`` and wait up to ``timeout`` seconds for the stream's acknowledgement.
 
@@ -354,7 +444,7 @@ class Bus:
                 duplicate and holds another message under the id.
             TimeoutError: The bus did not acknowledge in time.
         """
-        client = self._connected()
+        client = await self._up()
         if client is None:
             # A reconnecting client would buffer the publish and send it later, after the caller had been told it failed.
             raise BusUnavailableError(f"this process is not connected to the bus: {message_id} was not published on {topic}")

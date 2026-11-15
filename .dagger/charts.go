@@ -200,7 +200,7 @@ func (m *Rask) Charts(
 // real deployment refuses (`templates/prod-credentials.yaml`, [[XC-164]]).
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string image.tags.lance-rest-catalog=1.2.3 --set-string image.tags.web-console=1.2.3 " +
-	"--set-string nats.url=nats://nats.example.com:4222 " +
+	"--set-string nats.url=tls://nats.example.com:4222 " +
 	"--set route.parentRefs[0].name=edge --set route.parentRefs[0].namespace=edge-system " +
 	"--set route.hostnames[0]=lance.example.com " +
 	"--set networkPolicy.apiServerEgress[0].to[0].ipBlock.cidr=192.0.2.10/32 " +

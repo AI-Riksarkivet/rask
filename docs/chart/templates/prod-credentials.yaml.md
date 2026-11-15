@@ -72,5 +72,12 @@ A PLATFORM ADDRESS THE CHART NAMES IS HTTPS ON A REAL DEPLOYMENT. Each hop is li
 A development estate reaches its fixtures over http (the store's node port, GreptimeDB, Marquez), so the rule follows
 `rask.isRealDeployment` rather than refusing every http address. The platform's secret store (`lance.platformStoreAddr`)
 and IdP (`lance.oidcIssuer`) are refused http by their own helpers on any render that names them. The release's own
-Services (the bundled OpenFGA, the issuer mirror) are in-cluster hops and not judged here; nor are the bus (`nats.url`)
-and the Postgres (`age.externalHost`), which speak their own protocols.
+Services (the bundled OpenFGA, the issuer mirror) are in-cluster hops and not judged here; nor is the Postgres
+(`age.externalHost`), which speaks its own protocol. The bus (`nats.url`) is judged by its own scheme, below.
+
+## `{{- range (splitList "," (.Values.nats.url | default "")) -}}`
+
+THE BUS IS `tls://` ON A REAL DEPLOYMENT. Every session user's pod (the catalog, lineage, the maintenance worker) and the
+stream Job present their projected ServiceAccount token to the bus in `CONNECT`, so over a plaintext bus whoever reads the
+path holds a bearer credential the bus's signer would accept until it expires (600 s). Each server of a comma-separated
+`nats.url` is checked, and one that is not `tls://` joins the one refusal. A private CA is named in `nats.ca.configMap`.

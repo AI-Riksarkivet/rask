@@ -23,11 +23,15 @@ import pytest
 from tests.unit.chart_render import DEFAULT_ARGS, bus_jobs, render
 
 
-#: The stand-in CLI: `stream info` finds the streams named in `exists/`, `stream edit` records the config it is handed and
+#: The stand-in CLI: it answers only a call presenting the token in `token` as the connection `admin`, as the signer
+#: admits the stream Job; `stream info` finds the streams named in `exists/`, `stream edit` records the config it is handed and
 #: refuses it when `refuse` holds a reason, a stream's info request answers the config it was last added or edited with, a
 #: consumer read finds none, and a consumer add is accepted.
 _NATS = r"""#!/bin/sh
-[ "$1" = "--server" ] && shift 2
+server=$2
+[ "$1 $3 $4" = "--server --connection-name admin" ] && shift 4 || { echo "nats: error: Authorization Violation" >&2; exit 1; }
+case "$server" in tls://*) [ "$1" = "--tlsfirst" ] && shift || { echo "nats: error: tls: first record does not look like a TLS handshake" >&2; exit 1; } ;; esac
+[ "$NATS_TOKEN" = "$(cat "$FAKE_NATS/token")" ] || { echo "nats: error: Authorization Violation" >&2; exit 1; }
 case "$1 $2" in
   "stream ls") exit 0 ;;
   "stream info") [ -f "$FAKE_NATS/exists/$3" ] || { echo "nats: error: stream not found" >&2; exit 1; }; exit 0 ;;
@@ -92,10 +96,11 @@ def test_an_existing_stream_is_edited_to_its_declared_config_or_the_job_fails_na
     (bin_dir / "nats").chmod(0o755)
     (state / "exists" / "LINEAGE").touch()
     (state / "refuse").write_text(refusal)
+    (state / "token").write_text("the stream Job's projected bus token")
 
     done = subprocess.run(
         ["sh", "-c", script],
-        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path), "FAKE_NATS": str(state)},
+        env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path), "FAKE_NATS": str(state), "BUS_TOKEN_FILE": str(state / "token")},
         capture_output=True,
         text=True,
         timeout=60,

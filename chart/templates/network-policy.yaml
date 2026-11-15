@@ -290,11 +290,12 @@ spec:
         - { protocol: TCP, port: {{ .Values.console.port }} }
 ---
 {{- end }}
-{{- $busPeers := append (include "lance.busClients" . | fromJsonArray) "nats-box" }}
+{{- $busPeers := concat (include "lance.busClients" . | fromJsonArray) (list "nats-box" "bus-signer") }}
 {{- if .Values.objectStore.enabled }}{{- $busPeers = append $busPeers "rustfs" }}{{- end }}
 # (3f) the development bus (the nats fixture's servers, when the bus runs in this namespace): its ONLY ingress, since NATS
 # is on the (3a) exclusion list. 4222 admits the bus's clients (`lance.busClients`, the same pods the platform's bus is
-# reached from: every service pod, which dials it itself, and the stream Job's two phases), the fixture's own nats-box, and with
+# reached from: every service pod, which dials it itself, and the stream Job's two phases), the fixture's own nats-box and
+# its stand-in signer (`bus-signer`, which answers the server's auth callout over its own connection), and with
 # the development object store its server, which publishes each change on `store.events`; 6222 admits the servers to each
 # other, whose cluster routes the three-node JetStream cluster runs on. 7422 (leafnodes) and the 8222 monitor stay closed:
 # no pod the release renders reads them. component=nats (not just name) so nats-box is not a target.

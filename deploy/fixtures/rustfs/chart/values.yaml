@@ -56,6 +56,9 @@ events:
   # -- The Secret holding the store's own bus credential (`nats.creds`): rask's, written by ESO from its dev store for
   # its bus user `object-store`. Mounted as a file, never env.
   busCredentials: rask-object-store-bus-creds
+  # -- The ConfigMap (key `ca.crt`) holding the CA the bus's certificate chains to, for a bus that serves TLS: the NATS
+  # fixture's `rask-nats-ca` in operator mode. Empty dials the bus in plaintext.
+  busCa: ""
   # -- How often every bucket's event configuration is put again: the longest a new bucket's writes go unpublished.
   schedule: "*/5 * * * *"
   # -- The S3 client that puts each bucket's event configuration (Docker Hub, `amazon/aws-cli:2.39.6`, its multi-arch

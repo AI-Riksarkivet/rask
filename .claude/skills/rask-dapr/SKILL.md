@@ -14,7 +14,7 @@ holds the render to it in the default, local and production modes.
 
 | Need | Met by | Where |
 | --- | --- | --- |
-| Publishing an event, taking a delivery | each service's own NATS JetStream connection as its own bus user | `lakehouse.bus` (`Bus.consume`, `Bus.follow`), settled by `lakehouse.bus_delivery.judged`; the permission table is `nats.auth.users` |
+| Publishing an event, taking a delivery | each service's own NATS JetStream connection as its own bus user, presenting its pod's ServiceAccount token over TLS (no stored bus credential; the bus's signer grants a session of at most `nats.auth.sessionSeconds`) | `lakehouse.bus` (`Bus.consume`, `Bus.follow`), settled by `lakehouse.bus_delivery.judged`; the permission table is `nats.auth.users`, rendered for the signer as ConfigMap `<release>-nats-permissions` |
 | Reading a secret | each service's own store login (Kubernetes auth as `<release>-<app>`, its pod's projected token) | `lakehouse.governed.secrets`; who reads what is `lance.storeReads` in `chart/templates/_helpers.tpl` |
 | A fixed estate tick (once a window, whatever the replica count) | a loop in each replica that claims the window with one conditional write of `_timers/<timer>.json` | `lakehouse.timers` |
 | A time per object (a table's next maintenance pass) | a NATS message schedule on the worker's own queue | ADR 0198 decisions 5 and 6, `maintenance/services/queue.py` |
@@ -38,7 +38,9 @@ its own Components, Configurations and Resiliency; the product chart renders non
 that subscribes to the lakehouse's events through a sidecar takes the CloudEvent the lakehouse publishes in structured
 mode (`application/cloudevents+json`, its `id` as the message's `Nats-Msg-Id`, `lakehouse.cloud_events`); a client
 that reads the lakehouse's secret store does so under its own role, declared from its own values in
-`openbao.externalReaders`.
+`openbao.externalReaders`. A client's bus user is a row of `nats.auth.users` from its own values: with a `serviceAccount`
+it is a session user that presents that ServiceAccount's token (audience `nats.auth.audience`) to the bus and holds no
+credential; without one it is a static user whose `nats-user-<app>` the client reads under its own store role.
 
 Two things are the client's to ship, and the lakehouse's to keep stable:
 

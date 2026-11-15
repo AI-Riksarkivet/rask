@@ -242,15 +242,52 @@ Measured against the live cluster 2026-08-31.
 
 ## `{{- define "lance.busEnv" -}}`
 
-The bus as a service's process reaches it (list $root <user>): its address (`RASK_BUS_URL`) and the bus user the process
-connects as (`RASK_BUS_USER`), for the catalog and lineage, and for maintenance's own user while the worker publishes
-events. Each service publishes its events, and takes its deliveries, on a connection of its own as that user
-(`lakehouse.bus`, [[XC-199]]), with the credential it reads from the store under its own login (`nats-user-<user>`,
-granted by `lance.storeReads`) and replies arriving under `_INBOX_<user>`, which `nats.auth.users` grants to that user
-alone. The render refuses a user the table does not declare: the store would hold no credential for it, and the process
-would never connect. A name and an address, never a credential. A connection the bus ends is opened again in the
-process, with the credential the store holds then, and each consumer loop pulls again on the new one; no pod restarts
-for it.
+The bus as a service's process reaches it (list $root <user>): its address (`RASK_BUS_URL`), the bus user the process
+connects as (`RASK_BUS_USER`), the file its pod's bus token is projected to (`RASK_BUS_TOKEN_FILE`), the longest a
+session lives (`RASK_BUS_SESSION_SECONDS`, `nats.auth.sessionSeconds`) and, with `nats.ca.configMap`, the CA file
+(`RASK_BUS_CA_FILE`). Given for the catalog and lineage, and for maintenance's own user while the worker publishes events;
+with an empty user only the token, session and CA values are given, which is how the maintenance worker's queue
+connection (`maintenance-worker`) gets its own. Each service publishes its events, and takes its deliveries, on a
+connection of its own as that user (`lakehouse.bus`, [[XC-199]]), presenting the pod's token (`lance.busIdentity` mounts
+it) and holding no bus credential, with replies arriving under `_INBOX_<user>`, which `nats.auth.users` grants to that
+user alone. The render refuses a user the table does not declare, a user that is not a session user (`lance.busSessionUser`:
+it has no ServiceAccount, so it has no token to present), and a user whose row grants no inbox of its own, since the bus
+would hand it no acknowledgement of a publish. Names, addresses and file paths, never a credential. A session the bus
+ends is asked for again by the process on the same connection, and a connection the bus closes is opened again, each
+consumer loop pulling again on the new one; no pod restarts for it.
+
+## `{{- define "lance.busSessionUser" -}}`
+
+The refusal a service's bus user must pass: the table declares it (`lance.natsUsers`) and it is a session user
+(`lance.natsSessions`). A row without a ServiceAccount is a static user and fails here, since its pod would have no
+ServiceAccount token to present.
+
+## `{{- define "lance.busAudience" -}}`
+
+`nats.auth.audience`, the audience of the token each session user's pod projects and the signer's TokenReview names. It must
+be a lowercase name (`^[a-z0-9]([-a-z0-9]{0,52}[a-z0-9])?$`) because it names the pod's token volume and path.
+
+## `{{- define "lance.busTokenFile" -}}/var/run/secrets/rask/identity/{{ include "lance.busAudience" . }}/token{{- end -}}`
+
+Where `lance.identityTokens` mounts the projected token for the bus audience: `RASK_BUS_TOKEN_FILE`.
+
+## `{{- define "lance.busSessionSeconds" -}}`
+
+`nats.auth.sessionSeconds`, validated: a number, at least 60 (a pod's refresh never races its own connect) and below 600,
+the lifetime of the token a pod presents (`lance.identityTokens`, `expirationSeconds: 600`), so a refresh never presents
+a token about to lapse. It is rendered into the permission table and into each pod.
+
+## `{{- define "lance.busCaConfigMap" -}}`
+
+`nats.ca.configMap`, the ConfigMap in the release's namespace holding the CA bundle the bus's certificate chains to, or
+empty for the system's trust store. Setting it requires `nats.ca.key`.
+
+## `{{- define "lance.busIdentity" -}}`
+
+What a session user's pod mounts to reach the bus: the projected token for the bus audience (`lance.identityTokens`) and,
+with `nats.ca.configMap`, that ConfigMap's bundle read-only at `/etc/rask/bus-ca/ca.crt` (`lance.busCaFile`). The same
+include renders the volumes and the mounts (`list $root "volumes"` and `"mounts"`) of the catalog, lineage, the maintenance
+worker and the stream Job.
 
 ## `{{- define "lance.natsTable" -}}`
 
@@ -261,6 +298,22 @@ switches is issued under both ([[LH-559]]).
 ## `{{- define "lance.natsUsers" -}}`
 
 The NATS users of lance.natsTable, sorted and validated: a name becomes a secret name and a shell word, a subject a single-quoted shell word.
+
+## `{{- define "lance.natsSessions" -}}`
+
+The session users of the table, as JSON {user: ServiceAccount}. The lakehouse's own users take their ServiceAccount from
+the chart (`lance.natsOwnAccounts`: `catalog`, `lineage`, `maintenance` and `maintenance-worker`, and `admin` for the
+stream Job), and a values row supplying `serviceAccount` for one of them is refused. A client's row is a session user when
+it names a `serviceAccount` of the release's namespace; the render refuses one that is not a name, or that is a
+ServiceAccount the lakehouse renders or `default`, since a session user's token names an identity of its own.
+`lance.natsSessionUsers` lists them and `lance.natsStaticUsers` lists the rest (`monitor`, `object-store`, a client's row
+without a ServiceAccount).
+
+## `{{- define "lance.natsPermissions" -}}`
+
+The JSON the signer reads from ConfigMap `<release>-nats-permissions` (`nats-permissions.yaml`): the audience, the longest
+session in seconds, and for each session user its ServiceAccount as `system:serviceaccount:<namespace>:<name>` with its
+publish and subscribe lists. Only session users are listed.
 
 ## `{{- define "lance.busConsumers" -}}`
 
@@ -307,7 +360,7 @@ Whether the dev OpenBao issues the NATS credentials: the dev store this chart se
 
 ## `{{- define "lance.natsFiles" -}}`
 
-The Secrets ESO writes for the NATS pods that read their credential from a file, as JSON {target: [store secrets]}. This chart's ExternalSecrets write `nats-admin-creds`; the ESO policy grants all of them, because the NATS fixture's ExternalSecrets read the other two (nats-box's `monitor` creds, the server's operator config and route credential) from the dev store.
+The Secrets ESO writes for the NATS pods that read a credential from a file, as JSON {target: [store secrets]}, present only where the dev store issues the bus (`lance.natsMints`): `nats-box-creds` (the static user `nats-user-monitor`), `nats-auth` (`nats-server` and `nats-route`), `nats-signer` (`nats-callout`, the stand-in signer's keys) and, with `objectStore.enabled`, `object-store-bus-creds` (the static user `nats-user-object-store`). This chart's ExternalSecrets write only `object-store-bus-creds`; the ESO policy grants all of them, because the NATS fixture's ExternalSecrets read the others from the dev store. No session user's credential is in this list: it has none.
 
 ## `{{- define "lance.otelEnv" -}}`
 
@@ -819,30 +872,26 @@ there would let lineage read every secret in the store: refused at the render, b
 ## `{{- define "lance.storeReads" -}}`
 
 WHO READS WHAT FROM THE STORE, ONE TABLE ([[XC-165]], ADR 0169): app id -> {its ServiceAccount, `api` (the secrets its
-code reads under its own login to the store, `lakehouse.governed.secrets`: its bus users among them, for the
-connections it publishes and pulls on)}. Every place that decides a read is a view of it: its store role's policy grants
+code reads under its own login to the store, `lakehouse.governed.secrets`)}. Every place that decides a read is a view of it: its store role's policy grants
 `api` (the seed's `policy-<release>-<app>.json`), its environment names that role (`lance.secretStoreEnv`), and an app
 with no read gets no store at all (`lance.secretScopes`). Two lists that agreed when written are how a read gets
 refused at runtime, or granted past its owner, so nothing restates it.
 
-Every service is named its bus (`lance.busEnv`, [[XC-199]]), so each reads its own bus user for its own connection,
-and maintenance's worker reads its work-queue user (`nats-user-maintenance-worker`) wherever `maintenance.enabled`
-renders it. Pinned by `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
+No lakehouse service reads a bus credential: each is a session user that presents its ServiceAccount token to the bus
+(`lance.busEnv`, [[XC-199]]), so no `nats-user-<app>` is in any app's `api` list. Pinned by
+`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 
 The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
 (a signer's public key), never a copy, so a rotation writes one place. The verifier
 lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
-`signing.doors`), and a signer reads its own pair. A service's read of its bus user restates when its process opens a
-connection: the catalog and lineage each (each publishes or pulls on its own), maintenance's
-worker for its queue user, and maintenance's own user when the worker emits (`maintenance.lineageEmit`,
-`maintenance.controlEmit`). Maintenance's worker reads the signers' public keys when its write-event lane checks
+`signing.doors`), and a signer reads its own pair. Maintenance's worker reads the signers' public keys when its write-event lane checks
 signatures (`auth.enabled`, `maintenance.arrivalEnabled`, and `signing.doors` not `off`).
 
 A CLIENT'S READER (`openbao.externalReaders`) is an ALLOWLIST, because the store grants by name and a client's values are
-not the lakehouse's to trust: `<app>` may hold only `nats-user-<app>`, names of its own (`<app>-<name>`) and
+not the lakehouse's to trust: `<app>` may hold only `nats-user-<app>` (refused when `<app>` is a session user, which holds no such secret), names of its own (`<app>-<name>`) and
 `signing-public-<name>`. Each refusal closes one way a client's values could reach a name another identity holds: an
 app id that is no lowercase name, a lakehouse app (enabled or not), one whose own names would cover a family the store issues
-per identity (`nats-user-<name>`, for every user of the issued table including a client's own, `signing-key-<name>`,
+per identity (`nats-user-<name>`, for every static user of the issued table including a client's own, `signing-key-<name>`,
 `signing-public-<name>`), one whose own names would cover a name ESO, a lakehouse identity or the dev store's seed holds
 (the seed-only names are listed here, beside the ones the table and `lance.esoReads` derive) or another reader's id, a
 role `<release>-<app>` equal to ESO's (`externalSecrets.role`, whose policy and role keys the identities ConfigMap
@@ -941,7 +990,7 @@ Usage: {{ splitList "," (include "lance.secretScopes" .) }}
 
 ## `{{- define "lance.secretReaderComponents" -}}`
 
-The component labels of the pods that dial the store (each service logs in to it), for the NetworkPolicies that admit them, and for the bus's client list (`lance.busClients`): the scope above, where an app's id is its pods' component label,
+The component labels of the pods that dial the store (each service logs in to it), for the NetworkPolicies that admit them: the scope above, where an app's id is its pods' component label,
 and `maintenance-worker`, the label of maintenance's worker pods, which run under maintenance's app id (ADR 0198's
 amendment of 2026-11-10) and so appear in no scope of their own. A policy that ranged the scope alone would lock the
 worker out of the store, and its start would fail closed. The worker's label is named only where its Deployment is

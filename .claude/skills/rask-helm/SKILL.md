@@ -114,7 +114,7 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   `console.enabled`: Deployment, Service and HTTPRoute `rask-console`, ServiceAccount `rask-sa-console` with no token
   mounted, ConfigMap `rask-console-config`), and `make k3s-up` installs it with the lakehouse. **No client is a
   prerequisite** (XC-183), and this repository deploys none: a client's release reaches rask by reference, and what
-  the lakehouse must admit for it (a bus user in `nats.auth.users`, store reads in `openbao.externalReaders`, a store
+  the lakehouse must admit for it (a bus user in `nats.auth.users`, with a `serviceAccount` to be a session user; store reads in `openbao.externalReaders`, a store
   peer in `networkPolicy.objectStoreExtraFrom`) comes from the client's own repository with `-f`. A client's roles
   on the catalog are grants to its own identity: made at the catalog's access doors ([[LH-563]]), or, on a project or
   warehouse, declared in `catalog.declared.grants` from the client's own values (§ 5). Every client lives outside this repository
@@ -305,7 +305,7 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   `bao` in the seed container is that administrator (`$HOME/.vault-token`); run an operator's `bao` there.
   The pod is the openbao fixture's ([[XC-131]]); its `mint` and `seed` run the scripts rask renders into
   `<release>-openbao-seed`, and a change rask makes to them reaches the running seed in place (it mints a pair for any
-  new identity, issues the bus users again under the same root, and seeds again), so a rask upgrade replaces no store. A change to the fixture's own pod spec does replace it, and the replacement
+  new identity, issues the static bus users and the scoped signing keys again under the same root, and seeds again), so a rask upgrade replaces no store. A change to the fixture's own pod spec does replace it, and the replacement
   honours no token the old store issued, a surge included. A service asks the store about its own token every 15 s and
   logs in again on the pass that finds it refused, so it reads again within a pass of the replacement admitting it
   ([[XC-199]], `lakehouse.governed.secrets`; pinned offline by
@@ -323,28 +323,39 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   and lineage after a non-surge replacement rather than waiting (docs/OPERATORS.md § 6). values.yaml
   `signing:` holds the tiers, the rotation and the store-loss cases, and the platform's store is
   refused at render until `signing.provisioned` attests that an operator created them.
-- **The dev OpenBao also mints the NATS trust root** ([[XC-078]]): the seed carries `nats-root` and `nats-route` over a
-  surge and keeps or issues every `nats-user-<user>` of the issued table (`lance.natsTable`: values.yaml `nats.auth.users`
-  plus each `nats.auth.flagged` grant whose flag is on) before its readiness key. A declared user keeps its key pair and
-  JWT across reseeds while its grants match; a changed grant is reissued under the same key and the old JWT revoked
-  `--at` its issue time; a stored user whose seed is unreadable gets a fresh pair and its old key revoked `--at` the
-  stored JWT's `iat` (`NATS user <u>: replaced`), the seed stopping only on a stored JWT that names no key; and the APP
-  account's `*` revocation sits one second before the oldest JWT a declared user
-  holds, taking back whatever earlier reseeds left (measured 2026-11-07, nats-server 2.14.2, nsc 2.15.0, nats.go 1.39.1:
-  a client holding a revoked JWT is closed after two refused reconnects, the state a service's own connection opens
-  again from, in-process, with the credential the store holds then, `lakehouse.bus`; the maintenance worker ends its
-  process instead and starts again on it, `TaskQueue.connect`); a non-dev store waits for
-  `nats.auth.provisioned`. **The seed revokes every APP bus user the release stops declaring**: it lists the
-  `nats-user-*` secrets in its own store and the one behind the Service, reads each undeclared user's key out of its
-  stored JWT, adds it to the APP account's revocations (carried to the bus in `resolver_preload`), and deletes its
-  secret from this pod's store, since a user JWT carries no expiry and the account that signed it stays trusted. A
-  revocation reaches the running bus at its config reload: measured 2026-11-07 on nats-server 2.14.2 with nsc 2.15.0, a
-  SIGHUP (the bus fixture's reloader sends one when its auth Secret changes) applies it and drops a connected revoked
-  client, and a restart keeps it. **The seed also deletes every store role and policy the release no longer renders**
-  (all but `default` and `root`), so an identity git stopped declaring logs in to nothing. The NATS fixture's ExternalSecrets read `nats-server`, `nats-route` and `nats-user-monitor` through
-  rask's SecretStore, so the dev store's ESO policy grants them (`lance.natsFiles`). With the fixture's `nats.auth.server` on, a
-  non-surge OpenBao replacement mints a new root that the operator-mode server refuses until the NATS pods restart, which
-  empties JetStream: docs/OPERATORS.md § 7 has the switch-over and recovery.
+- **The dev OpenBao also mints the NATS trust root** ([[XC-078]], [[XC-199]]): the seed carries `nats-root` and `nats-route`
+  over a surge and, under that root, converges the bus for the issued table (`lance.natsTable`: values.yaml
+  `nats.auth.users` plus each `nats.auth.flagged` grant whose flag is on) before its readiness key. **A session user**
+  (a row with a ServiceAccount: the lakehouse's own, `lance.natsSessions`) gets NO credential and no `nats-user-<user>`:
+  its pod presents its projected ServiceAccount token (`nats.auth.audience`) as the connection's token, and the bus's
+  signer answers with a session of at most `nats.auth.sessionSeconds` signed by that user's scoped signing key in APP (one
+  per session user, role = the user's name, scope = the row; a changed row re-scopes the same key, a user that stops being
+  a session user loses its key and its sessions). The seed also converges the AUTH account (the signer's user `callout`, a
+  bearer `sentinel` denied every subject as the server's `default_sentinel`, one signing key for the signer's answers, the
+  callout naming `callout` and APP) and writes `nats-callout` (the signer's keys, read by ESO alone) and
+  `nats-server` with the `default_sentinel`. **A static user** (a row with no ServiceAccount: `monitor`, `object-store`, a
+  client's) keeps or is issued `nats-user-<user>`: it keeps its key pair and JWT across reseeds while its grants match; a
+  changed grant is reissued under the same key and the old JWT revoked `--at` its issue time; a stored user whose seed is
+  unreadable gets a fresh pair and its old key revoked `--at` the stored JWT's `iat` (`NATS user <u>: replaced`), the
+  seed stopping only on a stored JWT that names no key; and the APP account's `*` revocation sits one second before the
+  oldest JWT a static user holds, taking back whatever earlier reseeds left (measured 2026-11-07, nats-server 2.14.2, nsc
+  2.15.0, nats.go 1.39.1: a client holding a revoked JWT is closed after two refused reconnects, the state a service's own
+  connection opens again from, in-process, `lakehouse.bus`; the maintenance worker ends its process instead and starts
+  again, `TaskQueue.connect`); a non-dev store waits for `nats.auth.provisioned`, which attests that the platform's signer
+  admits each session user of `<release>-nats-permissions` and that each static user's secret exists. **The seed revokes
+  every static APP bus user the release stops issuing**: it lists the `nats-user-*` secrets in its own store and the one
+  behind the Service, reads each unissued user's key out of its stored JWT, adds it to the APP account's revocations
+  (carried to the bus in `resolver_preload`), and deletes its secret from this pod's store, since a user JWT carries no
+  expiry and the account that signed it stays trusted. A revocation reaches the running bus at its config reload:
+  measured 2026-11-07 on nats-server 2.14.2 with nsc 2.15.0, a SIGHUP (the bus fixture's reloader sends one when its auth
+  Secret changes) applies it and drops a connected revoked client, and a restart keeps it. **The seed also deletes every
+  store role and policy the release no longer renders** (all but `default` and `root`), so an identity git stopped
+  declaring logs in to nothing. The NATS fixture's ExternalSecrets read `nats-server`, `nats-route`, `nats-callout` and
+  `nats-user-monitor` through rask's SecretStore, so the dev store's ESO policy grants them (`lance.natsFiles`). The
+  chart renders the session users' table as ConfigMap `<release>-nats-permissions` (`permissions.json`) in every mode,
+  for the signer. With the fixture's `nats.auth.server` on, a non-surge OpenBao replacement mints a new root that the
+  operator-mode server refuses until the NATS pods restart, which empties JetStream: docs/OPERATORS.md § 7 has the
+  switch-over and recovery.
 - **The chart renders no secret store; production names the platform's** ([[XC-149]]): `openbao.enabled` means the
   estate uses the dev OpenBao fixture (a real deployment refuses it), and off it the render requires `openbao.externalAddr`
   (https only: every service logs in to it with its pod's ServiceAccount token; a store under a
@@ -365,14 +376,14 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   ([[XC-199]], `lakehouse.governed.secrets`): Kubernetes auth as its role `<release>-<app>`, which `lance.secretStoreEnv`
   names in its environment (`RASK_SECRET_STORE_ADDR`, `_ROLE`, `_AUTH_MOUNT`, `_KV_MOUNT`, `_TOKEN_FILE`), with a token
   projected for `openbao.identity.audience` into its own container. Each role's
-  policy reads exactly that app's reads, its own bus user `nats-user-<app>` among them (`lance.storeIdentity` mounts the token). The roles and policies render in every
+  policy reads exactly that app's reads (`lance.storeIdentity` mounts the token); a lakehouse app's list holds no bus credential, since its bus connection presents its ServiceAccount token (`lance.busIdentity`). The roles and policies render in every
   mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform
   store's operator creates. A new secret a service reads is a row there, or the store's policy refuses its read.
   A client reads through the same table from `openbao.externalReaders` (`<app>: {serviceAccount, secrets}`,
   supplied from the client's own repository, empty by default), and it is an allowlist: an external reader `<app>` may hold only
-  `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`. The render refuses an app id that is
+  `nats-user-<app>` (refused when `<app>` is a session user, which has no such secret), names of its own (`<app>-<name>`) and `signing-public-<name>`. The render refuses an app id that is
   no lowercase name, a lakehouse app (catalog, lineage, maintenance, even disabled), one whose own names would cover a family
-  the store issues per identity (`nats-user-<name>` for every user of the issued table, a client's own included,
+  the store issues per identity (`nats-user-<name>` for every static user of the issued table, a client's own included,
   `signing-key-<name>`, `signing-public-<name>`), a name ESO, a lakehouse identity or the dev store's seed holds
   (`nats-root`, `object-store-root`, `postgres`, `*-s3`, …) or another reader's id, or one whose role
   `<release>-<app>` is ESO's (`externalSecrets.role`); a ServiceAccount that is no name, one the lakehouse renders

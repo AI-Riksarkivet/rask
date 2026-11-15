@@ -66,18 +66,14 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "signing-key-rask-sa-maintenance": {"store": frozenset({"maintenance"})},
     "signing-public-rask-sa-catalog": {"store": _CATALOG_VERIFIERS},
     "signing-public-rask-sa-maintenance": {"store": _MAINTENANCE_VERIFIERS},
-    "nats-user-catalog": {"store": frozenset({"catalog"})},
-    "nats-user-lineage": {"store": frozenset({"lineage"})},
-    "nats-user-maintenance": {"store": frozenset({"maintenance"})},
-    # The work queue's own bus user (ADR 0198 decision 5): the worker reads it under its own login, as it reads its
-    # signing key.
-    "nats-user-maintenance-worker": {"store": frozenset({"maintenance"})},
-    "nats-user-admin": {"store": frozenset({"eso"}), "pods": frozenset({"Job/rask-nats-stream-r1", "Job/rask-nats-stream-retire-r1"})},
     "nats-user-monitor": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-nats-box"})},
     # The development store's own bus user: it publishes each write and delete of a rask bucket on store.events.
     "nats-user-object-store": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-rustfs"})},
     "nats-server": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},
     "nats-route": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},
+    # The bus's stand-in signer's own: its user, its answers' key and each session user's scoped key. No lakehouse pod
+    # reads a bus credential: each presents its ServiceAccount token to the bus.
+    "nats-callout": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-nats-signer"})},
     "postgres": {"store": frozenset({"eso"}), "pods": _POSTGRES_CLIENTS},
     "object-store-root": {
         "store": frozenset({"eso"}),
@@ -479,14 +475,23 @@ _CLIENT_READER: Final = '{"client":{"serviceAccount":"rask-sa-client","secrets":
         pytest.param("client", "default", '["client-x"]', 'client.serviceAccount: "default" is the lakehouse\'s own', id="the-shared-default-account"),
         pytest.param("client", "rask-sa-catalog", '["client-x"]', 'client.serviceAccount: "rask-sa-catalog" is the lakehouse\'s own', id="a-lakehouse-account"),
         pytest.param("client", "rask-sa-client", "[]", "client.secrets names no secret", id="no-secret"),
+        pytest.param(
+            "session",
+            "sa-session",
+            '["nats-user-session"]',
+            "openbao.externalReaders.session.secrets: session is a session user, which presents its ServiceAccount token to the bus and holds no nats-user-session",
+            id="a-session-users-bus-credential",
+        ),
     ],
 )
 def test_a_client_store_reader_is_refused_any_read_that_is_not_its_own(app: str, service_account: str, secrets: str, refusal: str) -> None:
     reader = f'openbao.externalReaders={{"{app}":{{"serviceAccount":"{service_account}","secrets":{secrets}}}}}'
     #: A client's bus user, as a client's own values add it to the issued table.
     bus_user = 'nats.auth.users.foo-bar={"publish":["dlq.foo-bar"],"subscribe":["_INBOX.>"]}'
+    #: A client's session user, which presents its own ServiceAccount's token to the bus.
+    session_user = 'nats.auth.users.session={"serviceAccount":"sa-session","publish":["dlq.session"],"subscribe":["_INBOX_session.>"]}'
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        render_chart_text(REPO / "chart", *DEV_ESTATE, "--set-json", bus_user, "--set-json", reader)
+        render_chart_text(REPO / "chart", *DEV_ESTATE, "--set-json", bus_user, "--set-json", session_user, "--set-json", reader)
     assert refusal in refused.value.stderr
 
 

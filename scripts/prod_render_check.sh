@@ -46,7 +46,7 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set signing.provisioned=true
         --set nats.auth.provisioned=true
         --set objectStore.events.provisioned=true
-        --set-string nats.url=nats://nats.example.com:4222
+        --set-string nats.url=tls://nats.example.com:4222
         --set-string observability.export.endpoint=https://otlp.example.com:4318/v1/otlp
         --set-string auth.fgaApiUrl=https://fga.example.com
         --set-string age.externalHost=pg.example.com
@@ -108,7 +108,7 @@ grep -q 'https://vault.example.com:8200' "$OUT" || fail "prod's secret readers m
 # 3. The NATS bus is the platform's ([[XC-129]]): prod renders no server, only rask's stream Job against nats.url.
 awk '/^kind: StatefulSet$/{f=1} f&&/^  name: /{print $2; f=0}' "$OUT" | grep -qx 'rask-nats' \
   && fail "prod must not render a NATS server (it is a prerequisite)"
-grep -q 'S="nats://nats.example.com:4222"' "$OUT" || fail "prod's stream Job must provision rask's streams on the bus nats.url names"
+grep -q 'S="tls://nats.example.com:4222"' "$OUT" || fail "prod's stream Job must provision rask's streams on the bus nats.url names"
 # And the CloudNativePG operator ([[XC-130]]): prod runs no operator image and renders none of its webhooks.
 grep -qE "image: \"?ghcr.io/cloudnative-pg/cloudnative-pg:" "$OUT" \
   && fail "prod must not run a CloudNativePG operator (it is a prerequisite)"

@@ -144,7 +144,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.busClients" -}}
-{{- toJson (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "nats-stream") -}}
+{{- $clients := list "catalog" "lineage" -}}
+{{- if .Values.maintenance.enabled }}{{- $clients = append $clients "maintenance-worker" }}{{- end -}}
+{{- range $app, $_ := (.Values.openbao.externalReaders | default dict) }}{{- $clients = append $clients $app }}{{- end -}}
+{{- toJson (append ($clients | uniq) "nats-stream") -}}
 {{- end -}}
 
 {{- define "lance.platformEgress" -}}
@@ -153,6 +156,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $api := include "lance.tokenVerifiers" . | fromJsonArray -}}
 {{- if and $v.auth.issuerMirror.enabled (or $v.openfga.enabled $v.objectStore.enabled) }}{{- $api = append $api "issuer-mirror" }}{{- end -}}
 {{- if $v.openbao.enabled }}{{- $api = append $api "openbao" }}{{- end -}}
+{{- if not (include "rask.isRealDeployment" .) }}{{- $api = append $api "bus-signer" }}{{- end -}}
 {{- if $v.observability.enabled }}{{- $api = append $api "otel-collector" }}{{- end -}}
 {{- if $v.backups.volumeSnapshot.enabled }}{{- $api = append $api "object-store-backup" }}{{- end -}}
 {{- if $api -}}
@@ -212,11 +216,67 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.busEnv" -}}
 {{- $root := index . 0 -}}{{- $user := index . 1 -}}
-{{- if not (has $user (include "lance.natsUsers" $root | splitList " ")) }}{{- fail (printf "the service %s connects to the bus as the user %s, which nats.auth.users does not declare" $user $user) }}{{- end -}}
+{{- if $user -}}
+{{- include "lance.busSessionUser" (list $root $user) -}}
 {{- $inbox := printf "_INBOX_%s.>" $user -}}
-{{- if not (has $inbox ((get (include "lance.natsTable" $root | fromJson) $user).subscribe | default list)) }}{{- fail (printf "nats.auth.users.%s grants the service %s no inbox of its own (%s): the bus would hand it no acknowledgement of a publish, so every event it publishes would stay staged" $user $user $inbox) }}{{- end -}}
+{{- if not (has $inbox ((get (include "lance.natsTable" $root | fromJson) $user).subscribe | default list)) }}{{- fail (printf "nats.auth.users.%s grants the service %s no inbox of its own (%s): the bus would hand it no acknowledgement of a publish, so every event it publishes would stay staged" $user $user $inbox) }}{{- end }}
 - { name: RASK_BUS_URL, value: {{ include "lance.natsUrl" $root | quote }} }
 - { name: RASK_BUS_USER, value: {{ $user | quote }} }
+{{- end }}
+- { name: RASK_BUS_TOKEN_FILE, value: {{ include "lance.busTokenFile" $root | quote }} }
+- { name: RASK_BUS_SESSION_SECONDS, value: {{ include "lance.busSessionSeconds" $root | quote }} }
+{{- if include "lance.busCaConfigMap" $root }}
+- { name: RASK_BUS_CA_FILE, value: {{ include "lance.busCaFile" $root | quote }} }
+{{- end }}
+{{- end -}}
+
+{{- define "lance.busSessionUser" -}}
+{{- $root := index . 0 -}}{{- $user := index . 1 -}}
+{{- if not (has $user (include "lance.natsUsers" $root | splitList " ")) }}{{- fail (printf "the service %s connects to the bus as the user %s, which nats.auth.users does not declare" $user $user) }}{{- end -}}
+{{- if not (hasKey (include "lance.natsSessions" $root | fromJson) $user) }}{{- fail (printf "the service %s connects to the bus as the user %s, which is no session user: it holds no bus credential, only its ServiceAccount token" $user $user) }}{{- end -}}
+{{- end -}}
+
+{{- define "lance.busAudience" -}}
+{{- $aud := required "nats.auth.audience names the audience each session user's pod projects its bus token for, which the signer's TokenReview names" .Values.nats.auth.audience | toString -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,52}[a-z0-9])?$" $aud) }}{{- fail (printf "nats.auth.audience %q must be a lowercase name: it names the pod's token volume" $aud) }}{{- end -}}
+{{- $aud -}}
+{{- end -}}
+
+{{- define "lance.busTokenFile" -}}/var/run/secrets/rask/identity/{{ include "lance.busAudience" . }}/token{{- end -}}
+
+{{- define "lance.busSessionSeconds" -}}
+{{- $s := required "nats.auth.sessionSeconds is the longest a bus session lives" .Values.nats.auth.sessionSeconds -}}
+{{- if not (kindIs "float64" $s) }}{{- if not (kindIs "int64" $s) }}{{- if not (kindIs "int" $s) }}{{- fail (printf "nats.auth.sessionSeconds is %v: a number of seconds" $s) }}{{- end }}{{- end }}{{- end -}}
+{{- $n := int $s -}}
+{{- if lt $n 60 }}{{- fail (printf "nats.auth.sessionSeconds is %d: a session lives at least a minute, so a pod's refresh never races its own connect" $n) }}{{- end -}}
+{{- if ge $n 600 }}{{- fail (printf "nats.auth.sessionSeconds is %d: a session must end before the 600 s token the pod presents for it, or a refresh would present a token about to lapse" $n) }}{{- end -}}
+{{- $n -}}
+{{- end -}}
+
+{{- define "lance.busCaFile" -}}/etc/rask/bus-ca/ca.crt{{- end -}}
+
+{{- define "lance.busCaConfigMap" -}}
+{{- $ca := .Values.nats.ca | default dict -}}
+{{- if $ca.configMap -}}
+{{- if not $ca.key }}{{- fail "nats.ca.key names the key of the ConfigMap nats.ca.configMap that holds the bus's CA bundle" }}{{- end -}}
+{{- $ca.configMap -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.busIdentity" -}}
+{{- $root := index . 0 -}}{{- $part := index . 1 -}}
+{{- $ca := include "lance.busCaConfigMap" $root -}}
+{{- include "lance.identityTokens" (list $part (include "lance.busAudience" $root)) }}
+{{- if $ca }}
+{{- if eq $part "mounts" }}
+- { name: bus-ca, mountPath: {{ dir (include "lance.busCaFile" $root) }}, readOnly: true }
+{{- else }}
+- name: bus-ca
+  configMap:
+    name: {{ $ca | quote }}
+    items: [{ key: {{ $root.Values.nats.ca.key | quote }}, path: {{ base (include "lance.busCaFile" $root) }} }]
+{{- end }}
+{{- end }}
 {{- end -}}
 
 {{- define "lance.natsTable" -}}
@@ -230,8 +290,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- if $on -}}
 {{- range $u, $g := $grants -}}
-{{- $row := get $t $u | default dict -}}
-{{- $_ := set $t $u (dict "publish" (concat ($row.publish | default list) ($g.publish | default list) | uniq) "subscribe" (concat ($row.subscribe | default list) ($g.subscribe | default list) | uniq)) -}}
+{{- $row := deepCopy (get $t $u | default dict) -}}
+{{- $_ := set $row "publish" (concat ($row.publish | default list) ($g.publish | default list) | uniq) -}}
+{{- $_ := set $row "subscribe" (concat ($row.subscribe | default list) ($g.subscribe | default list) | uniq) -}}
+{{- $_ := set $t $u $row -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -247,6 +309,54 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $names = append $names $u -}}
 {{- end -}}
 {{- join " " $names -}}
+{{- end -}}
+
+{{- define "lance.natsOwnAccounts" -}}
+{{- $v := .Values -}}
+{{- toJson (dict $v.services.catalog.appId "catalog" $v.services.lineage.appId "lineage" $v.maintenance.appId "maintenance" "maintenance-worker" "maintenance" "admin" "jobs") -}}
+{{- end -}}
+
+{{- define "lance.natsSessions" -}}
+{{- $root := . -}}
+{{- $own := include "lance.natsOwnAccounts" . | fromJson -}}
+{{- $lakehouse := append (include "lance.serviceAccounts" . | fromJsonArray) "default" -}}
+{{- $out := dict -}}
+{{- $table := include "lance.natsTable" . | fromJson -}}
+{{- range $u := (include "lance.natsUsers" . | splitList " " | compact) -}}
+{{- $row := get $table $u -}}
+{{- if hasKey $own $u -}}
+{{- if hasKey $row "serviceAccount" }}{{- fail (printf "nats.auth.users.%s.serviceAccount: the lakehouse's own bus user takes its ServiceAccount from the chart, never from values" $u) }}{{- end -}}
+{{- $_ := set $out $u (include "lance.saName" (list $root (get $own $u))) -}}
+{{- else if hasKey $row "serviceAccount" -}}
+{{- $sa := $row.serviceAccount | default "" | toString -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$" $sa) }}{{- fail (printf "nats.auth.users.%s.serviceAccount names no ServiceAccount" $u) }}{{- end -}}
+{{- if has $sa $lakehouse }}{{- fail (printf "nats.auth.users.%s.serviceAccount: %q is the lakehouse's own ServiceAccount or the namespace's shared default: a session user's token names an identity of its own" $u $sa) }}{{- end -}}
+{{- $_ := set $out $u $sa -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+
+{{- define "lance.natsSessionUsers" -}}
+{{- keys (include "lance.natsSessions" . | fromJson) | sortAlpha | join " " -}}
+{{- end -}}
+
+{{- define "lance.natsStaticUsers" -}}
+{{- $sessions := include "lance.natsSessions" . | fromJson -}}
+{{- $out := list -}}
+{{- range (include "lance.natsUsers" . | splitList " " | compact) }}{{- if not (hasKey $sessions .) }}{{- $out = append $out . }}{{- end }}{{- end -}}
+{{- join " " $out -}}
+{{- end -}}
+
+{{- define "lance.natsPermissions" -}}
+{{- $root := . -}}
+{{- $table := include "lance.natsTable" . | fromJson -}}
+{{- $users := dict -}}
+{{- range $u, $sa := (include "lance.natsSessions" . | fromJson) -}}
+{{- $row := get $table $u -}}
+{{- $_ := set $users $u (dict "serviceAccount" (include "lance.accountOf" (list $root $sa)) "publish" $row.publish "subscribe" $row.subscribe) -}}
+{{- end -}}
+{{- toPrettyJson (dict "audience" (include "lance.busAudience" .) "sessionSeconds" (include "lance.busSessionSeconds" . | int) "users" $users) -}}
 {{- end -}}
 
 {{- define "lance.busConsumers" -}}
@@ -305,10 +415,11 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "lance.natsFiles" -}}
-{{- $files := dict "nats-admin-creds" (list "nats-user-admin") -}}
+{{- $files := dict -}}
 {{- if include "lance.natsMints" . }}
 {{- $_ := set $files "nats-box-creds" (list "nats-user-monitor") }}
 {{- $_ := set $files "nats-auth" (list "nats-server" "nats-route") }}
+{{- $_ := set $files "nats-signer" (list "nats-callout") }}
 {{- if .Values.objectStore.enabled }}{{- $_ := set $files "object-store-bus-creds" (list "nats-user-object-store") }}{{- end }}
 {{- end -}}
 {{- toJson $files -}}
@@ -618,7 +729,7 @@ buckets as the estate's reads already are. */ -}}
 
 {{- define "lance.serviceAccounts" -}}
 {{- $root := . -}}{{- $fullname := include "lance.fullname" . -}}
-{{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-otel-collector" $fullname) -}}
+{{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-otel-collector" $fullname) (printf "%s-openfga" .Release.Name) -}}
 {{- range (include "lance.saComponents" . | fromJsonArray) }}{{- $names = append $names (include "lance.saName" (list $root .)) }}{{- end -}}
 {{- if .Values.console.enabled }}{{- $names = append $names (include "lance.saName" (list $root "console")) }}{{- end -}}
 {{- toJson $names -}}
@@ -831,10 +942,10 @@ activeDeadlineSeconds: 1800
 {{- $own := dict -}}
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
-  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat (list (printf "nats-user-%s" $v.services.catalog.appId) "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))))
-  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat (list (printf "nats-user-%s" $v.services.lineage.appId)) (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce)))) -}}
+  (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))))
+  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce)))) -}}
 {{- if $v.maintenance.enabled -}}
-{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (concat (list "nats-user-maintenance-worker") (ternary (list (printf "nats-user-%s" $v.maintenance.appId)) list (or $v.maintenance.lineageEmit $v.maintenance.controlEmit)) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled)))) -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) -}}
 {{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}
@@ -842,10 +953,11 @@ activeDeadlineSeconds: 1800
 {{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api) -}}
 {{- end -}}
 {{- end -}}
-{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "openbao-seeded" "commit-id-key" "otel-collector-export" "object-store-root" "postgres") -}}
+{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "nats-callout" "openbao-seeded" "commit-id-key" "otel-collector-export" "object-store-root" "postgres") -}}
 {{- range $reads }}{{- $held = concat $held .api }}{{- end -}}
 {{- $lakehouseApps := list $v.services.catalog.appId $v.services.lineage.appId $v.maintenance.appId -}}
 {{- $external := $v.openbao.externalReaders | default dict -}}
+{{- $sessions := include "lance.natsSessions" . | fromJson -}}
 {{- range $app, $reader := $external -}}
 {{- if not (regexMatch "^[a-z][a-z0-9-]{0,62}$" $app) }}{{- fail (printf "openbao.externalReaders: %q is no app id" $app) }}{{- end -}}
 {{- if has $app $lakehouseApps }}{{- fail (printf "openbao.externalReaders: %q is the lakehouse's own app" $app) }}{{- end -}}
@@ -863,6 +975,7 @@ activeDeadlineSeconds: 1800
 {{- range $reader.secrets }}
 {{- if not (regexMatch (include "lance.secretNamePattern" $root) (toString .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is no secret name (a path or a wildcard would widen the store policy)" $app (toString .)) }}{{- end -}}
 {{- if not (or (eq . (printf "nats-user-%s" $app)) (hasPrefix $own .) (hasPrefix "signing-public-" .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is not the reader's own: a reader holds only nats-user-%s, names of its own (%s<name>) and signing-public-<name>" $app . $app $own) }}{{- end -}}
+{{- if and (eq . (printf "nats-user-%s" $app)) (hasKey $sessions $app) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %s is a session user, which presents its ServiceAccount token to the bus and holds no nats-user-%s" $app $app $app) }}{{- end -}}
 {{- end -}}
 {{- $_ := set $reads $app (dict "sa" $reader.serviceAccount "api" ($reader.secrets | uniq | sortAlpha)) -}}
 {{- end -}}

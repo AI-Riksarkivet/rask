@@ -1,5 +1,6 @@
 {{- if and (not (include "lance.natsMints" .)) (not .Values.nats.auth.provisioned) }}
 {{- $names := list }}
-{{- range (include "lance.natsUsers" . | splitList " " | compact) }}{{- $names = append $names (printf "nats-user-%s" .) }}{{- end }}
-{{- fail (printf "NATS CREDENTIALS NOT PROVISIONED: the platform's store (openbao.enabled=false), which this chart does not seed, gets no NATS user from the chart, so every pub/sub client would connect with an empty credential. Create these secrets in the store (KV v2; nats-user-<user> holds the fields jwt and seed, issued by the bus's operator with the permissions nats.auth.users lists), then --set nats.auth.provisioned=true:\n  - %s" (join "\n  - " $names)) }}
+{{- range (include "lance.natsSessionUsers" . | splitList " " | compact) }}{{- $names = append $names (printf "session user %s: the platform's signer admits it with a session of at most nats.auth.sessionSeconds, signed by a signing key scoped to its row" .) }}{{- end }}
+{{- range (include "lance.natsStaticUsers" . | splitList " " | compact) }}{{- $names = append $names (printf "static user %s: the store holds nats-user-%s (KV v2, fields jwt and seed, issued by the bus's operator with its row's permissions)" . .) }}{{- end }}
+{{- fail (printf "NATS USERS NOT PROVISIONED: the platform runs the bus, its signer and its store (openbao.enabled=false), and the chart issues no bus user. The signer reads ConfigMap %s-nats-permissions (the audience, the longest session and each session user's ServiceAccount and subjects). Provide each of these, then --set nats.auth.provisioned=true:\n  - %s" (include "lance.fullname" .) (join "\n  - " $names)) }}
 {{- end }}

@@ -77,22 +77,26 @@ ONE PAIR PER SIGNING IDENTITY, chosen from the kept copy, the store behind the S
 
 ## `nsc() { "$NATS_TOOLS/nsc" -H "$B/nsc" "$@"; }`
 
-THE BUS CREDENTIALS (values.yaml `nats.auth`): the trust root and the route credential carried from the store behind the
-Service or minted, then every user of the table kept or issued under that root (`nats_user`, below), the whole bundle
-kept before the first write.
+THE BUS TRUST ROOT AND ITS USERS (values.yaml `nats.auth`): the trust root and the route credential carried from the store
+behind the Service or minted, then, under that root, every STATIC user of the table kept or issued (`nats_user`, below),
+the AUTH account converged (`converge_auth`) and one scoped signing key per SESSION user (`drop_scopes`, `scope_user`), the
+whole bundle kept before the first write. A session user (a row with a ServiceAccount) is issued no credential: its pod
+presents its ServiceAccount token and the bus's signer signs a session with that user's scoped key, so the seed writes no
+`nats-user-<user>` for it.
 
 ## `revoke_undeclared() {`
 
-A BUS USER RASK STOPS DECLARING IS REVOKED, not just left unwritten. A user JWT the seed issues carries no expiry, and
-the APP account that signed it stays trusted, so a credential the release no longer declares would keep admitting
-whoever holds it; not re-issuing it changes nothing at the broker. Before it issues the table, the seed lists every
+A STATIC BUS USER RASK STOPS ISSUING IS REVOKED, not just left unwritten. A user JWT the seed issues carries no expiry, and
+the APP account that signed it stays trusted, so a credential the release does not issue would keep admitting
+whoever holds it; not re-issuing it changes nothing at the broker. A user that is a session user falls under this too,
+since the seed issues it no credential. Before it issues the table, the seed lists every
 `nats-user-*` secret in this pod's store and in the store behind the Service (`store_list`), takes each name the
-release's table (`lance.natsTable`) does not hold, reads the user's public key out of the JWT that secret stores
+release's static users (`lance.natsStaticUsers`) do not hold, reads the user's public key out of the JWT that secret stores
 (`jwt_key`: the `sub` of the payload), and adds it to the APP account's revocations (`nsc revocations add-user`). The
 account JWT carrying the revocation is what `resolver_preload` holds, so it reaches the bus with the trust root. A
 secret that holds no JWT naming a key fails the seed, since the seed cannot revoke what it cannot name; a store that
 is unreachable or lists nothing counts as empty, and any other listing error fails the seed rather than seed without
-knowing what rask no longer declares.
+knowing what rask does not issue.
 
 After the bundle is written, each revoked user's secret is deleted from this pod's store (`bao kv metadata delete`),
 so no reader is left a credential the bus refuses.
@@ -105,7 +109,7 @@ revocation.
 
 ## `nats_user() {`
 
-A DECLARED USER KEEPS ITS KEY PAIR AND ITS JWT while its grants match. The seed reads the user's stored JWT and seed
+A DECLARED STATIC USER KEEPS ITS KEY PAIR AND ITS JWT while its grants match. The seed reads the user's stored JWT and seed
 from this pod's store, else from the store behind the Service; when the JWT was issued by the APP account and its
 publish and subscribe grants equal the table's, both are kept as they are, so a reseed changes no credential a running
 client holds. A changed grant is reissued under the SAME key, and the JWT it replaces is revoked `--at` that JWT's issue
@@ -119,14 +123,39 @@ only when the stored JWT names no key at all, since it could not revoke what it 
 
 ## `revoke_older() {`
 
-THE ACCOUNT'S `*` REVOCATION SITS ONE SECOND BEFORE THE OLDEST JWT A DECLARED USER HOLDS. Revoking `*` at a time refuses
+THE ACCOUNT'S `*` REVOCATION SITS ONE SECOND BEFORE THE OLDEST JWT A STATIC USER HOLDS. Revoking `*` at a time refuses
 every user JWT the APP account issued up to it, so this takes back every credential earlier reseeds left behind (a key
 that left the table with no stored secret left to name it) while every credential
 the table holds now is newer and keeps admitting. Written only when the bound moves.
 
 Measured 2026-11-07 on nats-server 2.14.2, nsc 2.15.0 and nats.go 1.39.1: a client holding a revoked JWT is closed after
-two refused reconnects, which is the closed connection a service's own connection opens again from with the
-credential the store holds then (`lakehouse.bus`).
+two refused reconnects, which is the closed connection a service's own connection opens again from (`lakehouse.bus`).
+
+## `converge_auth() {`
+
+THE SIGNER'S OWN ACCOUNT, `AUTH`, converged under the trust root and kept while it is what this root issued, so a reseed
+changes nothing the server holds (measured 2026-11-15 on nsc 2.15.0 and nats-server 2.15.2): the user `callout`, which may
+subscribe to `$SYS.REQ.USER.AUTH` and publish nothing but responses; a bearer user `sentinel` denied every subject, which
+the server holds as its `default_sentinel` so a pod presents no NATS JWT, only its token; one account signing key, which
+signs the signer's answers (`issuer_seed`); and the external authorization (`nsc edit authcallout`) naming `callout` as the
+auth user and APP as the allowed account. The signer's user, its signing seed, the account public keys and each session
+user's scoped seed are written as secret `nats-callout`, which only ESO reads, for the fixture's signer; the sentinel's JWT
+goes to `nats-server` as `default_sentinel`.
+
+## `drop_scopes() {`
+
+ONE SCOPED SIGNING KEY PER SESSION USER IN APP, its role the user's name. A key whose role names no session user, or whose
+seed this root does not hold, is removed from the account. Removing a key closes every connection whose user it signed
+(nats-server 2.15.2 `accounts.go:4040-4056`, read, not run here), so a user that stops being a session user loses its
+sessions at the next reload.
+
+## `scope_user() {`
+
+THE KEY'S SCOPE IS THE USER'S ROW. `scope_user <user> <publish> <subscribe>` keeps the user's key when its scope already
+holds the row's lists, and otherwise re-scopes the SAME key (`nsc edit signing-key --role <user> --allow-pub --allow-sub`)
+or adds one, so a changed row changes the permissions of every later session without a new key. The scope, not the signer's
+code, is what the bus enforces: a session the signer signs with this key carries no permissions of its own. The key's seed is
+kept in the trust root and written to `nats-callout` as `key-<user>`.
 
 ## `G=$DEV_CREDENTIALS`
 

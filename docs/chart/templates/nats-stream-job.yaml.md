@@ -48,13 +48,23 @@ The pod states only its seccomp profile ([[XC-202]]): its one container runs the
 the nats CLI writes its context under $HOME, which a read-only rootfs turns into a failure. HOME on the tmp
 emptyDir is the pair every app container in this chart already uses.
 
-## `- { name: NATS_CREDS, value: /etc/nats-creds/nats.creds }`
+## `- { name: BUS_TOKEN_FILE, value: {{ include "lance.busTokenFile" $ | quote }} }`
 
-The path of the `admin` creds file the nats CLI reads (values.yaml `nats.auth`), never the credential itself.
+The path of the Job's projected ServiceAccount token for the bus audience (`lance.busIdentity`, ServiceAccount
+`<release>-sa-jobs`), never the token itself. The Job is the session user `admin` (values.yaml `nats.auth.users`) and holds
+no creds file: it presents that token, and the bus's signer answers with a session as `admin`. With `nats.ca.configMap`,
+`BUS_CA_FILE` names the mounted CA the bus's certificate chains to.
 
-## `until err=$(nats --server "$S" stream ls 2>&1 >/dev/null); do`
+## `bus() { NATS_TOKEN=$(cat "$BUS_TOKEN_FILE") nats --server "$S" --connection-name admin ${BUS_CA_FILE:+--tlsca "$BUS_CA_FILE"} "$@"; }`
 
-A server that is not up yet is waited for; one that refuses this Job's credential fails it now, by name.
+EVERY `nats` CALL OF THE JOB GOES THROUGH THIS FUNCTION. The token is read from its file on each call, so a call made after
+the kubelet rotated the file presents the new token, and each call asks for a session of its own as `admin`:
+`--connection-name admin` is the name the signer matches against the table's users, and a call that names another user, or
+whose token names another ServiceAccount, is refused.
+
+## `until err=$(bus stream ls 2>&1 >/dev/null); do`
+
+A server that is not up yet is waited for; one that refuses this Job's token (no session as `admin`) fails it now, by name.
 
 ## `consumer_of() {`
 

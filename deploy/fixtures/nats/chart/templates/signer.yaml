@@ -1,0 +1,77 @@
+{{- if .Values.nats.auth.server }}
+{{- $name := .Values.nats.fullnameOverride }}
+{{- $signer := printf "%s-signer" $name }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $signer }}
+  labels: {{- include "bus.labels" . | nindent 4 }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-{{ .Release.Namespace }}-bus-signer-token-review
+  labels: {{- include "bus.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - { kind: ServiceAccount, name: {{ $signer }}, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $signer }}
+  labels: {{- include "bus.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.signer.replicas }}
+  selector:
+    matchLabels: { app.kubernetes.io/component: bus-signer, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      labels:
+        {{- include "bus.labels" . | nindent 8 }}
+        app.kubernetes.io/component: bus-signer
+    spec:
+      serviceAccountName: {{ $signer }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: signer
+          image: {{ .Values.signer.image | quote }}
+          args:
+            - --url=tls://{{ $name }}:{{ .Values.nats.config.nats.port | default 4222 }}
+            - --ca=/etc/bus-signer/ca/ca.crt
+            - --creds=/etc/bus-signer/signer/callout.creds
+            - --issuer-seed=/etc/bus-signer/signer/issuer.seed
+            - --auth-account-file=/etc/bus-signer/signer/auth_account
+            - --app-account-file=/etc/bus-signer/signer/app_account
+            - --keys=/etc/bus-signer/keys
+            - --table=/etc/bus-signer/table/permissions.json
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+            seccompProfile: { type: RuntimeDefault }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+          volumeMounts:
+            - { name: signer, mountPath: /etc/bus-signer/signer, readOnly: true }
+            - { name: keys, mountPath: /etc/bus-signer/keys, readOnly: true }
+            - { name: table, mountPath: /etc/bus-signer/table, readOnly: true }
+            - { name: ca, mountPath: /etc/bus-signer/ca, readOnly: true }
+      volumes:
+        - { name: signer, secret: { secretName: {{ $signer }}, defaultMode: 0440 } }
+        - { name: keys, secret: { secretName: {{ $signer }}-keys, defaultMode: 0440 } }
+        - { name: table, configMap: { name: {{ .Values.rask.release }}-nats-permissions } }
+        - { name: ca, configMap: { name: {{ $name }}-ca } }
+{{- end }}

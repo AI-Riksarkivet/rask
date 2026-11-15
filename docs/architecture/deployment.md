@@ -67,8 +67,11 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
   every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
   `signing:`; the render refuses the platform's store until its operator created them and `signing.provisioned` says so.
-- `nats-user-<user>` per values.yaml `nats.auth` user (read by that app's login, or by ESO for `admin` and `monitor`),
-  and `nats-route` (and `nats-server`, in operator mode), attested by `nats.auth.provisioned`.
+- `nats-user-<user>` per STATIC user of values.yaml `nats.auth` (a row with no `serviceAccount`: `monitor` and
+  `object-store`, read by ESO, and a client's own, read by that client's login), and `nats-route` (and `nats-server` and
+  `nats-callout`, in operator mode). A session user (a row with a `serviceAccount`: every lakehouse pod and the stream
+  Job) has no secret: it presents its projected ServiceAccount token to the bus. `nats.auth.provisioned` attests that the
+  platform's signer admits each session user and that the static users' secrets exist.
 - With the in-chart Collector, `otel-collector-export` (fields username, password), the credential the audit store
   admits. A multibase data base holds none: it is its
   tables' storage on the estate's store, reached under the catalog's own identity ([[LH-286]]).
@@ -85,18 +88,21 @@ its environment.
 
 ## Prerequisite: NATS JetStream
 
-Every event rask moves rides **NATS JetStream, a prerequisite** (ADR 0153) the platform runs, and ADR 0199 makes it the lakehouse's one bus. Each service publishes lineage's events and the catalog's control events on a connection of its own, as its own bus user (`lakehouse.bus`, nats-py), and takes its deliveries on that connection too: lineage pulls the durable consumer `lineage-ingest`, and each catalog replica follows `CATALOG_CONTROL` by reading it by sequence. Maintenance's work queue, schedules, the store's change events and the write-event lane (`maintenance-arrival`) go through nats-py as the bus user `maintenance-worker` (ADR 0198 decision 5). The chart
+Every event rask moves rides **NATS JetStream, a prerequisite** (ADR 0153) the platform runs, and ADR 0199 makes it the lakehouse's one bus. Each service publishes lineage's events and the catalog's control events on a connection of its own, as its own bus user (`lakehouse.bus`, nats-py), presenting its pod's ServiceAccount token and holding no bus credential, and takes its deliveries on that connection too: lineage pulls the durable consumer `lineage-ingest`, and each catalog replica follows `CATALOG_CONTROL` by reading it by sequence. Maintenance's work queue, schedules, the store's change events and the write-event lane (`maintenance-arrival`) go through nats-py as the bus user `maintenance-worker` (ADR 0198 decision 5). The chart
 renders no server; it renders what is rask's: the address its clients dial, the stream and durable consumer
 definitions (the stream Job, which declares them on the bus as the `admin` user, converges each to its declared config,
 and after the sync removes the consumers of this release that git no longer declares), and the bus users
 (`nats.auth.users`, one per connection a service opens). Name
-the bus in `nats.url` (the render refuses without it). Each user's credential `nats-user-<user>` lives in the store; a store the chart does not seed needs them issued by
-the bus's operator and attested with `nats.auth.provisioned` (docs/OPERATORS.md § 7).
+the bus in `nats.url` (the render refuses without it, and refuses a scheme other than `tls://` on a real deployment, since each pod's token crosses in `CONNECT`), and the CA its certificate chains to in `nats.ca.configMap` when it is a private one. The chart renders each session user's ServiceAccount and subjects as ConfigMap `<release>-nats-permissions` for the bus's signer; a store the chart does not seed needs the signer and the static users' `nats-user-<user>` provided by the platform and attested with `nats.auth.provisioned` (docs/OPERATORS.md § 7).
 
 What the bus must provide, and the version rask is tested against, are in `deploy/fixtures/nats` (the development
 install `make k3s-up` runs, release `nats`, Service `rask-nats` in rask's namespace): NATS 2.15.2; JetStream on a file
-store; a cluster of at least `nats.streamReplicas` nodes (three); operator mode with one APP account holding JetStream
-and every rask user, so each service and maintenance's worker authenticate with a user JWT and NKEY seed.
+store; a cluster of at least `nats.streamReplicas` nodes (three); TLS on the client port; operator mode with one APP
+account holding JetStream and every rask user, and an AUTH account whose auth callout is the platform's signer. A
+lakehouse pod's connection presents its ServiceAccount token (audience `nats.auth.audience`), and the signer answers with
+a session as that pod's bus user that ends within `nats.auth.sessionSeconds`, signed by the user's scoped signing key so
+the bus enforces the row of `nats.auth.users`. The development install runs this with a stand-in signer
+(`deploy/fixtures/nats`, `nats.auth.server`).
 
 ## Prerequisite: the CloudNativePG operator, for the AGE-on-CNPG path
 
@@ -295,7 +301,7 @@ repository supplies its values to a lakehouse install with `-f`. A platform brin
   `rask-web` is confidential, for the live lanes' password grant. A platform's issuer registers the same public client
   and names it in `console.oidc.clientId`.
 - **A client's admissions** go through the seams the chart ships empty: `openbao.externalReaders` (an allowlist: a
-  reader may hold only `nats-user-<app>`, `<app>-<name>` and `signing-public-<name>`, and the render refuses a lakehouse
+  reader may hold only `nats-user-<app>` (not for a session user), `<app>-<name>` and `signing-public-<name>`, and the render refuses a lakehouse
   app id or any name another identity holds), `networkPolicy.objectStoreExtraFrom` and `nats.auth.users`. A client's
   roles on the catalog are grants to its ServiceAccount made at the catalog's access doors ([[LH-563]]), which no
   values file holds.
