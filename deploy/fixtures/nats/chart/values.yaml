@@ -18,7 +18,7 @@ rask:
 # is proved by the nats-auth lane, not supported for any other use. Its keys are rask's dev store's `nats-callout`.
 signer:
   # The stand-in signer's image (`.docker/bus-signer.dockerfile`, binary `/bus-signer`), from the dev registry.
-  image: localhost:5000/bus-signer:dev
+  image: localhost:5000/bus-signer:2a264d75f
   replicas: 2
 
 nats:
