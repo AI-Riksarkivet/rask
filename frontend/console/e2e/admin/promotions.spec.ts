@@ -9,6 +9,8 @@ import { MOCK_CATALOG } from './ports';
 type Body = Record<string, unknown>;
 
 const TABLE = 'acme-silver$features';
+/** The held table as the console names it: its path (ADR 0210). */
+const TABLE_PATH = 'acme-silver › features';
 const LIST = 'GET /management/v1/promotions?limit=100';
 
 let token: string;
@@ -46,10 +48,10 @@ test('the list names each held table, its version and why it is held', async ({ 
 
 	await page.goto('/catalog/promotions');
 
-	const row = page.getByTestId('promotions').locator('tbody tr', { hasText: TABLE });
+	const row = page.getByTestId('promotions').locator('tbody tr', { hasText: TABLE_PATH });
 	await expect(row).toContainText('v7');
 	await expect(row).toContainText('Row count moved outside the review band');
-	await expect(row.getByRole('link', { name: TABLE })).toHaveAttribute(
+	await expect(row.getByRole('link', { name: TABLE_PATH })).toHaveAttribute(
 		'href',
 		`/catalog/promotions/${encodeURIComponent(TABLE)}`,
 	);

@@ -341,7 +341,7 @@ async def update_table_schema_metadata(
     # `str(v)` on a null would write the literal string "None" — the deletion signal must survive intact.
     values: dict[str, str | None] = {str(k): None if v is None else str(v) for k, v in raw.items()}
     # BEFORE the route split, so neither route can be the one that forgot ([[LH-208]]). A null counts:
-    # deleting `lineage.dataset_id` erases the name maintenance files a medallion tier under.
+    # deleting `lineage.dataset_id` erases the name the catalog stamped on the table.
     provenance_guard.refuse_reserved_keys(values, door="schema_metadata/update")
     # A null takes a key away, which turns nothing on.
     formats.refuse_flag_locking_keys([key for key, value in values.items() if value is not None], door="schema_metadata/update")

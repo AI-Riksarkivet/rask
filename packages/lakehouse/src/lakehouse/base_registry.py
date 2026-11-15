@@ -13,9 +13,8 @@ keeps every table prefix off the control root, so no vended session policy cover
 without that rule a table registered at ``.`` or ``_bases`` is vended exactly that prefix).
 
 KEYED BY THE TABLE ROOT LOCATION, not the table id. The consumers that read it — the base-reference
-pre-pass and the lineage reconcile — hold URIs, not ids; medallion tiers have no uuid8 id at all; and a
-location key survives the deregister→register an undrop performs, while a drop→re-declare mints a new
-location and so a fresh, empty record (lh279 s3). The key is the path the location decodes to
+pre-pass and the lineage reconcile — hold URIs, not ids; and a location key survives the deregister→register an
+undrop performs, while a drop→re-declare mints a new location and so a fresh, empty record (lh279 s3). The key is the path the location decodes to
 (:func:`lakehouse.base_refs.decoded_path`): the doors write the record under the catalog's
 percent-encoded spelling while the pre-pass reads it under the decoded directory discovery lists (lh279 r6
 spellings), and both name one table.
@@ -73,7 +72,6 @@ class BaseOrigin(StrEnum):
 
     CREATE = "create"
     REGISTER = "register"
-    SILVER = "silver"
 
 
 class RecordedBase(BaseModel):

@@ -15,24 +15,22 @@ test('a non-estate-admin is refused every admin route, and the sidebar links non
 }) => {
 	await signIn(context, { token: TOKEN.member });
 	await mockMe(page, ME_MEMBER);
-	// Every route the door covers, and it covers exactly the `admin` area now: #105 took the access
-	// workbench and the audit trail to the console (`/settings/*`, behind ITS own layout gate) and
-	// retired the tenants page, so `governance` is not a segment the console serves at all.
-	for (const path of ['/admin/dlq', '/admin/streams', '/admin/events']) {
+	// Every route the door covers, and it covers exactly the `admin` area: the access explorer lives
+	// under `/settings/*`, behind ITS own layout gate.
+	for (const path of ['/admin/dlq', '/admin/events']) {
 		await page.goto(path);
 		await expect(
 			page.getByRole('heading', { name: 'You don’t have access to Operations', level: 1 }),
 		).toBeVisible();
 		// The route's own content never renders behind the door.
 		await expect(page.getByRole('heading', { name: 'DLQ', exact: true })).toHaveCount(0);
-		await expect(page.getByRole('heading', { name: 'Streams' })).toHaveCount(0);
 	}
 	// The sidebar SHOWS the operations rows, disabled, and links none. Each says who may open it in
 	// plain words, printed once under the group and read as every row's description, so a keyboard
 	// and a touch reach the reason as a pointer does.
 	const nav = page.getByRole('navigation', { name: 'Pages' });
 	const reason = 'Only estate admins can open this.';
-	for (const name of ['Events', 'Streams', 'DLQ']) {
+	for (const name of ['Events', 'DLQ']) {
 		const row = nav.locator('[aria-disabled="true"]', { hasText: name });
 		await expect(row).toBeVisible();
 		await expect(row).toHaveAccessibleDescription(reason);
@@ -53,14 +51,14 @@ test('an estate admin passes the door and gets the operations rows as links', as
 	await page.goto('/admin/dlq');
 	await expect(page.getByRole('heading', { name: 'DLQ', exact: true })).toBeVisible();
 	const nav = page.getByRole('navigation', { name: 'Pages' });
-	for (const href of ['/admin/events', '/admin/streams', '/admin/dlq']) {
+	for (const href of ['/admin/events', '/admin/dlq']) {
 		await expect(nav.locator(`a[href="${href}"]`)).toBeVisible();
 	}
 	await expect(nav.locator('[aria-disabled="true"]')).toHaveCount(0);
 	await expect(nav.locator('a[href="/admin/dlq"]')).toHaveAttribute('data-active', 'true');
 });
 
-test('a page has one name across its sidebar row, crumb, h1 and title; a named object is "<name> · <collection> · rask"', async ({
+test('a page has one name across its sidebar row, crumb, h1 and title; a named object is "<path> · <collection> · rask"', async ({
 	context,
 	page,
 }) => {
@@ -74,9 +72,7 @@ test('a page has one name across its sidebar row, crumb, h1 and title; a named o
 		['/', 'Home'],
 		['/admin/events', 'Events'],
 		['/admin/dlq', 'DLQ'],
-		['/catalog/storage', 'Storage'],
 		['/settings/access', 'Users & roles'],
-		['/settings/audit', 'Audit'],
 		['/workbench', 'Workbench'],
 	] as const) {
 		await page.goto(path);
@@ -93,12 +89,15 @@ test('a page has one name across its sidebar row, crumb, h1 and title; a named o
 	await expect(crumbs.getByText('Operations', { exact: true })).toBeVisible();
 	await expect(crumbs.getByRole('link', { name: 'Operations' })).toHaveCount(0);
 	for (const [path, title, h1] of [
-		['/catalog/tables/db1%24t', 'db1$t · tables · rask', 'db1$t'],
-		['/catalog/promotions/db1%24t', 'db1$t · promotions · rask', 'db1$t'],
+		['/catalog/tables/db1%24t', 'db1 › t · tables · rask', 'db1 › t'],
+		['/catalog/promotions/db1%24t', 'db1 › t · promotions · rask', 'db1 › t'],
 	] as const) {
 		await page.goto(path);
 		await expect(page, path).toHaveTitle(title);
 		await expect(page.getByRole('heading', { level: 1 }), path).toHaveText(h1);
+		// The `$` id is shown only as something to copy, beneath the name.
+		await expect(page.getByTestId('catalog-id'), path).toHaveText('db1$t');
+		await expect(page.getByRole('button', { name: 'Copy table id' }), path).toBeVisible();
 	}
 });
 

@@ -6221,8 +6221,6 @@ export interface components {
             project: string;
             /** Protected */
             protected?: boolean | null;
-            /** Serving */
-            serving?: string | null;
         };
         /**
          * CredentialResponse
@@ -8675,8 +8673,6 @@ export interface components {
             bucket: string;
             /** Id */
             id: string;
-            /** Serving */
-            serving?: string | null;
             /** Status */
             status: string;
         };
@@ -8769,11 +8765,6 @@ export interface components {
         PublishRequest: {
             /** Accept Assertions */
             accept_assertions?: string[];
-            /**
-             * Cascade Id
-             * @default
-             */
-            cascade_id?: string;
             /**
              * Gate Only
              * @default false
@@ -9880,8 +9871,6 @@ export interface components {
             protected_by?: string | null;
             /** Root Uri */
             root_uri: string;
-            /** Serving */
-            serving?: string | null;
             /** Status */
             status?: string | null;
         };

@@ -8,8 +8,8 @@ import { seed as seedFor } from '../mock-client';
 // carries what the ruling put there, and that the ROUTE itself refuses. The sidebar SHOWS Settings to a
 // non-admin, disabled and with its reason (#143) — and either way the sidebar is presentation, not
 // authorization: anyone can type the URL, and a gate that lives only in the sidebar is not a gate. Since
-// #105 the gate is a `+layout.ts`, so it covers `/settings/access` and `/settings/audit` too — a door
-// that has to be remembered per child is a door that will be forgotten.
+// #105 the gate is a `+layout.ts`, so it covers `/settings/access` too — a door that has to be
+// remembered per child is a door that will be forgotten.
 
 let token: string;
 
@@ -37,24 +37,22 @@ test('an estate admin gets Settings in the sidebar, and the page carries the est
 	expect(res?.status()).toBe(200);
 	await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
 
-	// The three platform rows are in-app pages, so each must be an ordinary soft link — and the ABSENCE
+	// The two platform rows are in-app pages, so each must be an ordinary soft link — and the ABSENCE
 	// of `data-sveltekit-reload` is asserted, not merely unmentioned: the attribute would cost a full
 	// document load (and, with tokens in memory, a sign-in round trip) on every click.
 	for (const [name, href] of [
 		['Users & roles', '/settings/access'],
 		['Projects', '/projects'],
-		['Audit', '/settings/audit'],
 	] as const) {
 		const link = rows(page).getByRole('link', { name: new RegExp(`^${name}`) });
 		await expect(link).toHaveAttribute('href', href);
 	}
 
-	// The unwired half says so rather than pretending. A settings form that silently discards what you
-	// type is worse than one that admits it cannot save yet.
-	for (const row of ['New-project defaults', 'Credentials']) {
-		await expect(page.getByText(row, { exact: true })).toBeVisible();
-	}
-	await expect(page.getByText('Not wired').first()).toBeVisible();
+	// Every row works (ADR 0210): nothing on the page says it is not wired.
+	await expect(page.getByText('Not wired')).toHaveCount(0);
+	// The admin is named, beside the id a grant takes.
+	await expect(page.getByTestId('signed-in-as')).toContainText(`Signed in as ${ME_ADMIN.name}`);
+	await expect(page.getByTestId('signed-in-as')).toContainText(ME_ADMIN.sub);
 
 	// …and the sidebar lights Settings, the page you are on.
 	await expect(nav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveAttribute(
@@ -126,10 +124,10 @@ test('an UNRESOLVED identity is refused for a DIFFERENT reason than a non-admin'
 	await expect(page.getByText('owner on the estate root', { exact: false })).toHaveCount(0);
 });
 
-// The CHILDREN: `/settings/access` reads the platform's whole tuple store and `/settings/audit` its
-// cross-tenant trail, so the gate is a LAYOUT load that every child inherits, and these two tests keep
-// it that way — a gate moved onto one page fails here.
-for (const child of ['/settings/access', '/settings/audit'] as const) {
+// The CHILD: `/settings/access` reads the platform's whole tuple store, so the gate is a LAYOUT load
+// that every child inherits, and these two tests keep it that way — a gate moved onto one page fails
+// here.
+for (const child of ['/settings/access'] as const) {
 	test(`${child} is behind the SAME door as /settings`, async ({ page }) => {
 		await seed(page, {
 			'GET /management/v1/me': {

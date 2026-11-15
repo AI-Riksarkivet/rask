@@ -1,5 +1,5 @@
 /**
- * A table's namespace, and the medallion stage derived from it.
+ * A table's namespace, and the tier its namespaces declare.
  *
  * These exist because `namespaceOfTable` split on the FIRST `$` for as long as it had existed, which is
  * correct for exactly one shape — a flat `<ns>$<table>` — and wrong for every nested one. Namespaces
@@ -14,12 +14,12 @@
  * an object that is not its parent.
  *
  * The grammar itself lives in `#lib/api/identifiers.ts` and is covered by its own tests; this
- * file covers only the medallion-stage derivation built on top of it.
+ * file covers the tier a namespace declares, read the way the catalog reads it.
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { namespaceOfTable, stageOf, stageOfTable } from './stage';
+import { declaredTier, namespaceOfTable, tierCandidates } from './stage';
 
 describe('namespaceOfTable', () => {
 	it('takes every segment but the last, matching the backend', () => {
@@ -47,30 +47,18 @@ describe('namespaceOfTable', () => {
 	});
 });
 
-describe('stageOfTable', () => {
-	it('still resolves the flat case it always handled', () => {
-		expect(stageOfTable('bronze$pages')).toEqual({ stage: 'bronze' });
+describe('declaredTier', () => {
+	it('reads the tier a namespace declares, and only from its rask.tier property', () => {
+		expect(declaredTier({ 'rask.tier': 'silver' })).toEqual({ stage: 'silver' });
+		// A namespace NAMED like a tier declares nothing (ADR 0160): its name is the user's.
+		expect(declaredTier({})).toBeNull();
+		expect(declaredTier({ 'rask.tier': 'platinum' })).toBeNull();
 	});
+});
 
-	it('is null when the namespace encodes no stage — a derived hint, never a catalog fact', () => {
-		expect(stageOfTable('media$documents')).toBeNull();
-	});
-
-	it('a NESTED tier namespace resolves its stage from the LEAF segment', () => {
-		// Was pinned as a known gap and ruled 2026-08-16. `STAGE_RE` is anchored with `$` outside its
-		// character class, so a nested id matched nothing and the badge silently vanished — while the
-		// same namespace one rung up showed `silver`. The stage belongs to the namespace the data sits IN;
-		// the ancestors above it are tenancy, not tier.
-		expect(stageOf('acme-silver')).toEqual({ stage: 'silver' });
-		expect(stageOf('acme-wh$acme-silver')).toEqual({ stage: 'silver' });
-		expect(stageOfTable('acme-wh$acme-silver$features')).toEqual({ stage: 'silver' });
-	});
-
-	it('still returns null when the LEAF encodes no stage — the ancestors must not supply one', () => {
-		// The other direction, and the reason this is leaf-only rather than "any segment": a table in
-		// `acme-silver$scratch` is in `scratch`, which encodes no tier. Reading the stage off an
-		// ancestor would badge it `silver` and claim a tier the data does not have.
-		expect(stageOf('acme-silver$scratch')).toBeNull();
-		expect(stageOfTable('acme$transcripts$rows')).toBeNull();
+describe('tierCandidates', () => {
+	it('names every namespace on the path, shallowest first, and never the warehouse', () => {
+		expect(tierCandidates('acme$raw$audio')).toEqual(['acme$raw', 'acme$raw$audio']);
+		expect(tierCandidates('acme')).toEqual([]);
 	});
 });

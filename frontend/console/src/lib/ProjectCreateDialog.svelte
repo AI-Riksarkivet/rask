@@ -1,18 +1,15 @@
 <script lang="ts">
 	// Project creation — an estate-admin flow that COMPOSES existing APIs: it registers the project,
-	// then provisions its first (work) warehouse under it; an optional second create with
-	// serving:"gold" provisions the per-tenant gold serving warehouse (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers"); the
+	// then provisions its first warehouse under it; the
 	// initial admin grant is one raw FGA tuple written through the shared `writeTuple` remote command
 	// (estate-admin gated at the catalog, like /management/v1/events). Every step toasts success/failure honestly —
-	// a partial outcome (work warehouse up, gold or grant failed) is NAMED, never rolled into a fake
+	// a partial outcome (the warehouse up, the grant failed) is NAMED, never rolled into a fake
 	// success.
 	//
 	// Registering the project is what MINTS the tenant, and the catalog seeds the caller as its `admin`
 	// on that call (a brand-new project has no tuples, so the estate-admin door opens once and then
-	// hands the project to its creator). The warehouse create no longer mints a project as a side
-	// effect — it did until the project registry landed, and assuming it still does is exactly how this
-	// dialog came to provision nothing on every project after the first. So the gold create and
-	// every later project-scoped op run on the creator's OWN project rung, and the admin field below is
+	// hands the project to its creator). A warehouse create mints no project, so the project is
+	// registered first, and every later project-scoped op runs on the creator's OWN project rung; the admin field below is
 	// for granting a SECOND admin (or handing the tenant to someone else) — never the only thing
 	// standing between the new project and being ungovernable.
 	//
@@ -42,8 +39,6 @@
 	let name = $state('');
 	let whId = $state('');
 	let whBucket = $state('');
-	let goldId = $state('');
-	let goldBucket = $state('');
 	let admin = $state('');
 	let busy = $state(false);
 	let error = $state<string | null>(null);
@@ -67,8 +62,6 @@
 		name = '';
 		whId = '';
 		whBucket = '';
-		goldId = '';
-		goldBucket = '';
 		admin = '';
 		error = null;
 	}
@@ -107,7 +100,7 @@
 				toast.error(error);
 				return;
 			}
-			// 2. The work warehouse, now that its parent exists.
+			// 2. The first warehouse, now that its parent exists.
 			const first = await createWarehouse({ id: wh, project, bucket: whBucket.trim() || null });
 			if (!first.ok) {
 				// No confirmed creation (a timeout may still land server-side — failText says so) — stay
@@ -117,22 +110,7 @@
 				return;
 			}
 			const partials: string[] = [];
-			// 3. Optional gold serving warehouse (a second, serving-classed record).
-			const gold = goldId.trim();
-			if (gold) {
-				const res = await createWarehouse({
-					id: gold,
-					project,
-					bucket: goldBucket.trim() || null,
-					serving: 'gold',
-				});
-				if (!res.ok) {
-					partials.push(
-						`gold serving warehouse ${gold} failed: ${failText(`provisioning ${gold}`, res.status, res.detail)}`,
-					);
-				}
-			}
-			// 4. Optional extra admin — a raw admin tuple on the new project object, ON TOP of the one the
+			// 3. Optional extra admin — a raw admin tuple on the new project object, ON TOP of the one the
 			// catalog already seeded for the caller when it registered the project. Left empty, the project is still
 			// governable (by its creator); filled, it hands a co-admin (or a successor) the same rung.
 			const adminUser = admin.trim();
@@ -149,11 +127,11 @@
 				}
 			}
 			if (partials.length > 0) {
-				// The project + work warehouse EXIST — say so, and name exactly what still needs doing.
+				// The project and its warehouse EXIST — say so, and name exactly what still needs doing.
 				toast.error(`Project ${project} created with ${wh}, but ${partials.join('; ')}`);
 			} else {
 				toast.success(
-					`Project ${project} created — warehouse ${wh}${gold ? `, gold serving ${gold}` : ''}${adminUser ? `, admin ${adminUser}` : ''}.`,
+					`Project ${project} created — warehouse ${wh}${adminUser ? `, admin ${adminUser}` : ''}.`,
 				);
 			}
 			open = false;
@@ -169,8 +147,7 @@
 	<Dialog.Content>
 		<Dialog.Title>New project</Dialog.Title>
 		<Dialog.Description>
-			Registers the project, makes you its admin, and provisions its first warehouse under it; the
-			optional serving warehouse hosts the gold tier in its own bucket.
+			Registers the project, makes you its admin, and provisions its first warehouse under it.
 		</Dialog.Description>
 		<form
 			class="form"
@@ -191,26 +168,6 @@
 				<label
 					>bucket (defaults to id)
 					<input class="mono" bind:value={whBucket} placeholder="—" aria-label="Warehouse bucket" />
-				</label>
-			</div>
-			<div class="pair">
-				<label
-					>gold serving warehouse (optional)
-					<input
-						class="mono"
-						bind:value={goldId}
-						placeholder="acme-gold"
-						aria-label="Gold serving warehouse id"
-					/>
-				</label>
-				<label
-					>serving bucket (defaults to id)
-					<input
-						class="mono"
-						bind:value={goldBucket}
-						placeholder="—"
-						aria-label="Gold serving bucket"
-					/>
 				</label>
 			</div>
 			<label

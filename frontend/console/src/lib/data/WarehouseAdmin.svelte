@@ -22,7 +22,7 @@
 	import { RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import type { Warehouse, WarehouseRecord } from './catalog';
+	import type { Warehouse } from './catalog';
 	import {
 		createWarehouse,
 		fetchServedWarehouses,
@@ -41,9 +41,9 @@
 
 	/** A registered warehouse, or the estate's own (`estate`): one the root listing answers and the
 	 *  registry does not, which holds the lakehouse's own namespaces and belongs to no project. */
-	type Row = WarehouseRecord & { estate?: boolean };
+	type Row = Warehouse & { estate?: boolean };
 
-	let warehouses = $state<WarehouseRecord[] | null>(null);
+	let warehouses = $state<Warehouse[] | null>(null);
 	let estateIds = $state<string[]>([]);
 	let lastStatus = $state(0);
 	let settled = $state(false);
@@ -170,8 +170,8 @@
 	// `warehouse_deleted` control event, so the `liveRead(controlTick, …)` above re-reads every OTHER
 	// open warehouse list on the estate too.
 	let deleteOpen = $state(false);
-	let deleteRow = $state<WarehouseRecord | null>(null);
-	function openDelete(row: WarehouseRecord): void {
+	let deleteRow = $state<Warehouse | null>(null);
+	function openDelete(row: Warehouse): void {
 		deleteRow = row;
 		deleteOpen = true;
 	}
@@ -461,15 +461,6 @@
 					>{statusOf(drawerRow)}</span
 				>
 			</dd>
-			<dt>class</dt>
-			<dd>
-				{#if drawerRow.serving === 'gold'}
-					<!-- the serving marker: this record hosts the project's gold tier in its own bucket -->
-					<span class="chip gold mono">serving · gold</span>
-				{:else}
-					<span class="mut">work warehouse</span>
-				{/if}
-			</dd>
 			<dt>created</dt>
 			<dd class="mono">{drawerRow.created_at ?? '—'}</dd>
 			{#if declaredInGit(drawerRow)}
@@ -606,9 +597,6 @@
 		text-decoration: underline;
 	}
 	/* drawer record + jump links */
-	.chip.gold {
-		border-color: color-mix(in srgb, var(--accent, #ffc14d) 55%, var(--line));
-	}
 	.rec {
 		display: grid;
 		grid-template-columns: max-content 1fr;

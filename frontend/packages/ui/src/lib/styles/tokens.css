@@ -31,7 +31,7 @@
 	--success-foreground: oklch(0.985 0 0);
 	--warning: oklch(0.75 0.18 75);
 	--warning-foreground: oklch(0.16 0.006 270);
-	/* The medallion tiers' chips. Each clears WCAG 2.2 AA (4.5:1) as small text on every surface it
+	/* The tier chips (the three tiers a namespace may declare, ADR 0160). Each clears WCAG 2.2 AA (4.5:1) as small text on every surface it
 	   sits on: measured from these OKLCH values against --background, --card, --muted and --sidebar,
 	   the least 5.31:1 (gold on --muted). */
 	--stage-bronze: oklch(0.5 0.11 55);

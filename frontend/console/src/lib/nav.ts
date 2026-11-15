@@ -2,11 +2,9 @@ import {
 	Boxes,
 	Database,
 	FolderKanban,
-	HardDrive,
 	House,
 	Inbox,
 	LayoutDashboard,
-	Layers,
 	Radio,
 	Settings,
 	ShieldCheck,
@@ -26,8 +24,8 @@ import { isEstateAdmin } from '#lib/estate-admin.ts';
  * feature, while a disabled one says whom to ask.
  */
 
-/** The catalog, in hierarchy order below a project: warehouse, namespace, table; then the stores
- *  and the held promotions (a decision gated on `can_promote` on the held table). */
+/** The catalog, in hierarchy order below a project: warehouse, namespace, table; then the held
+ *  promotions (a decision gated on `can_promote` on the held table). */
 const CATALOG: PageNavLeaf[] = [
 	{
 		title: 'Warehouses',
@@ -42,7 +40,6 @@ const CATALOG: PageNavLeaf[] = [
 		icon: Boxes,
 	},
 	{ title: 'Tables', href: '/catalog/tables', match: seg('/catalog/tables'), icon: Database },
-	{ title: 'Storage', href: '/catalog/storage', match: seg('/catalog/storage'), icon: HardDrive },
 	{
 		title: 'Promotions',
 		href: '/catalog/promotions',
@@ -51,23 +48,19 @@ const CATALOG: PageNavLeaf[] = [
 	},
 ];
 
-/** Running the estate: its events, streams and dead letters, behind the estate-admin door. */
+/** Running the estate: its events and dead letters, behind the estate-admin door. */
 const OPERATIONS: PageNavLeaf[] = [
 	{ title: 'Events', href: '/admin/events', match: seg('/admin/events'), icon: Radio },
-	{ title: 'Streams', href: '/admin/streams', match: seg('/admin/streams'), icon: Layers },
 	{ title: 'DLQ', href: '/admin/dlq', match: seg('/admin/dlq'), icon: Inbox },
 ];
 
-/** Platform configuration, read across every project: who may do what, and the audit trail. */
+/** Platform configuration, read across every project: who may do what. */
 const SETTINGS: PageNavLeaf = {
 	title: 'Settings',
 	href: '/settings',
 	match: under('/settings'),
 	icon: Settings,
-	children: [
-		{ title: 'Users & roles', href: '/settings/access', match: seg('/settings/access') },
-		{ title: 'Audit', href: '/settings/audit', match: seg('/settings/audit') },
-	],
+	children: [{ title: 'Users & roles', href: '/settings/access', match: seg('/settings/access') }],
 };
 
 /** Above every section: the estate and its projects. */

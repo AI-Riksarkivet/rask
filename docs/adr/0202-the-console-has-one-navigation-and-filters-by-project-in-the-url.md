@@ -1,7 +1,8 @@
 # 0202. The console has one navigation, and filters by project in the URL (2026-11-11)
 
-**Status:** accepted. Source: the owner, 2026-11-11, through the question tool: "Remove both" for the console's top
-menu and its project switcher, leaving the sidebar as the one navigation.
+**Status:** accepted; its sidebar rows amended by [ADR 0210](0210-the-console-shows-what-is-there-by-its-path.md)
+(Storage, Streams and Settings → Audit have no page). Source: the owner, 2026-11-11, through the question tool: "Remove
+both" for the console's top menu and its project switcher, leaving the sidebar as the one navigation.
 
 ## Context
 

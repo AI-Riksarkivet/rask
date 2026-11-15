@@ -48,10 +48,10 @@ above: `--reuse-values` with the key missing must render the default, and the me
 a fraction of a day is a valid grace (the schema types it `number`), and truncating one would
 turn the dev estate's 0.04 into 0, which switches recoverable drops off ([[LH-518]]).
 
-## `{{- $reserved := list }}`
+## `- { name: LANCE_RESERVED_BUCKETS, value: {{ include "lance.platformBuckets" . | quote }} }`
 
-Buckets no warehouse may claim (audit 2026-07-23): the medallion ZONE buckets (gold can
-live outside the shared bucket) — the catalog root/registry bucket is always reserved in-app.
+Buckets no warehouse may claim (audit 2026-07-23): the platform's own buckets (`objectStore.buckets`), so no tenant
+governs a bucket every tenant's data may sit in. The catalog root and registry bucket are always reserved in-app.
 
 ## `- { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join...`
 

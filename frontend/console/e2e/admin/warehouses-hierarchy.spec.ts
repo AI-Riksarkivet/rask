@@ -1,5 +1,6 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
 import { signIn, TOKEN } from './session';
+import { declaredTiers } from './tiers';
 import { MOCK_CATALOG } from './ports';
 
 // The hierarchy drill-down (goal cond 3): project → warehouse → namespace → table, driven with an
@@ -61,11 +62,16 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 		// The warehouse's own listing (the spec's ListNamespaces on its name) answers the NAMES of the
 		// namespaces under it — the list the page renders, an empty one included (#66).
 		'GET /v1/namespace/acme-wh/list': { namespaces: ['silver', 'gold', 'raw'] },
+		// A namespace nests: silver holds `deep`, so the drill-down must lead there too.
+		'GET /v1/namespace/acme-wh%24silver/list': { namespaces: ['deep'] },
 		'GET /v1/table': { tables: TABLES },
+		...declaredTiers({ 'acme-wh$silver': 'silver', 'acme-wh$gold': 'gold' }),
 	});
 });
 
-test('drills warehouse → namespace with tier badges along the way', async ({ page }) => {
+test('drills warehouse → namespace → table with tier badges, and the breadcrumb leads back up', async ({
+	page,
+}) => {
 	// STARTS AT THE WAREHOUSE: a project is the TOP of the hierarchy (project › warehouse › namespace ›
 	// table) and its page is `/projects/<p>`; the up-link back to it is pinned below and in
 	// warehouses-drawers.spec.ts.
@@ -78,20 +84,35 @@ test('drills warehouse → namespace with tier badges along the way', async ({ p
 	// The way back UP: the project's own page.
 	const up = page.getByRole('link', { name: 'acme', exact: true });
 	await expect(up).toHaveAttribute('href', '/projects/acme');
-	const silverRow = page.locator('a.row', { hasText: 'acme-wh$silver' });
+	const silverRow = page.locator('a.row', { hasText: /^silver/ });
 	await expect(silverRow).toBeVisible();
 	await expect(silverRow.locator('.stage')).toHaveText('silver');
-	await expect(page.locator('a.row', { hasText: 'acme-wh$gold' }).locator('.stage')).toHaveText(
-		'gold',
-	);
+	await expect(page.locator('a.row', { hasText: /^gold/ }).locator('.stage')).toHaveText('gold');
 	// An empty namespace is listed with no tables, not left out.
-	await expect(page.locator('a.row', { hasText: 'acme-wh$raw' })).toContainText('0 tables');
+	await expect(page.locator('a.row', { hasText: /^raw/ })).toContainText('0 tables');
 	await expect(page.locator('a.row', { hasText: 'bronze' })).toHaveCount(0);
 	await silverRow.click();
 
-	// The namespace rung (existing page): its member table listed.
+	// The namespace rung: its child namespace and its member table, each by its own name.
 	await expect(page).toHaveURL(/\/catalog\/namespaces\/acme-wh%24silver$/);
-	await expect(page.getByRole('link', { name: 'acme-wh$silver$features' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'deep', exact: true })).toHaveAttribute(
+		'href',
+		'/catalog/namespaces/acme-wh%24silver%24deep',
+	);
+	await page.getByRole('link', { name: 'features', exact: true }).click();
+
+	// The table, named by its path, and its breadcrumb back through its namespace and warehouse.
+	await expect(page).toHaveURL(/\/catalog\/tables\/acme-wh%24silver%24features$/);
+	await expect(page.getByRole('heading', { level: 1 })).toHaveText('acme-wh › silver › features');
+	const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
+	await expect(crumbs.getByRole('link', { name: 'silver', exact: true })).toHaveAttribute(
+		'href',
+		'/catalog/namespaces/acme-wh%24silver',
+	);
+	await expect(crumbs.getByRole('link', { name: 'acme-wh', exact: true })).toHaveAttribute(
+		'href',
+		'/catalog/warehouses/acme-wh',
+	);
 });
 
 // DELETED WITH ITS SURFACE, and the gap is named rather than quietly closed: this file used to end

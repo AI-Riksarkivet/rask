@@ -204,11 +204,15 @@ granted a rung on a project or a namespace, and `can_promote` / `can_update_tag`
 
 ---
 
-## 6. The medallion: tier governance (bronze → silver → gold)
+## 6. Tiers: governance a namespace may declare
 
-Tiers are **namespaces**; datasets are **Lance tables**. Default storage: **one bucket per warehouse**, and a table
-the catalog makes lives at `<warehouse root>/<table uuid>`, so a tier is a catalog record, never a path prefix
-(ADR 0173 §5; authz and physical storage are independent axes).
+How data is layered is the user's choice. A namespace MAY declare a tier, `rask.tier` = `bronze`, `silver` or `gold`,
+once at create by its project's admin ([ADR 0160](adr/0160-the-tier-judge-owns-the-write-rung-and-a-tier-is-declared-once.md));
+a namespace that declares none has no tier rules, and nothing reads a tier from a name. Datasets are **Lance tables**,
+one bucket per warehouse, and a table the catalog makes lives at `<warehouse root>/<table uuid>`, so a tier is a
+catalog record, never a path prefix (ADR 0173 §5; authz and physical storage are independent axes).
+
+An example pipeline that declares tiers:
 
 ```mermaid
 flowchart LR
@@ -220,15 +224,15 @@ flowchart LR
   CAT[catalog write path: tier permission, provenance, gate] -. governs .- B & S & G
 ```
 
-**Moving data between tiers is the user's pipeline, on its own compute; the rules a tier write must satisfy are the
-catalog's**, applied in its write path so no writer can bypass them
+**Moving data between tables is the user's pipeline, on its own compute; the rules a write into a declared tier must
+satisfy are the catalog's**, applied in its write path so no writer can bypass them
 ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md),
 [ADR 0156](adr/0156-the-audit-grilling-amends-0155.md)). A pipeline authenticates → `describe`s its input
 [authz `can_read_data` + location/creds] → reads → transforms → `create`/`insert`s the next tier
 [authz `can_create_table`/`can_write_data`] → a new Lance version is committed and the catalog announces it on
-lineage. Publishing a version runs the project's quality gate and moves the table's `published` tag. What the catalog
-enforces today, and the ADR 0156 rules still to land (the `rask.tier` judge, provenance in the spec Context, the tag
-gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
+lineage. A write into a declared silver or gold namespace must name its run and its inputs. Publishing a version runs the
+project's quality gate and moves the table's `published` tag. What the catalog enforces is in
+[`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 
 ---
 
@@ -242,8 +246,8 @@ gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 | Authz (OpenFGA, `can_*` per op, concentric + parent cascade, roles-as-subjects) | ✅ done, e2e-verified |
 | Post-create ownership seeding (single `seed_ownership` helper) | ✅ done |
 | Resilience (retry + fail-closed incl. transport errors; one retry layer; bounded) | ✅ done |
-| Medallion model + tests (bronze/silver/gold + persona roles) | ✅ done (model + `model.fga.yaml`) |
-| Tier movement (bronze→silver→gold) | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog runs the publish-time quality gate, and the ADR 0156 tier rules are tracked in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) |
+| Authorization model + tests (persona roles, the validator rung) | ✅ done (model + `model.fga.yaml`) |
+| Data movement between tables | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog judges writes into declared tiers and runs the publish-time quality gate ([`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md)) |
 | `project` type + 3-axis governance (teams × projects × tiers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
 | Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), lineage's relay tick and the catalog's six ticks are fixed timers in each service's own process, each window claimed by one conditional write on the control root (`lakehouse.timers`), and NATS JetStream, the one bus (ADR 0199), carries the internal events |
 | Lineage (authenticated OpenLineage intake, the commit feed and table-level edges as catalog-governed Lance tables, a forwarder to a bring-your-own graph backend; producer-side emitter) | ✅ service built & deployed; read-side authz implemented (see §9, `docs/LINEAGE.md`) |
@@ -327,7 +331,7 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
 ## 11. Glossary
 
 - **Control plane / data plane** — decide+locate (this service) vs move bytes (engines).
-- **Namespace** — a logical container, a record in the catalog, never a path prefix; a medallion *tier* is a namespace.
+- **Namespace** — a logical container, a record in the catalog, never a path prefix; it may declare a *tier*.
 - **Table / dataset** — a Lance dataset (versioned); a table the catalog makes lives at `<warehouse root>/<table uuid>`,
   a registered one where its registrar put it (ADR 0173 §5).
 - **Tuple** — an OpenFGA fact, e.g. `user:dex~alice owner table:<uuid>`: a table's or namespace's grants are held by the uuid the catalog minted for it, never by its name (ADR 0173 §8).
@@ -337,4 +341,5 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
   `project` or `parent` edge.
 - **Create-on-parent** — creating a child is authorized against its parent.
 - **Credential vending** — the catalog returns scoped storage creds per table (`describe` with `vend_credentials`).
-- **Medallion** — bronze → silver → gold tiers, governed in the catalog's write path.
+- **Tier** — `bronze`, `silver` or `gold`, which a namespace may declare (`rask.tier`); the catalog judges writes into
+  it. A namespace that declares none has no tier.

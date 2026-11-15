@@ -416,7 +416,7 @@ rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-a
 rustfs-provisioning: ## Store IAM vs a REAL RustFS (a refused policy fails the hook; a reclaim session ends one record and nothing else)
 	$(DAGGER) call rustfs-provisioning
 
-# The dataops loop: authorization + provenance AUTHORSHIP + medallion lineage, with real Dex tokens
+# The dataops loop: authorization + provenance AUTHORSHIP + derivation lineage, with real Dex tokens
 # and not one hand-written tuple. Replaced `scripts/governance_e2e.sh`, which layered FOUR compose
 # files to assemble the same thing — and which could not have passed as written: it never exported
 # `LANCE_E2E_DEX_SECRET`, so its own test sent a client secret to a Dex client both configs declare

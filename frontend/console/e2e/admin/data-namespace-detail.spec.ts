@@ -99,12 +99,12 @@ test('renders the header, table roster, and policy chips from the mocked list + 
 	// The count comes from the registry list, grouped by the `<namespace>$` prefix. Scoped to the page's
 	// own header: the AppShell topbar and the access-graph card both contribute <header> elements too.
 	await expect(page.locator('.page > header')).toContainText('2 tables');
-	await expect(page.locator('a.row', { hasText: 'gold$catalog' })).toHaveAttribute(
+	await expect(page.locator('a.row', { hasText: /^catalog$/ })).toHaveAttribute(
 		'href',
 		'/catalog/tables/gold%24catalog',
 	);
 	// bronze's table must NOT bleed into gold's roster.
-	await expect(page.locator('a.row', { hasText: 'bronze$events' })).toHaveCount(0);
+	await expect(page.locator('a.row', { hasText: /^events$/ })).toHaveCount(0);
 	// The #50 policy card renders the described policy as chips.
 	await expect(page.locator('.chip', { hasText: 'retention 14d' })).toBeVisible();
 	await expect(page.locator('.chip', { hasText: 'keep last 5' })).toBeVisible();

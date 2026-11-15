@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { tableFromIPC, Type } from 'apache-arrow';
 import { mockMe, signIn, TOKEN } from './session';
+import { declaredTiers } from './tiers';
 import { MOCK_CATALOG } from './ports';
 import { cellUnder } from '../table-cell';
 
@@ -40,7 +41,7 @@ test('declare-table posts a JSON body (no Arrow) and the registry re-lists the n
 	page,
 }) => {
 	await page.goto('/catalog/tables');
-	await expect(page.getByRole('link', { name: 'db1$existing' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › existing' })).toBeVisible();
 	// The post-declare world: the catalog answers the create, and the registry it re-lists now carries
 	// the reserved id. Seeded before the click because the page re-lists in the same flight.
 	await seed(page, {
@@ -60,14 +61,14 @@ test('declare-table posts a JSON body (no Arrow) and the registry re-lists the n
 		'declared db1$fresh @ s3://lance-catalog/db1$fresh',
 	);
 	// the success re-load renders the post-declare registry: the reserved row is listed
-	await expect(page.getByRole('link', { name: 'db1$fresh' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › fresh' })).toBeVisible();
 });
 
 test('declare with a location carries it on the wire (#85)', async ({ page }) => {
 	await page.goto('/catalog/tables');
 	// Hydration guard (same as the first declare test): clicking the toggle before Svelte attaches the
 	// handler is a silent no-op and the form never opens.
-	await expect(page.getByRole('link', { name: 'db1$existing' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › existing' })).toBeVisible();
 	await seed(page, { 'POST /v1/table/db1%24pinned/declare': { location: 's3://elsewhere' } });
 	await page.getByRole('button', { name: 'Declare table' }).click();
 	await page.getByLabel('Namespace').fill('db1');
@@ -90,7 +91,7 @@ test('a 403 declare renders the create-denied state and adds no row (#85)', asyn
 	});
 	await page.goto('/catalog/tables');
 	// Hydration guard — see the location test above.
-	await expect(page.getByRole('link', { name: 'db1$existing' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › existing' })).toBeVisible();
 	await page.getByRole('button', { name: 'Declare table' }).click();
 	await page.getByLabel('Namespace').fill('db1');
 	await page.getByLabel('Table name').fill('fresh');
@@ -98,7 +99,7 @@ test('a 403 declare renders the create-denied state and adds no row (#85)', asyn
 	await expect(page.locator('.banner.fail')).toContainText(
 		'Denied: declaring in db1 needs create access (can_create_table).',
 	);
-	await expect(page.getByRole('link', { name: 'db1$fresh' })).toHaveCount(0);
+	await expect(page.getByRole('link', { name: 'db1 › fresh' })).toHaveCount(0);
 });
 
 // --- the other half of the form: create WITH data (the dead end's exit) ---
@@ -114,7 +115,7 @@ test('rows in the form send the CREATE door an Arrow body, not the declare door'
 }) => {
 	await page.goto('/catalog/tables');
 	// Hydration guard — see the location test above.
-	await expect(page.getByRole('link', { name: 'db1$existing' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › existing' })).toBeVisible();
 	await seed(page, {
 		'GET /v1/table': { tables: ['db1$existing', 'db1$fresh'] },
 		'POST /v1/table/db1%24fresh/create': { version: 1 },
@@ -145,14 +146,14 @@ test('rows in the form send the CREATE door an Arrow body, not the declare door'
 	// nothing refreshes the `fetchTables` query the way the declare COMMAND does. Without the explicit
 	// refresh in the component this assertion fails until the live cursor happens to tick, which reads
 	// as a flake rather than a failure.
-	await expect(page.getByRole('link', { name: 'db1$fresh' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › fresh' })).toBeVisible();
 });
 
 test('a bare declare says the reserved id holds no data yet', async ({ page }) => {
 	// The dead end was not only missing a door — it was silent about being a dead end, and "declared
 	// db1$fresh" read as "the table is ready" right before its detail page 404'd.
 	await page.goto('/catalog/tables');
-	await expect(page.getByRole('link', { name: 'db1$existing' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › existing' })).toBeVisible();
 	await seed(page, { 'POST /v1/table/db1%24fresh/declare': { location: 's3://x' } });
 	await page.getByRole('button', { name: 'Declare table' }).click();
 	await page.getByLabel('Namespace').fill('db1');
@@ -170,7 +171,7 @@ test('a namespace named like a route group links to its own page, not the list',
 	// like a route group: the row's links must still name the namespace and the table.
 	await seed(page, { 'GET /v1/table': { tables: ['(staging)$pages'] } });
 	await page.goto('/catalog/tables');
-	await expect(page.getByRole('link', { name: '(staging)$pages' })).toHaveAttribute(
+	await expect(page.getByRole('link', { name: '(staging) › pages' })).toHaveAttribute(
 		'href',
 		'/catalog/tables/(staging)%24pages',
 	);
@@ -180,14 +181,15 @@ test('a namespace named like a route group links to its own page, not the list',
 	);
 });
 
-test('stage chips, muted text and primary fills clear WCAG AA contrast in light and dark', async ({
+test('tier chips, muted text and primary fills clear WCAG AA contrast in light and dark', async ({
 	page,
 }) => {
 	await seed(page, {
-		'GET /v1/table': { tables: ['acme-bronze$a', 'acme-silver$b', 'acme-gold$c'] },
+		'GET /v1/table': { tables: ['acme$bronze$a', 'acme$silver$b', 'acme$gold$c'] },
+		...declaredTiers({ acme$bronze: 'bronze', acme$silver: 'silver', acme$gold: 'gold' }),
 	});
 	await page.goto('/catalog/tables');
-	await expect(page.getByRole('link', { name: 'acme-gold$c' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'acme › gold › c' })).toBeVisible();
 	// A primary fill as a selected toggle or a default button paints it, beside the account avatar's.
 	await page.evaluate(() => {
 		const probe = document.createElement('span');
@@ -277,16 +279,14 @@ test('an empty registry says no table is visible to the reader, not that none ex
 	await expect(page.getByText('No tables visible to you.')).toBeVisible();
 });
 
-test('a table with no project draws the stage column’s dash, in the same face', async ({
-	page,
-}) => {
+test('a table with no project draws the tier column’s dash, in the same face', async ({ page }) => {
 	await page.goto('/catalog/tables');
-	await expect(page.getByRole('link', { name: 'db1$existing' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › existing' })).toBeVisible();
 	const dashFace = async (header: string) =>
-		(await cellUnder(page, 'db1$existing', header))
+		(await cellUnder(page, 'db1 › existing', header))
 			.getByText('—', { exact: true })
 			.evaluate((el) => getComputedStyle(el).fontFamily);
-	expect(await dashFace('project')).toBe(await dashFace('stage'));
+	expect(await dashFace('project')).toBe(await dashFace('tier'));
 });
 
 test('the declare form takes the focus it was opened for, and Escape closes it back to its toggle', async ({

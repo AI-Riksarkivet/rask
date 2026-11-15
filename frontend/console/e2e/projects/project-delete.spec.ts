@@ -77,7 +77,7 @@ test('a 409 names the blocking warehouses and renders each as a link to its cata
 			project: 'acme',
 			warehouses: [
 				{ id: 'acme-wh', bucket: 'acme-bucket', status: 'active' },
-				{ id: 'acme-gold', bucket: 'gold-bucket', serving: 'gold', status: 'active' },
+				{ id: 'acme-gold', bucket: 'gold-bucket', status: 'active' },
 			],
 			admins: ['user:alice'],
 		},

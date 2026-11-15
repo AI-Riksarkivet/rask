@@ -1,7 +1,7 @@
 """Automated data-quality assertions — the gate every publication runs.
 
 Lives in `lakehouse` rather than in one service because § D-R1 makes the gate a property
-of PUBLICATION, not of the medallion: a version becomes consumable only after it passes, whoever
+of PUBLICATION, not of any one writer: a version becomes consumable only after it passes, whoever
 wrote it — a gate that only one writer can run is a gate every other writer has to reimplement, which
 is how the estate ends up with two definitions of "good enough".
 
@@ -24,7 +24,7 @@ import pyarrow as pa
 from pydantic import BaseModel, model_validator
 
 from lakehouse import blobs
-from lakehouse.stage_stamp import SOURCE_ROWID_COLUMN
+from lakehouse.provenance_stamp import SOURCE_ROWID_COLUMN
 from lakehouse.storage_options import StorageOptions
 
 

@@ -1,12 +1,12 @@
 <script lang="ts">
-	// The medallion-tier badge (goal cond 3): a small stage chip derived from the namespace name.
-	// Presentation-only — derivation lives in stage.ts.
+	// The tier badge: the tier a namespace DECLARES (`rask.tier`, ADR 0160), never one read off its name.
+	// Presentation-only — the read is `namespaceTier` / `NamespaceTiers`.
 	import type { StageInfo } from './stage';
 
 	let { info }: { info: StageInfo } = $props();
 </script>
 
-<span class="stage mono {info.stage}" title="Medallion stage (derived from the namespace name)">
+<span class="stage mono {info.stage}" title="Tier declared on the namespace (rask.tier)">
 	{info.stage}
 </span>
 

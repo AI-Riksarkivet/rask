@@ -286,7 +286,7 @@ func (m *Rask) lineageService(src *dagger.Directory, catalog *dagger.Service, to
 }
 
 // GovernanceChain proves the dataops loop end to end: authorization, provenance AUTHORSHIP, and
-// medallion lineage — with real Dex id_tokens and not one hand-written tuple.
+// derivation lineage — with real Dex id_tokens and not one hand-written tuple.
 //
 // It replaces `scripts/governance_e2e.sh`, which layered FOUR compose files (base + auth + lineage +
 // governance) to assemble the same thing. Everything it needs beyond the auth stack is the lineage

@@ -8,12 +8,8 @@ are not decoration. `code` is a REQUIRED, no-default field on the generated Lanc
 `ErrorResponse` model, so a client validating one of these bodies RAISES; it does not quietly get a
 `None`. Seven places built the envelope by hand with four keys.
 
-THE TWO HALVES ARE NOT THE SAME DEFECT, and the audit is right to separate them:
-
-  * The CATALOG sites answer on `/v1/...` routes that generated clients parse. That is the real one.
-  * The MEDALLION sites are root-mounted non-spec doors (`/train` and the operator doors) reached
-    by the frontend and operators, never by a generated client — envelope inconsistency only. Worth
-    fixing anyway, because a body that claims parity with the catalog's errors must carry the same keys.
+The catalog's sites answer on `/v1/...` routes that generated clients parse, so a body missing `code` breaks a
+client rather than only an envelope.
 
 WHY THE SITES KEEP BUILDING A RESPONSE INSTEAD OF RAISING, which is where this deviates from the
 audit's suggested fix. Two of them are pure-ASGI middleware that sit outside `ExceptionMiddleware` and

@@ -10,17 +10,17 @@ No build step: `package.json` `exports` name the source (`./src/lib/components/<
 
 `vite.config.ts` serves Storybook + vitest, and its `test` block is load-bearing: `include` names **both** homes — `tests/**` and `src/**` — because narrowing to one silently drops the other.
 
-## The 20 export subpaths
+## The 21 export subpaths
 
 **Components** — `src/lib/components/<name>/index.ts`, conditions `svelte` + `types` only:
 
-`alert-dialog · badge · button · card · checkbox · data-table · dialog · dropdown-menu · input · popover · select · sheet · skeleton · table · tooltip` (measured 2026-11-11 against `package.json` `exports`). `avatar`, `collapsible`, `separator` and `sidebar` are in `src/lib/components/` and exported by no subpath: the shell alone uses them, by relative import.
+`alert-dialog · badge · button · card · checkbox · copy-button · data-table · dialog · dropdown-menu · input · popover · select · sheet · skeleton · table · tooltip` (measured 2026-11-15 against `package.json` `exports`). `copy-button` copies one `value` on the click that asks for it and names it in its accessible name (`Copy {label}`); the console's `Subject`, a catalog object's id and the connect snippets use it. `avatar`, `collapsible`, `separator` and `sidebar` are in `src/lib/components/` and exported by no subpath: the shell alone uses them, by relative import.
 
 **Non-components** (`./utils` and `./motion` carry a `default` condition; `./shell` does not — it is `types` + `svelte` like a component, and shares rough edge 3; `./styles/tokens.css` is a bare path):
 
 | Subpath | Contents |
 |---|---|
-| `./shell` | `AppShell`, `AppError` + `nav-config` (the sidebar's and the bell's types; the route matchers are the console's, `#lib/nav-match.ts`). The frame's parts (`app-sidebar`, `page-nav`, `navbar-user`, the bell `activity-center`, `breadcrumb`) are not exported: `AppShell` mounts them. The bell is fed through props and callbacks; the console owns the log (`rask-frontend`) |
+| `./shell` | `AppShell` (its `trail` prop replaces the URL's crumbs for a page that knows a truer path), `AppError`, the `Crumb` type + `nav-config` (the sidebar's and the bell's types; the route matchers are the console's, `#lib/nav-match.ts`). The frame's parts (`app-sidebar`, `page-nav`, `navbar-user`, the bell `activity-center`, `breadcrumb`) are not exported: `AppShell` mounts them. The bell is fed through props and callbacks; the console owns the log (`rask-frontend`) |
 | `./utils` | `cn`, `toDate/formatAbsolute/formatRelative/formatTimestamp/formatZoned/utcOffsetLabel`, `WithElementRef/WithoutChildren/WithoutChild/WithoutChildrenOrChild` |
 | `./motion` | GSAP `{@attach}` factories |
 | `./styles/tokens.css` | the theme |

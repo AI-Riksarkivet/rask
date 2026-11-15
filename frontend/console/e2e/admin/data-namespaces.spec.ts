@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mockMe, signIn, TOKEN } from './session';
+import { declaredTiers } from './tiers';
 import { MOCK_CATALOG } from './ports';
 
 // Hermetic /namespaces coverage (#64 + the #85 drop lifecycle + the create): the page lists each
@@ -46,12 +47,13 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 		'GET /v1/namespace/acme-wh/list': LISTED,
 		'POST /v1/namespace/acme-wh%24bronze/drop': {},
 		'POST /v1/namespace/acme-wh%24gold/drop': {},
+		...declaredTiers({ 'acme-wh$bronze': 'bronze', 'acme-wh$gold': 'gold' }),
 	});
 });
 
-/** A namespace's row link, by its whole id. */
+/** A namespace's row link, by its whole id, which the list names by its path (ADR 0210). */
 const nsLink = (page: Page, id: string) =>
-	page.locator('a.ns-name', { hasText: new RegExp(`^${id.replaceAll('$', '\\$')}$`) });
+	page.locator('a.ns-name', { hasText: new RegExp(`^${id.replaceAll('$', ' › ')}$`) });
 
 test('lists one sortable row per namespace with table counts + tier badges', async ({ page }) => {
 	await page.goto('/catalog/namespaces');
@@ -60,7 +62,7 @@ test('lists one sortable row per namespace with table counts + tier badges', asy
 	// read from the catalog with this test's own bearer.
 	const bronze = page.locator('tr', { has: nsLink(page, 'acme-wh$bronze') });
 	await expect(bronze).toContainText('1');
-	await expect(bronze.locator('.stage')).toHaveText('bronze'); // the derived medallion tier badge
+	await expect(bronze.locator('.stage')).toHaveText('bronze'); // the tier the namespace declares
 	await expect(bronze).toContainText('acme-wh'); // its warehouse, read off its id
 	const gold = page.locator('tr', { has: nsLink(page, 'acme-wh$gold') });
 	await expect(gold).toContainText('2');

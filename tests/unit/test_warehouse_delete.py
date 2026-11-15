@@ -255,7 +255,7 @@ def test_purge_bucket_true_removes_the_bytes_and_reports_the_count(tmp_path: Any
 
 def test_a_purge_refuses_while_a_sibling_warehouse_still_claims_the_same_bucket(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The create door lets ONE project back two warehouses with one bucket (its cross-claim guard subtracts
-    the caller's own project — a work plus a ``serving="gold"`` pair is exactly that shape). A purge deletes
+    the caller's own project, so one project may keep several warehouses on one bucket). A purge deletes
     every object AND the bucket, so without a symmetric guard here, deleting one of the pair destroys the
     other's data and leaves its record pointing at a bucket that no longer exists. Refuse, and name it."""
     settings = _settings(tmp_path)

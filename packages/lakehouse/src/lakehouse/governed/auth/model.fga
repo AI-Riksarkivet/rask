@@ -14,9 +14,9 @@ model
 #   that imply it and what flows down from the parent, and no `can_*` reads a bare data rung. `visible_below` reads the bare
 #   names alone and recurses downward, so upward visibility never asks a descendant about its parents ([[LH-222]]).
 #   `CHANGELOG.md` beside this file says, per change, whether a store's tuples are added to or rewritten.
-# Privileges: concentric rungs cascade DOWN via `parent` / `project`. A SEPARATE `validator` rung gates
-#   medallion stage PROMOTION (e.g. silver -> gold): a plain writer can write within a stage but cannot
-#   promote INTO a gated stage; only an owner or an explicit validator can (`can_promote: validator`).
+# Privileges: concentric rungs cascade DOWN via `parent` / `project`. A SEPARATE `validator` rung decides a
+#   held PROMOTION (a published version the project's quality gate held for review): a plain writer can write a
+#   table but cannot approve its held version; only an owner or an explicit validator can (`can_promote: validator`).
 # Multi-tenancy: each project is a tenant holding its warehouses (buckets). Projects are isolated — a grant
 #   on project A's warehouse never reaches project B, and a role of project B is granted nothing in A.
 # Permissions: every API operation is checked against a `can_*` ACTION relation (the model, not the app,
@@ -461,7 +461,7 @@ type warehouse
     # withdrawn, so they cannot clear the flag either — a policy you can switch off is not a policy.
     define can_set_managed_access: manage_grants
 
-# Namespace = a medallion stage (bronze/silver/gold) or a domain namespace; self-nesting under a warehouse.
+# Namespace = a container of tables, which may declare a tier (`rask.tier`, ADR 0160); self-nesting under a warehouse.
 type namespace
   relations
     define parent: [warehouse, namespace]

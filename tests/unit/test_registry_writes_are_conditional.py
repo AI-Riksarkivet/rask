@@ -93,32 +93,27 @@ def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(cont
     assert live["created_at"] == "t0"
 
 
-def test_the_same_hazard_on_protected_and_serving(control_root: str) -> None:
-    """`protected` and `serving` carry forward by the same mechanism, so they had the same hole.
-
-    `protected` is the one whose loss is silent AND irreversible — it is the delete door's only
+def test_a_re_create_naming_nothing_keeps_deletion_protection(control_root: str) -> None:
+    """`protected` carries forward through the conditional write, and its loss is silent AND irreversible — it is the delete door's only
     safety catch, so a re-create that dropped it would let `DELETE ?purge_bucket=true` take the
     bucket without ever asking for `force=true`.
     """
     _seed(control_root)
 
-    # An operator arms protection and designates the warehouse gold AFTER the re-POST's read.
+    # An operator arms protection AFTER the re-POST's read.
     _, armed = warehouses.upsert_warehouse(
         control_root,
         StorageOptions(),
         {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"},
-        serving="gold",
         protection=ProtectionChange(protected=True, by="user:dex~anna"),
     )
     assert armed["protected"] == "true"
-    assert armed["serving"] == "gold"
 
-    # A later re-POST that names NEITHER must not disarm or demote: a field it does not name stands as it is.
+    # A later re-POST that does not name it must not disarm it: a field it does not name stands as it is.
     _, plain = warehouses.upsert_warehouse(
         control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}
     )
     assert plain["protected"] == "true", "a re-create disarmed deletion protection"
-    assert plain["serving"] == "gold", "a re-create demoted a gold warehouse to a work warehouse"
 
 
 def test_a_record_that_vanished_is_a_conflict_not_a_resurrection(control_root: str) -> None:
@@ -210,7 +205,7 @@ def test_a_project_that_vanished_is_a_conflict_not_a_resurrection(control_root: 
 def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_root: str) -> None:
     """`primary` is a third field with the arm-never-disarm rule, and it has the sharpest loss.
 
-    `serving` and `protected` are honoured as explicit REQUESTS inside the merge; every other field
+    `protected` is honoured as an explicit REQUEST inside the merge; every other field
     comes from `live` or from `_CALLER_OWNED`. A field that is neither is silently dropped — which is
     what happened on 2026-09-06: the endpoint set `record["primary"]`, the write returned 200, and the
     flag was not there. Measured against the deployed catalog, `POST /management/v1/warehouses {primary: true}`
@@ -227,7 +222,7 @@ def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_roo
     )
     assert armed.get("primary") == "true", f"the primary marker did not survive the conditional write: {armed}"
 
-    # A later re-POST naming neither must carry it forward — same rule as serving/protected. A GitOps
+    # A later re-POST naming nothing must carry it forward — the same rule as `protected`. A GitOps
     # re-apply that silently demoted the primary would stop the tenant's cascade, not misroute it.
     _, plain = warehouses.upsert_warehouse(
         control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}

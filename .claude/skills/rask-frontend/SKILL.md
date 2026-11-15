@@ -48,12 +48,12 @@ modules are fine, and the data layer is `reads.svelte.ts`. `tsconfig.json` exten
 
 | path | what it is |
 |---|---|
-| `/` | the estate landing |
+| `/` | Home: the caller's tables per project and tier, lineage's latest commits, the held promotions, and for an estate admin the DLQ depth and the latest governance changes, each from a door the caller already reads (`#lib/home.ts`) |
 | `/projects`, `/projects/[project]` | the project gallery and one project's overview (create, delete, policies) |
-| `/settings`, `/settings/access`, `/settings/audit` | estate configuration, estate-admin only (`settings/+layout.ts`) |
+| `/settings`, `/settings/access` | estate configuration, estate-admin only (`settings/+layout.ts`): Users & roles (the FGA explorer) and a link to Projects |
 | `/catalog` | a 307 to `/catalog/tables` (`catalog/+page.ts`): an old bookmark lands on a list; the group is no page, so its breadcrumb crumb is plain text |
-| `/catalog/{warehouses,namespaces,tables,promotions,storage}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`, `promotions/[table]`) | the catalog; the four lists take `?project=<id>` (below); `storage` is the tier view, which states the catalog's refusal (below) |
-| `/admin`, `/admin/{events,streams,dlq}` | operations, estate-admin only (`admin/+layout.ts`) |
+| `/catalog/{warehouses,namespaces,tables,promotions}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`, `promotions/[table]`) | the catalog; the four lists take `?project=<id>` (below) |
+| `/admin`, `/admin/{events,dlq}` | operations, estate-admin only (`admin/+layout.ts`) |
 | `/workbench` | the dock (events, tables) |
 | `/auth/{login,callback,logout}` | the sign-in round trip, client pages |
 
@@ -72,8 +72,14 @@ with a query is written without the leading `/`, ``resolve(`auth/login?redirect=
 **One name per page.** A page's sidebar row, breadcrumb crumb, `h1` and `<title>` say the same name (`#lib/nav.ts`'s
 `PAGE_NAMES` feeds the crumbs, `GROUP_NAMES` the plain crumbs of `/catalog` and `/admin`, "Catalog" and
 "Operations"; `/` has the one crumb "Home"), and a longer description is the subtitle under the `h1`. Every `<title>` is that name
-followed by ` · rask` (`DLQ · rask`), and a page about one named object has the name, as the catalog writes it, as its
-`h1` and before its collection in the title (`db1$t · tables · rask`). An error page has its own: `+error.svelte` sets
+followed by ` · rask` (`DLQ · rask`). A catalog object is named by its PATH, never by its `$` identifier
+(`#lib/catalog-trail.ts`, ADR 0210): `catalogPath('acme$bronze$t')` is `acme › bronze › t`, which is its `h1`
+(`#lib/data/CatalogName.svelte`), its title before its collection (`acme › bronze › t · tables · rask`) and its name in
+the estate-wide lists, while a child listed on its parent's page shows its own segment. The `$` id appears only where it
+is something to copy: beneath the `h1` with a `CopyButton` (`@rask/ui/copy-button`), in the connect snippets, and in a
+door's URL. A catalog object's breadcrumb is its path too: the root layout passes `catalogTrail(route.id, params)` as
+`AppShell`'s `trail`, so a table's crumbs are Catalog › Warehouses › warehouse › namespace(s) › table, each ancestor
+linking to its page, and every other route's crumbs are its URL's. An error page has its own: `+error.svelte` sets
 `<title>` and one `h1` from the error's `title` (`App.Error`; `requireEstateAdmin` gives "You don’t have access to
 <area>") or the status in words, with the code small beneath. The breadcrumb is the only trail: a detail page draws
 no second one. A 403 on one object's read is the catalog keeping existence to itself, so its page says "No <kind>
@@ -83,8 +89,17 @@ hidden one. Home and the workbench name themselves with a visually hidden `h1` (
 they draw), and a list drawn in a workbench panel (`TableRegistry`'s `frame="panel"`) heads itself with an `h2`, at the
 panel's width.
 
+**A table's and a namespace's tabs.** A table has Overview, Preview, Versions (the commit log, its tags and branches,
+and a summary naming the version the `published` tag points at and the latest; the publish door moves that tag), Connect
+and Access; a namespace has Overview, Connect and Access. Connect (`#lib/data/ConnectSnippets.svelte` over
+`#lib/data/connect.ts`) gives a pylance and a LanceDB snippet that reach the object through the catalog's Lance REST
+namespace (`lance_namespace.connect("rest", {"uri": <origin>/api/catalog, "headers.Authorization": ...})`), with the
+bearer read from `RASK_TOKEN` and the storage credential the catalog vends on each open; it names the issuer and the
+audience scope from `/config.json` (`auth.issuer`, `auth.scopes`) and holds no secret. Each snippet was run as written
+against the dev estate (2026-11-15).
+
 **One navigation, the sidebar, on every page** (ADR 0202). `consoleSidebar(me)` in `#lib/nav.ts` builds it: Home and
-Projects, a Catalog group (Warehouses, Namespaces, Tables, Storage, Promotions), an Operations group (Events, Streams,
+Projects, a Catalog group (Warehouses, Namespaces, Tables, Promotions), an Operations group (Events,
 DLQ), and Workbench and Settings pinned at the foot; `@rask/ui`'s shell renders it (`app-sidebar`, `page-nav`) inside one
 `<nav aria-label="Pages">`. The top bar holds only the sidebar's toggle, the breadcrumb (the route's own path,
 `pathCrumbs`, named and linked by `AppShell`'s `pages`; a group such as Catalog is plain text), the bell and the account
@@ -129,12 +144,10 @@ protection, delete) with 403, so the warehouses page keeps a declared warehouse'
 the project page a declared project's delete, on screen but disabled, with `DECLARED_IN_GIT_REASON` as their
 description, rather than offer what will be refused.
 
-**The audit and streams pages cannot work.** They need the platform's telemetry store and the NATS monitor (`/jsz`),
-which no Gateway route serves to a browser; the owner kept them anyway (2026-11-04): the audit page says where the trail
-lives and offers no filter, and `jetstream.api.ts` answers with that failure, naming what is missing, without a request. So
-do the doors the catalog does not serve: `#lib/storage/remote/storage.api.ts` (the stores-by-tier registry) answers an honest 501 with a
-`detail` naming what no door keeps, and the storage page renders that refusal ("The stores registry is unavailable (HTTP 501) — …"). The e2e mocks
-serve only doors that exist. Promotions read the catalog's own doors:
+**Every page in the sidebar works** (ADR 0210). A view that needs what no Gateway route serves a browser (the platform's
+telemetry store for an audit trail, the NATS monitor for streams, a stores-by-tier registry no door keeps) has no page:
+a page that can only say it cannot work is not offered. The e2e mocks serve only doors that exist. Promotions read the
+catalog's own doors:
 `GET /management/v1/promotions` for the open holds, and `POST /management/v1/table/{id}/promotion/{approve,reject}` for a
 decision, keyed by table.
 

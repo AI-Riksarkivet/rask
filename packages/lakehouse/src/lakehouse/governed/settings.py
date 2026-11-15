@@ -43,7 +43,7 @@ from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, is_machine_idp, requ
 #: absent on purpose — each is declared once already and keeps its owning service's namespace.
 RETIRED_AUTH_ENV_NAMES: tuple[str, ...] = tuple(
     f"{prefix}_{suffix}"
-    for prefix in ("LANCE", "LINEAGE", "MEDALLION", "MAINTENANCE")
+    for prefix in ("LANCE", "LINEAGE", "MAINTENANCE")
     for suffix in (
         "OIDC_ENABLED",
         "OIDC_ISSUER",
@@ -97,7 +97,7 @@ class FgaSettings:
     #: is the first segment of every name on that root ([[LH-593]], :attr:`estate_warehouse`), the parent
     #: of every namespace directly beneath it, and where `can_create_namespace` is asked for one. MEASURED
     #: on the live store 2026-09-22 it is load-bearing: `warehouse:lance_catalog` carries 7 `child` edges
-    #: and 10 principal grants, which is the cascade every medallion write depends on.
+    #: and 10 principal grants, which every write under it inherits through.
     #:
     #: THINGS BREAK IF THESE TWO EVER COLLAPSE BACK INTO ONE, each measured rather than argued:
     #: `namespace#parent` is typed `[warehouse, namespace]` and every `… from parent` rung it inherits
@@ -238,7 +238,7 @@ class OidcProvider(BaseModel):
 
 
 class OidcSettings:
-    """The bearer-token verifier's knobs. Mix in alone only alongside `FgaSettings` (see medallion)."""
+    """The bearer-token verifier's knobs. Mix in alone only alongside `FgaSettings`."""
 
     oidc_enabled: bool = Field(default=False, alias="RASK_OIDC_ENABLED")
     oidc_issuer: str | None = Field(default=None, alias="RASK_OIDC_ISSUER")
@@ -363,7 +363,7 @@ class GovernedAuthSettings(OidcSettings, FgaSettings):
     The coupling lives here and not on `FgaSettings` because it is a statement about human doors:
     FGA answers "may THIS subject do it", so enabling it without OIDC would mean checking a subject
     nobody verified. A service that authorizes as its own SERVICE identity has already answered
-    "which subject" from config, so it composes the two mixins directly instead (medallion), or takes
+    "which subject" from config, so it composes the two mixins directly instead, or takes
     `FgaSettings` alone (maintenance).
     """
 

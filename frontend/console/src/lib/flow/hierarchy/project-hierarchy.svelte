@@ -9,7 +9,7 @@
 		| { ok: false; status: number; detail: string };
 
 	/** The project→warehouse rung, as both pages' catalog reads already spell it. Structural: a
-	 *  richer record (with `status`, `serving`, …) passes without an adapter. */
+	 *  richer record (with `status`, `protected`, …) passes without an adapter. */
 	export type HierarchyWarehouse = { id: string; bucket: string };
 
 	/** The warehouse→namespace rung: the namespaces directly under a warehouse, as ids

@@ -60,7 +60,7 @@ def is_spelled_as_a_uuid(segment: str) -> bool:
 #: a deny. The fleet fails closed on an unrecognised authz error, so that surfaces as a 503 on the
 #: browse path for the WHOLE bucket, including its owners, and it is LATERAL: one deep sibling branch
 #: poisons the negative check for every object in the warehouse. 9 (a warehouse and seven namespaces) keeps the deepest legal tree well
-#: inside the evaluator's reach. (The medallion is two levels; Polaris allows 16.)
+#: inside the evaluator's reach.
 MAX_NAMESPACE_DEPTH = 9
 
 

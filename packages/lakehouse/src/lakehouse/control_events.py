@@ -130,10 +130,9 @@ ControlAction = Literal[
 #: object: a tool that works on the lakehouse keeps its own objects and its own channel for them (ADR 0171).
 ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate", "principal", "role"]
 
-#: The caps on the two cascade CLAIMS a publication echoes onto `table_published`'s `extra`: the batch
-#: id and the person the batch is for. The catalog's publish door enforces them, and a door that takes
-#: either from a caller declares the same cap, so a claim it accepts is never refused at that publish.
-CASCADE_ID_MAX_LENGTH = 128
+#: The cap on the CLAIM a publication echoes onto `table_published`'s `extra`: the person the publication is for. The
+#: catalog's publish door enforces it, and a door that takes it from a caller declares the same cap, so a claim it
+#: accepts is never refused at that publish.
 ORIGINATOR_MAX_LENGTH = 256
 
 

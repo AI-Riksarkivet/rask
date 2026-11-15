@@ -9,8 +9,7 @@ from lineage.core.config import get_settings
 def is_external_source(namespace: str, name: str) -> bool:
     """Is this dataset OUTSIDE the governed estate — a raw source rather than a table we authorize?
 
-    R23 draws the line the whole medallion rests on: the governed tiers are exactly bronze -> silver ->
-    gold, and **raw is the external world, never a governed tier**. So a producer that honestly records
+    R23 draws the line: **raw is the external world, never a governed table**. So a producer that honestly records
     where its data came from names something that has no catalog entry, no ``table:`` object, and
     therefore no tuple that could ever be written for it. Authorizing those inputs the same way as
     governed ones is not strict — it is unsatisfiable, and it refused every such producer permanently:

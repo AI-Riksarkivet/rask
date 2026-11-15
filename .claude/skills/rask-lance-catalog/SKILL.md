@@ -1372,21 +1372,19 @@ governing their data. The project-scoped surface is the console's project page, 
   reported by its location, never expired or vended), checked by no orphan check (`unnamed`), and reported by the reconciler as an
   `UnregisteredDataset` by location.
 
-  **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** No maintenance reader
+  **A DERIVED TABLE INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** No maintenance reader
   names a dataset by it, and `lineage.dataset_id` is schema METADATA, which survives `set_column` / `append_column` /
-  `drop_columns` — so a silver table derived from bronze declares bronze's id unless something
-  re-declares it (measured 2026-09-09: silver's compactions and FAIL events were filed against bronze's
-  node). `lakehouse.stage_stamp.stamp_stage(..., dataset_id=...)` re-declares the destination
-  and DROPS an inherited id when none is given, the same rule it applies to the `lineage` document. No
-  lakehouse service calls it; it is the helper a pipeline writing a derived tier uses. When
+  `drop_columns` — so a table derived from another declares its upstream's id unless something re-declares it
+  (measured 2026-09-09: a derived table's compactions and FAIL events were filed against its upstream's node). The
+  catalog re-declares it on every table it writes (`lakehouse.provenance_stamp.declare_dataset_id`, which DROPS an
+  inherited id when none is given). When
   you check a declared-id chain, ask not "is an id stamped" but "whose uuid, on the tier that derived it": the catalog
   stamps the uuid its location claim holds, never the name (`dataplane._named_by_its_uuid`, ADR 0173 §10).
 
-  **EVERY TIER IS A CATALOG TABLE, and the writer is the user's pipeline** (ADR 0154, ADR 0155). Bronze,
-  silver and gold are written only through the namespace doors, so each tier is a `table:` object with a
-  record and ownership tuples from its first row, and the catalog announces every committed write on
-  lineage. Moving rows between tiers runs on the user's own compute and orchestrator; the lakehouse runs
-  no stage. **The promotion gate is the `published` tag** (ADR 0156 C1, ADR 0161, [[LH-466]]): readers of a
+  **EVERY TABLE IS WRITTEN THROUGH THE CATALOG, and the writer is the user's pipeline** (ADR 0154, ADR 0155): a table
+  is a `table:` object with a record and ownership tuples from its first row, and the catalog announces every committed
+  write on lineage. Moving rows between tables, tiered or not, runs on the user's own compute and orchestrator; the
+  lakehouse runs no stage. **The promotion gate is the `published` tag** (ADR 0156 C1, ADR 0161, [[LH-466]]): readers of a
   governed tier read `@published`, and `POST /management/v1/table/{id}/publish` runs the project's quality gate
   (`/management/v1/project/{id}/gate/*`) against the committed version; a pass advances the tag. A declaration that
   exists and cannot be read, or the table's warehouse record (which names its project), refuses the publish (503 when the store did not

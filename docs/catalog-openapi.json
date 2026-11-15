@@ -4544,17 +4544,6 @@
               }
             ],
             "title": "Protected"
-          },
-          "serving": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Serving"
           }
         },
         "required": [
@@ -10010,17 +9999,6 @@
             "title": "Id",
             "type": "string"
           },
-          "serving": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Serving"
-          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -10266,12 +10244,6 @@
             },
             "title": "Accept Assertions",
             "type": "array"
-          },
-          "cascade_id": {
-            "default": "",
-            "maxLength": 128,
-            "title": "Cascade Id",
-            "type": "string"
           },
           "gate_only": {
             "default": false,
@@ -12751,17 +12723,6 @@
           "root_uri": {
             "title": "Root Uri",
             "type": "string"
-          },
-          "serving": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Serving"
           },
           "status": {
             "anyOf": [

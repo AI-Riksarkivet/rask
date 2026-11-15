@@ -333,8 +333,8 @@ def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_
     assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
 
     store.checks.clear()
-    gold = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-gold", project="acme", serving="gold"))
-    assert gold.serving == "gold"
+    second = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-two", project="acme"))
+    assert second.id == "acme-two"
     assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
 
 
@@ -460,94 +460,6 @@ def test_reserved_bucket_set_defaults_collapse_to_the_root_bucket() -> None:
     assert s.reserved_bucket_set == frozenset({"lance-catalog"})
     local = Settings.model_validate({"root": "file:///tmp/cat", "s3_access_key_id": "x", "s3_secret_access_key": "x"})
     assert local.reserved_bucket_set == frozenset()
-
-
-# --------------------------------------------------------------------------- #
-# serving designation (gold serving warehouse — docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers")
-# --------------------------------------------------------------------------- #
-
-
-def _serving_settings(tmp_path: Any) -> Settings:
-    return Settings.model_validate(
-        {
-            "control_root": _root(tmp_path),
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
-
-
-def _create(settings: Settings, body: Any) -> Any:
-    from catalog.api.v1.endpoints import warehouses as wh_ep
-    from lakehouse.control_emit import NoopControlEmitter
-
-    # The project must EXIST now (Decision 1) — mint its registry record first, idempotently, so
-    # these unit tests keep their real subject (the warehouse record contract) without re-testing
-    # the existence guard, which has its own tests.
-    proj_svc.put_project(
-        settings.registry_root,
-        settings.storage_options(),
-        {"id": body.project, "created_at": "t", "created_by": "unit"},
-    )
-    return asyncio.run(
-        wh_ep.create_warehouse(
-            request=_request(settings),
-            settings=settings,
-            token=None,  # FGA off → the admin gate + seed are no-ops (unit scope is the record contract)
-            client=None,
-            control=NoopControlEmitter(),
-            vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
-            body=body,
-        )
-    )
-
-
-def test_create_rejects_unknown_serving(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Only the class the resolvers know is accepted — an unknown value would mint a record NEITHER
-    # project_root nor project_gold_root ever matches (an unroutable warehouse). Rejected before any
-    # bucket/registry/FGA side effect.
-    from catalog.schemas import CreateWarehouseRequest
-
-    provisioned: list[str] = []
-    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
-    with pytest.raises(InvalidInputError):
-        _create(
-            _serving_settings(tmp_path),
-            CreateWarehouseRequest(id="wh-x", project="acme", serving="silver"),
-        )
-    assert provisioned == []
-
-
-def test_create_serving_gold_round_trips(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # serving="gold" lands in the response AND the persisted registry record; a plain create keeps the
-    # field ABSENT (not null) — the resolver's "absent = work" contract.
-    from catalog.schemas import CreateWarehouseRequest
-
-    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
-    settings = _serving_settings(tmp_path)
-    gold = _create(settings, CreateWarehouseRequest(id="acme-gold", project="acme", serving="gold"))
-    assert gold.serving == "gold"
-    work = _create(settings, CreateWarehouseRequest(id="acme-work", project="acme"))
-    assert work.serving is None
-    gold_rec = warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-gold")
-    work_rec = warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-work")
-    assert gold_rec is not None and gold_rec["serving"] == "gold"
-    assert work_rec is not None and "serving" not in work_rec
-
-
-def test_recreate_without_serving_does_not_demote_gold(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Idempotent re-create carries serving FORWARD (like status/created_at): a GitOps reconcile
-    # re-POSTing the gold warehouse without the field must not silently demote it to a work warehouse —
-    # a silver→gold pipeline would quietly fall back to the work root.
-    from catalog.schemas import CreateWarehouseRequest
-
-    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
-    settings = _serving_settings(tmp_path)
-    _create(settings, CreateWarehouseRequest(id="acme-gold", project="acme", serving="gold"))
-    again = _create(settings, CreateWarehouseRequest(id="acme-gold", project="acme"))
-    assert again.serving == "gold"
-    rec = warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-gold")
-    assert rec is not None and rec["serving"] == "gold"
 
 
 def test_a_warehouse_record_the_store_does_not_serve_is_an_outage_never_a_record_to_skip() -> None:

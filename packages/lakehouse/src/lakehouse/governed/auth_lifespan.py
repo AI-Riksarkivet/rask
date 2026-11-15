@@ -3,7 +3,7 @@
 WHY THIS EXISTS. Every service with a door carried its own ~30-line copy of this block — twelve doors,
 two mechanisms — and a duplicated bootstrap is one a fix cannot travel through. The estate has paid for
 that twice in the same shape: the ING-02 blocking-verify fix landed on the ingest copy of a duplicated
-auth function and never reached the medallion copy, and split-horizon discovery was written into five
+auth function and never reached the other copies, and split-horizon discovery was written into five
 copies and omitted from the sixth, where every service-to-service test passed anyway because the
 service-token path returns before the verifier is touched.
 
@@ -68,10 +68,7 @@ class _FgaSettings(Protocol):
 
     READ-ONLY members (properties, not annotations) because a mutable protocol member is INVARIANT,
     which would make this signature reject a settings class whose field is declared even slightly
-    differently. Nothing here writes to settings, so read-only is correct rather than lax. (It used to
-    be load-bearing for a second reason: the estate's classes disagreed on optionality, medallion
-    declaring `fga_store_id: str = ""` against everyone else's `str | None`. That disagreement is gone
-    — the field is declared once, in `lakehouse.governed.settings.FgaSettings`.)
+    differently. Nothing here writes to settings, so read-only is correct rather than lax.
     """
 
     @property
@@ -99,8 +96,8 @@ class _DeciderSettings(_FgaSettings, Protocol):
 
 class _GovernedSettings(_DeciderSettings, Protocol):
     """The subset of `GovernedAuthSettings` this needs. A Protocol, so a settings class satisfies it
-    structurally without importing a base — which is what lets medallion, whose class mixes the two
-    halves directly rather than the composed `GovernedAuthSettings`, pass without a cast."""
+    structurally without importing a base — which is what lets a class that mixes the two halves directly rather
+    than the composed `GovernedAuthSettings` pass without a cast."""
 
     @property
     def oidc_enabled(self) -> bool: ...

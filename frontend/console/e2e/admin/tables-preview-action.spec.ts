@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { Int32, Table, Utf8, tableToIPC, vectorFromArray } from 'apache-arrow';
 import { mockMe, signIn, TOKEN } from './session';
+import { cellUnder } from '../table-cell';
 import { MOCK_CATALOG } from './ports';
 
 // The R18 table-previewer entry point: a registry ROW's drawer carries a Preview action that
@@ -61,8 +62,8 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 
 test('the drawer Preview action lands on the detail preview tab with rows', async ({ page }) => {
 	await page.goto('/catalog/tables');
-	// open the row drawer via the stage cell (the id/namespace cells are links of their own)
-	await page.locator('tbody tr', { hasText: 'bronze$events' }).locator('.stage').click();
+	// open the row drawer via the tier cell (the id/namespace cells are links of their own)
+	await (await cellUnder(page, 'bronze › events', 'tier')).click();
 	const drawer = page.getByRole('dialog');
 	await expect(drawer.getByRole('link', { name: 'Preview' })).toHaveAttribute(
 		'href',

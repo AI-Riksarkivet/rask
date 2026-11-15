@@ -144,8 +144,8 @@ from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import reads_as_store_outage
+from lakehouse.provenance_stamp import declare_dataset_id
 from lakehouse.schema import SchemaFields, facet_fields
-from lakehouse.stage_stamp import declare_dataset_id
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
 from lakehouse.version_retention import MAIN_BRANCH, recorded_branch

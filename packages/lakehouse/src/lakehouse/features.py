@@ -693,7 +693,7 @@ def describe_compaction_unsupported_flags(reader: int, writer: int, bases: Compa
       nothing. MEASURED on pylance 10.0.0: 4 fragments -> 1, 9,445 -> 14,366 bytes locally, the base
       directory byte-identical, 20/20 external payloads still resolving afterwards.
 
-    Folded together, the refusal covered every ingest bronze table and every medallion tier — the rows
+    Folded together, the refusal covered every table with one external blob prefix — the rows
     with the most fragments in the estate — which then accumulated fragments forever while the sweep
     reported a successful pass over them (``fragments_removed_total=0`` across 785 ticks).
 

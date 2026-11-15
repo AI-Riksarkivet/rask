@@ -67,7 +67,7 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict[
 # in on a guard whose job is refusing a second project's claim on somebody's bucket.
 #
 # `extra="allow"` because these records carry lifecycle fields the identity check has no business
-# knowing about (`status`, `protected`, `serving`, `created_at`, …) and a model that dropped them
+# knowing about (`status`, `protected`, `primary`, `created_at`, …) and a model that dropped them
 # would silently disarm a quarantine. Only the fields every consumer keys on are declared.
 # --------------------------------------------------------------------------- #
 
@@ -115,7 +115,7 @@ class BucketClaimRecord(_Record):
     """Which PROJECT owns a bucket, written once so the store arbitrates rival claims.
 
     Keyed by bucket and carrying the project rather than the warehouse id, because one project
-    legitimately backs several warehouses with one bucket (the work+gold pair) — the same asymmetry
+    legitimately backs several warehouses with one bucket (one project's several warehouses on one bucket) — the same asymmetry
     `projects_claiming_bucket` encodes by subtracting the caller's own project.
     """
 

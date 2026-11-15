@@ -35,6 +35,9 @@ const TABLES = [
 	'acme-gold$catalog',
 ] as const;
 
+/** A catalog object as the console names it: its path (ADR 0210). */
+const shown = (id: string): string => id.replaceAll('$', ' › ');
+
 const WIDTHS = [1440, 1024, 900, 768, 600];
 
 /** The shell's collapse breakpoint (`SHELL_COLLAPSE_BREAKPOINT`) — BELOW it the sidebar is an
@@ -61,7 +64,7 @@ async function openShell(page: Page, path = '/catalog/tables'): Promise<void> {
 	await page.goto(path);
 	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
 	if (path === '/catalog/tables')
-		await expect(page.getByRole('link', { name: TABLES[2] })).toBeVisible();
+		await expect(page.getByRole('link', { name: shown(TABLES[2]) })).toBeVisible();
 }
 
 for (const width of WIDTHS) {
@@ -143,7 +146,7 @@ test('/catalog has no page of its own: it lands on the tables list, and its crum
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await page.goto('/catalog');
 	await expect(page).toHaveURL(/\/catalog\/tables$/);
-	await expect(page.getByRole('link', { name: TABLES[2] })).toBeVisible();
+	await expect(page.getByRole('link', { name: shown(TABLES[2]) })).toBeVisible();
 
 	// A group's crumb places the reader without sending them to a page they did not ask for; the
 	// page crumbs link, with the sidebar's names.
@@ -152,9 +155,9 @@ test('/catalog has no page of its own: it lands on the tables list, and its crum
 	await expect(crumbs.getByText('Catalog', { exact: true })).toBeVisible();
 	await expect(crumbs.getByRole('link', { name: 'Catalog' })).toHaveCount(0);
 	await page.goto(`/catalog/tables/${encodeURIComponent(TABLES[2])}`);
-	await expect(crumbs.getByRole('link', { name: 'Tables', exact: true })).toHaveAttribute(
+	await expect(crumbs.getByRole('link', { name: 'Warehouses', exact: true })).toHaveAttribute(
 		'href',
-		'/catalog/tables',
+		'/catalog/warehouses',
 	);
 });
 
@@ -165,19 +168,19 @@ test('the breadcrumb truncates MIDDLE segments and always shows the current page
 	await page.goto(`/catalog/tables/${encodeURIComponent(TABLES[0])}`);
 	const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
 	// The current page is the LAST crumb and is never the one that gets dropped (the label is the
-	// table id, percent-decoded and otherwise as written).
+	// table's own name, the last segment of its path, as written).
 	const current = crumbs.locator('[data-slot="breadcrumb-page"]');
 	await expect(current).toBeVisible();
-	await expect(current).toHaveText(TABLES[0]);
+	await expect(current).toHaveText(TABLES[0].split('$').at(-1) ?? '');
 	// A middle segment is folded behind an ellipsis affordance rather than squeezing the trail…
 	const ellipsis = crumbs.locator('[data-slot="breadcrumb-ellipsis"]');
 	await expect(ellipsis).toBeVisible();
 	// …and folding hides it from the ROW, not from the user: the skipped ancestor is still one click
 	// away, so the trail stays navigable.
 	await ellipsis.click();
-	await expect(page.getByRole('menuitem', { name: 'Tables' })).toHaveAttribute(
+	await expect(page.getByRole('menuitem', { name: 'Warehouses' })).toHaveAttribute(
 		'href',
-		'/catalog/tables',
+		'/catalog/warehouses',
 	);
 	await page.keyboard.press('Escape');
 	// The breadcrumb bar itself never overflows its row.
@@ -192,12 +195,12 @@ test('the breadcrumb is the path alone, and writes identifiers as they are', asy
 	// identifier re-cased by a stylesheet misreports the data the page is about.
 	const seen = { useInnerText: true } as const;
 
-	// A catalog page: the trail is the path, with no project in front of it (a table belongs to the
-	// project its warehouse names, which its own page says), and the table id is printed exactly as
-	// the catalog names it.
+	// A catalog object's page: the trail is the object's path through its warehouse (ADR 0210), with
+	// no project in front of it (a table belongs to the project its warehouse names, which its own page
+	// says), and each segment printed exactly as the catalog names it.
 	await page.goto(`/catalog/tables/${encodeURIComponent(TABLES[2])}`);
 	await expect(page.getByRole('button', { name: 'Account' })).toBeVisible();
-	await expect(crumbs).toHaveText(['Catalog', 'Tables', TABLES[2]], seen);
+	await expect(crumbs).toHaveText(['Catalog', 'Warehouses', ...TABLES[2].split('$')], seen);
 	// Separators go between crumbs: the trail starts with a name.
 	await expect(crumbs.first().locator('svg')).toHaveCount(0);
 	await expect(crumbs.nth(1).locator('svg')).toHaveCount(1);

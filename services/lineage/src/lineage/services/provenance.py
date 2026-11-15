@@ -181,7 +181,7 @@ RUN_SCHEMA: Final = pa.schema(
 
 _TABLES: Final = ((FEED, FEED_SCHEMA), (EDGES, EDGE_SCHEMA), (REFUSALS, REFUSAL_SCHEMA), (CURSORS, CURSOR_SCHEMA), (RUNS, RUN_SCHEMA))
 
-#: How many derivation hops `derived` follows. A medallion is three tiers, so a longer chain is a cycle the walk's
+#: How many derivation hops `derived` follows. A longer chain is a cycle the walk's
 #: visited set already stops or an estate whose answer says it stopped short (`complete`).
 MAX_DERIVED_DEPTH: Final = 20
 #: The most bytes of rows one group commit takes, a sixteenth of the catalog's default body cap (`LANCE_MAX_BODY_BYTES`,

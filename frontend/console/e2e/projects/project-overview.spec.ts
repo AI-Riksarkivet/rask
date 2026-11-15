@@ -1,7 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { seed as seedFor } from '../mock-client';
-import { cellUnder } from '../table-cell';
 
 // `/projects/<p>` — ONE project's metadata and overview, a top-level page because a project is the
 // TOP of the hierarchy. Its read is a `query` running in the browser, so the catalog answer is seeded
@@ -14,7 +13,7 @@ const DETAIL = {
 	project: 'acme',
 	warehouses: [
 		{ id: 'acme-wh', bucket: 'acme-bucket', status: 'active' },
-		{ id: 'acme-gold', bucket: 'gold-bucket', serving: 'gold', status: 'pending' },
+		{ id: 'acme-gold', bucket: 'gold-bucket', status: 'pending' },
 	],
 	admins: ['user:alice', 'role:7d2c0f4e-5b1a-4c3e-9f6d-2a8b1c0e9f3a#assignee'],
 };
@@ -43,9 +42,6 @@ test('renders the project’s warehouse rows and effective admins', async ({ pag
 	const gold = page.getByRole('row').filter({ hasText: 'acme-gold' });
 	await expect(gold).toContainText('gold-bucket');
 	await expect(gold).toContainText('pending');
-	// Which warehouse serves the project's gold tier, and a dash where a warehouse serves none.
-	await expect(await cellUnder(page, 'acme-gold', 'serving')).toHaveText('gold');
-	await expect(await cellUnder(page, 'acme-wh', 'serving')).toHaveText('—');
 
 	// The effective admins, verbatim — a userset (`role:<id>#assignee`) is a real grant and must not be
 	// flattened into a plain user.

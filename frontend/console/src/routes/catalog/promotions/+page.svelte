@@ -6,6 +6,7 @@
 	import { Card } from '@rask/ui/card';
 	import { reasonLabel, type PromotionHold } from '#lib/data/promotions.ts';
 	import { listPromotions } from '#lib/data/remote/promotions.api.ts';
+	import { catalogPath } from '#lib/catalog-trail.ts';
 	import { formatAbsolute } from '@rask/ui/utils';
 	import ProjectFilter from '#lib/data/ProjectFilter.svelte';
 	import ProjectFilterNotice from '#lib/data/ProjectFilterNotice.svelte';
@@ -144,7 +145,7 @@
 										class="font-mono underline"
 										href={resolve('/catalog/promotions/[table]', {
 											table: encodeURIComponent(hold.table),
-										})}>{hold.table}</a
+										})}>{catalogPath(hold.table)}</a
 									>
 								</td>
 								<!-- The dash in the other columns' face: a monospace em dash reads as an en dash. -->

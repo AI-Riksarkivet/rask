@@ -276,8 +276,8 @@ def test_create_warehouse_bucket_claimed_by_another_project_409(client: TestClie
 
 
 def test_create_warehouse_reserved_bucket_refused(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Mallory layer 1b: the shared catalog root bucket (settings.root) and the medallion zone buckets
-    # (LANCE_RESERVED_BUCKETS, populated by the chart from medallion.buckets) are platform storage — no
+    # Mallory layer 1b: the shared catalog root bucket (settings.root) and the platform's buckets
+    # (LANCE_RESERVED_BUCKETS, populated by the chart from objectStore.buckets) are platform storage — no
     # project may register a warehouse over them.
     provisioned: list[str] = []
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
@@ -308,11 +308,6 @@ def test_explicit_bucket_name(client: TestClient, tmp_path: Any, store: str, mon
     resp = client.post("/management/v1/warehouses", json={"id": "wh-b", "project": "acme", "bucket": "tenant-b-data"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["root_uri"] == "s3://tenant-b-data"
-
-
-def test_get_missing_warehouse_404(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
-    assert client.get("/management/v1/warehouses/nope").status_code == 404
 
 
 def test_invalid_id_rejected_400(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from catalog.services.changes import ChangeKind
 from catalog.services.control_records import DeleteMode
-from lakehouse.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
+from lakehouse.control_events import ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from lakehouse.features import TableFileFormat
 from lakehouse.maintenance_due import CompactionDue, IndexDue
 
@@ -719,19 +719,14 @@ class CreateWarehouseRequest(RequestBody):
     id: str
     project: str
     bucket: str | None = None  # defaults to the id (a warehouse = one bucket)
-    # Serving designation (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical layout"): "gold" marks this as the
-    # project's gold SERVING warehouse. Absent (default) = a WORK warehouse. Only "gold" is accepted. Recorded and read back,
-    # never routed by: a name's first segment names its warehouse ([[LH-593]]).
-    serving: str | None = None
     #: Deletion protection as the declaration states it ([[LH-548]]): `true` arms it and `false` clears it, so a
     #: re-POST converges on what it declares either way. Absent leaves it as it stands, so a declaration that never
     #: names it leaves it to `POST /management/v1/warehouses/{warehouse_id}/protection`; a new warehouse is then
     #: unprotected, its record carrying no `protected` key.
     protected: bool | None = None
-    # THE PROJECT'S PRIMARY WAREHOUSE IN ITS SERVING CLASS, a mark the operator sets for whoever picks one of a
-    # project's several active warehouses. Recorded and read back, never routed by: a name's first segment names its
-    # warehouse ([[LH-593]]). Absent (default) keeps every existing record byte-identical; a re-POST carries an existing
-    # flag forward, exactly as `serving` does.
+    # THE PROJECT'S PRIMARY WAREHOUSE, a mark the operator sets for whoever picks one of a project's several active
+    # warehouses. Recorded and read back, never routed by: a name's first segment names its warehouse ([[LH-593]]).
+    # Absent (default) keeps every existing record byte-identical; a re-POST carries an existing flag forward.
     primary: bool = False
     # [[LH-067]] THE OBJECT STORE THIS WAREHOUSE'S BUCKET LIVES AT. Absent (default) means the estate's
     # and keeps existing records byte-identical; an explicit empty string re-points a record at the
@@ -755,7 +750,6 @@ class WarehouseResponse(BaseModel):
     root_uri: str
     project: str
     status: str | None = None  # "active" / "deactivated" (P2.3 lifecycle); absent on pre-lifecycle records
-    serving: str | None = None  # "gold" = the project's serving warehouse; absent = a work warehouse
     # #123: the delete-door safety, finally OBSERVABLE — records carry "true" (string), coerced here.
     # None on unprotected/pre-protection records (exclude_none keeps them byte-identical on the wire).
     protected: bool | None = None
@@ -961,20 +955,9 @@ class PublishRequest(RequestBody):
     #: (`STRUCTURAL_ASSERTIONS`) are refused however they are named, and a non-empty list additionally
     #: requires `can_promote` — a rung ABOVE the `can_update_tag` publish itself needs.
     accept_assertions: list[str] = Field(default_factory=list)
-    #: THE BATCH THIS PUBLISH BELONGS TO (§8 change 9). Opaque to the catalog — it is echoed onto the
-    #: `table_published` event and nothing here interprets it.
-    #:
-    #: It exists because a batch has no other identity that survives a tier boundary: without it the
-    #: bronze, silver and gold writes are unrelated runs in the graph with nothing joining them, and a
-    #: person asking "did my batch finish?" follows dataset names by eye.
-    #:
-    #: Carried through the catalog rather than stamped in the dataset because the publish is the hop
-    #: where the identity would otherwise be lost: one tier's writer knows it, the next tier's writer
-    #: needs it, and the `table_published` event in between is what that writer reads.
-    cascade_id: str = Field(default="", max_length=CASCADE_ID_MAX_LENGTH)
     #: THE PERSON THE BATCH IS FOR, when the caller is a service running on their behalf.
     #:
-    #: An untrusted CLAIM, exactly like `cascade_id`: it authorizes nothing here and nothing downstream
+    #: An untrusted CLAIM: it authorizes nothing here and nothing downstream
     #: — a notifier re-derives every recipient's visibility at delivery — so carrying it
     #: across the bus needs no new trust. It is a TARGETING hint, and the reason it must be a hint is
     #: that the truthful actor cannot serve: a pipeline's service principal authenticates to this door as
@@ -987,10 +970,9 @@ class PublishRequest(RequestBody):
     #: Ask for the gate's VERDICT without publishing. The identical assertions on the identical
     #: version, with `published` false and the tag untouched — a question, never a write.
     #:
-    #: It exists for the cascade's promotion review. Under a publish-driven cascade the publish IS the
-    #: promotion (the tag move wakes the next stage), so a review that decides BEFORE publishing cannot
-    #: name the assertions it is reviewing, and one that decides after has already promoted. Asking
-    #: first separates the two.
+    #: It exists for a review that decides before publishing: once `published` moves, every reader of
+    #: the table's published view already reads the version, so a reviewer asks first and publishes
+    #: after.
     #:
     #: Guarded by the SAME rung as an ordinary publish, deliberately: only a caller who could publish
     #: has any business asking whether this door would accept a version, and a cheaper rung would make
@@ -1301,8 +1283,6 @@ class ProjectWarehouse(BaseModel):
     id: str
     bucket: str
     status: str
-    # "gold" = the project's gold SERVING warehouse (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers"); None = a work warehouse.
-    serving: str | None = None
 
 
 class ProjectResponse(BaseModel):

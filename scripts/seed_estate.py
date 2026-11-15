@@ -145,12 +145,11 @@ class Namespace:
 @dataclass(frozen=True, slots=True)
 class Warehouse:
     """One warehouse = one S3 bucket, and the first segment of every name inside it. ``bucket`` defaults to the id
-    server-side; ``serving="gold"`` marks the project's gold serving warehouse."""
+    server-side."""
 
     id: str
     namespaces: tuple[Namespace, ...] = ()
     bucket: str | None = None
-    serving: str | None = None
 
 
 class Role(BaseModel):
@@ -205,7 +204,7 @@ DEMO_ESTATE = Estate(
                     id="acme",
                     bucket="acme-bucket",
                     namespaces=(
-                        # The medallion tiers the fixtures describe. bronze holds no table there, and
+                        # The tier namespaces the fixtures describe. bronze holds no table there, and
                         # holding none here too keeps the two readable as the same estate.
                         Namespace(name="bronze"),
                         # The table layer POSTs `/declare` with `parent=namespace:<ns>`, which is the link
@@ -351,13 +350,11 @@ def namespace_id(warehouse: Warehouse, namespace: Namespace) -> str:
 
 
 def _warehouse_body(project: Project, warehouse: Warehouse) -> dict[str, object]:
-    """The create payload. ``bucket`` and ``serving`` are OMITTED when unset rather than sent as null —
-    absent is the wire contract for "defaults to the id" and "a work warehouse"."""
+    """The create payload. ``bucket`` is OMITTED when unset rather than sent as null: absent is the wire contract for
+    "defaults to the id"."""
     body: dict[str, object] = {"id": warehouse.id, "project": project.id}
     if warehouse.bucket:
         body["bucket"] = warehouse.bucket
-    if warehouse.serving:
-        body["serving"] = warehouse.serving
     return body
 
 
@@ -696,8 +693,7 @@ def summarize(http: httpx.Client, estate: Estate) -> list[str]:
             held: set[str] = set()
             for entry in (_as_record(item) for item in _as_list(record.get("warehouses"))):
                 held.add(str(entry.get("id")))
-                serving = f" serving={entry['serving']}" if entry.get("serving") else ""
-                print(f"    warehouse {entry.get('id')}  bucket={entry.get('bucket')}  status={entry.get('status')}{serving}")
+                print(f"    warehouse {entry.get('id')}  bucket={entry.get('bucket')}  status={entry.get('status')}")
             admins = ", ".join(str(admin) for admin in _as_list(record.get("admins")))
             print(f"    admins: {admins or '(none — FGA off or unavailable)'}")
             for warehouse_spec in project.warehouses:

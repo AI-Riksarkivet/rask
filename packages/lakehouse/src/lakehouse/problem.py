@@ -43,7 +43,7 @@ def problem_body(code: int, *, status: int, title: str, detail: str, slug: str |
     WHY THIS EXISTS INSTEAD OF THOSE SITES SIMPLY RAISING. Two of them are pure-ASGI middleware that
     sit outside ``ExceptionMiddleware`` and must answer before the body is buffered, so they cannot
     raise at all. The rest could — but every one of them sets ``Retry-After`` (5s on a draining
-    medallion door, 60s on catalog maintenance), and ``install_problem_handlers``' handler builds a
+    pod, 60s on catalog maintenance), and ``install_problem_handlers``' handler builds a
     bare ``JSONResponse`` with no headers, so raising would trade a missing ``code`` for a missing
     ``Retry-After``. A generic handler also cannot know which window applies. So the SHAPE lives here
     and the STATUS and HEADERS stay with the site that knows them.

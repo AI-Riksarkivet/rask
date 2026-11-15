@@ -126,7 +126,6 @@ def _group_by_project(records: list[dict[str, str]]) -> dict[str, list[ProjectWa
                 id=str(warehouse_id),
                 bucket=str(record.get("bucket") or ""),
                 status=str(record.get("status") or "active"),
-                serving=str(record["serving"]) if record.get("serving") else None,
             )
         )
     for entries in grouped.values():

@@ -94,9 +94,7 @@ export function parentNamespaceOrNull(id: string): string | null {
 
 /**
  * The last segment of a nested id — the table's own name, or a namespace's own name without its
- * ancestors. Used for display, and for reading a property that belongs to the object itself rather
- * than to anything above it (the medallion stage is one: `acme$acme-silver` is `silver`, because the
- * ancestors above the leaf are tenancy, not tier).
+ * ancestors: what a child is called on its parent's page.
  */
 export function leafSegment(id: string): string {
 	return id.includes(DELIMITER) ? id.slice(id.lastIndexOf(DELIMITER) + 1) : id;

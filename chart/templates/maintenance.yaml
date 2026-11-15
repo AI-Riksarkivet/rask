@@ -77,9 +77,6 @@
 
 
 {{- $extra := list }}
-{{- range $ns, $bkt := .Values.medallion.buckets }}
-{{- if ne $bkt $root.Values.objectStore.bucket }}{{ $extra = append $extra $bkt }}{{ end }}
-{{- end }}
 {{- range .Values.catalog.multibase.dataBases }}
 {{- $extra = append $extra (. | replace "s3://" "" | trimSuffix "/") }}
 {{- end }}

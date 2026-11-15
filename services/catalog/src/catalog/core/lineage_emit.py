@@ -248,8 +248,8 @@ def _input_dataset(ref: InputRef, *, namespace: str) -> dict[str, Any]:
 
 
 #: `is_person_subject` is imported from the library rather than defined here: it has more than one
-#: producer, and the medallion — whose authors ARE chart role literals — cannot depend on the catalog,
-#: so a rule written here could only ever be applied here. See that module for why that matters.
+#: producer, and a producer outside the catalog cannot depend on it, so a rule written here could only
+#: ever be applied here. See that module for why that matters.
 def _is_ddl(operation: str) -> bool:
     """Whether this operation CHANGED THE TABLE'S DEFINITION rather than its rows.
 

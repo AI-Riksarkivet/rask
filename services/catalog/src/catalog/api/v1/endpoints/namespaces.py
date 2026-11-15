@@ -200,7 +200,7 @@ async def create_namespace(
 
     # Owner + parent edge (parent namespace if nested, else the catalog root) so the
     # concentric cascade reaches the namespace and its tables — stops a nested-namespace
-    # lockout and lets a layer-level grant (medallion bronze/silver/gold) reach children.
+    # lockout and lets a grant on a namespace reach its children.
     #
     # Compensated (diff2 F3): the namespace is EMPTY at this instant — it was created three lines up
     # and nothing can have been put in it yet — so the undo cannot destroy anyone's data. A failed

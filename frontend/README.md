@@ -103,7 +103,7 @@ per family of specs, each with its own mocks and named by its Playwright project
 (the estate pages and the activity log, `e2e/activity/`) and `admin` (`e2e/admin/`: the catalog and operations pages); ports in
 `e2e/ports.ts` and `e2e/admin/ports.ts`.
 
-Some pages cannot work, and say so without a request: the audit trail and the streams view (no door
-serves the telemetry store or the NATS monitor to a browser), the stores-by-tier view (no door maps
-stores to tiers), and remembering the projects view (no door keeps per-person state). The workbench
-keeps its layout and named views in this browser (`console/src/lib/dock/store.ts`).
+Every page in the sidebar works (ADR 0210): a view that needs a door no route serves a browser (the
+audit trail, the bus's streams, a stores-by-tier registry) has no page. The projects view's grid or
+list choice holds for the page only, since no door keeps per-person state; the workbench keeps its
+layout and named views in this browser (`console/src/lib/dock/store.ts`).

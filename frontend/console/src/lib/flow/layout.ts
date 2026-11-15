@@ -2,7 +2,7 @@
  * Layered layout for the lineage DAG — the ordering step the graph was missing.
  *
  * **Why not a force layout.** Lineage is a DAG whose edges carry direction: `derived_from` means
- * bronze precedes silver precedes gold. A force simulation treats edges as springs and has no notion
+ * an input precedes what was derived from it. A force simulation treats edges as springs and has no notion
  * of direction, so it settles into a blob and destroys the left-to-right derivation reading — the one
  * thing a lineage graph is for. It is also non-deterministic (a different arrangement every load, so
  * no spatial memory) and animated (it visibly settles). d3-force is the right tool for undirected,
@@ -48,7 +48,7 @@ export interface Placed {
 	y: number;
 }
 
-/** Card pitch — the medallion/job cards are 200px wide and ~64px tall. */
+/** Card pitch — the dataset and job cards are 200px wide and ~64px tall. */
 const COL_W = 240;
 const ROW_H = 110;
 const X0 = 30;

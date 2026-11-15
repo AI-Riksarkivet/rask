@@ -169,7 +169,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 
 /** #113 the version/branch/tag surface lives on the History tab now, not in an overview section. */
 async function openHistory(page: Page): Promise<void> {
-	await page.getByRole('tab', { name: 'history' }).click();
+	await page.getByRole('tab', { name: 'versions' }).click();
 	await expect(page.locator('section.hist')).toBeVisible();
 }
 
@@ -177,7 +177,7 @@ test('the commit log lists every version newest-first, with branches and tags (#
 	page,
 }) => {
 	await page.goto('/catalog/tables/db1%24t');
-	await expect(page.getByRole('heading', { name: 'db1$t' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'db1 › t' })).toBeVisible();
 	// The old surface is GONE from overview — one version table in the app, not two.
 	await expect(page.getByText('Versions, branches & tags')).toHaveCount(0);
 	await openHistory(page);
@@ -576,8 +576,8 @@ test('danger-zone drop confirms via the AlertDialog, closes it, and the registry
 	await expect(page.getByRole('alertdialog')).toHaveCount(0);
 	// The id no longer names a table — back to the registry, where the dropped row is gone.
 	await expect(page).toHaveURL(/\/catalog\/tables$/);
-	await expect(page.getByRole('link', { name: 'db1$other' })).toBeVisible();
-	await expect(page.getByRole('link', { name: 'db1$t', exact: true })).toHaveCount(0);
+	await expect(page.getByRole('link', { name: 'db1 › other' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'db1 › t', exact: true })).toHaveCount(0);
 });
 
 test('danger-zone deregister confirms via its own AlertDialog copy (#85)', async ({ page }) => {
@@ -630,7 +630,7 @@ test('rename posts {new_table_name} and navigates to the renamed detail (#85)', 
 		.toEqual({ new_table_name: 't2' });
 	// success navigates to the renamed table's detail (the old id no longer exists)
 	await expect(page).toHaveURL(/\/catalog\/tables\/db1%24t2$/);
-	await expect(page.getByRole('heading', { name: 'db1$t2' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'db1 › t2' })).toBeVisible();
 });
 
 test('a 409 rename surfaces "already exists" and stays on the page (#85)', async ({ page }) => {
@@ -645,7 +645,7 @@ test('a 409 rename surfaces "already exists" and stays on the page (#85)', async
 	await danger.getByRole('button', { name: 'Rename' }).click();
 	await expect(danger).toContainText('Denied: a table named db1$other already exists.');
 	await expect(page).toHaveURL(/\/catalog\/tables\/db1%24t$/);
-	await expect(page.getByRole('heading', { name: 'db1$t' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'db1 › t' })).toBeVisible();
 });
 
 // --- #85 row ops: update / delete by SQL predicate ---

@@ -61,8 +61,8 @@ EXPIRE_VERSIONS = "expire_versions"
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required).
 _PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/maintenance/src/maintenance/core/lineage_emit.py"
 
-#: Standard ``ErrorMessageRunFacet`` schema URL — the SAME one the medallion FAIL emitter stamps
-#: (``medallion/schemas/events.py``), so both failure surfaces are one spec version.
+#: Standard ``ErrorMessageRunFacet`` schema URL, shared from ``lakehouse.openlineage`` so every FAIL emitter
+#: stamps one spec version.
 _ERROR_FACET_SCHEMA_URL = ERROR_MESSAGE_FACET_SCHEMA_URL
 
 #: Exception strings embed full s3:// URIs and Rust backtraces — cap the facet message so a failing

@@ -48,6 +48,10 @@ class AuthState {
 	/** Why `/config.json` could not be used, when it could not: the console then runs nothing. */
 	configError = $state<string | null>(null);
 	session = $state.raw<Session | null>(null);
+	/** The issuer and the scopes the release names, for what the console tells a client to sign in
+	 *  with; null and none on a stack that signs nobody in. */
+	issuer = $state<string | null>(null);
+	scopes = $state.raw<readonly string[]>([]);
 }
 
 export const auth = new AuthState();
@@ -95,8 +99,9 @@ export function initAuth(fetch: typeof globalThis.fetch = globalThis.fetch): Pro
 		}
 		if (read.off) return;
 		const config = read.config;
+		const authority = new URL(config.issuer, location.origin).href.replace(/\/$/, '');
 		manager = new UserManager({
-			authority: new URL(config.issuer, location.origin).href.replace(/\/$/, ''),
+			authority,
 			client_id: config.clientId,
 			redirect_uri: `${location.origin}/auth/callback`,
 			post_logout_redirect_uri: `${location.origin}/`,
@@ -108,6 +113,8 @@ export function initAuth(fetch: typeof globalThis.fetch = globalThis.fetch): Pro
 			automaticSilentRenew: false,
 			monitorSession: false,
 		});
+		auth.issuer = authority;
+		auth.scopes = config.scopes;
 		auth.enabled = true;
 	})();
 	return ready;

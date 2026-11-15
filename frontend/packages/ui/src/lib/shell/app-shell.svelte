@@ -10,7 +10,7 @@
 	import { ChevronRight, MoreHorizontal } from '@lucide/svelte';
 	import { gsap } from 'gsap';
 	import type { ActivityFeed, NavUser, PageNav } from './nav-config.js';
-	import { collapseCrumbs, pathCrumbs, type Crumb } from './breadcrumb.js';
+	import { collapseCrumbs, pathCrumbs, type ShellCrumb } from './breadcrumb.js';
 
 	// Subtle content settle-in. Runs once when the shell MOUNTS — i.e. on a fresh
 	// document load, which is every full-page landing — so the page gently
@@ -49,6 +49,7 @@
 		activity = null,
 		pages = null,
 		groups = null,
+		trail = null,
 		children,
 	}: {
 		pathname?: string;
@@ -70,6 +71,9 @@
 		/** The paths that name a group of pages (`/catalog`), with the sidebar group's name: their
 		 *  crumb is plain text in that name. */
 		groups?: ReadonlyMap<string, string> | null;
+		/** The page's own breadcrumb, when the app knows a truer one than the URL: a catalog object's
+		 *  path, each ancestor a link to its page. Null: the trail is the route's path. */
+		trail?: ShellCrumb[] | null;
 		children: Snippet;
 	} = $props();
 
@@ -80,29 +84,27 @@
 		pathname === '/' && pages?.has('/') ? [{ id: '', label: pages.get('/') ?? '', href: '/' }] : [],
 	);
 	const crumbs = $derived(
-		[...rootCrumb, ...pathCrumbs(pathname, routeId)].map((crumb): ShellCrumb =>
-			pages === null
-				? { ...crumb, page: true }
-				: {
-						...crumb,
-						label: pages.get(crumb.href) ?? groups?.get(crumb.href) ?? crumb.label,
-						page: pages.has(crumb.href),
-					},
-		),
+		trail ??
+			[...rootCrumb, ...pathCrumbs(pathname, routeId)].map((crumb): ShellCrumb =>
+				pages === null
+					? { ...crumb, page: true }
+					: {
+							...crumb,
+							label: pages.get(crumb.href) ?? groups?.get(crumb.href) ?? crumb.label,
+							page: pages.has(crumb.href),
+						},
+			),
 	);
 	// A deep path does not fit a narrow row, so the MIDDLE of the trail folds behind an ellipsis menu
 	// rather than squeezing every crumb into illegibility — and the current page, the one crumb worth
 	// keeping, is never the thing that disappears. Same breakpoint the rest of the shell folds on.
 	const narrow = new IsMobile(SHELL_COLLAPSE_BREAKPOINT);
-	const trail = $derived(collapseCrumbs(crumbs, narrow.current ? 2 : 4));
+	const folded = $derived(collapseCrumbs(crumbs, narrow.current ? 2 : 4));
 	// Every crumb but the last is a link back up its own path; the last IS the current page, so it
 	// renders as text and carries aria-current instead.
-	const lastCrumbId = $derived(trail.tail.at(-1)?.id);
+	const lastCrumbId = $derived(folded.tail.at(-1)?.id);
 	// A separator goes BETWEEN crumbs, so the first one has none.
 	const firstCrumbId = $derived(crumbs[0]?.id);
-
-	/** A crumb, and whether its path is a page a link can open. */
-	type ShellCrumb = Crumb & { page: boolean };
 
 	// Bound, so the trigger and cmd/ctrl+b open and close the rail.
 	let sidebarOpen = $state(true);
@@ -145,12 +147,12 @@
 			     behind the ellipsis menu (`collapseCrumbs`) instead of shrinking the current page. -->
 			<nav aria-label="Breadcrumb" class="flex min-w-0 flex-1 items-center overflow-hidden text-sm">
 				<ol class="flex min-w-0 items-center gap-1.5">
-					{#each trail.lead as crumb (crumb.id)}
+					{#each folded.lead as crumb (crumb.id)}
 						<li class="flex min-w-0 shrink-0 items-center gap-1.5">
 							{@render ancestor(crumb)}
 						</li>
 					{/each}
-					{#if trail.hidden.length > 0}
+					{#if folded.hidden.length > 0}
 						<!-- The folded middle: an affordance, not a deletion — every skipped ancestor is one
 					     click away, so the trail stays navigable at any width. -->
 						<li class="flex shrink-0 items-center gap-1.5">
@@ -170,7 +172,7 @@
 									{/snippet}
 								</DropdownMenu.Trigger>
 								<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
-									{#each trail.hidden as crumb (crumb.id)}
+									{#each folded.hidden as crumb (crumb.id)}
 										{#if crumb.page === false}
 											<DropdownMenu.Item disabled>{crumb.label}</DropdownMenu.Item>
 										{:else}
@@ -188,7 +190,7 @@
 							</DropdownMenu.Root>
 						</li>
 					{/if}
-					{#each trail.tail as crumb (crumb.id)}
+					{#each folded.tail as crumb (crumb.id)}
 						<li class="flex min-w-0 items-center gap-1.5">
 							{#if crumb.id !== firstCrumbId}
 								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />

@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 #: (`core/provenance_guard.py`), and this is the one key in it a client may name, and only an admin.
 TIER_PROPERTY: Final = "rask.tier"
 
-#: The governed tiers, the medallion's three (R23: raw is the external world, never a tier).
+#: The three tiers a namespace may declare (R23: raw is the external world, never a tier).
 TIERS: Final = frozenset({"bronze", "silver", "gold"})
 
 #: The tiers whose data is derived, so every write adding data to them names its run and inputs.

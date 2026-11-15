@@ -737,7 +737,7 @@ def governs(location: str, *, warehouse: str, settings: MaintenanceSettings, opt
     bucket configured or not: a configured bucket answers only for the estate's own warehouse, which has no record. A
     first segment naming neither the estate's warehouse nor a record is no warehouse the catalog serves, so its table is
     left alone and rechecked. The record is read by the warehouse's id, so what the pass costs is the table's, never the
-    registry's; and two warehouses one project backs with one bucket (the work and gold pair) are each judged by their
+    registry's; and two warehouses one project backs with one bucket (one project's several warehouses on one bucket) are each judged by their
     own status. A location outside S3 is the control root's own.
     """
     if not on_s3(location):

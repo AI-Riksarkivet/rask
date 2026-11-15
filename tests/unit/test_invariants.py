@@ -131,19 +131,18 @@ def _hook_buckets(rendered: str) -> list[str]:
     return [argv[i + 1] for i, arg in enumerate(argv) if arg == "--bucket"]
 
 
-def test_the_hook_creates_every_platform_bucket_and_every_zone() -> None:
+def test_the_hook_creates_every_platform_bucket() -> None:
     """Every bucket a value names reaches the step that creates it.
 
     Each source is its own hop in the template, and a hop dropped is invisible while another value names
-    the same bucket. So the root, the platform bucket and the zone here are each named by one value only.
+    the same bucket. So the root and the platform bucket here are each named by one value only.
     """
     rendered = _helm_template(
         "objectStore.bucket=root-x",
         "objectStore.buckets={extra-platform}",
-        "medallion.buckets.gold=acme-gold",
     )
 
-    missing = {"root-x", "extra-platform", "acme-gold"} - set(_hook_buckets(rendered))
+    missing = {"root-x", "extra-platform"} - set(_hook_buckets(rendered))
 
     assert not missing, f"the hook is told to create none of these buckets: {sorted(missing)}"
 

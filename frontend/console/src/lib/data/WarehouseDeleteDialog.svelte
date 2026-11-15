@@ -18,7 +18,7 @@
 	import { Dialog } from '@rask/ui/dialog';
 	import { Checkbox } from '@rask/ui/checkbox';
 	import { toast } from 'svelte-sonner';
-	import type { WarehouseRecord } from './catalog';
+	import type { Warehouse } from './catalog';
 	import { deleteWarehouse } from './remote/warehouses.api';
 
 	let {
@@ -28,7 +28,7 @@
 	}: {
 		open?: boolean;
 		/** The row being deleted. `null` renders nothing — the dialog is opened WITH a target. */
-		warehouse: WarehouseRecord | null;
+		warehouse: Warehouse | null;
 		/** Fired after a confirmed 200, so the list can re-read without waiting for the control tick. */
 		ondeleted?: () => void;
 	} = $props();

@@ -1,7 +1,7 @@
 <script lang="ts">
 	// `/tables` — the catalog table registry (#52) on the shared @rask/ui DataTable (goal cond 4):
-	// sortable columns, a text search, and a medallion STAGE filter (goal cond 3 — the stage is
-	// derived from the namespace segment, shown as a tier badge per row). Same stack-mode states as
+	// sortable columns, a text search, and a TIER filter (the tier each table's namespace declares,
+	// `rask.tier`, ADR 0160 — never one read off a name — shown as a badge per row). Same stack-mode states as
 	// before: governed without a session ⇒ sign-in, unreachable ⇒ retrying, open ⇒ data or the
 	// honest empty state.
 	//
@@ -41,7 +41,10 @@
 	import { filterVerdict, projectOf } from './project-filter.ts';
 	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
-	import { namespaceOfTable, stageOfTable, type StageInfo } from './stage';
+	import { namespaceOfTable, type StageInfo } from './stage';
+	import { NamespaceTiers } from './namespace-tiers.svelte';
+	import { catalogPath } from '#lib/catalog-trail.ts';
+	import { CopyButton } from '@rask/ui/copy-button';
 	import StageBadge from './StageBadge.svelte';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 
@@ -96,6 +99,9 @@
 		]),
 	);
 
+	/** The tier each listed table's namespace declares (ADR 0160), never one read off its name. */
+	const tiers = new NamespaceTiers();
+
 	async function load(): Promise<void> {
 		const [res] = await Promise.all([fetchTables(), projects.load()]);
 		settled = true;
@@ -103,6 +109,7 @@
 			// A copy + sort, not toSorted() — the latter is ES2023, above the repo's Safari-16 floor.
 			tables = [...res.data.tables].sort();
 			lastStatus = 200;
+			void tiers.load(tables.map(namespaceOfTable));
 		} else {
 			lastStatus = res.status; // status 0 (offline/timeout) now reads as offline, not a stuck spinner
 		}
@@ -248,7 +255,7 @@
 		const all = (tables ?? []).map((id): Row => ({
 			id,
 			namespace: namespaceOfTable(id),
-			stage: stageOfTable(id),
+			stage: tiers.of(namespaceOfTable(id)),
 			project: projects.index ? projectOf(projects.index, id) : null,
 		}));
 		return all;
@@ -274,7 +281,7 @@
 	let sorting = $state<SortingState>([]);
 	let globalFilter = $state('');
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 10 });
-	let stageFilter = $state(''); // '' = any stage
+	let stageFilter = $state(''); // '' = any tier
 
 	// Goal cond 8: a row click opens the record drawer; a click on a link in the row is the link's
 	// (the data table leaves a click on a control to the control).
@@ -314,7 +321,7 @@
 			accessorFn: (r) => r.stage?.stage ?? '',
 			header: ({ column }) =>
 				renderComponent(DataTableHeaderButton, {
-					label: 'stage',
+					label: 'tier',
 					sorted: column.getIsSorted(),
 					onclick: column.getToggleSortingHandler(),
 				}),
@@ -364,7 +371,8 @@
 {#snippet tableCell(row: Row)}
 	<a
 		class="rowlink mono"
-		href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(row.id) })}>{row.id}</a
+		href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(row.id) })}
+		>{catalogPath(row.id)}</a
 	>
 {/snippet}
 {#snippet projectCell(row: Row)}
@@ -378,7 +386,7 @@
 	<a
 		class="nslink mono"
 		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.namespace) })}
-		>{row.namespace}</a
+		>{catalogPath(row.namespace)}</a
 	>
 {/snippet}
 
@@ -388,8 +396,7 @@
 		<span class="sub mono"
 			>{projectFilter
 				? `the catalog registry, in project ${projectFilter} — the tables your grants allow there`
-				: 'the catalog registry, estate-wide — every table your grants allow'} ·
-			&lt;namespace&gt;$&lt;table&gt;</span
+				: 'the catalog registry, estate-wide — every table your grants allow'}</span
 		>
 		{#if !unauthorized}
 			<button class="new" {@attach holdToggle} onclick={() => (declaring = !declaring)}>
@@ -485,13 +492,13 @@
 		<div class="toolbar">
 			<DataTableTextFilter bind:value={globalFilter} placeholder="Search tables…" />
 			<label class="text-muted-foreground inline-flex items-center gap-2 text-sm">
-				Stage
+				Tier
 				<Select
 					bind:value={stageFilter}
-					ariaLabel="Stage filter"
-					placeholder="any stage"
+					ariaLabel="Tier filter"
+					placeholder="any tier"
 					options={[
-						{ value: '', label: 'any stage' },
+						{ value: '', label: 'any tier' },
 						{ value: 'bronze', label: 'bronze' },
 						{ value: 'silver', label: 'silver' },
 						{ value: 'gold', label: 'gold' },
@@ -526,26 +533,26 @@
 
 <RowDrawer
 	bind:open={drawerOpen}
-	title={drawerRow?.id ?? ''}
+	title={drawerRow ? catalogPath(drawerRow.id) : ''}
 	description="The registry record for this table."
 >
 	{#if drawerRow}
 		<dl class="rec">
 			<dt>table id</dt>
-			<dd class="mono">{drawerRow.id}</dd>
+			<dd class="mono">{drawerRow.id}<CopyButton value={drawerRow.id} label="table id" /></dd>
 			<dt>namespace</dt>
 			<dd>
 				<a
 					class="mono jump"
 					href={resolve('/catalog/namespaces/[id]', {
 						id: encodeURIComponent(drawerRow.namespace),
-					})}>{drawerRow.namespace}</a
+					})}>{catalogPath(drawerRow.namespace)}</a
 				>
 			</dd>
-			<dt>medallion stage</dt>
+			<dt>tier</dt>
 			<dd>
 				{#if drawerRow.stage}<StageBadge info={drawerRow.stage} />{:else}<span class="mut"
-						>— (not a tier namespace)</span
+						>— (no tier declared)</span
 					>{/if}
 			</dd>
 		</dl>

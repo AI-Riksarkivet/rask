@@ -76,7 +76,7 @@ was renamed: no lance name collided with a rask name.
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
   age.externalHost · auth.enabled · catalog.controlEmit ·
   auth.oidc.{issuer,audience} · dex.{enabled,port} · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
-  medallion.buckets · nats.url ·
+  nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.topic ·
   resources.{default,<component>} · objectStore.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
   services.{catalog,lineage}.{port,appId} · services.lineage.relay.periodSeconds

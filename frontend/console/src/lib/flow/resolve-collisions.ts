@@ -6,7 +6,7 @@
  * needs and given the reasoning below.
  *
  * **Why a layout engine is not enough.** ELK reserves exactly the box it is TOLD. A card whose height
- * is content-driven — the medallion cards wrap version/failure/tag chips onto further rows — is not
+ * is content-driven — the dataset cards wrap version/failure/tag chips onto further rows — is not
  * knowable before it renders, so the first layout necessarily runs on an estimate. Measured on the
  * deployed estate: cards render 51–129px tall against a declared 64, 82 of 85 exceed the declaration,
  * and 22 node pairs genuinely overlapped, one of them by 200×31px.

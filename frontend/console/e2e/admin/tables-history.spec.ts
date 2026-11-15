@@ -142,7 +142,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 
 async function openLog(page: Page): Promise<void> {
 	await page.goto('/catalog/tables/db1%24t');
-	await page.getByRole('tab', { name: 'history' }).click();
+	await page.getByRole('tab', { name: 'versions' }).click();
 	await expect(page.locator('section.hist')).toBeVisible();
 }
 
@@ -187,7 +187,7 @@ test('a version the format no longer reports is not listed (#113)', async ({ pag
 	// …and when /history is unavailable, the manifest list is the source and v1 is NOT invented.
 	historyStatus = 404;
 	await page.reload();
-	await page.getByRole('tab', { name: 'history' }).click();
+	await page.getByRole('tab', { name: 'versions' }).click();
 	await expect(page.getByTestId('commit-log').locator('tbody tr')).toHaveCount(4);
 	await expect(page.getByTestId('commit-log')).not.toContainText('v1');
 });
@@ -295,11 +295,11 @@ test('the read limit is a real page size, not a client-side slice (#113)', async
 
 test('the history tab is deep-linkable (#113)', async ({ page }) => {
 	await openLog(page);
-	await expect(page).toHaveURL(/\?tab=history/);
+	await expect(page).toHaveURL(/\?tab=versions/);
 	await page.reload();
 	// The tab survives the reload, so the log is a shareable link and not a click-path. (A cold reload of
 	// this route compiles the whole detail page, so it gets a longer budget than the default 5s.)
-	await expect(page.getByRole('tab', { name: 'history' })).toHaveAttribute(
+	await expect(page.getByRole('tab', { name: 'versions' })).toHaveAttribute(
 		'aria-selected',
 		'true',
 		{

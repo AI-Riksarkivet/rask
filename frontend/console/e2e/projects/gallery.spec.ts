@@ -165,15 +165,16 @@ test('a slow estate listing does not hold the navigation: the page shows, its ca
 		'GET /management/v1/me': ME_ADMIN,
 		'GET /management/v1/projects': [{ project: 'acme', warehouses: [{ id: 'acme-wh' }] }],
 	});
-	await page.goto('/');
-	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-	// The listing answers only when the spec lets it, a catalog as slow as the reader likes.
+	// The listing answers only when the spec lets it, a catalog as slow as the reader likes. Slow from
+	// the first page on: Home reads the same listing, and the gallery shares that read.
 	let answer: () => void = () => {};
 	const answered = new Promise<void>((resolve) => (answer = resolve));
 	await page.route('**/api/catalog/management/v1/projects', async (route) => {
 		await answered;
 		await route.continue();
 	});
+	await page.goto('/');
+	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 	await page
 		.getByRole('navigation', { name: 'Pages' })
 		.getByRole('link', { name: 'Projects', exact: true })

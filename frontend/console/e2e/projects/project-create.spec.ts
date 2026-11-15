@@ -4,7 +4,7 @@ import { postsTo, seed as seedFor } from '../mock-client';
 
 // Hermetic project-creation coverage. A project is the TOP of the hierarchy, so the page that MINTS one
 // lives beside the estate's project list in the main menu. The flow COMPOSES existing APIs — warehouse create (the project comes into existence with its first
-// warehouse), the optional serving:"gold" second create, and the initial admin tuple — all three land
+// warehouse) and the initial admin tuple — each lands
 // on the mock catalog: reads seeded per bearer, writes read back from `/__mock/calls`.
 //
 // `/management/v1/me` is seeded on the mock per bearer, and each test signs in with a per-test bearer,
@@ -56,7 +56,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	});
 });
 
-test('creates work + gold warehouses and grants the initial admin, with the exact wire bodies', async ({
+test('creates the project and its warehouse and grants the initial admin, with the exact wire bodies', async ({
 	page,
 }) => {
 	await seed(page, { 'POST /management/v1/warehouses': created('acme-wh', 'acme', 'acme-wh') });
@@ -65,7 +65,6 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 	const dialog = page.getByRole('dialog');
 	await dialog.getByLabel('Project name').fill('acme');
 	await dialog.getByLabel('Warehouse id', { exact: true }).fill('acme-wh');
-	await dialog.getByLabel('Gold serving warehouse id').fill('acme-gold');
 	// the admin subject prefilled from /management/v1/me (user:alice) is kept
 	await expect(dialog.getByLabel('Initial admin')).toHaveValue('user:alice');
 	// The estate AFTER the creates — the create makes the project visible on the next estate list,
@@ -74,10 +73,7 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 		'GET /management/v1/projects': [
 			{
 				project: 'acme',
-				warehouses: [
-					{ id: 'acme-wh', bucket: 'acme-wh', status: 'active' },
-					{ id: 'acme-gold', bucket: 'acme-gold', status: 'active', serving: 'gold' },
-				],
+				warehouses: [{ id: 'acme-wh', bucket: 'acme-wh', status: 'active' }],
 				admins: [],
 			},
 		],
@@ -88,24 +84,12 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 	// after it is a settled fact. Queued behind the two polls' HTTP round-trips it had already
 	// dismissed by the time it was looked for: a real failure of the test, not of the product.
 	await expect(
-		page.getByText(
-			'Project acme created — warehouse acme-wh, gold serving acme-gold, admin user:alice.',
-		),
+		page.getByText('Project acme created — warehouse acme-wh, admin user:alice.'),
 	).toBeVisible();
-	// wire bodies pinned: the work create carries NO serving key; the gold one carries serving:"gold"
+	// the wire body pinned
 	await expect
 		.poll(async () => warehousePosts(page))
-		.toEqual([
-			{ id: 'acme-wh', project: 'acme', bucket: null, protected: false, primary: false },
-			{
-				id: 'acme-gold',
-				project: 'acme',
-				bucket: null,
-				serving: 'gold',
-				protected: false,
-				primary: false,
-			},
-		]);
+		.toEqual([{ id: 'acme-wh', project: 'acme', bucket: null, protected: false, primary: false }]);
 	// the initial admin grant is one raw FGA tuple on the new project object — recorded by the mock
 	// catalog
 	await expect
@@ -113,7 +97,7 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 		.toEqual([{ user: 'user:alice', relation: 'admin', object: 'project:acme' }]);
 	// the gallery reflects the new project on the reload oncreated triggered
 	// The card links to the project's own overview, `/projects/acme`, beside the list.
-	await expect(page.locator('a[href="/projects/acme"]')).toContainText('2 warehouses');
+	await expect(page.locator('a[href="/projects/acme"]')).toContainText('1 warehouse');
 });
 
 test('gold warehouse and admin grant are optional — one create, no tuple', async ({ page }) => {

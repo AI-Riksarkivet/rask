@@ -755,19 +755,6 @@ pubsub:
   # -- Topic OpenLineage events are published on and each consumer of them is filtered to (LANCE_LINEAGE_TOPIC and siblings).
   topic: lineage.events.v1
 
-# === The medallion tiers (bronze → silver → gold) =================================================
-# The tiers are governed tables inside the catalog (ADR 0155): a pipeline writes each tier through the catalog's
-# namespace doors, and the chart runs no stage, no producer and no engine of its own.
-medallion:
-  # Storage ZONES. Maps a tier NAMESPACE to its S3 bucket; anything unset falls back to the shared `objectStore.bucket`,
-  # so the default is the single-bucket layout. Any bucket listed here is created by the provisioning hook on the dev store, swept
-  # by maintenance, and appended to the catalog's LANCE_RESERVED_BUCKETS, so naming a bucket makes it platform
-  # storage no tenant may later claim as a warehouse.
-  #
-  # Empty is the normal case: the tier namespaces are NESTED under a project's warehouse and inherit its location.
-  # -- Map of tier namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `objectStore.bucket`. Listed buckets are auto-created, swept by maintenance and reserved from warehouses.
-  buckets: {}
-
 # === Maintenance service (a worker on a NATS JetStream work queue, ADR 0198) =====================
 # Every replica's worker takes one task at a time off MAINTENANCE_TASKS: a table's pass (version expiry, its due
 # record, listed by the catalog's `GET /management/v1/maintenance/due`, and its next pass scheduled), a trash
@@ -849,8 +836,7 @@ maintenance:
   # off, a persistently failing dataset is visible only in OTel spans + the cron response body. When ON,
   # also consider services.lineage.runRetentionDays > 0: a recovered dataset's FAIL Run node otherwise
   # persists in /runs indefinitely (the deterministic id means exactly one node per dataset).
-  # ON since 2026-08-16. The reason it was off — "opt-in, like the medallion toggles" — was a posture,
-  # not a cost: the events are graph-only by construction, so turning it on adds provenance and cannot
+  # ON by default: the events are graph-only by construction, so turning it on adds provenance and cannot
   # add notification noise. `maintenance/core/lineage_emit.py` stamps a `rask_lance` facet and outputs, and
   # NO `rask_author` facet and no `rask_lance.project`; per the events' targeting contract (docs/COMMIT-EVENTS.md), a
   # notifier addresses a run's author by `rask_author.sub` and nothing else, and its project's watchers by
@@ -1187,7 +1173,8 @@ objectStore:
   # (`lance.platformBuckets` in _helpers.tpl). A name listed here AND under its own key outlives a rename
   # of that key, as a bucket the hook makes and nothing uses.
   # On the dev store the provisioning hook (templates/object-store-provisioning.yaml) CREATES that set, with
-  # objectStore.bucket and the medallion.buckets zones: the store is a plain StatefulSet that provisions none.
+  # objectStore.bucket: the store is a plain StatefulSet that provisions none. The catalog reserves the set from
+  # warehouses (LANCE_RESERVED_BUCKETS), so no tenant may claim a platform bucket.
   # On a platform's S3 its operator creates them, since rask provisions nothing there. (Warehouse buckets are the
   # catalog's, made at runtime by `provision_bucket`.) The maintenance reconcile exempts the
   # same set from `orphan_buckets`. A bucket dropped from this set stays on the store (nothing deletes a

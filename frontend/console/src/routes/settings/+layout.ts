@@ -7,5 +7,5 @@ export const load: LayoutLoad = async ({ parent }) => {
 	const { me } = await parent();
 	const admin = requireEstateAdmin(me, 'Settings');
 	// The signed-in caller's principal key (`<idp-id>~<user id>`), the form a grant names as written.
-	return { meSubject: admin.sub };
+	return { meSubject: admin.sub, meName: admin.name ?? admin.email };
 };

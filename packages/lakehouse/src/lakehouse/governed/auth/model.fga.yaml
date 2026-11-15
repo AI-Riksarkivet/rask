@@ -28,7 +28,7 @@ tuples:
   - { user: project:acme, relation: project, object: warehouse:acme_bucket }
   - { user: project:research, relation: project, object: warehouse:research_bucket }
   - { user: project:beta, relation: project, object: warehouse:beta_bucket }
-  # medallion stages under the acme bucket
+  # namespaces under the acme bucket
   - { user: warehouse:acme_bucket, relation: parent, object: namespace:acme_bronze }
   - { user: warehouse:acme_bucket, relation: parent, object: namespace:acme_silver }
   - { user: warehouse:acme_bucket, relation: parent, object: namespace:acme_gold }

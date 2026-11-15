@@ -19,7 +19,7 @@ EXTENSION MEMBERS — ``raise Refused("2 problem(s)", extensions={"problems": [.
 subclass that wants to NAME its failure sets ``problem_type``. Both exist so a domain never has to
 build a problem body beside this module, as one route once had to.
 
-The lakehouse services (catalog, lineage, medallion, compaction) deliberately use a DIFFERENT
+The lakehouse services (catalog, lineage, maintenance) deliberately use a DIFFERENT
 taxonomy — the ``lance_namespace`` error hierarchy via
 :func:`lakehouse.ns_errors.install_problem_handlers` — because the Lance Namespace
 REST spec pins a numeric ``code`` in the error body. That is an external contract, not drift.

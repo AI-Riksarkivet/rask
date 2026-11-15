@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import CatalogName from '#lib/data/CatalogName.svelte';
+	import { catalogPath } from '#lib/catalog-trail.ts';
 	import { Badge } from '@rask/ui/badge';
 	import { Button } from '@rask/ui/button';
 	import { Card } from '@rask/ui/card';
@@ -48,12 +50,12 @@
 	}
 </script>
 
-<svelte:head><title>{table} · promotions · rask</title></svelte:head>
+<svelte:head><title>{catalogPath(table)} · promotions · rask</title></svelte:head>
 
 <!-- The catalog pages' column: centred, at the lists' width. -->
 <div class="mx-auto flex w-full max-w-[860px] flex-col gap-4 px-5 pt-14 pb-10">
 	<div>
-		<h1 class="font-mono text-xl font-semibold">{table}</h1>
+		<CatalogName id={table} kind="table" />
 		<p class="text-muted-foreground text-sm">
 			A held promotion. The quality gate found this version unusual rather than broken, so it waits
 			for a validator instead of being published. Approving moves <code>published</code> to it;
@@ -78,7 +80,7 @@
 	{:else if review.current.data === null}
 		<Card class="p-4">
 			<p class="text-sm">
-				No open hold on <code>{table}</code>. A hold is answerable only while it is open — once
+				No open hold on {catalogPath(table)}. A hold is answerable only while it is open — once
 				decided, or once it expires, it is gone.
 			</p>
 		</Card>
@@ -87,7 +89,7 @@
 		<Card class="flex flex-col gap-3 p-4">
 			<div class="flex flex-wrap items-center gap-2">
 				<Badge variant="warning">held</Badge>
-				<code class="text-xs">{held.table}</code>
+				<span class="text-sm">{catalogPath(held.table)}</span>
 			</div>
 
 			<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">

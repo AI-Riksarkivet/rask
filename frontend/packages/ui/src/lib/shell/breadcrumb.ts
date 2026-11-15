@@ -10,6 +10,9 @@ export type Crumb = {
 	href: string;
 };
 
+/** A crumb as the shell renders it: `page: false` is a group (`/catalog`), printed as plain text, never linked. */
+export type ShellCrumb = Crumb & { page: boolean };
+
 /** Route words that are INITIALISMS, so sentence-casing does not turn them into words.
  *
  *  `/admin/dlq` sentence-cased to "Dlq", which reads as a misspelling rather than a name — the nav

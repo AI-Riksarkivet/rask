@@ -9,6 +9,7 @@
 	import { auth, expired, login } from '#lib/auth.svelte.ts';
 	import { activity } from '#lib/activity.svelte.ts';
 	import { areaOf, consoleSidebar, GROUP_NAMES, PAGE_NAMES } from '#lib/nav.ts';
+	import { catalogTrail } from '#lib/catalog-trail.ts';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
@@ -68,6 +69,7 @@
 	{pageNav}
 	pages={PAGE_NAMES}
 	groups={GROUP_NAMES}
+	trail={catalogTrail(page.route.id, page.params)}
 	activity={activityFeed}
 >
 	{#if canvasArea}

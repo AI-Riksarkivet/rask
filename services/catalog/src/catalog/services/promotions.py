@@ -76,10 +76,9 @@ class Hold(BaseModel):
     reasons: list[str]
     #: The verified subject who asked to publish, ``None`` with authentication off.
     requested_by: str | None
-    #: The person the publication is for and the batch it belongs to, as the publish resolved them, so an
-    #: approval announces the publication the publish would have.
+    #: The person the publication is for, as the publish resolved them, so an approval announces the
+    #: publication the publish would have.
     originator: str = ""
-    cascade_id: str = ""
     opened_at: datetime
     expires_at: datetime
     state: HoldState = "open"

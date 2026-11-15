@@ -27,11 +27,14 @@
 	import type { Policy } from '#lib/policies.ts';
 	import { partErrored, type TableStats, type TableDetail } from './catalog';
 	import { fetchTableDetail } from './remote/catalog.api';
+	import CatalogName from './CatalogName.svelte';
+	import ConnectSnippets from './ConnectSnippets.svelte';
 	import DetailTabs from './DetailTabs.svelte';
 	import { fmtBytes } from './history';
 	import TableHistory from './TableHistory.svelte';
 	import StageBadge from './StageBadge.svelte';
-	import { stageOfTable } from './stage';
+	import { namespaceOfTable } from './stage';
+	import { namespaceTier } from './remote/namespace.api';
 	import TablePreview from './TablePreview.svelte';
 	import TableProperties from './TableProperties.svelte';
 	import BlobPreviewSection from './table-detail/BlobPreviewSection.svelte';
@@ -47,12 +50,12 @@
 
 	let { table }: { table: string } = $props();
 
-	// Goal cond 3: the FGA view lives on an Access TAB (overview stays the default); the medallion
-	// stage badge is derived from the table's namespace segment. Goal cond 5 adds the Preview tab.
-	// #113 adds History — the commit log, which took the version/branch/tag surface off overview.
+	// The FGA view lives on an Access TAB (overview stays the default); the tier badge is the tier the
+	// table's namespace declares. Preview shows rows; Versions is the commit log with its tags and
+	// branches; Connect is how a pipeline reaches the table.
 	// `?tab=` deep-links a tab (the registry drawer's "access" jump uses it) and the tab bar now WRITES it,
 	// so a tab is linkable, reload-stable and back-button-able.
-	const TABS = ['overview', 'preview', 'history', 'access'];
+	const TABS = ['overview', 'preview', 'versions', 'connect', 'access'];
 	/** The platform's metadata keys: the catalog answers them and refuses a caller's write of one. */
 	const RESERVED_PREFIX = 'rask.';
 	// DERIVED from the URL, not mirrored into it: the tab is a linkable, reload-stable, back-button-able
@@ -70,7 +73,9 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the current page's own URL with a new tab parameter
 		goto(url, { replace: true, reset: false });
 	}
-	const stageInfo = $derived(stageOfTable(table));
+	/** The tier the table's namespace declares (ADR 0160), never one read off its name. */
+	const tierRead = $derived(namespaceTier(namespaceOfTable(table)));
+	const stageInfo = $derived(tierRead.current ?? null);
 
 	// The catalog calls the grants panel makes, bound to this page's reads and writes: the panel's
 	// positional signature onto the data functions' single argument.
@@ -192,7 +197,7 @@
 <div class="page">
 	<header>
 		<Database size={16} />
-		<h1 class="mono">{table}</h1>
+		<CatalogName id={table} kind="table" />
 		{#if stageInfo}<StageBadge info={stageInfo} />{/if}
 		{#if detail?.describe.version != null}
 			<span class="sub mono">v{detail.describe.version}</span>
@@ -240,7 +245,7 @@
 		<DetailTabs tabs={TABS} active={tab} onselect={selectTab} />
 		{#if tab === 'preview'}
 			<TablePreview {table} />
-		{:else if tab === 'history'}
+		{:else if tab === 'versions'}
 			<!-- #113 the commit log. Keyed by table so a navigation REMOUNTS it: every selection, armed
 			     confirm and filter belongs to one table and resets by construction. -->
 			{#key table}
@@ -253,6 +258,8 @@
 					onchange={load}
 				/>
 			{/key}
+		{:else if tab === 'connect'}
+			<ConnectSnippets id={table} kind="table" />
 		{:else if tab === 'access'}
 			<section>
 				<h2>Access</h2>
@@ -336,10 +343,6 @@
 		font-size: 13px;
 		line-height: 1.5;
 		white-space: pre-wrap;
-	}
-	h1 {
-		font-size: 18px;
-		margin: 0;
 	}
 	h2 {
 		font-size: 13px;

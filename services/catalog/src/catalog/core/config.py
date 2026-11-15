@@ -463,8 +463,8 @@ class Settings(
     # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on
     # create. Default off for two reasons: (1) an external pointer's bytes live outside the lakehouse, so
     # Lance's version-aware GC can't protect them and a source delete dangles the pointer; (2) SSRF — the
-    # client controls the pointer URI and the cascade's read_blobs would fetch it with the medallion
-    # service's network position + creds, so an arbitrary URI (cloud metadata, internal host) becomes a
+    # client controls the pointer URI and a reader's read_blobs would fetch it with the catalog's
+    # network position + creds, so an arbitrary URI (cloud metadata, internal host) becomes a
     # server-side read primitive. Enable only for a trusted producer; Lance's REGISTERED EXTERNAL BASES
     # (approved base paths) are the finer-grained alternative. Managed/inline blobs (bytes in) always work.
     allow_external_blobs: bool = Field(default=False, alias="LANCE_ALLOW_EXTERNAL_BLOBS")
@@ -511,10 +511,10 @@ class Settings(
     # allowed.
     trash_grace_days: float = Field(default=0, ge=0, le=365, alias="LANCE_TRASH_GRACE_DAYS")
     # Buckets NO warehouse may ever claim, beyond the always-reserved catalog root/registry buckets (audit
-    # 2026-07-23: a project admin could register a warehouse over the SHARED bucket — or a medallion zone
-    # bucket — and a later project-policy set would then govern every tenant's datasets in it). The chart
-    # populates this from the `medallion.buckets` values map (the raw/gold zone buckets); comma-separated,
-    # empty = only the root/registry buckets are reserved (the default, byte-identical for single-bucket).
+    # 2026-07-23: a project admin could register a warehouse over a SHARED platform bucket, and a later
+    # project-policy set would then govern every tenant's datasets in it). The chart populates this from the
+    # platform's own buckets (`objectStore.buckets`, `lance.platformBuckets`); comma-separated, empty = only the
+    # root/registry buckets are reserved.
     reserved_buckets: str = Field(default="", alias="LANCE_RESERVED_BUCKETS")
 
     @property
@@ -525,7 +525,7 @@ class Settings(
     @property
     def reserved_bucket_set(self) -> frozenset[str]:
         """Bucket names no warehouse may claim: the shared catalog root, the registry/control bucket, every
-        approved multi-base data bucket, and the configured medallion zone buckets (``LANCE_RESERVED_BUCKETS``).
+        approved multi-base data bucket, and the platform's own buckets (``LANCE_RESERVED_BUCKETS``).
         Platform-owned storage is reserved regardless of zoning: a multibase data bucket is exactly as
         claimable-looking as the shared root, and a warehouse over any of them would hand one project
         governance of every tenant's data there. Non-s3 roots (local dev/test ``file://`` registries)

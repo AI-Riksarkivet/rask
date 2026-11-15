@@ -1,7 +1,7 @@
 import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '#lib/api/client.ts';
-import type { CreateWarehouseBody, WarehouseRecord } from '../catalog';
+import type { CreateWarehouse, Warehouse } from '../catalog';
 
 import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 import { childId, DELIMITER } from '#lib/api/identifiers.ts';
@@ -15,14 +15,13 @@ import { childId, DELIMITER } from '#lib/api/identifiers.ts';
 
 const enc = encodeURIComponent;
 
-/** `WarehouseResponse` + the additive `serving` class (see `WarehouseRecord` in ../catalog). */
+/** `WarehouseResponse`, parsed at the door. */
 const WarehouseSchema = v.object({
 	id: v.string(),
 	project: v.string(),
 	bucket: v.string(),
 	root_uri: v.string(),
 	created_at: v.optional(v.nullable(v.string())),
-	serving: v.optional(v.nullable(v.string())),
 	status: v.optional(v.nullable(v.string())),
 	/** `"git"` for a warehouse git declares, whose lifecycle its doors refuse (XC-213); absent otherwise. */
 	managed_by: v.optional(v.picklist(['git', 'self'])),
@@ -54,12 +53,12 @@ const DeleteWarehouseSchema = v.object({
 });
 
 /** Warehouse admin reads: whatever the catalog shows this caller (any signed-in user). */
-export const fetchWarehouses = query(async (): Promise<ApiResult<WarehouseRecord[]>> =>
+export const fetchWarehouses = query(async (): Promise<ApiResult<Warehouse[]>> =>
 	parsed(await catalogJSON('/management/v1/warehouses'), v.array(WarehouseSchema)),
 );
 
 /** One warehouse record — the hierarchy drill-down's warehouse page (can_get_metadata gated). */
-export const fetchWarehouse = query(v.string(), async (id): Promise<ApiResult<WarehouseRecord>> =>
+export const fetchWarehouse = query(v.string(), async (id): Promise<ApiResult<Warehouse>> =>
 	parsed(await catalogJSON(`/management/v1/warehouses/${enc(id)}`), WarehouseSchema),
 );
 
@@ -110,8 +109,7 @@ export const createWarehouse = command(
 		id: v.string(),
 		project: v.string(),
 		bucket: v.optional(v.nullable(v.string())),
-		serving: v.optional(v.literal('gold')),
-		// #73 made `protected` REQUIRED on `CreateWarehouseBody` — protection now covers every rung of
+		// #73 made `protected` REQUIRED on `CreateWarehouse` — protection now covers every rung of
 		// the hierarchy, not just tables. Defaulted rather than surfaced: a warehouse is born
 		// unprotected and is armed deliberately afterwards through the protection door, so asking at
 		// create time would offer a choice the estate does not actually want made there. Omitting it
@@ -127,7 +125,7 @@ export const createWarehouse = command(
 		// the mismatch surfaces at the command's overload rather than anywhere near the cause.
 		primary: v.optional(v.boolean(), false),
 	}),
-	async (body: CreateWarehouseBody): Promise<ApiResult<WarehouseRecord>> => {
+	async (body: CreateWarehouse): Promise<ApiResult<Warehouse>> => {
 		const result = parsed(
 			await catalogJSON('/management/v1/warehouses', {
 				method: 'POST',
@@ -146,7 +144,7 @@ export const createWarehouse = command(
 export const setWarehouseActive = command(
 	({ id, active }) => `${active ? 'Activate' : 'Deactivate'} warehouse ${id}`,
 	v.object({ id: v.string(), active: v.boolean() }),
-	async ({ id, active }): Promise<ApiResult<WarehouseRecord>> => {
+	async ({ id, active }): Promise<ApiResult<Warehouse>> => {
 		const result = parsed(
 			await catalogJSON(
 				`/management/v1/warehouses/${enc(id)}/${active ? 'activate' : 'deactivate'}`,

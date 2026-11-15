@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { mockMe, signIn, TOKEN } from './session';
+import { cellUnder } from '../table-cell';
+import { declaredTiers } from './tiers';
 import { MOCK_CATALOG } from './ports';
 
 // The table/namespace row drawers, over registry and detail reads seeded on the mock catalog per bearer.
@@ -29,10 +31,11 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 		data: {
 			bearer: token,
 			routes: {
-				'GET /v1/table': { tables: ['db1$t', 'bronze$events', 'acme-gold$catalog'] },
+				'GET /v1/table': { tables: ['db1$t', 'bronze$events', 'acme-wh$gold$catalog'] },
 				[describeKey('bronze$events')]: DESCRIBE,
 				[describeKey('db1$t')]: DESCRIBE,
-				[describeKey('acme-gold$catalog')]: DESCRIBE,
+				[describeKey('acme-wh$gold$catalog')]: DESCRIBE,
+				...declaredTiers({ 'acme-wh$gold': 'gold' }),
 			},
 		},
 	});
@@ -42,12 +45,12 @@ test('a table row opens the record drawer with stage, namespace and the two jump
 	page,
 }) => {
 	await page.goto('/catalog/tables');
-	// click the row's STAGE badge (the id/namespace cells are links with their own navigation)
-	await page.locator('tbody tr', { hasText: 'bronze$events' }).locator('.stage').click();
+	// click the row's TIER cell (the id/namespace cells are links with their own navigation)
+	await (await cellUnder(page, 'bronze › events', 'tier')).click();
 	const drawer = page.getByRole('dialog');
-	await expect(drawer).toContainText('bronze$events');
+	await expect(drawer).toContainText('bronze › events');
 	await expect(drawer).toContainText('The registry record for this table.');
-	await expect(drawer).toContainText('medallion stage');
+	await expect(drawer).toContainText('tier');
 	// jump links: the detail page, and the detail page's Access tab (?tab= deep link)
 	await expect(drawer.getByRole('link', { name: 'Open detail' })).toHaveAttribute(
 		'href',
@@ -63,7 +66,7 @@ test('the access jump link lands on the detail page with the Access tab selected
 	page,
 }) => {
 	await page.goto('/catalog/tables');
-	await page.locator('tbody tr', { hasText: 'bronze$events' }).locator('.stage').click();
+	await (await cellUnder(page, 'bronze › events', 'tier')).click();
 	await page.getByRole('dialog').getByRole('link', { name: 'Access tab' }).click();
 	await expect(page).toHaveURL(/\/catalog\/tables\/bronze%24events\?tab=access$/);
 	await expect(page.getByRole('tab', { name: 'access' })).toHaveAttribute('aria-selected', 'true');
@@ -74,7 +77,7 @@ test('an in-cell table link navigates in the app, with no page load and no drawe
 }) => {
 	await page.goto('/catalog/tables');
 	// The list renders once the first visit's sign-in round trip is over, so loads count from here.
-	const link = page.getByRole('link', { name: 'db1$t', exact: true });
+	const link = page.getByRole('link', { name: 'db1 › t', exact: true });
 	await expect(link).toBeVisible();
 	// A page load drops the in-memory sign-in, so the router must be the one to follow the link. The mock
 	// issuer signs a reloaded page straight back in, which is why the URL alone cannot tell the two apart.
@@ -101,8 +104,8 @@ test('a namespace row opens the record drawer with the member count', async ({ p
 	);
 });
 
-test('the table detail header carries the derived tier badge', async ({ page }) => {
-	await page.goto('/catalog/tables/acme-gold%24catalog');
+test('the table detail header carries the tier its namespace declares', async ({ page }) => {
+	await page.goto('/catalog/tables/acme-wh%24gold%24catalog');
 	await expect(page.locator('header .stage')).toHaveText('gold');
 	// The tab bar defaults to overview; the Access tab hosts the FGA view.
 	await expect(page.getByRole('tab', { name: 'overview' })).toHaveAttribute(

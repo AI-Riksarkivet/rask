@@ -1,43 +1,42 @@
-// Medallion-tier derivation from NAMES (goal cond 3): a namespace named `bronze`, `silver` or `gold`,
-// or ending in `-bronze` and the like, is badged with that tier. Those three are the governed tiers:
-// raw is the external world, never a governed tier (R23). This is a NAMING-derived hint — the honest
-// wording everywhere is "derived", never presented as a catalog fact — and it says nothing about a
-// project: a name's project is its warehouse's (`project-filter.ts`), never a prefix of the name.
+// A namespace's TIER, as the catalog knows it (ADR 0160): the reserved namespace property `rask.tier`,
+// declared once at namespace create by the project's admin, one of the three governed tiers. It is
+// never read from a name: a namespace called `bronze` that declares nothing is untiered, and its name
+// is the user's. A table's tier is the shallowest declaration on its namespace path (a deeper
+// namespace may only repeat its ancestor's), and the path starts below the warehouse, which no door
+// gives a tier. Tiers are opt-in: most namespaces declare none, and the console then shows none.
+
+/**
+ * The identifier grammar lives in `#lib/api/identifiers.ts`, the one copy every reader shares: a second
+ * copy that split on the FIRST delimiter would name the wrong namespace for a nested one. Re-exported
+ * here so a tier's callers import it from one place.
+ */
+import { DELIMITER } from '#lib/api/identifiers.ts';
+
+export { parentNamespace as namespaceOfTable } from '#lib/api/identifiers.ts';
 
 export type Stage = 'bronze' | 'silver' | 'gold';
 
 export type StageInfo = { stage: Stage };
 
-// An optional `<anything>-` prefix, then a literal stage name, so `acme-data-silver` is `silver`.
-/**
- * The identifier grammar lives in `#lib/api/identifiers.ts`, the one copy every reader shares: a second
- * copy that split on the FIRST delimiter would name the wrong namespace for a nested one. Re-exported
- * here so the stage derivation's callers import it from one place.
- */
-import { leafSegment, parentNamespace } from '#lib/api/identifiers.ts';
+/** The reserved namespace property that declares a tier (`catalog.core.tier_policy.TIER_PROPERTY`). */
+export const TIER_PROPERTY = 'rask.tier';
 
-export { parentNamespace as namespaceOfTable } from '#lib/api/identifiers.ts';
+const TIERS: ReadonlySet<string> = new Set<Stage>(['bronze', 'silver', 'gold']);
 
-const STAGE_RE = /^(?:[a-z0-9][a-z0-9_-]*?-)?(bronze|silver|gold)$/;
-
-/**
- * The medallion stage a namespace encodes, or null for a non-medallion namespace.
- *
- * Takes the LAST segment of a nested id. `STAGE_RE` is anchored and `$` is outside its character
- * class, so a nested id like `acme$acme-silver` matched nothing at all and every table under a nested
- * tier namespace rendered with no stage badge — while the identical namespace one rung higher showed
- * `silver`. The stage is a property of the namespace the data sits IN, and for `acme$acme-silver` that
- * is `acme-silver`; the ancestors are tenancy, not tier.
- *
- * Ruled 2026-08-16 with the visible consequence stated: badges now appear where there were none.
- */
-export function stageOf(namespace: string): StageInfo | null {
-	const m = STAGE_RE.exec(leafSegment(namespace));
-	if (!m) return null;
-	return { stage: m[1] as Stage };
+function isStage(value: unknown): value is Stage {
+	return typeof value === 'string' && TIERS.has(value);
 }
 
-/** The medallion stage of a table id, derived from its namespace segment. */
-export function stageOfTable(table: string): StageInfo | null {
-	return stageOf(parentNamespace(table));
+/** The tier a namespace's own properties declare, or null when they declare none. */
+export function declaredTier(properties: unknown): StageInfo | null {
+	if (typeof properties !== 'object' || properties === null) return null;
+	const tier: unknown = (properties as Record<string, unknown>)[TIER_PROPERTY];
+	return isStage(tier) ? { stage: tier } : null;
+}
+
+/** The namespaces whose declaration can give `namespace` its tier, shallowest first: every prefix of
+ *  its path below the warehouse, itself included. */
+export function tierCandidates(namespace: string): string[] {
+	const segments = namespace.split(DELIMITER);
+	return segments.slice(1).map((_, i) => segments.slice(0, i + 2).join(DELIMITER));
 }

@@ -1,8 +1,8 @@
 <script lang="ts">
 	// `/namespaces` — the catalog's namespaces on the shared @rask/ui DataTable (goal cond 4): one
 	// sortable/searchable row per namespace, from each warehouse's own listing (the spec's
-	// ListNamespaces on the warehouse's name) and from the table registry's ids, with the medallion
-	// tier badge (goal cond 3), the #85 drop action (AlertDialog confirm; Restrict by default, Cascade
+	// ListNamespaces on the warehouse's name) and from the table registry's ids, with the tier badge of
+	// the tier each namespace declares (`rask.tier`, ADR 0160), the #85 drop action (AlertDialog confirm; Restrict by default, Cascade
 	// opt-in) and the create: the spec's CreateNamespace on `<warehouse>$<name>`.
 	import { AlertDialog } from '@rask/ui/alert-dialog';
 	import {
@@ -34,12 +34,15 @@
 	import { filterVerdict, projectOf, readFailure } from './project-filter.ts';
 	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
-	import { namespaceOfTable, stageOf, type StageInfo } from './stage';
+	import { namespaceOfTable, type StageInfo } from './stage';
+	import { NamespaceTiers } from './namespace-tiers.svelte';
 	import StageBadge from './StageBadge.svelte';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 	import { DELIMITER, warehouseOf } from '#lib/api/identifiers.ts';
 	import { missingFieldsHint } from '#lib/form-hint.ts';
 	import { Select } from '@rask/ui/select';
+	import { catalogPath } from '#lib/catalog-trail.ts';
+	import { CopyButton } from '@rask/ui/copy-button';
 
 	let tables = $state<string[] | null>(null);
 	// Each warehouse's own listing — the same listing a warehouse delete reads for what it still holds.
@@ -87,7 +90,11 @@
 		}
 		listing = listed.ok ? listed.data : null;
 		listingFailure = listed.ok ? null : readFailure('warehouses', listed);
+		void tiers.load([...(listing?.namespaces ?? []), ...(tables ?? []).map(namespaceOfTable)]);
 	}
+
+	/** The tier each namespace declares (ADR 0160), never one read off its name. */
+	const tiers = new NamespaceTiers();
 
 	// The table registry it folds and the namespace listings advance on one shared cursor, so the two
 	// cannot disagree for longer than a tick about what exists.
@@ -125,7 +132,7 @@
 				.map(([ns, count]): Row => ({
 					ns,
 					count,
-					stage: stageOf(ns),
+					stage: tiers.of(ns),
 					warehouse: warehouseOf(ns),
 					project: projects.index ? projectOf(projects.index, ns) : null,
 				}))
@@ -281,7 +288,7 @@
 			accessorFn: (r) => r.stage?.stage ?? '',
 			header: ({ column }) =>
 				renderComponent(DataTableHeaderButton, {
-					label: 'stage',
+					label: 'tier',
 					sorted: column.getIsSorted(),
 					onclick: column.getToggleSortingHandler(),
 				}),
@@ -349,7 +356,8 @@
 {#snippet nsCell(row: Row)}
 	<a
 		class="ns-name mono"
-		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.ns) })}>{row.ns}</a
+		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.ns) })}
+		>{catalogPath(row.ns)}</a
 	>
 {/snippet}
 {#snippet projectCell(row: Row)}
@@ -503,19 +511,19 @@
 
 <RowDrawer
 	bind:open={drawerOpen}
-	title={drawerRow?.ns ?? ''}
+	title={drawerRow ? catalogPath(drawerRow.ns) : ''}
 	description="The registry record for this namespace (grouped from the table registry)."
 >
 	{#if drawerRow}
 		<dl class="rec">
-			<dt>namespace</dt>
-			<dd class="mono">{drawerRow.ns}</dd>
+			<dt>namespace id</dt>
+			<dd class="mono">{drawerRow.ns}<CopyButton value={drawerRow.ns} label="namespace id" /></dd>
 			<dt>warehouse</dt>
 			<dd class="mono">{drawerRow.warehouse}</dd>
-			<dt>medallion stage</dt>
+			<dt>tier</dt>
 			<dd>
 				{#if drawerRow.stage}<StageBadge info={drawerRow.stage} />{:else}<span class="mut"
-						>— (not a tier namespace)</span
+						>— (no tier declared)</span
 					>{/if}
 			</dd>
 			<dt>tables</dt>

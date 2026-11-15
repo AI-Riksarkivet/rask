@@ -204,13 +204,6 @@ export const RETYPE_TYPES = [
 	'large_binary',
 ] as const;
 
-/** A warehouse record with the medallion serving class: `serving === "gold"` marks the project's
- * per-tenant SERVING warehouse (the gold tier's separate bucket — docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers");
- * absent = a work warehouse. Additive over the generated shape until the spec regenerates. */
-export type WarehouseRecord = Warehouse & { serving?: string | null };
-/** The create body with the optional `serving: "gold"` class (same additive rationale). */
-export type CreateWarehouseBody = CreateWarehouse & { serving?: 'gold' };
-
 // The warehouse TRANSPORT (list / describe / create / activate / bind) lives in
 // `remote/warehouses.api.ts`. This module keeps the table surface plus the shared wire contracts.
 

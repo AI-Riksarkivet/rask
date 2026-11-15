@@ -8,6 +8,7 @@ import {
 	createLineageClient,
 	type DlqBacklog,
 	type DlqReplayResponse,
+	type Events,
 } from '#lib/api/lineage/index.ts';
 
 // The lineage plane's DLQ surface (its backlog read and its replay write). It wraps the SHARED
@@ -21,6 +22,12 @@ const lineage = createLineageClient({
 	getJSON: (path) => getJSON(LINEAGE_API, path),
 	requestJSON: (path, init) => requestJSON(LINEAGE_API, path, init),
 });
+
+/** The newest events lineage's feed shows the caller (governed per dataset by the service), as their
+ *  summaries; null when the feed could not be read. */
+export const fetchRecentEvents = query(v.number(), async (limit): Promise<Events | null> =>
+	lineage.fetchEvents({ limit, summary: true }),
+);
 
 /** #83 DLQ ops — the transactional-outbox backlog. Governed per-dataset by the service, so the
  *  status split (401 sign-in vs an empty backlog) is what the panel renders on. */

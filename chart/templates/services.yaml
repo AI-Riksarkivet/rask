@@ -62,9 +62,7 @@ spec:
             - { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int | quote }} }
             - { name: LANCE_TRASH_GRACE_DAYS, value: {{ hasKey .Values.catalog "trashGraceDays" | ternary .Values.catalog.trashGraceDays 7 | quote }} }
 
-            {{- $reserved := list }}
-            {{- range $ns, $bkt := .Values.medallion.buckets }}{{- $reserved = append $reserved $bkt }}{{- end }}
-            - { name: LANCE_RESERVED_BUCKETS, value: {{ $reserved | uniq | join "," | quote }} }
+            - { name: LANCE_RESERVED_BUCKETS, value: {{ include "lance.platformBuckets" . | quote }} }
             - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
 
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }

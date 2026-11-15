@@ -209,7 +209,6 @@ def upsert_warehouse(
     storage_options: StorageOptions,
     record: dict[str, str],
     *,
-    serving: str | None = None,
     protection: ProtectionChange | None = None,
     primary: bool = False,
 ) -> tuple[dict[str, str], dict[str, str]]:
@@ -231,7 +230,7 @@ def upsert_warehouse(
 
     So the merge happens INSIDE the conditional write, against the record as it actually is:
     `_CALLER_OWNED` fields come from the caller, every other field is carried from live, and
-    `serving`/`primary` are honoured as REQUESTS (they may arm, never disarm). `protection` is what the
+    `primary` is honoured as a REQUEST (it may arm, never disarm). `protection` is what the
     request names ([[LH-548]]), armed or cleared, and `None`, a request naming nothing, carries the live
     value forward. `exchange_json` re-reads and re-applies on a lost race, so a
     concurrent deactivate is preserved instead of clobbered.
@@ -240,7 +239,6 @@ def upsert_warehouse(
         control_root: The registry's root.
         storage_options: How to reach it.
         record: The record the request builds; only its `_CALLER_OWNED` fields are taken.
-        serving: A serving class to mark, or None to carry the live one.
         protection: Deletion protection to apply, or None to carry the live one.
         primary: Mark the warehouse its project's primary; false carries the live marker.
 
@@ -265,15 +263,13 @@ def upsert_warehouse(
         # A record written before the lifecycle feature has no status, and absent means live.
         merged.setdefault("status", "active")
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
-        if serving:
-            merged["serving"] = serving
         if protection is not None:
             merged = with_protection(merged, protection)
         # THE THIRD REQUEST FIELD, and it must be one: `merged` takes only `_CALLER_OWNED` keys from
         # the caller's record, so a field that is neither caller-owned nor an explicit request is
         # silently dropped. Setting `record["primary"]` at the endpoint returned 200 and wrote nothing
-        # (measured against the deployed catalog 2026-09-06). Arm-never-disarm, as `serving` is: a
-        # re-POST naming nothing carries the live value forward.
+        # (measured against the deployed catalog 2026-09-06). Arm-never-disarm: a re-POST naming
+        # nothing carries the live value forward.
         if primary:
             merged["primary"] = "true"
         return merged
@@ -404,7 +400,7 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
     `RecordExistsError` instead of last-writer-wins.
 
     KEYED BY BUCKET, CARRYING THE PROJECT. One project legitimately backs several warehouses with one
-    bucket — the work+gold pair — which is why a claim already held by the caller's own project is a
+    bucket, which is why a claim already held by the caller's own project is a
     pass rather than a collision, and why keying this by warehouse id would refuse the second half of a
     legitimate pair. It is also what keeps `create_warehouse`'s partial-failure retry idempotent.
     """

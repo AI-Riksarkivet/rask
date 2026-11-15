@@ -78,8 +78,8 @@ class GateSpec(BaseModel):
     def _safe_identifier(cls, value: str) -> str:
         """Reject a value that could escape its record path or its SQL predicate.
 
-        Checked here rather than at the door because both the catalog (writer) and the medallion
-        (reader) depend on it, and a guard on one side only is a guard the other side does not have.
+        Checked here rather than at the door because every reader of a declared gate depends on it as well as the
+        door that writes it, and a guard on one side only is a guard the other side does not have.
         """
         cleaned = value.strip()
         if not cleaned:

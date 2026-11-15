@@ -18,10 +18,14 @@
 		fetchWarehouseNamespaces,
 	} from '#lib/data/remote/warehouses.api.ts';
 	import DeclaredInGit, { declaredInGit } from '#lib/data/DeclaredInGit.svelte';
-	import { namespaceOfTable, stageOf } from '#lib/data/stage.ts';
+	import { namespaceOfTable } from '#lib/data/stage.ts';
+	import { NamespaceTiers } from '#lib/data/namespace-tiers.svelte.ts';
+	import { leafSegment } from '#lib/api/identifiers.ts';
 	import StageBadge from '#lib/data/StageBadge.svelte';
 
 	const id = $derived(page.params.id ?? '');
+	/** The tier each namespace declares (ADR 0160), never one read off its name. */
+	const tiers = new NamespaceTiers();
 
 	let wh = $state<Warehouse | null>(null);
 	let tables = $state<string[] | null>(null);
@@ -58,6 +62,7 @@
 		estate =
 			!whRes.ok && whRes.status === 404 && served.ok && served.data.namespaces.includes(current);
 		bound = nsRes.ok ? [...nsRes.data.namespaces].sort() : null;
+		void tiers.load(bound ?? []);
 		tables = tRes.ok ? [...tRes.data.tables].sort() : null;
 	}
 
@@ -83,7 +88,7 @@
 			const ns = namespaceOfTable(t);
 			counts.set(ns, (counts.get(ns) ?? 0) + 1);
 		}
-		return bound.map((ns) => ({ ns, count: counts.get(ns) ?? 0, info: stageOf(ns) }));
+		return bound.map((ns) => ({ ns, count: counts.get(ns) ?? 0, info: tiers.of(ns) }));
 	});
 
 	function statusOf(w: Warehouse): string {
@@ -112,7 +117,7 @@
 							class="row"
 							href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(ns) })}
 						>
-							<span class="mono">{ns}</span>
+							<span class="mono">{leafSegment(ns)}</span>
 							{#if info}<StageBadge {info} />{/if}
 							<span class="count">{count} table{count === 1 ? '' : 's'}</span>
 						</a>

@@ -56,9 +56,6 @@ spec:
             - --root-secret-file
             - /store-root/object-store-secret-key
             {{- $buckets := concat (list $.Values.objectStore.bucket) (splitList "," (include "lance.platformBuckets" $)) }}
-            {{- range $_, $zone := $.Values.medallion.buckets }}
-            {{- $buckets = append $buckets $zone }}
-            {{- end }}
             {{- range $.Values.catalog.multibase.dataBases | default list }}
             {{- $buckets = append $buckets (first (splitList "/" (trimPrefix "s3://" .))) }}
             {{- end }}

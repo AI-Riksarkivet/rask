@@ -7,7 +7,7 @@ step by step, how the three axes meet on one identity (``table:<id>``):
   who-may   (OpenFGA)      — alice owns what she creates; bob, with no grant, is denied
   what/when (Lance)        — the bronze/silver tables are real Lance datasets
   how/who   (OpenLineage)  — the catalog records alice as the *verified* creator; a promote
-                             run links silver ← bronze (the medallion lineage)
+                             run links silver ← bronze (derivation lineage)
 
 Run it through the stack that already exists: `dagger call governance-chain --demo`.
 Or, against a stack you stood up yourself:
@@ -164,7 +164,7 @@ def main() -> int:
     r = requests.post(f"{LINEAGE}/api/v1/lineage", json=promote, headers=ah, timeout=10)
     check(r.status_code == 201, f"emit promote run -> {r.status_code} (want 201)")
 
-    step("how: silver is derived from bronze (the medallion lineage, off lineage's edge list)")
+    step("how: silver is derived from bronze (derivation lineage, off lineage's edge list)")
     down = poll(
         lambda: [d["table"] for d in get_json(f"{LINEAGE}/tables/{bronze}/derived", ah).get("derived", [])],
         [silver],

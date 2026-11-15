@@ -40,7 +40,7 @@ those events' `rask_author.sub` (the contract is [`COMMIT-EVENTS.md`](COMMIT-EVE
 - **Who may write.** Every namespace door authorizes the caller on OpenFGA (`can_create_table` on the parent namespace
   for a create, `can_write_data` on the table for a write), the same rule in every tier.
 - **Provenance columns are reserved.** A governed tier row's provenance columns (`stage`, `lineage` and
-  `source_rowid`, named by `lakehouse.stage_stamp`) and the `lineage.*` / `rask.*` schema-metadata keys
+  `source_rowid`, named by `lakehouse.provenance_stamp`) and the `lineage.*` / `rask.*` schema-metadata keys
   cannot be dropped, renamed or rewritten by a writer (`catalog/core/provenance_guard.py`). The rest of a tier row is
   the writer's: no tier carries a workload-shaped schema.
 - **The quality gate.** A project declares its gate on the catalog's gates door (which column identifies a row, which

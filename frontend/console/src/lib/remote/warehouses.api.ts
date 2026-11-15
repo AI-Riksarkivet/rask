@@ -27,7 +27,6 @@ const ProjectSchema = v.object({
 		v.object({
 			id: v.string(),
 			bucket: v.string(),
-			serving: v.optional(v.nullable(v.string())),
 			status: v.string(),
 		}),
 	),

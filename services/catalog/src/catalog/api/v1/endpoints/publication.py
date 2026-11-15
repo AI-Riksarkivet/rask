@@ -84,19 +84,18 @@ class ProjectSource(Protocol):
 
 
 #: NO LOCAL COPY OF "is this a person" LIVES HERE. `catalog.core.lineage_emit.is_person_subject` is the
-#: one definition, and its own docstring says why: "the two disagreeing is the whole failure mode".
-#: This module briefly declared a weakened set — `{"", "*", "user:*"}` — which omitted the ROLE
-#: LITERALS the canonical set carries (`ray`, `data_eng`, `analyst`, `anon`, `system`, `service`).
-#: Measured on that version, `publication_originator("data_eng", …)` returned `"data_eng"`, so a failed
-#: gold stage still wrote a row into an inbox actor named after a role — verbatim the symptom this
-#: door was added to eliminate (`docs/COMMIT-EVENTS.md`, telling people).
+#: one definition, and its own docstring says why: "the two disagreeing is the whole failure mode". A
+#: narrower local set that omitted the ROLE LITERALS the canonical set carries (`ray`, `data_eng`,
+#: `analyst`, `anon`, `system`, `service`) would let `publication_originator("data_eng", …)` answer
+#: `"data_eng"`, and a notifier would address a person named after a role (`docs/COMMIT-EVENTS.md`,
+#: telling people).
 
 
 def publication_originator(claimed: str, token: Caller | None) -> str:
     """The PERSON this publication is for, or `""` when it is for nobody.
 
     THE CATALOG IS THE ONLY COMPONENT THAT CAN ANSWER THIS, which is why the decision lives here
-    rather than at the consumer. `table_published` is what wakes the next cascade hop, and the hop
+    rather than at the consumer. A pipeline reacting to `table_published` acts for someone, and it
     needs to know whether the caller was a person or a service — a question only the door that
     authenticated them can answer: `catalog/api/security.py` answers a `ServicePrincipal` for a machine,
     a service account the cluster vouched for or a Dex client signed in for itself (ADR 0181), and a
@@ -153,7 +152,6 @@ async def publication_extra(
     to_version: int | None,
     location: str,
     accepted: list[str] | None = None,
-    cascade_id: str = "",
     originator: str = "",
 ) -> dict[str, Any]:
     """The `table_published` payload: the version RANGE, the vended location, and the TENANT.
@@ -173,13 +171,8 @@ async def publication_extra(
     # byte-identical to before.
     if accepted:
         extra["accepted_assertions"] = list(accepted)
-    # The batch identity, echoed verbatim (§8 change 9). OMITTED when empty, on the same rule as
-    # `project` below: a consumer must be able to tell "no batch identity" from one named "".
-    if cascade_id:
-        extra["cascade_id"] = cascade_id
     # THE PERSON, resolved by `publication_originator` before it gets here. Omitted when empty on the
-    # same rule as `cascade_id` and `project`: a consumer that carries this field onto the next tier's
-    # work would thread a `""` down to a failing stage, addressed to a recipient named "". A consumer must be able to tell "nobody" from somebody named nothing.
+    # same rule as `project`: a consumer must be able to tell "nobody" from somebody named nothing.
     if originator:
         extra["originator"] = originator
     project = await lineage.project_for(segments[0]) if segments else None
@@ -331,7 +324,6 @@ async def publish_table(
             review=gate.review,
             requested_by=token.subject if token is not None else None,
             originator=publication_originator(body.originator, token),
-            cascade_id=body.cascade_id,
             opened_at=clock(),
         )
         hold = _view(standing, table=fga.canonical_object_id(segments))
@@ -366,7 +358,6 @@ async def publish_table(
             moved_at=result.moved_at,
             location=result.table,
             accepted=result.accepted,
-            cascade_id=body.cascade_id,
             # WHO this publication is FOR, as opposed to `actor`, which is who performed it. They
             # differ on exactly the path that matters: a pipeline's publish is performed by its service
             # principal and is for the person whose bronze write started the batch.
@@ -400,7 +391,7 @@ def _published_rows(table: DoorTable, so: StorageOptions) -> int | None:
 
 def _view(hold: promotions.Hold, *, table: str) -> PromotionHold:
     """The hold as the wire shows it, naming its table ``table``: its storage location stays inside the catalog."""
-    return PromotionHold.model_validate({**hold.model_dump(exclude={"location", "originator", "cascade_id", "restore_owed"}), "table": table})
+    return PromotionHold.model_validate({**hold.model_dump(exclude={"location", "originator", "restore_owed"}), "table": table})
 
 
 async def _hold(
@@ -414,7 +405,6 @@ async def _hold(
     review: publication.ReviewPolicy,
     requested_by: str | None,
     originator: str,
-    cascade_id: str,
     opened_at: datetime,
 ) -> promotions.Hold:
     """Record the held version as its table's open hold and pin it; the hold that stands is returned."""
@@ -427,7 +417,6 @@ async def _hold(
         reasons=result.hold_reasons,
         requested_by=requested_by,
         originator=originator,
-        cascade_id=cascade_id,
         opened_at=opened_at,
         expires_at=promotions.deadline(opened_at, review.hours),
     )
@@ -496,7 +485,6 @@ async def _announce_publication(
     moved_at: str | None,
     location: str,
     accepted: list[str] | None = None,
-    cascade_id: str = "",
     originator: str = "",
 ) -> None:
     """Announce that `published` moved to `to_version`: a `publish_table` run on lineage, which reaches the
@@ -537,7 +525,6 @@ async def _announce_publication(
             to_version=to_version,
             location=location,
             accepted=accepted,
-            cascade_id=cascade_id,
             originator=originator,
         ),
     )
@@ -626,7 +613,6 @@ async def approve_promotion(
             to_version=decided.version,
             moved_at=advanced.moved_at,
             location=decided.location,
-            cascade_id=decided.cascade_id,
             originator=decided.originator,
         )
     await _repin(settings, table, so, table_uuid)

@@ -36,7 +36,7 @@ RUN_EVENT_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$def
 
 #: Standard ``SchemaDatasetFacet`` schema URL — the produced dataset's columns (name + a concise,
 #: blob/vector-aware type via ``lakehouse.schema.facet_fields``). Shared here so every emitter (catalog,
-#: medallion) stamps the SAME spec version; a per-emitter copy would silently drift when one bumps it.
+#: maintenance) stamps the SAME spec version; a per-emitter copy would silently drift when one bumps it.
 SCHEMA_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet"
 
 #: Standard ``DatasetVersionDatasetFacet`` schema URL — the Lance version stamped on inputs/outputs (the
@@ -47,7 +47,7 @@ VERSION_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/DatasetVers
 #: the lineage feed is forwarded to records the dataset lives).
 DATASOURCE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet"
 
-#: Standard ``ErrorMessageRunFacet`` schema URL — the FAIL emitters' error payload (medallion + compaction).
+#: Standard ``ErrorMessageRunFacet`` schema URL — the FAIL emitters' error payload (maintenance).
 ERROR_MESSAGE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/ErrorMessageRunFacet.json#/$defs/ErrorMessageRunFacet"
 
 #: Fixed namespace for lance-ns name-based run ids (``uuid5`` of the project URL under ``NAMESPACE_URL``
@@ -58,8 +58,8 @@ _RUN_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg93/la
 def run_id_for(seed: str) -> str:
     """A spec-valid UUID ``runId`` that is STABLE for ``seed`` (e.g. ``"<operation>-<token>"``).
 
-    OpenLineage requires ``runId`` to be a UUID (Marquez rejects anything else), but the medallion
-    cascade and maintenance's per-dataset FAIL run need DETERMINISTIC ids so an at-least-once redelivery
+    OpenLineage requires ``runId`` to be a UUID (Marquez rejects anything else), but the catalog's
+    announcements and maintenance's per-dataset FAIL run need DETERMINISTIC ids so an at-least-once redelivery
     lands on the same feed key instead of duplicating the run. ``uuid5`` gives both: the same seed always
     yields the same UUID. Keep the human-readable seed as a run facet / job name for correlation —
     never as the ``runId`` itself.

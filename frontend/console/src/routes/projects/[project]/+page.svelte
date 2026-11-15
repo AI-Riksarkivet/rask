@@ -296,7 +296,7 @@
 				<p class="mut">No warehouses provisioned for this project.</p>
 			{:else}
 				<table>
-					<thead><tr><th>warehouse</th><th>bucket</th><th>serving</th><th>status</th></tr></thead>
+					<thead><tr><th>warehouse</th><th>bucket</th><th>status</th></tr></thead>
 					<tbody>
 						{#each detail.warehouses as w (w.id)}
 							<tr>
@@ -309,7 +309,6 @@
 									>
 								</td>
 								<td class="mono">{w.bucket}</td>
-								<td class="mono">{w.serving ?? '—'}</td>
 								<td><span class="chip mono" class:off={w.status !== 'active'}>{w.status}</span></td>
 							</tr>
 						{/each}

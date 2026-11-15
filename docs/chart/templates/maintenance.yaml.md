@@ -196,8 +196,7 @@ catalog's `LANCE_REST_ROOT` names it (services.yaml), where maintenance's store 
 
 A table's pass runs on a table in a bucket maintenance governs (`table_pass.governs`), or
 its tables would accumulate superseded versions FOREVER. This list names the buckets the
-chart itself knows of: the medallion storage zones (gold can live in its own bucket) and
-the approved multi-base data bases. A warehouse's bucket is created by an API call at
+chart itself knows of: the approved multi-base data bases. A warehouse's bucket is created by an API call at
 runtime, so it is governed from the warehouse registry instead, read per task through the
 warehouse the first segment of the table's name names: no value names it, and a deactivated warehouse's tables are
 not passed.

@@ -14,7 +14,8 @@
 	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
 	import DetailTabs from '#lib/data/DetailTabs.svelte';
 	import StageBadge from '#lib/data/StageBadge.svelte';
-	import { namespaceOfTable, stageOf } from '#lib/data/stage.ts';
+	import { namespaceOfTable } from '#lib/data/stage.ts';
+	import { leafSegment } from '#lib/api/identifiers.ts';
 	import { policyRequestFrom } from '#lib/data/namespace.ts';
 	import type { AccessGraph } from '#lib/data/namespace.ts';
 	import type { Policy } from '#lib/policies.ts';
@@ -32,17 +33,24 @@
 		describeNamespace,
 		fetchNamespacePolicy,
 		fetchNamespaceTasks,
+		namespaceTier,
 		setNamespacePolicy,
 	} from '#lib/data/remote/namespace.api.ts';
 	import type { TrashEntry } from '#lib/data/remote/catalog.api.ts';
 	import { formatZoned } from '@rask/ui/utils';
+	import CatalogName from '#lib/data/CatalogName.svelte';
+	import { fetchWarehouseNamespaces } from '#lib/data/remote/warehouses.api.ts';
+	import ConnectSnippets from '#lib/data/ConnectSnippets.svelte';
+	import { catalogPath } from '#lib/catalog-trail.ts';
 
 	const ns = $derived(page.params.id ?? '');
 
-	// Goal cond 3: the FGA view lives on an Access TAB (overview stays the default); the medallion
-	// stage badge is derived from the namespace name.
+	// The FGA view lives on an Access TAB (overview stays the default); the tier badge is the tier the
+	// namespace declares.
 	let tab = $state('overview');
-	const stageInfo = $derived(stageOf(ns));
+	/** The tier this namespace declares (ADR 0160), never one read off its name. */
+	const tierRead = $derived(namespaceTier(ns));
+	const stageInfo = $derived(tierRead.current ?? null);
 
 	// The catalog calls the grants panel makes, bound to this page's reads and writes: the panel's
 	// positional signature onto the data functions' single argument.
@@ -121,6 +129,18 @@
 	// the top-level ancestor against `ns`, so `acme$bronze` listed none of its own tables and `acme`
 	// listed all of them. Two copies of one rule is how they came to disagree.
 	const members = $derived((tables ?? []).filter((t) => namespaceOfTable(t) === ns).sort());
+
+	/** The namespaces directly under this one (the spec's ListNamespaces on its id), so a table in a nested
+	 *  namespace is reached from its warehouse through every namespace above it. `null`: the listing failed,
+	 *  said so on the page, never read as "none". */
+	let children = $state<string[] | null>([]);
+
+	async function loadChildren(): Promise<void> {
+		const current = ns;
+		const res = await fetchWarehouseNamespaces(current);
+		if (ns !== current) return;
+		children = res.ok ? [...res.data.namespaces].sort() : null;
+	}
 
 	async function loadTables(): Promise<void> {
 		const current = ns;
@@ -231,7 +251,9 @@
 		perms = null;
 		managed = null;
 		presence = { kind: 'checking' };
+		children = [];
 		loadTables();
+		void loadChildren();
 		void loadPresence();
 	});
 
@@ -343,12 +365,12 @@
 	}
 </script>
 
-<svelte:head><title>{ns} · namespaces · rask</title></svelte:head>
+<svelte:head><title>{catalogPath(ns)} · namespaces · rask</title></svelte:head>
 
 <div class="page">
 	<header>
 		<Boxes size={15} />
-		<h1 class="mono">{ns}</h1>
+		<CatalogName id={ns} kind="namespace" />
 		{#if stageInfo}<StageBadge info={stageInfo} />{/if}
 		<!-- Counted only for a namespace the caller can see: a count beside "no namespace you can see"
 		     would describe one. -->
@@ -395,8 +417,29 @@
 		<div class="empty"><p>Loading…</p></div>
 	{:else}
 		<!-- Goal cond 3: overview (default) | access — the FGA view moved onto its own tab. -->
-		<DetailTabs tabs={['overview', 'access']} bind:active={tab} />
+		<DetailTabs tabs={['overview', 'connect', 'access']} bind:active={tab} />
 		{#if tab === 'overview'}
+			{#if children === null}
+				<section>
+					<h2>Namespaces</h2>
+					<p class="mut">The namespaces under this one could not be listed.</p>
+				</section>
+			{:else if children.length > 0}
+				<section>
+					<h2>Namespaces</h2>
+					<ul class="list">
+						{#each children as child (child)}
+							<li>
+								<a
+									class="row mono"
+									href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(child) })}
+									>{leafSegment(child)}</a
+								>
+							</li>
+						{/each}
+					</ul>
+				</section>
+			{/if}
 			<section>
 				<h2>Tables</h2>
 				{#if members.length === 0}
@@ -407,7 +450,8 @@
 							<li>
 								<a
 									class="row mono"
-									href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(t) })}>{t}</a
+									href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(t) })}
+									>{leafSegment(t)}</a
 								>
 							</li>
 						{/each}
@@ -540,6 +584,8 @@
 				{/if}
 				{#if policyError}<p class="error">{policyError}</p>{/if}
 			</section>
+		{:else if tab === 'connect'}
+			<ConnectSnippets id={ns} kind="namespace" />
 		{:else}
 			<section>
 				<h2>Access</h2>
@@ -619,11 +665,6 @@
 		gap: 8px;
 		margin-bottom: 18px;
 		color: var(--mut);
-	}
-	h1 {
-		font-size: 20px;
-		margin: 0;
-		color: var(--ink);
 	}
 	.count {
 		font-size: 12px;

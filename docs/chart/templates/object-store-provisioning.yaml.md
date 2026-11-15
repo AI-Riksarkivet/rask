@@ -100,7 +100,7 @@ the root secret from its file and prints no secret; a store that never answers f
 ## `{{- range compact $buckets | uniq }}`
 
 THE PLATFORM BUCKETS, created here and nowhere else on the dev store: `objectStore.bucket` (the control root),
-`objectStore.buckets` (`lance.platformBuckets`), every `medallion.buckets` zone, and each multi-base data base's bucket.
+`objectStore.buckets` (`lance.platformBuckets`) and each multi-base data base's bucket.
 The store is a plain StatefulSet that provisions none, so a bucket this list omits never appears. Warehouse buckets are
 the catalog's, made at runtime by `POST /management/v1/warehouses`. `CreateBucket` on an existing bucket is accepted as
 already there, so a re-run makes only what is missing, and nothing here deletes a bucket.

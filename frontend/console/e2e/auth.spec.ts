@@ -43,7 +43,6 @@ test("the sidebar is every page's one navigation; an anonymous visitor sees the 
 		['Warehouses', '/catalog/warehouses'],
 		['Namespaces', '/catalog/namespaces'],
 		['Tables', '/catalog/tables'],
-		['Storage', '/catalog/storage'],
 		['Promotions', '/catalog/promotions'],
 		['Workbench', '/workbench'],
 	] as const) {
@@ -51,7 +50,7 @@ test("the sidebar is every page's one navigation; an anonymous visitor sees the 
 	}
 	// `me` resolves null here, so every estate-admin row is SHOWN disabled with the sign-in reason as
 	// its description: neither a link nor a button, and none of Settings' children handed out.
-	for (const name of ['Events', 'Streams', 'DLQ', 'Settings']) {
+	for (const name of ['Events', 'DLQ', 'Settings']) {
 		await expect(nav.getByRole('link', { name, exact: true })).toHaveCount(0);
 		const row = nav.locator('[aria-disabled="true"]', { hasText: name });
 		await expect(row).toBeVisible();
@@ -60,7 +59,7 @@ test("the sidebar is every page's one navigation; an anonymous visitor sees the 
 	await expect(page.locator('a[href^="/admin"], a[href^="/settings"]')).toHaveCount(0);
 });
 
-test('the landing is HOME — an honest scaffold, not the project gallery', async ({ page }) => {
+test('the landing is HOME — a summary of the estate, not the project gallery', async ({ page }) => {
 	await page.goto('/');
 	// The LAGOM wordmark: two flex spans around the peepo image, so its text computes with a
 	// separator space — match loosely, never `exact`.
@@ -70,10 +69,11 @@ test('the landing is HOME — an honest scaffold, not the project gallery', asyn
 			.getByText(/LA\s*GOM/)
 			.first(),
 	).toBeVisible();
-	// IT SAYS WHAT IT IS. The insights are not wired, and a landing page that implied otherwise — or
-	// showed invented numbers — would be worse than one that admits it. The badge is the claim.
-	await expect(page.getByText('Scaffold — no insights wired yet')).toBeVisible();
-	await expect(page.getByRole('region', { name: 'Estate insights' })).toBeVisible();
+	// Every card reads a door (ADR 0210): nothing on it is a placeholder.
+	for (const card of ['home-tables', 'home-commits', 'home-attention']) {
+		await expect(page.getByTestId(card)).toBeVisible();
+	}
+	await expect(page.getByText('Not wired')).toHaveCount(0);
 	// …and it is NOT the gallery any more. That surface, and the membership empty state that used to
 	// greet a project-less visitor as their entire product, live on /projects — asserted as an
 	// ABSENCE here so the two cannot quietly both render the list again.

@@ -144,6 +144,13 @@
 		}, {}),
 	);
 
+	/** The tag the catalog's publish door moves (`catalog.services.publication.PUBLISHED_TAG`): the
+	 *  version it names is what readers of the table's published view get. */
+	const PUBLISHED_TAG = 'published';
+	const publishedVersion = $derived(
+		tags.find(([name]) => name === PUBLISHED_TAG)?.[1].version ?? null,
+	);
+
 	type LogRow = {
 		version: number;
 		txn: HistoryRow | null;
@@ -445,7 +452,12 @@
 				>tip</span
 			>{/if}
 		{#each row.refs as name (name)}
-			<span class="tagchip mono" title="tag {name} pins v{row.version}">{name}</span>
+			<span
+				class={['tagchip mono', { published: name === PUBLISHED_TAG }]}
+				title={name === PUBLISHED_TAG
+					? `v${row.version} is published: the publish door moved this tag here`
+					: `tag ${name} pins v${row.version}`}>{name}</span
+			>
 		{/each}
 		{#if row.schemaChange}
 			<span class="schemadot" title="this commit changed the schema" aria-label="schema change"
@@ -521,6 +533,17 @@
 	<h2>Commit log</h2>
 	<p class="mut">
 		Every version of this table, newest first — read out of the Lance transaction log.
+	</p>
+	<p class="summary" data-testid="versions-summary">
+		{#if publishedVersion !== null}
+			<span>Published <span class="mono">v{publishedVersion}</span></span>
+		{:else}
+			<span>Nothing published yet</span>
+		{/if}
+		{#if currentVersion !== null}<span>Latest <span class="mono">v{currentVersion}</span></span
+			>{/if}
+		<span>{tags.length} tag{tags.length === 1 ? '' : 's'}</span>
+		<span>{branches.length} branch{branches.length === 1 ? '' : 'es'}</span>
 	</p>
 
 	{#if historyDrift}
@@ -1057,6 +1080,18 @@
 		flex-wrap: wrap;
 		gap: 8px;
 		margin-top: 8px;
+	}
+	.summary {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 16px;
+		margin: 0 0 12px;
+		font-size: 13px;
+	}
+	/* The version readers of the published view read: the tag's own semantic colour, never a tier's. */
+	.tagchip.published {
+		border-color: var(--success);
+		font-weight: 600;
 	}
 	.chip {
 		align-items: center;

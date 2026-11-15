@@ -4,6 +4,8 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 // rather than by seeding the shared mock catalog, whose auth-off bucket another spec seeds.
 
 const TABLES = ['db1$t', 'db1$u'];
+/** A table as the registry names it: its path (ADR 0210). */
+const shown = (id: string | undefined): string => (id ?? '').replaceAll('$', ' › ');
 const EVENTS = {
 	events: [
 		{ seq: 1, event_type: 'COMPLETE', job: 'bronze.ingest', event_time: '2026-11-11T10:00:00Z' },
@@ -29,7 +31,7 @@ const tab = (page: Page, title: string) => page.getByRole('tab', { name: new Reg
 async function open(page: Page): Promise<{ hold: () => void }> {
 	const reads = await answerReads(page);
 	await page.goto('/workbench');
-	await expect(page.getByRole('link', { name: TABLES[0] })).toBeVisible();
+	await expect(page.getByRole('link', { name: shown(TABLES[0]) })).toBeVisible();
 	await expect(page.getByText('bronze.ingest')).toBeVisible();
 	return reads;
 }
@@ -57,7 +59,7 @@ test('a panel maximizes over the dock and restores to where it was', async ({ pa
 	await open(page);
 	await page.getByRole('button', { name: 'Maximize Tables' }).click();
 	await expect(page.getByRole('tablist')).toHaveCount(0);
-	await expect(page.getByRole('link', { name: TABLES[0] })).toBeVisible();
+	await expect(page.getByRole('link', { name: shown(TABLES[0]) })).toBeVisible();
 	await expect(page.getByText('bronze.ingest')).toHaveCount(0);
 
 	await page.getByRole('button', { name: 'Restore' }).click();
@@ -187,11 +189,11 @@ test("a panel's data is there again after its tab was switched away and back", a
 	reads.hold();
 	await page.waitForTimeout(1_100);
 	await tab(page, 'Tables').click();
-	await expect(page.getByRole('link', { name: TABLES[0] })).toBeVisible();
+	await expect(page.getByRole('link', { name: shown(TABLES[0]) })).toBeVisible();
 	await tab(page, 'Events').click();
 	await expect(page.getByText('bronze.ingest')).toBeVisible();
 	await tab(page, 'Tables').click();
-	await expect(page.getByRole('link', { name: TABLES[1] })).toBeVisible();
+	await expect(page.getByRole('link', { name: shown(TABLES[1]) })).toBeVisible();
 });
 
 test("the tables panel's project filter narrows the panel and keeps the reader on the workbench", async ({
@@ -213,12 +215,12 @@ test("the tables panel's project filter narrows the panel and keeps the reader o
 		json(route, { tables: ['acme-wh$db1$t', 'globex-wh$db2$u'] }),
 	);
 	await page.goto('/workbench');
-	await expect(page.getByRole('link', { name: 'globex-wh$db2$u' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'globex-wh › db2 › u' })).toBeVisible();
 
 	await page.getByLabel('Project filter').click();
 	await page.getByRole('option', { name: 'acme' }).click();
-	await expect(page.getByRole('link', { name: 'acme-wh$db1$t' })).toBeVisible();
-	await expect(page.getByRole('link', { name: 'globex-wh$db2$u' })).toHaveCount(0);
+	await expect(page.getByRole('link', { name: 'acme-wh › db1 › t' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'globex-wh › db2 › u' })).toHaveCount(0);
 	await expect(page).toHaveURL(/\/workbench$/);
 });
 
@@ -228,7 +230,7 @@ test('at phone width the views rail sits above the dock, which keeps the full wi
 	await page.setViewportSize({ width: 390, height: 844 });
 	await answerReads(page);
 	await page.goto('/workbench');
-	await expect(page.getByRole('link', { name: TABLES[0] })).toBeVisible();
+	await expect(page.getByRole('link', { name: shown(TABLES[0]) })).toBeVisible();
 	const rail = await page.locator('aside').filter({ hasText: 'Views' }).boundingBox();
 	const dock = await page.locator('.horizon-layout').first().boundingBox();
 	if (!rail || !dock) throw new Error('the rail and the dock are both on the page');

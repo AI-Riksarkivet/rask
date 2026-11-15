@@ -22,7 +22,6 @@ const WAREHOUSES = [
 		bucket: 'acme-gold-bucket',
 		root_uri: 's3://acme-gold-bucket',
 		status: 'active',
-		serving: 'gold',
 	},
 ];
 
@@ -40,11 +39,9 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	await seed(page, { 'GET /management/v1/warehouses': WAREHOUSES });
 });
 
-test('a warehouse row opens the full record with the serving marker + project jump link', async ({
-	page,
-}) => {
+test('a warehouse row opens the full record with its project jump link', async ({ page }) => {
 	await page.goto('/catalog/warehouses');
-	// the gold serving record: click its PROJECT cell (id is a link, actions is a button)
+	// the second record: click its PROJECT cell (id is a link, actions is a button)
 	await page
 		.locator('tbody tr', { hasText: 'acme-gold-bucket' })
 		.getByText('acme', { exact: true })
@@ -52,17 +49,13 @@ test('a warehouse row opens the full record with the serving marker + project ju
 	const drawer = page.getByRole('dialog');
 	await expect(drawer).toContainText('acme-gold');
 	await expect(drawer).toContainText('s3://acme-gold-bucket');
-	// the serving-class marker — a gold warehouse is stated as such, a work one is not
-	await expect(drawer.getByText('serving · gold')).toBeVisible();
 	// The project jump goes UP to the estate level: a project is the top of the hierarchy, so its page
 	// is `/projects/<p>`.
 	const jump = drawer.getByRole('link', { name: 'Open project' });
 	await expect(jump).toHaveAttribute('href', '/projects/acme');
 });
 
-test('a work warehouse row states the work class honestly (no serving marker)', async ({
-	page,
-}) => {
+test('a warehouse row states when it was created', async ({ page }) => {
 	await page.goto('/catalog/warehouses');
 	await page
 		.locator('tbody tr', { hasText: 'acme-bucket' })
@@ -71,8 +64,6 @@ test('a work warehouse row states the work class honestly (no serving marker)', 
 		.click();
 	const drawer = page.getByRole('dialog');
 	await expect(drawer).toContainText('acme-wh');
-	await expect(drawer).toContainText('work warehouse');
-	await expect(drawer.getByText('serving · gold')).toHaveCount(0);
 	await expect(drawer).toContainText('2026-07-01T00:00:00Z');
 });
 

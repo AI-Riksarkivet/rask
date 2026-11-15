@@ -166,8 +166,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # ADDITIONAL buckets to sweep, comma-separated (audit 2026-07-14). The sweep discovered exactly ONE
     # bucket, so every #3-A per-warehouse bucket and #3-B multi-base data bucket was INVISIBLE to GC: their
     # tables accumulated superseded manifest versions and small fragments FOREVER. A storage leak introduced
-    # by the very features that create new buckets. The chart wires the medallion zone buckets + any
-    # multibase data bases here; per-warehouse buckets are added as they are provisioned.
+    # by the very features that create new buckets. The chart wires the multibase data bases here; per-warehouse buckets are added as they are provisioned.
     s3_extra_buckets: str = Field(default="", alias="MAINTENANCE_S3_EXTRA_BUCKETS")
     # PLATFORM buckets — infrastructure the estate creates for itself, comma-separated. They hold no
     # governed tables, so no warehouse record will ever claim them, and `orphan_buckets` would otherwise

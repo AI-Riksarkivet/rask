@@ -6,15 +6,15 @@ fence around the keys and columns the estate's provenance rests on. rask therefo
 one choke point every door calls, the same shape `core/formats.py` gives the Lance-only rule.
 
 TWO RESERVED NAMESPACES IN SCHEMA METADATA. `lineage.*` holds the #21 self-describing coordinates the
-catalog stamps at create and the cascade stamps on each tier; `lineage.dataset_id` is what
-maintenance names a medallion dataset by where its path cannot. `rask.*` is the platform's own
+catalog stamps at create; `lineage.dataset_id` is the name the catalog stamps on each table it
+writes. `rask.*` is the platform's own
 namespace. A writer who sets or nulls one of them re-points or erases another party's claim about the
 table, so every such write is refused, whichever route the request takes and whatever the create
 payload carries.
 
 THE PROVENANCE COLUMN. A governed row needs no column (ADR 0156 C9): its run and inputs ride the commit
 ([[LH-225]]), and `stage` and `lineage` are the writer's own. `source_rowid` is the one column the platform names
-(`lakehouse.stage_stamp`), an opt-in that traces a row to the source row it descends from, and every
+(`lakehouse.provenance_stamp`), an opt-in that traces a row to the source row it descends from, and every
 reader resolves it by that name, so it is protected by name wherever it appears. The row identity is protected by Lance's own declaration instead: any
 field carrying `lance-schema:unenforced-primary-key`, and each of its ancestors, in any table
 (`lance_docs/lance/format/table/index.md` § Unenforced Primary Key), read through Lance's own parser
@@ -25,8 +25,7 @@ pylance 13.0.0, Lance reads `Y` and `on` as a key and ` true` as none. Measured 
 * `alter_columns` with a `data_type`, even int64 -> int64, is accepted, strips the key metadata and
   re-mints the field id, after which `merge_insert(None)` raises "A merge insert operation requires join
   keys";
-* a rename keeps the key but moves the name the cascade merges on (`ingest/runtime.py`, the medallion
-  lanes name `id` explicitly);
+* a rename keeps the key but moves the name a pipeline merges on;
 * dropping or renaming a struct that holds a nested key field is accepted the same way.
 
 Lance itself refuses only `nullable=True` on the key or an ancestor ("Primary key column and all its
@@ -44,13 +43,13 @@ import pyarrow as pa
 from lance_namespace import InvalidInputError
 
 from catalog.services import primary_keys
-from lakehouse.stage_stamp import SOURCE_ROWID_COLUMN
+from lakehouse.provenance_stamp import SOURCE_ROWID_COLUMN
 
 
 #: Schema-metadata namespaces only the platform writes. A key under either is refused at every write door.
 RESERVED_METADATA_PREFIXES: Final = ("lineage.", "rask.")
 
-#: The platform's provenance column, by the name `stage_stamp` writes and every reader resolves.
+#: The platform's provenance column, by the name `lakehouse.provenance_stamp` gives it.
 PROVENANCE_COLUMNS: Final = frozenset({SOURCE_ROWID_COLUMN})
 
 

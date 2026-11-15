@@ -812,15 +812,6 @@
                 }
             }
         },
-        "medallion": {
-            "type": "object",
-            "properties": {
-                "buckets": {
-                    "description": "Map of tier namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `objectStore.bucket`. Listed buckets are auto-created, swept by maintenance and reserved from warehouses.",
-                    "type": "object"
-                }
-            }
-        },
         "nameOverride": {
             "description": "Overrides the chart name used in `rask.name` labels when `fullnameOverride` is empty. Empty uses the chart name.",
             "type": "string"

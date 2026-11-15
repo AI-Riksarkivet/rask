@@ -167,8 +167,7 @@ def validated_ids(settings: Settings, body: CreateWarehouseRequest) -> Warehouse
     """The warehouse id, project and bucket ``body`` names, each a control id.
 
     Raises:
-        InvalidInputError: An id is malformed, the id is the estate's own warehouse, the serving class is unknown, or
-            the endpoint is not the estate's object store ([[LH-205]]): another store needs a credential the catalog
+        InvalidInputError: An id is malformed, the id is the estate's own warehouse, or the endpoint is not the estate's object store ([[LH-205]]): another store needs a credential the catalog
             resolves and consumes on every open, provision and vend, and no door consumes one, so admitting it would
             have the estate's own key signed toward a host the caller chose.
     """
@@ -177,9 +176,6 @@ def validated_ids(settings: Settings, body: CreateWarehouseRequest) -> Warehouse
     bucket = _validate_id(body.bucket or body.id, what="bucket name")
     if warehouse_id == settings.estate_warehouse:
         raise InvalidInputError(f"warehouse id {warehouse_id!r} is the estate's own warehouse; choose another")
-    # Only the one serving class the estate defines: an unknown value would record a class no reader of the record knows.
-    if body.serving is not None and body.serving != "gold":
-        raise InvalidInputError(f"invalid serving {body.serving!r}: only 'gold' is supported")
     if not names_the_estate_store(body.endpoint, estate=settings.s3_endpoint):
         raise InvalidInputError(
             f"endpoint {body.endpoint!r} is not the estate's object store. A warehouse in another store needs a credential "
@@ -289,12 +285,12 @@ async def _claim_the_bucket(
         require_estate_store(existing.get("endpoint"), estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     # Reserved-bucket guard (audit 2026-07-23, the Mallory scenario's first door): the shared catalog
-    # root/registry bucket and the medallion zone buckets are PLATFORM storage — a warehouse claiming one
+    # root/registry bucket and the platform's own buckets are PLATFORM storage — a warehouse claiming one
     # would make its project the bucket's "owner" (provision_bucket is idempotent on an existing bucket, so
     # the claim silently succeeds) and a later project-policy set would govern every tenant's data in it.
     if bucket in settings.reserved_bucket_set:
         raise InvalidInputError(
-            f"bucket {bucket!r} is reserved platform storage (catalog root/registry or a medallion zone bucket) and cannot back a warehouse"
+            f"bucket {bucket!r} is reserved platform storage (the catalog root or registry, or a platform bucket) and cannot back a warehouse"
         )
     # Cross-project BUCKET-claim guard — the same takeover the warehouse-ID guard above closes, through the
     # other key: `bucket` is caller-chosen and provisioning an EXISTING bucket is a silent no-op, so without
@@ -385,13 +381,6 @@ def _record_for(
         # live profile; omitted, the merge carries the live one forward.
         **_delete_profile_fields(body.delete_profile),
     }
-    # Serving carries FORWARD on an idempotent re-create (same rationale as status above): a GitOps
-    # reconcile re-POSTing the gold warehouse WITHOUT the serving field must not silently demote it to a
-    # work warehouse. The field stays ABSENT (not null) on work warehouses: absent means work, and records
-    # written without a serving class stay byte-identical.
-    serving = body.serving or (existing.get("serving") if existing is not None else None)
-    if serving:
-        record["serving"] = serving
     # Deletion protection (Decision 5) is what the request declares ([[LH-548]]): `true` arms it, `false` clears it, and
     # a request naming neither leaves it as it stands. A new warehouse's record takes it here; a re-create's merge takes
     # it inside the conditional write (`upsert_warehouse`), against the record as it stands, since a re-POST that lost
@@ -432,7 +421,6 @@ async def _write_record(
                     settings.registry_root,
                     so,
                     record,
-                    serving=body.serving,
                     protection=protection,
                     primary=bool(body.primary),
                 )
@@ -954,10 +942,10 @@ def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]],
     path on its own:
 
     * A bucket may back TWO warehouses of the SAME project — the cross-claim guard subtracts the caller's
-      own project on purpose (a work warehouse plus a ``serving="gold"`` one is exactly that shape). A purge
+      own project on purpose, so one project may keep several warehouses on one bucket. A purge
       deletes every object AND the bucket, so deleting one of the pair would silently destroy the other's
       data and leave its record pointing at a bucket that no longer exists.
-    * The reserved platform buckets (catalog root/registry, medallion zones) are refused at create — but a
+    * The reserved platform buckets (the catalog root and registry, the data bases) are refused at create — but a
       record written before that guard existed, or by anything else with registry write access, still names
       one, and purging it would take the whole estate's registry with it.
 
@@ -968,7 +956,7 @@ def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]],
     bucket = record["bucket"]
     if bucket in settings.reserved_bucket_set:
         raise InvalidInputError(
-            f"bucket {bucket!r} is reserved platform storage (catalog root/registry or a medallion zone bucket) "
+            f"bucket {bucket!r} is reserved platform storage (the catalog root or registry, or a platform bucket) "
             f"and must not be purged — delete the warehouse without ?purge_bucket=true"
         )
     rivals = [r for r in records if r.get("bucket") == bucket and r.get("id") != warehouse_id]

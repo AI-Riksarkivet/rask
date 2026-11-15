@@ -29,6 +29,10 @@
 			"types": "./src/lib/components/checkbox/index.ts",
 			"svelte": "./src/lib/components/checkbox/index.ts"
 		},
+		"./copy-button": {
+			"types": "./src/lib/components/copy-button/index.ts",
+			"svelte": "./src/lib/components/copy-button/index.ts"
+		},
 		"./data-table": {
 			"types": "./src/lib/components/data-table/index.ts",
 			"svelte": "./src/lib/components/data-table/index.ts"

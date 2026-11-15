@@ -108,7 +108,7 @@ No — related species, different format and bigger scope on our side:
 
 | | **Lakekeeper** | **this platform** |
 |---|---|---|
-| What it is | Apache **Iceberg** REST catalog (Rust) | **Lance** REST catalog + lineage + governance, with the medallion as tier governance in the catalog |
+| What it is | Apache **Iceberg** REST catalog (Rust) | **Lance** REST catalog + lineage + governance, with opt-in tier governance in the catalog |
 | The "contract" | the Iceberg spec: snapshots, schema evolution via column IDs, hidden partitioning — metadata JSON managed by the catalog | the Lance manifest + immutable versions (§2) — self-describing storage, catalog is a thin adapter |
 | AuthZ | OpenFGA (same choice — we studied theirs) | OpenFGA, threaded through the SAME table uuid as lineage (`table:<uuid>`) |
 | Lineage | none | OpenLineage intake, a durable commit feed and a table-level edge list as catalog-governed Lance tables, every event forwarded to a bring-your-own graph backend |
