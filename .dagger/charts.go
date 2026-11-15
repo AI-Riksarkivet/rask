@@ -207,6 +207,7 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set networkPolicy.apiServerEgress[0].ports[0].port=6443 " +
 	"--api-versions external-secrets.io/v1/ExternalSecret " +
 	"--set-string auth.oidc.issuer=https://auth.example.com/dex " +
+	"--set-string auth.oidc.idpId=corp " +
 	"--set-string auth.oidc.connectors.ldap=corp " +
 	"--set openbao.enabled=false " +
 	"--set-string openbao.externalAddr=https://vault.example.com:8200 " +

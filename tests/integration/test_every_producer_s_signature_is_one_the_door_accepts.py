@@ -87,6 +87,7 @@ PRODUCERS = [
 def _settings(signers: set[str], delegators: set[str], *, fga_enabled: bool = False) -> LineageSettings:
     auth = {
         "oidc_enabled": True,
+        "oidc_idp_id": "dex",
         "oidc_connectors": {"local": "dex"},
         "oidc_issuer": "https://dex.example",
         "oidc_audience": "lance",

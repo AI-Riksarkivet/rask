@@ -222,6 +222,7 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
         governed = get_settings().model_copy(
             update={
                 "oidc_enabled": True,
+                "oidc_idp_id": "dex",
                 "oidc_connectors": {"local": "dex"},
                 "oidc_issuer": "https://idp.example",
                 "oidc_audience": "lance",

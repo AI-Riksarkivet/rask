@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.oidc import OIDCVerifier
-from lakehouse.governed.principal import CLIENT_IDP, SERVICE_ACCOUNT_IDP, Principal
+from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, SERVICE_ACCOUNT_IDP, Principal
 
 
 #: The username prefix the Kubernetes API server gives every service account (`system:serviceaccount:<ns>:<sa>`).
@@ -42,9 +42,9 @@ def service_account_principal(account: str) -> Principal:
     return Principal(idp_id=SERVICE_ACCOUNT_IDP, subject=account)
 
 
-def client_principal(client_id: str) -> Principal:
-    """The principal an OpenID client signed in for itself is: `dex-client~` and its client id (ADR 0181)."""
-    return Principal(idp_id=CLIENT_IDP, subject=client_id)
+def client_principal(idp_id: str, client_id: str) -> Principal:
+    """The principal a client of the issuer named `idp_id` signed in for itself is: `<idp_id>-client~<client id>`."""
+    return Principal(idp_id=f"{idp_id}{CLIENT_IDP_SUFFIX}", subject=client_id)
 
 
 class ServicePrincipal(BaseModel):

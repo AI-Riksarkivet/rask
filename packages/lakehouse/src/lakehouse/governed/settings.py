@@ -32,9 +32,9 @@ from pathlib import Path
 from typing import Self
 
 from dotenv import dotenv_values
-from pydantic import Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lakehouse.governed.principal import MACHINE_IDPS, require_idp_id
+from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, is_machine_idp, require_idp_id
 
 
 #: The names the 2026-08-30 hard rename deleted. Kept as a REFUSAL list, never as an alias list: an
@@ -174,6 +174,69 @@ def _configured_env_files(cls: type) -> list[Path]:
     return [Path(entry) for entry in candidates if entry]
 
 
+def _require_a_persons_idp_id(setting: str, idp_id: str) -> None:
+    """`ValueError` naming `setting` when `idp_id` is a machine's or outside the idp-id grammar."""
+    if is_machine_idp(idp_id):
+        raise ValueError(f"{setting} {idp_id!r}, a machine identity's idp id")
+    try:
+        require_idp_id(idp_id)
+    except ValueError as exc:
+        raise ValueError(f"{setting} an idp id no principal can carry: {exc}") from exc
+
+
+#: The claims every verified token carries (`lakehouse.governed.oidc.IDToken`), so none of them marks a client's.
+_CLAIMS_EVERY_TOKEN_CARRIES = frozenset({"iss", "sub", "aud", "exp", "iat"})
+
+
+class ClientMarker(BaseModel):
+    """The claim an issuer marks its client's own token with, and the value it must hold (any, when unset)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    claim: str = Field(min_length=1)
+    value: str | None = None
+
+    @model_validator(mode="after")
+    def _marks_something(self) -> Self:
+        if self.claim in _CLAIMS_EVERY_TOKEN_CARRIES:
+            raise ValueError(f"the client marker names {self.claim!r}, a claim every token carries, so it marks nothing")
+        return self
+
+
+class OidcProvider(BaseModel):
+    """One issuer a person or a client signs in at, and the rule its tokens are named by (`lakehouse.governed.idp_identity`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    issuer: str = Field(min_length=1)
+    idp_id: str
+    #: Split-horizon fetch: discovery and keys fetched here while tokens keep `issuer`.
+    discovery_url: str | None = None
+    subject_claims: tuple[str, ...] | None = None
+    connectors: dict[str, str] = Field(default_factory=dict)
+    client_marker: ClientMarker | None = None
+
+    @model_validator(mode="after")
+    def _one_rule(self) -> Self:
+        """One rule names a person, under idp ids a person may carry."""
+        if self.subject_claims is not None:
+            if self.connectors:
+                raise ValueError("subject claims are never read beside a Dex connector map, which reports its user id in federated_claims")
+            if not self.subject_claims or not all(self.subject_claims):
+                raise ValueError("the subject claims name no claim, or an empty one")
+        if "" in self.connectors:
+            raise ValueError("the connector map names an empty connector id")
+        _require_a_persons_idp_id("the idp id is", self.idp_id)
+        for connector, idp_id in self.connectors.items():
+            _require_a_persons_idp_id(f"the connector map maps {connector!r} to", idp_id)
+        return self
+
+    @property
+    def idp_ids(self) -> frozenset[str]:
+        """Every idp id this issuer's people and clients are named under, which no other issuer may name."""
+        return frozenset({self.idp_id, f"{self.idp_id}{CLIENT_IDP_SUFFIX}", *self.connectors.values()})
+
+
 class OidcSettings:
     """The bearer-token verifier's knobs. Mix in alone only alongside `FgaSettings` (see medallion)."""
 
@@ -188,19 +251,26 @@ class OidcSettings:
     oidc_cache_ttl: int = Field(default=300, gt=0, alias="RASK_OIDC_CACHE_TTL")
     oidc_leeway: int = Field(default=60, alias="RASK_OIDC_LEEWAY")
     oidc_allow_insecure: bool = Field(default=False, alias="RASK_OIDC_ALLOW_INSECURE")
-    #: The idp id the issuer's people are principals of ([[XC-214]], `lakehouse.governed.idp_identity`): `corp` makes the
-    #: person the issuer names `s` the principal `corp~s`. Set it, or `oidc_connectors` for a Dex that brokers several
-    #: upstream providers, never both: exactly one rule names a person.
+    #: The idp id of the issuer's people and clients ([[XC-214]], `lakehouse.governed.idp_identity`), required with OIDC:
+    #: `corp` makes the person the issuer names `s` the principal `corp~s`, and its client `etl` signed in for itself
+    #: `corp-client~etl`. Under `oidc_connectors` it names the clients alone, and the connectors' idp ids the people.
     oidc_idp_id: str | None = Field(default=None, alias="RASK_OIDC_IDP_ID")
     #: The claims a person's subject is read from, the first the token carries winning; unset is `sub` alone, which
     #: OpenID Connect Core 1.0 § 2 makes unique and never reassigned within the issuer. A provider whose `sub` is not the
-    #: stable id a grant needs names another first (Entra's `oid`). Read only with `oidc_idp_id`.
+    #: stable id a grant needs names another first (Entra's `oid`). Never read beside `oidc_connectors`.
     oidc_subject_claims: list[str] | None = Field(default=None, alias="RASK_OIDC_SUBJECT_CLAIMS")
     #: The idp id each Dex connector's users are principals of, keyed by the connector id Dex reports in
     #: `federated_claims` ([[LH-063]], `lakehouse.governed.idp_identity`): `{"local": "dex"}` makes the user id
     #: `u` of connector `local` the principal `dex~u`. Renaming a connector adds its new id under the same idp id, so
     #: no grant is re-keyed. A connector absent here authenticates nobody. Empty unless the issuer is such a Dex.
     oidc_connectors: dict[str, str] = Field(default_factory=dict, alias="RASK_OIDC_CONNECTORS")
+    #: How the issuer marks a token its client was issued for itself where its `sub` is not the client's id (Keycloak's
+    #: service-account user, `{"claim": "client_id"}`; Entra's `{"claim": "idtyp", "value": "app"}`). Unset, a token is
+    #: a client's when its `sub` is the `client_id` it names (RFC 9068 § 2.2).
+    oidc_client_marker: ClientMarker | None = Field(default=None, alias="RASK_OIDC_CLIENT_MARKER")
+    #: Further issuers a person or a client signs in at, beside `oidc_issuer` (which the console signs in at), each with
+    #: its own idp id and naming rule. A token is named by the issuer its `iss` is, and every issuer's idp ids are its own.
+    oidc_providers: list[OidcProvider] = Field(default_factory=list, alias="RASK_OIDC_PROVIDERS")
     #: AN ACKNOWLEDGEMENT, NOT A SWITCH — it turns nothing off. `oidc_enabled` already decides whether
     #: this service authenticates; this says an operator MEANT the answer to be "no". Without it,
     #: "auth off because I meant it" and "auth off because nothing set it" are indistinguishable, and
@@ -226,28 +296,48 @@ class OidcSettings:
         # A door routes a bearer by its unverified `iss`, the service-account issuer first, so one issuer named twice
         # would answer every person's token as a service account's. Two providers claiming one issuer are refused at
         # boot instead.
-        if self.oidc_enabled and self.sa_issuer and self.oidc_issuer and self.sa_issuer.rstrip("/") == self.oidc_issuer.rstrip("/"):
-            raise ValueError("RASK_SA_ISSUER and RASK_OIDC_ISSUER name one issuer: its tokens would be routed as service accounts' and never as a person's")
+        if self.sa_issuer and any(provider.issuer.rstrip("/") == self.sa_issuer.rstrip("/") for provider in self.oidc_person_providers):
+            raise ValueError("RASK_SA_ISSUER and a person's issuer name one issuer: its tokens would be routed as service accounts' and never as a person's")
         return self
+
+    @property
+    def oidc_person_providers(self) -> list[OidcProvider]:
+        """Every issuer a person or a client signs in at: `oidc_issuer`, then `oidc_providers`. Empty with OIDC off."""
+        if not (self.oidc_enabled and self.oidc_issuer and self.oidc_idp_id):
+            return []
+        try:
+            primary = OidcProvider(
+                issuer=self.oidc_issuer,
+                idp_id=self.oidc_idp_id,
+                discovery_url=self.oidc_discovery_url,
+                subject_claims=None if self.oidc_subject_claims is None else tuple(self.oidc_subject_claims),
+                connectors=self.oidc_connectors,
+                client_marker=self.oidc_client_marker,
+            )
+        except ValidationError as exc:
+            refusals = "; ".join(str(error["msg"]).removeprefix("Value error, ") for error in exc.errors())
+            raise ValueError(f"RASK_OIDC_ISSUER's settings are refused: {refusals}") from None
+        return [primary, *self.oidc_providers]
 
     @model_validator(mode="after")
     def _validate_person_naming(self) -> Self:
-        """Exactly one rule names a person, under an idp id a person may carry, never a machine's (`kubernetes`, `dex-client`)."""
-        if self.oidc_enabled and not (self.oidc_idp_id or self.oidc_connectors):
-            raise ValueError("RASK_OIDC_IDP_ID or RASK_OIDC_CONNECTORS is required when OIDC is enabled: a person is the principal the issuer's idp id names")
-        if self.oidc_idp_id and self.oidc_connectors:
-            raise ValueError("RASK_OIDC_IDP_ID and RASK_OIDC_CONNECTORS each name every person: set one")
-        if self.oidc_subject_claims is not None:
-            if self.oidc_connectors:
-                raise ValueError("RASK_OIDC_SUBJECT_CLAIMS is read only with RASK_OIDC_IDP_ID: a Dex connector reports its user id in federated_claims")
-            if not self.oidc_subject_claims or not all(self.oidc_subject_claims):
-                raise ValueError("RASK_OIDC_SUBJECT_CLAIMS names no claim, or an empty one")
-        if "" in self.oidc_connectors:
-            raise ValueError("RASK_OIDC_CONNECTORS names an empty connector id")
-        if self.oidc_idp_id:
-            _require_a_persons_idp_id("RASK_OIDC_IDP_ID is", self.oidc_idp_id)
-        for connector, idp_id in self.oidc_connectors.items():
-            _require_a_persons_idp_id(f"RASK_OIDC_CONNECTORS maps {connector!r} to", idp_id)
+        """Each issuer names its people under idp ids of its own, never a machine's (`kubernetes`, `<idp id>-client`)."""
+        if not self.oidc_enabled:
+            return self
+        if not self.oidc_idp_id:
+            raise ValueError("RASK_OIDC_IDP_ID is required when OIDC is enabled: it names the issuer's people, or under RASK_OIDC_CONNECTORS its clients")
+        claimed: dict[str, str] = {}
+        issuers: set[str] = set()
+        for provider in self.oidc_person_providers:
+            issuer = provider.issuer.rstrip("/")
+            if issuer in issuers:
+                raise ValueError(f"{issuer} is named as an issuer twice: one token would be named by two rules")
+            issuers.add(issuer)
+            for idp_id in provider.idp_ids:
+                if claimed.setdefault(idp_id, issuer) != issuer:
+                    raise ValueError(f"the idp id {idp_id!r} is named by {claimed[idp_id]} and {issuer}: their people would share one namespace")
+            if not self.oidc_allow_insecure and not issuer.startswith("https://"):
+                raise ValueError(f"the issuer {issuer} must use HTTPS (set RASK_OIDC_ALLOW_INSECURE=true for a dev IdP)")
         return self
 
     @model_validator(mode="after")
@@ -258,23 +348,13 @@ class OidcSettings:
         # AN `http://` ISSUER IS A MISCONFIGURATION, AND IT BELONGS HERE. `_require_https` catches it
         # only at VERIFY time, refusing every bearer — valid or not — with a 503 on the first request
         # after a healthy-looking startup. A scheme is knowable at construction, which is what this
-        # validator is for.
+        # validator is for (`_validate_person_naming` holds every issuer to it).
         #
         # The `jwks_uri` half cannot move here: it comes from DISCOVERY, so settings never sees it and
         # `_require_https` remains the backstop for that path.
         if self.oidc_enabled and self.oidc_issuer and not self.oidc_allow_insecure and not self.oidc_issuer.startswith("https://"):
             raise ValueError("RASK_OIDC_ISSUER must use HTTPS (set RASK_OIDC_ALLOW_INSECURE=true for a dev IdP)")
         return self
-
-
-def _require_a_persons_idp_id(setting: str, idp_id: str) -> None:
-    """`ValueError` naming `setting` when `idp_id` is a machine's or outside the idp-id grammar."""
-    if idp_id in MACHINE_IDPS:
-        raise ValueError(f"{setting} {idp_id!r}, a machine identity's idp id")
-    try:
-        require_idp_id(idp_id)
-    except ValueError as exc:
-        raise ValueError(f"{setting} an idp id no principal can carry: {exc}") from exc
 
 
 class GovernedAuthSettings(OidcSettings, FgaSettings):

@@ -148,6 +148,7 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp.example.com",
             "oidc_audience": "lance",
+            "oidc_idp_id": "dex",
             "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_store_id": "s",

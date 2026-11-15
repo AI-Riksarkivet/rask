@@ -6,8 +6,8 @@ door verifies it offline against the cluster issuer (signature, `iss`, the door'
 another key signed under the issuer's name, or one minted for another door, authenticates nobody.
 
 [[XC-214]], ADR 0208. At any OpenID provider a person is `<idp-id>~<subject>`: the idp id the deployment names for the
-issuer (`RASK_OIDC_IDP_ID`) and the first of `RASK_OIDC_SUBJECT_CLAIMS` the token carries, `sub` by default
-(`conftest.OidcIssuer`). A token from an issuer the deployment does not name is refused 401 before any naming rule runs,
+issuer (`RASK_OIDC_IDP_ID`, or a further issuer's in `RASK_OIDC_PROVIDERS`) and the first of its subject claims the token
+carries, `sub` by default (`conftest.OidcIssuer`). A token from an issuer the deployment does not name is refused 401 before any naming rule runs,
 which `a-token-another-clusters-issuer-signed` pins.
 
 [[LH-063]], ADR 0159 D5. Behind a Dex mapped connector by connector a person is `<idp-id>~<user id>`: the idp id the
@@ -16,8 +16,9 @@ reports in `federated_claims`, never Dex's own `sub`, which encodes the connecto
 `conftest.dex_subject`). So a connector renamed under the same idp id keeps every grant, and a token that names no
 mapped connector names nobody.
 
-ADR 0181. A client signed in for itself with the client-credentials grant is the machine `dex-client~<client id>`: its
-`sub` is the client's, equal to the `client_id` it names (RFC 9068 § 2.2, `conftest.OidcIssuer.mint_client`), or, at
+ADR 0181, ADR 0208. A client signed in for itself with the client-credentials grant is the machine
+`<issuer's idp id>-client~<client id>` (`dex-client~` at a Dex named `dex`): its token carries the mark its issuer is
+configured with, or else its `sub` is the client's, equal to the `client_id` it names (RFC 9068 § 2.2, `conftest.OidcIssuer.mint_client`), or, at
 Dex, Dex's encoding of the client named in `azp` under the empty connector id no connector may carry
 (`conftest.DexIssuer.mint_client`). A person's token that asked for another audience carries
 `azp` too, but its `sub` encodes a connector, so without federated claims it still names nobody.
@@ -77,6 +78,16 @@ _CLIENT_USER = f"user:dex-client~{_CLIENT_ID}"
 #: A person at an OpenID provider that is not Dex: the subject it issues them, and the one user they are there.
 _OIDC_SUBJECT = "248289761001"
 _OIDC_PERSON_USER = f"user:corp~{_OIDC_SUBJECT}"
+#: The same client id signed in for itself at that provider, and at a second one, `partner`, which marks its app-only
+#: tokens `idtyp: app` and gives them a `sub` that is not the client's, as Entra does: two machines, one per issuer.
+_OIDC_CLIENT_USER = f"user:corp-client~{_CLIENT_ID}"
+_PARTNER_CLIENT_USER = f"user:partner-client~{_CLIENT_ID}"
+#: And at a third, `ops`, whose client tokens carry `client_id` with a `sub` that is the client's hidden service-account
+#: user, as Keycloak's do.
+_OPS_CLIENT_USER = f"user:ops-client~{_CLIENT_ID}"
+#: A person at the second provider, and the one user they are there.
+_PARTNER_SUBJECT = "f3a1c9e2-6b7d-4e2a-9c1f-8d3e2b4a5c6d"
+_PARTNER_PERSON_USER = f"user:partner~{_PARTNER_SUBJECT}"
 
 
 class _CheckResponse:
@@ -169,6 +180,7 @@ def _catalog(person_issuer: dict[str, str], sa_issuer: Any, tmp_path: Any, monke
     # root object the access-admin door's gate checks, granted to the person.
     openfga = _OpenFga(
         {(_PIPELINE_USER, db), (_PERSON_USER, db), (_HASHED_USER, db), (_CLIENT_USER, db), (_PERSON_USER, "estate:rask"), (_OIDC_PERSON_USER, db)}
+        | {(_OIDC_CLIENT_USER, db), (_PARTNER_CLIENT_USER, db), (_PARTNER_PERSON_USER, db), (_OPS_CLIENT_USER, db)}
     )
     with TestClient(app, raise_server_exceptions=False) as client:
         # Authorization on for the requests, after a lifespan that built the verifiers and no OpenFGA client.
@@ -185,15 +197,46 @@ def _catalog(person_issuer: dict[str, str], sa_issuer: Any, tmp_path: Any, monke
 @pytest.fixture
 def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _OpenFga]]:
     """The catalog whose people sign in through a Dex that brokers upstream providers, mapped connector by connector."""
-    with _catalog({"RASK_OIDC_ISSUER": dex_issuer.issuer, "RASK_OIDC_CONNECTORS": json.dumps(_CONNECTORS)}, sa_issuer, tmp_path, monkeypatch) as served:
+    with _catalog(
+        {"RASK_OIDC_ISSUER": dex_issuer.issuer, "RASK_OIDC_IDP_ID": "dex", "RASK_OIDC_CONNECTORS": json.dumps(_CONNECTORS)}, sa_issuer, tmp_path, monkeypatch
+    ) as served:
         yield served
 
 
 @pytest.fixture
-def oidc_catalog(sa_issuer: Any, oidc_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _OpenFga]]:
-    """The catalog whose people sign in at an OpenID provider that is not Dex, named `corp`, each by `oid` where the
-    token carries one and by `sub` otherwise."""
-    person_issuer = {"RASK_OIDC_ISSUER": oidc_issuer.issuer, "RASK_OIDC_IDP_ID": "corp", "RASK_OIDC_SUBJECT_CLAIMS": json.dumps(["oid", "sub"])}
+def partner_issuer(oidc_issuer: Any) -> Iterator[Any]:
+    """A second OpenID provider on loopback, of the same kind as `oidc_issuer`."""
+    issuer = type(oidc_issuer)()
+    yield issuer
+    issuer.close()
+
+
+@pytest.fixture
+def ops_issuer(oidc_issuer: Any) -> Iterator[Any]:
+    """A third OpenID provider on loopback, of the same kind as `oidc_issuer`."""
+    issuer = type(oidc_issuer)()
+    yield issuer
+    issuer.close()
+
+
+@pytest.fixture
+def oidc_catalog(
+    sa_issuer: Any, oidc_issuer: Any, partner_issuer: Any, ops_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[TestClient, _OpenFga]]:
+    """The catalog whose people sign in at two OpenID providers that are not Dex: `corp`, naming each by `oid` where the
+    token carries one and by `sub` otherwise; `partner`, whose client tokens carry `idtyp: app` as their mark; and `ops`,
+    whose client tokens carry `client_id` as theirs, whatever its value."""
+    person_issuer = {
+        "RASK_OIDC_ISSUER": oidc_issuer.issuer,
+        "RASK_OIDC_IDP_ID": "corp",
+        "RASK_OIDC_SUBJECT_CLAIMS": json.dumps(["oid", "sub"]),
+        "RASK_OIDC_PROVIDERS": json.dumps(
+            [
+                {"issuer": partner_issuer.issuer, "idp_id": "partner", "client_marker": {"claim": "idtyp", "value": "app"}},
+                {"issuer": ops_issuer.issuer, "idp_id": "ops", "client_marker": {"claim": "client_id"}},
+            ]
+        ),
+    }
     with _catalog(person_issuer, sa_issuer, tmp_path, monkeypatch) as served:
         yield served
 
@@ -375,21 +418,32 @@ def test_a_seeded_tuple_names_a_principal_and_a_bare_name_is_refused(
     [
         pytest.param("granted-person-by-oid", 200, _OIDC_PERSON_USER, id="the-first-subject-claim-the-token-carries-names-them"),
         pytest.param("not-a-string-claim", 200, _OIDC_PERSON_USER, id="a-subject-claim-that-is-no-string-yields-to-the-next"),
-        pytest.param("granted-client", 200, _CLIENT_USER, id="a-client-signed-in-for-itself-is-its-client-principal"),
+        pytest.param("granted-client", 200, _OIDC_CLIENT_USER, id="a-client-signed-in-for-itself-is-its-issuers-client-principal"),
         pytest.param("sub-equal-to-azp", 403, f"user:corp~{_CLIENT_ID}", id="a-person-whose-sub-is-their-clients-id-stays-a-person"),
+        pytest.param("partner-person", 200, _PARTNER_PERSON_USER, id="a-person-at-a-second-issuer-is-its-idp-id-and-their-subject"),
+        pytest.param("partner-marked-client", 200, _PARTNER_CLIENT_USER, id="a-client-a-second-issuer-marks-is-that-issuers-client"),
+        pytest.param("partner-marked-naming-no-client", 401, None, id="a-marked-token-naming-no-client-is-refused"),
+        pytest.param("ops-marked-client", 200, _OPS_CLIENT_USER, id="a-mark-with-no-value-is-a-claim-present"),
     ],
 )
 def test_a_person_at_any_openid_provider_is_its_idp_id_and_their_subject_and_their_tuples_alone_authorize_them(
-    oidc_catalog: tuple[TestClient, _OpenFga], oidc_issuer: Any, caller: str, status: int, asked_about: str | None
+    oidc_catalog: tuple[TestClient, _OpenFga], oidc_issuer: Any, partner_issuer: Any, ops_issuer: Any, caller: str, status: int, asked_about: str | None
 ) -> None:
-    """[[XC-214]]: OpenID Connect Core 1.0 § 2 makes `sub` unique and never reassigned within its issuer, so the issuer's
-    idp id and that subject name one person whatever the provider; a deployment may name the claims read before it."""
+    """[[XC-214]], ADR 0208: OpenID Connect Core 1.0 § 2 makes `sub` unique and never reassigned within its issuer, so the
+    issuer's idp id and that subject name one person whatever the provider; a deployment may name the claims read before
+    it. Each issuer names its people and its clients under idp ids of its own, so one client id at two issuers is two
+    machines, and a person at the second issuer whose token names its client in `azp` and a type other than the mark's
+    value is a person."""
     client, openfga = oidc_catalog
     token = {
         "granted-person-by-oid": lambda: oidc_issuer.mint("pairwise-7f3e", audience="lance-catalog", oid=_OIDC_SUBJECT),
         "not-a-string-claim": lambda: oidc_issuer.mint(_OIDC_SUBJECT, audience="lance-catalog", oid=248289761001),
         "granted-client": lambda: oidc_issuer.mint_client(_CLIENT_ID, audience="lance-catalog"),
         "sub-equal-to-azp": lambda: oidc_issuer.mint(_CLIENT_ID, audience="lance-catalog", azp=_CLIENT_ID),
+        "partner-person": lambda: partner_issuer.mint(_PARTNER_SUBJECT, audience="lance-catalog", azp="rask-console", idtyp="user"),
+        "partner-marked-client": lambda: partner_issuer.mint("0c9b1e5a-service-principal-object", audience="lance-catalog", azp=_CLIENT_ID, idtyp="app"),
+        "partner-marked-naming-no-client": lambda: partner_issuer.mint("0c9b1e5a-service-principal-object", audience="lance-catalog", idtyp="app"),
+        "ops-marked-client": lambda: ops_issuer.mint("5d2f8a1b-service-account-user", audience="lance-catalog", azp=_CLIENT_ID, client_id=_CLIENT_ID),
     }[caller]()
 
     answered = _describe(client, token)

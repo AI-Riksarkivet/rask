@@ -46,6 +46,7 @@ def lineage_port(dex_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[i
         "RASK_OIDC_ISSUER": dex_issuer.issuer,
         "RASK_OIDC_AUDIENCE": "rask-lineage",
         "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_IDP_ID": "dex",
         "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
     }.items():
         monkeypatch.setenv(key, value)

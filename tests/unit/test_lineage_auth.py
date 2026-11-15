@@ -94,6 +94,7 @@ _FULL_AUTH = {
     "oidc_enabled": True,
     "oidc_issuer": _ISSUER,
     "oidc_audience": "lance",
+    "oidc_idp_id": "dex",
     "oidc_connectors": {"local": "dex"},
     "fga_enabled": True,
     "fga_store_id": "store",
@@ -108,7 +109,7 @@ _FULL_AUTH = {
 
 def test_oidc_enabled_requires_issuer_and_audience() -> None:
     with pytest.raises(ValidationError):
-        _settings(oidc_enabled=True, oidc_connectors={"local": "dex"})
+        _settings(oidc_enabled=True, oidc_idp_id="dex", oidc_connectors={"local": "dex"})
 
 
 def test_fga_enabled_requires_oidc() -> None:
@@ -122,13 +123,13 @@ def test_fga_enabled_requires_oidc() -> None:
 
 
 def test_authenticate_enabled_unwired_verifier_fails_closed() -> None:
-    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance", oidc_connectors={"local": "dex"})
+    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance", oidc_idp_id="dex", oidc_connectors={"local": "dex"})
     with pytest.raises(ServiceUnavailableError):
         security.authenticate(_request(), settings, _creds())
 
 
 def test_authenticate_enabled_verifies_token() -> None:
-    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance", oidc_connectors={"local": "dex"})
+    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance", oidc_idp_id="dex", oidc_connectors={"local": "dex"})
     verifier = SimpleNamespace(verify=lambda _t: _token("dee"))
     token = security.authenticate(_request(oidc=verifier), settings, _creds())
     assert token is not None and token.subject == "dex~dee"

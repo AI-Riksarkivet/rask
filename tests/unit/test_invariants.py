@@ -202,6 +202,7 @@ _REAL_REGISTRY = (
     f"openbao.externalAddr={chart_render.SECRET_STORE_URL}",
     "dex.enabled=false",
     "auth.oidc.issuer=https://auth.example.com/dex",
+    "auth.oidc.idpId=corp",
     "auth.oidc.connectors.ldap=corp",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",

@@ -56,7 +56,14 @@ def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
         "s3_secret_access_key": "x",
     }
     if fga_enabled:
-        data |= {"fga_enabled": True, "oidc_enabled": True, "oidc_issuer": "https://idp", "oidc_audience": "lance", "oidc_connectors": {"local": "dex"}}
+        data |= {
+            "fga_enabled": True,
+            "oidc_enabled": True,
+            "oidc_issuer": "https://idp",
+            "oidc_audience": "lance",
+            "oidc_idp_id": "dex",
+            "oidc_connectors": {"local": "dex"},
+        }
     return Settings.model_validate(data)
 
 

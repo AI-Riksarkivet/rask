@@ -46,6 +46,7 @@ def _auth_settings(*, read_only: bool = False) -> Settings:
         {
             "maintenance_read_only": read_only,
             "oidc_enabled": True,
+            "oidc_idp_id": "dex",
             "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",

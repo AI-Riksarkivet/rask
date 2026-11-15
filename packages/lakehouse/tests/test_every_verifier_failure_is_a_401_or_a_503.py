@@ -57,8 +57,9 @@ from pydantic import BaseModel
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.deps import make_auth_deps
-from lakehouse.governed.idp_identity import IdpVerifier, SubjectNaming
+from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
+from lakehouse.governed.settings import OidcProvider
 from lakehouse.ns_errors import install_problem_handlers
 
 
@@ -225,7 +226,9 @@ def _client(idp: _IdP, *, clock: Callable[[], float] = time.monotonic) -> TestCl
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.state.oidc = IdpVerifier(OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock), SubjectNaming(idp_id="corp"))
+    app.state.oidc = IdpVerifier(
+        OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock), [OidcProvider(issuer=idp.issuer, idp_id="corp")]
+    )
 
     @app.get("/gated")
     def _gated(subject: _Subject) -> dict[str, str]:

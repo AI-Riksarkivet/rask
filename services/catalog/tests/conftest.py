@@ -322,6 +322,7 @@ def governed_catalog(openfga_store: Any, dex_issuer: Any, tmp_path: Path, monkey
         "RASK_OIDC_ISSUER": dex_issuer.issuer,
         "RASK_OIDC_AUDIENCE": "lance-catalog",
         "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_IDP_ID": "dex",
         "RASK_OIDC_CONNECTORS": json.dumps({GovernedCatalog.CONNECTOR: GovernedCatalog.IDP}),
         "RASK_FGA_ENABLED": "true",
         "RASK_FGA_API_URL": openfga_store.url,

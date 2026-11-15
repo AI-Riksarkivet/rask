@@ -24,6 +24,7 @@ def _enabled_settings() -> Settings:
     return Settings.model_validate(
         {
             "oidc_enabled": True,
+            "oidc_idp_id": "dex",
             "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
@@ -56,7 +57,7 @@ def test_oidc_enabled_valid_token_passes_through(client: TestClient, fake_ns: Ma
 
 @pytest.mark.parametrize("missing", ["issuer", "audience"])
 def test_settings_rejects_enabled_oidc_without_provider(missing: str) -> None:
-    kwargs: dict[str, object] = {"oidc_issuer": "https://idp.example", "oidc_audience": "lance", "oidc_connectors": {"local": "dex"}}
+    kwargs: dict[str, object] = {"oidc_issuer": "https://idp.example", "oidc_audience": "lance", "oidc_idp_id": "dex", "oidc_connectors": {"local": "dex"}}
     kwargs[f"oidc_{missing}"] = None
     with pytest.raises(ValueError, match="OIDC"):
         Settings.model_validate({"oidc_enabled": True, "s3_access_key_id": "x", "s3_secret_access_key": "x", **kwargs})

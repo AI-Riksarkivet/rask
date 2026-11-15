@@ -124,6 +124,7 @@ def settings() -> LineageSettings:
         oidc_enabled=True,
         oidc_issuer="https://example.invalid/realms/rask",
         oidc_audience="rask",
+        oidc_idp_id="dex",
         oidc_connectors={"local": "dex"},
     )
 

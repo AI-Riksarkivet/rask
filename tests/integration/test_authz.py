@@ -87,6 +87,7 @@ def _auth_settings() -> Settings:
     return Settings.model_validate(
         {
             "oidc_enabled": True,
+            "oidc_idp_id": "dex",
             "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",

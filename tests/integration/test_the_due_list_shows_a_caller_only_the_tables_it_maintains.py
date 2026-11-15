@@ -35,6 +35,7 @@ def _governed(client: TestClient, tmp_path: Path) -> tuple[Settings, Grants]:
         {
             "root": str(tmp_path),
             "oidc_enabled": True,
+            "oidc_idp_id": "dex",
             "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",

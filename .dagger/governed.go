@@ -26,7 +26,8 @@ const (
 	provenanceNamespace = "lance_catalog$provenance"
 	lineageTokenPath    = "/var/run/rask/catalog-token"
 	// laneConnectors is the catalog's `RASK_OIDC_CONNECTORS` in these lanes ([[LH-063]]): the lane Dex's one connector,
-	// its password database `local`, is the idp id `laneIDP`, as the chart maps the development Dex's.
+	// its password database `local`, is the idp id `laneIDP`, which also names the lane Dex's clients (`RASK_OIDC_IDP_ID`), as
+	// the chart maps the development Dex's.
 	laneConnectors = `{"local":"dex"}`
 	laneIDP        = "dex"
 )
@@ -200,6 +201,7 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, prov 
 		WithEnvVariable("RASK_OIDC_ENABLED", "true").
 		WithEnvVariable("RASK_OIDC_ISSUER", "http://dex:5556/dex").
 		WithEnvVariable("RASK_OIDC_AUDIENCE", "rask-lakehouse").
+		WithEnvVariable("RASK_OIDC_IDP_ID", laneIDP).
 		WithEnvVariable("RASK_OIDC_CONNECTORS", laneConnectors).
 		// Dex serves discovery over http here. Dev only — the chart never sets this.
 		WithEnvVariable("RASK_OIDC_ALLOW_INSECURE", "true").

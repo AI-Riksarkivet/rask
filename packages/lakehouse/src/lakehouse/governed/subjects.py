@@ -5,10 +5,10 @@ a value that is not one person's subject is not a weaker address — it addresse
 reads.
 
 A PERSON IS A PRINCIPAL NO MACHINE IDENTITY VOUCHED FOR ([[LH-063]]): `<idp-id>~<subject>`
-(`lakehouse.governed.principal`) with an idp id that is neither `kubernetes` nor `dex-client`. Every value that is not
+(`lakehouse.governed.principal`) with an idp id that is neither `kubernetes` nor ends in `-client`. Every value that is not
 a principal fails that rule without a list of its own: a role or engine literal a writer stamps as its author
 (`data_eng`, `ray`), a wildcard, a userset, an FGA object id (`user:<principal>`), the anonymous fallback. A service
-account's principal and a Dex client's are machines.
+account's principal and an issuer's client's are machines.
 
 IT IS ONE RULE BECAUSE IT HAS MORE THAN ONE SIDE. The lakehouse's run-event builders and the door that accepts the claim
 ask it before they stamp an address, and a notifier applies the same rule (`docs/COMMIT-EVENTS.md` § Telling people)

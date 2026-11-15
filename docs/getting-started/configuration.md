@@ -15,8 +15,10 @@ Declared once in `packages/lakehouse/src/lakehouse/governed/settings.py`, one na
 |---|---|
 | `RASK_OIDC_ENABLED` | Verify an OIDC bearer token on every request (on in the chart). |
 | `RASK_OIDC_ISSUER` / `RASK_OIDC_AUDIENCE` | The issuer (Dex in development) and the lakehouse's own audience the token must carry (`auth.oidc.audience`, never a sign-in client's id). |
-| `RASK_OIDC_IDP_ID` / `RASK_OIDC_SUBJECT_CLAIMS` | The idp id the issuer's people are principals of, and the claims their subject is read from, `sub` by default (`auth.oidc.idpId`, `auth.oidc.subjectClaims`): any OpenID provider. |
-| `RASK_OIDC_CONNECTORS` | Instead of the idp id, the idp id of each connector of a Dex that brokers several providers (`auth.oidc.connectors`; the development Dex's `local` is `dex`). |
+| `RASK_OIDC_IDP_ID` / `RASK_OIDC_SUBJECT_CLAIMS` | The issuer's idp id (its people `<idp-id>~<subject>`, its clients `<idp-id>-client~<client id>`), and the claims a subject is read from, `sub` by default (`auth.oidc.idpId`, `auth.oidc.subjectClaims`): any OpenID provider. |
+| `RASK_OIDC_CONNECTORS` | Instead of subject claims, the idp id of each connector of a Dex that brokers several providers (`auth.oidc.connectors`; the development Dex's `local` is `dex`). |
+| `RASK_OIDC_CLIENT_MARKER` | The claim the issuer marks its client's own token with where the client's `sub` is not its id (`auth.oidc.clientMarker`; Keycloak `{claim: client_id}`, Entra `{claim: idtyp, value: app}`). |
+| `RASK_OIDC_PROVIDERS` | Further issuers beside the console's, each with the same keys (`auth.oidc.providers`). |
 | `RASK_FGA_ENABLED` | Authorize every request on OpenFGA (on in the chart). |
 | `RASK_FGA_API_URL` / `RASK_FGA_STORE_ID` | The OpenFGA server and store. |
 | `RASK_FGA_ROOT_OBJECT` | The estate's root object (default `estate:rask`). |

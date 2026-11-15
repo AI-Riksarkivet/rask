@@ -42,8 +42,9 @@ from catalog.api import security as catalog_security
 from catalog.core.config import Settings as CatalogSettings
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed import oidc
-from lakehouse.governed.idp_identity import ConnectorNaming, IdpVerifier
+from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
+from lakehouse.governed.settings import OidcProvider
 from lakehouse.ns_errors import install_problem_handlers
 from lineage.api import security as lineage_security
 from lineage.core.config import LineageSettings
@@ -62,6 +63,7 @@ def _oidc_on(issuer: str) -> dict[str, object]:
         "RASK_OIDC_ISSUER": issuer,
         "RASK_OIDC_AUDIENCE": AUDIENCE,
         "RASK_OIDC_ALLOW_INSECURE": True,
+        "RASK_OIDC_IDP_ID": "dex",
         "RASK_OIDC_CONNECTORS": {"local": "dex"},
     }
 
@@ -173,7 +175,7 @@ def _client(door: _Door, provider: _BrokenProvider) -> TestClient:
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.state.oidc = IdpVerifier(provider.verifier, ConnectorNaming(connectors={"local": "dex"}))
+    app.state.oidc = IdpVerifier(provider.verifier, [OidcProvider(issuer=provider.issuer, idp_id="dex", connectors={"local": "dex"})])
     # Never verified: every fault is met before a signature is checked. The `kid` carries it to the key-set fetch.
     claims = {"iss": provider.issuer, "sub": "gina", "aud": AUDIENCE, "iat": 0, "exp": 1 << 31}
     bearer = jwt.encode(claims, "unverified", algorithm="HS256", headers={"kid": "k1"})

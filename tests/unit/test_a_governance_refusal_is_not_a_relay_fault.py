@@ -102,6 +102,7 @@ def _governed_settings(outbox_uri: str) -> LineageSettings:
         "oidc_enabled": True,
         "oidc_issuer": "https://dex.example",
         "oidc_audience": "lance",
+        "oidc_idp_id": "dex",
         "oidc_connectors": {"local": "dex"},
         "fga_store_id": "s",
         "fga_model_id": "m",

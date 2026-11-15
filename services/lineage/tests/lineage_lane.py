@@ -135,6 +135,7 @@ def governed(monkeypatch: pytest.MonkeyPatch) -> None:
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": "https://idp.invalid/dex",
         "RASK_OIDC_AUDIENCE": "rask",
+        "RASK_OIDC_IDP_ID": "dex",
         "RASK_OIDC_CONNECTORS": '{"local": "dex"}',
     }.items():
         monkeypatch.setenv(key, value)

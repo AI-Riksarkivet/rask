@@ -71,6 +71,7 @@ def _settings() -> Settings:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",
+            "oidc_idp_id": "dex",
             "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_api_url": "http://openfga:8080",

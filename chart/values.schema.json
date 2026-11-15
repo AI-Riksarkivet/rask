@@ -116,24 +116,32 @@
                             "description": "The scope a client asks the IdP for to obtain a token for `audience`; empty is Dex's cross-client scope, `audience:server:client_id:\u003caudience\u003e`.",
                             "type": "string"
                         },
+                        "clientMarker": {
+                            "description": "How the issuer marks a token its client was issued for itself where its `sub` is not the client's id (`RASK_OIDC_CLIENT_MARKER`; `{claim: client_id}` for Keycloak's service accounts, `{claim: idtyp, value: app}` for Entra, an optional claim the tenant turns on, without which its apps read as people); never a claim every token carries; the client is named by the token's `client_id`, `azp` or `appid`. Empty, a token is a client's when its `sub` is the `client_id` it names (RFC 9068).",
+                            "type": "object"
+                        },
                         "connectors": {
-                            "description": "The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes` or `dex-client`. With `dex.enabled` and no `idpId` the development Dex's `local` connector is `dex` unless named here. Set this or `idpId`, never both.",
+                            "description": "The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes` and never ending in `-client`. With `dex.enabled` and no `subjectClaims` the development Dex's `local` connector is `dex` unless named here. Under it `idpId` names the issuer's clients alone.",
                             "type": "object"
                         },
                         "egress": {
-                            "description": "NetworkPolicy egress rules ({to, ports}) admitting the governed doors that verify a person's token (the catalog, lineage) to the platform's IdP at `issuer`, at the port a policy sees. Required under networkPolicy.enabled while `auth.enabled` and `dex.enabled` is false.",
+                            "description": "NetworkPolicy egress rules ({to, ports}) admitting the governed doors that verify a person's token (the catalog, lineage) to the platform's IdP at `issuer` and at each of `providers`, at the port a policy sees. Required under networkPolicy.enabled while `auth.enabled` and `dex.enabled` is false.",
                             "type": "array"
                         },
                         "idpId": {
-                            "description": "The idp id the issuer's people are principals of (`RASK_OIDC_IDP_ID`; `corp` makes the person the issuer names `s` the principal `corp~s`): lower-case letters, digits and `-`, never `kubernetes` or `dex-client`. Set this or `connectors`, never both.",
+                            "description": "The idp id of the issuer's people and clients (`RASK_OIDC_IDP_ID`; `corp` makes the person the issuer names `s` the principal `corp~s` and its client `etl` the machine `corp-client~etl`): lower-case letters, digits and `-`, never `kubernetes` and never ending in `-client`. Empty is `dex` with `dex.enabled`, and required otherwise. It names no rule: `connectors` or `subjectClaims` picks how people are read.",
                             "type": "string"
                         },
                         "issuer": {
                             "description": "The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it). Required when `auth.enabled`; https unless `dex.enabled`.",
                             "type": "string"
                         },
+                        "providers": {
+                            "description": "Further issuers people and clients sign in at beside `issuer` (`RASK_OIDC_PROVIDERS`), each `{issuer, idpId, discoveryUrl, subjectClaims, connectors, clientMarker}` read as the keys above: an https issuer named once, and idp ids no other issuer names. `egress` must admit each of them under `networkPolicy.enabled`.",
+                            "type": "array"
+                        },
                         "subjectClaims": {
-                            "description": "The claims a person's subject is read from, the first the token carries winning (`RASK_OIDC_SUBJECT_CLAIMS`); empty is `sub` alone. Name another first where the provider's `sub` is not the stable id a grant needs (Entra's `oid`). Read only with `idpId`.",
+                            "description": "The claims a person's subject is read from, the first the token carries winning (`RASK_OIDC_SUBJECT_CLAIMS`); empty is `sub` alone. Name another first where the provider's `sub` is not the stable id a grant needs (Entra's `oid`). Never set beside `connectors`; with `dex.enabled`, setting it reads the development Dex's people by subject instead of by connector.",
                             "type": "array"
                         }
                     }

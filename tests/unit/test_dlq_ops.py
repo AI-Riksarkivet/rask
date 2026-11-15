@@ -41,6 +41,7 @@ _FULL_AUTH = {
     "oidc_enabled": True,
     "oidc_issuer": "https://dex.example",
     "oidc_audience": "lance",
+    "oidc_idp_id": "dex",
     "oidc_connectors": {"local": "dex"},
     "fga_enabled": True,
     "fga_store_id": "store",

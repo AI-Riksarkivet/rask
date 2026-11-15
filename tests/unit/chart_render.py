@@ -100,6 +100,7 @@ PROD_ARGS: tuple[str, ...] = (
     "--set", "objectStore.events.provisioned=true",
     "--set-string", "observability.export.endpoint=https://otlp.example.com:4318/v1/otlp",
     "--set-string", "auth.fgaApiUrl=https://fga.example.com",
+    "--set-string", "auth.oidc.idpId=corp",
     "--set-json", 'auth.oidc.connectors={"ldap":"corp"}',
     "--set-string", "age.externalHost=pg.example.com",
     "--set-string", f"objectStore.externalEndpoint={OBJECT_STORE_URL}",

@@ -177,6 +177,7 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ISSUER", "https://idp.invalid/dex")
     monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
+    monkeypatch.setenv("RASK_OIDC_IDP_ID", "dex")
     monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
     get_settings.cache_clear()
     store = ProvenanceStore.from_settings(get_settings())

@@ -191,6 +191,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
             "RASK_OIDC_ISSUER": dex_issuer.issuer,
             "RASK_OIDC_AUDIENCE": "lance-catalog",
             "RASK_OIDC_ALLOW_INSECURE": "true",
+            "RASK_OIDC_IDP_ID": "dex",
             "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
             "RASK_SA_ISSUER": sa_issuer.issuer,
             "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),

@@ -749,30 +749,54 @@ production render that left the issuer at a dev default trusted `rask-dex` over 
 ([[XC-148]]). Stated as `"false"` otherwise rather than left to the setting's default, so the render
 itself shows the HTTPS guard on.
 
-## `{{- with include "lance.oidcIdpId" $root }}`
+## `- { name: RASK_OIDC_IDP_ID, value: {{ include "lance.oidcIdpId" $root | quote }} }`
 
-How every governed door names a person ([[XC-214]], ADR 0208), one include each, so every door carries the same rule.
-`RASK_OIDC_IDP_ID` names any OpenID provider's people by the token's subject: OpenID Connect Core 1.0 § 2 makes `sub`
-unique and never reassigned within its issuer, so `<idp-id>~<sub>` is one person whatever the vendor.
-`RASK_OIDC_SUBJECT_CLAIMS` names the claims read before `sub`, for a provider whose `sub` is not the stable id a grant
-needs. `RASK_OIDC_CONNECTORS` names a Dex that brokers several upstream providers connector by connector instead
-([[LH-063]], ADR 0159 D5): a door keys a person on `<idp-id>~<user id>` from the token's `federated_claims` and refuses a
-token whose connector the map does not name. Each is rendered only when set, so a door carries one rule.
+How every governed door names a caller ([[XC-214]], ADR 0208), one include each, so every door carries the same rules.
+`RASK_OIDC_IDP_ID` is the issuer's idp id: its people are `<idp-id>~<subject>` (OpenID Connect Core 1.0 § 2 makes `sub`
+unique and never reassigned within its issuer, so that is one person whatever the vendor) and its clients signed in for
+themselves `<idp-id>-client~<client id>`. `RASK_OIDC_SUBJECT_CLAIMS` names the claims read before `sub`, for a provider
+whose `sub` is not the stable id a grant needs. `RASK_OIDC_CONNECTORS` names a Dex that brokers several upstream
+providers connector by connector instead ([[LH-063]], ADR 0159 D5): a door keys a person on `<idp-id>~<user id>` from the
+token's `federated_claims` and refuses a token whose connector the map does not name. `RASK_OIDC_CLIENT_MARKER` names
+the claim an issuer marks its client's own token with, where the client's `sub` is not its id (Keycloak, Entra).
+`RASK_OIDC_PROVIDERS` names further issuers, each with the same keys. Every one but the idp id is rendered only when set.
+
+## `{{- define "lance.oidcIdpIdFormat" -}}`
+
+An idp id a person may carry: a string of lower-case letters, digits and `-`, never `kubernetes` and never ending in
+`-client`, the machine identities', since a person named under either would read as a machine at every door.
 
 ## `{{- define "lance.oidcIdpId" -}}`
 
-`auth.oidc.idpId`, refused at render when it is not an idp id (`lance.oidcIdpIdFormat`: a string of lower-case letters,
-digits and `-`, never `kubernetes` or `dex-client`, the machine identities', since a person named under either would read
-as a machine at every door), and when `auth.oidc.connectors` is set too, since two rules would each name every person.
+`auth.oidc.idpId`, or `dex` with `dex.enabled`, so the development estate keeps `dex~` people and `dex-client~` clients;
+refused at render when empty without the development Dex, and when `lance.oidcIdpIdFormat` refuses it.
 
 ## `{{- define "lance.oidcConnectors" -}}`
 
-`auth.oidc.connectors`, plus the development Dex's one connector, its password database `local`, as `dex` when
-`dex.enabled`, `auth.oidc.idpId` is empty and the map names no `local` of its own, so the development estate keeps the
-principals its grants name. Refused at render when neither it nor `auth.oidc.idpId` names anyone, since a door would then
-sign nobody in; for an empty connector id; and for an idp id `lance.oidcIdpIdFormat` refuses. The service refuses the
-same settings at boot (`OidcSettings`, a `dict[str, str]`, which takes no number for an idp id); the render refusal names
-the value before any pod starts. Empty, it renders nothing, which is what tells the console not to ask for `federated:id`.
+`auth.oidc.connectors`, with the development Dex's one connector, its password database `local`, as `dex` when
+`dex.enabled`, the map names no `local` of its own and `auth.oidc.subjectClaims` is empty, so the development estate keeps
+the principals its grants name whatever `auth.oidc.idpId` says: the map, or else the subject claims, picks the rule. Refused for an empty connector id, and for an idp id `lance.oidcIdpIdFormat` refuses. The service refuses
+the same settings at boot (`OidcSettings`, a `dict[str, str]`, which takes no number for an idp id); the render refusal
+names the value before any pod starts. Empty, it renders nothing, which is what tells the console not to ask for
+`federated:id`.
+
+## `{{- define "lance.oidcClientMarkerFormat" -}}`
+
+A client marker as JSON (`claim`, and `value` when set), refused without a claim or on one every verified token carries
+(`iss`, `sub`, `aud`, `exp`, `iat`), which would mark nothing.
+
+## `{{- define "lance.oidcClientMarker" -}}`
+
+`auth.oidc.clientMarker` through `lance.oidcClientMarkerFormat`, rendered only when set.
+
+## `{{- define "lance.oidcProviders" -}}`
+
+`auth.oidc.providers` as JSON in the service's own key names, rendered only when set. Each issuer is refused at render
+as the service refuses it at boot (`OidcSettings`), so a bad entry fails the release rather than crash-looping a pod:
+when it is not https (no development Dex stands behind a further issuer), when it is named twice (`auth.oidc.issuer`
+included), when its idp id or a connector's is missing or `lance.oidcIdpIdFormat` refuses it, when an idp id it names
+(its own or a connector's) is one another issuer names, when it sets subject claims beside connectors or a claim that is
+not one, and when `lance.oidcClientMarkerFormat` refuses its marker.
 
 ## `{{- define "lance.oidcSubjectClaims" -}}`
 
@@ -784,7 +808,7 @@ subject claim, and for an entry that is not a claim name.
 
 `auth.bootstrapAdmin`, which the catalog's declaration grants the estate's two standing authorities ([[XC-011]]), must be a
 person's principal, `<idp-id>~<subject>`. A bare name is refused at render because no token could ever prove it, a `user:`
-id because the catalog encodes the principal itself (`fga.user_object`), and a `kubernetes~` or `dex-client~` principal
+id because the catalog encodes the principal itself (`fga.user_object`), and a `kubernetes~` or `<idp-id>-client~` principal
 because a machine administers no tenant (LH-433).
 
 ## `{{- define "lance.governedFgaEnv" -}}`

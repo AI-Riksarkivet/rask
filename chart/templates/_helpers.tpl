@@ -775,30 +775,24 @@ buckets as the estate's reads already are. */ -}}
 
 {{- define "lance.oidcIdpIdFormat" -}}
 {{- $setting := index . 0 -}}{{- $idp := index . 1 -}}
-{{- if or (not (kindIs "string" $idp)) (has $idp (list "kubernetes" "dex-client")) (not (regexMatch "^[a-z0-9-]+$" $idp)) -}}
-{{- fail (printf "%s=%v is not an idp id: lower-case letters, digits and '-', never kubernetes or dex-client, the machine identities'" $setting $idp) -}}
+{{- if or (not (kindIs "string" $idp)) (eq $idp "kubernetes") (hasSuffix "-client" $idp) (not (regexMatch "^[a-z0-9-]+$" $idp)) -}}
+{{- fail (printf "%s=%v is not a person's idp id: lower-case letters, digits and '-', never kubernetes and never ending in -client, the machine identities'" $setting $idp) -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "lance.oidcIdpId" -}}
-{{- $idp := .Values.auth.oidc.idpId | default "" -}}
-{{- if $idp -}}
+{{- $idp := .Values.auth.oidc.idpId | default (ternary "dex" "" .Values.dex.enabled) -}}
+{{- if not $idp -}}
+{{- fail "auth.oidc.idpId must name the idp id of the IdP's people and clients (e.g. corp): a person is <idp-id>~<subject>, a client signed in for itself <idp-id>-client~<client id>" -}}
+{{- end -}}
 {{- include "lance.oidcIdpIdFormat" (list "auth.oidc.idpId" $idp) -}}
-{{- if .Values.auth.oidc.connectors -}}
-{{- fail "auth.oidc.idpId and auth.oidc.connectors each name every person: set idpId for any OpenID provider, or connectors for a Dex that brokers several, not both" -}}
-{{- end -}}
-{{- end -}}
 {{- $idp -}}
 {{- end -}}
 
 {{- define "lance.oidcConnectors" -}}
 {{- $connectors := deepCopy (.Values.auth.oidc.connectors | default dict) -}}
-{{- $idp := include "lance.oidcIdpId" . -}}
-{{- if and .Values.dex.enabled (not $idp) (not (hasKey $connectors "local")) -}}
+{{- if and .Values.dex.enabled (not .Values.auth.oidc.subjectClaims) (not (hasKey $connectors "local")) -}}
 {{- $_ := set $connectors "local" "dex" -}}
-{{- end -}}
-{{- if and (not $connectors) (not $idp) -}}
-{{- fail "auth.oidc.idpId must name the idp id of the IdP's people (e.g. corp): a person is the principal <idp-id>~<subject> the issuer names. A Dex that brokers several upstream providers may name auth.oidc.connectors instead (e.g. {ldap: corp})" -}}
 {{- end -}}
 {{- range $connector, $idp := $connectors -}}
 {{- if not $connector -}}
@@ -809,11 +803,74 @@ buckets as the estate's reads already are. */ -}}
 {{- if $connectors -}}{{- toJson $connectors -}}{{- end -}}
 {{- end -}}
 
+{{- define "lance.oidcClientMarkerFormat" -}}
+{{- $setting := index . 0 -}}{{- $marker := index . 1 -}}
+{{- if or (not (kindIs "string" $marker.claim)) (not $marker.claim) (has $marker.claim (list "iss" "sub" "aud" "exp" "iat")) -}}
+{{- fail (printf "%s.claim must name the claim the IdP marks its client's own token with (e.g. client_id), never one every token carries" $setting) -}}
+{{- end -}}
+{{- toJson (pick $marker "claim" "value") -}}
+{{- end -}}
+
+{{- define "lance.oidcClientMarker" -}}
+{{- with .Values.auth.oidc.clientMarker -}}
+{{- include "lance.oidcClientMarkerFormat" (list "auth.oidc.clientMarker" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.oidcProviders" -}}
+{{- $providers := list -}}
+{{- $primary := include "lance.oidcIssuer" . | trimSuffix "/" -}}
+{{- $claimed := dict -}}
+{{- $connectors := include "lance.oidcConnectors" . | default "{}" | fromJson -}}
+{{- range $idp := append (values $connectors) (include "lance.oidcIdpId" .) -}}{{- $_ := set $claimed $idp $primary -}}{{- end -}}
+{{- $issuers := list $primary -}}
+{{- range $index, $provider := .Values.auth.oidc.providers | default list -}}
+{{- $at := printf "auth.oidc.providers[%d]" $index -}}
+{{- $issuer := required (printf "%s.issuer names the issuer's https URL" $at) $provider.issuer -}}
+{{- if not (hasPrefix "https://" $issuer) -}}
+{{- fail (printf "%s.issuer=%s is not https: every governed door fetches the keys it checks each token against from it" $at $issuer) -}}
+{{- end -}}
+{{- if has (trimSuffix "/" $issuer) $issuers -}}
+{{- fail (printf "%s.issuer=%s is named as an issuer twice: one token would be named by two rules" $at $issuer) -}}
+{{- end -}}
+{{- $issuers = append $issuers (trimSuffix "/" $issuer) -}}
+{{- $idp := required (printf "%s.idpId names the issuer's idp id" $at) $provider.idpId -}}
+{{- include "lance.oidcIdpIdFormat" (list (printf "%s.idpId" $at) $idp) -}}
+{{- $out := dict "issuer" $issuer "idp_id" $idp -}}
+{{- $own := list $idp -}}
+{{- with $provider.connectors -}}
+{{- range $connector, $mapped := . -}}
+{{- if not $connector -}}{{- fail (printf "%s.connectors names an empty connector id" $at) -}}{{- end -}}
+{{- include "lance.oidcIdpIdFormat" (list (printf "%s.connectors.%s" $at $connector) $mapped) -}}
+{{- $own = append $own $mapped -}}
+{{- end -}}
+{{- $_ := set $out "connectors" . -}}
+{{- end -}}
+{{- range $own | uniq -}}
+{{- if hasKey $claimed . -}}
+{{- fail (printf "%s names the idp id %s, which %s names too: their people would share one namespace" $at . (get $claimed .)) -}}
+{{- end -}}
+{{- $_ := set $claimed . $issuer -}}
+{{- end -}}
+{{- with $provider.subjectClaims -}}
+{{- if $provider.connectors -}}{{- fail (printf "%s.subjectClaims is never set beside its connectors" $at) -}}{{- end -}}
+{{- range . -}}{{- if or (not (kindIs "string" .)) (not .) -}}{{- fail (printf "%s.subjectClaims names %v, which is no claim" $at .) -}}{{- end -}}{{- end -}}
+{{- $_ := set $out "subject_claims" . -}}
+{{- end -}}
+{{- with $provider.discoveryUrl -}}{{- $_ := set $out "discovery_url" . -}}{{- end -}}
+{{- with $provider.clientMarker -}}
+{{- $_ := set $out "client_marker" (include "lance.oidcClientMarkerFormat" (list (printf "%s.clientMarker" $at) .) | fromJson) -}}
+{{- end -}}
+{{- $providers = append $providers $out -}}
+{{- end -}}
+{{- if $providers -}}{{- toJson $providers -}}{{- end -}}
+{{- end -}}
+
 {{- define "lance.oidcSubjectClaims" -}}
 {{- $claims := .Values.auth.oidc.subjectClaims | default list -}}
 {{- if $claims -}}
 {{- if include "lance.oidcConnectors" . -}}
-{{- fail "auth.oidc.subjectClaims is read only with auth.oidc.idpId: a Dex connector reports its user id in federated_claims" -}}
+{{- fail "auth.oidc.subjectClaims is never set beside auth.oidc.connectors: a Dex connector reports its user id in federated_claims" -}}
 {{- end -}}
 {{- range $claims -}}
 {{- if or (not (kindIs "string" .)) (not .) -}}
@@ -826,8 +883,8 @@ buckets as the estate's reads already are. */ -}}
 
 {{- define "lance.bootstrapAdmin" -}}
 {{- $admin := .Values.auth.bootstrapAdmin | default "" | toString -}}
-{{- if and $admin (or (hasPrefix "kubernetes~" $admin) (hasPrefix "dex-client~" $admin) (not (regexMatch "^[a-z0-9-]+~[^[:cntrl:]]+$" $admin))) -}}
-{{- fail (printf "auth.bootstrapAdmin=%s is not a person's principal: name them <idp-id>~<subject>, auth.oidc.idpId and the subject the issuer names them by, or the idp id auth.oidc.connectors gives their Dex connector and the user id it reports (dex~<userID> for a development Dex user)" $admin) -}}
+{{- if and $admin (or (hasPrefix "kubernetes~" $admin) (regexMatch "^[a-z0-9-]*-client~" $admin) (not (regexMatch "^[a-z0-9-]+~[^[:cntrl:]]+$" $admin))) -}}
+{{- fail (printf "auth.bootstrapAdmin=%s is not a person's principal (never kubernetes~ nor an <idp-id>-client~ machine): name them <idp-id>~<subject>, auth.oidc.idpId and the subject the issuer names them by, or the idp id auth.oidc.connectors gives their Dex connector and the user id it reports (dex~<userID> for a development Dex user)" $admin) -}}
 {{- end -}}
 {{- $admin -}}
 {{- end -}}
@@ -866,14 +923,18 @@ buckets as the estate's reads already are. */ -}}
 {{- end }}
 - { name: RASK_OIDC_AUDIENCE, value: {{ include "lance.oidcAudience" $root | quote }} }
 - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "true" "false" $root.Values.dex.enabled | quote }} }
-{{- with include "lance.oidcIdpId" $root }}
-- { name: RASK_OIDC_IDP_ID, value: {{ . | quote }} }
-{{- end }}
+- { name: RASK_OIDC_IDP_ID, value: {{ include "lance.oidcIdpId" $root | quote }} }
 {{- with include "lance.oidcSubjectClaims" $root }}
 - { name: RASK_OIDC_SUBJECT_CLAIMS, value: {{ . | quote }} }
 {{- end }}
 {{- with include "lance.oidcConnectors" $root }}
 - { name: RASK_OIDC_CONNECTORS, value: {{ . | quote }} }
+{{- end }}
+{{- with include "lance.oidcClientMarker" $root }}
+- { name: RASK_OIDC_CLIENT_MARKER, value: {{ . | quote }} }
+{{- end }}
+{{- with include "lance.oidcProviders" $root }}
+- { name: RASK_OIDC_PROVIDERS, value: {{ . | quote }} }
 {{- end }}
 {{- end -}}
 

@@ -4,8 +4,9 @@ The console is the lakehouse's own single-page app with no backend: the browser 
 with PKCE as the client it names (`frontend/console/src/lib/auth.svelte.ts`). The catalog accepts a token only when its
 `iss` is `auth.oidc.issuer` and its `aud` carries the lakehouse's audience, which Dex issues only for the cross-client
 scope. A person is the principal the issuer names ([[XC-214]]): by `sub` under `auth.oidc.idpId`, which any OpenID
-provider issues, or, where `auth.oidc.connectors` names a Dex's connectors, by the `federated_claims` Dex adds only for
-`federated:id`, so the console asks for that scope then and never otherwise. A client the dev Dex
+provider issues, read by the subject claims `auth.oidc.subjectClaims` names, or, under a Dex connector map (the
+development Dex's `local` by default), by the `federated_claims` Dex adds only for `federated:id`, so the console asks for
+that scope then and never otherwise. A client the dev Dex
 does not declare public could not complete the exchange without a secret the browser does not hold, and the Vite dev
 server (`make dev`, :5173) is an origin of its own, whose discovery, key and token reads at Dex are cross-origin.
 
@@ -30,8 +31,33 @@ _ISSUER: Final = "https://idp.example.com/dex"
 @pytest.mark.parametrize(
     ("naming", "federated", "person_env"),
     [
-        pytest.param((), ["federated:id"], {"RASK_OIDC_CONNECTORS": '{"local":"dex"}'}, id="a-dex-named-connector-by-connector"),
-        pytest.param(("--set-string", "auth.oidc.idpId=corp"), [], {"RASK_OIDC_IDP_ID": "corp"}, id="any-openid-provider-named-by-its-idp-id"),
+        pytest.param((), ["federated:id"], {"RASK_OIDC_IDP_ID": "dex", "RASK_OIDC_CONNECTORS": '{"local":"dex"}'}, id="a-dex-named-connector-by-connector"),
+        pytest.param(
+            ("--set-string", "auth.oidc.idpId=corp", "--set-json", 'auth.oidc.subjectClaims=["sub"]'),
+            [],
+            {"RASK_OIDC_IDP_ID": "corp", "RASK_OIDC_SUBJECT_CLAIMS": '["sub"]'},
+            id="any-openid-provider-read-by-subject",
+        ),
+        pytest.param(
+            (
+                "--set-string",
+                "auth.oidc.idpId=corp",
+                "--set-json",
+                'auth.oidc.subjectClaims=["sub"]',
+                "--set-json",
+                'auth.oidc.clientMarker={"claim":"idtyp","value":"app"}',
+                "--set-json",
+                'auth.oidc.providers=[{"issuer":"https://partner.example.com","idpId":"partner","clientMarker":{"claim":"client_id"}}]',
+            ),
+            [],
+            {
+                "RASK_OIDC_IDP_ID": "corp",
+                "RASK_OIDC_SUBJECT_CLAIMS": '["sub"]',
+                "RASK_OIDC_CLIENT_MARKER": '{"claim":"idtyp","value":"app"}',
+                "RASK_OIDC_PROVIDERS": '[{"client_marker":{"claim":"client_id"},"idp_id":"partner","issuer":"https://partner.example.com"}]',
+            },
+            id="further-issuers-and-a-client-marker",
+        ),
     ],
 )
 def test_the_console_config_names_the_issuer_a_public_client_and_the_scopes_the_lakehouse_doors_require(
@@ -47,7 +73,12 @@ def test_the_console_config_names_the_issuer_a_public_client_and_the_scopes_the_
     ]
     [catalog_env] = [env_of(container) for workload, name, container in containers(lakehouse) if workload == "Deployment/rask-catalog" and name == "catalog"]
     audience = catalog_env["RASK_OIDC_AUDIENCE"]
-    naming_env = {key: value for key, value in catalog_env.items() if key in {"RASK_OIDC_IDP_ID", "RASK_OIDC_SUBJECT_CLAIMS", "RASK_OIDC_CONNECTORS"}}
+    naming_env = {
+        key: value
+        for key, value in catalog_env.items()
+        if key.startswith("RASK_OIDC_")
+        and key not in {"RASK_OIDC_ENABLED", "RASK_OIDC_ISSUER", "RASK_OIDC_AUDIENCE", "RASK_OIDC_ALLOW_INSECURE", "RASK_OIDC_DISCOVERY_URL"}
+    }
     [dex_config] = [yaml.safe_load(doc["data"]["config.yaml"]) for doc in dex if doc.get("kind") == "ConfigMap"]
     declared = {client["id"]: client for client in dex_config["staticClients"]}
 

@@ -210,8 +210,8 @@ emitted):
 | `outputs[].facets.rask_lance.tableUuid` | each table the run wrote, as the object `table:<tableUuid>` every check is asked on; an output without one names no object a grant could reach |
 
 A value is an address only when it is one person's principal: `<idp-id>~<subject>`, where the idp id is `[a-z0-9-]+`
-(so the first `~` ends it) and is neither `kubernetes` (a service account) nor `dex-client` (a Dex client signed in for
-itself), and the subject is non-empty and carries no control character. A role literal, a service account's
+(so the first `~` ends it) and is neither `kubernetes` (a service account) nor ends in `-client` (an issuer's client
+signed in for itself, ADR 0208), and the subject is non-empty and carries no control character. A role literal, a service account's
 principal, a userset, an OpenFGA object id and `*` address nobody.
 
 ### Whom a control event names

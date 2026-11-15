@@ -23,7 +23,7 @@ clientSecret: lance-catalog-secret
 audience: rask-lakehouse
 audienceSecret: rask-lakehouse-held-by-no-client
 # Pipelines outside Kubernetes, each a confidential client signing in for itself with the client-credentials grant: the
-# machine `dex-client~<id>` (ADR 0181). The audience client trusts each, so its token is issued for the lakehouse.
+# machine `dex-client~<id>`, `<idp id>-client` for the development Dex's idp id `dex` (ADR 0181, ADR 0208). The audience client trusts each, so its token is issued for the lakehouse.
 machineClients:
   - { id: rask-pipeline, secret: rask-pipeline-dev-secret }
 # The lakehouse console's sign-in client (the product chart's `console.oidc.clientId`): public, holding no secret and

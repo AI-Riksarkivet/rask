@@ -107,6 +107,7 @@ def _settings() -> LineageSettings:
             "oidc_enabled": True,
             "oidc_issuer": "https://idp.invalid/dex",
             "oidc_audience": "rask",
+            "oidc_idp_id": "dex",
             "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_store_id": "s",

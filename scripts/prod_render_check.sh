@@ -39,6 +39,7 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # default names no build, which a real deployment refuses (templates/prod-credentials.yaml, [[XC-164]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set auth.oidc.issuer=https://auth.example.com/dex
+        --set auth.oidc.idpId=corp
         --set-json 'auth.oidc.connectors={"ldap":"corp"}'
         --set image.repository=ghcr.io/example/rask
         --set-string image.tags.lance-rest-catalog=1.2.3

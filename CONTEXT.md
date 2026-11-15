@@ -132,8 +132,9 @@ _Avoid_: commit lock, write lease, schema lock
 **Principal**:
 Who a verified caller is, `<idp-id>~<subject>`: the identity provider that vouched for them and the subject it names. A
 service is `kubernetes~system:serviceaccount:<ns>:<sa>`, and a pipeline off the cluster signed in as its own OpenID
-client is `dex-client~<client id>` (both machines, ADR 0181); a person is the idp id the deployment gives their issuer and
-the subject it names them by (ADR 0208), or, behind a Dex that brokers several providers, the idp id the deployment gives
+client is `<idp-id>-client~<client id>`, under its issuer's idp id (`dex-client~` at the development Dex; both machines,
+ADR 0181, ADR 0208); a person is the idp id the deployment gives their issuer and the subject it names them by (ADR 0208,
+each issuer its own idp ids), or, behind a Dex that brokers several providers, the idp id the deployment gives
 their Dex connector and the user id that connector reports, so renaming a connector re-keys no grant. Every grant and attribution
 names a principal, and a bare name, which no token can prove, is refused wherever one is required.
 _Avoid_: sub, subject id, user name, OIDC sub

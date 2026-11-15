@@ -41,6 +41,8 @@ _PLATFORM_STORE = (
     "--set",
     "dex.enabled=false",
     "--set",
+    "auth.oidc.idpId=corp",
+    "--set",
     "auth.oidc.connectors.ldap=corp",
     "--set",
     "objectStore.enabled=false",

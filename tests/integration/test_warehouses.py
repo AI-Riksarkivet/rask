@@ -48,6 +48,7 @@ def _settings(tmp_path: Any, store: str, *, fga: bool = False, reserved: str = "
             {
                 "fga_enabled": True,
                 "oidc_enabled": True,
+                "oidc_idp_id": "dex",
                 "oidc_connectors": {"local": "dex"},
                 "oidc_issuer": "https://idp",
                 "oidc_audience": "lance",

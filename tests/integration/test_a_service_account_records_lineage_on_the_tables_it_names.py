@@ -75,6 +75,7 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
         "RASK_OIDC_ISSUER": dex_issuer.issuer,
         "RASK_OIDC_AUDIENCE": "lance-catalog",
         "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_IDP_ID": "dex",
         "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
     }
     catalog_env = {

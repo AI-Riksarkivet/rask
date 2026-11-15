@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from lakehouse.governed import fga as fga_mod
 from lakehouse.governed import oidc as oidc_mod
 from lakehouse.governed.auth_lifespan import attach_auth, build_fga_client
+from lakehouse.governed.settings import OidcProvider
 from lakehouse.supervision import Supervisor
 
 
@@ -42,9 +43,9 @@ class _Settings(BaseModel):
     oidc_cache_ttl: int = 300
     oidc_leeway: int = 30
     oidc_allow_insecure: bool = False
-    oidc_idp_id: str | None = None
-    oidc_subject_claims: list[str] | None = None
-    oidc_connectors: dict[str, str] = {"local": "dex"}
+    oidc_person_providers: list[OidcProvider] = [
+        OidcProvider(issuer="https://issuer.test", idp_id="dex", discovery_url="http://dex.internal/dex", connectors={"local": "dex"})
+    ]
     sa_issuer: str | None = None
     sa_audience: str | None = None
     sa_fetch_token_file: str | None = None

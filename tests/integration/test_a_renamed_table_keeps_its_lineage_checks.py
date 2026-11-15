@@ -120,7 +120,14 @@ def _lineage_app(decider: OpenFgaDecider) -> FastAPI:
 async def test_a_renamed_tables_writes_pass_lineages_checks(decider: OpenFgaDecider, renamed: Renamed) -> None:
     """Each gate refuses by raising, so the write and the outside producer's event are admitted when none raises."""
     settings = LineageSettings.model_validate(
-        {"oidc_enabled": True, "oidc_issuer": "https://idp.example.com", "oidc_audience": "lance", "oidc_connectors": {"local": "dex"}, "fga_enabled": True}
+        {
+            "oidc_enabled": True,
+            "oidc_issuer": "https://idp.example.com",
+            "oidc_audience": "lance",
+            "oidc_idp_id": "dex",
+            "oidc_connectors": {"local": "dex"},
+            "fga_enabled": True,
+        }
     )
     caller = PersonPrincipal(principal=Principal(idp_id="dex", subject="pipeline"), claims=IDToken(iss="i", sub="pipeline", aud="lance", exp=1, iat=1))
     write = _write(

@@ -28,8 +28,9 @@ from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import AUDIT_LOGGER
-from lakehouse.governed.idp_identity import ConnectorNaming, IdpVerifier
+from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
+from lakehouse.governed.settings import OidcProvider
 from lakehouse.ns_errors import install_problem_handlers
 
 
@@ -55,6 +56,7 @@ def _client(verifier: IdpVerifier | None, issuer: str) -> TestClient:
             "RASK_OIDC_ISSUER": issuer,
             "RASK_OIDC_AUDIENCE": AUDIENCE,
             "RASK_OIDC_ALLOW_INSECURE": True,
+            "RASK_OIDC_IDP_ID": "dex",
             "RASK_OIDC_CONNECTORS": CONNECTORS,
         }
     )
@@ -87,7 +89,10 @@ def _audited_reasons(caplog: pytest.LogCaptureFixture) -> list[object]:
 
 
 def test_an_unreachable_issuer_and_no_verifier_at_all_answer_one_body(unreachable_issuer: str) -> None:
-    verifier = IdpVerifier(OIDCVerifier(unreachable_issuer, AUDIENCE, cache_ttl=300, allow_insecure=True), ConnectorNaming(connectors=CONNECTORS))
+    verifier = IdpVerifier(
+        OIDCVerifier(unreachable_issuer, AUDIENCE, cache_ttl=300, allow_insecure=True),
+        [OidcProvider(issuer=unreachable_issuer, idp_id="dex", connectors=CONNECTORS)],
+    )
 
     outage = _client(verifier, unreachable_issuer).get("/gated", headers=_bearer(unreachable_issuer))
     unwired = _client(None, unreachable_issuer).get("/gated", headers=_bearer(unreachable_issuer))
@@ -99,7 +104,11 @@ def test_a_token_from_an_issuer_the_catalog_does_not_trust_is_still_the_callers(
     """The control: the split must not turn a refused token into an outage. Two issuers, because with one
     `_provider_for` resolves without reading the token and this branch cannot be reached."""
     verifier = IdpVerifier(
-        OIDCVerifier([unreachable_issuer, f"{unreachable_issuer}/second"], AUDIENCE, cache_ttl=300, allow_insecure=True), ConnectorNaming(connectors=CONNECTORS)
+        OIDCVerifier([unreachable_issuer, f"{unreachable_issuer}/second"], AUDIENCE, cache_ttl=300, allow_insecure=True),
+        [
+            OidcProvider(issuer=unreachable_issuer, idp_id="dex", connectors=CONNECTORS),
+            OidcProvider(issuer=f"{unreachable_issuer}/second", idp_id="second", connectors={"local": "second"}),
+        ],
     )
 
     response = _client(verifier, unreachable_issuer).get("/gated", headers=_bearer("https://elsewhere.example.test"))

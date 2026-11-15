@@ -46,8 +46,37 @@ def test_every_door_trusts_the_named_issuer_and_only_the_dev_dex_is_reached_over
         assert not dev_dex, f"{overlay}: without the development Dex the render still sends something to it: {dev_dex}"
 
 
-def test_an_issuer_that_is_not_https_is_refused_without_the_development_dex() -> None:
-    with pytest.raises(subprocess.CalledProcessError) as refused:
-        render_text(*DEFAULT_ARGS, "--set", "dex.enabled=false", "--set-string", "auth.oidc.issuer=http://idp.platform.example")
+_PARTNER = "https://partner.example.com"
 
-    assert "auth.oidc.issuer=http://idp.platform.example is not https" in refused.value.stderr
+
+@pytest.mark.parametrize(
+    ("values", "refusal"),
+    [
+        pytest.param(
+            ("--set", "dex.enabled=false", "--set-string", "auth.oidc.issuer=http://idp.platform.example"),
+            "auth.oidc.issuer=http://idp.platform.example is not https",
+            id="an-issuer-over-http-without-the-development-dex",
+        ),
+        pytest.param(
+            ("--set-json", f'auth.oidc.providers=[{{"issuer":"{_PARTNER}","idpId":"dex"}}]'), "names the idp id dex, which", id="two-issuers-name-one-idp-id"
+        ),
+        pytest.param(("--set-json", f'auth.oidc.providers=[{{"issuer":"{_DEV_ISSUER}","idpId":"partner"}}]'), "is not https", id="a-further-issuer-over-http"),
+        pytest.param(
+            ("--set-json", f'auth.oidc.providers=[{{"issuer":"{_PARTNER}","idpId":"partner"}},{{"issuer":"{_PARTNER}/","idpId":"other"}}]'),
+            "named as an issuer twice",
+            id="one-further-issuer-named-twice",
+        ),
+        pytest.param(
+            ("--set-json", f'auth.oidc.providers=[{{"issuer":"{_PARTNER}","idpId":"partner","clientMarker":{{"claim":"sub"}}}}]'),
+            "never one every token carries",
+            id="a-client-marker-every-token-carries",
+        ),
+    ],
+)
+def test_an_issuer_the_doors_could_not_name_callers_by_is_refused_at_render(values: tuple[str, ...], refusal: str) -> None:
+    """[[XC-148]], ADR 0208: an issuer reached over http, named twice, sharing an idp id with another issuer, or marking its
+    clients with a claim every token carries is refused before any pod starts, rather than crash-looping one at boot."""
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_text(*DEFAULT_ARGS, "--set-string", f"auth.oidc.issuer={_DEV_ISSUER}", *values)
+
+    assert refusal in refused.value.stderr

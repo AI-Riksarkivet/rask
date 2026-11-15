@@ -49,7 +49,14 @@ def governed(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Ite
     """The real catalog with OIDC and FGA on, as the person `dex~alice`, over an in-memory tuple store, with one table ``db$src``."""
     app = real_ns_client.app
     settings = get_settings().model_copy(
-        update={"oidc_enabled": True, "oidc_connectors": {"local": "dex"}, "oidc_issuer": "https://idp.example", "oidc_audience": "lance", "fga_enabled": True}
+        update={
+            "oidc_enabled": True,
+            "oidc_idp_id": "dex",
+            "oidc_connectors": {"local": "dex"},
+            "oidc_issuer": "https://idp.example",
+            "oidc_audience": "lance",
+            "fga_enabled": True,
+        }
     )
     app.dependency_overrides[get_settings] = lambda: settings
     monkeypatch.setattr(app.state, "oidc", MagicMock())

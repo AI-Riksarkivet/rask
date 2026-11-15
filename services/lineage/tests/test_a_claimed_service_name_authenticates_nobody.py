@@ -37,6 +37,7 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": "https://idp.invalid",
         "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_IDP_ID": "dex",
         "RASK_OIDC_CONNECTORS": '{"local": "dex"}',
         "RASK_SA_ISSUER": issuer.issuer,
         "RASK_SA_AUDIENCE": "rask-lineage",

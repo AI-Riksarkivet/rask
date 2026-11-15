@@ -135,6 +135,7 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Estate]:
         {
             "root": root,
             "oidc_enabled": True,
+            "oidc_idp_id": "dex",
             "oidc_connectors": {"local": "dex"},
             "oidc_issuer": "https://idp.example",
             "oidc_audience": "lance",

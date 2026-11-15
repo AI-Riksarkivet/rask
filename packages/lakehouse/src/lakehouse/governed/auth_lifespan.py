@@ -45,7 +45,7 @@ exactly as it did before it had a door.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Protocol
 
 from starlette.concurrency import run_in_threadpool
@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from openfga_sdk import OpenFgaClient
 
     from lakehouse.governed.decider import AccessDecider
+    from lakehouse.governed.settings import OidcProvider
     from lakehouse.supervision import Supervisor
 
 
@@ -110,11 +111,7 @@ class _GovernedSettings(_DeciderSettings, Protocol):
     @property
     def oidc_discovery_url(self) -> str | None: ...
     @property
-    def oidc_idp_id(self) -> str | None: ...
-    @property
-    def oidc_subject_claims(self) -> Sequence[str] | None: ...
-    @property
-    def oidc_connectors(self) -> Mapping[str, str]: ...
+    def oidc_person_providers(self) -> Sequence[OidcProvider]: ...
     @property
     def sa_issuer(self) -> str | None: ...
     @property
@@ -229,15 +226,16 @@ async def attach_auth(
     app.state.sa_oidc = None
     app.state.fga = None
     app.state.decider = None
-    if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
+    providers = settings.oidc_person_providers
+    if settings.oidc_enabled and providers and settings.oidc_audience:
         try:
             from lakehouse.governed import idp_identity, oidc
 
-            # A person is the principal the deployment's naming rule reads from the verified token ([[XC-214]]), so the
-            # IdP's verifier is wrapped with that rule rather than handed to the doors on its own.
+            # A caller is the principal its issuer's naming rule reads from the verified token ([[XC-214]], ADR 0208), so
+            # one verifier over every issuer is wrapped with each issuer's rule rather than handed to the doors on its own.
             app.state.oidc = idp_identity.IdpVerifier(
                 oidc.OIDCVerifier(
-                    settings.oidc_issuer,
+                    [provider.issuer for provider in providers],
                     settings.oidc_audience,
                     settings.oidc_cache_ttl,
                     leeway=settings.oidc_leeway,
@@ -245,9 +243,9 @@ async def attach_auth(
                     # Split-horizon (reverse-proxied IdP): fetch discovery/JWKS in-cluster while tokens
                     # keep the public issuer string. The omission of this argument at ONE of six doors
                     # broke every signed-in ingest; it is centralized here so there is no sixth door.
-                    discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
+                    discovery_overrides={provider.issuer: url for provider in providers if (url := provider.discovery_url)} or None,
                 ),
-                idp_identity.person_naming(idp_id=settings.oidc_idp_id, subject_claims=settings.oidc_subject_claims, connectors=settings.oidc_connectors),
+                providers,
             )
             # PROVED, not asserted. The constructor above performs no I/O, so until this call the
             # log line "verifier ready" said only that a Python object existed. `warm` resolves every
@@ -268,7 +266,7 @@ async def attach_auth(
                 for issuer, reason in failures:
                     log.error("%s: OIDC issuer unusable (issuer=%s): %s", service, issuer, reason)
             else:
-                log.info("%s: OIDC verifier ready (issuer=%s, discovery reached)", service, settings.oidc_issuer)
+                log.info("%s: OIDC verifier ready (issuers=%s, discovery reached)", service, ", ".join(provider.issuer for provider in providers))
         except Exception:
             if fatal:
                 raise

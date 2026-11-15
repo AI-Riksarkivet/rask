@@ -14,7 +14,8 @@ unverified ``iss`` routes it: the cluster's service-account issuer goes to ``app
 verifies it offline and answers the principal ``kubernetes~system:serviceaccount:<ns>:<sa>``, from any namespace;
 every other issuer goes to the IdP, which refuses a token it did not sign (401), and answers a person as the
 principal the deployment's naming rule reads from it, ``<idp-id>~<subject>`` ([[XC-214]], [[LH-063]]), and a client
-signed in for itself as the machine ``dex-client~<client id>`` (ADR 0181). A service-account token never falls
+signed in for itself as the machine ``<idp-id>-client~<client id>`` (ADR 0181, ADR 0208), each under its own issuer's
+idp id. A service-account token never falls
 through to the IdP, no header names the caller, and OpenFGA alone decides what the principal may do.
 """
 
