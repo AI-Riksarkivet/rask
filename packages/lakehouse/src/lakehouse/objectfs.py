@@ -53,7 +53,7 @@ def lance_storage_options(
     would pin it to nothing.
 
     ``allow_http`` IS DERIVED FROM THE ENDPOINT'S SCHEME and cannot be passed: ``"true"`` exactly for an ``http`` scheme,
-    in any case. It is a PERMIT — "Allow non-TLS, i.e. non-HTTPS connections" (``lance_docs/lance/guide/object_store.md:32``)
+    in any case. It is a PERMIT — "Allow non-TLS, i.e. non-HTTPS connections" (``lance_docs/lance/guide/object_store.md:64``)
     — that object_store consults only when a request would otherwise be refused, so a TLS store holding it looks
     identical until something downgrades. Measured on pylance 12.0.0 against a closed port, in a process with no ambient
     ``AWS_ALLOW_HTTP``: ``http://`` with ``allow_http=false`` dies at client construction (``builder error``),
@@ -93,12 +93,12 @@ class StoreTimeouts(BaseModel):
     A PLANE CHOOSES THESE, which is why they are a value here and not baked into
     :func:`lance_storage_options`: a request-serving plane must fail fast and let its caller retry,
     while a batch plane would rather wait out a slow store than fail a long job. Without them Lance runs
-    on object_store's defaults (`lance_docs/lance/guide/object_store.md:28-43`: connect 5 s, request 30 s, 3 retries
+    on object_store's defaults (`lance_docs/lance/guide/object_store.md:60-75`: connect 5 s, request 30 s, 3 retries
     within 180 s), and MEASURED on pylance 12.0.0 one dataset open against a store that drops packets
     took **124.9 s**, and against one that accepts the connection and never answers it outlasted a
     300 s harness.
 
-    THE REQUEST KEY IS ``timeout`` (`lance_docs/lance/guide/object_store.md:37`), and an unrecognised key is ignored
+    THE REQUEST KEY IS ``timeout`` (`lance_docs/lance/guide/object_store.md:69`), and an unrecognised key is ignored
     rather than refused. Measured on pylance 12.0.0 against a store that accepts and never answers: with
     ``request_timeout=5s`` each request still ran its full 30.0 s, with ``timeout=3s`` it ran 3.0 s.
     ``connect_timeout``, ``client_max_retries`` and ``client_retry_timeout`` were honoured as
@@ -129,10 +129,10 @@ class StoreTimeouts(BaseModel):
         }
 
 
-#: The three algorithms object_store accepts, verbatim from `lance_docs/lance/guide/object_store.md:134`. A fourth value
+#: The three algorithms object_store accepts, verbatim from `lance_docs/lance/guide/object_store.md:294`. A fourth value
 #: is not an error at the store — it is an ignored option, and the bytes land in plaintext.
 _SSE_ALGORITHMS: Final = ("AES256", "aws:kms", "aws:kms:dsse")
-#: The two that carry a customer key. `lance_docs/lance/guide/object_store.md:135`, on `aws_sse_kms_key_id`: "If set,
+#: The two that carry a customer key. `lance_docs/lance/guide/object_store.md:295`, on `aws_sse_kms_key_id`: "If set,
 #: `aws_server_side_encryption` must be `"aws:kms"` or `"aws:kms:dsse"`."
 SSE_KMS_ALGORITHMS: Final = ("aws:kms", "aws:kms:dsse")
 

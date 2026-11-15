@@ -114,7 +114,7 @@ tier shape (`{id, payload, stage}`, 8 MiB of payload held constant while value s
 
 The crossover is ~1 KiB, the worst regression is +78% at 256 B, and above 32 KiB the setting is inert
 because Lance already applies general compression automatically in a full-zip context at that size
-(`lance_docs/lance/format/file/encoding.md:883-884` § General; measured as a +0.0% delta at 256 KiB values,
+(`lance_docs/lance/format/file/encoding.md:917-918` § General; measured as a +0.0% delta at 256 KiB values,
 which is what confirms the harness was reading real behaviour rather than a no-op).
 
 **The corpus this was taken at.** The five governed tier datasets measured live on 2026-09-19 hold

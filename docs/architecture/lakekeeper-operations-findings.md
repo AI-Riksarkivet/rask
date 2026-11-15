@@ -102,7 +102,7 @@ write; JetStream's work queue gives rask the redelivery but no answer to the hol
 names, and a commit through `version/create` is a compare-and-swap, so the likely harm is a duplicate pass's reads and a
 duplicate FAIL or COMPLETE event, not lost data. The invariant is still the one the worker's docstring states
 (`queue.py:285-300`), and the orphan scan with `delete_unverified=True` is the step whose concurrency Lance warns about
-(`lance_docs/lance/guide/blob.md:211-213`).
+(`lance_docs/lance/guide/blob.md:304-306`).
 
 **Four facts.** GitOps: meets; the guard and the thresholds are rendered from the chart. Cloud native: meets; it relies on
 Kubernetes' grace period and nothing else. Lance-idiomatic: neutral; Lance's own CAS stays the final fence for commits.
@@ -343,7 +343,7 @@ recheck a day later.
 - **Whether a pass thread outlives the process's exit** once uvicorn's lifespan returns (anyio's worker threads and
   interpreter shutdown). Finding 2.1's arithmetic assumes the worst case, that it runs until SIGKILL.
 - **Whether two concurrent `cleanup_old_versions` on one table are safe** in pylance 13. `lance_docs/` warns only about
-  `delete_unverified=True` beside uncommitted uploads (`lance_docs/lance/guide/blob.md:211-213`); I found no statement
+  `delete_unverified=True` beside uncommitted uploads (`lance_docs/lance/guide/blob.md:304-306`); I found no statement
   either way for two cleanups.
 - **KEDA's NATS JetStream scaler** (finding 2.2) was not read; the claim that it scales on a consumer's pending count is
   from its name and purpose, not its docs.

@@ -4,7 +4,7 @@ A vend is the catalog's own token exchanged for a session narrowed to one table 
 still a credential. Inside the catalog its secret access key and session token are `SecretStr`, so a repr, a str, a model
 dump, a log line or an error that echoes the vend carries neither. A client is handed one flat `storage_options` map
 (`lance_docs/ns_catalog/spec.yaml:2883-2892`), the expiry beside it on the management door and inside it on a spec
-door, at the keys `lance_docs/lance/guide/object_store.md:127-136` names.
+door, at the keys `lance_docs/lance/guide/object_store.md:287-296` names.
 
 Only the STS exchange is faked: the vendor, its storage options builder and both doors are the deployed ones.
 """

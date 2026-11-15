@@ -1281,14 +1281,14 @@ governing their data. The project-scoped surface is the console's project page, 
   itself** ([[LH-286]], `maintenance.services.base_reclaim`). `cleanup_old_versions` is ROOT-SCOPED: measured
   on pylance 13.0.0, after an overwrite of a table whose fragments sit on a data base, `cleanup_old_versions(older_than=0,
   delete_unverified=True)` removed every superseded version and none of the base's files (against
-  `lance_docs/lance/guide/read_and_write.md:534`). The same root-scoping is what makes cleanup SAFE on a shallow clone (see
+  `lance_docs/lance/guide/read_and_write.md:832`). The same root-scoping is what makes cleanup SAFE on a shallow clone (see
   `SUPPORTED_FOR_GC`). A data base is its tables' storage on the estate's store, reached under the catalog's own
   identity like a root (owner, 2026-10-24: Lance's default, "every base inherits the unscoped options",
   `lance_docs/lance/guide/object_store.md` § Per-Base Configuration); no base holds a credential of its own, so the native doors read it and the
   vend is direct. The expiry pass, after `cleanup_old_versions`, lists each directory the table's base record names
   as a `data` entry (a plain base, never a dataset root), subtracts every file any retained version of main or any
   branch references (a branch inherits the base under the same id and appends into the same directory, measured), and
-  deletes what is left once it is older than Lance's unverified-file age, 7 days (`lance_docs/lance/guide/read_and_write.md:564-571`). It signs with the
+  deletes what is left once it is older than Lance's unverified-file age, 7 days (`lance_docs/lance/guide/read_and_write.md:957-964`). It signs with the
   maintain-tier vend, which gets delete on the table's own data directories (`vending.VendableBases`), and the probe
   asks for that vend when a stranded file is past the age, so a table overwritten once still reclaims. A deleted row's
   bytes stay in its base fragment behind a deletion vector; the pass reports such fragments

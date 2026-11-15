@@ -40,7 +40,7 @@ What `lance_docs/` settles, read in full for this decision:
   by the implementation", `spec.yaml:2719-2724`).
 - A Lance table carries no identity of its own. It is anchored at its dataset root, "the location where the dataset was
   initially created" (`lance_docs/lance/format/table/layout.md:14-18`): the external manifest store keys commits by `base_uri`
-  (`lance_docs/lance/format/table/transaction.md:752`), and shallow clones and branches reference other roots by path (`lance_docs/lance/format/table/layout.md:141-176`,
+  (`lance_docs/lance/format/table/transaction.md:980`), and shallow clones and branches reference other roots by path (`lance_docs/lance/format/table/layout.md:141-176`,
   `branch_tag.md:49-85`). A rename that moved bytes would break those references.
 - Lance keeps special characters out of its own paths: partition namespaces take random names "to avoid issues with
   special characters" and keep the real values in `__manifest` columns (`ns_catalog/partitioning-spec.md:171-184`,

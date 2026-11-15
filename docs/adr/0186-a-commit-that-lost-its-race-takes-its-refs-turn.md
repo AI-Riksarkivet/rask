@@ -65,14 +65,14 @@ its target failed its commit as of unknown outcome, after one call.
   (`client/v3/concurrency/mutex.go:89`); an object store offers neither, so a process keeps one eventually consistent view
   of the record for all its waiters, as a client-go shared informer keeps one local cache for every consumer in a process
   (`tools/cache/shared_informer.go:48-70`), and as Lance's guide asks an application to share one table, or one session,
-  so that a metadata cache serves every user of it (`lance_docs/lance/guide/performance.md:132-134`). An answer is shared
+  so that a metadata cache serves every user of it (`lance_docs/lance/guide/performance.md:150-152`). An answer is shared
   only among waiters reading the same store as the same signing identity (the access key id, never the secret), so the
   store judges every credential the record is read under.
 - **Only waiting takes the shared view; a writer's own turn is read from the store.** Whether the record keeps the turn a
   stock writer was handed decides whether its commit releases that turn (`TableTurns.keeps`). An answer from before the
   hand, such as a read in flight across it or another replica's view, would leave the turn held to its lapse, with the
   catalog's own writers of the ref waiting the 30 s on it. Lance's own cache holds only what cannot change under its key
-  (a manifest by version and etag, `lance_docs/lance/guide/performance.md:136-140`), and Lance decides a commit whose
+  (a manifest by version and etag, `lance_docs/lance/guide/performance.md:154-158`), and Lance decides a commit whose
   answer it lost by reading the version back from the store ([[LH-491]]); a view kept for waiting likewise decides no
   ownership.
 - **A stock writer that lost its race is handed the ref's next turn** (`DoorTable.hand_turn`, `TableTurns.hand`), whether

@@ -121,7 +121,7 @@ def _overwrite(uri: str) -> None:
 
 
 def _update_columns(uri: str) -> None:
-    """Rewrite `v` in place for one row: `fragment.update_columns` plus `LanceOperation.Update` (lance_docs/lance/guide/distributed_write.md:187-247)."""
+    """Rewrite `v` in place for one row: `fragment.update_columns` plus `LanceOperation.Update` (lance_docs/lance/guide/distributed_write.md:189-249)."""
     dataset = lance.dataset(uri)
     updated, fields_modified = dataset.get_fragments()[0].update_columns(pa.table({"_rowid": pa.array([0], pa.uint64()), "v": pa.array([99], pa.int64())}))
     lance.LanceDataset.commit(uri, lance.LanceOperation.Update(updated_fragments=[updated], fields_modified=fields_modified), read_version=dataset.version)

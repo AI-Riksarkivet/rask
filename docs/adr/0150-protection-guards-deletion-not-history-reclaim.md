@@ -6,9 +6,9 @@ the same day after the lance_docs check.
 ## Context
 
 Lance separates retention from cleanup. A version that must survive is tagged: "Tagged versions are exempt from
-cleanup" (`lance_docs/lance/guide/read_and_write.md:561`, `lance_docs/lance/guide/tags_and_branches.md:61-67`), and branches keep their referenced files the same way
+cleanup" (`lance_docs/lance/guide/read_and_write.md:954`, `lance_docs/lance/guide/tags_and_branches.md:77-83`), and branches keep their referenced files the same way
 (`tags_and_branches.md:129-133`). Lance's own advice for a rollback window is to "create a tag … delay cleanup"
-(`lance_docs/lance/guide/data_evolution.md:170-179`). Deleting a tag or a branch is therefore what makes its versions reclaimable (`tags_and_branches.md:66-67`,
+(`lance_docs/lance/guide/data_evolution.md:270-279`). Deleting a tag or a branch is therefore what makes its versions reclaimable (`tags_and_branches.md:66-67`,
 `:133`): it is history reclaim, not entity deletion.
 
 At the decision `version/delete`, tag delete and branch delete checked protection (`fga_deps.require_table_unprotected`,

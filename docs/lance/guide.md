@@ -20,6 +20,10 @@ description: The upstream Lance user guide, vendored.
 
 --8<-- "lance_docs/lance/guide/distributed_write.md"
 
+--8<-- "lance_docs/lance/guide/full_text_search.md"
+
+--8<-- "lance_docs/lance/guide/indexing.md"
+
 --8<-- "lance_docs/lance/guide/json.md"
 
 --8<-- "lance_docs/lance/guide/migration.md"
@@ -32,6 +36,14 @@ description: The upstream Lance user guide, vendored.
 
 --8<-- "lance_docs/lance/guide/read_and_write.md"
 
+--8<-- "lance_docs/lance/guide/row_ids.md"
+
+--8<-- "lance_docs/lance/guide/scalar_indexing.md"
+
 --8<-- "lance_docs/lance/guide/tags_and_branches.md"
 
 --8<-- "lance_docs/lance/guide/tokenizer.md"
+
+--8<-- "lance_docs/lance/guide/update_join.md"
+
+--8<-- "lance_docs/lance/guide/vector_search.md"

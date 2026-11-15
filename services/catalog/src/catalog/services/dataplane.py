@@ -1579,7 +1579,7 @@ def _discard_unlanded_attempt(
     Called only once the attempt cannot land, its finalize lost to another commit's manifest or the attempt refused before
     its finalize, so no version names these files, and the next attempt plans afresh and writes its own. Lance would keep
     them 7 days, since a store cannot tell a dead commit's file from one still being written
-    (``lance_docs/lance/guide/read_and_write.md:564-571``); the catalog knows them for its own. It raises nothing, since it
+    (``lance_docs/lance/guide/read_and_write.md:957-964``); the catalog knows them for its own. It raises nothing, since it
     runs while another error is on its way: a delete the store refuses is logged and leaves its file to Lance's rule.
     """
     own = committed_files.written_by(transaction, wrote, branch=branch)
@@ -3263,7 +3263,7 @@ def read_changes(
     YIELDING BOUNDS WHAT THIS FUNCTION HOLDS, NOT WHAT LANCE HOLDS. The scan itself runs under the
     process scan defaults the catalog sets at boot (`catalog.main.bound_lance_scans`, [[LH-247]]):
     Lance's own size a batch in ROWS (8,192, whatever their width) and buffer up to 2 GB of IO ahead of
-    the consumer (`lance_docs/lance/guide/performance.md:170-191`), and on a 164 MB table of 1024-dim float32 vectors
+    the consumer (`lance_docs/lance/guide/performance.md:297-318`), and on a 164 MB table of 1024-dim float32 vectors
     this feed peaked the catalog at 597,224 kB against its 524,288 kB limit (pylance 12.0.0, measured
     from outside a one-CPU catalog over a moto store). No scanner option is passed here, so the feed
     and the native backend's scans share one bound an operator can move in one place.

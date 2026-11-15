@@ -42,7 +42,7 @@ AND ONLY A WINDOW THE VERSION COLUMNS DESCRIBE. Three transactions change rows w
 columns the way the predicates assume, so the door reads the window's transactions and refuses a
 window spanning one (`unfollowable`): a Restore and an Overwrite replace the table wholesale, and an
 Update whose `fields_modified` is non-empty rewrote a column in place (`fragment.update_columns` plus
-`LanceOperation.Update`, `lance_docs/lance/guide/distributed_write.md:187-247`; measured on pylance 12.0.0 it leaves
+`LanceOperation.Update`, `lance_docs/lance/guide/distributed_write.md:189-249`; measured on pylance 12.0.0 it leaves
 `_row_last_updated_at_version` where it was, so the `updated` stream never shows the change).
 `dataset.update` and `merge_insert` commit an Update with `fields_modified == []` and new fragments,
 which the columns describe, and a compaction (a ReserveFragments BaseOperation then a Rewrite) moves

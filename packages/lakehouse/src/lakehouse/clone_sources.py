@@ -3,7 +3,7 @@
 A shallow clone is a dataset of its own whose manifest names its source's data files through a dataset-root base, and
 the source records nothing of it (`lance_docs/lance/format/table/transaction.md` § Clone). It "relies on continued
 source retention, such as a source tag" (`lance_docs/lance/format/table/blob.md:309-313`), and a tagged version is
-exempt from cleanup (`lance_docs/lance/guide/tags_and_branches.md:61-67`). The register door is the one door a clone
+exempt from cleanup (`lance_docs/lance/guide/tags_and_branches.md:77-83`). The register door is the one door a clone
 enters the estate through (a write vend may not put a final manifest), so it tags the source version the clone's own
 first transaction names (:func:`clone_reference`), and every door that ends the clone deletes the tag
 (:func:`release`). Measured on pylance 13.0.0 (2026-11-08): a clone of a tagged version read all its rows after its

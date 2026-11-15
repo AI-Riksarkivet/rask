@@ -32,7 +32,7 @@ list is also written under maintenance's own identity and trusted by the catalog
 1. **A registered clone keeps its source by a Lance tag.** A shallow clone is a dataset of its own whose manifest names
    the source's files; the source records nothing of it (`lance_docs/lance/format/table/transaction.md` § Clone), and it
    relies on "continued source retention, such as a source tag" (`lance_docs/lance/format/table/blob.md:309-313`), which
-   cleanup honours (`lance_docs/lance/guide/tags_and_branches.md:61-67`). pylance 13.0.0's `shallow_clone` writes its
+   cleanup honours (`lance_docs/lance/guide/tags_and_branches.md:77-83`). pylance 13.0.0's `shallow_clone` writes its
    target directly, with no namespace client, and the write vend denies that final manifest, so a clone enters the
    estate only through `RegisterTable`, whose door reads its `base_paths`: there the catalog takes a tag on each source
    version a clone names, and ends it when the clone ends. A clone never registered keeps its own tag through the tag
@@ -299,7 +299,7 @@ through the multi-question tool, 2026-11-09 and 2026-11-10:
 
 Two fixes every per-table check needed. A file the store cannot place before the scan began reading its referenced set
 is no finding, since a commit landing during the check writes files that look stranded and age is the only evidence an
-unverified file has (`lance_docs/lance/guide/read_and_write.md:564-571`). And a table carrying the raise's stamp is raised
+unverified file has (`lance_docs/lance/guide/read_and_write.md:957-964`). And a table carrying the raise's stamp is raised
 again once its floor has moved past the stamp, instead of never again; the stamp carries the epoch to the fraction, so a
 manifest written earlier in the stamp's second cannot read as having passed it.
 

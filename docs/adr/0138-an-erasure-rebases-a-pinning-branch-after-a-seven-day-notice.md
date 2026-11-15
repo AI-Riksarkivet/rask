@@ -11,9 +11,9 @@ In Lance a branch lives inside the table: it is a shallow clone under the datase
 point (`lance_docs/lance/format/table/branch_tag.md:37-52`). Keeping branches in-table is what lets cleanup be driven
 by branch and tag expiry, with no forgotten copy to break an erasure (Jack Ye, "Branching and Shallow Cloning in Lance", <https://www.lancedb.com/blog/branching-and-shallow-clone>). The
 fork point holds the parent's files: "Lance ensures that cleanup does not delete files still referenced by any branch.
-Delete unused branches to allow their referenced files to be cleaned up" (`lance_docs/lance/guide/tags_and_branches.md:131-133`). A tag holds
+Delete unused branches to allow their referenced files to be cleaned up" (`lance_docs/lance/guide/tags_and_branches.md:233-235`). A tag holds
 a version the same way: "Tagged versions are exempted from the `LanceDataset.cleanup_old_versions()` process", and a
-tagged version is released only by deleting the tag (`lance_docs/lance/guide/tags_and_branches.md:63-66`).
+tagged version is released only by deleting the tag (`lance_docs/lance/guide/tags_and_branches.md:79-82`).
 
 So when a subject is erased from main, a branch whose parent version, or a tag whose version, still holds the subject
 keeps it readable: `checkout_version(N)` serves the erased rows, the erasure report says `complete=False`, and nobody is
@@ -36,7 +36,7 @@ Idea taken from: Lakekeeper's two-step expiry (mark first, reclaim later).
   owners have the same grace period to copy work out (owner, 2026-10-10). A branch has no update operation, so delete-and-recreate is its only
   release (`lance_docs/ns_catalog/namespace/operations/index.md:85-92`; CreateTableBranch takes `fromBranch` /
   `fromVersion`, `ns_catalog/namespace/operations/models/CreateTableBranchRequest.md:13-15`). The `reference=` keyword
-  of `create_branch` is the installed pylance 12.0.0 signature; `lance_docs/lance/guide/tags_and_branches.md:107-108` shows the call positionally. A tag
+  of `create_branch` is the installed pylance 12.0.0 signature; `lance_docs/lance/guide/tags_and_branches.md:124-125` shows the call positionally. A tag
   could instead be moved to the clean head (UpdateTableTag, `ns_catalog/namespace/operations/models/UpdateTableTagRequest.md:13-14`),
   which keeps its name; the owner chose deletion. The owner may copy work out before the deadline; a branch loses its
   fork point and a tag its name.
@@ -69,7 +69,7 @@ Idea taken from: Lakekeeper's two-step expiry (mark first, reclaim later).
     `retention_days` (`services/maintenance/src/maintenance/services/sweep.py:554-555`); pylance's own default is 14 days
     (pylance 13.0.0 `LanceDataset.cleanup_old_versions`: `older_than = timedelta(days=14)`). Cleanup on main never touches a branch's own `tree/<branch>/` history (LH-263).
 - Until cleanup runs, restoring a retained pre-erasure version brings the rows back, even after compaction
-  (`lance_docs/lance/format/table/transaction.md:715-730`; `prototypes/lance-erasure-and-commit-door/a5_restore.py`), so restore stays a high-privilege door.
+  (`lance_docs/lance/format/table/transaction.md:943-958`; `prototypes/lance-erasure-and-commit-door/a5_restore.py`), so restore stays a high-privilege door.
 - A tag can sit on a non-main branch (its ref at the dataset root carries `branch`), so the pin census reads the tag's
   branch as well as its version (`lance_docs/lance/format/table/branch_tag.md:101-127`; `prototypes/lance-erasure-and-commit-door/a6_tag_on_branch.py`). Cleanup on that branch raises
   when `error_if_tagged_old_versions=True`: the sweep passes False (`services/catalog/src/catalog/services/maintenance.py:394`)

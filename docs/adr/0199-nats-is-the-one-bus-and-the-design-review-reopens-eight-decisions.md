@@ -70,11 +70,11 @@ Reopened, each decided in the package that implements it and not before:
 | [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) decision 5, [0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) | cloud native and zero trust: two bus clients and two credential paths in one product; a bus seed and a shared app token that never expire | follows the move off Dapr: one direct path, each pod trading its ServiceAccount token for short-lived credentials | D8 | follows D |
 
 Kept after the same judgement: [ADR 0102](0102-the-sweep-is-the-one-reclaimer-lance-s-commit-path-auto.md)
-and 0103 (one reclaimer, which `lance_docs/lance/guide/read_and_write.md:666-678` supports), ADR 0162 (the lakehouse
+and 0103 (one reclaimer, which `lance_docs/lance/guide/read_and_write.md:1059-1071` supports), ADR 0162 (the lakehouse
 builds nothing), ADR 0157 and 0164 (stock clients commit through `version/create`, the directory catalog's own
 put-if-not-exists finalize), ADR 0170 and 0197 (a workload's store identity is its ServiceAccount token), and
 [ADR 0186](0186-a-commit-that-lost-its-race-takes-its-refs-turn.md): replanning in place of Lance's rebase is not
-Lance-idiomatic (`lance_docs/lance/format/table/transaction.md:615-620`), and it stays until pylance's `update` and
+Lance-idiomatic (`lance_docs/lance/format/table/transaction.md:843-848`), and it stays until pylance's `update` and
 merge take transaction properties.
 
 ## Consequences

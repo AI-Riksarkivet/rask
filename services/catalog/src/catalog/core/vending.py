@@ -140,7 +140,7 @@ class VendedSession(BaseModel):
         puts in clear (:meth:`StorageOptions.in_clear`).
 
         In clear, the spec's one map (`lance_docs/ns_catalog/spec.yaml:2883-2892`), at the keys
-        `lance_docs/lance/guide/object_store.md:127-136` names: the body that hands it to its caller, or the client the
+        `lance_docs/lance/guide/object_store.md:287-296` names: the body that hands it to its caller, or the client the
         catalog signs with it.
 
         BUILT THROUGH THE SHARED BUILDER, not hand-rolled. A hand-rolled dict carried the bare credential spellings, which

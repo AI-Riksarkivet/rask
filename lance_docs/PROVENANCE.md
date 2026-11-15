@@ -13,7 +13,7 @@ edited; the repo's pre-commit hooks trim trailing whitespace and add final newli
 
 | Directory | Source | Pinned at | Read by |
 | --- | --- | --- | --- |
-| `lance/` | [`lance-format/lance`](https://github.com/lance-format/lance) `docs/src/` | `main` at `51cf89df7873d26269ba193fe971f439d3c031db` (2026-10-26) | citations across the estate |
+| `lance/` | [`lance-format/lance`](https://github.com/lance-format/lance) `docs/src/` | `main` at `a33c4682d05172d42ab47ff9948d45c5c74e7856` (2026-11-15) | citations across the estate |
 | `ns_catalog/` | [`lance-format/lance-namespace`](https://github.com/lance-format/lance-namespace) `docs/src/` | `main` at `a13c746bdf369b62d4fc583357564f0cddfad667` (2026-10-23) | `tests/integration/test_spec_conformance.py` and criterion 2's `tests/e2e-py/test_the_catalog_is_correct.py` read `ns_catalog/spec.yaml` |
 
 The site's Lance Reference pages (`docs/lance/file-format.md`, `guide.md`, `namespace.md`) embed every page of
@@ -30,22 +30,17 @@ installed package (pylance's own docstrings, measured behaviour), or to lance-ra
 not have, and a claim taken from them is settled on pylance 13.0.0 before rask relies on it (CLAUDE.md: "or by
 measuring on the installed pylance"). Measured examples of the gap:
 
-- **The feature-flag table allocates eighteen flags** (`lance/format/table/versioning.md` § Current Feature Flags,
-  `2^0` through `2^17`). pylance 13.0.0 allocates fourteen (`rust/lance-table/src/feature_flags.rs` at `v13.0.0`,
+- **The feature-flag table allocates twenty flags** (`lance/format/table/versioning.md` § Current Feature Flags,
+  `2^0` through `2^19`). pylance 13.0.0 allocates fourteen (`rust/lance-table/src/feature_flags.rs` at `v13.0.0`,
   `FLAG_UNKNOWN = 1 << 14`): `FLAG_MANAGED_BLOBS` (`2^14`, `lance/format/table/blob.md` § Capability and Compatibility),
-  `FLAG_NON_REUSABLE_FIELD_IDS` (`2^15`), and the reserved `2^16` and `2^17` are newer than the installed release.
+  `FLAG_NON_REUSABLE_FIELD_IDS` (`2^15`), the reserved `2^16` and `2^17`, `FLAG_ROW_ADDR_INDICES` (`2^18`) and
+  `FLAG_INLINE_DELETIONS` (`2^19`) are newer than the installed release.
   `lakehouse.features` names the fourteen pylance 13.0.0 allocates; a table carrying a newer one is refused
   as an unknown flag, which is the refusal the format asks of a reader that does not support it.
 - **The table layout adds `_blobs/{UUID}.blob`** (`lance/format/table/layout.md` § Basic Layout), Managed blob
   payloads under `FLAG_MANAGED_BLOBS`. pylance 13.0.0 writes no such object, so the vend allow-list
   (`lakehouse.table_layout.WRITER_PUT_GLOBS`) names none; a pylance bump that brings Managed blobs needs
   the directory judged there, and in the orphan scan, before a table may opt in.
-- **The blob-v1 marker.** `lance/guide/data_types.md:43` says a 2.2 write rejects `lance-encoding:blob`, and
-  `lance/guide/blob.md:65` that it is "Accepted as input; written as Blob v2"; pylance 13.0.0 does the second (measured
-  2026-10-26, [[LH-246]]).
-- **The cleanup default.** `lance/guide/read_and_write.md:550` says versions older than 7 days are removed by default;
-  pylance 13.0.0's `LanceDataset.cleanup_old_versions` defaults `older_than` to 14 days (its source). Code that relies
-  on the default cites the package.
 - **`packed`.** `lance/format/file/encoding.md` § Compression Configuration says the knob takes any string; pylance
   13.0.0 packs a struct on `true`, `1`, `yes` or `on` in any case and ignores every other value, while a 2.0 file packs
   on any value (measured 2026-10-26, `catalog.core.encoding`).
@@ -67,7 +62,7 @@ correction, and the correction is what rask relies on:
   clone) fails `Not found` on its inherited files, which resolve through the original root's absolute path.
 - **The error codes** (`ns_catalog/namespace/operations/errors.md` lists 0 to 21). `spec.yaml` and lance-namespace
   0.11.1 define 22 (`TableBranchNotFound`) and 23 (`TableBranchAlreadyExists`); cite `spec.yaml`.
-- **Unrendered message tables.** `lance/` holds 68 placeholders (66 `%%% proto.message.* %%%`, 2
+- **Unrendered message tables.** `lance/` holds 71 placeholders (69 `%%% proto.message.* %%%`, 2
   `%%% mem_wal.message.* %%%`), and pylance 13.0.0 ships no `.proto`, so a message's field numbers are measured or read
   off the binary, never off these pages (`lakehouse.manifest_wire`).
 - **A branch's ref file** (`lance/format/table/branch_tag.md` § Branch File Format). `_refs/branches/<branch>.json` also
@@ -126,6 +121,21 @@ Read against these docs on 2026-10-26 (each item absent from pylance 13.0.0, mea
 - **`DataReplacement.data_change`**: a `data_change=false` repack is a compaction, which the lineage operation map
   (`DataReplacement` -> `UPDATE`) would mislabel.
 
+Measured on pylance 14.0.3 and lance-namespace 0.13.0, 2026-11-15, for LH-595 (#831), which holds the bump until a
+release carries the fix for lance-format/lance#11117:
+
+- **`read_transaction` raises `TypeError` on a `Rewrite` that rewrote an index**: a compaction of a stable-row-id table
+  with a BTREE index (BITMAP, LABEL_LIST and INVERTED rewrite none). pylance builds `LanceOperation.RewrittenIndex` from
+  two of its five fields (`python/src/transaction.rs`, `IntoPyObject`), so `version/create`, the commit reconciler, both
+  committed-file readers and the erasure fail on that version.
+- No create, append, delete, update, merge, schema change, index build, compaction, tag, branch or config write sets a
+  flag above `2^13`; `lance.blob.managed = "true"` stamps `2^14` in both fields (`(16386, 16386)`).
+- The inline transaction is written at field 23 only (0 on an Append's manifest, 151 on a CreateIndex's).
+- `compact_files(defer_index_remap=True)` is refused on a stable-row-id table, `cleanup_old_versions` takes
+  `delete_concurrency`, and `MINHASHLSH` builds.
+- lance-namespace 0.13's `MergeInsertIntoTableRequest.on` and the urllib3 client's `merge_insert_into_table` take the
+  key as a list; a string is refused by the model.
+
 ## `ns_catalog/spec.yaml`
 
 `test_every_spec_operation_is_served` checks that every operation in the vendored copy has a served catalog route.
@@ -155,9 +165,8 @@ The per-model pages under `ns_catalog/namespace/operations/models/` are generate
 
 ### A dataset's default file format version is fixed at create; each data file's is not
 
-The guide says so itself (`lance/guide/blob.md:23-26`: "Append and compaction can select another exact `2.x` version
-without rewriting existing files or changing that default"; `lance/guide/data_types.md:42` keeps the older "fixed once
-created" line for the default). Measured on pylance 12.0.0, 2026-09-25, on local tables at 2.1 and 2.2 with stable row
+The guide says so itself (`lance/guide/blob.md:24-27`: "Append and compaction can select another exact `2.x` version
+without rewriting existing files or changing that default"; `lance/guide/data_types.md:51` calls it the dataset's default). Measured on pylance 12.0.0, 2026-09-25, on local tables at 2.1 and 2.2 with stable row
 ids:
 
 - An append (`write_dataset(mode="append")` or a committed `LanceOperation.Append`), or a committed
@@ -177,7 +186,7 @@ ids:
 
 ### The thread pools
 
-`lance/guide/performance.md:100-118` names two pools, and both hold as written. The IO pool's width is the object store's
+`lance/guide/performance.md:118-135` names two pools, and both hold as written. The IO pool's width is the object store's
 (8 on a local store, 64 on a cloud one, `LANCE_IO_THREADS` to override), and the compute pool is the tokio runtime
 `lance-cpu`, which `LANCE_CPU_THREADS` sizes. Every pool Lance sizes by CPU count counts the cgroup quota, so the
 lakehouse sets no Lance thread variable ([[LH-250]]). The pools in a lakehouse process that size themselves to the

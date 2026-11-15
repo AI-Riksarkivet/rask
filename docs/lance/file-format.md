@@ -34,6 +34,8 @@ description: The upstream Lance file and table format documentation, vendored.
 
 --8<-- "lance_docs/lance/format/index/scalar/label_list.md"
 
+--8<-- "lance_docs/lance/format/index/scalar/list_element.md"
+
 --8<-- "lance_docs/lance/format/index/scalar/minhash_lsh.md"
 
 --8<-- "lance_docs/lance/format/index/scalar/ngram.md"
