@@ -470,12 +470,20 @@ auth:
     audience: rask-lakehouse
     # -- The scope a client asks the IdP for to obtain a token for `audience`; empty is Dex's cross-client scope, `audience:server:client_id:<audience>`.
     audienceScope: ""
-    # A PERSON IS THE PRINCIPAL THEIR DEX CONNECTOR MAPS TO ([[LH-063]], ADR 0159 D5): `<idp-id>~<user id>`, with
-    # the idp id named here for the connector id Dex reports in `federated_claims` and the upstream user id that
-    # connector reports. Every grant and attribution keys on it, so renaming a connector in Dex is one more
-    # entry under the same idp id and re-keys no grant. The development Dex's one connector, its password database
-    # `local`, is `dex` whenever `dex.enabled`; without it every connector of the platform's Dex is named here.
-    # -- The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required.
+    # A PERSON IS THE PRINCIPAL THE ISSUER NAMES ([[XC-214]], ADR 0208): `<idp-id>~<subject>`, the idp id named here
+    # for the issuer and the subject the token carries, which OpenID Connect Core 1.0 § 2 makes unique and never
+    # reassigned within it, so any OpenID provider signs its people in. Every grant and attribution keys on it.
+    # -- The idp id the issuer's people are principals of (`RASK_OIDC_IDP_ID`; `corp` makes the person the issuer names `s` the principal `corp~s`): lower-case letters, digits and `-`, never `kubernetes` or `dex-client`. Set this or `connectors`, never both.
+    idpId: ""
+    # -- The claims a person's subject is read from, the first the token carries winning (`RASK_OIDC_SUBJECT_CLAIMS`); empty is `sub` alone. Name another first where the provider's `sub` is not the stable id a grant needs (Entra's `oid`). Read only with `idpId`.
+    subjectClaims: []
+    # A DEX THAT BROKERS SEVERAL UPSTREAM PROVIDERS may be named connector by connector instead ([[LH-063]]): the idp
+    # id named here for the connector id Dex reports in `federated_claims`, and the upstream user id that connector
+    # reports, so renaming a connector in Dex is one more entry under the same idp id and re-keys no grant, and each
+    # connector's people keep apart. The console then asks Dex for `federated:id`, the scope that adds those claims.
+    # The development Dex's one connector, its password database `local`, is `dex` whenever `dex.enabled` and
+    # `idpId` is empty.
+    # -- The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes` or `dex-client`. With `dex.enabled` and no `idpId` the development Dex's `local` connector is `dex` unless named here. Set this or `idpId`, never both.
     connectors: {}
   # Lock root (top-level) namespace/table creation to warehouse-create-grant holders.
   #
@@ -1254,14 +1262,15 @@ console:
   port: 3000
   # -- The image's non-root uid and gid (`USER 10001` in .docker/frontend.dockerfile), named by number so `runAsNonRoot` can verify it.
   runAsUser: 10001
-  # The browser's sign-in, served as `/config.json` with `issuer` set to `auth.oidc.issuer`. The chart adds `federated:id`
-  # and `auth.oidc.audienceScope` (or Dex's cross-client scope for `auth.oidc.audience`) to the scopes, since every governed
-  # door refuses a token without either, so no value can drop them. With `auth.enabled` off the console is told
+  # The browser's sign-in, served as `/config.json` with `issuer` set to `auth.oidc.issuer`. The chart adds
+  # `auth.oidc.audienceScope` (or Dex's cross-client scope for `auth.oidc.audience`) to the scopes, since every governed
+  # door refuses a token without the audience, and `federated:id` where `auth.oidc.connectors` names a person by their Dex
+  # connector, which needs the claims that scope adds, so no value can drop them. With `auth.enabled` off the console is told
   # `{"signIn": false}` and sends no bearer. Nothing here is a secret: a public client holds none.
   oidc:
     # -- The IdP's public client the console signs in with (PKCE, no secret); the development Dex declares `rask-console` (deploy/fixtures/dex `console`).
     clientId: rask-console
-    # -- Scopes the console asks for; `federated:id` and the lakehouse's audience scope are always added.
+    # -- Scopes the console asks for; the lakehouse's audience scope is always added, and `federated:id` whenever `auth.oidc.connectors` names a Dex's connectors.
     scopes: [openid, profile, email, groups]
   # -- CPU/memory requests and limits for the console's static server.
   resources:

@@ -15,6 +15,8 @@ Declared once in `packages/lakehouse/src/lakehouse/governed/settings.py`, one na
 |---|---|
 | `RASK_OIDC_ENABLED` | Verify an OIDC bearer token on every request (on in the chart). |
 | `RASK_OIDC_ISSUER` / `RASK_OIDC_AUDIENCE` | The issuer (Dex in development) and the lakehouse's own audience the token must carry (`auth.oidc.audience`, never a sign-in client's id). |
+| `RASK_OIDC_IDP_ID` / `RASK_OIDC_SUBJECT_CLAIMS` | The idp id the issuer's people are principals of, and the claims their subject is read from, `sub` by default (`auth.oidc.idpId`, `auth.oidc.subjectClaims`): any OpenID provider. |
+| `RASK_OIDC_CONNECTORS` | Instead of the idp id, the idp id of each connector of a Dex that brokers several providers (`auth.oidc.connectors`; the development Dex's `local` is `dex`). |
 | `RASK_FGA_ENABLED` | Authorize every request on OpenFGA (on in the chart). |
 | `RASK_FGA_API_URL` / `RASK_FGA_STORE_ID` | The OpenFGA server and store. |
 | `RASK_FGA_ROOT_OBJECT` | The estate's root object (default `estate:rask`). |
@@ -64,7 +66,7 @@ answers it 404 rather than the page; with `console.enabled: false` it is the Gat
 |---|---|
 | `console.enabled` | Render the console's Deployment, Service, ServiceAccount, ConfigMap and HTTPRoute (default `true`). |
 | `console.oidc.clientId` | The issuer's public client the browser signs in on (default `rask-console`). |
-| `console.oidc.scopes` | The scopes it asks for; the chart adds `federated:id` and the audience scope, which every governed door requires. |
+| `console.oidc.scopes` | The scopes it asks for; the chart adds the audience scope, which every governed door requires, and `federated:id` under an `auth.oidc.connectors` map. |
 
 | Value / variable | Meaning |
 |---|---|

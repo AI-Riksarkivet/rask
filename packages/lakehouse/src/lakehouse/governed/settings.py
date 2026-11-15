@@ -188,10 +188,18 @@ class OidcSettings:
     oidc_cache_ttl: int = Field(default=300, gt=0, alias="RASK_OIDC_CACHE_TTL")
     oidc_leeway: int = Field(default=60, alias="RASK_OIDC_LEEWAY")
     oidc_allow_insecure: bool = Field(default=False, alias="RASK_OIDC_ALLOW_INSECURE")
+    #: The idp id the issuer's people are principals of ([[XC-214]], `lakehouse.governed.idp_identity`): `corp` makes the
+    #: person the issuer names `s` the principal `corp~s`. Set it, or `oidc_connectors` for a Dex that brokers several
+    #: upstream providers, never both: exactly one rule names a person.
+    oidc_idp_id: str | None = Field(default=None, alias="RASK_OIDC_IDP_ID")
+    #: The claims a person's subject is read from, the first the token carries winning; unset is `sub` alone, which
+    #: OpenID Connect Core 1.0 § 2 makes unique and never reassigned within the issuer. A provider whose `sub` is not the
+    #: stable id a grant needs names another first (Entra's `oid`). Read only with `oidc_idp_id`.
+    oidc_subject_claims: list[str] | None = Field(default=None, alias="RASK_OIDC_SUBJECT_CLAIMS")
     #: The idp id each Dex connector's users are principals of, keyed by the connector id Dex reports in
     #: `federated_claims` ([[LH-063]], `lakehouse.governed.idp_identity`): `{"local": "dex"}` makes the user id
     #: `u` of connector `local` the principal `dex~u`. Renaming a connector adds its new id under the same idp id, so
-    #: no grant is re-keyed. A connector absent here authenticates nobody.
+    #: no grant is re-keyed. A connector absent here authenticates nobody. Empty unless the issuer is such a Dex.
     oidc_connectors: dict[str, str] = Field(default_factory=dict, alias="RASK_OIDC_CONNECTORS")
     #: AN ACKNOWLEDGEMENT, NOT A SWITCH — it turns nothing off. `oidc_enabled` already decides whether
     #: this service authenticates; this says an operator MEANT the answer to be "no". Without it,
@@ -223,19 +231,23 @@ class OidcSettings:
         return self
 
     @model_validator(mode="after")
-    def _validate_connectors(self) -> Self:
-        """A connector maps to an idp id a principal can carry, never a machine identity's (`kubernetes`, `dex-client`)."""
-        if self.oidc_enabled and not self.oidc_connectors:
-            raise ValueError("RASK_OIDC_CONNECTORS is required when OIDC is enabled: a person is the principal their Dex connector maps to")
+    def _validate_person_naming(self) -> Self:
+        """Exactly one rule names a person, under an idp id a person may carry, never a machine's (`kubernetes`, `dex-client`)."""
+        if self.oidc_enabled and not (self.oidc_idp_id or self.oidc_connectors):
+            raise ValueError("RASK_OIDC_IDP_ID or RASK_OIDC_CONNECTORS is required when OIDC is enabled: a person is the principal the issuer's idp id names")
+        if self.oidc_idp_id and self.oidc_connectors:
+            raise ValueError("RASK_OIDC_IDP_ID and RASK_OIDC_CONNECTORS each name every person: set one")
+        if self.oidc_subject_claims is not None:
+            if self.oidc_connectors:
+                raise ValueError("RASK_OIDC_SUBJECT_CLAIMS is read only with RASK_OIDC_IDP_ID: a Dex connector reports its user id in federated_claims")
+            if not self.oidc_subject_claims or not all(self.oidc_subject_claims):
+                raise ValueError("RASK_OIDC_SUBJECT_CLAIMS names no claim, or an empty one")
+        if "" in self.oidc_connectors:
+            raise ValueError("RASK_OIDC_CONNECTORS names an empty connector id")
+        if self.oidc_idp_id:
+            _require_a_persons_idp_id("RASK_OIDC_IDP_ID is", self.oidc_idp_id)
         for connector, idp_id in self.oidc_connectors.items():
-            if not connector:
-                raise ValueError("RASK_OIDC_CONNECTORS names an empty connector id")
-            if idp_id in MACHINE_IDPS:
-                raise ValueError(f"RASK_OIDC_CONNECTORS maps {connector!r} to {idp_id!r}, a machine identity's idp id")
-            try:
-                require_idp_id(idp_id)
-            except ValueError as exc:
-                raise ValueError(f"RASK_OIDC_CONNECTORS maps {connector!r} to an idp id no principal can carry: {exc}") from exc
+            _require_a_persons_idp_id(f"RASK_OIDC_CONNECTORS maps {connector!r} to", idp_id)
         return self
 
     @model_validator(mode="after")
@@ -253,6 +265,16 @@ class OidcSettings:
         if self.oidc_enabled and self.oidc_issuer and not self.oidc_allow_insecure and not self.oidc_issuer.startswith("https://"):
             raise ValueError("RASK_OIDC_ISSUER must use HTTPS (set RASK_OIDC_ALLOW_INSECURE=true for a dev IdP)")
         return self
+
+
+def _require_a_persons_idp_id(setting: str, idp_id: str) -> None:
+    """`ValueError` naming `setting` when `idp_id` is a machine's or outside the idp-id grammar."""
+    if idp_id in MACHINE_IDPS:
+        raise ValueError(f"{setting} {idp_id!r}, a machine identity's idp id")
+    try:
+        require_idp_id(idp_id)
+    except ValueError as exc:
+        raise ValueError(f"{setting} an idp id no principal can carry: {exc}") from exc
 
 
 class GovernedAuthSettings(OidcSettings, FgaSettings):

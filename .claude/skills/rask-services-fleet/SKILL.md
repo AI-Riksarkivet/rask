@@ -106,8 +106,9 @@ service directly. See `rask-frontend`.
    person's token passes only when its `aud` names the lakehouse's own audience, `auth.oidc.audience`
    (`rask-lakehouse`, never a client's own sign-in id): the console asks Dex for it with
    `audience:server:client_id:<audience>`, which Dex grants only to a client the audience client lists in
-   `trustedPeers` ([[LH-515]]), so a token for the sign-in client alone is a 401. A token without `federated:id` is a
-   401 too (`lakehouse.governed.idp_identity`). Any verified
+   `trustedPeers` ([[LH-515]]), so a token for the sign-in client alone is a 401. Under a Dex connector map
+   (`auth.oidc.connectors`, the dev estate's) a token without `federated:id` is a 401 too
+   (`lakehouse.governed.idp_identity`). Any verified
    service-account token authenticates at any door (ADR 0156 C5), through the edge included. The FGA denials read
    `<subject> lacks <relation> on <object>`. A client asks a lakehouse verb through the catalog's decision door, which
    answers only `can_*` verbs and `member`, and only about objects inside the scope its own identity was granted at the

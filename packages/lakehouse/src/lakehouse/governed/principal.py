@@ -3,9 +3,10 @@
 ADR 0159 D5 and ADR 0156 C5. The idp id names the identity provider that vouched for the caller, so two providers'
 subjects never share a namespace, and renaming a provider in its own configuration re-keys nobody. `kubernetes` is the
 cluster's service-account issuer, whose subject is the account's username (`system:serviceaccount:<ns>:<sa>`);
-`dex-client` is a Dex client signed in for itself with the client-credentials grant, whose subject is its client id
-(ADR 0181); every other idp id is one the deployment names for a Dex connector (`RASK_OIDC_CONNECTORS`), whose subject
-is the upstream user id Dex reports for it (`lakehouse.governed.idp_identity`). The first two are machines. The idp
+`dex-client` is an OpenID client signed in for itself with the client-credentials grant, whose subject is its client
+id (ADR 0181); every other idp id is one the deployment names for its issuer (`RASK_OIDC_IDP_ID`), whose subject is the
+one the issuer names a person by, or for a Dex connector (`RASK_OIDC_CONNECTORS`), whose subject is the upstream user id
+Dex reports for it (`lakehouse.governed.idp_identity`, ADR 0208). The first two are machines. The idp
 id's grammar excludes `~`, so the first `~` ends it and the subject may carry any other character.
 
 A string that names no identity provider is no principal. Every place that requires one parses it here: a grant, a
@@ -23,10 +24,10 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, model_validator
 
 
 SEPARATOR: Final = "~"
-#: The idp id of the cluster's service-account issuer. No Dex connector may be given it.
+#: The idp id of the cluster's service-account issuer. No issuer or Dex connector may be given it.
 SERVICE_ACCOUNT_IDP: Final = "kubernetes"
-#: The idp id of a Dex client signed in with the client-credentials grant. No Dex connector may be given it, so a client
-#: id and a person's user id never name one principal.
+#: The idp id of an OpenID client signed in with the client-credentials grant. No issuer or Dex connector may be given
+#: it, so a client id and a person's subject never name one principal.
 CLIENT_IDP: Final = "dex-client"
 #: The idp ids whose principals are machines: a person is a principal under any other.
 MACHINE_IDPS: Final = frozenset({SERVICE_ACCOUNT_IDP, CLIENT_IDP})

@@ -262,8 +262,9 @@ address, token, scrape job, alert or network peer (ADR 0189).
   ([ADR 0193](../adr/0193-the-inbox-is-retired-and-the-console-joins-the-product.md)): the Deployment and Service
   `rask-console` serving the `web-console` image on `console.port`, its ServiceAccount `rask-sa-console` with no token
   mounted (it calls no door), the ConfigMap `rask-console-config` holding the `/config.json` the browser boots from
-  (the issuer `auth.oidc.issuer`, the client `console.oidc.clientId`, and `console.oidc.scopes` with the two scopes every
-  governed door requires, `federated:id` and the audience scope, added by the chart; `{"signIn": false}` with auth off),
+  (the issuer `auth.oidc.issuer`, the client `console.oidc.clientId`, and `console.oidc.scopes` with the audience scope
+  every governed door requires added by the chart, and `federated:id` with it under an `auth.oidc.connectors` map;
+  `{"signIn": false}` with auth off),
   and the HTTPRoute `rask-console` sending `/` to it. Under `networkPolicy.enabled` its pod admits its port from
   anywhere and dials nothing.
 - **The cluster route** (`templates/route.yaml`) — Gateway API HTTPRoutes on the platform's Gateway

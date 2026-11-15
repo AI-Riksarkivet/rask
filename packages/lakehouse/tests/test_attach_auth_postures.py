@@ -42,6 +42,8 @@ class _Settings(BaseModel):
     oidc_cache_ttl: int = 300
     oidc_leeway: int = 30
     oidc_allow_insecure: bool = False
+    oidc_idp_id: str | None = None
+    oidc_subject_claims: list[str] | None = None
     oidc_connectors: dict[str, str] = {"local": "dex"}
     sa_issuer: str | None = None
     sa_audience: str | None = None

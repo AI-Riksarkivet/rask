@@ -109,8 +109,10 @@ When a workflow step points to a rule ID, open the matching file in `references/
 **Every subject is a principal, `<idp-id>~<subject>`, and becomes a `user` id in one place,
 `lakehouse.governed.fga.user_object`** (ADR 0159 D5, ADR 0156 C5, [[LH-063]], [[LH-474]];
 `lakehouse.governed.principal`). A service account is `kubernetes~system:serviceaccount:<ns>:<sa>`; a person is the idp
-id the deployment names their Dex connector (`RASK_OIDC_CONNECTORS`, chart `auth.oidc.connectors`; the dev Dex's
-`local` is `dex`) and the user id Dex reports in `federated_claims`, never Dex's `sub`, which encodes the connector.
+id the deployment names their issuer (`RASK_OIDC_IDP_ID`, chart `auth.oidc.idpId`) and the token's `sub` or the first
+claim `auth.oidc.subjectClaims` names (ADR 0208), or, under a Dex mapped connector by connector (`RASK_OIDC_CONNECTORS`,
+chart `auth.oidc.connectors`; the dev Dex's `local` is `dex`), the connector's idp id and the user id Dex reports in
+`federated_claims`, never Dex's `sub`, which encodes the connector.
 `user_object` refuses a value that names no identity provider (`InvalidInputError`, 400), so no tuple, seed or check
 names a bare name, and writes `user:` and the key percent-encoded as Lakekeeper encodes a `UserId`
 (`urllib.parse.quote(key, safe="")`): OpenFGA refuses a user id with a second `:` ("the 'user' field is malformed",

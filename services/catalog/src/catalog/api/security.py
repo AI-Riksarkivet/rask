@@ -1,4 +1,4 @@
-"""Authentication at the catalog door: an OIDC bearer for a person or a Dex client, a projected service-account token for a service.
+"""Authentication at the catalog door: an OIDC bearer for a person or a client, a projected service-account token for a service.
 
 When OIDC is disabled (the default) this is a no-op and all routes stay open.
 When enabled, it requires a valid bearer token on every route it guards and maps
@@ -13,8 +13,8 @@ A service is the Kubernetes service account its projected token names ([[LH-220]
 unverified ``iss`` routes it: the cluster's service-account issuer goes to ``app.state.sa_oidc``, which
 verifies it offline and answers the principal ``kubernetes~system:serviceaccount:<ns>:<sa>``, from any namespace;
 every other issuer goes to the IdP, which refuses a token it did not sign (401), and answers a person as the
-principal their Dex connector maps to, ``<idp-id>~<user id>`` ([[LH-063]]), and a Dex client signed in for itself as
-the machine ``dex-client~<client id>`` (ADR 0181). A service-account token never falls
+principal the deployment's naming rule reads from it, ``<idp-id>~<subject>`` ([[XC-214]], [[LH-063]]), and a client
+signed in for itself as the machine ``dex-client~<client id>`` (ADR 0181). A service-account token never falls
 through to the IdP, no header names the caller, and OpenFGA alone decides what the principal may do.
 """
 

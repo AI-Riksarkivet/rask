@@ -773,29 +773,61 @@ buckets as the estate's reads already are. */ -}}
 {{- $issuer -}}
 {{- end -}}
 
+{{- define "lance.oidcIdpIdFormat" -}}
+{{- $setting := index . 0 -}}{{- $idp := index . 1 -}}
+{{- if or (not (kindIs "string" $idp)) (has $idp (list "kubernetes" "dex-client")) (not (regexMatch "^[a-z0-9-]+$" $idp)) -}}
+{{- fail (printf "%s=%v is not an idp id: lower-case letters, digits and '-', never kubernetes or dex-client, the machine identities'" $setting $idp) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.oidcIdpId" -}}
+{{- $idp := .Values.auth.oidc.idpId | default "" -}}
+{{- if $idp -}}
+{{- include "lance.oidcIdpIdFormat" (list "auth.oidc.idpId" $idp) -}}
+{{- if .Values.auth.oidc.connectors -}}
+{{- fail "auth.oidc.idpId and auth.oidc.connectors each name every person: set idpId for any OpenID provider, or connectors for a Dex that brokers several, not both" -}}
+{{- end -}}
+{{- end -}}
+{{- $idp -}}
+{{- end -}}
+
 {{- define "lance.oidcConnectors" -}}
 {{- $connectors := deepCopy (.Values.auth.oidc.connectors | default dict) -}}
-{{- if and .Values.dex.enabled (not (hasKey $connectors "local")) -}}
+{{- $idp := include "lance.oidcIdpId" . -}}
+{{- if and .Values.dex.enabled (not $idp) (not (hasKey $connectors "local")) -}}
 {{- $_ := set $connectors "local" "dex" -}}
 {{- end -}}
-{{- if not $connectors -}}
-{{- fail "auth.oidc.connectors must name the idp id of each of the IdP's Dex connectors (e.g. {ldap: corp}): a person is the principal <idp-id>~<user id> their connector maps to, and a connector named nowhere signs nobody in" -}}
+{{- if and (not $connectors) (not $idp) -}}
+{{- fail "auth.oidc.idpId must name the idp id of the IdP's people (e.g. corp): a person is the principal <idp-id>~<subject> the issuer names. A Dex that brokers several upstream providers may name auth.oidc.connectors instead (e.g. {ldap: corp})" -}}
 {{- end -}}
 {{- range $connector, $idp := $connectors -}}
 {{- if not $connector -}}
 {{- fail "auth.oidc.connectors names an empty connector id: Dex names every connector" -}}
 {{- end -}}
-{{- if or (not (kindIs "string" $idp)) (eq $idp "kubernetes") (not (regexMatch "^[a-z0-9-]+$" $idp)) -}}
-{{- fail (printf "auth.oidc.connectors.%s=%v is not an idp id: lower-case letters, digits and '-', never kubernetes, the service-account issuer's" $connector $idp) -}}
+{{- include "lance.oidcIdpIdFormat" (list (printf "auth.oidc.connectors.%s" $connector) $idp) -}}
+{{- end -}}
+{{- if $connectors -}}{{- toJson $connectors -}}{{- end -}}
+{{- end -}}
+
+{{- define "lance.oidcSubjectClaims" -}}
+{{- $claims := .Values.auth.oidc.subjectClaims | default list -}}
+{{- if $claims -}}
+{{- if include "lance.oidcConnectors" . -}}
+{{- fail "auth.oidc.subjectClaims is read only with auth.oidc.idpId: a Dex connector reports its user id in federated_claims" -}}
+{{- end -}}
+{{- range $claims -}}
+{{- if or (not (kindIs "string" .)) (not .) -}}
+{{- fail (printf "auth.oidc.subjectClaims names %v, which is no claim" .) -}}
 {{- end -}}
 {{- end -}}
-{{- toJson $connectors -}}
+{{- toJson $claims -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "lance.bootstrapAdmin" -}}
 {{- $admin := .Values.auth.bootstrapAdmin | default "" | toString -}}
-{{- if and $admin (or (hasPrefix "kubernetes~" $admin) (not (regexMatch "^[a-z0-9-]+~[^[:cntrl:]]+$" $admin))) -}}
-{{- fail (printf "auth.bootstrapAdmin=%s is not a person's principal: name them <idp-id>~<user id>, the idp id auth.oidc.connectors gives their Dex connector and the user id it reports (dex~<userID> for a development Dex user)" $admin) -}}
+{{- if and $admin (or (hasPrefix "kubernetes~" $admin) (hasPrefix "dex-client~" $admin) (not (regexMatch "^[a-z0-9-]+~[^[:cntrl:]]+$" $admin))) -}}
+{{- fail (printf "auth.bootstrapAdmin=%s is not a person's principal: name them <idp-id>~<subject>, auth.oidc.idpId and the subject the issuer names them by, or the idp id auth.oidc.connectors gives their Dex connector and the user id it reports (dex~<userID> for a development Dex user)" $admin) -}}
 {{- end -}}
 {{- $admin -}}
 {{- end -}}
@@ -834,7 +866,15 @@ buckets as the estate's reads already are. */ -}}
 {{- end }}
 - { name: RASK_OIDC_AUDIENCE, value: {{ include "lance.oidcAudience" $root | quote }} }
 - { name: RASK_OIDC_ALLOW_INSECURE, value: {{ ternary "true" "false" $root.Values.dex.enabled | quote }} }
-- { name: RASK_OIDC_CONNECTORS, value: {{ include "lance.oidcConnectors" $root | quote }} }
+{{- with include "lance.oidcIdpId" $root }}
+- { name: RASK_OIDC_IDP_ID, value: {{ . | quote }} }
+{{- end }}
+{{- with include "lance.oidcSubjectClaims" $root }}
+- { name: RASK_OIDC_SUBJECT_CLAIMS, value: {{ . | quote }} }
+{{- end }}
+{{- with include "lance.oidcConnectors" $root }}
+- { name: RASK_OIDC_CONNECTORS, value: {{ . | quote }} }
+{{- end }}
 {{- end -}}
 
 {{- define "lance.governedFgaEnv" -}}

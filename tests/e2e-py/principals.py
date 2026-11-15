@@ -1,7 +1,8 @@
 """The principal a bearer proves, as the catalog derives it ([[LH-063]]).
 
-A person is `<idp-id>~<user id>`: the idp id the deployment names their Dex connector (`auth.oidc.connectors`) and the
-user id that connector reports. No token carries it whole: Dex reports the connector and the user id in
+A person on the development estate is `<idp-id>~<user id>`, under the Dex connector map its release names
+(`auth.oidc.connectors`; ADR 0208 names any other issuer's people by `auth.oidc.idpId` and their subject): the idp id the
+deployment names their Dex connector and the user id that connector reports. No token carries it whole: Dex reports the connector and the user id in
 `federated_claims`, and only when the client asks for the `federated:id` scope, while the map from connector to idp id
 is the deployment's. So a suite asks the catalog, whose `/management/v1/me` answers exactly the principal every door keys
 that bearer on.

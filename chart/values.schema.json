@@ -117,16 +117,24 @@
                             "type": "string"
                         },
                         "connectors": {
-                            "description": "The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required.",
+                            "description": "The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes` or `dex-client`. With `dex.enabled` and no `idpId` the development Dex's `local` connector is `dex` unless named here. Set this or `idpId`, never both.",
                             "type": "object"
                         },
                         "egress": {
                             "description": "NetworkPolicy egress rules ({to, ports}) admitting the governed doors that verify a person's token (the catalog, lineage) to the platform's IdP at `issuer`, at the port a policy sees. Required under networkPolicy.enabled while `auth.enabled` and `dex.enabled` is false.",
                             "type": "array"
                         },
+                        "idpId": {
+                            "description": "The idp id the issuer's people are principals of (`RASK_OIDC_IDP_ID`; `corp` makes the person the issuer names `s` the principal `corp~s`): lower-case letters, digits and `-`, never `kubernetes` or `dex-client`. Set this or `connectors`, never both.",
+                            "type": "string"
+                        },
                         "issuer": {
                             "description": "The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it). Required when `auth.enabled`; https unless `dex.enabled`.",
                             "type": "string"
+                        },
+                        "subjectClaims": {
+                            "description": "The claims a person's subject is read from, the first the token carries winning (`RASK_OIDC_SUBJECT_CLAIMS`); empty is `sub` alone. Name another first where the provider's `sub` is not the stable id a grant needs (Entra's `oid`). Read only with `idpId`.",
+                            "type": "array"
                         }
                     }
                 },
@@ -386,7 +394,7 @@
                             "type": "string"
                         },
                         "scopes": {
-                            "description": "Scopes the console asks for; `federated:id` and the lakehouse's audience scope are always added.",
+                            "description": "Scopes the console asks for; the lakehouse's audience scope is always added, and `federated:id` whenever `auth.oidc.connectors` names a Dex's connectors.",
                             "type": "array",
                             "items": {
                                 "type": "string"

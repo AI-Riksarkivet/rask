@@ -43,12 +43,12 @@ def service_account_principal(account: str) -> Principal:
 
 
 def client_principal(client_id: str) -> Principal:
-    """The principal a Dex client signed in for itself is: `dex-client~` and its client id (ADR 0181)."""
+    """The principal an OpenID client signed in for itself is: `dex-client~` and its client id (ADR 0181)."""
     return Principal(idp_id=CLIENT_IDP, subject=client_id)
 
 
 class ServicePrincipal(BaseModel):
-    """A machine caller: a service account the cluster vouched for, or a Dex client the IdP vouched for (ADR 0181)."""
+    """A machine caller: a service account the cluster vouched for, or a client the IdP vouched for (ADR 0181)."""
 
     model_config = ConfigDict(frozen=True)
 

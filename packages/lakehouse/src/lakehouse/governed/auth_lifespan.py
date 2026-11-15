@@ -45,7 +45,7 @@ exactly as it did before it had a door.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol
 
 from starlette.concurrency import run_in_threadpool
@@ -109,6 +109,10 @@ class _GovernedSettings(_DeciderSettings, Protocol):
     def oidc_audience(self) -> str | None: ...
     @property
     def oidc_discovery_url(self) -> str | None: ...
+    @property
+    def oidc_idp_id(self) -> str | None: ...
+    @property
+    def oidc_subject_claims(self) -> Sequence[str] | None: ...
     @property
     def oidc_connectors(self) -> Mapping[str, str]: ...
     @property
@@ -229,8 +233,8 @@ async def attach_auth(
         try:
             from lakehouse.governed import idp_identity, oidc
 
-            # A person is the principal their Dex connector maps to ([[LH-063]]), so the IdP's verifier is wrapped with
-            # the deployment's connector map rather than handed to the doors on its own.
+            # A person is the principal the deployment's naming rule reads from the verified token ([[XC-214]]), so the
+            # IdP's verifier is wrapped with that rule rather than handed to the doors on its own.
             app.state.oidc = idp_identity.IdpVerifier(
                 oidc.OIDCVerifier(
                     settings.oidc_issuer,
@@ -243,7 +247,7 @@ async def attach_auth(
                     # broke every signed-in ingest; it is centralized here so there is no sixth door.
                     discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
                 ),
-                settings.oidc_connectors,
+                idp_identity.person_naming(idp_id=settings.oidc_idp_id, subject_claims=settings.oidc_subject_claims, connectors=settings.oidc_connectors),
             )
             # PROVED, not asserted. The constructor above performs no I/O, so until this call the
             # log line "verifier ready" said only that a Python object existed. `warm` resolves every

@@ -2,7 +2,9 @@
 {{- $name := printf "%s-console" (include "lance.fullname" .) -}}
 {{- $config := dict "signIn" false -}}
 {{- if .Values.auth.enabled -}}
-{{- $scopes := concat .Values.console.oidc.scopes (list "federated:id" (include "lance.oidcAudienceScope" .)) | uniq -}}
+{{- $required := list (include "lance.oidcAudienceScope" .) -}}
+{{- if include "lance.oidcConnectors" . -}}{{- $required = prepend $required "federated:id" -}}{{- end -}}
+{{- $scopes := concat .Values.console.oidc.scopes $required | uniq -}}
 {{- $config = dict "issuer" (include "lance.oidcIssuer" .) "clientId" (required "console.oidc.clientId names the IdP's public client the console signs in with" .Values.console.oidc.clientId) "scopes" $scopes -}}
 {{- end -}}
 {{- $selector := dict "app.kubernetes.io/component" "console" "app.kubernetes.io/instance" .Release.Name -}}

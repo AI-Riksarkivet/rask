@@ -42,7 +42,7 @@ from catalog.api import security as catalog_security
 from catalog.core.config import Settings as CatalogSettings
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed import oidc
-from lakehouse.governed.idp_identity import IdpVerifier
+from lakehouse.governed.idp_identity import ConnectorNaming, IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.ns_errors import install_problem_handlers
 from lineage.api import security as lineage_security
@@ -173,7 +173,7 @@ def _client(door: _Door, provider: _BrokenProvider) -> TestClient:
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.state.oidc = IdpVerifier(provider.verifier, {"local": "dex"})
+    app.state.oidc = IdpVerifier(provider.verifier, ConnectorNaming(connectors={"local": "dex"}))
     # Never verified: every fault is met before a signature is checked. The `kid` carries it to the key-set fetch.
     claims = {"iss": provider.issuer, "sub": "gina", "aud": AUDIENCE, "iat": 0, "exp": 1 << 31}
     bearer = jwt.encode(claims, "unverified", algorithm="HS256", headers={"kid": "k1"})

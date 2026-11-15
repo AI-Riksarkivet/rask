@@ -20,10 +20,12 @@ no edge NetworkPolicy (`network-policy.yaml`). An unmatched `/api/*` is then the
 The ConfigMap `<fullname>-console-config` holds the `config.json` the browser boots from. With `auth.enabled` it is
 `{issuer, clientId, scopes}`: the issuer is `auth.oidc.issuer` (`lance.oidcIssuer`, the one the services verify tokens
 against), the client is `console.oidc.clientId` (`rask-console` by default, a public client with no secret, which the
-render refuses empty), and the scopes are `console.oidc.scopes` with `federated:id` and the lakehouse's audience scope
+render refuses empty), and the scopes are `console.oidc.scopes` with the lakehouse's audience scope
 (`lance.oidcAudienceScope`: `auth.oidc.audienceScope`, or Dex's `audience:server:client_id:<auth.oidc.audience>`)
-added and deduplicated. Every governed door refuses a token without either (`lakehouse.governed.idp_identity`, the
-audience check), so the chart adds them and no value can drop them. With `auth.enabled` off the config is
+added and deduplicated, and `federated:id` before it wherever `auth.oidc.connectors` names a Dex's connectors
+(`lance.oidcConnectors` renders a map). Every governed door refuses a token without the audience, and under the
+connector rule one without the `federated_claims` that scope adds (`lakehouse.governed.idp_identity`), so the chart adds
+them and no value can drop them; under `auth.oidc.idpId` the console asks for no Dex scope ([[XC-214]]). With `auth.enabled` off the config is
 `{"signIn": false}` and the console sends no bearer.
 
 Nothing in it is a secret. The Deployment carries `checksum/config` of it, so a change to the sign-in rolls the pod and

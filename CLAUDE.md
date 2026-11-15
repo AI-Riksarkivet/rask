@@ -296,7 +296,7 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     signs in with OIDC and PKCE on the lakehouse's public client (`console.oidc.clientId`, `rask-console`; the dev Dex
     declares it under its own `console` value), with `oidc-client-ts`, tokens in memory and only the transient PKCE
     state in sessionStorage. It reads its issuer, client and scopes from `/config.json` at boot (the chart's ConfigMap
-    `rask-console-config`, which adds `federated:id` and the audience scope every governed door requires), and calls
+    `rask-console-config`, which adds the audience scope every governed door requires, and `federated:id` under a Dex connector map), and calls
     the catalog and lineage APIs with its bearer, same-origin. Its bell is a browser-side log of the reader's own
     writes (`#lib/activity.svelte.ts`: each `command`'s success or failure, in sessionStorage under the principal, at
     most 100 and none older than 24 h, cleared at sign-out). `serve.ts` is its static server: the build with an

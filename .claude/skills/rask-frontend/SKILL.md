@@ -165,11 +165,11 @@ same-origin path. Sign-in is OFF only where the config says so, `{"signIn": fals
 Playwright project serves `e2e/console-config.off.json`). A missing or malformed `/config.json` fails closed:
 `auth.svelte.ts` sets `configError`, and the root `+layout.ts` answers 503 saying why, with no `/api` call.
 
-**The scopes are load-bearing.** The lakehouse's governed doors refuse a token without `federated:id`
-(`lakehouse.governed.idp_identity`: "a client asks for the federated:id scope") and one whose `aud` does not name the
-lakehouse, which Dex grants through `audience:server:client_id:<audience>`. The chart adds both to
-`console.oidc.scopes` itself (the audience scope is `auth.oidc.audienceScope`, or built from `auth.oidc.audience`), so
-no value can drop them; with `auth.enabled=false` it renders `{"signIn": false}`.
+**The scopes are load-bearing.** The lakehouse's governed doors refuse a token whose `aud` does not name the
+lakehouse, which Dex grants through `audience:server:client_id:<audience>`, and, where `auth.oidc.connectors` names a
+Dex's connectors (the dev estate's), one without `federated:id` (`lakehouse.governed.idp_identity`: "a client asks for
+the federated:id scope"). The chart adds the audience scope to `console.oidc.scopes` itself (`auth.oidc.audienceScope`,
+or built from `auth.oidc.audience`), and `federated:id` only under that connector map, so no value can drop them; with `auth.enabled=false` it renders `{"signIn": false}`.
 
 **The CSP travels with the app.** The `csp` option of `sveltekit()` in `vite.config.ts` declares it (mode `hash`: `default-src 'self'`,
 `script-src 'self'` plus the bootstrap hash, `connect-src 'self'`, `style-src 'self' 'unsafe-inline'` for Svelte's and

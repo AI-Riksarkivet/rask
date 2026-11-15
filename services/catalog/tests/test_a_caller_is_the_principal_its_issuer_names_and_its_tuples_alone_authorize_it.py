@@ -5,14 +5,21 @@ door verifies it offline against the cluster issuer (signature, `iss`, the door'
 `kubernetes~system:serviceaccount:<ns>:<sa>`, from any namespace, with no list of accounts in front of the door. A token
 another key signed under the issuer's name, or one minted for another door, authenticates nobody.
 
-[[LH-063]], ADR 0159 D5. A person is `<idp-id>~<user id>`: the idp id the deployment names for the Dex connector that
-authenticated them (`RASK_OIDC_CONNECTORS`), and the upstream user id Dex reports in `federated_claims`, never Dex's own
-`sub`, which encodes the connector (measured on the dev Dex v2.42.0, `conftest.dex_subject`). So a connector renamed
-under the same idp id keeps every grant, and a token that names no mapped connector names nobody.
+[[XC-214]], ADR 0208. At any OpenID provider a person is `<idp-id>~<subject>`: the idp id the deployment names for the
+issuer (`RASK_OIDC_IDP_ID`) and the first of `RASK_OIDC_SUBJECT_CLAIMS` the token carries, `sub` by default
+(`conftest.OidcIssuer`). A token from an issuer the deployment does not name is refused 401 before any naming rule runs,
+which `a-token-another-clusters-issuer-signed` pins.
 
-ADR 0181. A Dex client signed in for itself with the client-credentials grant is the machine `dex-client~<client id>`: its
-token carries no federated claims, names the client in `azp`, and its `sub` encodes the client under the empty connector
-id no connector may carry (`conftest.DexIssuer.mint_client`). A person's token that asked for another audience carries
+[[LH-063]], ADR 0159 D5. Behind a Dex mapped connector by connector a person is `<idp-id>~<user id>`: the idp id the
+deployment names for the Dex connector that authenticated them (`RASK_OIDC_CONNECTORS`), and the upstream user id Dex
+reports in `federated_claims`, never Dex's own `sub`, which encodes the connector (measured on the dev Dex v2.42.0,
+`conftest.dex_subject`). So a connector renamed under the same idp id keeps every grant, and a token that names no
+mapped connector names nobody.
+
+ADR 0181. A client signed in for itself with the client-credentials grant is the machine `dex-client~<client id>`: its
+`sub` is the client's, equal to the `client_id` it names (RFC 9068 § 2.2, `conftest.OidcIssuer.mint_client`), or, at
+Dex, Dex's encoding of the client named in `azp` under the empty connector id no connector may carry
+(`conftest.DexIssuer.mint_client`). A person's token that asked for another audience carries
 `azp` too, but its `sub` encodes a connector, so without federated claims it still names nobody.
 
 What a subject may do is decided by the tuples that name it, as the `user` OpenFGA accepts: `user:` and the principal,
@@ -31,7 +38,8 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
@@ -66,6 +74,9 @@ _HASHED_USER = "user:corp~corp%237"
 #: A pipeline outside Kubernetes, signed in as its own Dex client, and the one user that client is.
 _CLIENT_ID = "nightly-etl"
 _CLIENT_USER = f"user:dex-client~{_CLIENT_ID}"
+#: A person at an OpenID provider that is not Dex: the subject it issues them, and the one user they are there.
+_OIDC_SUBJECT = "248289761001"
+_OIDC_PERSON_USER = f"user:corp~{_OIDC_SUBJECT}"
 
 
 class _CheckResponse:
@@ -124,8 +135,8 @@ def _refuse_a_user_that_is_not_one(user: str) -> None:
         raise ValidationException(reason="the 'user' field is malformed")
 
 
-@pytest.fixture
-def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _OpenFga]]:
+@contextmanager
+def _catalog(person_issuer: dict[str, str], sa_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, _OpenFga]]:
     env = {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": str(tmp_path),
@@ -133,10 +144,9 @@ def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "RASK_OIDC_ENABLED": "true",
-        "RASK_OIDC_ISSUER": dex_issuer.issuer,
         "RASK_OIDC_AUDIENCE": "lance-catalog",
         "RASK_OIDC_ALLOW_INSECURE": "true",
-        "RASK_OIDC_CONNECTORS": json.dumps(_CONNECTORS),
+        **person_issuer,
         "RASK_SA_ISSUER": sa_issuer.issuer,
         "RASK_SA_AUDIENCE": "rask-catalog",
         "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
@@ -157,17 +167,35 @@ def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.
 
     # The namespace the request reads, granted to the pipeline's account, the person and the user id carrying `#`; and the
     # root object the access-admin door's gate checks, granted to the person.
-    openfga = _OpenFga({(_PIPELINE_USER, db), (_PERSON_USER, db), (_HASHED_USER, db), (_CLIENT_USER, db), (_PERSON_USER, "estate:rask")})
+    openfga = _OpenFga(
+        {(_PIPELINE_USER, db), (_PERSON_USER, db), (_HASHED_USER, db), (_CLIENT_USER, db), (_PERSON_USER, "estate:rask"), (_OIDC_PERSON_USER, db)}
+    )
     with TestClient(app, raise_server_exceptions=False) as client:
         # Authorization on for the requests, after a lifespan that built the verifiers and no OpenFGA client.
-        governed = Settings.model_validate(
-            {**env, "RASK_OIDC_CONNECTORS": _CONNECTORS, "RASK_FGA_ENABLED": True, "RASK_FGA_API_URL": "http://openfga.invalid:8080"}
-        )
+        monkeypatch.setenv("RASK_FGA_ENABLED", "true")
+        monkeypatch.setenv("RASK_FGA_API_URL", "http://openfga.invalid:8080")
+        governed = Settings()
         app.dependency_overrides[get_settings] = lambda: governed
         app.state.fga = openfga
         yield client, openfga
     app.dependency_overrides.clear()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _OpenFga]]:
+    """The catalog whose people sign in through a Dex that brokers upstream providers, mapped connector by connector."""
+    with _catalog({"RASK_OIDC_ISSUER": dex_issuer.issuer, "RASK_OIDC_CONNECTORS": json.dumps(_CONNECTORS)}, sa_issuer, tmp_path, monkeypatch) as served:
+        yield served
+
+
+@pytest.fixture
+def oidc_catalog(sa_issuer: Any, oidc_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _OpenFga]]:
+    """The catalog whose people sign in at an OpenID provider that is not Dex, named `corp`, each by `oid` where the
+    token carries one and by `sub` otherwise."""
+    person_issuer = {"RASK_OIDC_ISSUER": oidc_issuer.issuer, "RASK_OIDC_IDP_ID": "corp", "RASK_OIDC_SUBJECT_CLAIMS": json.dumps(["oid", "sub"])}
+    with _catalog(person_issuer, sa_issuer, tmp_path, monkeypatch) as served:
+        yield served
 
 
 def _signed_by_another_key(issuer: str, kid: str) -> str:
@@ -340,3 +368,31 @@ def test_a_seeded_tuple_names_a_principal_and_a_bare_name_is_refused(
         answer,
         written,
     )
+
+
+@pytest.mark.parametrize(
+    ("caller", "status", "asked_about"),
+    [
+        pytest.param("granted-person-by-oid", 200, _OIDC_PERSON_USER, id="the-first-subject-claim-the-token-carries-names-them"),
+        pytest.param("not-a-string-claim", 200, _OIDC_PERSON_USER, id="a-subject-claim-that-is-no-string-yields-to-the-next"),
+        pytest.param("granted-client", 200, _CLIENT_USER, id="a-client-signed-in-for-itself-is-its-client-principal"),
+        pytest.param("sub-equal-to-azp", 403, f"user:corp~{_CLIENT_ID}", id="a-person-whose-sub-is-their-clients-id-stays-a-person"),
+    ],
+)
+def test_a_person_at_any_openid_provider_is_its_idp_id_and_their_subject_and_their_tuples_alone_authorize_them(
+    oidc_catalog: tuple[TestClient, _OpenFga], oidc_issuer: Any, caller: str, status: int, asked_about: str | None
+) -> None:
+    """[[XC-214]]: OpenID Connect Core 1.0 § 2 makes `sub` unique and never reassigned within its issuer, so the issuer's
+    idp id and that subject name one person whatever the provider; a deployment may name the claims read before it."""
+    client, openfga = oidc_catalog
+    token = {
+        "granted-person-by-oid": lambda: oidc_issuer.mint("pairwise-7f3e", audience="lance-catalog", oid=_OIDC_SUBJECT),
+        "not-a-string-claim": lambda: oidc_issuer.mint(_OIDC_SUBJECT, audience="lance-catalog", oid=248289761001),
+        "granted-client": lambda: oidc_issuer.mint_client(_CLIENT_ID, audience="lance-catalog"),
+        "sub-equal-to-azp": lambda: oidc_issuer.mint(_CLIENT_ID, audience="lance-catalog", azp=_CLIENT_ID),
+    }[caller]()
+
+    answered = _describe(client, token)
+
+    assert answered.status_code == status, answered.text
+    assert set(openfga.asked) == ({asked_about} if asked_about else set()), f"OpenFGA was asked about {sorted(set(openfga.asked))}"

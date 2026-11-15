@@ -8,8 +8,8 @@ verified bearer, and the bearer's unverified issuer decides which verifier answe
   (`lakehouse.governed.machine_identity`, [[LH-220]], ADR 0156 C5). It comes back a `ServicePrincipal` and never
   falls through to the IdP;
 - anything else: the IdP's verifier (`IdpVerifier`, the same one the catalog uses), which answers a person as the
-  principal their Dex connector maps to, `<idp-id>~<user id>` ([[LH-063]]), and a Dex client signed in for itself as
-  the `ServicePrincipal` `dex-client~<client id>` (ADR 0181).
+  principal the deployment's naming rule reads from the token, `<idp-id>~<subject>` ([[XC-214]], [[LH-063]]), and a
+  client signed in for itself as the `ServicePrincipal` `dex-client~<client id>` (ADR 0181).
 
 Either way the caller is authorized by FGA as its principal key, `.subject`. Nothing a caller asserts in a header names it,
 and a service-account token's audience is lineage's own (`rask-lineage`), so a token minted for another door is

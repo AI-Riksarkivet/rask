@@ -57,7 +57,7 @@ from pydantic import BaseModel
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.deps import make_auth_deps
-from lakehouse.governed.idp_identity import IdpVerifier
+from lakehouse.governed.idp_identity import IdpVerifier, SubjectNaming
 from lakehouse.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
 from lakehouse.ns_errors import install_problem_handlers
 
@@ -208,7 +208,7 @@ def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
 
 def _token(idp: _IdP, key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey, algorithm: str, *, kid: str | None = KID) -> str:
     now = int(time.time())
-    claims = {"iss": idp.issuer, "sub": "gina", "aud": AUDIENCE, "iat": now, "exp": now + 300, "federated_claims": {"connector_id": "corp", "user_id": "gina"}}
+    claims = {"iss": idp.issuer, "sub": "gina", "aud": AUDIENCE, "iat": now, "exp": now + 300}
     return jwt.encode(claims, key, algorithm=algorithm, headers={} if kid is None else {"kid": kid})
 
 
@@ -225,7 +225,7 @@ def _client(idp: _IdP, *, clock: Callable[[], float] = time.monotonic) -> TestCl
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.state.oidc = IdpVerifier(OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock), {"corp": "corp"})
+    app.state.oidc = IdpVerifier(OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock), SubjectNaming(idp_id="corp"))
 
     @app.get("/gated")
     def _gated(subject: _Subject) -> dict[str, str]:

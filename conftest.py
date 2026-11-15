@@ -389,14 +389,11 @@ def dex_subject(user_id: str, connector: str) -> str:
     return base64.urlsafe_b64encode(field(1, user_id) + (field(2, connector) if connector else b"")).rstrip(b"=").decode()
 
 
-class DexIssuer:
-    """A Dex issuer on loopback, answering as the dev Dex v2.42.0 does ([[LH-063]]).
+class _LoopbackIssuer:
+    """An OpenID provider on loopback: its discovery document and key set over plain HTTP to anyone, so a verifier reaches
+    it with `allow_insecure`, and a signer of the tokens it issues."""
 
-    Measured 2026-10-16 on the dev Dex's password grant: with `federated:id` in the scope, the id token and the access
-    token both carry `federated_claims: {connector_id, user_id}`; without it, neither does. `sub` is `dex_subject`, so a
-    renamed connector changes it for the same user. Discovery and the key set are plain HTTP to anyone, as the dev Dex
-    serves them, so a verifier reaches it with `allow_insecure`.
-    """
+    kid = "test-loopback-key"
 
     def __init__(self) -> None:
         import base64
@@ -407,7 +404,6 @@ class DexIssuer:
         from cryptography.hazmat.primitives.asymmetric import rsa
 
         self._signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        self.kid = "test-dex-key"
         numbers = self._signing_key.public_key().public_numbers()
 
         def b64(value: int) -> str:
@@ -445,14 +441,32 @@ class DexIssuer:
         self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self._thread.start()
 
+    def sign(self, claims: dict[str, object]) -> str:
+        """`claims` as a token this issuer signed."""
+        import jwt
+
+        return jwt.encode(claims, self._signing_key, algorithm="RS256", headers={"kid": self.kid})
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+class DexIssuer(_LoopbackIssuer):
+    """A Dex issuer on loopback, answering as the dev Dex v2.42.0 does ([[LH-063]]).
+
+    Measured 2026-10-16 on the dev Dex's password grant: with `federated:id` in the scope, the id token and the access
+    token both carry `federated_claims: {connector_id, user_id}`; without it, neither does. `sub` is `dex_subject`, so a
+    renamed connector changes it for the same user. Discovery and the key set are plain HTTP to anyone, as the dev Dex
+    serves them.
+    """
+
     def mint(self, user_id: str, *, connector: str, audience: str, federated: bool = True, azp: str | None = None, ttl: int = 600) -> str:
         """The token Dex issues `user_id` of `connector`, with `federated_claims` when the client asked for `federated:id`.
 
         `azp` names the client a token issued for another audience was asked by, as Dex sets it then.
         """
         import time
-
-        import jwt
 
         now = int(time.time())
         claims: dict[str, object] = {
@@ -468,7 +482,7 @@ class DexIssuer:
             claims["federated_claims"] = {"connector_id": connector, "user_id": user_id}
         if azp is not None:
             claims["azp"] = azp
-        return jwt.encode(claims, self._signing_key, algorithm="RS256", headers={"kid": self.kid})
+        return self.sign(claims)
 
     def mint_client(self, client_id: str, *, audience: str, ttl: int = 600) -> str:
         """The token Dex v2.46 issues a confidential client signing in for itself with the client-credentials grant.
@@ -480,8 +494,6 @@ class DexIssuer:
         """
         import time
 
-        import jwt
-
         now = int(time.time())
         claims: dict[str, object] = {
             "iss": self.issuer,
@@ -491,17 +503,41 @@ class DexIssuer:
             "iat": now,
             "exp": now + ttl,
         }
-        return jwt.encode(claims, self._signing_key, algorithm="RS256", headers={"kid": self.kid})
-
-    def close(self) -> None:
-        self._server.shutdown()
-        self._server.server_close()
+        return self.sign(claims)
 
 
 @pytest.fixture(scope="session")
 def dex_issuer() -> Iterator[DexIssuer]:
     """One loopback Dex per worker; read-only, so session scope holds."""
     issuer = DexIssuer()
+    yield issuer
+    issuer.close()
+
+
+class OidcIssuer(_LoopbackIssuer):
+    """An OpenID provider on loopback that is not Dex, issuing only what OpenID Connect and RFC 9068 define ([[XC-214]]).
+
+    A person's token names them by `sub` alone (OpenID Connect Core 1.0 § 2: unique and never reassigned within the
+    issuer), with whatever other claims the provider adds; a client signed in for itself with the client-credentials grant
+    carries `client_id` and a `sub` that is the client's identifier (RFC 9068 § 2.2).
+    """
+
+    def mint(self, sub: str, *, audience: str, ttl: int = 600, **extra: object) -> str:
+        """The token this provider issues the person `sub` for `audience`, carrying `extra` besides."""
+        import time
+
+        now = int(time.time())
+        return self.sign({"iss": self.issuer, "sub": sub, "aud": audience, "iat": now, "exp": now + ttl, **extra})
+
+    def mint_client(self, client_id: str, *, audience: str, ttl: int = 600) -> str:
+        """The access token this provider issues the client `client_id` signed in for itself (RFC 9068 § 2.2)."""
+        return self.mint(client_id, audience=audience, ttl=ttl, client_id=client_id)
+
+
+@pytest.fixture(scope="session")
+def oidc_issuer() -> Iterator[OidcIssuer]:
+    """One loopback OpenID provider per worker that is not Dex; read-only, so session scope holds."""
+    issuer = OidcIssuer()
     yield issuer
     issuer.close()
 

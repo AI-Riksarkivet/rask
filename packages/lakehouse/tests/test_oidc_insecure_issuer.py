@@ -62,7 +62,13 @@ def test_the_check_is_skipped_when_oidc_is_off() -> None:
 @pytest.mark.parametrize(
     ("over", "refusal"),
     [
-        pytest.param({"RASK_OIDC_CONNECTORS": {}}, "RASK_OIDC_CONNECTORS is required", id="no-connector-names-anyone"),
+        pytest.param({"RASK_OIDC_CONNECTORS": {}}, "RASK_OIDC_IDP_ID or RASK_OIDC_CONNECTORS is required", id="no-rule-names-anyone"),
+        pytest.param({"RASK_OIDC_IDP_ID": "corp"}, "each name every person: set one", id="two-rules-name-every-person"),
+        pytest.param({"RASK_OIDC_CONNECTORS": {}, "RASK_OIDC_IDP_ID": "kubernetes"}, "a machine identity's idp id", id="the-issuer-claims-the-clusters-idp-id"),
+        pytest.param({"RASK_OIDC_SUBJECT_CLAIMS": ["oid"]}, "read only with RASK_OIDC_IDP_ID", id="subject-claims-a-dex-connector-map-never-reads"),
+        pytest.param(
+            {"RASK_OIDC_CONNECTORS": {}, "RASK_OIDC_IDP_ID": "corp", "RASK_OIDC_SUBJECT_CLAIMS": []}, "names no claim", id="subject-claims-naming-none"
+        ),
         pytest.param({"RASK_OIDC_CONNECTORS": {"local": "kubernetes"}}, "a machine identity's idp id", id="a-connector-claims-the-clusters-idp-id"),
         pytest.param({"RASK_OIDC_CONNECTORS": {"local": "dex-client"}}, "a machine identity's idp id", id="a-connector-claims-the-dex-clients-idp-id"),
         pytest.param({"RASK_OIDC_CONNECTORS": {"local": "Corp~1"}}, "no principal can carry", id="an-idp-id-outside-the-grammar"),
@@ -73,9 +79,11 @@ def test_the_check_is_skipped_when_oidc_is_off() -> None:
 )
 def test_settings_no_bearer_could_pass_are_refused_at_construction(over: dict[str, object], refusal: str) -> None:
     """Each is refused when the settings are built, not met one request at a time: an issuer verified over http answers
-    401 to every bearer. A person is the principal their Dex connector maps to ([[LH-063]]), so a map naming nobody, or
-    an id no principal can carry, answers 401 to every person; a connector given the cluster's idp id makes its people
-    service accounts; and one issuer named for both routes every person's token as a service account's."""
+    401 to every bearer. A person is the principal one rule names ([[XC-214]], [[LH-063]]): the issuer's idp id, or the
+    one their Dex connector maps to. No rule, or an id no principal can carry, answers 401 to every person; two rules, or
+    subject claims the connector rule never reads, leave which one names a person to the reader; an idp id a machine
+    carries makes people service accounts; and one issuer named for both routes every person's token as a service
+    account's."""
     with pytest.raises(ValueError, match=refusal):
         _settings(**over)
 
