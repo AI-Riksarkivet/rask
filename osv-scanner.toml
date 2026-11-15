@@ -20,6 +20,14 @@ id = "GO-2026-6615"
 ignoreUntil = 2027-02-12
 reason = "otel sdk/log 0.16.0 is pinned by the Dagger Go SDK's replace directives; it moves with the engine upgrade. CI tooling only."
 
+# The same pin holds the rest of the module's OpenTelemetry back: with otel, trace and sdk at 1.47.0 (this advisory's
+# fix), otel/log at the replace's v0.16.0 imports otel/internal/global in a cycle and the module does not build (measured
+# 2026-11-15, go 1.27.1). It moves with the engine upgrade (v0.21.8 now, v0.21.11 released).
+[[IgnoredVulns]]
+id = "GHSA-q7gw-24fr-5p69"
+ignoreUntil = 2027-02-12
+reason = "otel sdk, sdk/log and trace 1.45.0 are held by the Dagger Go SDK's replace of otel/log at v0.16.0, which import-cycles with otel 1.47.0; they move with the engine upgrade. CI tooling only."
+
 # deepmerge 4.3.1: no fixed release exists. It reaches the console's build through @sveltejs/vite-plugin-svelte, at build
 # time only; the console's image ships the built pages, not the build toolchain.
 [[IgnoredVulns]]
