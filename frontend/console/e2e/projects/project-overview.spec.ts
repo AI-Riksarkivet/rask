@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { seed as seedFor } from '../mock-client';
+import { MOCK_CATALOG } from '../ports';
 
 // `/projects/<p>` — ONE project's metadata and overview, a top-level page because a project is the
 // TOP of the hierarchy. Its read is a `query` running in the browser, so the catalog answer is seeded
@@ -107,4 +108,70 @@ test('a visit to a project reads the project once', async ({ page }) => {
 		page.getByText(/No governance changes on this project|Events unavailable right now/),
 	).toBeVisible();
 	expect(reads).toHaveLength(1);
+});
+
+test('a project admin defines a label on the project page, and evolves it', async ({ page }) => {
+	await seed(page, { 'GET /management/v1/projects/acme': DETAIL });
+	await page.goto('/projects/acme');
+	const labels = page.getByTestId('project-labels');
+	await expect(labels).toContainText('This project defines no label yet.');
+
+	const form = labels.getByRole('form', { name: 'Define a label' });
+	await form.getByLabel('Label name').fill('sensitivity');
+	await form.getByLabel('Label kind').click();
+	await page.getByRole('option', { name: 'one of a list' }).click();
+	// Nothing to submit until the label says what it applies to and what values it allows.
+	await expect(form.getByRole('button', { name: 'Define label' })).toBeDisabled();
+	await form.getByLabel('Allowed values').fill('internal, restricted');
+	await form.getByLabel('Label description').fill('How tightly the data is held');
+	await form.getByRole('button', { name: 'Define label' }).click();
+
+	const row = labels.getByRole('row').filter({ hasText: 'sensitivity' });
+	await expect(row).toContainText('one of a list');
+	await expect(row).toContainText('tables');
+	await expect(row).toContainText('internal, restricted');
+	await expect(row).toContainText('How tightly the data is held');
+
+	// Evolving it may only grow it: the kind is fixed, and it may now apply to namespaces too.
+	await row.getByRole('button', { name: 'Evolve label sensitivity' }).click();
+	const evolve = labels.getByRole('form', { name: 'Evolve label sensitivity' });
+	await expect(evolve.getByLabel('Label kind')).toBeDisabled();
+	await evolve.getByRole('checkbox', { name: 'namespaces' }).click();
+	await evolve.getByRole('button', { name: 'Save label' }).click();
+	await expect(row).toContainText('namespaces, tables');
+});
+
+test('a label still attached is not deleted, and the catalog’s reason is said', async ({
+	page,
+}) => {
+	await seed(page, { 'GET /management/v1/projects/acme': DETAIL });
+	await page.request.post(`${MOCK_CATALOG}/__mock/labels`, {
+		data: {
+			bearer: token,
+			definitions: [{ project: 'acme', name: 'pii', scope: ['table'], kind: 'marker' }],
+			objects: [{ kind: 'table', id: 'acme-wh$raw$a', project: 'acme', labels: { pii: null } }],
+		},
+	});
+	await page.goto('/projects/acme');
+	const labels = page.getByTestId('project-labels');
+	await labels.getByRole('button', { name: 'Delete label pii' }).click();
+	await expect(labels.getByRole('status')).toHaveText("label 'pii' is still attached to 1 object");
+	await expect(labels.getByRole('row').filter({ hasText: 'pii' })).toBeVisible();
+});
+
+test('a define the catalog refuses for want of project-admin access says so', async ({ page }) => {
+	await seed(page, {
+		'GET /management/v1/projects/acme': DETAIL,
+		'POST /management/v1/projects/acme/labels/define': {
+			status: 403,
+			body: { detail: 'user:alice lacks can_administer on project:acme' },
+		},
+	});
+	await page.goto('/projects/acme');
+	const form = page.getByTestId('project-labels').getByRole('form', { name: 'Define a label' });
+	await form.getByLabel('Label name').fill('pii');
+	await form.getByRole('button', { name: 'Define label' }).click();
+	await expect(page.getByTestId('project-labels').getByRole('status')).toHaveText(
+		'Denied: defining a label needs project-admin access (can_administer).',
+	);
 });

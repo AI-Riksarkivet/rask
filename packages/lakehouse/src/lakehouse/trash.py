@@ -91,8 +91,8 @@ def make_record(
 
     ``properties`` is a namespace's properties map, set on a namespace record that had any. A namespace's
     properties live only in its ``__manifest`` row, which the drop removes, so this is their only copy;
-    undrop recreates the namespace with them. Among them is ``rask.tier``, which only an admin may set, so
-    an undrop that lost them would let the namespace's owner shed its tier.
+    undrop recreates the namespace with them. Among them is ``rask.requires_run``, which only an admin may
+    set, so an undrop that lost them would let the namespace's owner shed the run rule.
 
     ``namespace_uuid`` is the uuid of the namespace the object was dropped from, which its announcements name it under
     when no live namespace holds that name any more. ``cascade`` is the uuid of the namespace a recoverable cascade

@@ -319,7 +319,7 @@ def forgeries(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> F
     bus.wait_until_acked(INGEST_STREAM, (INGEST_CONSUMER,), lineage_seq, within=scenario.SETTLE_SECONDS)
     # A namespace the tenant's teardown removes with its warehouse.
     marker = f"{byo_tenant.project}$marker"
-    scenario.ok(byo_tenant.admin.http.post(f"{scenario.CATALOG}/v1/namespace/{marker}/create", json={"properties": {"rask.tier": "bronze"}}))
+    scenario.ok(byo_tenant.admin.http.post(f"{scenario.CATALOG}/v1/namespace/{marker}/create", json={}))
     kept = _kept_by_the_catalog(byo_tenant.admin, forged=forged_grant, marker=marker)
     return Forgeries(
         recorded=[

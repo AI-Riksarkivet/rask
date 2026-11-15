@@ -26,7 +26,7 @@ The lakehouse runs no ingest of its own (ADR 0154): data enters only through the
 (`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`), and
 ingest of an external source is a bring-your-own client job that commits through the catalog.
 
-**The lakehouse runs no stage, no training and no engine (ADR 0155).** Moving data between tiers is the user's
+**The lakehouse runs no stage, no training and no engine (ADR 0155).** Moving data between tables is the user's
 pipeline, on their own compute and orchestrator, writing each tier through the catalog's doors. The catalog announces
 every committed write as an OpenLineage `COMPLETE` on lineage, and the NATS topics stay internal. A pipeline follows
 committed writes on lineage's durable `GET /events`, which follows forward from a `since=` cursor in the commit-event

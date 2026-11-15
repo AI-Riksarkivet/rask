@@ -1,6 +1,6 @@
 """Quality-gate declaration endpoints — the governed door a project's gate is CONFIGURED through.
 
-The gate decides whether a write into a tier may publish: which column identifies a row, which columns
+The gate decides whether a table's version may publish: which column identifies a row, which columns
 a consumer depends on, how far a row count may move before a promotion waits for a human, and how long
 that wait may last. A gate is a record like every other governed artefact, so it can be enumerated,
 reviewed and gated on. The publish door reads it, and holds a breaching version for a `can_promote`

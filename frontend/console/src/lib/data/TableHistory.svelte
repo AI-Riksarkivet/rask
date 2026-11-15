@@ -281,7 +281,7 @@
 			} else if (res.status === 401) {
 				restoreError = 'Sign in to restore a version.';
 			} else if (res.status === 403) {
-				restoreError = 'Denied: restoring a version needs the owner tier (can_restore).';
+				restoreError = 'Denied: restoring a version needs the owner rung (can_restore).';
 			} else {
 				restoreError = res.detail;
 			}
@@ -1088,7 +1088,7 @@
 		margin: 0 0 12px;
 		font-size: 13px;
 	}
-	/* The version readers of the published view read: the tag's own semantic colour, never a tier's. */
+	/* The version readers of the published view read: the tag's own semantic colour. */
 	.tagchip.published {
 		border-color: var(--success);
 		font-weight: 600;

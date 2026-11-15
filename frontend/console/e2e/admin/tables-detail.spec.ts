@@ -411,12 +411,12 @@ test('save table properties posts every live key (#74 tail)', async ({ page }) =
 	const section = page.locator('section', { hasText: 'Properties' });
 	// the seed row is describe.metadata { owner: "data-eng" }; add a second key, then save
 	await section.getByRole('button', { name: '+ add row' }).click();
-	await section.getByLabel('Property key 2').fill('tier');
-	await section.getByLabel('Property value 2').fill('gold');
+	await section.getByLabel('Property key 2').fill('domain');
+	await section.getByLabel('Property value 2').fill('sales');
 	await section.getByRole('button', { name: 'Save properties' }).click();
 	await expect
 		.poll(() => bodyOf(page, `/v1/table/${TABLE}/schema_metadata/update`))
-		.toEqual({ metadata: { owner: 'data-eng', tier: 'gold' } });
+		.toEqual({ metadata: { owner: 'data-eng', domain: 'sales' } });
 	await expect(section.getByText('Saved.')).toBeVisible();
 });
 
@@ -538,6 +538,129 @@ test('surfaces the Lance file format badge (#78)', async ({ page }) => {
 	await page.goto('/catalog/tables/db1%24t');
 	const stats = page.locator('section', { hasText: 'Stats' }).first();
 	await expect(stats).toContainText('Lance · storage v2.2');
+});
+
+// --- labels (ADR 0211): the owner attaches the labels the table's project defines ---
+
+/** The table's warehouse `db1` in project `acme`, and the labels `acme` defines, in the mock's label
+ *  store, which answers them as the table's describe's `available`. */
+async function seedLabels(page: Page): Promise<void> {
+	await seed(page, {
+		'GET /management/v1/warehouses': [
+			{ id: 'db1', project: 'acme', bucket: 'db1', root_uri: 's3://db1', status: 'active' },
+		],
+	});
+	await page.request.post(`${MOCK_CATALOG}/__mock/labels`, {
+		data: {
+			bearer: token,
+			warehouses: { db1: 'acme' },
+			definitions: [
+				{ project: 'acme', name: 'pii', scope: ['table'], kind: 'marker' },
+				{
+					project: 'acme',
+					name: 'sensitivity',
+					scope: ['table', 'namespace'],
+					kind: 'enumerated',
+					allowed_values: ['internal', 'restricted'],
+				},
+				// A namespace-only label is not offered on a table.
+				{ project: 'acme', name: 'zone', scope: ['namespace'], kind: 'free_text' },
+			],
+		},
+	});
+}
+
+test('an owner attaches a label its project defines on the overview, and removes it', async ({
+	page,
+}) => {
+	await seedLabels(page);
+	await page.goto('/catalog/tables/db1%24t');
+	const labels = page.getByTestId('object-labels');
+	await expect(labels).toContainText('This table carries no label.');
+
+	await labels.getByLabel('Label to add').click();
+	await expect(page.getByRole('option', { name: 'zone' })).toHaveCount(0);
+	await page.getByRole('option', { name: 'pii' }).click();
+	await labels.getByRole('button', { name: 'Add label' }).click();
+	await expect(labels.getByRole('list', { name: 'Labels on this table' })).toHaveText('pii');
+
+	// An enumerated label takes one of its allowed values.
+	await labels.getByLabel('Label to add').click();
+	await page.getByRole('option', { name: 'sensitivity' }).click();
+	await expect(labels.getByRole('button', { name: 'Add label' })).toBeDisabled();
+	await labels.getByLabel('Label value').click();
+	await page.getByRole('option', { name: 'restricted' }).click();
+	await labels.getByRole('button', { name: 'Add label' }).click();
+	await expect(labels.getByRole('listitem')).toHaveText(['pii', 'sensitivity=restricted']);
+
+	await labels.getByRole('button', { name: 'Remove label pii' }).click();
+	await expect(labels.getByRole('listitem')).toHaveText(['sensitivity=restricted']);
+});
+
+test('an owner who is no member of the project is offered what its describe makes available', async ({
+	page,
+}) => {
+	await seedLabels(page);
+	// The project's own definitions door refuses a non-member (404), and the registry shows no
+	// warehouse: the add form is fed by the table's own describe alone.
+	await seed(page, {
+		'GET /management/v1/projects/acme/labels': {
+			status: 404,
+			body: { detail: 'project not found: acme' },
+		},
+		'GET /management/v1/warehouses': [],
+	});
+	const definitionReads: string[] = [];
+	page.on('request', (req) => {
+		if (new URL(req.url()).pathname.endsWith('/projects/acme/labels'))
+			definitionReads.push(req.url());
+	});
+	await page.goto('/catalog/tables/db1%24t');
+	const labels = page.getByTestId('object-labels');
+	await labels.getByLabel('Label to add').click();
+	await page.getByRole('option', { name: 'pii' }).click();
+	await labels.getByRole('button', { name: 'Add label' }).click();
+	await expect(labels.getByRole('listitem')).toHaveText(['pii']);
+	expect(definitionReads).toEqual([]);
+});
+
+test('a refused label write is said in plain words, and the labels stay as they were', async ({
+	page,
+}) => {
+	await seedLabels(page);
+	await seed(page, {
+		[`POST /management/v1/table/${TABLE}/labels/set`]: {
+			status: 403,
+			body: { detail: 'user:e2e lacks can_label on table' },
+		},
+	});
+	await page.goto('/catalog/tables/db1%24t');
+	const labels = page.getByTestId('object-labels');
+	await labels.getByLabel('Label to add').click();
+	await page.getByRole('option', { name: 'pii' }).click();
+	await labels.getByRole('button', { name: 'Add label' }).click();
+	await expect(labels.getByRole('status')).toHaveText(
+		'Denied: attaching a label on this table needs its owner’s access (can_label).',
+	);
+	await expect(labels).toContainText('This table carries no label.');
+});
+
+test('a table the catalog says lies in no project shows no labels block', async ({ page }) => {
+	// The mock answers the label doors 400 for the estate's own warehouse, as the catalog does for the
+	// warehouse its settings name; the console holds no copy of that name and reads the answer.
+	const id = 'lance_catalog%24provenance%24events';
+	await seed(page, {
+		[`POST /v1/table/${id}/describe`]: DESCRIBE,
+	});
+	const labelsAnswered = page.waitForResponse(
+		(res) =>
+			res.url().endsWith(`/management/v1/table/${id}/labels/describe`) && res.status() === 400,
+	);
+	await page.goto(`/catalog/tables/${id}`);
+	await labelsAnswered;
+	await expect(page.getByRole('heading', { name: 'Stats' })).toBeVisible();
+	await expect(page.getByTestId('object-labels')).toHaveCount(0);
+	await expect(page.getByText('could not be read')).toHaveCount(0);
 });
 
 // --- #85 danger zone: drop / deregister (AlertDialog confirm) + rename (navigates) ---

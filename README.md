@@ -5,20 +5,20 @@
 > ⚠️ **Work in progress — don't use.**
 
 *Lagom* is the Swedish word for "just the right amount" — not too little, not too much. It is the
-design rule for this platform: every tier governed, nothing over-built, and no capability that cannot
+design rule for this platform: every write governed, nothing over-built, and no capability that cannot
 say where its data came from.
 
-A **Lance lakehouse** under Lance Namespace (a governed REST catalog that enforces the bronze → silver → gold
-tiers in its write path, and OpenLineage provenance), **events** on NATS JetStream, and **governance** over
+A **Lance lakehouse** under Lance Namespace (a governed REST catalog that judges every write in its write path, and
+OpenLineage provenance), **events** on NATS JetStream, and **governance** over
 all of it — Dex OIDC for identity, OpenFGA for authorization, S3-compatible storage (RustFS in development, the
 platform's S3 in production). The lakehouse runs no ingest, no pipeline stage, no training and no workflow engine:
-compute and orchestration are the user's, and a pipeline writes every tier through the catalog's Lance Namespace
+compute and orchestration are the user's, and a pipeline writes every table through the catalog's Lance Namespace
 doors like any other client (ADRs 0154 and 0155).
 
 **The platform is workload-agnostic by design.** It stores and governs blobs and multimodal data;
 no workload is its identity. Anything that reads bytes, writes a governed table and emits lineage fits the same
 shape — text, image, audio, video, embeddings. A workload's model, stage graph and output format are its own and live
-outside this repository; no shared seam (the catalog and its tier governance, maintenance's work queue, lineage, the
+outside this repository; no shared seam (the catalog and its write governance, maintenance's work queue, lineage, the
 events) names one. The test for any shared seam is *would this still be right for audio?*
 
 This repository holds the lakehouse and its console, nothing else. Every other client (flows, compute and the Ray
@@ -40,7 +40,8 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
   no client does: a client reaches the lakehouse through its doors and events.
 - `services/` — runnable Python services (uv workspace members):
   - **the lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
-    tables, and the bronze→silver→gold tier governance a pipeline's writes pass through), `lineage`
+    tables, and the write governance a pipeline's writes pass through: the opt-in run rule, project-defined labels, the
+    publish-time quality gate), `lineage`
     (the OpenLineage intake, the commit feed and edge list as Lance tables, and the durable `GET /events` log; the
     lineage graph is bring-your-own, ADR 0158), `maintenance` (version expiry, trash purge, the orphan scan,
     cross-store reconcile, and the list of tables due for a bring-your-own compaction or index optimize; ADR 0162)

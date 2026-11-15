@@ -1,9 +1,10 @@
 <script lang="ts">
 	// `/namespaces` — the catalog's namespaces on the shared @rask/ui DataTable (goal cond 4): one
 	// sortable/searchable row per namespace, from each warehouse's own listing (the spec's
-	// ListNamespaces on the warehouse's name) and from the table registry's ids, with the tier badge of
-	// the tier each namespace declares (`rask.tier`, ADR 0160), the #85 drop action (AlertDialog confirm; Restrict by default, Cascade
-	// opt-in) and the create: the spec's CreateNamespace on `<warehouse>$<name>`.
+	// ListNamespaces on the warehouse's name) and from the table registry's ids, with the labels each
+	// namespace carries (ADR 0211) and a filter by one, the #85 drop action (AlertDialog confirm;
+	// Restrict by default, Cascade opt-in) and the create: the spec's CreateNamespace on
+	// `<warehouse>$<name>`.
 	import { AlertDialog } from '@rask/ui/alert-dialog';
 	import {
 		createSvelteTable,
@@ -34,11 +35,13 @@
 	import { filterVerdict, projectOf, readFailure } from './project-filter.ts';
 	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
-	import { namespaceOfTable, type StageInfo } from './stage';
-	import { NamespaceTiers } from './namespace-tiers.svelte';
-	import StageBadge from './StageBadge.svelte';
+	import { LabelIndexRead } from './label-index.svelte.ts';
+	import LabelChips from './LabelChips.svelte';
+	import LabelFilter from './LabelFilter.svelte';
+	import LabelIndexNotice from './LabelIndexNotice.svelte';
+	import { labelChips, type Labels } from './labels.ts';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
-	import { DELIMITER, warehouseOf } from '#lib/api/identifiers.ts';
+	import { DELIMITER, parentNamespace, warehouseOf } from '#lib/api/identifiers.ts';
 	import { missingFieldsHint } from '#lib/form-hint.ts';
 	import { Select } from '@rask/ui/select';
 	import { catalogPath } from '#lib/catalog-trail.ts';
@@ -64,7 +67,15 @@
 	let {
 		project: projectFilter,
 		onprojectchange,
-	}: { project: string; onprojectchange: (project: string) => void } = $props();
+		label: labelFilter,
+		onlabelchange,
+	}: {
+		project: string;
+		onprojectchange: (project: string) => void;
+		/** The label the rows are filtered to (`''`: any label); the page keeps it in its URL too. */
+		label: string;
+		onlabelchange: (label: string) => void;
+	} = $props();
 
 	// Each row's project, its warehouse's (the first segment of its id); the filter narrows the rows
 	// this caller was given, a view and never a boundary.
@@ -82,6 +93,7 @@
 			projects.load(),
 		]);
 		settled = true;
+		void labels.load(projects.visible.state);
 		if (res.ok) {
 			tables = [...res.data.tables].sort();
 			lastStatus = 200;
@@ -90,17 +102,16 @@
 		}
 		listing = listed.ok ? listed.data : null;
 		listingFailure = listed.ok ? null : readFailure('warehouses', listed);
-		void tiers.load([...(listing?.namespaces ?? []), ...(tables ?? []).map(namespaceOfTable)]);
 	}
 
-	/** The tier each namespace declares (ADR 0160), never one read off its name. */
-	const tiers = new NamespaceTiers();
+	/** The labels each namespace carries, read per project the caller can see (ADR 0211). */
+	const labels = new LabelIndexRead();
 
 	// The table registry it folds and the namespace listings advance on one shared cursor, so the two
 	// cannot disagree for longer than a tick about what exists.
 	liveRead(lineageTick, () => load());
 
-	// Group by the table's PARENT namespace — every segment but the LAST, via `namespaceOfTable`
+	// Group by the table's PARENT namespace — every segment but the LAST, via `parentNamespace`
 	// (`#lib/api/identifiers.ts`). A bare name with no delimiter is its own root, which is this view's
 	// rule and not the backend's: `parent_namespace_id` returns None there, so a root-level table
 	// gets a row here rather than vanishing. That divergence is safe because this answer is only a
@@ -111,7 +122,7 @@
 	type Row = {
 		ns: string;
 		count: number;
-		stage: StageInfo | null;
+		labels: Labels;
 		warehouse: string;
 		project: string | null;
 	};
@@ -122,7 +133,7 @@
 		// that failed seeds nothing and the banner below says so — never silently "none".
 		for (const ns of listing?.namespaces ?? []) m.set(ns, 0);
 		for (const t of tables ?? []) {
-			const ns = namespaceOfTable(t);
+			const ns = parentNamespace(t);
 			m.set(ns, (m.get(ns) ?? 0) + 1);
 		}
 		return (
@@ -132,7 +143,7 @@
 				.map(([ns, count]): Row => ({
 					ns,
 					count,
-					stage: tiers.of(ns),
+					labels: labels.of('namespace', ns),
 					warehouse: warehouseOf(ns),
 					project: projects.index ? projectOf(projects.index, ns) : null,
 				}))
@@ -149,7 +160,13 @@
 			rowProjects,
 		}),
 	);
-	const rows = $derived(allRows.filter((r) => !projectFilter || r.project === projectFilter));
+	const rows = $derived(
+		allRows.filter(
+			(r) =>
+				(!labelFilter || labelFilter in r.labels) &&
+				(!projectFilter || r.project === projectFilter),
+		),
+	);
 
 	// Tables inside the namespace queued for drop — sizes the Cascade choice honestly.
 	const targetCount = $derived(
@@ -284,16 +301,16 @@
 			meta: { headerClass: 'w-32' },
 		},
 		{
-			id: 'stage',
-			accessorFn: (r) => r.stage?.stage ?? '',
+			id: 'labels',
+			accessorFn: (r) => labelChips(r.labels).join(' '),
 			header: ({ column }) =>
 				renderComponent(DataTableHeaderButton, {
-					label: 'tier',
+					label: 'labels',
 					sorted: column.getIsSorted(),
 					onclick: column.getToggleSortingHandler(),
 				}),
-			cell: ({ row }) => renderSnippet(stageCell, row.original),
-			meta: { headerClass: 'w-28' },
+			cell: ({ row }) => renderSnippet(labelsCell, row.original),
+			meta: { headerClass: 'w-40' },
 		},
 		{
 			// WHICH WAREHOUSE HOLDS THIS: the first segment of the namespace's id, read off the id itself.
@@ -361,11 +378,11 @@
 	>
 {/snippet}
 {#snippet projectCell(row: Row)}
-	<!-- The stage column's dash, in the stage column's face: a monospace em dash reads as an en dash. -->
-	{#if row.project}<span class="mono">{row.project}</span>{:else}<span class="mut">—</span>{/if}
+	<!-- A monospace em dash, as the labels column draws one: a monospace em dash reads as an en dash. -->
+	{#if row.project}<span class="mono">{row.project}</span>{:else}<span class="mut font-mono">—</span>{/if}
 {/snippet}
-{#snippet stageCell(row: Row)}
-	{#if row.stage}<StageBadge info={row.stage} />{:else}<span class="mut">—</span>{/if}
+{#snippet labelsCell(row: Row)}
+	<LabelChips labels={row.labels} />
 {/snippet}
 {#snippet warehouseCell(row: Row)}
 	<!-- A link, because the warehouse has a detail page, the estate's own included. -->
@@ -489,7 +506,11 @@
 				ofRows={[...rowProjects]}
 				onchange={onprojectchange}
 			/>
+			<LabelFilter value={labelFilter} names={labels.names} onchange={onlabelchange} />
 		</div>
+		{#if labels.state.kind === 'ready'}
+			<LabelIndexNotice failures={labels.state.failures} filtering={labelFilter !== ''} />
+		{/if}
 		{#if verdict.kind === 'failed' || verdict.kind === 'unseen'}
 			<ProjectFilterNotice
 				project={projectFilter}
@@ -499,10 +520,14 @@
 		{:else}
 			<DataTable
 				{table}
-				loading={tables === null || verdict.kind === 'waiting'}
-				emptyMessage={projectFilter
-					? `No namespaces in project ${projectFilter}.`
-					: 'No namespaces visible to you. The list holds only the namespaces your grants reach: ask a project admin for access, or create one in a warehouse you can write to.'}
+				loading={tables === null ||
+					verdict.kind === 'waiting' ||
+					(labelFilter !== '' && labels.state.kind === 'loading')}
+				emptyMessage={labelFilter
+					? `No namespace you can see carries the label ${labelFilter}${projectFilter ? ` in project ${projectFilter}` : ''}.`
+					: projectFilter
+						? `No namespaces in project ${projectFilter}.`
+						: 'No namespaces visible to you. The list holds only the namespaces your grants reach: ask a project admin for access, or create one in a warehouse you can write to.'}
 				onrowclick={openDrawer}
 			/>
 		{/if}
@@ -520,12 +545,8 @@
 			<dd class="mono">{drawerRow.ns}<CopyButton value={drawerRow.ns} label="namespace id" /></dd>
 			<dt>warehouse</dt>
 			<dd class="mono">{drawerRow.warehouse}</dd>
-			<dt>tier</dt>
-			<dd>
-				{#if drawerRow.stage}<StageBadge info={drawerRow.stage} />{:else}<span class="mut"
-						>— (no tier declared)</span
-					>{/if}
-			</dd>
+			<dt>labels</dt>
+			<dd><LabelChips labels={drawerRow.labels} /></dd>
 			<dt>tables</dt>
 			<dd class="mono">{drawerRow.count}</dd>
 		</dl>

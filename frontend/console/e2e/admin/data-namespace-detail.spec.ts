@@ -183,7 +183,7 @@ test('removing the policy deletes it and the card falls back to the global-defau
 });
 
 test('a 403 access review renders the denial state, never the ACL', async ({ page }) => {
-	// Re-seeding the same key wins — deny the review like the catalog's FGA gate (owner-tier
+	// Re-seeding the same key wins — deny the review like the catalog's FGA gate (owner-rung
 	// can_delete on the namespace) does for a non-owner.
 	await seed(page, {
 		'POST /management/v1/namespace/gold/access/list': {

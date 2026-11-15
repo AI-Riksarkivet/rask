@@ -28,7 +28,7 @@ overtook; the read and the move remain two operations (:func:`advance`).
 
 The control flow is gate first, fail-closed, then create-or-update the tag.
 
-**THE TAG IS THE GATE, AND A BREACH IS HELD (ADR 0156 C1, [[LH-466]]).** Readers of a governed tier read the
+**THE TAG IS THE GATE, AND A BREACH IS HELD (ADR 0156 C1, [[LH-466]]).** Readers who want the vetted version read the
 version tagged `published`, so a version reaches them only through this door. When the project's declared gate
 has review on, a version whose failed assertions a validator may waive, or whose row count moves past the band
 from the published version's, is HELD rather than refused: the tag stays where it is, and the door records a
@@ -62,7 +62,7 @@ from catalog.core.config import shared_lance_session
 from catalog.services import dataplane
 from lakehouse import gate_specs
 from lakehouse.outage import store_refusal
-from lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, tier_contract_violations
+from lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, source_rowid_violations
 from lakehouse.storage_options import StorageOptions
 
 
@@ -104,7 +104,7 @@ STALE_PIN_AGE = timedelta(days=1)
 def is_catalog_tag(tag: str) -> bool:
     """Whether ``tag`` is one the catalog moves itself and no client may create, move or delete.
 
-    `published` is what readers of a governed tier read (ADR 0156 C1), so only this door's gate and a
+    `published` is what readers of the vetted version read (ADR 0156 C1), so only this door's gate and a
     `can_promote` holder's approval move it; a tag door that moved it would publish past both. The `rask.` tags pin
     versions for those doors: a publish's candidate and a held version.
     """
@@ -290,14 +290,14 @@ def _open_for_contract(uri: str, storage_options: StorageOptions, version: int) 
     return dataset.schema, getattr(dataset, "has_stable_row_ids", None), int(dataset.count_rows())
 
 
-def refuse_a_tier_without_provenance(schema: Any, *, version: int, has_stable_row_ids: bool | None = None) -> None:
+def refuse_a_table_without_provenance(schema: Any, *, version: int, has_stable_row_ids: bool | None = None) -> None:
     """Raise 400 when a table carries a `source_rowid` that cannot name the row it descends from.
 
     At this door because every publisher passes it. A table without the column is untouched: a governed row needs
-    no column (ADR 0156 C9), and `quality.tier_contract_violations` owns the rule; this function owns only the
+    no column (ADR 0156 C9), and `quality.source_rowid_violations` owns the rule; this function owns only the
     door's answer to it.
     """
-    problems = tier_contract_violations(schema, has_stable_row_ids=has_stable_row_ids)
+    problems = source_rowid_violations(schema, has_stable_row_ids=has_stable_row_ids)
     if not problems:
         return
     raise InvalidInputError(
@@ -525,7 +525,7 @@ def gate(
     # answering the same question — `assert_quality` above opened it for the assertions, and the
     # contract is a schema read, not a scan.
     contract_schema, stable_ids, rows = _open_for_contract(uri, storage_options or StorageOptions(), version)
-    refuse_a_tier_without_provenance(contract_schema, version=version, has_stable_row_ids=stable_ids)
+    refuse_a_table_without_provenance(contract_schema, version=version, has_stable_row_ids=stable_ids)
     band = review_reasons(rows=rows, published_rows=published_rows, band=review.band) if review is not None else []
     verdict = judge_findings(assertions, band_reasons=band, review=review is not None)
     return PublicationResult(
@@ -626,9 +626,9 @@ def publish(
         )
         # BEFORE the verdict, so an unrunnable gate can never reach the tag move below.
         refuse_a_gate_that_cannot_run(assertions, key_column=key_column, version=version, declared_by=declared_by)
-        # And before that verdict too: a tier with no provenance is not a weak publish, it is an
+        # And before that verdict too: a table with no provenance is not a weak publish, it is an
         # untraceable one, and no assertion in the list above can see a column that is absent.
-        refuse_a_tier_without_provenance(candidate.schema, version=version, has_stable_row_ids=getattr(candidate, "has_stable_row_ids", None))
+        refuse_a_table_without_provenance(candidate.schema, version=version, has_stable_row_ids=getattr(candidate, "has_stable_row_ids", None))
 
         # The band compares the row count readers would move to with the one they read now.
         band = (

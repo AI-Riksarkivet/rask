@@ -25,6 +25,7 @@
 	} from '#lib/remote/policies.api.ts';
 	import { fetchProject, namespaceTables, projectEvents } from '#lib/remote/warehouses.api.ts';
 	import { fetchWarehouseNamespaces } from '#lib/data/remote/warehouses.api.ts';
+	import ProjectLabels from '#lib/data/ProjectLabels.svelte';
 	import DeclaredInGit, {
 		declaredInGit,
 		DECLARED_IN_GIT_REASON,
@@ -35,10 +36,10 @@
 	// The graph is a map: every rung below the project links to the catalog page that owns it.
 	// `project` returns null: from `/projects/<id>`, the project rung IS this page.
 	const rungHref: HierarchyHref = (rung) => {
-		if (rung.tier === 'project') return null;
-		if (rung.tier === 'warehouse')
+		if (rung.level === 'project') return null;
+		if (rung.level === 'warehouse')
 			return resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(rung.id) });
-		if (rung.tier === 'namespace')
+		if (rung.level === 'namespace')
 			return resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(rung.id) });
 		return resolve('/catalog/tables/[table]', { table: encodeURIComponent(rung.id) });
 	};
@@ -60,7 +61,7 @@
 		detail === null && settled && ![200, 401, 403, 404].includes(lastStatus),
 	);
 
-	// #65 the tenant's maintenance plane. ONE read answers all three tiers: the project's own record
+	// #65 the tenant's maintenance plane. ONE read answers all three levels: the project's own record
 	// plus every table/namespace record inside it — a per-object `policy/describe` could not have been
 	// issued anyway, since the page would have to already know each id.
 	//
@@ -83,7 +84,7 @@
 		enabled: true,
 	});
 
-	/** The project's OWN record, if it has one — the tier this page can edit. */
+	/** The project's OWN record, if it has one — the one this page can edit. */
 	const ownPolicy = $derived(
 		policies?.policies.find((p) => p.kind === 'project' && p.id === project) ?? null,
 	);
@@ -331,6 +332,12 @@
 			{/if}
 		</section>
 
+		<!-- The labels this project defines, which its objects' owners attach (ADR 0211). Keyed by the
+		     project, so a form opened on one project cannot carry its draft into the next. -->
+		{#key project}
+			<ProjectLabels {project} />
+		{/key}
+
 		<!-- #71 what just happened HERE: the 10 most recent control events on this project and its
 		     warehouses, newest first. The estate-wide, filterable stream is one reload-link away. -->
 		<section>
@@ -480,7 +487,7 @@
 					</p>
 				{:else}
 					<table>
-						<thead><tr><th>tier</th><th>object</th><th>retention</th><th>state</th></tr></thead>
+						<thead><tr><th>kind</th><th>object</th><th>retention</th><th>state</th></tr></thead>
 						<tbody>
 							{#each scopedPolicies as p (`${p.kind}:${p.id}`)}
 								<tr>

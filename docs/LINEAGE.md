@@ -24,7 +24,7 @@ erasure ◀── GET /tables/{name}/derived ──────┤              
 
 A governed table is recorded under the uuid the catalog minted for it, with its bare catalog id (e.g. `acme$bronze$images`)
 beside it as the name its event used, so the same object is governed by OpenFGA (`table:<uuid>`), versioned by Lance and
-traced here, and a rename does not split its lineage (ADR 0173 §10). An external source (anything outside the governed tiers, R23) is recorded
+traced here, and a rename does not split its lineage (ADR 0173 §10). An external source (anything outside the catalog's governed tables, R23) is recorded
 namespace-qualified, `<namespace>/<name>`, so an external input can never resolve onto a governed table's edges
 (`Dataset.lineage_name` in `lineage/models.py`). The catalog names its datasets under its endpoint,
 `lance-namespace://<host>/api/catalog`, with each table's storage location in the `symlinks` facet ([[LH-553]],

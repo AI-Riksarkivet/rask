@@ -19,7 +19,7 @@ export type MyPermissions = components['schemas']['MyPermissionsResponse'];
 export type ManagedAccess = components['schemas']['ManagedAccessResponse'];
 export type PolicyRequest = components['schemas']['PolicyRequest'];
 
-/** The FGA object kinds the catalog's FULL access surface is mounted on — the owner-tier gate is
+/** The FGA object kinds the catalog's FULL access surface is mounted on — the owner-rung gate is
  * `can_drop` for a table, `can_delete` for a namespace (same bar, per-type relation).
  *
  * Deliberately NOT widened to warehouse/project: `access/list`, `check`, `grant`, `revoke` and
@@ -71,7 +71,7 @@ export const AccessCheckSchema = v.object({
 });
 /** The SELF-view: every `can_*` the model defines on the object, answered for the CALLER alone.
  *  Distinct from the review above and deliberately so — that one enumerates principals and clears the
- *  owner bar, this one describes only the person asking and is gated at the reader tier, so the page
+ *  owner bar, this one describes only the person asking and is gated at the reader rung, so the page
  *  can decide what to RENDER before the user clicks something they were never allowed to do.
  *  `permissions` is an open record because its keys are the model's `can_*` set: pinning them here
  *  would be a fourth copy of the model that drifts the day a relation is added. */
@@ -80,7 +80,7 @@ export const MyPermissionsSchema = v.object({
 	subject: v.string(),
 	permissions: v.record(v.string(), v.boolean()),
 });
-/** Whether granting on this container is CENTRALIZED — read at the reader tier on purpose, because
+/** Whether granting on this container is CENTRALIZED — read at the reader rung on purpose, because
  *  this flag is the reason a page's grant controls are absent and the person who needs that
  *  explanation is exactly the one who may not change it. */
 export const ManagedAccessSchema = v.object({

@@ -56,7 +56,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import ListLimit, paginate
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import tier_policy
+from catalog.core import write_judge
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, with_minted_uuid
@@ -157,7 +157,7 @@ async def create_namespace(
     # where a client sets a DEFAULT format for the tables created under it — so accepting one here
     # would let the ruling be bypassed one level up from the door that enforces it.
     reject_unsupported_properties(body.properties if body else None)
-    declared = tier_policy.declared_tier(body.properties if body else None)
+    declared = write_judge.declares_requires_run(body.properties if body else None)
     # WHAT `mode` MEANS HERE, from spec.yaml's CreateNamespaceRequest: "Create: the operation fails
     # with 409. ExistOk: the operation succeeds and the existing namespace is kept. Overwrite: the
     # existing namespace is dropped and a new empty namespace with this name is created." The backend
@@ -177,17 +177,19 @@ async def create_namespace(
     # the kept namespace's own, and an Overwrite's replacement is a new namespace with a new one.
     req.properties = with_minted_uuid(req.properties)
     minted = req.properties[UUID_PROPERTY]
-    await _judge_tier_declaration(ns, settings, token, client, segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
+    await _judge_run_rule_declaration(ns, settings, token, client, segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
     # RACE-FREE BY CATCHING RATHER THAN PRE-CHECKING. An `exists?` read followed by a create leaves a
     # window in which another caller creates the namespace, and on THIS door the loser of that race
     # would go on to seed ownership over somebody else's object. The backend's own refusal is the only
     # answer that cannot be stale.
     if create_mode is CreateMode.EXIST_OK:
         response, kept_existing = await create_or_keep_namespace(ns, segments, req)
-        if kept_existing and declared is not None and (kept := (response.properties or {}).get(tier_policy.TIER_PROPERTY)) != declared:
-            # ExistOk keeps the namespace as it is, so a tier it does not already have would not land. A tier
-            # is declared once (ADR 0160): saying so beats a 200 that quietly ignored the declaration.
-            raise NamespaceAlreadyExistsError(f"namespace {id!r} already exists with {tier_policy.TIER_PROPERTY}={kept!r}; a tier is declared once, at create")
+        if kept_existing and declared and (response.properties or {}).get(write_judge.REQUIRES_RUN_PROPERTY) != write_judge.REQUIRED:
+            # ExistOk keeps the namespace as it is, so a rule it does not already declare would not land. The rule is
+            # declared once (ADR 0211): saying so beats a 200 that quietly ignored the declaration.
+            raise NamespaceAlreadyExistsError(
+                f"namespace {id!r} already exists without {write_judge.REQUIRES_RUN_PROPERTY}; the rule is declared once, at create"
+            )
     elif create_mode is CreateMode.OVERWRITE:
         response = await _create_or_replace_empty_namespace(ns, settings, token, client, segments, req)
         kept_existing = False
@@ -321,37 +323,32 @@ async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, to
         pass
 
 
-async def _judge_tier_declaration(
+async def _judge_run_rule_declaration(
     ns: LanceNamespace,
     settings: Settings,
     token: Caller | None,
     client: OpenFgaClient | None,
     segments: list[str],
     *,
-    declared: str | None,
+    declared: bool,
     overwrite: bool,
 ) -> None:
-    """Refuse a create that declares a tier, or an Overwrite that would replace one, unless an admin asks (ADR 0160).
+    """Refuse a create that declares the run rule, or an Overwrite that would drop one, unless an admin asks (ADR 0211).
 
-    A tier is declared once: no Lance operation alters a namespace's properties, so the catalog's own
-    Overwrite is the only way to change one, and it needs the same admin as the declaration. A deeper
-    namespace may repeat its ancestors' tier and nothing else, which is what lets the judge stop at the
-    shallowest declaration. The ancestors are read only after the admin check, so a refused caller learns
-    nothing about them. An Overwrite reads the namespace's own declaration first, to know whether it
-    replaces one; a caller who may create beside it already reads it as a reader of the parent.
+    The rule is declared once: no Lance operation alters a namespace's properties, so the catalog's own Overwrite is the
+    only way to drop it, and it needs the same admin as the declaration. A namespace beneath one that declares it is
+    bound by it whatever it declares itself (:func:`write_judge.requires_run`). An Overwrite reads the namespace's own
+    declaration first, to know whether it drops one; a caller who may create beside it already reads it as a reader of
+    the parent.
 
     Raises:
         PermissionDeniedError: The caller is not the namespace's project admin (or the estate admin).
-        InvalidInputError: ``declared`` differs from the tier an ancestor declares.
     """
-    replaced = await tier_policy.declared_on(ns, segments) if overwrite else None
-    if declared is None and replaced is None:
+    replaced = await write_judge.declared_on(ns, segments) if overwrite else False
+    if not declared and not replaced:
         return
     project = await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), segments[0])
-    await fga_deps.require_tier_authority(client, settings, token, project=project)
-    inherited = await tier_policy.tier_of(ns, segments[:-1])
-    if declared is not None and inherited is not None and inherited != declared:
-        raise InvalidInputError(f"namespace {segments!r} lies under a {inherited} namespace, so it cannot declare {tier_policy.TIER_PROPERTY}={declared!r}")
+    await fga_deps.require_run_rule_authority(client, settings, token, project=project)
 
 
 async def _create_or_replace_empty_namespace(

@@ -24,13 +24,20 @@ from __future__ import annotations
 
 from typing import Final
 
-from lakehouse import commit_records, commit_turns, file_identities, history_fences, maintenance_policies, protection
+from lakehouse import commit_records, commit_turns, control_prefixes, file_identities, history_fences, maintenance_policies, protection
 from lakehouse.record_store import delete_record, record_key
 from lakehouse.storage_options import StorageOptions
 
 
 #: Every control-root registry holding one record per object under its uuid.
-OBJECT_RECORD_PREFIXES: Final = (protection.PREFIX, maintenance_policies.PREFIX, history_fences.PREFIX, commit_turns.PREFIX, commit_records.MARKS_PREFIX)
+OBJECT_RECORD_PREFIXES: Final = (
+    protection.PREFIX,
+    maintenance_policies.PREFIX,
+    history_fences.PREFIX,
+    commit_turns.PREFIX,
+    commit_records.MARKS_PREFIX,
+    control_prefixes.LABELS,
+)
 
 
 def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, uuid: str) -> list[str]:

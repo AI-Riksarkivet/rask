@@ -1,7 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { mockMe, signIn, TOKEN } from './session';
 import { cellUnder } from '../table-cell';
-import { declaredTiers } from './tiers';
 import { MOCK_CATALOG } from './ports';
 
 // The table/namespace row drawers, over registry and detail reads seeded on the mock catalog per bearer.
@@ -35,22 +34,21 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 				[describeKey('bronze$events')]: DESCRIBE,
 				[describeKey('db1$t')]: DESCRIBE,
 				[describeKey('acme-wh$gold$catalog')]: DESCRIBE,
-				...declaredTiers({ 'acme-wh$gold': 'gold' }),
 			},
 		},
 	});
 });
 
-test('a table row opens the record drawer with stage, namespace and the two jump links', async ({
+test('a table row opens the record drawer with its labels, namespace and the two jump links', async ({
 	page,
 }) => {
 	await page.goto('/catalog/tables');
-	// click the row's TIER cell (the id/namespace cells are links with their own navigation)
-	await (await cellUnder(page, 'bronze › events', 'tier')).click();
+	// click the row's LABELS cell (the id/namespace cells are links with their own navigation)
+	await (await cellUnder(page, 'bronze › events', 'labels')).click();
 	const drawer = page.getByRole('dialog');
 	await expect(drawer).toContainText('bronze › events');
 	await expect(drawer).toContainText('The registry record for this table.');
-	await expect(drawer).toContainText('tier');
+	await expect(drawer).toContainText('labels');
 	// jump links: the detail page, and the detail page's Access tab (?tab= deep link)
 	await expect(drawer.getByRole('link', { name: 'Open detail' })).toHaveAttribute(
 		'href',
@@ -66,7 +64,7 @@ test('the access jump link lands on the detail page with the Access tab selected
 	page,
 }) => {
 	await page.goto('/catalog/tables');
-	await (await cellUnder(page, 'bronze › events', 'tier')).click();
+	await (await cellUnder(page, 'bronze › events', 'labels')).click();
 	await page.getByRole('dialog').getByRole('link', { name: 'Access tab' }).click();
 	await expect(page).toHaveURL(/\/catalog\/tables\/bronze%24events\?tab=access$/);
 	await expect(page.getByRole('tab', { name: 'access' })).toHaveAttribute('aria-selected', 'true');
@@ -104,10 +102,10 @@ test('a namespace row opens the record drawer with the member count', async ({ p
 	);
 });
 
-test('the table detail header carries the tier its namespace declares', async ({ page }) => {
+test('the table detail opens on its overview, and the Access tab hosts the FGA view', async ({
+	page,
+}) => {
 	await page.goto('/catalog/tables/acme-wh%24gold%24catalog');
-	await expect(page.locator('header .stage')).toHaveText('gold');
-	// The tab bar defaults to overview; the Access tab hosts the FGA view.
 	await expect(page.getByRole('tab', { name: 'overview' })).toHaveAttribute(
 		'aria-selected',
 		'true',

@@ -180,7 +180,7 @@ async def create_governed_table(
     ``mode``, ``shape`` and ``table`` arrive PARSED ONCE, by the door, which refuses a malformed one
     before its idempotency claim (``CreateMode.parse``, :func:`parse_create_shape`,
     ``dataplane.read_arrow_body``); four decisions below turn on
-    the mode: the pre-existence guards, the schema read-back and the announcements. ``run`` is the run the request's Context names, which the tier judge already judged: it is stamped
+    the mode: the pre-existence guards, the schema read-back and the announcements. ``run`` is the run the request's Context names, which the write judge already judged: it is stamped
     into the commit and its inputs become the event's inputs. ``force`` releases deletion protection for an Overwrite of an existing table,
     and nothing else.
     """

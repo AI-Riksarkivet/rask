@@ -54,12 +54,12 @@ WARN: Final = "warn"
 PROVENANCE: Final = "provenance_complete"
 
 
-def tier_contract_violations(schema: pa.Schema, *, has_stable_row_ids: bool | None = None) -> list[str]:
+def source_rowid_violations(schema: pa.Schema, *, has_stable_row_ids: bool | None = None) -> list[str]:
     """Why this schema's `source_rowid` cannot name the row it descends from — empty when it can, or is absent.
 
     A governed row needs no column (ADR 0156 C9): its run and inputs are the commit's transaction properties
     ([[LH-225]]), and `stage` and `lineage` are the writer's own columns. `source_rowid` is the one column the
-    platform names, an opt-in a pipeline writes so impact analysis can trace a row to the bronze row it came
+    platform names, an opt-in a pipeline writes so impact analysis can trace a row to the source row it came
     from; a table that carries it must be able to back it.
     """
     if SOURCE_ROWID_COLUMN not in schema.names:

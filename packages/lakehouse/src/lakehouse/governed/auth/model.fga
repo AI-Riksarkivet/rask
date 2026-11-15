@@ -170,8 +170,8 @@ type estate
         # Every `/management/v1/access/*` route: reading and WRITING the raw tuple store, the authorization state
         # of the whole estate, and offboarding a principal from it.
         define can_administer_authz: owner
-        # Declaring or dropping `rask.tier` on a namespace no project owns (ADR 0160).
-        define can_declare_unowned_tier: owner
+        # Declaring or dropping `rask.requires_run` on a namespace no project owns (ADR 0211).
+        define can_declare_unowned_run_rule: owner
         # Deregistering a table no uuid identifies, which therefore holds no grant of its own ([[LH-534]]).
         define can_deregister_unidentified_table: owner
         # Lineage's kept parks ([[LH-148]]): reading them, and presenting one to the feed again. Two verbs, since
@@ -461,7 +461,8 @@ type warehouse
     # withdrawn, so they cannot clear the flag either — a policy you can switch off is not a policy.
     define can_set_managed_access: manage_grants
 
-# Namespace = a container of tables, which may declare a tier (`rask.tier`, ADR 0160); self-nesting under a warehouse.
+# Namespace = a container of tables, which may require every write under it to name its run (`rask.requires_run`,
+# ADR 0211); self-nesting under a warehouse.
 type namespace
   relations
     define parent: [warehouse, namespace]
@@ -546,6 +547,8 @@ type namespace
     # at the same tier as the `can_delete` it guards. See `type table`'s `can_set_protection` for why a
     # distinct action at an identical tier costs nobody a permission and buys back the audit trail.
     define can_set_protection: owner_effective
+    # Attaching or removing a label the project defines (ADR 0211): the table rung's twin. A label grants nothing.
+    define can_label: owner_effective
     # ---- grant actions ---- (same shape as `warehouse`; see there for the reasoning)
     define can_grant_owner: manage_grants
     define can_grant_writer: manage_grants or (writer_effective and pass_grants)
@@ -659,6 +662,9 @@ type table
     # then lack", which is true of a GRANTABLE relation and false of a computed userset over `owner`.
     # This one is computed, so every owner already holds it the moment it exists.
     define can_set_protection: owner_effective
+    # Attaching or removing a label the project defines (ADR 0211). A label grants nothing and refuses nothing, so
+    # classifying the table is the owner's statement about it, at the protection's tier and under its own name.
+    define can_label: owner_effective
     define can_deregister: owner_effective
     # MOVING A TABLE INTO ANOTHER NAMESPACE ([[LH-568]]), which a rename naming one does. It retires the name as a drop
     # does, so it is the owner's act, and the table's grants, held by its uuid, go with it, so it is a grant-management

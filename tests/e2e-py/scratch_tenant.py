@@ -82,7 +82,7 @@ class Tenant:
         admin = self.admin
         ok(admin.http.post(f"{CATALOG}/management/v1/projects", json={"id": self.project}))
         ok(admin.http.post(f"{CATALOG}/management/v1/warehouses", json={"id": self.project, "project": self.project}))
-        ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.bronze}/create", json={"properties": {"rask.tier": "bronze"}}))
+        ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.bronze}/create", json={}))
         for relation in self.grants:
             ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.bronze}/access/grant", json={"user": self.job.principal, "relation": relation}))
 

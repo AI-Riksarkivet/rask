@@ -8,11 +8,18 @@
 	 */
 	import TableRegistry from '#lib/data/TableRegistry.svelte';
 
-	/** The panel's own filter: kept out of the URL, so choosing a project keeps the reader on the
-	 *  workbench. It resets when the dock remounts the panel, as the registry's search does. */
+	/** The panel's own filters: kept out of the URL, so choosing a project or a label keeps the reader
+	 *  on the workbench. They reset when the dock remounts the panel, as the registry's search does. */
 	let project = $state('');
+	let label = $state('');
 </script>
 
 <div class="bg-background h-full min-h-0 overflow-auto">
-	<TableRegistry {project} onprojectchange={(next) => (project = next)} frame="panel" />
+	<TableRegistry
+		{project}
+		onprojectchange={(next) => (project = next)}
+		{label}
+		onlabelchange={(next) => (label = next)}
+		frame="panel"
+	/>
 </div>

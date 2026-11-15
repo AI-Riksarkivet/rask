@@ -93,10 +93,10 @@
 				};
 				await onmutated?.();
 			} else if (res.status === 401 || res.status === 403) {
-				// NAMES THE REAL GATE. It read "Managing access needs the owner tier", which is true of
+				// NAMES THE REAL GATE. "Managing access needs the owner rung" is true of
 				// `access/list` and `access/check` (both still `can_drop`) and has NOT been true of
 				// grant/revoke since the grant axis was separated from ownership. Under `managed_access` a
-				// refused caller may already HOLD the owner tier, because that flag withdraws precisely
+				// refused caller may already HOLD the owner rung, because that flag withdraws precisely
 				// `manage_grants` and the grant option beneath it.
 				result = {
 					tone: 'fail',

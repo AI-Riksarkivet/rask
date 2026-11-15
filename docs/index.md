@@ -17,7 +17,7 @@ the root workspace (`uv sync --package <name>`), one dockerfile each under
 
 ```mermaid
 flowchart LR
-    pipe["A user's pipeline<br/><sub>on its own compute</sub>"] -->|"namespace doors"| cat["Catalog<br/><sub>tier governance · FGA</sub>"]
+    pipe["A user's pipeline<br/><sub>on its own compute</sub>"] -->|"namespace doors"| cat["Catalog<br/><sub>write governance · FGA</sub>"]
     cat --> store[("Lance tables<br/>S3")]
     cat -->|"commit announcement"| lin["Lineage<br/><sub>GET /events · edge list</sub>"]
     lin --> notif["A notifier<br/><sub>a client, bring your own</sub>"]
@@ -28,7 +28,8 @@ flowchart LR
 ```
 
 1. A client (the user's pipeline, an ingest job, a notebook) writes through the catalog's **Lance Namespace** doors;
-   the catalog authorizes it on **OpenFGA** and governs the bronze → silver → gold tiers in its own write path.
+   the catalog authorizes it on **OpenFGA** and judges it in its own write path (the opt-in run rule, the
+   publish-time quality gate); a project classifies its tables and namespaces with labels it defines.
 2. The catalog announces every committed write as an **OpenLineage** event; lineage records it, serves the
    durable `GET /events` feed a pipeline polls and forwards it to a graph backend of the operator's choice; a
    notifier, a client the lakehouse does not run, tells the right person from the fields each event names
@@ -43,7 +44,7 @@ flowchart LR
 
 - **[Getting Started](getting-started/index.md)** — install, run it locally, and deploy to k3s.
 - **[Architecture](architecture/index.md)** — how the catalog, lineage, maintenance, the console and storage fit together.
-- **[Tier Governance](TIER-GOVERNANCE.md)** — what the catalog enforces on a write into a tier.
+- **[Write Governance](WRITE-GOVERNANCE.md)** — what the catalog enforces on a write.
 - **[Packages](packages/index.md)** — the monorepo's libraries.
 - **[API Reference](reference/storage.md)** — auto-generated from source docstrings.
 

@@ -1,9 +1,8 @@
 <script lang="ts">
 	// `/tables` — the catalog table registry (#52) on the shared @rask/ui DataTable (goal cond 4):
-	// sortable columns, a text search, and a TIER filter (the tier each table's namespace declares,
-	// `rask.tier`, ADR 0160 — never one read off a name — shown as a badge per row). Same stack-mode states as
-	// before: governed without a session ⇒ sign-in, unreachable ⇒ retrying, open ⇒ data or the
-	// honest empty state.
+	// sortable columns, a text search, a project filter and a LABEL filter (the labels each table
+	// carries, ADR 0211, shown as chips per row). Same stack-mode states as before: governed without a
+	// session ⇒ sign-in, unreachable ⇒ retrying, open ⇒ data or the honest empty state.
 	//
 	// THE #85 "Declare table" FORM NOW HAS ITS SECOND HALF. Declaring reserves an id and writes no
 	// bytes, and nothing in the app could put the first rows in: the append door (`insertRows`)
@@ -27,7 +26,6 @@
 		type PaginationState,
 		type SortingState,
 	} from '@rask/ui/data-table';
-	import { Select } from '@rask/ui/select';
 	import { Plus, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
@@ -41,11 +39,14 @@
 	import { filterVerdict, projectOf } from './project-filter.ts';
 	import { ProjectIndexRead } from './project-index.svelte.ts';
 	import RowDrawer from './RowDrawer.svelte';
-	import { namespaceOfTable, type StageInfo } from './stage';
-	import { NamespaceTiers } from './namespace-tiers.svelte';
+	import { parentNamespace } from '#lib/api/identifiers.ts';
+	import { LabelIndexRead } from './label-index.svelte.ts';
+	import LabelChips from './LabelChips.svelte';
+	import LabelFilter from './LabelFilter.svelte';
+	import LabelIndexNotice from './LabelIndexNotice.svelte';
+	import { labelChips, type Labels } from './labels.ts';
 	import { catalogPath } from '#lib/catalog-trail.ts';
 	import { CopyButton } from '@rask/ui/copy-button';
-	import StageBadge from './StageBadge.svelte';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 
 	// Seeded from the shared read instance: a registry mounted again (the workbench remounts a panel
@@ -60,10 +61,15 @@
 	let {
 		project: projectFilter,
 		onprojectchange,
+		label: labelFilter,
+		onlabelchange,
 		frame = 'page',
 	}: {
 		project: string;
 		onprojectchange: (project: string) => void;
+		/** The label the rows are filtered to (`''`: any label), held where the project filter is. */
+		label: string;
+		onlabelchange: (label: string) => void;
 		/** Where the registry is drawn: its own page (the page's h1, its column and padding), or a
 		 *  workbench panel (a heading under the workbench's h1, the panel's whole width). */
 		frame?: 'page' | 'panel';
@@ -99,17 +105,17 @@
 		]),
 	);
 
-	/** The tier each listed table's namespace declares (ADR 0160), never one read off its name. */
-	const tiers = new NamespaceTiers();
+	/** The labels each listed table carries, read per project the caller can see (ADR 0211). */
+	const labels = new LabelIndexRead();
 
 	async function load(): Promise<void> {
 		const [res] = await Promise.all([fetchTables(), projects.load()]);
 		settled = true;
+		void labels.load(projects.visible.state);
 		if (res.ok) {
 			// A copy + sort, not toSorted() — the latter is ES2023, above the repo's Safari-16 floor.
 			tables = [...res.data.tables].sort();
 			lastStatus = 200;
-			void tiers.load(tables.map(namespaceOfTable));
 		} else {
 			lastStatus = res.status; // status 0 (offline/timeout) now reads as offline, not a stuck spinner
 		}
@@ -250,12 +256,12 @@
 	}
 
 	// ── the DataTable (goal cond 4) ──
-	type Row = { id: string; namespace: string; stage: StageInfo | null; project: string | null };
+	type Row = { id: string; namespace: string; labels: Labels; project: string | null };
 	const allRows = $derived.by((): Row[] => {
 		const all = (tables ?? []).map((id): Row => ({
 			id,
-			namespace: namespaceOfTable(id),
-			stage: tiers.of(namespaceOfTable(id)),
+			namespace: parentNamespace(id),
+			labels: labels.of('table', id),
 			project: projects.index ? projectOf(projects.index, id) : null,
 		}));
 		return all;
@@ -273,7 +279,7 @@
 	const rows = $derived(
 		allRows.filter(
 			(r) =>
-				(!stageFilter || r.stage?.stage === stageFilter) &&
+				(!labelFilter || labelFilter in r.labels) &&
 				(!projectFilter || r.project === projectFilter),
 		),
 	);
@@ -281,7 +287,6 @@
 	let sorting = $state<SortingState>([]);
 	let globalFilter = $state('');
 	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 10 });
-	let stageFilter = $state(''); // '' = any tier
 
 	// Goal cond 8: a row click opens the record drawer; a click on a link in the row is the link's
 	// (the data table leaves a click on a control to the control).
@@ -317,16 +322,16 @@
 			meta: { headerClass: 'w-32' },
 		},
 		{
-			id: 'stage',
-			accessorFn: (r) => r.stage?.stage ?? '',
+			id: 'labels',
+			accessorFn: (r) => labelChips(r.labels).join(' '),
 			header: ({ column }) =>
 				renderComponent(DataTableHeaderButton, {
-					label: 'tier',
+					label: 'labels',
 					sorted: column.getIsSorted(),
 					onclick: column.getToggleSortingHandler(),
 				}),
-			cell: ({ row }) => renderSnippet(stageCell, row.original),
-			meta: { headerClass: 'w-28' },
+			cell: ({ row }) => renderSnippet(labelsCell, row.original),
+			meta: { headerClass: 'w-40' },
 		},
 		{
 			id: 'namespace',
@@ -376,11 +381,11 @@
 	>
 {/snippet}
 {#snippet projectCell(row: Row)}
-	<!-- The stage column's dash, in the stage column's face: a monospace em dash reads as an en dash. -->
-	{#if row.project}<span class="mono">{row.project}</span>{:else}<span class="mut">—</span>{/if}
+	<!-- A monospace em dash, as the labels column draws one: a monospace em dash reads as an en dash. -->
+	{#if row.project}<span class="mono">{row.project}</span>{:else}<span class="mut font-mono">—</span>{/if}
 {/snippet}
-{#snippet stageCell(row: Row)}
-	{#if row.stage}<StageBadge info={row.stage} />{:else}<span class="mut">—</span>{/if}
+{#snippet labelsCell(row: Row)}
+	<LabelChips labels={row.labels} />
 {/snippet}
 {#snippet nsCell(row: Row)}
 	<a
@@ -491,27 +496,17 @@
 	{:else}
 		<div class="toolbar">
 			<DataTableTextFilter bind:value={globalFilter} placeholder="Search tables…" />
-			<label class="text-muted-foreground inline-flex items-center gap-2 text-sm">
-				Tier
-				<Select
-					bind:value={stageFilter}
-					ariaLabel="Tier filter"
-					placeholder="any tier"
-					options={[
-						{ value: '', label: 'any tier' },
-						{ value: 'bronze', label: 'bronze' },
-						{ value: 'silver', label: 'silver' },
-						{ value: 'gold', label: 'gold' },
-					]}
-				/>
-			</label>
 			<ProjectFilter
 				value={projectFilter}
 				visible={projects.visible.ids}
 				ofRows={[...rowProjects]}
 				onchange={onprojectchange}
 			/>
+			<LabelFilter value={labelFilter} names={labels.names} onchange={onlabelchange} />
 		</div>
+		{#if labels.state.kind === 'ready'}
+			<LabelIndexNotice failures={labels.state.failures} filtering={labelFilter !== ''} />
+		{/if}
 		{#if verdict.kind === 'failed' || verdict.kind === 'unseen'}
 			<ProjectFilterNotice
 				project={projectFilter}
@@ -521,10 +516,14 @@
 		{:else}
 			<DataTable
 				{table}
-				loading={tables === null || verdict.kind === 'waiting'}
-				emptyMessage={projectFilter
-					? `No tables in project ${projectFilter}.`
-					: 'No tables visible to you. The list holds only the tables your grants reach: ask a project admin for access, or declare one.'}
+				loading={tables === null ||
+					verdict.kind === 'waiting' ||
+					(labelFilter !== '' && labels.state.kind === 'loading')}
+				emptyMessage={labelFilter
+					? `No table you can see carries the label ${labelFilter}${projectFilter ? ` in project ${projectFilter}` : ''}.`
+					: projectFilter
+						? `No tables in project ${projectFilter}.`
+						: 'No tables visible to you. The list holds only the tables your grants reach: ask a project admin for access, or declare one.'}
 				onrowclick={openDrawer}
 			/>
 		{/if}
@@ -549,12 +548,8 @@
 					})}>{catalogPath(drawerRow.namespace)}</a
 				>
 			</dd>
-			<dt>tier</dt>
-			<dd>
-				{#if drawerRow.stage}<StageBadge info={drawerRow.stage} />{:else}<span class="mut"
-						>— (no tier declared)</span
-					>{/if}
-			</dd>
+			<dt>labels</dt>
+			<dd><LabelChips labels={drawerRow.labels} /></dd>
 		</dl>
 		<div class="jumps">
 			<a

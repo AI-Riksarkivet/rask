@@ -7,14 +7,16 @@ and events across them. This section describes the system as it runs today.
 
 The **catalog** serves the Lance Namespace REST specification (`lance_docs/ns_catalog/spec.yaml`) over Lance datasets
 on S3, organised as `project > warehouse > namespace > table`. Every write enters through its namespace doors, is
-authorized on **OpenFGA**, and is governed in the catalog's write path, which is where the bronze → silver → gold
-tiers live ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)). The catalog announces each
+authorized on **OpenFGA**, and is governed in the catalog's write path, which is where the opt-in run rule and the publish-time quality gate
+live ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md),
+[ADR 0211](../adr/0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md)); how a project layers
+its data is its own vocabulary, kept as labels it defines. The catalog announces each
 committed write as an OpenLineage event on **NATS JetStream**; **lineage** records it in a durable
 commit feed (`GET /events`) and a table-level edge list, Lance tables in the catalog's provenance namespace, and
 forwards it to a bring-your-own graph backend ([ADR 0158](../adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md)).
 The lakehouse runs no notifier: a client that tells people about the events targets them from the fields the events
 name ([the contract](../COMMIT-EVENTS.md#telling-people-the-notifier-contract)).
-**Maintenance** expires versions, purges trash, scans for orphans and reconciles stores. Moving data between tiers,
+**Maintenance** expires versions, purges trash, scans for orphans and reconciles stores. Moving data between tables,
 ingest and training are the user's pipeline, on the user's own compute and orchestrator
 ([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). The HTTP backend sits behind the
 **platform's Gateway** (Kubernetes Gateway API), whose HTTPRoutes the chart renders, one per public `/api/*` prefix
@@ -30,7 +32,7 @@ serves its static files at `/` on the same Gateway
 flowchart TB
     browser["Browser · the console<br/><sub>frontend/console, static files</sub>"] -->|"/api/* with its bearer"| gw["Platform Gateway · HTTPRoutes<br/><sub>chart/templates/route.yaml</sub>"]
     client["A user's pipeline<br/><sub>its own compute</sub>"] -->|"namespace doors"| cat
-    gw --> cat["catalog<br/><sub>tier governance</sub>"]
+    gw --> cat["catalog<br/><sub>write governance</sub>"]
     gw --> lin["lineage<br/><sub>GET /events · provenance tables</sub>"]
     gw --> web["rask-console<br/><sub>the console's static files, at /</sub>"]
     cat --> fga[("OpenFGA")]
@@ -42,8 +44,8 @@ flowchart TB
 ## Key facts
 
 - **The catalog is the only way in.** No lakehouse service fetches source bytes or writes a governed table except
-  through the catalog's namespace doors, so tier governance cannot be bypassed. What it enforces today, and the
-  ADR 0156 rules still to land, are in [Tier Governance](../TIER-GOVERNANCE.md).
+  through the catalog's namespace doors, so write governance cannot be bypassed. What it enforces is in
+  [Write Governance](../WRITE-GOVERNANCE.md).
 - **The estate is authenticated.** Every service verifies an OIDC token (Dex in development) and authorizes on OpenFGA;
   the chart turns auth on by default and refuses a half-governed render. The console calls `/api/*` on the cluster
   route with the signed-in person's bearer, and the route sends each prefix straight to its service; no process at the
@@ -59,4 +61,4 @@ flowchart TB
 
 - **[Monorepo Layout](layout.md)** — the two language-pure workspace planes and what lives where.
 - **[Deployment](deployment.md)** — prerequisites, clusters, container images, CI, and how it ships.
-- **[Ingest and Tier Movement](ingest-and-tier-movement.md)** — where data enters and who moves it between tiers.
+- **[Ingest and Data Movement](ingest-and-data-movement.md)** — where data enters and who moves it between tables.

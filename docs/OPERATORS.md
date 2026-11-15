@@ -149,7 +149,7 @@ dependency for crash-recovery semantics the idempotency keys already give.
 > the argument above stops applying and a workflow engine earns its dependency.
 >
 > **The lakehouse runs no ingest and hosts no workflow engine** ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md),
-> [ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)): ingest and tier movement are bring-your-own
+> [ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)): ingest and data movement are bring-your-own
 > client jobs that commit through the catalog. The criterion above is the question any new multi-step path is asked.
 
 **Lance — no operator exists, none is missing.** Lance is a format + libraries; its "control

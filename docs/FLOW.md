@@ -1,6 +1,6 @@
 # End-to-end flow — what happens to a write, in order
 
-The single read-this-first narrative of how data enters the lakehouse, moves between tiers and is traced. Each step
+The single read-this-first narrative of how data enters the lakehouse, moves between tables and is traced. Each step
 links to the deep doc for its subsystem. The lakehouse runs no ingest, no stage, no training and no engine
 ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md),
 [ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)): every write below is a client's, and the
@@ -12,8 +12,8 @@ lakehouse governs, records and announces it.
    ▼
  catalog ── authorizes (OpenFGA), commits the Lance write, announces it ──pub(lineage.events.v1)──▶ lineage ─▶ commit feed + edge list
                                                                                                       └─▶ forwarded to a graph backend
- the user's pipeline (on its own compute) reads bronze, writes silver through the catalog, emits its own
-   │  OpenLineage run; then silver → gold the same way
+ the user's pipeline (on its own compute) reads one table, writes the next through the catalog, emits its own
+   │  OpenLineage run; and again for each table it derives
    ▼
  maintenance ── per-table passes on a work queue: expires versions, lists due work; audit, orphan scan, purge ── emits maintenance lineage
 ```
@@ -23,11 +23,12 @@ lakehouse governs, records and announces it.
 Data enters only through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`,
 `MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`). The
 writer is a client: the deployer's ingest job on its own compute (a bring-your-own client job), or a user's
-pipeline moving data between tiers, as the live lane `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py`
-does with stock clients: pylance seeds bronze and the lance-namespace client derives silver. Each door authorizes the
-caller on OpenFGA before it commits.
+pipeline moving data between tables, as the live lane `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py`
+does with stock clients: pylance seeds a namespace named `bronze` and the lance-namespace client derives one named `silver`, which
+declares the run rule (`rask.requires_run`). Each door authorizes the caller on OpenFGA, and the write judge applies the
+run rule, before it commits.
 
-→ [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) · code: `services/catalog`
+→ [`WRITE-GOVERNANCE.md`](WRITE-GOVERNANCE.md) · code: `services/catalog`
 
 ## 2. The catalog announces the commit
 
@@ -51,11 +52,11 @@ configured (Marquez in development), which answers upstream, downstream and run-
 
 ## 4. The user's pipeline moves the data on
 
-The user's pipeline reads the tier, transforms on its own compute, writes the next tier through the catalog's doors
+The user's pipeline reads a table, transforms on its own compute, writes the next table through the catalog's doors
 (step 1 again) and emits its own OpenLineage run for the transform (`POST /api/lineage/api/v1/lineage`), naming its
 inputs so the edge list records what the output derives from. A pipeline outside the estate learns of a committed
-write by following lineage's durable `GET /events` feed forward with its own token; the NATS topics are internal. On
-silver and gold the write itself carries the run and its inputs (the spec `Context` headers, stamped by the catalog as
+write by following lineage's durable `GET /events` feed forward with its own token; the NATS topics are internal. Under
+the run rule the write itself carries the run and its inputs (the spec `Context` headers, stamped by the catalog as
 `rask.*` transaction properties: ADR 0156 C2, LH-225, #180).
 
 → [`COMMIT-EVENTS.md`](COMMIT-EVENTS.md)

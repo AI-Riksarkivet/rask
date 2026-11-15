@@ -1,6 +1,6 @@
 """The bring-your-own pipeline scenario Phase 1's acceptance drives, once per session ([[LH-478]], XC-090).
 
-The lakehouse runs no pipeline. A user's job, on its own compute, writes every tier through the catalog's Lance
+The lakehouse runs no pipeline. A user's job, on its own compute, writes every table through the catalog's Lance
 Namespace doors with a stock client, follows the commit feed to learn what to do next, and publishes through the
 tag gate. `drive` is that job, run from outside the cluster:
 
@@ -157,8 +157,9 @@ class Tenant:
         self.created_at = datetime.now(UTC)
         ok(admin.http.post(f"{CATALOG}/management/v1/projects", json={"id": self.project}))
         ok(admin.http.post(f"{CATALOG}/management/v1/warehouses", json={"id": self.project, "project": self.project}))
-        for namespace, tier in ((self.bronze, "bronze"), (self.silver, "silver")):
-            ok(admin.http.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={"properties": {"rask.tier": tier}}))
+        # Silver requires every write to name its run (ADR 0211); bronze, which the pipeline seeds, declares nothing.
+        for namespace, properties in ((self.bronze, {}), (self.silver, {"rask.requires_run": "true"})):
+            ok(admin.http.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={"properties": properties}))
             ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{namespace}/access/grant", json={"user": self.pipeline.principal, "relation": "writer"}))
         ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.silver}/access/grant", json={"user": self.validator.principal, "relation": "validator"}))
         self.declare_gate(review=False)

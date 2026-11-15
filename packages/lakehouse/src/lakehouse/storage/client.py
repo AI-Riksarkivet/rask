@@ -85,8 +85,8 @@ def s3_client(
 
     ``access_key``/``secret_key``/``session_token``/``region``/``insecure`` override the env for THIS
     client only. Env-only credentials are a single global pair, so one process could address exactly
-    one backend — and the estate genuinely spans two: the governed tiers on the deployment's own
-    store, and raw on an external one with different keys. Reading a store from the wrong backend
+    one backend — and the estate genuinely spans two: the governed tables on the deployment's own
+    store, and sources on an external one with different keys. Reading a store from the wrong backend
     does not error, it returns an empty listing, which is the least debuggable failure available.
     Passing them per call is what lets one process serve both. Omitted → the env chain.
 

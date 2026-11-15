@@ -121,7 +121,7 @@ class ExpiryPolicy(BaseModel):
     #: pylance then substitutes a 14-day default.
     older_than: timedelta | None
     retain_versions: int | None = None
-    #: ``False`` keeps the ENTIRE version history: a tier under legal hold, or one whose time-travel window is the product.
+    #: ``False`` keeps the ENTIRE version history: a table under legal hold, or one whose time-travel window is the product.
     cleanup_enabled: bool = True
     #: Reclaim only once at least this many versions are reclaimable (``MAINTENANCE_MIN_VERSIONS_TO_EXPIRE``).
     min_reclaimable: int = Field(default=1, ge=1)

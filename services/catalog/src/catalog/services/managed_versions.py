@@ -895,7 +895,7 @@ def judge(
 
     The version is compared with the one it follows. What it adds is judged: a file or a row carried over was judged
     when it landed. It adds data when it names a data file the version it follows does not hold, unless it is a
-    compaction or a restore, whose files carry rows the table already held: such a commit on a derived tier names its
+    compaction or a restore, whose files carry rows the table already held: such a commit under the run rule names its
     run. A compaction of a table a registered clone reads is judged as any other: the clone's tag keeps the version it
     reads, whatever a compaction and the cleanup after it remove (ADR 0198 §1).
 

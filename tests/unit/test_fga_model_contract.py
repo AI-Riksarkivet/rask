@@ -31,7 +31,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver
-from catalog.core import tier_policy
+from catalog.core import write_judge
 from catalog.core.config import Settings
 from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -91,9 +91,9 @@ class _FakeRequest:
         return self._body
 
 
-def _rung_type(rung: tier_policy.Rung) -> str:
+def _rung_type(rung: write_judge.Rung) -> str:
     """The object type a rung is asked on: a named table's or namespace's kind, else its object's type."""
-    return rung.on.kind if isinstance(rung.on, tier_policy.Named) else _obj_type(rung.on)
+    return rung.on.kind if isinstance(rung.on, write_judge.Named) else _obj_type(rung.on)
 
 
 def _obj_type(obj: str) -> str:
@@ -139,7 +139,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         assert nested is not None
         pairs.add((_rung_type(nested), nested.relation))
         top = fga_deps._create_parent_rung(resource, ["acme-wh", "child"])
-        assert top is not None and isinstance(top.on, tier_policy.Named)
+        assert top is not None and isinstance(top.on, write_judge.Named)
         warehouse = asyncio.run(resolver.object(top.on.kind, list(top.on.segments)))
         assert warehouse is not None and _obj_type(warehouse) == "warehouse", f"a create directly in a warehouse is asked on {warehouse!r}"
         # WHERE it is checked differs; WHICH permission it needs may not. A create directly in a warehouse is no licence

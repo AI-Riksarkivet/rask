@@ -1,6 +1,6 @@
-"""A governed tier's row is the writer's, and the one platform column it may carry is held to its width (ADR 0156 C9).
+"""A governed row is the writer's, and the one platform column it may carry is held to its width (ADR 0156 C9).
 
-Provenance lives in the commit ([[LH-225]]): the run and inputs a silver or gold write names are its transaction
+Provenance lives in the commit ([[LH-225]]): the run and inputs a write under the run rule names are its transaction
 properties, so no column is required of a governed row. `stage` and `lineage` are the writer's own columns.
 `source_rowid` is an opt-in a pipeline writes to name the bronze row a row descends from; a table that carries it
 must carry it as `uint64`, the width of Lance's stable row id, or it is a different column wearing the right name:

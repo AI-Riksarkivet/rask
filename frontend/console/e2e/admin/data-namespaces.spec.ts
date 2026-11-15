@@ -1,6 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
 import { mockMe, signIn, TOKEN } from './session';
-import { declaredTiers } from './tiers';
 import { MOCK_CATALOG } from './ports';
 
 // Hermetic /namespaces coverage (#64 + the #85 drop lifecycle + the create): the page lists each
@@ -47,7 +46,36 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 		'GET /v1/namespace/acme-wh/list': LISTED,
 		'POST /v1/namespace/acme-wh%24bronze/drop': {},
 		'POST /v1/namespace/acme-wh%24gold/drop': {},
-		...declaredTiers({ 'acme-wh$bronze': 'bronze', 'acme-wh$gold': 'gold' }),
+		'GET /management/v1/projects': [{ project: 'acme', warehouses: [{ id: 'acme-wh' }] }],
+		'GET /management/v1/warehouses': [
+			{
+				id: 'acme-wh',
+				project: 'acme',
+				bucket: 'acme-wh-bucket',
+				root_uri: 's3://acme-wh-bucket',
+				status: 'active',
+			},
+		],
+	});
+	// The labels the namespaces carry (ADR 0211), in the mock's label store.
+	await page.request.post(`${MOCK_CATALOG}/__mock/labels`, {
+		data: {
+			bearer: token,
+			definitions: [
+				{ project: 'acme', name: 'raw', scope: ['namespace'], kind: 'marker' },
+				{
+					project: 'acme',
+					name: 'owner',
+					scope: ['namespace'],
+					kind: 'enumerated',
+					allowed_values: ['data-eng', 'research'],
+				},
+			],
+			objects: [
+				{ kind: 'namespace', id: 'acme-wh$bronze', project: 'acme', labels: { raw: null } },
+				{ kind: 'namespace', id: 'acme-wh$gold', project: 'acme', labels: { owner: 'research' } },
+			],
+		},
 	});
 });
 
@@ -55,17 +83,20 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 const nsLink = (page: Page, id: string) =>
 	page.locator('a.ns-name', { hasText: new RegExp(`^${id.replaceAll('$', ' › ')}$`) });
 
-test('lists one sortable row per namespace with table counts + tier badges', async ({ page }) => {
+test('lists one sortable row per namespace with table counts and the labels each carries', async ({
+	page,
+}) => {
 	await page.goto('/catalog/namespaces');
 	await expect(page.getByRole('heading', { name: 'Namespaces' })).toBeVisible();
 	// One DataTable row per namespace (goal cond 4), derived from the registry ids the browser
 	// read from the catalog with this test's own bearer.
 	const bronze = page.locator('tr', { has: nsLink(page, 'acme-wh$bronze') });
 	await expect(bronze).toContainText('1');
-	await expect(bronze.locator('.stage')).toHaveText('bronze'); // the tier the namespace declares
+	await expect(bronze.locator('[data-slot="label-chips"]')).toHaveText('raw'); // a marker: its name
 	await expect(bronze).toContainText('acme-wh'); // its warehouse, read off its id
 	const gold = page.locator('tr', { has: nsLink(page, 'acme-wh$gold') });
 	await expect(gold).toContainText('2');
+	await expect(gold.locator('[data-slot="label-chips"]')).toHaveText('owner=research');
 	// A namespace that holds no table is listed by its warehouse, so it has a row all the same (#66).
 	const silver = page.locator('tr', { has: nsLink(page, 'acme-wh$silver') });
 	await expect(silver).toContainText('0');
@@ -78,6 +109,19 @@ test('lists one sortable row per namespace with table counts + tier badges', asy
 	await page.getByPlaceholder('Search namespaces…').fill('bronze');
 	await expect(nsLink(page, 'acme-wh$gold')).toHaveCount(0);
 	await expect(nsLink(page, 'acme-wh$bronze')).toBeVisible();
+});
+
+test('the label filter narrows the namespaces to those carrying it, in the URL', async ({
+	page,
+}) => {
+	await page.goto('/catalog/namespaces');
+	await expect(nsLink(page, 'acme-wh$bronze')).toBeVisible();
+	await page.getByLabel('Label filter').click();
+	await page.getByRole('option', { name: 'owner' }).click();
+	await expect(page).toHaveURL(/[?&]label=owner(&|$)/);
+	await expect(nsLink(page, 'acme-wh$gold')).toBeVisible();
+	await expect(nsLink(page, 'acme-wh$bronze')).toHaveCount(0);
+	await expect(nsLink(page, 'acme-wh$silver')).toHaveCount(0);
 });
 
 test('New namespace creates one in the chosen warehouse through the spec door, and lists it', async ({
@@ -166,7 +210,7 @@ test('cancelling the confirm never posts the drop', async ({ page }) => {
 });
 
 test('a 403 drop surfaces the forbidden state and keeps the namespace listed', async ({ page }) => {
-	// Deny the drop like the catalog's FGA gate (owner-tier can_delete) does for a non-owner.
+	// Deny the drop like the catalog's FGA gate (the owner rung's can_delete) does for a non-owner.
 	await seed(page, {
 		'POST /v1/namespace/acme-wh%24gold/drop': { status: 403, body: { detail: 'forbidden' } },
 	});

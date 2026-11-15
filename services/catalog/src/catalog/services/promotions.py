@@ -1,6 +1,6 @@
 """Promotion holds: a version the project's quality gate holds for a person, answered on the catalog (ADR 0156 C1, [[LH-466]]).
 
-Readers of a governed tier read the version tagged ``published``, and only the publish door moves that tag once
+Readers who want the vetted version read the version tagged ``published``, and only the publish door moves that tag once
 the project's gate passes the version. When the project's declared gate has review on and a version breaches it,
 the door records a HOLD instead: one record per table under ``_promotions/`` on the control root, with the held
 version pinned by the tag :data:`HOLD_TAG` so version cleanup cannot collect it while it waits. A ``can_promote``

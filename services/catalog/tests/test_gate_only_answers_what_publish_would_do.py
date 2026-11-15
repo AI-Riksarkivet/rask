@@ -6,7 +6,7 @@ unrunnable key column is a 400 here too, or a caller could ask the question, be 
 pass, and then be refused by the act."*
 
 The tier-contract refusal broke exactly that, and it was MY change that broke it:
-`refuse_a_tier_without_provenance` was added to `publish` and not to `gate`. Measured by driving both
+`refuse_a_table_without_provenance` was added to `publish` and not to `gate`. Measured by driving both
 doors against one dataset carrying `stage` but neither `lineage` nor `source_rowid` — `gate` answered
 200 with every assertion passing and no mention of a problem, and `publish` of the SAME version
 answered 400.

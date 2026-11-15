@@ -1,9 +1,10 @@
-"""A table's tier is the `rask.tier` its namespace declares, only an admin declares it, and every write is judged under it.
+"""A namespace's `rask.requires_run` binds every write beneath it to name its run, only an admin declares it, and every
+write is judged under it.
 
-ADR 0156 C8 and ADR 0160, on the real catalog app over real pylance with OIDC and FGA on, in a registered warehouse. The
+ADR 0156 C8 and ADR 0211, on the real catalog app over real pylance with OIDC and FGA on, in a registered warehouse. The
 OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga` functions that answers a
-check from an explicit grant set, so who may act IS the claim here. Namespaces are named against their
-tier on purpose (`sales` is silver, `gold` is untiered): a judge reading names would answer both wrong.
+check from an explicit grant set, so who may act IS the claim here. A namespace named `gold` that declares nothing is
+judged by what it declares, never by its name.
 """
 
 from __future__ import annotations
@@ -97,8 +98,11 @@ def _properties(client: TestClient, namespace: str) -> dict[str, str]:
     return described.json().get("properties") or {}
 
 
-def _tier(client: TestClient, namespace: str) -> str | None:
-    return _properties(client, namespace).get("rask.tier")
+RULE = {"rask.requires_run": "true"}
+
+
+def _rule(client: TestClient, namespace: str) -> str | None:
+    return _properties(client, namespace).get("rask.requires_run")
 
 
 def _refused(resp: httpx.Response, code: int) -> None:
@@ -107,48 +111,48 @@ def _refused(resp: httpx.Response, code: int) -> None:
     assert resp.json()["code"] == code, resp.json()
 
 
-def test_only_the_projects_admin_declares_or_drops_a_tier(real_ns_client: TestClient, grants: Grants) -> None:
+def test_only_the_projects_admin_declares_or_drops_the_run_rule(real_ns_client: TestClient, grants: Grants) -> None:
     """On a create in the warehouse, a nested create and an Overwrite: bob is refused PermissionDenied (15), alice lands it."""
     client = real_ns_client
     act_as(client, "bob")
-    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH), 15)
-    assert _top_level(client, SALES) == 200, "bob may still create the namespace without declaring a tier"
+    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": RULE}, headers=AUTH), 15)
+    assert _top_level(client, SALES) == 200, "bob may still create the namespace without declaring the rule"
     grants.grant("bob", ("can_create_namespace", _object(client, "namespace", SALES)))
-    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH), 15)
+    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": RULE}, headers=AUTH), 15)
 
     act_as(client, "alice")
-    assert _top_level(client, LEDGER, {"rask.tier": "gold"}) == 200
+    assert _top_level(client, LEDGER, RULE) == 200
     ledger = _object(client, "namespace", LEDGER)
     for user in ("alice", "bob"):
         grants.grant(user, ("can_get_metadata", ledger))
-    assert _tier(client, LEDGER) == "gold"
+    assert _rule(client, LEDGER) == "true"
 
     act_as(client, "bob")
     grants.grant("bob", ("can_create_namespace", ledger), ("can_delete", ledger))
     _refused(client.post(f"/v1/namespace/{WAREHOUSE}$ledger/create", json={"mode": "Overwrite", "properties": {}}, headers=AUTH), 15)
-    assert _tier(client, LEDGER) == "gold", "a refused Overwrite dropped the tier"
+    assert _rule(client, LEDGER) == "true", "a refused Overwrite dropped the rule"
 
 
-def test_a_declaration_names_no_reserved_key_but_a_tier_its_ancestors_agree_with(real_ns_client: TestClient, grants: Grants) -> None:
-    """A value outside bronze/silver/gold, a deeper namespace re-tiering its ancestor's, or another reserved key, the
-    uuid the catalog mints among them ([[LH-519]]), is InvalidInput (13) in the warehouse and beneath it; an ExistOk naming a tier the
-    kept namespace does not have is NamespaceAlreadyExists (2)."""
+def test_a_declaration_names_no_reserved_key_but_the_run_rule_as_true(real_ns_client: TestClient, grants: Grants) -> None:
+    """A value other than "true", or another reserved key, the uuid the catalog mints among them ([[LH-519]]), is
+    InvalidInput (13) in the warehouse and beneath it; a nested namespace may repeat the rule; an ExistOk naming the rule
+    on a kept namespace that does not declare it is NamespaceAlreadyExists (2)."""
     client = real_ns_client
     act_as(client, "alice")
     forged = {"rask.uuid": "00000000-0000-4000-8000-000000000000"}
-    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.tier": "platinum"}}, headers=AUTH), 13)
+    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.requires_run": "false"}}, headers=AUTH), 13)
+    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH), 13)
     _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": forged}, headers=AUTH), 13)
-    assert _top_level(client, SALES, {"rask.tier": "silver"}) == 200
+    assert _top_level(client, SALES, RULE) == 200
     grants.grant("alice", ("can_create_namespace", _object(client, "namespace", SALES)))
 
-    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": {"rask.tier": "bronze"}}, headers=AUTH), 13)
     _refused(client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": forged}, headers=AUTH), 13)
-    assert client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH).status_code == 200
+    assert client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": RULE}, headers=AUTH).status_code == 200
     assert _top_level(client, f"{WAREHOUSE}$plain") == 200
     grants.grant("alice", ("can_create_namespace", _object(client, "namespace", f"{WAREHOUSE}$plain")))
-    assert client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={"properties": {"rask.tier": "bronze"}}, headers=AUTH).status_code == 200
-    kept = client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={"mode": "ExistOk", "properties": {"rask.tier": "gold"}}, headers=AUTH)
-    assert (kept.status_code, kept.json()["code"]) == (409, 2), "ExistOk kept the namespace, so the gold it named never landed"
+    assert client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={}, headers=AUTH).status_code == 200
+    kept = client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={"mode": "ExistOk", "properties": RULE}, headers=AUTH)
+    assert (kept.status_code, kept.json()["code"]) == (409, 2), "ExistOk kept the namespace, so the rule it named never landed"
 
 
 def _rows() -> bytes:
@@ -159,7 +163,7 @@ def _rows() -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-#: The run a silver write names (ADR 0156 C2): an input the writer may read, at a version.
+#: The run a write under the rule names (ADR 0156 C2): an input the writer may read, at a version.
 _RUN = {
     "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
     "x-rask-job-namespace": "pipelines",
@@ -168,44 +172,52 @@ _RUN = {
 }
 
 
-def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client: TestClient, grants: Grants, caplog: pytest.LogCaptureFixture) -> None:
-    """Without the writer rung the write is PermissionDenied (15); with it the decision is audited under the
-    declared tier, and a namespace whose NAME is a tier but which declares none is judged untiered."""
+def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(real_ns_client: TestClient, grants: Grants, caplog: pytest.LogCaptureFixture) -> None:
+    """Without the writer rung the write is PermissionDenied (15). Under ``sales``, which declares the rule, and under
+    ``sales$lane``, which inherits it, an insert naming no run is InvalidInput (13) and one naming its run lands; under
+    ``gold``, which declares nothing, both land. Each decision is audited with the rule it was judged under."""
     client = real_ns_client
     act_as(client, "alice")
-    assert _top_level(client, SALES, {"rask.tier": "silver"}) == 200
+    assert _top_level(client, SALES, RULE) == 200
     assert _top_level(client, f"{WAREHOUSE}$gold") == 200
     assert _top_level(client, f"{WAREHOUSE}$src") == 200
-    grants.grant("alice", *[("can_create_table", _object(client, "namespace", ns)) for ns in (SALES, f"{WAREHOUSE}$gold", f"{WAREHOUSE}$src")])
+    grants.grant("alice", ("can_create_namespace", _object(client, "namespace", SALES)))
+    assert client.post(f"/v1/namespace/{SALES}$lane/create", json={}, headers=AUTH).status_code == 200
+    spaces = (SALES, f"{SALES}$lane", f"{WAREHOUSE}$gold")
+    grants.grant("alice", *[("can_create_table", _object(client, "namespace", ns)) for ns in (*spaces, f"{WAREHOUSE}$src")])
     # The run's input is a table alice may read: a name that holds no table grants nothing to read.
     assert client.post(f"/v1/table/{WAREHOUSE}$src$a/create?mode=create", content=_rows(), headers=ARROW).status_code == 200
     grants.grant("alice", ("can_read_data", _object(client, "table", f"{WAREHOUSE}$src$a")))
-    for ns in (SALES, f"{WAREHOUSE}$gold"):
+    for ns in spaces:
         assert client.post(f"/v1/table/{ns}$t/create?mode=create", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
-    grants.grant("alice", *[("can_write_data", _object(client, "table", f"{ns}$t")) for ns in (SALES, f"{WAREHOUSE}$gold")])
+    grants.grant("alice", *[("can_write_data", _object(client, "table", f"{ns}$t")) for ns in spaces])
 
     act_as(client, "dave")
     _refused(client.post(f"/v1/table/{SALES}$t/insert", content=_rows(), headers={**ARROW, **_RUN}), 15)
 
     act_as(client, "alice")
+    for ns in (SALES, f"{SALES}$lane"):
+        _refused(client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers=ARROW), 13)
+    assert client.post(f"/v1/table/{WAREHOUSE}$gold$t/insert", content=_rows(), headers=ARROW).status_code == 200
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
-    for ns in (SALES, f"{WAREHOUSE}$gold"):
+    caplog.clear()
+    for ns in spaces:
         assert client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
     judged = [
-        (r.__dict__["audit.resource"], r.__dict__["audit.tier"])
+        (r.__dict__["audit.resource"], r.__dict__["audit.requires_run"])
         for r in caplog.records
-        if r.name == AUDIT_LOGGER and r.__dict__.get("audit.action") == "tier_judge" and r.__dict__.get("audit.op") == "insert"
+        if r.name == AUDIT_LOGGER and r.__dict__.get("audit.action") == "write_judge" and r.__dict__.get("audit.op") == "insert"
     ]
-    # The judgement is audited under the written table's name (``WriteOp.obj``), as a refusal names it.
-    assert judged == [(f"table:{SALES}$t", "silver"), (f"table:{WAREHOUSE}$gold$t", "untiered")]
+    # The judgement is audited under the written table's name (``Write.obj``), as a refusal names it.
+    assert judged == [(f"table:{SALES}$t", "true"), (f"table:{SALES}$lane$t", "true"), (f"table:{WAREHOUSE}$gold$t", "false")]
 
 
-def test_a_recoverable_drop_and_its_undrop_keep_the_declared_tier_and_the_uuid(real_ns_client: TestClient, grants: Grants) -> None:
-    """An owner who may drop and undrop is not an admin, so the round trip must bring the tier back with the namespace,
+def test_a_recoverable_drop_and_its_undrop_keep_the_run_rule_and_the_uuid(real_ns_client: TestClient, grants: Grants) -> None:
+    """An owner who may drop and undrop is not an admin, so the round trip must bring the rule back with the namespace,
     and the namespace comes back as itself, under the uuid it was created with ([[LH-519]])."""
     client = real_ns_client
     act_as(client, "alice")
-    assert _top_level(client, LEDGER, {"rask.tier": "gold"}) == 200
+    assert _top_level(client, LEDGER, RULE) == 200
     act_as(client, "bob")
     ledger = _object(client, "namespace", LEDGER)
     grants.grant("bob", ("can_delete", ledger), ("can_get_metadata", ledger))
@@ -214,4 +226,4 @@ def test_a_recoverable_drop_and_its_undrop_keep_the_declared_tier_and_the_uuid(r
     assert client.post(f"/v1/namespace/{WAREHOUSE}$ledger/drop", json={"behavior": "Cascade"}, headers=AUTH).status_code == 200
     assert client.post(f"/management/v1/namespace/{WAREHOUSE}$ledger/undrop", json={}, headers=AUTH).status_code == 200
 
-    assert _properties(client, LEDGER) == {"rask.tier": "gold", "rask.uuid": minted}
+    assert _properties(client, LEDGER) == {"rask.requires_run": "true", "rask.uuid": minted}

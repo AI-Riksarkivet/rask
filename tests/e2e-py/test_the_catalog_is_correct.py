@@ -243,7 +243,7 @@ class Scene:
     def build(self) -> None:
         """Make the matrix namespace, grant each rung, and make the standing objects every refused call shares."""
         admin = self.tenant.admin
-        created = scenario.ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.namespace}/create", json={"properties": {"rask.tier": "bronze"}}, timeout=60))
+        created = scenario.ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.namespace}/create", json={}, timeout=60))
         self.namespace_uuid = str(created["properties"]["rask.uuid"])
         for role, relation in ((Role.OWNER, "owner"), (Role.WRITER, "writer"), (Role.READER, "reader")):
             grant = {"user": self.callers[role].principal, "relation": relation}
@@ -718,7 +718,7 @@ SPEC_DOORS: tuple[Door, ...] = (
         rung=Rung.READER,
         aim=_at_namespace,
         send=lambda s, role, t: s.clients[role].describe_namespace(ln.DescribeNamespaceRequest(id=t.namespace)),
-        shows=lambda s, role, t, value, before: (value.properties, {"rask.tier": "bronze", "rask.uuid": s.namespace_uuid}),
+        shows=lambda s, role, t, value, before: (value.properties, {"rask.uuid": s.namespace_uuid}),
     ),
     Door(
         operation="DropNamespace",

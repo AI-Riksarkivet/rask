@@ -59,10 +59,11 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
   `column_declared` failure; nothing patrols the same declarations between publishes. Additive evolution is never
   blocked. The wider schema-declaration item is tracked in
   `docs/adr/0012-schema-declaration-claim-check-hardening.md`.
-- **Inputs are declared by the writer.** Today a silver or gold write is authorized like any write, and its inputs
-  are named only in the writer's own OpenLineage run. ADR 0156 makes the run and inputs part of the write itself,
-  carried in the spec `Context` and stamped by the catalog (LH-225, #180), and a table's tier the `rask.tier`
-  namespace property judged at every write door (LH-470, #595).
+- **Inputs are declared by the writer, and required only under the run rule.** Under a namespace that declares
+  `rask.requires_run = "true"`, the run and inputs are part of the write itself, carried in the spec `Context` and
+  stamped by the catalog (ADR 0156 C2, LH-225, #180), and the write judge refuses a write adding data without them at
+  every write door (ADR 0211). Outside the rule a writer names its inputs only if it chooses, so a table there may
+  have no recorded upstream.
 - **The claim-check rule is a guard on size, not on shape.** Every publish goes through `lakehouse.bus.publish_event`,
   which refuses an envelope past 900 KiB and logs one past 64 KiB; nothing below that caps facet metadata bloat for
   thousand-column tables. NATS's ~1 MB message limit is the physical backstop.
@@ -108,13 +109,13 @@ No — related species, different format and bigger scope on our side:
 
 | | **Lakekeeper** | **this platform** |
 |---|---|---|
-| What it is | Apache **Iceberg** REST catalog (Rust) | **Lance** REST catalog + lineage + governance, with opt-in tier governance in the catalog |
+| What it is | Apache **Iceberg** REST catalog (Rust) | **Lance** REST catalog + lineage + governance, with opt-in write governance (the run rule, labels) in the catalog |
 | The "contract" | the Iceberg spec: snapshots, schema evolution via column IDs, hidden partitioning — metadata JSON managed by the catalog | the Lance manifest + immutable versions (§2) — self-describing storage, catalog is a thin adapter |
 | AuthZ | OpenFGA (same choice — we studied theirs) | OpenFGA, threaded through the SAME table uuid as lineage (`table:<uuid>`) |
 | Lineage | none | OpenLineage intake, a durable commit feed and a table-level edge list as catalog-governed Lance tables, every event forwarded to a bring-your-own graph backend |
 | Change events | CloudEvents emitted on every change | OpenLineage events on lineage's durable `GET /events` feed |
-| Change approval | a `ContractVerification` trait inside the catalog that can refuse a table change that would break a data contract or quality SLO | the same idea on the Lance write path: tier governance and the publish-time gate in the catalog (ADR 0155, ADR 0156) |
-| Data movement | none (catalog only) | none either: moving data between tiers is the user's pipeline (ADR 0155) |
+| Change approval | a `ContractVerification` trait inside the catalog that can refuse a table change that would break a data contract or quality SLO | the same idea on the Lance write path: the run rule and the publish-time gate in the catalog (ADR 0155, ADR 0156, ADR 0211) |
+| Data movement | none (catalog only) | none either: moving data between tables is the user's pipeline (ADR 0155) |
 
 We deliberately mined Lakekeeper for patterns: vended
 credentials with `expires_at_millis`, idempotency keys, scoped event emission — adopted; their

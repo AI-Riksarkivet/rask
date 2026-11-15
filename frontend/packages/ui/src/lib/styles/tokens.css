@@ -31,12 +31,6 @@
 	--success-foreground: oklch(0.985 0 0);
 	--warning: oklch(0.75 0.18 75);
 	--warning-foreground: oklch(0.16 0.006 270);
-	/* The tier chips (the three tiers a namespace may declare, ADR 0160). Each clears WCAG 2.2 AA (4.5:1) as small text on every surface it
-	   sits on: measured from these OKLCH values against --background, --card, --muted and --sidebar,
-	   the least 5.31:1 (gold on --muted). */
-	--stage-bronze: oklch(0.5 0.11 55);
-	--stage-silver: oklch(0.48 0.02 250);
-	--stage-gold: oklch(0.5 0.1 85);
 	/* Sidebar — reuses the old rail's bg for visual continuity, harmonized with the palette */
 	--sidebar: oklch(0.965 0.004 260);
 	--sidebar-foreground: oklch(0.16 0.006 270);
@@ -99,10 +93,6 @@
 	--success-foreground: oklch(0.985 0 0);
 	--warning: oklch(0.75 0.18 75);
 	--warning-foreground: oklch(0.985 0 0);
-	/* The least 7.29:1 (bronze on --muted). */
-	--stage-bronze: oklch(0.74 0.11 55);
-	--stage-silver: oklch(0.76 0.02 250);
-	--stage-gold: oklch(0.82 0.13 85);
 	/* Sidebar — reuses the old rail's dark bg for visual continuity */
 	--sidebar: oklch(0.16 0.008 260);
 	--sidebar-foreground: oklch(0.985 0 0);
@@ -141,9 +131,6 @@
 	--color-success-foreground: var(--success-foreground);
 	--color-warning: var(--warning);
 	--color-warning-foreground: var(--warning-foreground);
-	--color-stage-bronze: var(--stage-bronze);
-	--color-stage-silver: var(--stage-silver);
-	--color-stage-gold: var(--stage-gold);
 	--color-sidebar: var(--sidebar);
 	--color-sidebar-foreground: var(--sidebar-foreground);
 	--color-sidebar-primary: var(--sidebar-primary);

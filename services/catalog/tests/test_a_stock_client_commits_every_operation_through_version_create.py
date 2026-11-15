@@ -1666,7 +1666,7 @@ def _insert_door_naming_no_run(served: Served) -> tuple[int, int, str]:
 
 
 def _update_door(served: Served) -> tuple[int, int, str]:
-    """``update`` cannot carry a run into its commit, so a silver table refuses it whatever the Context names."""
+    """``update`` cannot carry a run into its commit, so a table under the run rule refuses it whatever the Context names."""
     context = {
         "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
         "x-rask-job-namespace": "pipelines",
@@ -1677,14 +1677,14 @@ def _update_door(served: Served) -> tuple[int, int, str]:
     return answer.status_code, answer.json()["code"], answer.json()["detail"]
 
 
-def _register_into_silver(served: Served) -> tuple[int, int, str]:
+def _register_under_the_run_rule(served: Served) -> tuple[int, int, str]:
     """``register`` attaches bytes written elsewhere and commits nothing a run can reach ([[LH-463]])."""
     answer = httpx.post(f"{served.url}/v1/table/lance_catalog$lab$registered/register", json={"location": "elsewhere"}, headers=_TOKEN)
     return answer.status_code, answer.json().get("code"), answer.json().get("detail", "")
 
 
-def _rename_into_silver(served: Served) -> tuple[int, int, str]:
-    """A rename commits nothing a run can reach, so it may not move another tier's table into silver."""
+def _rename_under_the_run_rule(served: Served) -> tuple[int, int, str]:
+    """A rename commits nothing a run can reach, so it may not move a table into a namespace requiring a run from one that does not."""
     body = {"new_table_name": "moved", "new_namespace_id": ["lance_catalog", "lab"]}
     answer = httpx.post(f"{served.url}/v1/table/lance_catalog$db$src/rename", json=body, headers=_TOKEN)
     return answer.status_code, answer.json()["code"], answer.json()["detail"]
@@ -1697,17 +1697,17 @@ def _rename_into_silver(served: Served) -> tuple[int, int, str]:
         pytest.param(_stock_append_naming_another_author, (400, 13), "rask.author", id="a-stock-commit-naming-another-author"),
         pytest.param(_insert_door_naming_no_run, (400, 13), "rask.run_id", id="the-insert-door-naming-no-run"),
         pytest.param(_update_door, (406, 0), "merge_insert", id="the-update-door"),
-        pytest.param(_rename_into_silver, (400, 13), "untiered table into a silver namespace", id="a-rename-into-silver"),
-        pytest.param(_register_into_silver, (406, 0), "merge_insert", id="a-register-into-silver"),
+        pytest.param(_rename_under_the_run_rule, (400, 13), "from one that does not", id="a-rename-under-the-run-rule"),
+        pytest.param(_register_under_the_run_rule, (406, 0), "merge_insert", id="a-register-under-the-run-rule"),
     ],
 )
-def test_a_silver_commit_lands_only_when_it_names_its_run_and_inputs(
+def test_a_commit_under_the_run_rule_lands_only_when_it_names_its_run_and_inputs(
     served: Served, write: Callable[[Served], tuple[int, int, str]], answer: tuple[int, int], names: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from catalog.main import app
 
     stock = _with_source(served)
-    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "lab"], properties={"rask.tier": "silver"}))
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "lab"], properties={"rask.requires_run": "true"}))
     lance.write_dataset(
         _keyed([1], ["a"]),
         namespace_client=stock,

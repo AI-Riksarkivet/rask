@@ -197,6 +197,12 @@ _DOORS: list[_Door] = [
     _Refusing(method="POST", route="/management/v1/project/{id}/policy/set", params={"id": PROJECT}, body={"retention_days": 7}),
     _Refusing(method="POST", route="/management/v1/project/{id}/policy/describe", params={"id": PROJECT}),
     _Refusing(method="POST", route="/management/v1/project/{id}/policy/delete", params={"id": PROJECT}),
+    _Refusing(method="GET", route="/management/v1/projects/{id}/labels", params={"id": PROJECT}, refused=_NOT_FOUND),
+    _Refusing(method="GET", route="/management/v1/projects/{id}/labels/objects", params={"id": PROJECT}, refused=_NOT_FOUND),
+    _Refusing(
+        method="POST", route="/management/v1/projects/{id}/labels/define", params={"id": PROJECT}, body={"name": "pii", "scope": ["table"], "kind": "marker"}
+    ),
+    _Refusing(method="POST", route="/management/v1/projects/{id}/labels/{name}/delete", params={"id": PROJECT, "name": "pii"}),
     _Refusing(method="POST", route="/management/v1/project/{id}/gate/set", params={"id": PROJECT}, body={}),
     _Refusing(method="POST", route="/management/v1/project/{id}/gate/describe", params={"id": PROJECT}),
     _Refusing(method="POST", route="/management/v1/project/{id}/gate/delete", params={"id": PROJECT}),

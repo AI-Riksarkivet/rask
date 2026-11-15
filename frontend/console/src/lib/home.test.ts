@@ -1,33 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
-import { recentCommits, tablesByProjectAndTier } from './home';
+import { recentCommits, tablesByProject } from './home';
 
-describe('tablesByProjectAndTier', () => {
-	it('counts each project’s tables per declared tier, an untiered table apart, the estate’s own last', () => {
+describe('tablesByProject', () => {
+	it('counts each project’s tables, projects by name and the estate’s own last', () => {
 		const projects: Record<string, string> = { acme: 'acme', beta: 'beta' };
-		// Declared on the namespace, whatever it is called: `acme$gold` declares nothing here.
-		const tiers: Record<string, 'bronze' | 'silver'> = {
-			acme$bronze: 'bronze',
-			beta$locked: 'silver',
-		};
-		const rows = tablesByProjectAndTier(
+		const rows = tablesByProject(
 			[
-				'acme$bronze$a',
-				'acme$bronze$b',
-				'acme$gold$c',
-				'beta$locked$d',
 				'lance_catalog$provenance$events',
+				'beta$raw$d',
+				'acme$raw$a',
+				'acme$raw$b',
+				'acme$curated$c',
 			],
 			(id) => projects[id.split('$')[0] ?? ''] ?? null,
-			(id) => {
-				const tier = tiers[id.split('$').slice(0, -1).join('$')];
-				return tier ? { stage: tier } : null;
-			},
 		);
 		expect(rows).toEqual([
-			{ project: 'acme', bronze: 2, silver: 0, gold: 0, other: 1, total: 3 },
-			{ project: 'beta', bronze: 0, silver: 1, gold: 0, other: 0, total: 1 },
-			{ project: null, bronze: 0, silver: 0, gold: 0, other: 1, total: 1 },
+			{ project: 'acme', total: 3 },
+			{ project: 'beta', total: 1 },
+			{ project: null, total: 1 },
 		]);
 	});
 });

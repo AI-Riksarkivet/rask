@@ -85,7 +85,7 @@ export const fetchTables = query(async (): Promise<ApiResult<TablesList>> =>
 );
 
 /** `TrashEntry[]` — what is SCHEDULED against one table (#75/§2.4). Today that is exactly one thing:
- *  a pending undrop deadline. Reader-tier at the catalog, so an owner can see the clock they are
+ *  a pending undrop deadline. Reader-gated at the catalog, so an owner can see the clock they are
  *  racing — a deadline nobody can read is not a safety feature. */
 export const TrashEntrySchema = v.object({
 	id: v.string(),

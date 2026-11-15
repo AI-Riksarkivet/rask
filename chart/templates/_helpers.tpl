@@ -687,7 +687,7 @@ buckets as the estate's reads already are. */ -}}
 
 {{- define "lance.objectStorePolicy.backup-control-root" -}}
 {{- $control := .Values.objectStore.bucket -}}
-{{- $records := list "_projects" "_warehouses" "_trash" "_protection" "_policies" "_gates" "_bases" -}}
+{{- $records := list "_projects" "_warehouses" "_trash" "_protection" "_policies" "_gates" "_bases" "_locations" "_maintenance_due" "_commit_authors" "_commit_marks" "_file_identities" "_maintenance_files" "_clone_endings" "_erasure_obligations" "_erasure_releases" "_promotions" "_table_inputs" "_roles" "_principals" "_declared_grants" "_label_definitions" "_labels" -}}
 {{- $dest := splitList "/" (trimSuffix "/" (trimPrefix "s3://" (.Values.backups.controlRoot.dest | default (printf "s3://%s/_backups/control" $control)))) | compact -}}
 {{- $destBucket := first $dest -}}{{- $destPrefix := join "/" (rest $dest) -}}
 {{- $listed := list -}}{{- $read := list -}}

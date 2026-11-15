@@ -136,7 +136,7 @@ REGISTER_TABLE = "register_table"
 #: A table moved to a new name, its uuid, data and grants kept: one DatasetEvent on the new name, whose standard
 #: ``lifecycleStateChange`` is ``RENAME`` with the old name as ``previousIdentifier`` ([[LH-554]]).
 RENAME_TABLE = "rename_table"
-#: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so readers of its tier now read
+#: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so its readers now read
 #: ``version``, the tag's target. It mints no version, and it is a run of its own so the project's watchers are told
 #: that new data is live: a notifier targets them by this event's ``rask_lance.project``
 #: (`docs/COMMIT-EVENTS.md`, WATCH).

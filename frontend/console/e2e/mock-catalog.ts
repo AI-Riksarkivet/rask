@@ -11,6 +11,7 @@
 // EVERYTHING is keyed by the BEARER, never by shared server state: the suite is fullyParallel, and
 // session.ts signs each test in with its own token, so nothing is shared.
 
+import { labelDoor } from './mock-labels';
 import { MOCK_CATALOG_PORT } from './ports';
 import {
 	answered,
@@ -279,6 +280,12 @@ Bun.serve({
 		// this keeps an unseeded read from rendering the honest-but-irrelevant "registry unavailable".
 		if (!isSeeded && url.pathname === '/v1/table' && req.method === 'GET') {
 			return json({ tables: ['db1$t'] });
+		}
+
+		// The label doors, in memory per bearer (`mock-labels.ts`); a seed for the same path wins.
+		if (!isSeeded) {
+			const labelled = await labelDoor(req, url, bearer);
+			if (labelled) return labelled;
 		}
 
 		// ── the seeded surface ──

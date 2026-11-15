@@ -56,7 +56,7 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import run_context, tier_policy, vending
+from catalog.core import run_context, vending, write_judge
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
 from catalog.services import dataplane, native, object_uuids, table_claims, warehouses
@@ -92,7 +92,7 @@ _FGA_TYPE: dict[str, str] = {
 # Read-only trailing actions (reader rung). ``query``/``count_rows`` read DATA; the rest
 # read metadata — split so list_objects(can_read_data) is meaningful (both are reader).
 # ``credentials`` (vending) is a DATA read at minimum — the router guard requires can_read_data (or can_maintain at the
-# maintain tier alone, `_ALTERNATIVE_RUNGS`); the tier judge additionally requires can_write_data for a write-tier vend
+# maintain tier alone, `_ALTERNATIVE_RUNGS`); the write judge additionally requires can_write_data for a write-tier vend
 # and can_vend_maintain for a maintain-tier one.
 # ``blobs`` (GET /v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
 # bytes, so it is a DATA read exactly like ``query``.
@@ -135,9 +135,9 @@ class _SecondRung(NamedTuple):
 #: `credentials` is a data read, so `can_read_data` is its primary rung. A MAINTAINER is deliberately not a reader
 #: (`model.fga` states it and its test block asserts it), yet the maintenance identity must obtain the maintain-tier
 #: credential its own rewrite needs: MEASURED 2026-09-08, 207 of 285 rewrites a tick fell back to the deployment's ROOT
-#: key because this router refused before the tier judge asked `can_vend_maintain`.
+#: key because this router refused before the write judge asked `can_vend_maintain`.
 #:
-#: PER TIER ([[LH-560]]). Only the maintain tier opens to `can_maintain`, and the tier judge then asks that tier's own
+#: PER TIER ([[LH-560]]). Only the maintain tier opens to `can_maintain`, and the write judge then asks that tier's own
 #: rung, `can_vend_maintain`, which the maintenance identity alone holds (ADR 0156 C4). At the read tier the judge asks
 #: nothing further, so a second rung there would vend a whole-table read to a maintainer who holds no `reader` grant;
 #: and since `can_grant_maintainer` is `maintainer and pass_grants`, any maintainer could hand that read on with no
@@ -263,6 +263,11 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # table" and "armed the safety on it" write identical audit lines. `can_set_protection: owner` is
         # a computed userset, so every owner already holds it and no grant had to change.
         "protection": "can_set_protection",
+        # Labels (ADR 0211) classify the table for the people who find and govern it, so attaching one is the owner's
+        # act, as arming its protection is; its own relation so the trail tells the two apart. Reading them is
+        # `labels/describe`, a metadata read by its trailing word.
+        "labels/set": "can_label",
+        "labels/remove": "can_label",
         # #75 undrop RESTORES the object into its namespace — the same authority as removing it.
         "undrop": "can_drop",
         # Publication ADVANCES the `published` tag, so it clears the same bar as `tags/update` — the
@@ -285,6 +290,9 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # The namespace twin of the table door's rung — same tier as the `can_delete` it guards, its own
         # name for the same audit reason.
         "protection": "can_set_protection",
+        # The table block's label doors, one level up.
+        "labels/set": "can_label",
+        "labels/remove": "can_label",
         "policy/set": "can_delete",
         "policy/delete": "can_delete",
         "access/list": "can_delete",
@@ -444,25 +452,25 @@ _UUID_KEYED: Final = frozenset({"table", "namespace"})
 _TRASH_DOORS: Final = frozenset({"undrop", "tasks"})
 
 
-def _named(fga_type: str, segments: Sequence[str], *, in_trash: bool = False) -> tier_policy.Named | None:
+def _named(fga_type: str, segments: Sequence[str], *, in_trash: bool = False) -> write_judge.Named | None:
     """``fga_type`` ``segments`` as a name its grants' object is resolved from, or ``None`` for a type no uuid keys."""
     if fga_type == "table":
-        return tier_policy.Named(kind="table", segments=tuple(segments), in_trash=in_trash)
+        return write_judge.Named(kind="table", segments=tuple(segments), in_trash=in_trash)
     if fga_type == "namespace":
-        return tier_policy.Named(kind="namespace", segments=tuple(segments), in_trash=in_trash)
+        return write_judge.Named(kind="namespace", segments=tuple(segments), in_trash=in_trash)
     return None
 
 
-def _rung(relation: str, fga_type: str, segments: Sequence[str], *, suffix: str = "") -> tier_policy.Rung:
+def _rung(relation: str, fga_type: str, segments: Sequence[str], *, suffix: str = "") -> write_judge.Rung:
     """``relation`` on ``fga_type`` ``segments``: on the name a table or namespace is resolved from, else on the id's object.
 
     A trash door's name also resolves to the object the trash holds under it (:data:`_TRASH_DOORS`).
     """
     named = _named(fga_type, segments, in_trash=suffix in _TRASH_DOORS)
-    return tier_policy.Rung(relation=relation, on=named if named is not None else _object(fga_type, list(segments)))
+    return write_judge.Rung(relation=relation, on=named if named is not None else _object(fga_type, list(segments)))
 
 
-def _label(rung: tier_policy.Rung) -> str:
+def _label(rung: write_judge.Rung) -> str:
     """The object ``rung`` is asked on, by name: what a refusal and the audit of an absent object say.
 
     One spelling for a table that is there and one that is not, so a refusal does not tell a caller which names exist.
@@ -472,7 +480,7 @@ def _label(rung: tier_policy.Rung) -> str:
     return _object(rung.on.kind, list(rung.on.segments))
 
 
-async def _resolve(resolver: Resolver, rung: tier_policy.Rung) -> str | None:
+async def _resolve(resolver: Resolver, rung: write_judge.Rung) -> str | None:
     """The FGA object ``rung`` is asked on: what its name resolves to, ``None`` when nothing has that name.
 
     A trash door's name with no live object resolves to the one trashed object it names; several are asked one by one
@@ -555,7 +563,7 @@ def _action_relation(fga_type: str, suffix: str) -> str:
 _CREATE_RELATIONS: Final = {"namespace": "can_create_namespace", "materialized_view": "can_create_materialized_view"}
 
 
-def _create_parent_rung(resource: str, id_segments: list[str]) -> tier_policy.Rung | None:
+def _create_parent_rung(resource: str, id_segments: list[str]) -> write_judge.Rung | None:
     """The ``can_create_*`` rung a create-on-parent op asks on the child's parent, by name.
 
     The parent is the namespace above the child, whose uuid the grants are held by, or the warehouse for a namespace
@@ -567,7 +575,7 @@ def _create_parent_rung(resource: str, id_segments: list[str]) -> tier_policy.Ru
     if len(id_segments) < 2:
         return None
     relation = _CREATE_RELATIONS.get(resource, "can_create_table")
-    return tier_policy.Rung(relation=relation, on=tier_policy.Named(kind="namespace", segments=tuple(id_segments[:-1])))
+    return write_judge.Rung(relation=relation, on=write_judge.Named(kind="namespace", segments=tuple(id_segments[:-1])))
 
 
 async def _require(client: OpenFgaClient, *, user: str, relation: str, obj: str, label: str | None = None) -> None:
@@ -596,7 +604,7 @@ def _refuse_absent(*, user: str, relation: str, label: str) -> PermissionDeniedE
     return PermissionDeniedError(f"{relation} required on {label}")
 
 
-async def _require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str, rung: tier_policy.Rung) -> str:
+async def _require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str, rung: write_judge.Rung) -> str:
     """Ask ``rung`` on the object its name resolves to, refuse it as :func:`_require` does, and return that object.
 
     A name that holds no object is refused alike: no tuple can name it, and the refusal names the name, as it does for
@@ -622,7 +630,7 @@ async def _require_trashed(
     *,
     user: str,
     relation: str,
-    named: tier_policy.Named,
+    named: write_judge.Named,
     label: str,
     trashed: list[dict[str, Any]],
 ) -> str:
@@ -693,12 +701,12 @@ async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, segm
     table = transaction_table(segments)
     relation = "can_get_metadata" if suffix == "describe" else "can_write_data"
     if suffix == "describe" and (dropped := await resolver.trashed_as_transaction(segments)):
-        named = tier_policy.Named(kind="table", segments=tuple(table), in_trash=True)
+        named = write_judge.Named(kind="table", segments=tuple(table), in_trash=True)
         await _require_trashed(client, resolver, user=token.subject, relation=relation, named=named, label=fga.canonical_object_id(segments), trashed=dropped)
         return
     try:
         await _require_rung(
-            client, resolver, user=token.subject, rung=tier_policy.Rung(relation=relation, on=tier_policy.Named(kind="table", segments=tuple(table)))
+            client, resolver, user=token.subject, rung=write_judge.Rung(relation=relation, on=write_judge.Named(kind="table", segments=tuple(table)))
         )
     except PermissionDeniedError:
         await _refused_read_as_absent(client, resolver, token=token, fga_type="table", denied=relation, segments=table)
@@ -1003,7 +1011,7 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Re
         raise PermissionDeniedError("malformed batch request body: 'entries' must be a list")
     if operations is not None and not isinstance(operations, list):
         raise PermissionDeniedError("malformed batch request body: 'operations' must be a list")
-    rungs: set[tier_policy.Rung] = set()
+    rungs: set[write_judge.Rung] = set()
     for kind, segments in _batch_ids(body):
         if kind == "declare_table":  # creating a table -> can_create_table on its parent
             if (parent := _create_parent_rung("table", segments)) is not None:
@@ -1042,7 +1050,7 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Re
 VEND_TIER_RUNGS: Final[dict[str, str]] = {"write": "can_write_data", "maintain": "can_vend_maintain"}
 
 
-#: The resources whose non-read doors write a table's data or its history, and so reach the tier judge.
+#: The resources whose non-read doors write a table's data or its history, and so reach the write judge.
 _JUDGED_RESOURCES: Final = frozenset({"table", "materialized_view"})
 
 
@@ -1063,8 +1071,8 @@ async def _rename_destination(request: Request, segments: list[str]) -> tuple[st
     return tuple(segments if destination is None else destination)
 
 
-async def _write_door(request: Request, settings: Settings) -> tier_policy.Write | None:
-    """The write this route is about to make, or ``None`` for a door the tier judge does not decide.
+async def _write_door(request: Request, settings: Settings) -> write_judge.Write | None:
+    """The write this route is about to make, or ``None`` for a door the write judge does not decide.
 
     A write door is every non-read door on a table or materialized view, owner-rung ones included, and every
     create of one (ADR 0160). The classification is the same one the router's own gate uses, so a door is
@@ -1083,9 +1091,9 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
         return None
     fga_type = _FGA_TYPE[resource]
     obj = _object(fga_type, segments)
-    run = run_context.from_headers(request.headers) if suffix in tier_policy.STAMPING_DOORS else None
+    run = run_context.from_headers(request.headers) if suffix in write_judge.STAMPING_DOORS else None
     if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
-        return tier_policy.Write(op=suffix, obj=obj, rung=_create_parent_rung(resource, segments), table=tuple(segments), run=run)
+        return write_judge.Write(op=suffix, obj=obj, rung=_create_parent_rung(resource, segments), table=tuple(segments), run=run)
     if suffix == "credentials":
         # A vend is a read at its default tier and a WRITE at a writing one: the credential is how a
         # direct-to-storage writer writes, so it is judged on the rung its tier opens.
@@ -1093,7 +1101,7 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
         writing = VEND_TIER_RUNGS.get(tier) if tier is not None else None
         if writing is None:
             return None
-        return tier_policy.Write(op=suffix, obj=obj, rung=_rung(writing, fga_type, segments), table=tuple(segments))
+        return write_judge.Write(op=suffix, obj=obj, rung=_rung(writing, fga_type, segments), table=tuple(segments))
     try:
         relation = _action_relation(fga_type, suffix)
     except InternalError:
@@ -1104,7 +1112,7 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
     moved_from = tuple(segments) if suffix == "rename" else ()
     if moved_from:
         relation = _rename_relation(moved_from, table)
-    return tier_policy.Write(
+    return write_judge.Write(
         op=suffix,
         obj=obj,
         rung=_rung(relation, fga_type, segments, suffix=suffix),
@@ -1133,7 +1141,7 @@ async def require_declared_inputs(
     if check is not None:
         for entry in run.inputs:
             try:
-                await check(tier_policy.Rung(relation="can_read_data", on=tier_policy.Named(kind="table", segments=tuple(entry.table))))
+                await check(write_judge.Rung(relation="can_read_data", on=write_judge.Named(kind="table", segments=tuple(entry.table))))
             except (PermissionDeniedError, object_uuids.UnidentifiedObjectError) as exc:
                 raise _unreadable_input(entry) from exc
     return await declared_inputs(resolver, run)
@@ -1142,7 +1150,7 @@ async def require_declared_inputs(
 async def declared_inputs(resolver: Resolver, run: run_context.RunContext | None) -> dict[str, run_context.RunInput]:
     """Each input ``run`` declares, by the uuid of the table its name resolves to through ``resolver``; none for no run.
 
-    A door reads here what the tier judge already judged (:func:`require_declared_inputs`), from the request's one
+    A door reads here what the write judge already judged (:func:`require_declared_inputs`), from the request's one
     resolution, so the uuids it records are the ones authorized.
 
     A table that records no uuid holds no grant ([[LH-534]]), so it is refused as one the committer may not read.
@@ -1169,8 +1177,8 @@ def _unreadable_input(entry: run_context.RunInput) -> InvalidInputError:
     )
 
 
-def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> tier_policy.RungCheck | None:
-    """The tier judge's rung check, asked through :func:`_require_rung`; ``None`` with FGA off, when every rung allows.
+def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> write_judge.RungCheck | None:
+    """The write judge's rung check, asked through :func:`_require_rung`; ``None`` with FGA off, when every rung allows.
 
     Raises:
         ServiceUnavailableError: FGA is on and unwired.
@@ -1179,7 +1187,7 @@ def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClien
     if (authz := authorization(settings, injected, token)) is None:
         return None
 
-    async def check(rung: tier_policy.Rung) -> None:
+    async def check(rung: write_judge.Rung) -> None:
         try:
             await _require_rung(authz.client, resolver, user=authz.subject, rung=rung)
         except object_uuids.UnidentifiedObjectError:
@@ -1200,7 +1208,7 @@ _UNIDENTIFIED_TABLE_RUNG: Final = "can_deregister"
 _UNIDENTIFIED_TABLE_ESTATE_VERB: Final = "can_deregister_unidentified_table"
 
 
-async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user: str, root: str, rung: tier_policy.Rung) -> None:
+async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user: str, root: str, rung: write_judge.Rung) -> None:
     """Admit the estate admin to deregister a table no uuid identifies, and refuse anyone else as a name holding nothing is refused.
 
     Every grant is held by an object's uuid (ADR 0173 §8), so such a table holds none, and its deregister asks the estate
@@ -1237,9 +1245,9 @@ async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user:
 
 
 async def _judge(
-    request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, write: tier_policy.Write
+    request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, write: write_judge.Write
 ) -> None:
-    """Hand ``write`` to the tier judge, with the rung asked through :func:`_require_rung` when FGA is on."""
+    """Hand ``write`` to the write judge, with the rung asked through :func:`_require_rung` when FGA is on."""
     check = _rung_check(settings, token, injected, resolver)
     # Imported HERE rather than at module scope: `dependencies` imports this module for its guards.
     from catalog.api.dependencies import namespace_for_warehouse
@@ -1247,7 +1255,7 @@ async def _judge(
     async def namespace(warehouse_id: str) -> LanceNamespace:
         return await namespace_for_warehouse(request, settings, warehouse_id)
 
-    await tier_policy.judge(
+    await write_judge.judge(
         write,
         caller=token.subject if token is not None else None,
         check=check,
@@ -1270,21 +1278,21 @@ async def judge_staged_run(
     """Judge the run a stock client's staged commit to table ``segments`` names (ADR 0157), and answer each input it
     declares by the uuid of the table it names (:func:`require_declared_inputs`).
 
-    Only a commit that ``adds_data`` must name a run on a derived tier, whose tier is then read through ``ns``, the
-    connection the door resolved for the table; any declared input is judged either way.
+    Only a commit that ``adds_data`` must name a run, under a namespace that requires one, whose rule is then read
+    through ``ns``, the connection the door resolved for the table; any declared input is judged either way.
 
     Raises:
-        InvalidInputError: The table is silver or gold and the commit names no run or no input, or an input names no
-            table the committer may read.
+        InvalidInputError: The table lies under a namespace that requires a run and the commit names no run or no input,
+            or an input names no table the committer may read.
     """
-    tier = await tier_policy.tier_of(ns, segments[:-1]) if adds_data and len(segments) > 1 else None
+    required = await write_judge.requires_run(ns, segments[:-1]) if adds_data and len(segments) > 1 else False
     names = f"the staged manifest's transaction properties {run_context.RUN_ID_PROPERTY} and {run_context.INPUTS_PROPERTY}"
     declared: dict[str, run_context.RunInput] = {}
 
     async def inputs(named: run_context.RunContext) -> None:
         declared.update(await require_declared_inputs(settings, token, injected, resolver, named))
 
-    await tier_policy.judge_run(tier, run, inputs=inputs, names=names)
+    await write_judge.judge_run(required, run, inputs=inputs, names=names)
     return declared
 
 
@@ -1309,7 +1317,7 @@ async def spec_vend_tier(
     """The highest tier a spec door (``describe``, ``declare``) vends the caller on table ``segments`` (ADR 0156 C3).
 
     ``table_uuid`` is the uuid the door resolved the name to (or minted, for a declare), whose object the grants are
-    held by. ``can_write_data`` opens the write tier, and that is a write, so the tier judge decides it and audits the
+    held by. ``can_write_data`` opens the write tier, and that is a write, so the write judge decides it and audits the
     tier it was taken under, as it does for the management vend door; ``ns`` is the connection the door already
     resolved for the table, which is the one its namespace path's tier is read through. ``can_read_data`` with
     ``can_maintain``, a compaction job's rungs, opens the write tier too: its puts are what a compaction stages, and
@@ -1344,14 +1352,14 @@ async def spec_vend_tier(
     async def namespace(_warehouse_id: str) -> LanceNamespace:
         return ns
 
-    write = tier_policy.Write(op=door, obj=_object("table", list(segments)), rung=None, table=tuple(segments))
-    await tier_policy.judge(write, caller=token.subject if token is not None else None, check=None, inputs=_names_no_run, namespace=namespace)
+    write = write_judge.Write(op=door, obj=_object("table", list(segments)), rung=None, table=tuple(segments))
+    await write_judge.judge(write, caller=token.subject if token is not None else None, check=None, inputs=_names_no_run, namespace=namespace)
     return "write"
 
 
 async def _names_no_run(run: run_context.RunContext) -> None:
     """The inputs check of a write that names no run, which the judge never asks."""
-    raise InternalError(f"a vend names no run, yet the tier judge asked for the inputs of run {run.run_id!r}")
+    raise InternalError(f"a vend names no run, yet the write judge asked for the inputs of run {run.run_id!r}")
 
 
 #: The spec's ``delimiter`` query parameter, declared on every route by the router's shape rung.
@@ -1465,7 +1473,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
 
 
 async def _decide(request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> None:
-    """The caller's permission for this route: the tier judge decides every write door, with FGA on
+    """The caller's permission for this route: the write judge decides every write door, with FGA on
     or off, and OpenFGA every other door (a no-op when FGA is off).
 
     A table or namespace is asked about as the object its name resolves to, ``table:<uuid>`` or ``namespace:<uuid>``
@@ -2164,7 +2172,7 @@ async def seed_ownership(
         return
     # A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust). A service principal
     # registering its own output would become that table's owner, keeping `can_drop`, `can_deregister`,
-    # `can_restore` and `manage_grants` on every governed tier of every tenant it ever wrote to.
+    # `can_restore` and `manage_grants` on every governed table of every tenant it ever wrote to.
     #
     # THE TABLE IS NOT LEFT UNOWNED. `warehouse.owner: … or admin from project` →
     # `namespace.owner: … or owner from parent` → `table.owner: … or owner from parent`, so the
@@ -2841,7 +2849,7 @@ async def require_rename_destination(
     if (parent := _create_parent_rung("table", destination)) is None:
         return
     if _moves_namespace(source, destination):
-        parent = tier_policy.Rung(relation=_ACCEPT_MOVED_TABLE_RELATION, on=parent.on)
+        parent = write_judge.Rung(relation=_ACCEPT_MOVED_TABLE_RELATION, on=parent.on)
     await _require_rung(authz.client, resolver, user=authz.subject, rung=parent)
 
 
@@ -2970,18 +2978,19 @@ async def require_classifier_to_set_labels(
         await authz.require("can_apply", f"classification:{value}")
 
 
-async def require_tier_authority(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str | None) -> None:
-    """Raise 403 unless the caller may declare or drop a namespace's ``rask.tier`` (ADR 0160).
+async def require_run_rule_authority(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str | None) -> None:
+    """Raise 403 unless the caller may declare or drop a namespace's ``rask.requires_run`` (ADR 0211).
 
     That is the namespace's project admin (``can_administer`` on ``project:<project>``), or the estate admin
-    (``can_declare_unowned_tier`` on the root object) where no project owns the namespace. With FGA off it allows (:func:`authorization`).
+    (``can_declare_unowned_run_rule`` on the root object) where no project owns the namespace. With FGA off it allows
+    (:func:`authorization`).
     """
     if (authz := authorization(settings, client, token)) is None:
         return
     if project is not None:
         await authz.require("can_administer", f"project:{project}")
     else:
-        await authz.require("can_declare_unowned_tier", settings.fga_root_object)
+        await authz.require("can_declare_unowned_run_rule", settings.fga_root_object)
 
 
 async def require_can_create_warehouse(

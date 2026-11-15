@@ -1,5 +1,5 @@
 <script lang="ts">
-	// #64 blob preview — one blob cell's bytes (GET /blobs?column=&row=), reader-tier can_read_data at
+	// #64 blob preview — one blob cell's bytes (GET /blobs?column=&row=), reader-gated can_read_data at
 	// the catalog. Fetched with the person's bearer and shown from a blob URL: an `<img src>` cannot
 	// carry a bearer. Only offered for binary/blob-typed columns, which this section derives from the
 	// schema itself.

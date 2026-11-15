@@ -40,7 +40,7 @@ def door_stamp(token: Caller | None, operation: str, run: RunContext | None = No
 
 
 async def record_declared_inputs(settings: Settings, resolver: Resolver, run: RunContext | None, *, table: ResolvedTable, segments: list[str]) -> None:
-    """Record, before a door commits to ``table``, each input ``run`` declares, by the uuid the tier judge authorized it as
+    """Record, before a door commits to ``table``, each input ``run`` declares, by the uuid the write judge authorized it as
     (:mod:`catalog.services.table_inputs`, [[LH-541]]); nothing for a run declaring none.
 
     Raises:

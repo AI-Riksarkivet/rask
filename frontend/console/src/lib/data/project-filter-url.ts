@@ -5,6 +5,7 @@
  */
 import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
+import { LABEL_PARAM } from './labels.ts';
 import { queryWithProject, type WithQuery } from './project-filter.ts';
 
 /** The catalog lists that carry a project filter, by their route. */
@@ -22,5 +23,16 @@ export type CatalogList = keyof typeof LIST_ROUTES;
 export function showProject(list: CatalogList, url: WithQuery, project: string): Promise<void> {
 	const route = LIST_ROUTES[list];
 	const query = queryWithProject(url, project);
+	return goto(query ? resolve(`${route}?${query}`) : resolve(route));
+}
+
+/** Show `list` filtered to the objects carrying `label` (`''`: any label), as a history entry of its
+ *  own, the project filter kept. */
+export function showLabel(list: CatalogList, url: WithQuery, label: string): Promise<void> {
+	const route = LIST_ROUTES[list];
+	const params = new URLSearchParams(url.searchParams.toString());
+	if (label) params.set(LABEL_PARAM, label);
+	else params.delete(LABEL_PARAM);
+	const query = params.toString();
 	return goto(query ? resolve(`${route}?${query}`) : resolve(route));
 }

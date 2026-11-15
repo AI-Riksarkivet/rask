@@ -140,7 +140,7 @@ class Drills:
     def build(self) -> None:
         """Make the namespace, grant the pipeline `writer` on it, and have the pipeline make the source table."""
         admin = self.tenant.admin
-        scenario.ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.namespace}/create", json={"properties": {"rask.tier": "bronze"}}, timeout=60))
+        scenario.ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.namespace}/create", json={}, timeout=60))
         self.grant(self.pipeline.principal, "writer")
         self._commit(self.source, range(4), NamedRun(job="c5-source"), mode="create")
 

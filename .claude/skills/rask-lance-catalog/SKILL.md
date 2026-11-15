@@ -158,12 +158,12 @@ Two contracts stack here, and confusing them is how bugs happen:
   handed to its destination ([[LH-586]]). A namespace's is its `rask.uuid` property in its `__manifest` row: both create doors and the provenance boot
   mint it (`identifiers.with_minted_uuid`), an undrop restores it from the trash record, and an Overwrite mints a new
   one. DescribeTable and DescribeNamespace answer each as `rask.uuid`, and every create, declare, register and namespace
-  door refuses a caller's `rask.*` property (only an admin's `rask.tier` on a namespace). Pinned by
+  door refuses a caller's `rask.*` property (only an admin's `rask.requires_run` on a namespace). Pinned by
   `tests/integration/test_the_door_that_makes_a_table_or_namespace_mints_its_uuid.py`.
 - **Every grant is held by the object's uuid** ([[LH-524]], ADR 0173 §8): OpenFGA objects are `table:<uuid>` and
   `namespace:<uuid>` (`fga.table_object`, `fga.namespace_object`), the parent and child edges join uuids, and a
   namespace directly in a warehouse (a two-segment name) has `warehouse:<id>` as its parent. Every door stays addressed by name and resolves it ONCE per request
-  (`catalog.api.dependencies.Resolver`, `ResolverDep`, which `authorize`, the tier judge and `ResolvedTableDep` share),
+  (`catalog.api.dependencies.Resolver`, `ResolverDep`, which `authorize`, the write judge and `ResolvedTableDep` share),
   so a door acts on the table it authorized. An absent name is refused 403, audited and refused by the name, and only a
   READ door converts a refusal to 404, answering a name the caller cannot see exactly as an absent one, so the answer never
   depends on whether the name holds an object ([[LH-236]], `fga_deps._refused_read_as_absent`): seeing a namespace is not
@@ -353,23 +353,25 @@ refuses every write the catalog would announce while it holds no signing key (`c
 503 code 17 before the commit, since an announcement signed after the commit could not be made; only a data write under
 the provenance namespace, which the catalog never announces, is served then.
 
-**A table's tier is the `rask.tier` property of the nearest enclosing namespace that declares one** (ADR 0156 C8,
-ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
-- **Declared once.** Only the namespace's project admin (`can_administer` on `project:<p>`, the project of the
-  name's warehouse, `warehouses.project_of`) declares it, or the estate admin (`can_declare_unowned_tier` on the root) where no project owns the
-  namespace. It is declared at create, on `POST /v1/namespace/{id}/create`.
-  The catalog's own Overwrite is the only way to change or drop it, and it asks the same admin; no Lance operation
-  alters a namespace's properties.
-- **What a declaration may say.** A value outside bronze/silver/gold, a deeper namespace declaring a different tier
-  from an ancestor's, and any other `rask.*` / `lineage.*` namespace key are all refused 400.
+**A table is under the run rule when any namespace on its path declares `rask.requires_run = "true"`** (ADR 0156 C8,
+ADR 0211, LH-596). The platform has no tiers and reads no layering vocabulary; `catalog/core/write_judge.py` holds
+the rule:
+- **Declared once, inherited.** Only the namespace's project admin (`can_administer` on `project:<p>`, the project of
+  the name's warehouse, `warehouses.project_of`) declares it, or the estate admin (`can_declare_unowned_run_rule` on the
+  root) where no project owns the namespace. It is declared at create, on `POST /v1/namespace/{id}/create`, and binds
+  every namespace beneath, whatever it declares itself (`write_judge.requires_run` walks the path shallowest first).
+  The catalog's own Overwrite is the only way to drop it, and it asks the same admin; no Lance operation alters a
+  namespace's properties.
+- **What a declaration may say.** `rask.requires_run` takes only `"true"`; `rask.tier` and any other `rask.*` /
+  `lineage.*` namespace key are refused 400 (`write_judge.declares_requires_run`).
 - **Every write is judged.** `fga_deps.authorize` hands each non-read `table` / `materialized_view` door and each
-  create of one to `tier_policy.judge`, with FGA on or off. The judge asks the route's declared rung first, then
-  reads the tier, and audits `tier_judge` with it.
+  create of one to `write_judge.judge`, with FGA on or off. The judge asks the route's declared rung first, then
+  reads the rule, and audits `write_judge` with `requires_run`.
 - **Pinned by tests.** `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and
-  fails on a write that skips the judge; `tests/integration/test_a_tier_is_declared_by_its_admin_and_judged_on_every_write.py`
-  covers the admin gate and the judged tier over HTTP.
-- **Silver and gold name their run** ([[LH-225]], ADR 0156 C2). A write adding data to a silver or gold table names
-  its run and inputs, and every named input, on any tier, must resolve to a table the committer may read (`can_read_data`),
+  fails on a write that skips the judge; `tests/integration/test_the_run_rule_is_declared_by_its_admin_and_judged_on_every_write.py`
+  covers the admin gate and the judged rule over HTTP.
+- **Under the rule a write names its run** ([[LH-225]], ADR 0156 C2). A write adding data to a table under the rule
+  names its run and inputs, and every named input, under the rule or not, must resolve to a table the committer may read (`can_read_data`),
   or the commit is refused 400 code 13 with one sentence for an absent name and an unreadable table
   (`fga_deps.require_declared_inputs`, ADR 0183 §2); before the commit is finalized the catalog records each input's uuid
   for the writing table's uuid (`catalog.services.table_inputs`, `_table_inputs/` on the control root, never ended). The
@@ -380,11 +382,20 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   catalog reads the same properties from the staged manifest, which may carry no other `rask.*` key but `rask.author`,
   and refuses a `rask.author` other than the caller (a property any committer can write proves authorship only because
   of that refusal). A compaction and a restore add no data, so they name no run. A rename commits nothing a run can
-  reach, so moving a table into silver or gold from another tier is refused, and so is `register` into one, which
+  reach, so moving a table into a namespace under the rule from one that is not is refused, and so is `register` into one, which
   attaches bytes no run produced through the catalog ([[LH-463]]). `update` and `add_columns` read no run from the
-  Context, so silver and gold refuse them 406. The judge answers allow or refuse; a version breaching the project's
-  quality gate is held when it is published, at the publish door (ADR 0161, below). Nothing anywhere reads a tier from
-  a name.
+  Context, so the rule refuses them 406. The judge answers allow or refuse; a version breaching the project's
+  quality gate is held when it is published, at the publish door (ADR 0161, below). Nothing reads the rule from a name.
+- **Labels classify and authorize nothing** (ADR 0211). A project's admin defines its labels
+  (`POST /management/v1/projects/{p}/labels/define`, `GET .../labels`, `POST .../labels/{name}/delete`, 409 code 3 while
+  any object carries one): a name, a scope (`namespace`, `table`), a kind (`marker`, `free_text`, `enumerated` with
+  `allowed_values`) whose scope and allowed values only grow and whose kind never changes. An object's owner attaches
+  them at `can_label` (`POST /management/v1/{table|namespace}/{id}/labels/{set,remove}`; `labels/describe` at
+  `can_get_metadata`), and `GET .../labels/objects?label=` lists the project's labelled objects the caller may see.
+  Records: `_label_definitions/<project>/<blake2s(name)>.json` and `_labels/<record_name(kind, uuid)>` on the control
+  root (`catalog.services.object_labels`, `catalog/api/v1/endpoints/labels.py`); a rename keeps them, the object's
+  ending ends them (`lakehouse.object_records`), a project's delete ends its definitions. No door reads a label to
+  decide. Pinned by `tests/integration/test_a_project_defines_labels_its_owners_attach.py`.
 - **Every version names its author, and every door commits stamped** ([[LH-497]]). Each catalog door stamps
   `rask.author` (the verified caller) and `rask.operation` (the lineage operation it announces) on its commit, on main
   and on every branch, through `dataplane.commit_stamped`: the door's transaction is planned on the ref's latest version,
@@ -812,10 +823,9 @@ governing their data. The project-scoped surface is the console's project page, 
   config whenever a plan names no option (`lance_docs/lance/format/table/table_config.md`), so the property guard
   (`core/formats.compaction_config_keys`), `version/create`, the register judge (`table_bases.judge_registered_table`)
   and the restore door (`dataplane.refuse_a_restore_carrying_refused_config`) refuse every such key ([[LH-538]]).
-- **Maintenance does not read a tier.** The due list plans a compaction at the #50 policy's
-  `target_rows_per_fragment`, else Lance's own sizing. There are no per-tier defaults: a tier is the
-  namespace's `rask.tier` property, which a dataset path does not carry, and a size guessed from a path is
-  applied silently forever (ADR 0160).
+- **Maintenance sizes by policy, never by a name.** The due list plans a compaction at the #50 policy's
+  `target_rows_per_fragment`, else Lance's own sizing. A size guessed from a path or a label would be applied silently
+  forever, so nothing derives one.
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs as two tasks of
   its own (`maintenance.services.audit`), each a NATS message schedule the worker asserts at its start and every 15
   minutes, so a purged schedules stream heals: the hourly AUDIT (`maintenance.queue.auditSchedule`, `@hourly`) walks
@@ -918,7 +928,7 @@ governing their data. The project-scoped surface is the console's project page, 
   are served by the blob door. A plain base inside a configured entry is CONFIGURED at the read/vend/blob doors
   and the register door only when it covers no governed storage (`BaseJudge.judge`, `GovernedStorage`), so a
   planted `models/<victim>/` base is sanctioned by the record or by nothing; maintenance and lineage keep the
-  unnarrowed standing for protection. A pipeline deriving a tier from one names its upstream's base as
+  unnarrowed standing for protection. A pipeline deriving a table from one names its upstream's base as
   `external_blob_base` on the create. `vend_sanctioned_bases` is gone: the vendor's allowlist is
   `LANCE_MULTIBASE_DATA_BASES` alone. Pinned by
   `tests/integration/test_an_external_blob_base_is_authorized_per_table.py` and the planted-base case of
@@ -972,7 +982,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`lakehouse.store_session`), so a running catalog never needs a restart for its credential.
   **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
   `DescribeTable` and `DeclareTable` vend unless the request sets `vend_credentials` false (unset, the spec lets the
-  server decide), write on `can_write_data` (judged by the tier judge) or on `can_read_data` with `can_maintain` (a
+  server decide), write on `can_write_data` (judged by the write judge) or on `can_read_data` with `can_maintain` (a
   compaction job's rungs, whose commits `version/create` admits for a compaction alone, ADR 0174, and whose puts can
   overwrite a committed data file as a writer's can), read on `can_read_data`, otherwise none.
   Every mint, at all three doors, writes the `vend_credentials` audit record with its `tier` and `door`. A stock
@@ -1130,8 +1140,8 @@ governing their data. The project-scoped surface is the console's project page, 
   take. The finish forgets a base record only where the door meant the bytes to go and no dataset stands there. No reader judges a clone gone (owner 2026-11-09). Measured on pylance 13.0.0, Lance itself commits a rewrite that loses or duplicates rows and an
   index naming a base or an empty directory, so the judge is what refuses them.
   **Provenance travels in the spec Context** ([[LH-225]]): the staged manifest's `rask.*` transaction properties name
-  the run, `version/create` refuses a silver or gold commit adding data without a run and inputs, and the finalize's
-  lineage event names the inputs at their versions. See the tier bullet under "rask's hierarchy layer".
+  the run, `version/create` refuses a commit adding data under the run rule without a run and inputs, and the finalize's
+  lineage event names the inputs at their versions. See the run-rule bullets under "rask's hierarchy layer".
 - **A write's lineage event names the commit that write made, never a reopen** ([[LH-214]]).
   `lineage_deps.emit_measured_write` takes `pin_version` and `branch` with no default: a new write door
   passes its handle's `version` after the commit, its response's `version`, or
@@ -1359,10 +1369,10 @@ governing their data. The project-scoped surface is the console's project page, 
   registered clone reads keeps its bytes, since the catalog vends no session to delete them while the clone's tag
   stands on it (`trash_reclaim.clone_refusal`, ADR 0198 §1). On a local `file://` root pyarrow decodes the
   URL itself, so only an S3 store shows a reader that compares spellings.
-- **A governed tier's maintenance run is emitted only when expiry does MATERIAL work.**
+- **A table's maintenance run is emitted only when expiry does MATERIAL work.**
   `table_pass.py::_did_material_work` gates the `expire_versions` emit, and its `lance.audit` record, on
   `old_versions_removed` or `base_files_removed`, so a correctly-idle estate records nothing — deliberately, since a
-  pass after every commit would otherwise flood the graph with no-op runs. Consequence for verification: a stamped tier
+  pass after every commit would otherwise flood the graph with no-op runs. Consequence for verification: a stamped
   dataset does NOT produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and passed; a pass that removed
   no version and no base file emits nothing, which is the gate behaving correctly, not a defect.
 
@@ -1378,14 +1388,14 @@ governing their data. The project-scoped surface is the console's project page, 
   (measured 2026-09-09: a derived table's compactions and FAIL events were filed against its upstream's node). The
   catalog re-declares it on every table it writes (`lakehouse.provenance_stamp.declare_dataset_id`, which DROPS an
   inherited id when none is given). When
-  you check a declared-id chain, ask not "is an id stamped" but "whose uuid, on the tier that derived it": the catalog
+  you check a declared-id chain, ask not "is an id stamped" but "whose uuid, on the table that derived it": the catalog
   stamps the uuid its location claim holds, never the name (`dataplane._named_by_its_uuid`, ADR 0173 §10).
 
   **EVERY TABLE IS WRITTEN THROUGH THE CATALOG, and the writer is the user's pipeline** (ADR 0154, ADR 0155): a table
   is a `table:` object with a record and ownership tuples from its first row, and the catalog announces every committed
-  write on lineage. Moving rows between tables, tiered or not, runs on the user's own compute and orchestrator; the
+  write on lineage. Moving rows between tables runs on the user's own compute and orchestrator; the
   lakehouse runs no stage. **The promotion gate is the `published` tag** (ADR 0156 C1, ADR 0161, [[LH-466]]): readers of a
-  governed tier read `@published`, and `POST /management/v1/table/{id}/publish` runs the project's quality gate
+  governed table read `@published`, and `POST /management/v1/table/{id}/publish` runs the project's quality gate
   (`/management/v1/project/{id}/gate/*`) against the committed version; a pass advances the tag. A declaration that
   exists and cannot be read, or the table's warehouse record (which names its project), refuses the publish (503 when the store did not
   answer, 500 code 18 for a record that cannot be read as one) rather than judging it against the request's own weaker
@@ -1479,7 +1489,7 @@ governing their data. The project-scoped surface is the console's project page, 
   blob prefix via `initial_bases`, which sets 16 while every data file stays under the dataset's own
   root — measured on pylance 10.0.0, compacting that is a merge and nothing more (4 fragments -> 1,
   9,445 -> 14,366 bytes locally, base byte-identical, 20/20 payloads still resolving). Refused anyway,
-  the estate's most-fragmented tiers accumulated fragments forever while maintenance reported clean
+  the estate's most-fragmented tables accumulated fragments forever while maintenance reported clean
   passes (`fragments_removed_total=0` over 785 ticks). `features.gather_compaction_bases` therefore
   takes THREE readings and `describe_compaction_unsupported_flags` weighs them; it permits only when
   all three say no, and **every unknown refuses**:

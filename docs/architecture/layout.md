@@ -42,7 +42,7 @@ Each is unambiguous from inside its plane, and language purity is what lets both
 
 | Path | Type | Purpose |
 |---|---|---|
-| `services/{catalog,lineage,maintenance}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage intake, the durable `GET /events` feed and edge list (Lance tables the catalog governs) and the forwarder to a graph backend, and maintenance (expiry, purge, orphan scan, reconcile). |
+| `services/{catalog,lineage,maintenance}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with write governance, OpenLineage intake, the durable `GET /events` feed and edge list (Lance tables the catalog governs) and the forwarder to a graph backend, and maintenance (expiry, purge, orphan scan, reconcile). |
 | `frontend/console` | SvelteKit 3 + Svelte 5 (single-page app) | The console, the lakehouse's own UI, shipped by the product chart (`chart/templates/console.yaml`): static files with no backend of its own, served by its own small Bun server (`serve.ts`) with the runtime `config.json` the chart renders. The browser signs in to Dex with PKCE on the lakehouse's public `rask-console` client, keeps its tokens in memory under a strict Content Security Policy, and calls the catalog and lineage APIs with its bearer. |
 | `scripts/` | Python + shell | Every dev/ops tool in one place: `k3s-install.sh`, the e2e stack drivers, the estate seed, … No production-state-changing CLIs — data enters and moves only through the catalog's namespace doors. |
 

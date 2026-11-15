@@ -1,7 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { tableFromIPC, Type } from 'apache-arrow';
 import { mockMe, signIn, TOKEN } from './session';
-import { declaredTiers } from './tiers';
 import { MOCK_CATALOG } from './ports';
 import { cellUnder } from '../table-cell';
 
@@ -29,6 +28,30 @@ const calls = async (page: Page): Promise<Body[]> => {
 
 const callTo = async (page: Page, path: string): Promise<Body | undefined> =>
 	(await calls(page)).find((c) => c.path === path);
+
+/** The project `acme` the caller is a member of, owning the warehouse `acme`, and the labels its
+ *  tables carry (ADR 0211), in the mock's label store. */
+const seedLabelled = async (
+	page: Page,
+	objects: { id: string; labels: Record<string, string | null> }[],
+): Promise<void> => {
+	await seed(page, {
+		'GET /management/v1/projects': [{ project: 'acme', warehouses: [{ id: 'acme' }] }],
+		'GET /management/v1/warehouses': [
+			{ id: 'acme', project: 'acme', bucket: 'acme', root_uri: 's3://acme', status: 'active' },
+		],
+	});
+	await page.request.post(`${MOCK_CATALOG}/__mock/labels`, {
+		data: {
+			bearer: token,
+			definitions: [
+				{ project: 'acme', name: 'pii', scope: ['table'], kind: 'marker' },
+				{ project: 'acme', name: 'owner', scope: ['table'], kind: 'free_text' },
+			],
+			objects: objects.map((o) => ({ kind: 'table', project: 'acme', ...o })),
+		},
+	});
+};
 
 test.beforeEach(async ({ context, page }, testInfo) => {
 	token = `${TOKEN.admin}:${testInfo.testId}`;
@@ -181,15 +204,19 @@ test('a namespace named like a route group links to its own page, not the list',
 	);
 });
 
-test('tier chips, muted text and primary fills clear WCAG AA contrast in light and dark', async ({
+test('label chips, muted text and primary fills clear WCAG AA contrast in light and dark', async ({
 	page,
 }) => {
-	await seed(page, {
-		'GET /v1/table': { tables: ['acme$bronze$a', 'acme$silver$b', 'acme$gold$c'] },
-		...declaredTiers({ acme$bronze: 'bronze', acme$silver: 'silver', acme$gold: 'gold' }),
-	});
+	await seed(page, { 'GET /v1/table': { tables: ['acme$raw$a', 'acme$raw$b', 'acme$curated$c'] } });
+	await seedLabelled(page, [
+		{ id: 'acme$raw$a', labels: { pii: null } },
+		{ id: 'acme$curated$c', labels: { owner: 'data-eng' } },
+	]);
 	await page.goto('/catalog/tables');
-	await expect(page.getByRole('link', { name: 'acme › gold › c' })).toBeVisible();
+	await expect(page.getByText('owner=data-eng')).toBeVisible();
+	// Each paint is read at once, not part way through a colour transition (a badge transitions its
+	// colour when the mode flips).
+	await page.addStyleTag({ content: '* { transition: none !important; }' });
 	// A primary fill as a selected toggle or a default button paints it, beside the account avatar's.
 	await page.evaluate(() => {
 		const probe = document.createElement('span');
@@ -237,8 +264,8 @@ test('tier chips, muted text and primary fills clear WCAG AA contrast in light a
 
 	for (const dark of [false, true]) {
 		await page.evaluate((on) => document.documentElement.classList.toggle('dark', on), dark);
-		const chips = await ratios('.stage');
-		expect(chips.map((c) => c.text).sort()).toEqual(['bronze', 'gold', 'silver']);
+		const chips = await ratios('[data-slot="label-chips"] [data-slot="badge"]');
+		expect(chips.map((c) => c.text).sort()).toEqual(['owner=data-eng', 'pii']);
 		for (const chip of chips)
 			expect(chip.ratio, `${chip.text} chip, dark=${dark}`).toBeGreaterThanOrEqual(4.5);
 		for (const head of await ratios('th'))
@@ -250,9 +277,6 @@ test('tier chips, muted text and primary fills clear WCAG AA contrast in light a
 	}
 
 	// A project card's count, at rest and hovered (the card paints --accent then), in both modes.
-	await seed(page, {
-		'GET /management/v1/projects': [{ project: 'acme', warehouses: [{ id: 'acme-wh' }] }],
-	});
 	await page.goto('/projects');
 	const count = page.locator('a[href="/projects/acme"]').getByText('1 warehouse');
 	await expect(count).toHaveText('1 warehouse');
@@ -279,14 +303,53 @@ test('an empty registry says no table is visible to the reader, not that none ex
 	await expect(page.getByText('No tables visible to you.')).toBeVisible();
 });
 
-test('a table with no project draws the tier column’s dash, in the same face', async ({ page }) => {
+test('a table with no project draws the labels column’s dash, in the same face', async ({
+	page,
+}) => {
 	await page.goto('/catalog/tables');
 	await expect(page.getByRole('link', { name: 'db1 › existing' })).toBeVisible();
 	const dashFace = async (header: string) =>
 		(await cellUnder(page, 'db1 › existing', header))
 			.getByText('—', { exact: true })
 			.evaluate((el) => getComputedStyle(el).fontFamily);
-	expect(await dashFace('project')).toBe(await dashFace('tier'));
+	expect(await dashFace('project')).toBe(await dashFace('labels'));
+});
+
+test('the label filter narrows the tables to those carrying it, in the URL, and says so when none does', async ({
+	page,
+}) => {
+	await seed(page, { 'GET /v1/table': { tables: ['acme$raw$a', 'acme$raw$b', 'acme$curated$c'] } });
+	await seedLabelled(page, [
+		{ id: 'acme$raw$a', labels: { pii: null, owner: 'data-eng' } },
+		{ id: 'acme$curated$c', labels: { owner: 'research' } },
+	]);
+	await page.goto('/catalog/tables');
+	// Each row's labels, as chips: a marker by its name, a valued label as name=value.
+	await expect(await cellUnder(page, 'acme › raw › a', 'labels')).toHaveText(
+		/owner=data-eng\s*pii/,
+	);
+	await expect(await cellUnder(page, 'acme › curated › c', 'labels')).toHaveText('owner=research');
+
+	await page.getByLabel('Label filter').click();
+	await page.getByRole('option', { name: 'pii' }).click();
+	await expect(page).toHaveURL(/[?&]label=pii(&|$)/);
+	await expect(page.getByRole('link', { name: 'acme › raw › a' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'acme › raw › b' })).toHaveCount(0);
+	await expect(page.getByRole('link', { name: 'acme › curated › c' })).toHaveCount(0);
+
+	// The filter survives a reload, with the project filter beside it.
+	await page.goto('/catalog/tables?project=acme&label=owner');
+	await expect(page.getByRole('link', { name: 'acme › curated › c' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'acme › raw › a' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'acme › raw › b' })).toHaveCount(0);
+
+	// A label nothing the caller can see carries is said in plain words, not an empty table.
+	await page.goto('/catalog/tables?label=gdpr');
+	await expect(page.getByText('No table you can see carries the label gdpr.')).toBeVisible();
+	await page.getByLabel('Label filter').click();
+	await page.getByRole('option', { name: 'any label' }).click();
+	await expect(page).not.toHaveURL(/label=/);
+	await expect(page.getByRole('link', { name: 'acme › raw › b' })).toBeVisible();
 });
 
 test('the declare form takes the focus it was opened for, and Escape closes it back to its toggle', async ({

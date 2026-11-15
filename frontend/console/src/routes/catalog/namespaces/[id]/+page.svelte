@@ -13,9 +13,8 @@
 	import { page } from '$app/state';
 	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
 	import DetailTabs from '#lib/data/DetailTabs.svelte';
-	import StageBadge from '#lib/data/StageBadge.svelte';
-	import { namespaceOfTable } from '#lib/data/stage.ts';
-	import { leafSegment } from '#lib/api/identifiers.ts';
+	import ObjectLabels from '#lib/data/ObjectLabels.svelte';
+	import { leafSegment, parentNamespace } from '#lib/api/identifiers.ts';
 	import { policyRequestFrom } from '#lib/data/namespace.ts';
 	import type { AccessGraph } from '#lib/data/namespace.ts';
 	import type { Policy } from '#lib/policies.ts';
@@ -33,7 +32,6 @@
 		describeNamespace,
 		fetchNamespacePolicy,
 		fetchNamespaceTasks,
-		namespaceTier,
 		setNamespacePolicy,
 	} from '#lib/data/remote/namespace.api.ts';
 	import type { TrashEntry } from '#lib/data/remote/catalog.api.ts';
@@ -45,12 +43,9 @@
 
 	const ns = $derived(page.params.id ?? '');
 
-	// The FGA view lives on an Access TAB (overview stays the default); the tier badge is the tier the
-	// namespace declares.
+	// The FGA view lives on an Access TAB (overview stays the default), and the overview carries the
+	// namespace's labels.
 	let tab = $state('overview');
-	/** The tier this namespace declares (ADR 0160), never one read off its name. */
-	const tierRead = $derived(namespaceTier(ns));
-	const stageInfo = $derived(tierRead.current ?? null);
 
 	// The catalog calls the grants panel makes, bound to this page's reads and writes: the panel's
 	// positional signature onto the data functions' single argument.
@@ -123,12 +118,10 @@
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
 
-	// The namespace's member tables, grouped the way the registry groups them — through the SAME helper,
-	// not a local re-implementation of it. This carried its own copy that split on the FIRST delimiter,
-	// the identical bug fixed in `namespaceOfTable` earlier today: for a nested namespace it compared
-	// the top-level ancestor against `ns`, so `acme$bronze` listed none of its own tables and `acme`
-	// listed all of them. Two copies of one rule is how they came to disagree.
-	const members = $derived((tables ?? []).filter((t) => namespaceOfTable(t) === ns).sort());
+	// The namespace's member tables, grouped the way the registry groups them — through the SAME helper
+	// (`parentNamespace`, every segment but the last), not a local re-implementation of it: a copy that
+	// split on the FIRST delimiter would compare a nested namespace's top-level ancestor against `ns`.
+	const members = $derived((tables ?? []).filter((t) => parentNamespace(t) === ns).sort());
 
 	/** The namespaces directly under this one (the spec's ListNamespaces on its id), so a table in a nested
 	 *  namespace is reached from its warehouse through every namespace above it. `null`: the listing failed,
@@ -371,7 +364,6 @@
 	<header>
 		<Boxes size={15} />
 		<CatalogName id={ns} kind="namespace" />
-		{#if stageInfo}<StageBadge info={stageInfo} />{/if}
 		<!-- Counted only for a namespace the caller can see: a count beside "no namespace you can see"
 		     would describe one. -->
 		{#if tables !== null && presence.kind === 'live'}
@@ -419,6 +411,9 @@
 		<!-- Goal cond 3: overview (default) | access — the FGA view moved onto its own tab. -->
 		<DetailTabs tabs={['overview', 'connect', 'access']} bind:active={tab} />
 		{#if tab === 'overview'}
+			{#key ns}
+				<ObjectLabels kind="namespace" id={ns} />
+			{/key}
 			{#if children === null}
 				<section>
 					<h2>Namespaces</h2>

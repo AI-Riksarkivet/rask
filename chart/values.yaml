@@ -1179,10 +1179,10 @@ objectStore:
   # catalog's, made at runtime by `provision_bucket`.) The maintenance reconcile exempts the
   # same set from `orphan_buckets`. A bucket dropped from this set stays on the store (nothing deletes a
   # bucket), and `orphan_buckets` then reports it, holding the trash purge, until an operator deletes it.
-  # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
-  # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
+  # GOVERNED data only. A source's own buckets are NOT here: a source is the external world (R23) and lives
+  # on its own store. A local bucket sharing a name with an external one makes the browser report the empty
   # local one instead of 404ing.
-  # -- Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.
+  # -- Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed data only, not the root or feature buckets.
   buckets: []
   # Externalize: when set, the apps (catalog/lineage/maintenance + vending STS) connect HERE instead of the
   # development store — pair with objectStore.enabled=false to use the platform's S3.

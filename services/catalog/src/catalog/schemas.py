@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from catalog.services.changes import ChangeKind
 from catalog.services.control_records import DeleteMode
+from catalog.services.object_labels import LabelDefinition, LabelKind, LabelScope
 from lakehouse.control_events import ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from lakehouse.features import TableFileFormat
 from lakehouse.maintenance_due import CompactionDue, IndexDue
@@ -555,10 +556,10 @@ class PolicyRequest(RequestBody):
     # `compact_files` (Lance's `delta.targetFileSize` analog). None → Lance's default fragment sizing.
     #
     # Sizing is a real tradeoff, not a knob to leave alone: manifest work scales with fragment COUNT,
-    # while conflict detection is PER-FRAGMENT — so a tier under many concurrent updates/deletes/
+    # while conflict detection is PER-FRAGMENT — so a table under many concurrent updates/deletes/
     # merge_inserts wants MORE, smaller fragments, and a scan-heavy
-    # tier wants fewer, larger ones. Per-tier is the point: bronze page images are ~1.8 MB rows,
-    # silver/gold features are not, and one value cannot be right for both.
+    # table wants fewer, larger ones. A policy per table or namespace is the point: page-image rows are ~1.8 MB,
+    # feature rows are not, and one value cannot be right for both.
     target_rows_per_fragment: int | None = Field(default=None, ge=1024, le=10_000_000)
     # Per-OPERATION opt-outs. `compact_enabled` historically gated the whole pass; these split the
     # ordered per-dataset pass into its three real steps, because they have different costs and
@@ -568,19 +569,19 @@ class PolicyRequest(RequestBody):
     cleanup_enabled: bool = True
     optimize_indices_enabled: bool = True
     # The sweep's READ batch, passed to `compact_files`. Lance's default is 8192 ROWS, and rows are
-    # not a unit of memory: against bronze page-image rows (~1.8 MB each, measured) 8192 rows is
+    # not a unit of memory: against page-image rows (~1.8 MB each, measured) 8192 rows is
     # ~15 GB *per compute thread* — the default is safe for feature tables and ruinous for a blob
-    # tier. Per-tier is the whole point, exactly as with `target_rows_per_fragment`. None → Lance's
+    # table. A policy per table or namespace is the whole point, exactly as with `target_rows_per_fragment`. None → Lance's
     # default, which is correct wherever rows are small.
     scan_batch_size: int | None = Field(default=None, ge=1, le=8192)
     # The same ceiling expressed in BYTES rather than rows — pylance 11's `max_source_bytes`, a bound
-    # on the compaction PASS instead of on a read chunk. Per-tier for the reason above: a tier whose
+    # on the compaction PASS instead of on a read chunk. Per policy for the reason above: a table whose
     # rows turn out larger than whoever set the row count assumed is precisely how the read bound gets
     # away from you, and this one does not depend on knowing the row size. None → the sweep's default.
     # The range is `MaintenanceSettings.max_source_bytes`'s, which states the ceiling's reason.
     max_source_bytes: int | None = Field(default=None, ge=1024 * 1024, le=1024 * 1024 * 1024)
-    # HOW this tier's bytes move. Per-tier for the same reason the two bounds above are: a tier of
-    # uniformly-encoded fragments can binary-copy where a tier that has evolved its schema cannot, and
+    # HOW this table's bytes move. Per policy for the same reason the two bounds above are: a table of
+    # uniformly-encoded fragments can binary-copy where a table that has evolved its schema cannot, and
     # `try_binary_copy` falls back rather than failing. None = Lance's re-encode, today's behaviour.
     repack_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = None
     # NO FIELD hands version reclamation to Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`).
@@ -945,8 +946,8 @@ class PublishRequest(RequestBody):
     """
 
     version: int = Field(ge=1)
-    #: The identity column the `not_null` assertion checks. Stages key differently — bronze on `id`,
-    #: a derived tier possibly on something else — so the caller names it rather than the gate guessing.
+    #: The identity column the `not_null` assertion checks. Tables key differently — a source table on `id`,
+    #: a derived one possibly on something else — so the caller names it rather than the gate guessing.
     key_column: str = Field(min_length=1, max_length=128)
     required_columns: list[str] = Field(default_factory=list)
     #: Failed assertions the caller explicitly accepts — the third answer to a held promotion, where a
@@ -1073,6 +1074,55 @@ class ProtectionResponse(BaseModel):
     # Who armed it (`user:<principal>`), from the record — None on an unprotected object and on the SET
     # response (the caller knows who they are). A refused drop can then NAME the armer (#123).
     set_by: str | None = None
+
+
+class LabelDefinitionRequest(RequestBody):
+    """A label a project defines, or the definition its name holds, evolved (ADR 0211).
+
+    The name is the label's for good; its scope and its allowed values only grow, and its kind never changes, so a
+    label already attached stays valid.
+    """
+
+    name: str
+    description: str | None = None
+    #: The object kinds it may be attached to.
+    scope: list[LabelScope]
+    #: ``marker`` carries no value, ``free_text`` any value, ``enumerated`` one of ``allowed_values``.
+    kind: LabelKind
+    allowed_values: list[str] | None = None
+
+
+class SetLabelRequest(RequestBody):
+    """Attach a label the object's project defines, with its value; a marker carries none."""
+
+    name: str
+    value: str | None = None
+
+
+class RemoveLabelRequest(RequestBody):
+    """Remove a label from the object."""
+
+    name: str
+
+
+class ObjectLabelsResponse(BaseModel):
+    """The labels a table or namespace carries, each with its value (``None`` for a marker)."""
+
+    kind: LabelScope
+    id: str
+    uuid: str
+    labels: dict[str, str | None]
+    #: On a describe, the labels its project defines for its kind, each a ``LabelDefinition``: what its owner may
+    #: attach, read by whoever may read the object, whether or not they are a member of the project.
+    available: list[LabelDefinition] | None = None
+
+
+class LabelledObjectsResponse(BaseModel):
+    """A page of a project's labelled objects the caller may see, each named as it is named now."""
+
+    project: str
+    objects: list[ObjectLabelsResponse]
+    page_token: str | None = None
 
 
 class TrashEntry(BaseModel):

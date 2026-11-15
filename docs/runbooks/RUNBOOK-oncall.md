@@ -9,11 +9,11 @@ fixture's) or a user report — not a page.
 
 ## Orientation
 
-- **Services** (FastAPI): `catalog` (REST catalog and tier governance), `lineage`
+- **Services** (FastAPI): `catalog` (REST catalog and write governance), `lineage`
   (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `lance_catalog$provenance` namespace;
   the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (a NATS work queue its replicas share: each table's pass, the hourly audit with the drift report, the daily scan; and the write-event lane, ADR 0198),
   and the console's static-file server `rask-console`; public `/api/*` reaches the lakehouse through the platform's Gateway on the chart's HTTPRoutes (`chart/templates/route.yaml`), and `/` reaches the console on the chart's HTTPRoute `rask-console` (`chart/templates/console.yaml`). The lakehouse runs no stage and no pipeline: moving data
-  between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
+  between tables is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (OpenFGA's datastore),
   the object store (RustFS in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao
   fixture in development; the platform's Vault or OpenBao in production), `greptimedb` (metrics), `dex` (OIDC).

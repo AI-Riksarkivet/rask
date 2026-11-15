@@ -10,7 +10,7 @@ for access" from "you typed the wrong name".
 THE OWNER'S RULE (2026-09-11): **404 on READ doors, 403 kept on destructive ones.** The estate's
 no-existence-oracle property is deliberate and documented for `delete_warehouse` / `delete_project` /
 `_set_warehouse_status`, which collapse PermissionDenied into NotFound precisely so a destructive door
-cannot enumerate ids. That stays: a destructive door is a write door, refused by the tier judge, and the probe never
+cannot enumerate ids. That stays: a destructive door is a write door, refused by the write judge, and the probe never
 sees it.
 
 THE SAFETY PROPERTY, which is the half worth more than the feature ([[LH-236]], the owner's word of 2026-10-31): a READ

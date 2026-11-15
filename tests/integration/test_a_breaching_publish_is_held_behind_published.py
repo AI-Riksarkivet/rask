@@ -1,7 +1,7 @@
 """A publish that breaches the project's quality gate is held: the version stays on main, `published` stays where
 it was, and only a `can_promote` holder answers the hold (ADR 0156 C1, [[LH-466]]).
 
-Readers of a governed tier read the version tagged `published`. The project declares its gate on the gates door
+Readers who want the vetted version read the version tagged `published`. The project declares its gate on the gates door
 with review on, so a version whose row count moves past the band is not published: the door records a hold,
 listed on `GET /management/v1/promotions`, and a validator approves it (`published` moves to the held version)
 or rejects it (main is restored to the published version). A sweep expires a hold nobody answered.
@@ -156,7 +156,7 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Estate]:
     grants.grant("alice", ("can_create_namespace", f"warehouse:{WAREHOUSE}"), ("can_administer", f"project:{PROJECT}"))
     warehouses.ensure_catalog_row(client.app.dependency_overrides[get_namespace](), WAREHOUSE)
     act_as(client, "alice")
-    declared = client.post(f"/v1/namespace/{NAMESPACE}/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH)
+    declared = client.post(f"/v1/namespace/{NAMESPACE}/create", json={"properties": {"rask.requires_run": "true"}}, headers=AUTH)
     assert declared.status_code == 200, declared.text
     estate = Estate(client, grants, root)
     # The run's input, which the create names and alice reads.

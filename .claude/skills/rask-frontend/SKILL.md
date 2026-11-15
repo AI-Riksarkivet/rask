@@ -38,7 +38,7 @@ server, so browser globals are fine anywhere, and there is no `+server.ts`, `+pa
 **SvelteKit 3's config and filename rules.** The project config is the `sveltekit({...})` call in
 `console/vite.config.ts` (adapter-static, the CSP, `compilerOptions.experimental.async`); a `svelte.config.js` in the
 console is a build error. `#lib/*` is a Node subpath import declared in the console's `package.json` `imports` and
-written with the file's extension (`#lib/doors.ts`, `#lib/reads.svelte.ts`, `#lib/data/StageBadge.svelte`), as
+written with the file's extension (`#lib/doors.ts`, `#lib/reads.svelte.ts`, `#lib/data/LabelChips.svelte`), as
 `sv migrate sveltekit-3` writes it and `$app/tsconfig`'s `allowImportingTsExtensions` allows. Kit 3 reads a file named
 `remote.*` (`/[/.]remote\.[^/]+$/`) as a remote-functions module, which is a build error without
 `experimental.remoteFunctions`, and any `server` directory or `*.server.*` / `server.*` file as server-only
@@ -48,7 +48,7 @@ modules are fine, and the data layer is `reads.svelte.ts`. `tsconfig.json` exten
 
 | path | what it is |
 |---|---|
-| `/` | Home: the caller's tables per project and tier, lineage's latest commits, the held promotions, and for an estate admin the DLQ depth and the latest governance changes, each from a door the caller already reads (`#lib/home.ts`) |
+| `/` | Home: the caller's tables per project, lineage's latest commits, the held promotions, and for an estate admin the DLQ depth and the latest governance changes, each from a door the caller already reads (`#lib/home.ts`) |
 | `/projects`, `/projects/[project]` | the project gallery and one project's overview (create, delete, policies) |
 | `/settings`, `/settings/access` | estate configuration, estate-admin only (`settings/+layout.ts`): Users & roles (the FGA explorer) and a link to Projects |
 | `/catalog` | a 307 to `/catalog/tables` (`catalog/+page.ts`): an old bookmark lands on a list; the group is no page, so its breadcrumb crumb is plain text |
@@ -91,7 +91,12 @@ panel's width.
 
 **A table's and a namespace's tabs.** A table has Overview, Preview, Versions (the commit log, its tags and branches,
 and a summary naming the version the `published` tag points at and the latest; the publish door moves that tag), Connect
-and Access; a namespace has Overview, Connect and Access. Connect (`#lib/data/ConnectSnippets.svelte` over
+and Access; a namespace has Overview, Connect and Access. Both Overviews hold the object's labels
+(`#lib/data/ObjectLabels.svelte`, ADR 0211): its chips and, for whoever the catalog lets label it, an add form offering the
+`available` definitions its own `labels/describe` answers, so an owner who is no member of the project can label. A
+project's page defines its labels (`ProjectLabels.svelte`); the Tables and Namespaces lists carry a labels column and a
+`?label=` filter fed by `labels/objects` per project (`label-index.svelte.ts`). Nothing in the console reads a tier: a
+namespace's layer, where a project wants one, is a label it defines. Connect (`#lib/data/ConnectSnippets.svelte` over
 `#lib/data/connect.ts`) gives a pylance and a LanceDB snippet that reach the object through the catalog's Lance REST
 namespace (`lance_namespace.connect("rest", {"uri": <origin>/api/catalog, "headers.Authorization": ...})`), with the
 bearer read from `RASK_TOKEN` and the storage credential the catalog vends on each open; it names the issuer and the
@@ -145,7 +150,7 @@ the project page a declared project's delete, on screen but disabled, with `DECL
 description, rather than offer what will be refused.
 
 **Every page in the sidebar works** (ADR 0210). A view that needs what no Gateway route serves a browser (the platform's
-telemetry store for an audit trail, the NATS monitor for streams, a stores-by-tier registry no door keeps) has no page:
+telemetry store for an audit trail, the NATS monitor for streams, a stores-by-class registry no door keeps) has no page:
 a page that can only say it cannot work is not offered. The e2e mocks serve only doors that exist. Promotions read the
 catalog's own doors:
 `GET /management/v1/promotions` for the open holds, and `POST /management/v1/table/{id}/promotion/{approve,reject}` for a

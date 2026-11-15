@@ -10,11 +10,9 @@
 	import ControlEventLine from '#lib/admin/ControlEventLine.svelte';
 	import { catalogPath } from '#lib/catalog-trail.ts';
 	import { isEstateAdmin } from '#lib/estate-admin.ts';
-	import { recentCommits, tablesByProjectAndTier, TIER_ORDER } from '#lib/home.ts';
+	import { recentCommits, tablesByProject } from '#lib/home.ts';
 	import { projectOf } from '#lib/data/project-filter.ts';
 	import { ProjectIndexRead } from '#lib/data/project-index.svelte.ts';
-	import { NamespaceTiers } from '#lib/data/namespace-tiers.svelte.ts';
-	import { namespaceOfTable } from '#lib/data/stage.ts';
 	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
 	import { listPromotions } from '#lib/data/remote/promotions.api.ts';
 	import { fetchDlq, fetchRecentEvents } from '#lib/lineage/remote/lineage.api.ts';
@@ -33,13 +31,8 @@
 
 	const projects = new ProjectIndexRead();
 	void projects.load();
-	/** The tier each table's namespace declares (ADR 0160), never one read off its name. */
-	const declared = new NamespaceTiers();
 
 	const tables = fetchTables();
-	void tables.then((listed) => {
-		if (listed.ok) void declared.load(listed.data.tables.map(namespaceOfTable));
-	});
 	const events = fetchRecentEvents(RECENT);
 	const promotions = listPromotions({});
 	// Only an estate admin may read these two, and creating a read sends it, so nobody else asks.
@@ -48,28 +41,12 @@
 	const dlqRead = $derived(dlq?.current);
 	const governance = $derived(admin ? controlFeed() : null);
 
-	const tiers = $derived.by(() => {
+	const perProject = $derived.by(() => {
 		const listed = tables.current;
 		const index = projects.index;
 		if (!listed?.ok || index === null) return null;
-		return tablesByProjectAndTier(
-			listed.data.tables,
-			(id) => projectOf(index, id),
-			(id) => declared.of(namespaceOfTable(id)),
-		);
+		return tablesByProject(listed.data.tables, (id) => projectOf(index, id));
 	});
-	/** Each tier's colour as a literal class, so Tailwind finds it in the source and generates it. */
-	const TIER_TEXT = {
-		bronze: 'text-stage-bronze',
-		silver: 'text-stage-silver',
-		gold: 'text-stage-gold',
-	} as const satisfies Record<(typeof TIER_ORDER)[number], string>;
-
-	/** Only the tiers some listed table's namespace declares: tiers are opt-in (ADR 0160), so an estate
-	 *  that declares none sees its projects and their tables, and no tier column. */
-	const shownTiers = $derived(
-		TIER_ORDER.filter((tier) => (tiers ?? []).some((row) => row[tier] > 0)),
-	);
 	const commits = $derived(events.current ? recentCommits(events.current.events) : null);
 	const governanceEntries = $derived(
 		(governance?.current?.entries ?? []).filter((e) => e.kind === 'event').slice(0, RECENT),
@@ -135,26 +112,20 @@
 				<p class="text-muted-foreground text-sm">
 					The tables could not be grouped by project: {projects.state.reason}.
 				</p>
-			{:else if tiers === null}
+			{:else if perProject === null}
 				<p class="text-muted-foreground text-sm">Loading…</p>
-			{:else if tiers.length === 0}
+			{:else if perProject.length === 0}
 				<p class="text-muted-foreground text-sm">No table your grants list yet.</p>
 			{:else}
 				<table class="w-full text-sm">
 					<thead class="text-muted-foreground text-left text-xs">
 						<tr>
 							<th class="py-1 font-normal">project</th>
-							{#each shownTiers as tier (tier)}
-								<th class={['py-1 text-right font-normal', TIER_TEXT[tier]]}>{tier}</th>
-							{/each}
-							{#if shownTiers.length > 0}
-								<th class="py-1 text-right font-normal">no tier</th>
-							{/if}
 							<th class="py-1 text-right font-normal">tables</th>
 						</tr>
 					</thead>
 					<tbody>
-						{#each tiers as row (row.project ?? '')}
+						{#each perProject as row (row.project ?? '')}
 							<tr class="border-border border-t">
 								<td class="py-1.5">
 									{#if row.project}
@@ -167,12 +138,6 @@
 										<span class="text-muted-foreground">the estate’s own</span>
 									{/if}
 								</td>
-								{#each shownTiers as tier (tier)}
-									<td class="py-1.5 text-right tabular-nums">{row[tier]}</td>
-								{/each}
-								{#if shownTiers.length > 0}
-									<td class="py-1.5 text-right tabular-nums">{row.other}</td>
-								{/if}
 								<td class="py-1.5 text-right font-medium tabular-nums">{row.total}</td>
 							</tr>
 						{/each}

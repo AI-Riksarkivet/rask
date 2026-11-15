@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import type { HierarchyTier } from './hierarchy-node.svelte';
+	import type { HierarchyLevel } from './hierarchy-node.svelte';
 
 	/** Mirrors the pages' status-aware `ApiResult` (`#lib/api/client.ts`): 0 = fetch-level
 	 *  failure/offline. Declared structurally, so the view owns no API client and a page hands its
@@ -26,7 +26,7 @@
 	/** One rung, as `hrefFor` receives it. `id` is the OBJECT id and differs from `label` where the
 	 *  two diverge — a table's label is its bare name (`features`) while its id is the qualified
 	 *  `<namespace>$<table>` the catalog routes on. Passing the label would build a URL to nothing. */
-	export type HierarchyRung = { tier: HierarchyTier; id: string; label: string };
+	export type HierarchyRung = { level: HierarchyLevel; id: string; label: string };
 
 	/** Where a rung navigates, or `null` to leave it a plain box.
 	 *
@@ -83,7 +83,7 @@
 		hrefFor,
 	}: ProjectHierarchyProps = $props();
 
-	const TIER_H = 130;
+	const LEVEL_H = 130;
 	const SLOT_W = 210;
 
 	// Registered ONCE at module-ish scope (the five rules): keys match node.type exactly.
@@ -156,25 +156,25 @@
 		const nodes: Node[] = [];
 		const edges: Edge[] = [];
 		let slot = 0;
-		const TIERS = ['project', 'warehouse', 'namespace', 'table'] as const;
+		const LEVELS = ['project', 'warehouse', 'namespace', 'table'] as const;
 		// `more` and `err` nodes get NO href on purpose — neither names an object you can open, and a
 		// link to nowhere is worse than a plain box.
-		const link = (tier: HierarchyTier, id: string, label: string): Partial<HierarchyData> => {
-			const href = hrefFor?.({ tier, id, label });
+		const link = (level: HierarchyLevel, id: string, label: string): Partial<HierarchyData> => {
+			const href = hrefFor?.({ level, id, label });
 			return href ? { href } : {};
 		};
 		const node = (
 			id: string,
 			label: string,
-			tier: 0 | 1 | 2 | 3,
+			level: 0 | 1 | 2 | 3,
 			x: number,
 			extra: Partial<HierarchyData> = {},
 		): number => {
 			nodes.push({
 				id,
 				type: 'rung',
-				position: { x, y: tier * TIER_H },
-				data: { label, tier: TIERS[tier], ...extra } satisfies HierarchyData,
+				position: { x, y: level * LEVEL_H },
+				data: { label, level: LEVELS[level], ...extra } satisfies HierarchyData,
 				// StaticFlow is a VIEWER: connections/dragging are off, these just silence handles.
 				draggable: false,
 				connectable: false,

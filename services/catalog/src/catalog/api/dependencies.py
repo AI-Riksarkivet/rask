@@ -253,7 +253,7 @@ class Resolver:
     """The objects a request's names are governed as, each name resolved once per request (ADR 0173 §7, [[LH-524]]).
 
     A door is addressed by name and its grants are held by the uuid that name resolves to, so the router's authorization,
-    the tier judge and the door itself read ONE resolution of a name: a rename or a re-create landing between two
+    the write judge and the door itself read ONE resolution of a name: a rename or a re-create landing between two
     resolutions would have the door act on a table other than the one it authorized. Each name is resolved through the
     connection of the warehouse its first segment names, the one :func:`get_namespace` builds for the request's own ``{id}``.
     """

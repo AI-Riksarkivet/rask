@@ -2,7 +2,7 @@
 	// #73 index management — list + drop. The catalog builds no index: `create_index` and
 	// `create_scalar_index` answer 406 naming the bring-your-own path, so an index is built (or
 	// rebuilt) by the caller's own compute against the table, and appears here once committed. Drop
-	// stays a catalog door, gated at the writer tier (can_write_data).
+	// stays a catalog door, gated at the writer rung (can_write_data).
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation.

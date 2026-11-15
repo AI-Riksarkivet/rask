@@ -34,7 +34,7 @@ export type PageNavLeaf = {
 	match: (p: string) => boolean;
 	icon?: IconComponent;
 	/** Sub-routes, rendered as a `Sidebar.MenuSub` under this leaf and auto-expanded while any of
-	 *  them (or the parent) is active. One level only — a third tier is a sign the PAGE should have
+	 *  them (or the parent) is active. One level only — a third level is a sign the PAGE should have
 	 *  been split, not the menu. */
 	children?: PageNavLeaf[];
 	/** WHY this area cannot be opened by the current identity — one plain sentence, or absent when it

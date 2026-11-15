@@ -2,7 +2,7 @@ apiVersion: v2
 name: rask
 description: >-
   rask — an agnostic multimodal Lance lakehouse as one chart (one `helm install`, one release named
-  `rask`): the Lance Namespace REST catalog with tier governance, lineage (its provenance feed,
+  `rask`): the Lance Namespace REST catalog with write governance, lineage (its provenance feed,
   forwarded as OpenLineage), maintenance, authorization on OpenFGA, the console (the lakehouse's own UI),
   NATS stream definitions and bus users, and the OTel Collector that exports its telemetry to the OTLP
   endpoint the operator names. It renders no client of the lakehouse: a client reaches it by reference

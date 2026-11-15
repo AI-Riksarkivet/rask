@@ -4,7 +4,7 @@ LH-052 withdrew the cascade's `owner` on every tenant WAREHOUSE. It did not touc
 grant: `seed_ownership` gives `owner` on the just-created object to whoever created it, and for a
 pipeline service's output that creator is the service. So a cascade identity kept `can_drop`,
 `can_deregister`, `can_restore` and `manage_grants` on every table it had ever registered — which,
-for the cascade, is every governed tier of every tenant it has run in. Narrower than the warehouse
+for the cascade, is every governed table of every tenant it has run in. Narrower than the warehouse
 grant it replaced, and not nothing.
 
 THE PROJECT ADMIN ALREADY OWNS IT, so nothing needs to be granted in its place. The chain is

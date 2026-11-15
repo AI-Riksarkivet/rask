@@ -1,6 +1,6 @@
 # 0160. The tier judge owns the write rung, and a tier is declared once (2026-10-13)
 
-**Status:** accepted. Source: owner, 2026-10-13, two grilling rounds while taking LH-470 (#595). Refines ADR 0156 C8.
+**Status:** superseded by [ADR 0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md) (2026-11-15): `rask.tier` is deleted, its run guarantee is the namespace property `rask.requires_run`, and classification is labels a project defines. Source: owner, 2026-10-13, two grilling rounds while taking LH-470 (#595). Refines ADR 0156 C8.
 
 ## Context
 

@@ -122,13 +122,23 @@ ControlAction = Literal[
     # `grant_added` / `grant_revoked` naming them, the role's `deleted` the tuples it took along.
     "role_created",
     "role_deleted",
+    # A project's label vocabulary and the labels attached to its tables and namespaces (ADR 0211). Untargeted: a label
+    # classifies an object and changes nobody's standing, as a policy does. `label_defined` and `label_deleted` name the
+    # definition (`object_id` `label:<uuid>`, `extra.project`, `extra.name`); the attachment pair names the object
+    # (`extra.label`, and `extra.value` where the label carries one).
+    "label_defined",
+    "label_deleted",
+    "table_labelled",
+    "table_unlabelled",
+    "namespace_labelled",
+    "namespace_unlabelled",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the
 #: top of rask's hierarchy (project > warehouse > namespace > table) and became a first-class control object
 #: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1). Every member is a lakehouse
 #: object: a tool that works on the lakehouse keeps its own objects and its own channel for them (ADR 0171).
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate", "principal", "role"]
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate", "principal", "role", "label"]
 
 #: The cap on the CLAIM a publication echoes onto `table_published`'s `extra`: the person the publication is for. The
 #: catalog's publish door enforces it, and a door that takes it from a caller declares the same cap, so a claim it
@@ -243,6 +253,12 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "principal_deleted"
             | "role_created"
             | "role_deleted"
+            | "label_defined"
+            | "label_deleted"
+            | "table_labelled"
+            | "table_unlabelled"
+            | "namespace_labelled"
+            | "namespace_unlabelled"
         ):
             return "catalog"
         case "table_purged" | "namespace_purged":

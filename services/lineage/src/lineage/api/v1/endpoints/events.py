@@ -79,7 +79,7 @@ def _governed_datasets(record: EventRecord) -> Governed:
     """What a feed row must be authorized against: the tables it names, by the uuids it recorded ([[LH-524]]) —
     EXTERNAL INPUTS EXCLUDED.
 
-    The read-path twin of `enforce_output_authz`'s exemption. R23: raw is the external world, never a governed tier, so
+    The read-path twin of `enforce_output_authz`'s exemption. R23: raw is the external world, never a governed table, so
     an external source has no `table:` object and no tuple that could ever be written for it, and the row records no
     uuid for it. A governed table the row recorded without a uuid (an outside producer's name its credential could not
     resolve) is named by no object, so the row is hidden under FGA.

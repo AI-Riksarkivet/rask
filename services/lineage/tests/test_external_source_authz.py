@@ -11,7 +11,7 @@ ingest events. Nothing reported it: the ingest plane's I8 guard is *required* ne
 so the emit failure is a log line, and every other check asks whether the DATA landed.
 
 WHY NO TUPLE COULD EVER FIX IT. The guard composes `table:<input name>` and checks `can_get_metadata`.
-`bind86-src/run1` is a bucket prefix. R23 makes raw the external world and never a governed tier, so
+`bind86-src/run1` is a bucket prefix. R23 makes raw the external world and never a governed table, so
 that object does not exist in the store — and a check against a non-existent object returns
 `allowed=false`, always. The guard asks an unanswerable question and reads the "no" as a denial. Ten
 configuration causes were investigated (allowlist, credential, stale image, store id, model id, parent

@@ -87,7 +87,7 @@ class _Namespace:
         return DescribeTableResponse(location=_LOCATION)
 
     def describe_namespace(self, request: Any) -> DescribeNamespaceResponse:  # noqa: ANN401 — the backend's request model
-        """The namespace declares no tier; the tier judge reads it before a write-tier vend."""
+        """The namespace declares no tier; the write judge reads it before a write-tier vend."""
         return DescribeNamespaceResponse(properties={})
 
 

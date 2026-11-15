@@ -149,7 +149,7 @@ async def create_table(
     external base, and a pointer in the rows is refused.
 
     The run the request's Context names (:mod:`catalog.core.run_context`) is stamped into the commit and its inputs
-    become the create event's version-pinned inputs; the tier judge has already refused a silver or gold create that
+    become the create event's version-pinned inputs; the write judge has already refused a create under a namespace requiring a run that
     names none, and an input the caller cannot read.
     """
     # BEFORE `idem.begin`, like the register door's: a malformed mode, id, base or property map is a SHAPE

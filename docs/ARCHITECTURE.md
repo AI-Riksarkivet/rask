@@ -46,9 +46,9 @@ Lakekeeper, but for Lance (multimodal: vectors + blobs + columns)."
                                                       Lance datasets (<warehouse root>/<table uuid>)
 ```
 
-The catalog **moves no data between tiers itself** (no ETL inside the API process). It authorizes, locates, records
+The catalog **moves no data between tables itself** (no ETL inside the API process). It authorizes, locates, records
 and announces, and it governs every write in its own write path: compute is a **client** of the catalog. So moving
-data between tiers is the user's job, while the rules a tier write must satisfy are the catalog's (§6).
+data between tables is the user's job, while the rules a write must satisfy are the catalog's (§6).
 
 ### Credential vending & STS — how, and why it matters for the lakehouse
 
@@ -192,8 +192,8 @@ actions: can_get_metadata, can_read_data, can_write_data, can_drop, can_deregist
   policy in the model, not the code.
 
 The model is in three kept-in-sync files: `model.fga` (human DSL, source of truth),
-`model.json` (what the app loads into OpenFGA), `model.fga.yaml` (model tests with a
-tier scenario: bronze/silver/gold + ingestion/data_engineer/analyst roles).
+`model.json` (what the app loads into OpenFGA), `model.fga.yaml` (model tests over a
+scenario whose namespaces are named bronze/silver/gold, with ingestion/data_engineer/analyst roles).
 
 ### The hierarchy as built
 
@@ -204,35 +204,45 @@ granted a rung on a project or a namespace, and `can_promote` / `can_update_tag`
 
 ---
 
-## 6. Tiers: governance a namespace may declare
+## 6. Write governance: the run rule and labels
 
-How data is layered is the user's choice. A namespace MAY declare a tier, `rask.tier` = `bronze`, `silver` or `gold`,
-once at create by its project's admin ([ADR 0160](adr/0160-the-tier-judge-owns-the-write-rung-and-a-tier-is-declared-once.md));
-a namespace that declares none has no tier rules, and nothing reads a tier from a name. Datasets are **Lance tables**,
-one bucket per warehouse, and a table the catalog makes lives at `<warehouse root>/<table uuid>`, so a tier is a
-catalog record, never a path prefix (ADR 0173 §5; authz and physical storage are independent axes).
+How data is layered is the user's choice, and the platform has no layering vocabulary: nothing reads a tier
+([ADR 0211](adr/0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md)). Two opt-in seams
+govern what a project chooses to:
 
-An example pipeline that declares tiers:
+- **The run rule.** A namespace MAY declare `rask.requires_run = "true"`, once at create, by its project's admin (the
+  estate admin where no project owns it); every namespace beneath it is bound by it, and nothing reads it from a name.
+  Under it, a write that adds data names its run and its inputs, and `update`, `add_columns`, `register` and a rename
+  in from a namespace outside the rule are refused.
+- **Labels.** A project's admin defines its labels (a name, a scope, a kind: marker, free text or enumerated values),
+  and an object's owner attaches them to tables and namespaces. A project that layers bronze → silver → gold defines
+  that as an enumerated label. Labels classify and authorize nothing.
+
+Datasets are **Lance tables**, one bucket per warehouse, and a table the catalog makes lives at
+`<warehouse root>/<table uuid>`, so both seams are catalog records, never a path prefix (ADR 0173 §5; authz and
+physical storage are independent axes).
+
+An example pipeline whose project layers its data in three namespaces, the derived two under the run rule:
 
 ```mermaid
 flowchart LR
   SRC[an external source] --> P0[the user's ingest job]
-  P0 -->|namespace doors, via catalog| B[bronze tables]
+  P0 -->|namespace doors, via catalog| B[raw tables]
   B -->|read new versions| P1[the user's pipeline: transform]
-  P1 -->|namespace doors, via catalog| S[silver tables]
-  S --> P2[the user's pipeline: aggregate] -->|namespace doors, via catalog| G[gold tables]
-  CAT[catalog write path: tier permission, provenance, gate] -. governs .- B & S & G
+  P1 -->|namespace doors, via catalog| S[cleaned tables, run rule]
+  S --> P2[the user's pipeline: aggregate] -->|namespace doors, via catalog| G[reported tables, run rule]
+  CAT[catalog write path: permission, run rule, provenance, gate] -. governs .- B & S & G
 ```
 
-**Moving data between tables is the user's pipeline, on its own compute; the rules a write into a declared tier must
-satisfy are the catalog's**, applied in its write path so no writer can bypass them
+**Moving data between tables is the user's pipeline, on its own compute; the rules a write must satisfy are the
+catalog's**, applied in its write path so no writer can bypass them
 ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md),
 [ADR 0156](adr/0156-the-audit-grilling-amends-0155.md)). A pipeline authenticates → `describe`s its input
-[authz `can_read_data` + location/creds] → reads → transforms → `create`/`insert`s the next tier
+[authz `can_read_data` + location/creds] → reads → transforms → `create`/`insert`s the next table
 [authz `can_create_table`/`can_write_data`] → a new Lance version is committed and the catalog announces it on
-lineage. A write into a declared silver or gold namespace must name its run and its inputs. Publishing a version runs the
+lineage. A write under the run rule must name its run and its inputs. Publishing a version runs the
 project's quality gate and moves the table's `published` tag. What the catalog enforces is in
-[`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
+[`WRITE-GOVERNANCE.md`](WRITE-GOVERNANCE.md).
 
 ---
 
@@ -247,8 +257,8 @@ project's quality gate and moves the table's `published` tag. What the catalog e
 | Post-create ownership seeding (single `seed_ownership` helper) | ✅ done |
 | Resilience (retry + fail-closed incl. transport errors; one retry layer; bounded) | ✅ done |
 | Authorization model + tests (persona roles, the validator rung) | ✅ done (model + `model.fga.yaml`) |
-| Data movement between tables | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog judges writes into declared tiers and runs the publish-time quality gate ([`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md)) |
-| `project` type + 3-axis governance (teams × projects × tiers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
+| Data movement between tables | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog judges every write (the run rule where a namespace declares it) and runs the publish-time quality gate ([`WRITE-GOVERNANCE.md`](WRITE-GOVERNANCE.md)) |
+| `project` type + governance (teams × projects × namespaces) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
 | Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), lineage's relay tick and the catalog's six ticks are fixed timers in each service's own process, each window claimed by one conditional write on the control root (`lakehouse.timers`), and NATS JetStream, the one bus (ADR 0199), carries the internal events |
 | Lineage (authenticated OpenLineage intake, the commit feed and table-level edges as catalog-governed Lance tables, a forwarder to a bring-your-own graph backend; producer-side emitter) | ✅ service built & deployed; read-side authz implemented (see §9, `docs/LINEAGE.md`) |
 | OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-observability`-verified |
@@ -270,11 +280,11 @@ client's `CreateTableVersion`). In a governed catalog you want a commit to be **
 So **commit auth already exists**: committing goes through the same `authorize` dependency that gates every write,
 checking `can_write_data` on `table:<uuid>`. A stock client commits through the spec's `CreateTableVersion`: the
 catalog answers `managed_versioning=true`, judges the staged version (the operation's rung, file versions, bases,
-footers, the primary key, protected columns) and finalizes it (ADR 0157, LH-471 #597). On silver and gold a commit
+footers, the primary key, protected columns) and finalizes it (ADR 0157, LH-471 #597). Under the run rule a commit
 names its run and its inputs, in the spec `Context` headers on the catalog's own write doors or as `rask.*` transaction
 properties in a stock client's staged manifest; the catalog checks `can_read_data` on each input, stamps the run into
 the commit, and its announcement names the inputs, from which lineage records the edges (ADR 0156 C2, LH-225 #180;
-`catalog/core/run_context.py`, `catalog/core/tier_policy.py`). `docs/TIER-GOVERNANCE.md` tracks each rule.
+`catalog/core/run_context.py`, `catalog/core/write_judge.py`). `docs/WRITE-GOVERNANCE.md` tracks each rule.
 
 ---
 
@@ -284,8 +294,8 @@ This is what your "OpenLineage + graph database + dummies in between" intuition 
 about — and it's **provenance/observability, not access control**:
 
 - **OpenLineage** = an open standard for emitting "a job *run* read inputs X, wrote outputs Y" events. A user's
-  pipeline emits its own runs; the catalog emits an event for every write it commits, and on governed tiers ADR 0156
-  makes that emission mandatory.
+  pipeline emits its own runs; the catalog emits an event for every write it commits, and under the run rule ADR 0156
+  makes naming the run and inputs mandatory.
 - **Backend** = where events land. rask's lineage service keeps provenance (ADR 0158, LH-468 #592): an authenticated
   intake, the durable commit feed and the table-level edge list. The full lineage graph is bring-your-own (Marquez,
   DataHub, OpenMetadata), fed every recorded event by lineage's forwarder.
@@ -303,7 +313,7 @@ commit  ──▶  OpenFGA check (may you?)        ← access control      [done
 database. It ingests OpenLineage events at the standard `POST /api/v1/lineage` path (and from the bus and the outbox),
 and records each as a row of `lance_catalog$provenance$events` and its table-level edges in `lance_catalog$provenance$edges`: Lance tables in the
 catalog's provenance namespace, written through the catalog's `merge_insert` door as lineage's own principal, so every
-write is authorized, tier-judged and audited like any writer's. `GET /tables/{name}/derived` walks the edge list (how an
+write is authorized, judged and audited like any writer's. `GET /tables/{name}/derived` walks the edge list (how an
 erasure finds every derived table), and a relay tick forwards every recorded event as standard OpenLineage to the
 configured graph backend (Marquez in development). Producers emit via the official `openlineage-python` client.
 Full design + API in [`docs/LINEAGE.md`](LINEAGE.md).
@@ -331,7 +341,7 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
 ## 11. Glossary
 
 - **Control plane / data plane** — decide+locate (this service) vs move bytes (engines).
-- **Namespace** — a logical container, a record in the catalog, never a path prefix; it may declare a *tier*.
+- **Namespace** — a logical container, a record in the catalog, never a path prefix; it may declare the *run rule*.
 - **Table / dataset** — a Lance dataset (versioned); a table the catalog makes lives at `<warehouse root>/<table uuid>`,
   a registered one where its registrar put it (ADR 0173 §5).
 - **Tuple** — an OpenFGA fact, e.g. `user:dex~alice owner table:<uuid>`: a table's or namespace's grants are held by the uuid the catalog minted for it, never by its name (ADR 0173 §8).
@@ -341,5 +351,8 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
   `project` or `parent` edge.
 - **Create-on-parent** — creating a child is authorized against its parent.
 - **Credential vending** — the catalog returns scoped storage creds per table (`describe` with `vend_credentials`).
-- **Tier** — `bronze`, `silver` or `gold`, which a namespace may declare (`rask.tier`); the catalog judges writes into
-  it. A namespace that declares none has no tier.
+- **Run rule** — `rask.requires_run = "true"`, which a namespace may declare at create and which binds every namespace
+  beneath it; under it a write that adds data names its run and inputs. A namespace that declares none, under none
+  that does, has no run rule.
+- **Label** — a classification a project defines and an object's owner attaches to a table or namespace; it authorizes
+  nothing.

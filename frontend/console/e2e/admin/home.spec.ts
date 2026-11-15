@@ -1,7 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { MOCK_CATALOG } from './ports';
 import { ME_ADMIN, ME_MEMBER, mockMe, signIn, TOKEN } from './session';
-import { declaredTiers } from './tiers';
 
 // Home reads the doors the caller already reads (ADR 0210): the catalog's tables, warehouses and held
 // promotions, seeded per bearer on the mock catalog; lineage's feed and DLQ, and the catalog's control
@@ -41,10 +40,7 @@ const GRANT_EVENT = {
 };
 
 /** The world every test reads; `dlqAsked` records whether the page asked lineage for the DLQ. */
-async function seedWorld(
-	page: Page,
-	{ tiered }: { tiered: boolean },
-): Promise<{ dlqAsked: () => boolean }> {
+async function seedWorld(page: Page): Promise<{ dlqAsked: () => boolean }> {
 	await page.request.post(`${MOCK_CATALOG}/__mock/seed`, {
 		data: {
 			bearer,
@@ -62,13 +58,6 @@ async function seedWorld(
 						'lance_catalog$provenance$events',
 					],
 				},
-				...(tiered
-					? declaredTiers({
-							'acme-wh$bronze': 'bronze',
-							'acme-wh$gold': 'gold',
-							'globex-wh$silver': 'silver',
-						})
-					: {}),
 				'GET /management/v1/promotions?limit=100': {
 					holds: [
 						{
@@ -106,22 +95,21 @@ test.beforeEach(async ({ context }, testInfo) => {
 	await signIn(context, { token: bearer });
 });
 
-test('an estate admin’s Home counts their tables per project and tier, and shows commits, holds, dead letters and governance', async ({
+test('an estate admin’s Home counts their tables per project, and shows commits, holds, dead letters and governance', async ({
 	page,
 }) => {
 	await mockMe(page, ME_ADMIN);
-	await seedWorld(page, { tiered: true });
+	await seedWorld(page);
 	await page.goto('/');
 
 	await expect(page.getByTestId('home-signed-in')).toHaveText(`Signed in as ${ME_ADMIN.name}`);
 
 	const tables = page.getByTestId('home-tables');
-	// project, then each declared tier, no tier, tables
-	await expect(tables.locator('tbody tr').nth(0)).toHaveText(/acme\s*1\s*0\s*1\s*0\s*2/);
-	await expect(tables.locator('tbody tr').nth(1)).toHaveText(/globex\s*0\s*1\s*0\s*0\s*1/);
-	await expect(tables.locator('tbody tr').nth(2)).toHaveText(
-		/the estate’s own\s*0\s*0\s*0\s*1\s*1/,
-	);
+	// project, then its tables
+	await expect(tables.getByRole('columnheader')).toHaveText(['project', 'tables']);
+	await expect(tables.locator('tbody tr').nth(0)).toHaveText(/acme\s*2/);
+	await expect(tables.locator('tbody tr').nth(1)).toHaveText(/globex\s*1/);
+	await expect(tables.locator('tbody tr').nth(2)).toHaveText(/the estate’s own\s*1/);
 	await expect(tables.getByRole('link', { name: 'acme', exact: true })).toHaveAttribute(
 		'href',
 		'/catalog/tables?project=acme',
@@ -139,18 +127,14 @@ test('an estate admin’s Home counts their tables per project and tier, and sho
 	await expect(page.getByTestId('home-governance')).toContainText('table created');
 });
 
-test('a non-admin’s Home shows their own figures, no tier column where no namespace declares one, and asks for no admin read', async ({
-	page,
-}) => {
+test('a non-admin’s Home shows their own figures and asks for no admin read', async ({ page }) => {
 	await mockMe(page, ME_MEMBER);
-	const world = await seedWorld(page, { tiered: false });
+	const world = await seedWorld(page);
 	await page.goto('/');
 
 	await expect(page.getByTestId('home-signed-in')).toHaveText(`Signed in as ${ME_MEMBER.name}`);
 	const tables = page.getByTestId('home-tables');
 	await expect(tables.locator('tbody tr')).toHaveCount(3);
-	// Tiers are opt-in (ADR 0160): with none declared, the card is projects and their tables.
-	await expect(tables.getByRole('columnheader')).toHaveText(['project', 'tables']);
 	await expect(page.getByTestId('home-promotions')).toHaveText('1');
 	await expect(page.getByTestId('home-dlq')).toHaveCount(0);
 	await expect(page.getByTestId('home-governance')).toHaveCount(0);

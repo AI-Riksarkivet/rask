@@ -10,8 +10,8 @@ import type { components } from '#lib/api/generated/catalog.ts';
 /** `PolicyRequest` — the catalog's full set body, from the generated client. */
 export type PolicyRequest = components['schemas']['PolicyRequest'];
 
-/** The knobs THIS form owns. The per-tier tuning the catalog also accepts (`scan_batch_size`) is
- *  deliberately absent: it is sized against a specific tier's row shape — a bronze page-image row is
+/** The knobs THIS form owns. The per-table tuning the catalog also accepts (`scan_batch_size`) is
+ *  deliberately absent: it is sized against a specific table's row shape — a page-image row is
  *  ~1.8 MB and a feature row is not — so a tenant-wide value is a guess, and it belongs on the
  *  table/namespace cards that know the data. Omitting it from the body is what leaves an existing
  *  value standing. */

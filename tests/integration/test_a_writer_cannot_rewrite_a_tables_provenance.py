@@ -33,7 +33,7 @@ PK = {"lance-schema:unenforced-primary-key": "true"}
 DECLARED = {b"lineage.dataset_id": b"m$t"}
 FORGED_UUID = "00000000-0000-4000-8000-000000000000"
 
-#: A governed tier's shape: the key (top level and nested, so ancestors are exercised) and the three
+#: A governed table's shape: the key (top level and nested, so ancestors are exercised) and the three
 #: provenance columns `lakehouse.provenance_stamp` names. The nested key field declares itself `on`, a spelling Lance reads
 #: as part of the key (pylance 13.0.0), so the guard protects the key Lance dedupes on, not a parse of its own.
 SCHEMA = pa.schema(

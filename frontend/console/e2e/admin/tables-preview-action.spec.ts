@@ -62,8 +62,8 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 
 test('the drawer Preview action lands on the detail preview tab with rows', async ({ page }) => {
 	await page.goto('/catalog/tables');
-	// open the row drawer via the tier cell (the id/namespace cells are links of their own)
-	await (await cellUnder(page, 'bronze › events', 'tier')).click();
+	// open the row drawer via the labels cell (the id/namespace cells are links of their own)
+	await (await cellUnder(page, 'bronze › events', 'labels')).click();
 	const drawer = page.getByRole('dialog');
 	await expect(drawer.getByRole('link', { name: 'Preview' })).toHaveAttribute(
 		'href',

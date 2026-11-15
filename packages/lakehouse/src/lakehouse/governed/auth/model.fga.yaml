@@ -807,17 +807,17 @@ tests:
       # which is the reach that makes the identity worth asserting on a leaf rather than a container.
       - user: user:alice
         object: table:acme_gold_catalog
-        assertions: { owner_effective: true, can_drop: true, can_set_protection: true }
+        assertions: { owner_effective: true, can_drop: true, can_set_protection: true, can_label: true }
       - user: user:peter
         object: table:acme_gold_catalog
-        assertions: { can_write_data: true, can_drop: false, can_set_protection: false }
+        assertions: { can_write_data: true, can_drop: false, can_set_protection: false, can_label: false }
       - user: user:alice
         object: namespace:acme_bronze
-        assertions: { can_delete: true, can_set_protection: true }
+        assertions: { can_delete: true, can_set_protection: true, can_label: true }
       # carol reads acme_bronze through her warehouse grant and must not arm anything on it.
       - user: user:carol
         object: namespace:acme_bronze
-        assertions: { reader_effective: true, can_delete: false, can_set_protection: false }
+        assertions: { reader_effective: true, can_delete: false, can_set_protection: false, can_label: false }
   - name: classifying is INDEPENDENT of writing, in both directions
     # [[LH-058]]. The reference model's principle — "independent of `modify` (separation of duties:
     # classify without holding data/DDL rights)" — as behaviour rather than as a comment. The hole it
@@ -1981,7 +1981,7 @@ tests:
     # Owner ruling 2026-09-10 (zero trust). `seed_ownership` used to grant `owner` on a just-created
     # object to whoever created it — and for a pipeline's output that creator is the pipeline,
     # so a cascade identity kept can_drop / can_deregister / can_restore / manage_grants on every
-    # governed tier of every tenant it had ever run in. LH-052 withdrew the warehouse grant; this is
+    # governed table of every tenant it had ever run in. LH-052 withdrew the warehouse grant; this is
     # the second, quieter one it did not reach.
     #
     # THIS BLOCK IS THE LOAD-BEARING HALF OF THAT FIX. Declining to seed the machine is only safe
@@ -2236,7 +2236,7 @@ tests:
           can_list_all_projects: true
           can_finish_project_delete: true
           can_administer_authz: true
-          can_declare_unowned_tier: true
+          can_declare_unowned_run_rule: true
           can_deregister_unidentified_table: true
           can_read_parked_events: true
           can_replay_parked_events: true
@@ -2249,7 +2249,7 @@ tests:
           can_list_all_projects: false
           can_finish_project_delete: false
           can_administer_authz: false
-          can_declare_unowned_tier: false
+          can_declare_unowned_run_rule: false
           can_deregister_unidentified_table: false
           can_read_parked_events: false
           can_replay_parked_events: false

@@ -4,7 +4,7 @@ A stock client opening a table through the namespace takes the ``storage_options
 client that gets none signs with whatever credential its environment holds. So the spec doors vend unless the
 caller asks them not to: the spec lets the server decide when ``vend_credentials`` is unset
 (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableRequest). The tier is the highest rung FGA grants on the
-table: ``can_write_data`` opens the write tier, judged by the tier judge like every write, and so do ``can_read_data``
+table: ``can_write_data`` opens the write tier, judged by the write judge like every write, and so do ``can_read_data``
 and ``can_maintain`` together, a compaction job's rungs, whose commits ``version/create`` judges as a maintainer's;
 ``can_read_data`` alone the read tier; none, no credential. Maintain is never vended here (LH-473). Through a read-only
 window (`LANCE_MAINTENANCE_READ_ONLY`) the doors vend at most the read tier: a write-tier credential would write storage
@@ -13,7 +13,7 @@ straight past a catalog that refuses every write.
 Every credential either door mints writes the ``vend_credentials`` issuance record (#532), the record the
 management vend door already writes.
 
-FGA's answers are faked by relation (the offline suite has no OpenFGA); the doors, the tier judge and the policy
+FGA's answers are faked by relation (the offline suite has no OpenFGA); the doors, the write judge and the policy
 decision run for real, and the vendor records the tier it was asked for.
 """
 
@@ -78,7 +78,7 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     fga_client = MagicMock()
     fga_client.close = AsyncMock()
     client.app.state.fga = fga_client
-    fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(properties={"rask.tier": "silver"})
+    fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(properties={"rask.requires_run": "true"})
     recorder = MagicMock()
     recorder.vend.side_effect = lambda **kw: VendedSession(
         key_pair=S3KeyPair(access_key_id=f"AK-{kw['tier']}", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1

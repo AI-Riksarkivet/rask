@@ -104,6 +104,6 @@ per family of specs, each with its own mocks and named by its Playwright project
 `e2e/ports.ts` and `e2e/admin/ports.ts`.
 
 Every page in the sidebar works (ADR 0210): a view that needs a door no route serves a browser (the
-audit trail, the bus's streams, a stores-by-tier registry) has no page. The projects view's grid or
+audit trail, the bus's streams) has no page. The projects view's grid or
 list choice holds for the page only, since no door keeps per-person state; the workbench keeps its
 layout and named views in this browser (`console/src/lib/dock/store.ts`).

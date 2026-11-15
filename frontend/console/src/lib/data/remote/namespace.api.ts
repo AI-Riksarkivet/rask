@@ -5,7 +5,6 @@ import { DropNamespaceResponseSchema, type DropNamespace } from '../catalog';
 import { fetchTables, TrashEntrySchema, type TrashEntry } from './catalog.api';
 import { fetchWarehouseNamespaces } from './warehouses.api';
 import { warehouseOf } from '#lib/api/identifiers.ts';
-import { declaredTier, tierCandidates, type StageInfo } from '../stage';
 import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
 import { PolicyDeleteResponseSchema, type NamespacePolicyDelete } from '../namespace';
 
@@ -133,27 +132,6 @@ export const dropNamespace = command(
 export const describeNamespace = query(v.string(), async (namespace): Promise<ApiResult<unknown>> =>
 	catalogJSON(`/v1/namespace/${enc(namespace)}/describe`, { method: 'POST', body: '{}' }),
 );
-
-/** What DescribeNamespace answers that the tier read needs: the namespace's own properties. */
-const DescribedPropertiesSchema = v.object({
-	properties: v.optional(v.nullable(v.record(v.string(), v.string()))),
-});
-
-/**
- * The tier `namespace` holds, as the catalog decides it (`catalog.core.tier_policy.tier_of`): the shallowest
- * `rask.tier` its path declares, read with DescribeNamespace; null when none does, or when a namespace on the
- * path cannot be described for this caller (it then declares nothing the console may show).
- */
-export const namespaceTier = query(v.string(), async (namespace): Promise<StageInfo | null> => {
-	for (const candidate of tierCandidates(namespace)) {
-		const described = await describeNamespace(candidate);
-		if (!described.ok) return null;
-		const answer = v.safeParse(DescribedPropertiesSchema, described.data);
-		const tier = answer.success ? declaredTier(answer.output.properties) : null;
-		if (tier) return tier;
-	}
-	return null;
-});
 
 /** The namespace's trash record: a recoverable drop the caller may see, or a 404 when there is none. */
 export const fetchNamespaceTasks = query(

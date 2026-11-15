@@ -32,9 +32,7 @@
 	import DetailTabs from './DetailTabs.svelte';
 	import { fmtBytes } from './history';
 	import TableHistory from './TableHistory.svelte';
-	import StageBadge from './StageBadge.svelte';
-	import { namespaceOfTable } from './stage';
-	import { namespaceTier } from './remote/namespace.api';
+	import ObjectLabels from './ObjectLabels.svelte';
 	import TablePreview from './TablePreview.svelte';
 	import TableProperties from './TableProperties.svelte';
 	import BlobPreviewSection from './table-detail/BlobPreviewSection.svelte';
@@ -50,8 +48,8 @@
 
 	let { table }: { table: string } = $props();
 
-	// The FGA view lives on an Access TAB (overview stays the default); the tier badge is the tier the
-	// table's namespace declares. Preview shows rows; Versions is the commit log with its tags and
+	// The FGA view lives on an Access TAB (overview stays the default), and the overview carries the
+	// table's labels. Preview shows rows; Versions is the commit log with its tags and
 	// branches; Connect is how a pipeline reaches the table.
 	// `?tab=` deep-links a tab (the registry drawer's "access" jump uses it) and the tab bar now WRITES it,
 	// so a tab is linkable, reload-stable and back-button-able.
@@ -73,9 +71,6 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the current page's own URL with a new tab parameter
 		goto(url, { replace: true, reset: false });
 	}
-	/** The tier the table's namespace declares (ADR 0160), never one read off its name. */
-	const tierRead = $derived(namespaceTier(namespaceOfTable(table)));
-	const stageInfo = $derived(tierRead.current ?? null);
 
 	// The catalog calls the grants panel makes, bound to this page's reads and writes: the panel's
 	// positional signature onto the data functions' single argument.
@@ -198,7 +193,6 @@
 	<header>
 		<Database size={16} />
 		<CatalogName id={table} kind="table" />
-		{#if stageInfo}<StageBadge info={stageInfo} />{/if}
 		{#if detail?.describe.version != null}
 			<span class="sub mono">v{detail.describe.version}</span>
 		{/if}
@@ -304,6 +298,7 @@
 			<!-- The workflow sections own their state; `{#key table}` is what resets it on navigation
 			     (see the header comment). Keep any new section INSIDE this block for the same reason. -->
 			{#key table}
+				<ObjectLabels kind="table" id={table} />
 				<SchemaSection {table} fields={schemaFields} onchanged={load} />
 
 				<!-- #74 tail — table + per-column property editor (writer-gated by the catalog, on the signed-in user's bearer). -->

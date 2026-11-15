@@ -1,37 +1,22 @@
 /**
  * What Home summarises, read off the doors every reader already calls: the tables the catalog lists for
- * the caller, grouped by project and tier, and the latest commits lineage's feed shows them. Both are the
+ * the caller, counted per project, and the latest commits lineage's feed shows them. Both are the
  * caller's own view, governed by the doors, so two readers see two different Homes.
  */
 import type { EventRecord } from '#lib/api/lineage/index.ts';
-import type { Stage, StageInfo } from '#lib/data/stage.ts';
 
-/** One project's tables per declared tier; `other` is a table whose namespaces declare none. `project` is
- *  null for the tables in no project (the estate's own warehouse). */
-export type TierRow = {
-	project: string | null;
-	bronze: number;
-	silver: number;
-	gold: number;
-	other: number;
-	total: number;
-};
+/** One project's tables; `project` is null for the tables in no project (the estate's own warehouse). */
+export type ProjectTables = { project: string | null; total: number };
 
-/** The three tiers a namespace may declare, in the order a reader expects them. */
-export const TIER_ORDER = ['bronze', 'silver', 'gold'] as const satisfies readonly Stage[];
-
-/** The caller's tables counted per project and declared tier, projects by name and the projectless
- *  row last. `tierOf` answers the tier a table's namespace declares (ADR 0160), never one from a name. */
-export function tablesByProjectAndTier(
+/** The caller's tables counted per project, projects by name and the projectless row last. */
+export function tablesByProject(
 	tables: readonly string[],
 	projectOf: (id: string) => string | null,
-	tierOf: (id: string) => StageInfo | null,
-): TierRow[] {
-	const rows = new Map<string | null, TierRow>();
+): ProjectTables[] {
+	const rows = new Map<string | null, ProjectTables>();
 	for (const table of tables) {
 		const project = projectOf(table);
-		const row = rows.get(project) ?? { project, bronze: 0, silver: 0, gold: 0, other: 0, total: 0 };
-		row[tierOf(table)?.stage ?? 'other'] += 1;
+		const row = rows.get(project) ?? { project, total: 0 };
 		row.total += 1;
 		rows.set(project, row);
 	}

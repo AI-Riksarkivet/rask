@@ -79,8 +79,8 @@ from catalog.schemas import (
     ProtectionResponse,
     SetProtectionRequest,
 )
+from catalog.services import object_labels, role_grants, roles, warehouses
 from catalog.services import projects as project_registry
-from catalog.services import role_grants, roles, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
 from catalog.services.control_records import GIT, MANAGED_BY, ProtectionChange
 from lakehouse import maintenance_policies, protection
@@ -671,6 +671,9 @@ async def delete_project(
         # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant,
         # and a policy kept for the id would govern that tenant's buckets as soon as it named them.
         await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
+        # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object
+        # lay in a warehouse of it, and each ended its labels as it went.
+        await run_in_threadpool(object_labels.end_definitions, settings.registry_root, so, project_id)
         await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
 
         log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})

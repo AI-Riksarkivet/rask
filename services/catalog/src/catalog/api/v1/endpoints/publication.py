@@ -4,7 +4,7 @@ The publication contract, ruled by the owner 2026-08-04 (`c6c23407`) as D-R1/D-R
 READY. The gate runs against the committed version and only a pass advances the `published` tag, so
 a consumer reading through the pointer never sees a batch that failed.
 
-**THE TAG IS THE GATE (ADR 0156 C1, [[LH-466]]).** Readers of a governed tier read `@published`. When the
+**THE TAG IS THE GATE (ADR 0156 C1, [[LH-466]]).** Readers who want the vetted version read `@published`. When the
 project's declared gate has review on, a version that breaches it is HELD: `published` stays, the hold is
 listed on `GET /management/v1/promotions`, and a `can_promote` holder answers it on
 `POST /management/v1/table/{id}/promotion/approve` (`published` moves to the held version, the spec's
@@ -590,7 +590,7 @@ async def approve_promotion(
 ) -> PromotionDecision:
     """Approve the held `version`: `published` moves to it (the spec's `UpdateTableTag`) and its watchers are told.
 
-    Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The approval
+    Gated on `can_promote` by the router (`fga_deps`), and the write judge decides it like every write. The approval
     is recorded before the tag moves, so approving again completes one whose tag move failed and otherwise answers
     as decided. 409 when the table holds no such version, it was decided otherwise, or `published` reached it.
     """
@@ -637,7 +637,7 @@ async def reject_promotion(
     """Reject the held `version`: main is restored to the published version (the spec's `RestoreTable`), as a new
     commit, so the next writer builds on what readers read. `published` does not move.
 
-    Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection
+    Gated on `can_promote` by the router (`fga_deps`), and the write judge decides it like every write. The rejection
     is recorded before main is restored, and main is restored once: rejecting again completes a restore the first
     call could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past
     the held version meanwhile, there is nothing to restore and the rejection only closes the hold. A rejection whose

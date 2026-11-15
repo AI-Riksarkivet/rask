@@ -1113,7 +1113,7 @@
                     "type": "string"
                 },
                 "buckets": {
-                    "description": "Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.",
+                    "description": "Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed data only, not the root or feature buckets.",
                     "type": "array"
                 },
                 "egress": {

@@ -819,6 +819,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/namespace/{id}/labels/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Namespace Labels
+         * @description The labels the namespace carries. Read at ``can_get_metadata``.
+         */
+        post: operations["describe_namespace_labels_management_v1_namespace__id__labels_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/labels/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove Namespace Label
+         * @description Remove a label from the namespace (idempotent). Asked at ``can_label``.
+         */
+        post: operations["remove_namespace_label_management_v1_namespace__id__labels_remove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/labels/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Namespace Label
+         * @description Attach a label the namespace's project defines; the namespace's labels after. Asked at ``can_label``.
+         */
+        post: operations["set_namespace_label_management_v1_namespace__id__labels_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/namespace/{id}/managed-access/describe": {
         parameters: {
             query?: never;
@@ -1284,6 +1344,91 @@ export interface paths {
          * @description Revoke a rung on the project from a subject, gated by :func:`require_project_revoke` ([[LH-563]]).
          */
         post: operations["revoke_project_access_management_v1_projects__id__access_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{id}/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Label Definitions
+         * @description Every label the project defines, by name, for a member of it or the estate admin.
+         */
+        get: operations["list_label_definitions_management_v1_projects__id__labels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{id}/labels/define": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Define Label
+         * @description Define a label, or evolve the definition its name holds: its scope and allowed values only grow and its kind
+         *     never changes, so every label already attached stays valid. A definition applied again as it stands announces
+         *     nothing. The project's admin's act.
+         */
+        post: operations["define_label_management_v1_projects__id__labels_define_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{id}/labels/objects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Labelled Objects
+         * @description The project's labelled tables and namespaces the caller may see (``can_get_metadata`` on each, judged on its
+         *     uuid), each named as it is named now, with the labels whose definition stands. A table that is gone is listed to
+         *     nobody. Paged in the order of the objects' kinds and uuids.
+         */
+        get: operations["list_labelled_objects_management_v1_projects__id__labels_objects_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{id}/labels/{name}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Label Definition
+         * @description Delete a label the project defines, once no object of the project carries it (409 otherwise). The project's
+         *     admin's act.
+         */
+        post: operations["delete_label_definition_management_v1_projects__id__labels__name__delete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1929,6 +2074,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/table/{id}/labels/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Table Labels
+         * @description The labels the table carries, each with its value (``None`` for a marker). Read at ``can_get_metadata``.
+         */
+        post: operations["describe_table_labels_management_v1_table__id__labels_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/labels/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove Table Label
+         * @description Remove a label from the table (idempotent); the table's labels after. Asked at ``can_label``.
+         */
+        post: operations["remove_table_label_management_v1_table__id__labels_remove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/labels/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Table Label
+         * @description Attach a label the table's project defines, or change the value it carries; the table's labels after. Asked at
+         *     ``can_label``, the table owner's.
+         */
+        post: operations["set_table_label_management_v1_table__id__labels_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/table/{id}/maintenance/disarm": {
         parameters: {
             query?: never;
@@ -2110,7 +2316,7 @@ export interface paths {
          * Approve Promotion
          * @description Approve the held `version`: `published` moves to it (the spec's `UpdateTableTag`) and its watchers are told.
          *
-         *     Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The approval
+         *     Gated on `can_promote` by the router (`fga_deps`), and the write judge decides it like every write. The approval
          *     is recorded before the tag moves, so approving again completes one whose tag move failed and otherwise answers
          *     as decided. 409 when the table holds no such version, it was decided otherwise, or `published` reached it.
          */
@@ -2135,7 +2341,7 @@ export interface paths {
          * @description Reject the held `version`: main is restored to the published version (the spec's `RestoreTable`), as a new
          *     commit, so the next writer builds on what readers read. `published` does not move.
          *
-         *     Gated on `can_promote` by the router (`fga_deps`), and the tier judge decides it like every write. The rejection
+         *     Gated on `can_promote` by the router (`fga_deps`), and the write judge decides it like every write. The rejection
          *     is recorded before main is restored, and main is restored once: rejecting again completes a restore the first
          *     call could not make, and otherwise answers as decided. With nothing published, or `published` moved to or past
          *     the held version meanwhile, there is nothing to restore and the rejection only closes the hold. A rejection whose
@@ -3301,7 +3507,7 @@ export interface paths {
          *     external base, and a pointer in the rows is refused.
          *
          *     The run the request's Context names (:mod:`catalog.core.run_context`) is stamped into the commit and its inputs
-         *     become the create event's version-pinned inputs; the tier judge has already refused a silver or gold create that
+         *     become the create event's version-pinned inputs; the write judge has already refused a create under a namespace requiring a run that
          *     names none, and an input the caller cannot read.
          */
         post: operations["create_table_v1_table__id__create_post"];
@@ -3471,7 +3677,7 @@ export interface paths {
          *     the server decide (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableRequest), and a stock client opening
          *     through the namespace that gets none signs with whatever its environment holds. The tier is the highest FGA
          *     grants the caller (:func:`_vend_on_spec_door`, ADR 0156 C3): the router admitted a metadata reader, and a
-         *     write credential is decided by the tier judge like every write.
+         *     write credential is decided by the write judge like every write.
          */
         post: operations["describe_table_v1_table__id__describe_post"];
         delete?: never;
@@ -5509,7 +5715,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted" | "role_created" | "role_deleted";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted" | "role_created" | "role_deleted" | "label_defined" | "label_deleted" | "table_labelled" | "table_unlabelled" | "namespace_labelled" | "namespace_unlabelled";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5528,7 +5734,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "gate" | "principal" | "role";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "gate" | "principal" | "role" | "label";
             /** Object Uuid */
             object_uuid?: string | null;
             /**
@@ -7865,6 +8071,63 @@ export interface components {
             } | null;
         };
         /**
+         * LabelDefinition
+         * @description One label a project defines.
+         */
+        LabelDefinition: {
+            /** Allowed Values */
+            allowed_values?: string[] | null;
+            /** Defined At */
+            defined_at: string;
+            /** Defined By */
+            defined_by?: string | null;
+            /** Description */
+            description?: string | null;
+            kind: components["schemas"]["LabelKind"];
+            /** Name */
+            name: string;
+            /** Project */
+            project: string;
+            /** Scope */
+            scope: components["schemas"]["LabelScope"][];
+            /** Uuid */
+            uuid: string;
+        };
+        /**
+         * LabelDefinitionRequest
+         * @description A label a project defines, or the definition its name holds, evolved (ADR 0211).
+         *
+         *     The name is the label's for good; its scope and its allowed values only grow, and its kind never changes, so a
+         *     label already attached stays valid.
+         */
+        LabelDefinitionRequest: {
+            /** Allowed Values */
+            allowed_values?: string[] | null;
+            /** Description */
+            description?: string | null;
+            kind: components["schemas"]["LabelKind"];
+            /** Name */
+            name: string;
+            /** Scope */
+            scope: components["schemas"]["LabelScope"][];
+        };
+        /** @enum {string} */
+        LabelKind: "marker" | "free_text" | "enumerated";
+        /** @enum {string} */
+        LabelScope: "namespace" | "table";
+        /**
+         * LabelledObjectsResponse
+         * @description A page of a project's labelled objects the caller may see, each named as it is named now.
+         */
+        LabelledObjectsResponse: {
+            /** Objects */
+            objects: components["schemas"]["ObjectLabelsResponse"][];
+            /** Page Token */
+            page_token?: string | null;
+            /** Project */
+            project: string;
+        };
+        /**
          * ListNamespacesResponse
          * @description ListNamespacesResponse
          */
@@ -8346,6 +8609,23 @@ export interface components {
             /** Id */
             id?: string[] | null;
             identity?: components["schemas"]["Identity"] | null;
+        };
+        /**
+         * ObjectLabelsResponse
+         * @description The labels a table or namespace carries, each with its value (``None`` for a marker).
+         */
+        ObjectLabelsResponse: {
+            /** Available */
+            available?: components["schemas"]["LabelDefinition"][] | null;
+            /** Id */
+            id: string;
+            kind: components["schemas"]["LabelScope"];
+            /** Labels */
+            labels: {
+                [key: string]: string | null;
+            };
+            /** Uuid */
+            uuid: string;
         };
         /** @enum {string} */
         ObligationState: "open" | "released";
@@ -9121,6 +9401,14 @@ export interface components {
             users: string[];
         };
         /**
+         * RemoveLabelRequest
+         * @description Remove a label from the object.
+         */
+        RemoveLabelRequest: {
+            /** Name */
+            name: string;
+        };
+        /**
          * RenameTableRequest
          * @description RenameTableRequest
          */
@@ -9285,6 +9573,16 @@ export interface components {
             name: string;
             /** Project */
             project: string;
+        };
+        /**
+         * SetLabelRequest
+         * @description Attach a label the object's project defines, with its value; a marker carries none.
+         */
+        SetLabelRequest: {
+            /** Name */
+            name: string;
+            /** Value */
+            value?: string | null;
         };
         /**
          * SetProtectionRequest
@@ -11139,6 +11437,116 @@ export interface operations {
             };
         };
     };
+    describe_namespace_labels_management_v1_namespace__id__labels_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_namespace_label_management_v1_namespace__id__labels_remove_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_namespace_label_management_v1_namespace__id__labels_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_namespace_managed_access_management_v1_namespace__id__managed_access_describe_post: {
         parameters: {
             query?: {
@@ -11877,6 +12285,152 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_label_definitions_management_v1_projects__id__labels_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelDefinition"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    define_label_management_v1_projects__id__labels_define_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LabelDefinitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelDefinition"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_labelled_objects_management_v1_projects__id__labels_objects_get: {
+        parameters: {
+            query?: {
+                /** @description Only the objects carrying this label. */
+                label?: string | null;
+                limit?: number;
+                /** @description Continue after this object (the previous page's `page_token`). */
+                page_token?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelledObjectsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_label_definition_management_v1_projects__id__labels__name__delete_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabelDefinition"];
                 };
             };
             /** @description Validation Error */
@@ -12854,6 +13408,116 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_table_labels_management_v1_table__id__labels_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_table_label_management_v1_table__id__labels_remove_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectLabelsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_table_label_management_v1_table__id__labels_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetLabelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObjectLabelsResponse"];
                 };
             };
             /** @description Validation Error */

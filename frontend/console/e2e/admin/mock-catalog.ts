@@ -8,6 +8,7 @@
 // other spec. session.ts mints the token per browser CONTEXT (the access spec appends a per-test
 // suffix), so each test carries its own identity and nothing is shared.
 
+import { labelDoor } from '../mock-labels';
 import { ME_ADMIN, ME_MEMBER, TOKEN } from './session';
 import { MOCK_CATALOG_PORT } from './ports';
 
@@ -138,6 +139,10 @@ Bun.serve({
 					: json(hit);
 			}
 		}
+
+		// The label doors, in memory per bearer (`../mock-labels.ts`); a seed for the same path wins.
+		const labelled = await labelDoor(req, url, bearer);
+		if (labelled) return labelled;
 
 		// ── the registry defaults (a spec that cares seeds its own; this keeps an unseeded read sane) ──
 		// The trash door answers a name with no trash record the caller may see as the catalog does: a

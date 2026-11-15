@@ -52,19 +52,19 @@ def test_only_the_estate_admin_deregisters_a_table_no_uuid_identifies(
 
 
 def test_only_the_estate_admin_declares_a_tier_on_a_namespace_no_project_owns(governed_catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """A tier is declared by the namespace's project admin (ADR 0160); a namespace of the estate's own warehouse has none,
-    so its tier is the estate admin's, asked as its own verb on the estate root. Both may create a namespace there."""
+    """The run rule is declared by the namespace's project admin (ADR 0211); the estate's own warehouse belongs to no project,
+    so its run rule is the estate admin's, asked as its own verb on the estate root. Both may create a namespace there."""
     catalog = governed_catalog
     catalog.store.write(
         (catalog.person("root"), "owner", "estate:rask"),
         (catalog.person("root"), "writer", "warehouse:lance_catalog"),
         (catalog.person("alice"), "writer", "warehouse:lance_catalog"),
     )
-    declaring = {"properties": {"rask.tier": "silver"}}
+    declaring = {"properties": {"rask.requires_run": "true"}}
 
     refused = catalog.client.post("/v1/namespace/lance_catalog$staged/create", headers=catalog.bearer("alice"), json=declaring)
     declared = catalog.client.post("/v1/namespace/lance_catalog$staged/create", headers=catalog.bearer("root"), json=declaring)
 
-    assert (refused.status_code, refused.json().get("detail"), declared.status_code) == (403, "can_declare_unowned_tier required on estate:rask", 200), (
+    assert (refused.status_code, refused.json().get("detail"), declared.status_code) == (403, "can_declare_unowned_run_rule required on estate:rask", 200), (
         declared.text
     )

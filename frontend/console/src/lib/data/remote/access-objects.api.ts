@@ -26,7 +26,7 @@ import { catalogJSON, parsed } from '#lib/doors.ts';
 // `/v1/{table|namespace}/{id}/access/*`; the estate-wide FGA workbench (`lib/admin/access*`) is a
 // different surface with its own module.
 //
-// Kind-generalized: one code path targets either FGA object type, and the owner-tier gate is the
+// Kind-generalized: one code path targets either FGA object type, and the owner-rung gate is the
 // per-type relation (can_drop for a table, can_delete for a namespace), enforced by the CATALOG against
 // the signed-in user's own bearer (no service credential is ever sent). `fetchAccessGraph` serves both
 // kinds, since the table and namespace reads differ only in a path segment.
@@ -68,10 +68,10 @@ const SubjectSchema = v.object({
 	relation: v.string(),
 });
 
-/** Is granting on this container centralized? Reader-tier, so the page can EXPLAIN a missing control
+/** Is granting on this container centralized? Reader-gated, so the page can EXPLAIN a missing control
  *  to the person it is missing for. Named `describe` to match the catalog's suffix-per-operation shape
  *  (`policy/describe` / `policy/set`) — the authz suffix map is keyed on the path alone, so a read and
- *  a write sharing one suffix could only ever carry one tier, and it would be the write's. */
+ *  a write sharing one suffix could only ever carry one gate, and it would be the write's. */
 export const fetchManagedAccess = query(
 	TargetSchema,
 	async ({ kind, id }): Promise<ApiResult<ManagedAccess>> =>

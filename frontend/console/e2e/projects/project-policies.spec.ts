@@ -5,7 +5,7 @@ import { postsTo, seed as seedFor } from '../mock-client';
 // Screenshots are EVIDENCE the owner reviews, not assertions — the same convention
 // `settings/gated-action.spec.ts` established. The maintenance surface earns them because its
 // whole job is making a winner-takes-all resolution legible: a reviewer has to be able to SEE
-// that the project's own knobs and the tiers shadowing it are rendered as different things.
+// that the project's own knobs and the records shadowing it are rendered as different things.
 const SHOTS = 'e2e/__shots__';
 
 // `/projects/<p>` § Maintenance (#65) — the project-scoped VIEW of the maintenance policies governing
@@ -27,7 +27,7 @@ const DETAIL = {
 };
 
 /** The listing as the catalog answers it: the project's own record plus one record from each lower
- *  tier — the tiers that SHADOW it. */
+ *  level — the records that SHADOW it. */
 const POLICIES = {
 	project: 'acme',
 	buckets: ['acme-bucket'],
@@ -81,13 +81,13 @@ test('renders the project record and every record that shadows it', async ({ pag
 	await seed(page, { 'GET /management/v1/projects/acme/policies': POLICIES });
 	await page.goto('/projects/acme');
 
-	// The project's OWN tier — the one this page can edit — shown as its knobs, not as an "effective"
+	// The project's OWN record — the one this page can edit — shown as its knobs, not as an "effective"
 	// merge. Resolution is winner-takes-all, so a merged view would be a lie.
 	await expect(page.getByRole('heading', { name: 'Maintenance' })).toBeVisible();
 	await expect(page.getByText('retention 90d', { exact: true })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible();
 
-	// …and the tiers below it, read-only, each on its own rung.
+	// …and the records below it, read-only, each on its own rung.
 	const ns = page.getByRole('row').filter({ hasText: 'acme-wh$gold$pages' });
 	await expect(ns.getByRole('cell').first()).toHaveText('table');
 	await expect(ns).toContainText('off'); // compact_enabled:false is a STATE, not an absence

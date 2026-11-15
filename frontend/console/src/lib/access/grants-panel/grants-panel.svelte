@@ -5,7 +5,7 @@
 	// by design: the catalog gates the enumeration, so a non-owner sees the denial, never the ACL.
 	// The page hands in its `client`, the catalog calls bound to its own reads and writes, so the panel
 	// owns the flow and the page the transport.
-	// Collapsed by default: one owner-tier round-trip per object, with definitive outcomes (the ACL,
+	// Collapsed by default: one owner-rung round-trip per object, with definitive outcomes (the ACL,
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
 	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
 	import { Select } from '@rask/ui/select';
@@ -162,7 +162,7 @@
 				};
 				simFor = current;
 			} else if (res.status === 401 || res.status === 403) {
-				simError = `Simulating access needs the owner tier on this ${kind}.`;
+				simError = `Simulating access needs the owner rung on this ${kind}.`;
 			} else {
 				simError = `Check failed (HTTP ${res.status}).`;
 			}

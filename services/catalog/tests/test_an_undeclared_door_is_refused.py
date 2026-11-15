@@ -36,7 +36,7 @@ from starlette.types import Message
 from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver, get_fga_client
 from catalog.api.security import authenticate
-from catalog.core import tier_policy
+from catalog.core import write_judge
 from catalog.core.config import Settings, get_settings
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
@@ -250,29 +250,32 @@ def _grant_body(template: str) -> dict[str, object]:
 
 @pytest.fixture
 def judged(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Every write the tier judge is handed; it asks the rung it was given, as the real one does."""
+    """Every write the write judge is handed; it asks the rung it was given, as the real one does."""
     recorded: list[str] = []
 
     async def judge(
-        write: tier_policy.Write, *, caller: str | None, check: tier_policy.RungCheck | None, inputs: tier_policy.InputsCheck, namespace: object
-    ) -> tier_policy.Judgement:
+        write: write_judge.Write, *, caller: str | None, check: write_judge.RungCheck | None, inputs: write_judge.InputsCheck, namespace: object
+    ) -> write_judge.Judgement:
         del caller, inputs, namespace
         recorded.append(write.op)
         if check is not None and write.rung is not None:
             await check(write.rung)
-        return tier_policy.Judgement(tier=None)
+        return write_judge.Judgement(requires_run=False)
 
-    monkeypatch.setattr(fga_deps.tier_policy, "judge", judge)
+    monkeypatch.setattr(fga_deps.write_judge, "judge", judge)
     return recorded
 
 
 #: The table and view doors that only READ, each with the query that keeps it one. Written out here rather
 #: than derived from the router's maps, so a door those maps misclassify, or a door nobody has listed yet,
-#: must reach the tier judge (ADR 0160): a door is a write until this list says otherwise.
+#: must reach the write judge (ADR 0160): a door is a write until this list says otherwise.
 _READ_DOORS: frozenset[tuple[str, str]] = frozenset(
     {
         *((suffix, "") for suffix in ("access/my-permissions", "analyze_plan", "blobs", "branches/list", "changes", "count_rows", "credentials")),
-        *((suffix, "") for suffix in ("describe", "exists", "explain_plan", "history", "index/list", "index/{index_name}/stats", "policy/describe")),
+        *(
+            (suffix, "")
+            for suffix in ("describe", "exists", "explain_plan", "history", "index/list", "index/{index_name}/stats", "labels/describe", "policy/describe")
+        ),
         *((suffix, "") for suffix in ("query", "stats", "tags/list", "tags/version", "tasks", "version/describe", "version/list")),
         ("credentials", "tier=read"),
     }
@@ -280,12 +283,12 @@ _READ_DOORS: frozenset[tuple[str, str]] = frozenset(
 
 
 @pytest.mark.parametrize(("template", "query"), _guarded_doors())
-def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches_the_tier_judge(
+def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches_the_write_judge(
     asked: list[tuple[str, str]], judged: list[str], template: str, query: str
 ) -> None:
     """A mounted route whose suffix no map declares is refused for everyone, so it must fail here first.
 
-    And every table or view door that is not a listed read is decided by the tier judge, with FGA on and
+    And every table or view door that is not a listed read is decided by the write judge, with FGA on and
     with it off, so a new write door cannot skip it. The grant doors are the exception: they write tuples,
     not the table, and are authorized from the body by the rung being handed out.
     """
@@ -295,9 +298,9 @@ def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches
     suffix = template.split("/{id}/", 1)[1]
     resource = fga_deps._resource_for(router_walk.PARAM.sub("x", template))
     if resource not in ("table", "materialized_view") or suffix in ("access/grant", "access/revoke") or (suffix, query) in _READ_DOORS:
-        assert judged == [], f"{template}?{query} only reads, yet the tier judge decided it"
+        assert judged == [], f"{template}?{query} only reads, yet the write judge decided it"
         return
-    assert len(judged) == 1, f"{template}?{query} asks {asked} without the tier judge"
+    assert len(judged) == 1, f"{template}?{query} asks {asked} without the write judge"
     judged.clear()
     asyncio.run(fga_deps.authorize(_request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, None, _EveryNameHolds()))
-    assert len(judged) == 1, f"{template}?{query} skips the tier judge with FGA off"
+    assert len(judged) == 1, f"{template}?{query} skips the write judge with FGA off"

@@ -1,6 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
 import { signIn, TOKEN } from './session';
-import { declaredTiers } from './tiers';
 import { MOCK_CATALOG } from './ports';
 
 // The hierarchy drill-down (goal cond 3): project → warehouse → namespace → table, driven with an
@@ -65,20 +64,17 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 		// A namespace nests: silver holds `deep`, so the drill-down must lead there too.
 		'GET /v1/namespace/acme-wh%24silver/list': { namespaces: ['deep'] },
 		'GET /v1/table': { tables: TABLES },
-		...declaredTiers({ 'acme-wh$silver': 'silver', 'acme-wh$gold': 'gold' }),
 	});
 });
 
-test('drills warehouse → namespace → table with tier badges, and the breadcrumb leads back up', async ({
-	page,
-}) => {
+test('drills warehouse → namespace → table, and the breadcrumb leads back up', async ({ page }) => {
 	// STARTS AT THE WAREHOUSE: a project is the TOP of the hierarchy (project › warehouse › namespace ›
 	// table) and its page is `/projects/<p>`; the up-link back to it is pinned below and in
 	// warehouses-drawers.spec.ts.
 	await page.goto('/catalog/warehouses/acme-wh');
 
-	// The warehouse rung: registry facts + the namespaces its listing names, each by its whole id and
-	// carrying its tier badge; a namespace in another warehouse must NOT appear.
+	// The warehouse rung: registry facts + the namespaces its listing names, each by its own name; a
+	// namespace in another warehouse must NOT appear.
 	await expect(page).toHaveURL(/\/catalog\/warehouses\/acme-wh$/);
 	await expect(page.getByText('s3://acme-bucket')).toBeVisible();
 	// The way back UP: the project's own page.
@@ -86,8 +82,7 @@ test('drills warehouse → namespace → table with tier badges, and the breadcr
 	await expect(up).toHaveAttribute('href', '/projects/acme');
 	const silverRow = page.locator('a.row', { hasText: /^silver/ });
 	await expect(silverRow).toBeVisible();
-	await expect(silverRow.locator('.stage')).toHaveText('silver');
-	await expect(page.locator('a.row', { hasText: /^gold/ }).locator('.stage')).toHaveText('gold');
+	await expect(page.locator('a.row', { hasText: /^gold/ })).toBeVisible();
 	// An empty namespace is listed with no tables, not left out.
 	await expect(page.locator('a.row', { hasText: /^raw/ })).toContainText('0 tables');
 	await expect(page.locator('a.row', { hasText: 'bronze' })).toHaveCount(0);

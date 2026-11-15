@@ -8,7 +8,7 @@ one accepted `branch`, answered 200, and wrote to main.
 
 WHAT IS ASSERTED
 
-1. THE TIER CONTRACT (`publication.refuse_a_tier_without_provenance`, ADR 0156 C9). A governed row needs
+1. THE PROVENANCE COLUMN (`publication.refuse_a_table_without_provenance`, ADR 0156 C9). A governed row needs
    no column; `source_rowid` is the one column the platform names, an opt-in held to uint64 on a dataset
    created with stable row ids, and `stage`/`lineage` are the writer's own. Five drives: `source_rowid`
    alone publishes, the wrong width is refused, a dataset whose row ids are not stable is refused at the
@@ -160,7 +160,7 @@ class Estate:
 
 
 def _tier(rows: int = 2, *, source_rowid_type: pa.DataType | None = None) -> pa.Table:
-    """A conforming governed tier: the identity column, the writer's `stage` and `lineage`, and `source_rowid`.
+    """A conforming governed table: the identity column, the writer's `stage` and `lineage`, and `source_rowid`.
 
     `source_rowid` defaults to the width Lance's own stable row id uses; the wrong-width drive names
     int64 explicitly, because that is the whole content of the case it asserts.
@@ -170,7 +170,7 @@ def _tier(rows: int = 2, *, source_rowid_type: pa.DataType | None = None) -> pa.
             "id": pa.array([f"row-{i}" for i in range(rows)], pa.string()),
             "payload": pa.array([f"payload-{i}" for i in range(rows)], pa.string()),
             "stage": pa.array(["silver"] * rows, pa.string()),
-            # JSONB is the tier contract's type for this column — the publish door refuses a string,
+            # JSONB is the provenance column's type for this column — the publish door refuses a string,
             # because the platform's JSON scalar index over `lineage -> run_id` cannot be built on one.
             "lineage": pa.array(['{"run_id": "run-track-a"}'] * rows, pa.string()).cast(pa.json_()),
             "source_rowid": pa.array(list(range(rows)), source_rowid_type or pa.uint64()),
@@ -259,7 +259,7 @@ def estate() -> Iterator[Estate]:
         requests.delete(f"{CATALOG}/management/v1/projects/{live.project}", headers=_auth(), timeout=60)
 
 
-# --- 1. the tier contract ----------------------------------------------------------------------
+# --- 1. the provenance column --------------------------------------------------------------------
 
 
 def test_a_source_rowid_without_stage_or_lineage_publishes(estate: Estate) -> None:
@@ -324,7 +324,7 @@ def test_a_conforming_tier_publishes(estate: Estate) -> None:
 
 
 def test_a_plain_table_is_untouched_by_the_tier_contract(estate: Estate) -> None:
-    """A table without `source_rowid` is outside the tier contract and publishes on its gate alone.
+    """A table without `source_rowid` carries no provenance column and publishes on its gate alone.
 
     The rule is opt-in by column, and this is what makes it safe to enforce at a door every writer passes:
     a registered external dataset or a user's own table that carries no `source_rowid` is left alone.

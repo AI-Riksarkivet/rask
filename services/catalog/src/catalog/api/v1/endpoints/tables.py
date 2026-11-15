@@ -573,7 +573,7 @@ async def describe_table(
     the server decide (``lance_docs/ns_catalog/spec.yaml`` § DescribeTableRequest), and a stock client opening
     through the namespace that gets none signs with whatever its environment holds. The tier is the highest FGA
     grants the caller (:func:`_vend_on_spec_door`, ADR 0156 C3): the router admitted a metadata reader, and a
-    write credential is decided by the tier judge like every write.
+    write credential is decided by the write judge like every write.
     """
     segments = parse_identifier(id)
     if body is not None:

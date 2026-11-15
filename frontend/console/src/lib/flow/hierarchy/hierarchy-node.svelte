@@ -1,10 +1,10 @@
 <script lang="ts" module>
 	import type { Node, NodeProps } from '@xyflow/svelte';
 
-	export type HierarchyTier = 'project' | 'warehouse' | 'namespace' | 'table';
+	export type HierarchyLevel = 'project' | 'warehouse' | 'namespace' | 'table';
 	export type HierarchyData = {
 		label: string;
-		tier: HierarchyTier;
+		level: HierarchyLevel;
 		/** Sub-line under the name (a warehouse's bucket, a "+k more" count). */
 		detail?: string;
 		/** The capped-remainder node — dashed, muted, honest. */
@@ -22,7 +22,7 @@
 
 <script lang="ts">
 	// One rung of the project hierarchy (#104) — the SAME visual language as the FGA access graph's
-	// nodes (AccessGraphNode): a lucide icon per object type, a tier caption so the
+	// nodes (AccessGraphNode): a lucide icon per object type, a level caption so the
 	// graph says WHAT each box is, token-utility chrome only (themes in both modes).
 	import { Handle, Position } from '@xyflow/svelte';
 	import { Boxes, Database, Folder, Warehouse } from '@lucide/svelte';
@@ -38,9 +38,9 @@
 	const Tag = $derived(data.href ? 'a' : 'div');
 
 	const ICONS = { project: Boxes, warehouse: Warehouse, namespace: Folder, table: Database };
-	const Icon = $derived(ICONS[data.tier]);
+	const Icon = $derived(ICONS[data.level]);
 
-	const TIER_CLASS: Record<HierarchyTier, string> = {
+	const LEVEL_CLASS: Record<HierarchyLevel, string> = {
 		project: 'border-primary bg-primary/10 ring-2 ring-primary/20',
 		warehouse: 'border-success/60 bg-success/10',
 		namespace: 'border-border bg-card',
@@ -55,7 +55,7 @@
 	role={data.href ? 'link' : undefined}
 	class={cn(
 		'flex min-w-32 items-center gap-2 rounded-lg border px-3 py-2 text-left shadow-sm',
-		TIER_CLASS[data.tier],
+		LEVEL_CLASS[data.level],
 		data.more && 'border-dashed opacity-70',
 		data.err && 'border-destructive text-destructive',
 		// Only a linked rung advertises itself as one. Keyboard reach comes free with the anchor.
@@ -65,7 +65,7 @@
 >
 	<Icon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
 	<div class="min-w-0 leading-tight">
-		<div class="text-muted-foreground text-[10px] tracking-wide uppercase">{data.tier}</div>
+		<div class="text-muted-foreground text-[10px] tracking-wide uppercase">{data.level}</div>
 		<div class="truncate text-sm font-medium">{data.label}</div>
 		{#if data.detail}<div class="text-muted-foreground truncate text-xs">{data.detail}</div>{/if}
 	</div>

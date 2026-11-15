@@ -2,7 +2,9 @@
 
 **Status:** accepted. Source: FE-022 (#830), counted in map #478. Amends
 [ADR 0202](0202-the-console-has-one-navigation-and-filters-by-project-in-the-url.md): the sidebar's Catalog group loses
-Storage, Operations loses Streams, and Settings loses Audit.
+Storage, Operations loses Streams, and Settings loses Audit. Decision 6 is superseded by
+[ADR 0211](0211-labels-a-project-defines-replace-tiers-and-the-run-rule-stands-alone.md): the console reads no tier, and
+shows and filters by the labels a project defines.
 
 ## Context
 

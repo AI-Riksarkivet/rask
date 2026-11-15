@@ -38,6 +38,9 @@ CLONE_ENDINGS: Final = "_clone_endings"
 ERASURE_OBLIGATIONS: Final = "_erasure_obligations"
 ERASURE_RELEASES: Final = "_erasure_releases"
 PROMOTIONS: Final = "_promotions"
+#: A project's label definitions, and the labels attached to each table or namespace (ADR 0211).
+LABEL_DEFINITIONS: Final = "_label_definitions"
+LABELS: Final = "_labels"
 TABLE_INPUTS: Final = "_table_inputs"
 ROLES: Final = "_roles"
 PRINCIPALS: Final = "_principals"
@@ -88,6 +91,8 @@ RECORD_PREFIXES: Final[frozenset[str]] = frozenset(
         ROLES,
         PRINCIPALS,
         DECLARED_GRANTS,
+        LABEL_DEFINITIONS,
+        LABELS,
     }
 )
 """The records a control-root backup copies and a restore brings back."""

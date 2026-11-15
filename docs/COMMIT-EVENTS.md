@@ -1,6 +1,6 @@
 # The commit-event contract: following writes and telling people
 
-A pipeline that reacts to writes (trigger the next tier, refresh a cache, run a check) follows lineage's
+A pipeline that reacts to writes (trigger the next table's build, refresh a cache, run a check) follows lineage's
 durable feed. This page is the contract it polls; rask code is not needed to read it (LH-472, ADR 0156). It is also the
 contract the lakehouse's events publish for any notifier, a client that tells a person what the lakehouse did
 ([§ Telling people](#telling-people-the-notifier-contract),
@@ -115,11 +115,11 @@ OpenLineage `RunEvent` whose `producer` is the catalog's emitter
 
 ### A publication
 
-The table's `published` tag moved: the version readers of a governed tier read changed, and no row was committed
+The table's `published` tag moved: the version readers of `@published` read changed, and no row was committed
 ([ADR 0161](adr/0161-the-tag-gate-runs-at-publish.md)). `event_type` is `COMPLETE` and `event` is a `RunEvent` from the
 catalog's emitter whose `run.facets.rask_lance.operation` is `publish_table` and whose `version` is the version now
 published, a version an earlier row already committed. `run.facets.rask_author.sub` is who moved it: the publisher when the
-project's gate passed the version, or the validator who approved it when the gate held it. Trigger the next tier on
+project's gate passed the version, or the validator who approved it when the gate held it. Trigger the next table's build on
 this row when it should read only what readers of `@published` read. Its run id is derived from the table, the version
 and the time the tag moved, so one publication is one row however many times it is announced, and a version published
 again later (after an erasure dropped the tag) is a new row.

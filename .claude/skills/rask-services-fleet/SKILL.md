@@ -66,7 +66,7 @@ chart names no client.
 
 The lakehouse rows are `/api/catalog` and `/api/lineage`. There is no ingest row and no medallion row: the lakehouse
 runs no ingest service, no stage and no training (ADR 0154, ADR 0155), and data enters through the catalog's
-namespace doors on `/api/catalog`. A user's pipeline that moves data between tiers writes through those doors on its
+namespace doors on `/api/catalog`. A user's pipeline that moves data between tables writes through those doors on its
 own compute.
 
 ## Dev loops and the edge

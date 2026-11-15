@@ -12,5 +12,5 @@ export {
 	default as HierarchyNode,
 	type HierarchyData,
 	type HierarchyNodeType,
-	type HierarchyTier,
+	type HierarchyLevel,
 } from './hierarchy-node.svelte';

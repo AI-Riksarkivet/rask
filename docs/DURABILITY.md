@@ -74,7 +74,7 @@ the apps at the external endpoint:
 ## Data lifecycle — what's permanent vs transient
 The S3 store is permanent **infrastructure**; the *data within it* has a lifecycle:
 
-- **Every governed tier** is a Lance table with immutable versions; old versions age out under the table's
+- **Every governed table** is a Lance table with immutable versions; old versions age out under the table's
   maintenance policy. The **maintenance** service runs version expiry (`cleanup_old_versions`) in each table's pass,
   held a short delay after a commit and at least once every `maintenance.queue.recheckHours` (ADR 0198), and the trash
   purge, the orphan scan and cross-store reconcile in its hourly audit and daily scan, honouring protection. It rewrites no

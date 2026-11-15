@@ -65,7 +65,7 @@ hierarchy (`console/src/lib/flow`) and the workbench's dock (`console/src/lib/do
 three lakehouse services) and `frontend` (image `web-console`, the console's static-file server), both deployed by the
 product chart; plus `cnpg-age-ext` and `marquez` for the
 development stand-ins. The lakehouse runs no ingest service (ADR 0154) and no stage, training or engine (ADR 0155): data
-enters through the catalog's namespace doors, and moving data between tiers is the user's pipeline on their own compute.
+enters through the catalog's namespace doors, and moving data between tables is the user's pipeline on their own compute.
 
 **The product chart deploys the lakehouse, its console, and nothing it does not own** (ADR 0153, ADR 0193). The prerequisites (the External
 Secrets Operator, NATS JetStream, the CloudNativePG operator, the telemetry store) and the
