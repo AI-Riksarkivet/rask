@@ -146,7 +146,8 @@ def test_drop_table_index_drops_the_index_its_PATH_names(real_ns_client: TestCli
     dropped = lance.dataset(location)
     assert [index.name for index in dropped.describe_indices()] == []
     committed = dropped.read_transaction(dropped.version)
-    assert committed is not None and committed.transaction_properties == {"rask.operation": "drop_index"}
+    stamped = dict(committed.transaction_properties or {}) if committed is not None else {}
+    assert {key: value for key, value in stamped.items() if key != "rask.traceparent"} == {"rask.operation": "drop_index"}
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

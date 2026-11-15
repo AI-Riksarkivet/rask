@@ -10,7 +10,8 @@ from typing import Any
 import pytest
 
 from lakehouse import outbox
-from lakehouse.cloud_events import lineage_envelope
+from lakehouse.cloud_events import TRACE_ATTRIBUTES, lineage_envelope
+from lakehouse.context import continuing
 from lakehouse.storage_options import StorageOptions
 from tests.bus_double import BusDouble
 
@@ -37,8 +38,9 @@ def test_publish_with_outbox_stages_then_drops_on_ack(tmp_path: Any) -> None:
 
     _publish(bus, uri)
 
-    # The event rides its lane's envelope, under the id of this event and no other of its run.
-    assert [sent.envelope for sent in bus.sent] == [
+    # The event rides its lane's envelope, under the id of this event and no other of its run; the trace attributes are
+    # the publish's own (test_an_event_the_bus_did_not_take_stays_staged_as_its_envelope_in_the_trace_it_was_staged_under).
+    assert [{key: value for key, value in sent.envelope.items() if key not in TRACE_ATTRIBUTES} for sent in bus.sent] == [
         {
             "specversion": "1.0",
             "id": "r1@COMPLETE",
@@ -67,17 +69,22 @@ def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: A
     assert bus.events == [A_COMPLETE]
 
 
-def test_an_event_the_bus_did_not_take_stays_staged_under_its_envelopes_id_as_the_event_alone(tmp_path: Any) -> None:
-    """What the relay finds after a failed publish: the event its producer made, never its envelope, under its
-    envelope's id. That id carries the event's state, so a run's COMPLETE and its FAIL are two objects: staged under
-    the run alone, the later would truncate the earlier, on a run whose Lance write had committed."""
+def test_an_event_the_bus_did_not_take_stays_staged_as_its_envelope_in_the_trace_it_was_staged_under(tmp_path: Any) -> None:
+    """What the relay finds after a failed publish: the envelope, under its id, the event its producer made as ``data``,
+    and the trace of the request that staged it (ADR 0209), which the relay's publish continues. The id carries the
+    event's state, so a run's COMPLETE and its FAIL are two objects: staged under the run alone, the later would truncate
+    the earlier, on a run whose Lance write had committed."""
     uri = _uri(tmp_path)
+    request = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
-    with pytest.raises(outbox.UnpublishedEventError) as unpublished:
+    with pytest.raises(outbox.UnpublishedEventError) as unpublished, continuing(request):
         _publish(BusDouble(failing=TimeoutError("the bus did not answer")), uri)
 
     staged = [(key, json.loads(body)) for key, body in outbox.list_events(uri, StorageOptions())]
-    assert (unpublished.value.staged, staged) == (True, [("r1@COMPLETE", A_COMPLETE)])
+    assert (unpublished.value.staged, [(key, envelope["data"], envelope["traceparent"]) for key, envelope in staged]) == (
+        True,
+        [("r1@COMPLETE", A_COMPLETE, request)],
+    )
 
 
 def test_a_delivered_event_whose_drop_fails_stays_staged_and_says_why(tmp_path: Any, monkeypatch: Any, caplog: pytest.LogCaptureFixture) -> None:

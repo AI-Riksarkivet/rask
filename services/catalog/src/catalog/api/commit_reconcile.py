@@ -48,6 +48,7 @@ from catalog.core.lineage_emit import PUBLISH_TABLE, LineageEmitter, emit_write_
 from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
 from lakehouse import location_claims
 from lakehouse.base_refs import decoded_path
+from lakehouse.context import continuing
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lineage_events import DatasetUuids
@@ -184,27 +185,28 @@ def _feed_location(settings: Settings, ns: LanceNamespace) -> str | None:
 async def _announce(
     emitter: LineageEmitter, request: Request, settings: Settings, so: StorageOptions, table: _LiveTable, commit: commit_reconcile.Commit
 ) -> None:
-    """Announce ``commit`` as its door announced it, for the author the catalog recorded authorizing it, and audit the
-    announcement."""
+    """Announce ``commit`` as its door announced it, for the author the catalog recorded authorizing it, in the trace of the
+    request that made it (ADR 0209), and audit the announcement."""
     readback = await run_in_threadpool(dataplane.read_version_and_schema, table.location, so, table.segments, commit.version, commit.branch)
-    await emit_write_event(
-        emitter,
-        table.segments,
-        author=commit.author,
-        version=commit.version,
-        operation=commit.operation,
-        authorization=None,
-        uuids=ObjectUuids(request, settings),
-        known=table.uuids,
-        branch=commit.branch,
-        branch_identifier=commit.branch_identifier,
-        schema_fields=readback.schema_fields,
-        source_uri=readback.uri or table.location,
-        inputs=run_inputs(commit.run),
-        run=commit.run,
-        commits_rows=commit.commits_rows,
-        event_time=commit.committed_at,
-    )
+    with continuing(commit.traceparent):
+        await emit_write_event(
+            emitter,
+            table.segments,
+            author=commit.author,
+            version=commit.version,
+            operation=commit.operation,
+            authorization=None,
+            uuids=ObjectUuids(request, settings),
+            known=table.uuids,
+            branch=commit.branch,
+            branch_identifier=commit.branch_identifier,
+            schema_fields=readback.schema_fields,
+            source_uri=readback.uri or table.location,
+            inputs=run_inputs(commit.run),
+            run=commit.run,
+            commits_rows=commit.commits_rows,
+            event_time=commit.committed_at,
+        )
     audit(
         AuditAction.COMMIT_VERSION_ANNOUNCED,
         AuditOutcome.SUCCESS,

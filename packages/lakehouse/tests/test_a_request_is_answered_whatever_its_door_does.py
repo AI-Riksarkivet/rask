@@ -1,6 +1,6 @@
 """A lakehouse app answers every request with the spec's problem body, whatever its door does (ADR 0203).
 
-`build_lance_service_app` installs two layers inside the request-id layer for catalog, lineage and maintenance. A door
+`build_lance_service_app` installs two layers inside the request's trace for catalog, lineage and maintenance. A door
 that has begun no answer within the request deadline is answered 503 (code 17) and runs on to its own end, never
 cancelled, since a lakehouse door undoes its half-done work in its own ``except`` blocks. A door in which a native library
 panics, which pyo3 raises as a BaseException that no Exception handler catches, is answered 500 (code 18) as any other

@@ -15,7 +15,6 @@ is off (dev/tests). Every replay is audited on the ``lance.audit`` trail (#41).
 
 from __future__ import annotations
 
-import json
 import logging
 from collections import Counter
 from typing import Annotated
@@ -46,7 +45,7 @@ from lineage.core.metrics import Door, Outcome, record_outcome
 from lineage.models import DatasetEvent, RunEvent
 from lineage.schemas import DlqBacklog, DlqEvent, DlqReplayResponse, ParkedRuns
 from lineage.services.consumer import handle_cloud_event
-from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
+from lineage.services.staged import UnparseableEventError, parse_staged, read_staged, republish_staged
 
 
 log = logging.getLogger(__name__)
@@ -59,7 +58,7 @@ def _summary(run_id: str, event_json: str) -> DlqEvent:
     the operator can SEE the stuck event the relay would silently drop. A static change has no run, type or
     job, so it lists under its staged key with those left empty."""
     try:
-        event = parse_staged(event_json)
+        event = parse_staged(read_staged(event_json))
     except UnparseableEventError:
         return DlqEvent(run_id=run_id, parseable=False)
     outputs = [d.name for d in event.outputs if d.name]
@@ -114,7 +113,7 @@ async def list_dlq(
 def _governs(event_json: str) -> Governed:
     """The tables a staged event names, by the uuids it carries; a poison object names none."""
     try:
-        event = parse_staged(event_json)
+        event = parse_staged(read_staged(event_json))
     except UnparseableEventError:
         return Governed()
     return governed_refs([*event.inputs, *event.outputs])
@@ -156,7 +155,8 @@ async def replay_dlq(
         raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
     staged_key, event_json = resolved
     try:
-        event = parse_staged(event_json)
+        staged = read_staged(event_json)
+        event = parse_staged(staged)
     except UnparseableEventError as exc:
         # A poison object is dataset-less, so the governed list_dlq already hides it under FGA — replay must
         # too: 404 (indistinguishable from missing), no audited existence signal. Auth-off dev keeps the
@@ -174,7 +174,7 @@ async def replay_dlq(
     # signature and what the stamped author may record — so a replay admits nothing the relay would refuse,
     # and a forged or re-targeted object stays refused however trusted the operator is. Then the ingest
     # door's, over the operator: a caller may only replay what they could have written in the first place.
-    arrived = json.loads(event_json)
+    arrived = staged.data
     await enforce_bus_authz(event, request.app, settings, arrived)
     await enforce_output_authz(event, request.app, settings, token)
     await provenance.record(event)  # idempotent: every row under its key
@@ -182,7 +182,7 @@ async def replay_dlq(
     # already repaired when this fails, so the answer says so, and the partial outcome is audited: a 503
     # the operator can retry (the record is idempotent) rather than an unexplained 500 with no record.
     try:
-        await republish_staged(publisher, settings, arrived)
+        await republish_staged(publisher, settings, staged)
     except Exception as exc:
         audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.FAILURE, subject=token.subject if token else "", resource=_audited(event, run_id))
         log.warning("lineage_dlq_replay_unannounced", extra={"run_id": run_id, "error": str(exc)})

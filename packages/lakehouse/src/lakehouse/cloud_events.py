@@ -20,9 +20,9 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
-from opentelemetry import propagate
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
+from lakehouse.context import current_trace_context, extracted, is_traceparent, is_tracestate
 from lakehouse.control_events import CatalogControlEvent, control_signer_role
 from lakehouse.lineage.schemas import TERMINAL_STATES
 from lakehouse.lineage_events import dataset_uuids, event_identity
@@ -74,6 +74,38 @@ class CloudEvent(BaseModel):
     time: AwareDatetime | None = None
     dataschema: str | None = Field(default=None, min_length=1)
     data: dict[str, Any]
+    #: The W3C trace context the envelope was staged under (CloudEvents' distributed tracing extension, ADR 0209): the
+    #: trace of the request the event was made for, which a publish of the envelope continues (`lakehouse.bus`), so a
+    #: relay's copy is a span of that request's trace rather than the first of a trace of its own. A fresh envelope has
+    #: none, and its publish runs in whatever trace the publisher is in.
+    traceparent: str | None = None
+    tracestate: str | None = None
+
+    @field_validator("traceparent")
+    @classmethod
+    def _a_traceparent(cls, value: str | None) -> str | None:
+        """A trace context nobody could have issued is refused, never adopted."""
+        if value is not None and not is_traceparent(value):
+            raise ValueError("traceparent is not a W3C traceparent")
+        return value
+
+    @field_validator("tracestate")
+    @classmethod
+    def _a_tracestate(cls, value: str | None) -> str | None:
+        """A stager's text reaches no record unchecked: a ``tracestate`` outside W3C's grammar is refused."""
+        if value is not None and not is_tracestate(value):
+            raise ValueError("tracestate is not a W3C tracestate")
+        return value
+
+    def under_current_trace(self) -> CloudEvent:
+        """This envelope carrying the caller's trace context, the copy an outbox stages."""
+        current = current_trace_context()
+        return self.model_copy(update={"traceparent": current.get("traceparent"), "tracestate": current.get("tracestate")})
+
+    def with_trace_of(self, staged: CloudEvent) -> CloudEvent:
+        """This envelope carrying ``staged``'s trace context: a relay's envelope, derived from a staged event, kept in
+        the trace the event was staged under."""
+        return self.model_copy(update={"traceparent": staged.traceparent, "tracestate": staged.tracestate})
 
     def as_wire(self) -> dict[str, Any]:
         """The JSON object the bus carries: each attribute that is set, and ``data`` as it was given.
@@ -88,7 +120,7 @@ class CloudEvent(BaseModel):
 def trace_context(envelope: Mapping[str, object]) -> Context:
     """The trace context ``envelope``'s publish stamped it with, for its handling to continue; the empty context for an
     envelope that carries none."""
-    return propagate.extract({field: value for field in TRACE_ATTRIBUTES if isinstance(value := envelope.get(field), str)})
+    return extracted({field: value for field in TRACE_ATTRIBUTES if isinstance(value := envelope.get(field), str)})
 
 
 def lineage_envelope(event: Mapping[str, Any]) -> CloudEvent:

@@ -1,62 +1,120 @@
-"""Request-scoped correlation, for code that does not take ``request`` as a parameter.
+"""Correlation: the W3C trace context every request, log line, audit record, commit and event is joined by (ADR 0209).
 
-`RequestIDMiddleware` minted an id, stored it on `request.state` and echoed `X-Request-ID` back — and
-nothing read either. A caller could quote the id from a failed request and an operator had nothing to
-grep for. This is the half that was missing: the id published somewhere a log record, a repository
-method or a background helper can reach without plumbing `request` through every signature.
+One id joins them: the trace a request runs under. The app factory traces every request (`lakehouse.lance_app`), taking
+the caller's ``traceparent`` where one is sent and starting a trace where none is, so a caller's own trace reaches every
+record its request causes and a request with none still has one. Code that does not take ``request`` as a parameter reads
+it here, from the active span: a log line through :class:`CorrelationFilter`, the audit trail through
+:func:`current_trace_id`, a commit's ``rask.traceparent`` and a staged event's envelope through
+:func:`current_traceparent`. Work done later on behalf of that request (a relay delivering a staged event, a reconcile
+announcing a commit) runs inside :func:`continuing`, under the trace the record names, so the later work joins the
+request's trace rather than starting one of its own.
 
-WHAT WAS NEVER BROKEN, so this is not sold as more than it is: correlation was already available on
-the OTLP tier. `LoggingInstrumentor` injects `otelTraceID`/`otelSpanID` into every record and ships
-them to GreptimeDB. What was dead was the REQUEST ID specifically — the value the estate hands the
-caller — and, separately, the TRACE ID on the stdout tier: the instrumentor attached it to every
-record and `setup_logging`'s formatter never printed it, so the copy an operator reads first
-(`kubectl logs`) was the one copy with no way back to a trace.
+The trace id is a correlation id, never evidence: a caller may send any well-formed ``traceparent``, and nothing grants
+or attributes on it. The W3C grammar is what is held to, so a caller's text reaches no record unchecked.
 """
 
 from __future__ import annotations
 
 import logging
-from contextvars import ContextVar
+import re
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import Final, TypeIs
+
+from opentelemetry import context as otel_context
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 
-#: The current request's id. `"-"` rather than `""` so an absent value renders as a visible placeholder
-#: in a log line instead of a blank that reads like a formatting bug.
-request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
+#: A ``traceparent`` as W3C Trace Context level 1 writes it, version ``00``: a 32-hex trace id and a 16-hex parent id,
+#: neither all zeros, and the flags. Lower case only, as the specification requires of a sender.
+_TRACEPARENT: Final = re.compile(r"00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}")
+#: One ``tracestate`` list-member as W3C Trace Context level 1 writes it: a key (a tenant's ``id@system`` included) and a
+#: value of printable characters with no ``,`` or ``=``. A header holds at most 32 of them.
+_TRACESTATE_KEY: Final = r"(?:[a-z][_0-9a-z\-*/]{0,255}|[a-z0-9][_0-9a-z\-*/]{0,240}@[a-z][_0-9a-z\-*/]{0,13})"
+_TRACESTATE_VALUE: Final = r"[\x20-\x2b\x2d-\x3c\x3e-\x7e]{0,255}[\x21-\x2b\x2d-\x3c\x3e-\x7e]"
+_TRACESTATE_MEMBER: Final = re.compile(rf"[ \t]*{_TRACESTATE_KEY}={_TRACESTATE_VALUE}[ \t]*")
+_TRACESTATE_MEMBERS: Final = 32
+#: The one propagator these records are written and read with, whatever the process's global one is configured to: the
+#: records are W3C Trace Context's own, and a deployment's choice of extra propagators (baggage, B3) adds nothing to them.
+_PROPAGATOR: Final = TraceContextTextMapPropagator()
+#: How an absent trace id renders on a log line and in an audit record: a visible placeholder, not a blank that reads
+#: like a formatting bug.
+NO_TRACE: Final = "-"
 
 
-def current_request_id() -> str:
-    """The id for the request being served, or ``"-"`` outside one."""
-    return request_id_ctx.get()
+def is_traceparent(value: object) -> TypeIs[str]:
+    """Whether ``value`` is a well-formed W3C ``traceparent`` (version ``00``) naming a real trace and span."""
+    return isinstance(value, str) and _TRACEPARENT.fullmatch(value) is not None
 
 
-#: What `LoggingInstrumentor` writes when there is no active span — `"0"` before it has seen one, and
-#: an all-zero id for an invalid span context. Neither is a trace anyone can look up, so both render
-#: as the same visible placeholder rather than 32 zeros that read like a real id.
-_ABSENT_TRACE_IDS = frozenset({"", "0", "0" * 32})
+def is_tracestate(value: object) -> TypeIs[str]:
+    """Whether ``value`` is a well-formed W3C ``tracestate``: at most 32 list-members, each a key and a value."""
+    if not isinstance(value, str):
+        return False
+    members = value.split(",")
+    return len(members) <= _TRACESTATE_MEMBERS and all(_TRACESTATE_MEMBER.fullmatch(member) for member in members)
+
+
+def extracted(fields: dict[str, str]) -> Context:
+    """The trace context ``fields`` carry (``traceparent`` and ``tracestate``), read by the W3C propagator alone; the
+    empty context for fields that carry none or a malformed one."""
+    return _PROPAGATOR.extract(fields)
+
+
+def current_trace_id() -> str | None:
+    """The 32-hex id of the trace the caller runs under, or ``None`` outside one."""
+    context = trace.get_current_span().get_span_context()
+    return format(context.trace_id, "032x") if context.is_valid else None
+
+
+def current_trace_context() -> dict[str, str]:
+    """The active span's W3C trace context as the fields that carry it, ``traceparent`` and (where set)
+    ``tracestate``; empty outside a span."""
+    carrier: dict[str, str] = {}
+    _PROPAGATOR.inject(carrier)
+    return carrier
+
+
+def current_traceparent() -> str | None:
+    """The active span's ``traceparent``, or ``None`` outside one."""
+    return current_trace_context().get("traceparent")
+
+
+@contextmanager
+def continuing(traceparent: str | None, tracestate: str | None = None) -> Generator[None]:
+    """Run the block under the trace ``traceparent`` names, so a span started in it is a child of that trace.
+
+    A ``traceparent`` that is absent or not well formed leaves the block under whatever trace the caller runs in: a record
+    that names no trace starts none, and a malformed one is never adopted. A ``tracestate`` that is not well formed is
+    left out.
+    """
+    if not is_traceparent(traceparent):
+        yield
+        return
+    carrier = {"traceparent": traceparent} | ({"tracestate": tracestate} if is_tracestate(tracestate) else {})
+    token = otel_context.attach(extracted(carrier))
+    try:
+        yield
+    finally:
+        otel_context.detach(token)
 
 
 class CorrelationFilter(logging.Filter):
-    """Stamp ``record.request_id`` and ``record.trace_id`` on every record.
+    """Stamp ``record.trace_id`` on every record: the trace the active span runs under, or ``-`` outside one.
 
-    RENAMED from `RequestIdFilter` when it took on the second field: a class that stamps a trace id
-    while calling itself the request-id filter is the stale naming this codebase keeps paying for.
+    A FILTER on the root handler, not a middleware: a middleware annotates only the records it writes itself, while a
+    filter covers every module in every service, libraries included, through `setup_logging`'s single formatter. Read
+    off the active span, never off `LoggingInstrumentor`'s ``otelTraceID``, so a process run without
+    `opentelemetry-instrument` prints the same id the audit trail and the problem body's ``instance`` carry.
 
-    A FILTER, not a `LoggingMiddleware`, and the difference is the whole reason this reaches anything:
-    a middleware can only annotate records it writes itself, while a filter on the root handler covers
-    every module in every service — including libraries — through `setup_logging`'s single formatter,
-    with no per-service edit.
-
-    Never raises and never drops a record: a correlation aid that could swallow a log line would be a
-    far worse bug than the missing id it fixes. That is also why `trace_id` is DERIVED here rather
-    than named directly in the formatter — `logging` raises on a format field the record lacks, and a
-    record with no `otelTraceID` is the normal case in dev, in tests, and in any process run without
-    `opentelemetry-instrument`. Guaranteeing the attribute is what lets the formatter reference it.
+    Never raises and never drops a record: a correlation aid that could swallow a log line would be a far worse bug than
+    the missing id it adds. Guaranteeing the attribute is what lets the formatter name it.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.request_id = request_id_ctx.get()
-        trace_id = str(getattr(record, "otelTraceID", "") or "")
-        record.trace_id = "-" if trace_id in _ABSENT_TRACE_IDS else trace_id
+        record.trace_id = current_trace_id() or NO_TRACE
         return True
 
 
@@ -65,14 +123,12 @@ class CorrelationFilter(logging.Filter):
 # `message` join it because the FORMATTER sets those, not `__init__`.
 #
 # The rest are attributes that ride every record from somewhere other than the caller:
-# `LoggingInstrumentor` stamps the four `otel*` fields on all of them (`trace_id` above is already
-# derived from one, and the format string prints it), the filter's own two have their own slots, and
+# `LoggingInstrumentor` stamps the four `otel*` fields on all of them, the filter's own field has its own slot, and
 # uvicorn's `color_message` is an ANSI copy of the message meant for uvicorn's formatter to substitute
 # (`uvicorn/logging.py:61`) — rendering it prints every startup line in the fleet twice.
 _AMBIENT_RECORD_FIELDS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
     "asctime",
     "message",
-    "request_id",
     "trace_id",
     "otelTraceID",
     "otelSpanID",

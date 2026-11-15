@@ -47,7 +47,7 @@ from typing import Any, Final
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from catalog.api.ticks import Tick
 from catalog.core.config import Settings
@@ -71,10 +71,6 @@ type StagedVerifier = Callable[[Mapping[str, Any]], VerifiedSignature]
 #: Bounds what an event's own text puts on a log line: a staged object's key and action, or a delivered event's claimed
 #: identity and id, are whatever its writer chose.
 _MAX_LOGGED_CHARS: Final = 300
-
-#: Reads a staged object's text as the JSON object it must be. Its refusal is a `ValidationError`, the poison verdict,
-#: whatever is wrong with the text: not JSON, not an object, or nested past the parser's limit.
-_STAGED_OBJECT: Final = TypeAdapter(dict[str, Any])
 
 #: How many staged events one tick drains. The lineage drain learned this the hard way (docs/adr/0004-p1-2-bounded-oldest-first-outbox-drain.md
 #: P1.2): materialising a whole prefix inside the tick makes the relay fail hardest exactly when a
@@ -155,7 +151,7 @@ def bounded(text: str) -> str:
 
 
 def _action_of(event_json: str) -> str | None:
-    """The action a staged object names, for its log line, or None when it names none that can be read.
+    """The action a staged object's event names, for its log line, or None when it names none that can be read.
 
     Read off the RAW text, because the object is poison exactly when the model may not parse it. Total over whatever
     was staged: a document nested past the interpreter's recursion limit, or one that is not an object, must not raise
@@ -165,7 +161,8 @@ def _action_of(event_json: str) -> str | None:
         parsed = json.loads(event_json)
     except (ValueError, RecursionError):
         return None
-    action = parsed.get("action") if isinstance(parsed, dict) else None
+    event = parsed.get("data") if isinstance(parsed, dict) else None
+    action = event.get("action") if isinstance(event, dict) else None
     return bounded(action) if isinstance(action, str) and action else None
 
 
@@ -229,8 +226,11 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
             # ENVELOPED, THEN VERIFIED. The envelope is derived from the staged event, which must therefore be a
             # control event one can carry: that asks "could a subscriber read this?". Verification asks "did this
             # catalog write it?", and the answers decide poison vs relay. The envelope's data is the staged event as
-            # it is, never a re-serialization of a parsed model, and never signed here.
-            envelope = control_envelope(_STAGED_OBJECT.validate_json(event_json))
+            # it is, never a re-serialization of a parsed model, and never signed here; it goes out in the trace it
+            # was staged under (ADR 0209). The staged object's refusal is a `ValidationError`, the poison verdict,
+            # whatever is wrong with the text: not JSON, no envelope, or nested past the parser's limit.
+            staged = outbox.staged_envelope(event_json)
+            envelope = control_envelope(staged.data).with_trace_of(staged)
             if verify is not None:
                 await run_in_threadpool(verify, envelope.data)
         except KeySourceUnavailableError as exc:

@@ -4,8 +4,9 @@ A producer commits its Lance write and then publishes its event on the bus. A cr
 stream's acknowledgement loses the lineage event: the data landed but the feed never learns of it. A consumer's park
 only catches events that were published *then* failed delivery.
 
-The outbox narrows it: the producer stages the FULL event JSON — a ``RunEvent``, or the ``DatasetEvent``
-every catalog DDL change is — under ``<outbox_uri>/<its envelope's id>.json`` BEFORE the publish,
+The outbox narrows it: the producer stages the event's whole envelope — a ``RunEvent``, the ``DatasetEvent``
+every catalog DDL change is, or a control event, as ``data``, and the trace of the request that made it (ADR 0209) —
+under ``<outbox_uri>/<its envelope's id>.json`` BEFORE the publish,
 and deletes it once the publish returns. Because the stage happens AFTER the commit, every surviving object
 corresponds to a real committed write (no phantoms). If the process crashes before the delete — or the
 publish never lands — the object survives and the lineage service's relay tick re-ingests it
@@ -111,6 +112,19 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, key: str, even
     fs.create_dir(base, recursive=True)
     with fs.open_output_stream(f"{base}/{key}.json") as stream:
         stream.write(event_json.encode("utf-8"))
+
+
+def stage_envelope(outbox_uri: str, storage_options: StorageOptions, envelope: CloudEvent) -> None:
+    """Stage ``envelope`` under its id, as the bus would carry it: the event as ``data``, and the trace it names.
+    Blocking IO; callers threadpool it."""
+    stage_event(outbox_uri, storage_options, envelope.id, json.dumps(envelope.as_wire()))
+
+
+def staged_envelope(record: str) -> CloudEvent:
+    """The envelope a staged object holds: the event as its producer signed it, as ``data``, and the trace it was
+    staged under. ``ValueError`` (a ``pydantic.ValidationError``) for bytes that hold none, ``RecursionError`` for a
+    document nested past the interpreter's limit."""
+    return CloudEvent.model_validate_json(record)
 
 
 def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> None:
@@ -287,9 +301,10 @@ async def publish_with_outbox(
 
     Args:
         bus: This process's connection to the bus (`lakehouse.bus`).
-        envelope: The event in the envelope its lane derives from it (`lakehouse.cloud_events`). What is staged is the
-            event alone, ``envelope.data``, as its producer signed it: the relay that delivers a staged copy derives
-            the same envelope from it, so the copy goes out under the id the first publish carried.
+        envelope: The event in the envelope its lane derives from it (`lakehouse.cloud_events`). What is staged is that
+            envelope carrying the caller's trace (:meth:`CloudEvent.under_current_trace`), its ``data`` the event as its
+            producer signed it: the relay that delivers a staged copy derives the same envelope from the event, so the
+            copy goes out under the id the first publish carried, and publishes it in the trace it was staged under.
         outbox_uri: The lane's OWN outbox prefix. A lane-specific relay drains it and re-ingests what it finds (the
             lineage relay records into the feed), so two lanes on one prefix would feed each relay the other's events.
             Empty publishes unstaged: the outbox is opt-in.
@@ -302,11 +317,10 @@ async def publish_with_outbox(
     """
     from fastapi.concurrency import run_in_threadpool
 
-    event_json = json.dumps(envelope.data)
     staged = bool(outbox_uri)
     if staged:
         try:
-            await run_in_threadpool(stage_event, outbox_uri, storage_options, envelope.id, event_json)
+            await run_in_threadpool(stage_envelope, outbox_uri, storage_options, envelope.under_current_trace())
         except Exception as exc:
             # A stage failure degrades this call to the pre-#4 plain publish instead of raising past the
             # publish. Both callers catch and continue, so raising here loses the event outright — whereas

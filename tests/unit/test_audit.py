@@ -7,7 +7,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from lakehouse.context import request_id_ctx
+from lakehouse.context import continuing
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome, audit, configure_audit
 
 
@@ -33,13 +33,14 @@ def captured() -> Iterator[list[logging.LogRecord]]:
         configure_audit(enabled=True)  # leave the stream on for the rest of the suite
 
 
-#: The golden record of format 1.0: every field a compliance query may name, as one authorization verdict made under a
-#: request carries it. A renamed, retyped or dropped field changes this dict, and so is a new ``audit.format``.
-_GOLDEN_1_0 = {
-    "audit.format": "1.0",
+#: The golden record of format 2.0: every field a compliance query may name, as one authorization verdict made under a
+#: request carries it. A renamed, retyped or dropped field changes this dict, and so is a new ``audit.format`` (2.0 named
+#: the request's trace, ``audit.trace_id``, where 1.0 named a request id the caller chose, ADR 0209).
+_GOLDEN_2_0 = {
+    "audit.format": "2.0",
     "audit.action": "authz",
     "audit.outcome": "allow",
-    "audit.request_id": "r1",
+    "audit.trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
     "audit.subject": "alice",
     "audit.resource": "table:db$t",
     "audit.relation": "can_write_data",
@@ -48,13 +49,10 @@ _GOLDEN_1_0 = {
 
 def test_audit_emits_the_golden_record_of_its_format(captured: list[logging.LogRecord]) -> None:
     configure_audit(enabled=True)
-    token = request_id_ctx.set("r1")
-    try:
+    with continuing("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, subject="alice", resource="table:db$t", relation="can_write_data")
-    finally:
-        request_id_ctx.reset(token)
 
-    assert [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in captured] == [_GOLDEN_1_0]
+    assert [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in captured] == [_GOLDEN_2_0]
 
 
 def test_configure_audit_disabled_drops_every_event(captured: list[logging.LogRecord]) -> None:

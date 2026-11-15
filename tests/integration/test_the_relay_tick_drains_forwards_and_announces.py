@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 
 from lakehouse import outbox
 from lakehouse.bus import BusUnavailableError
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.storage_options import StorageOptions
 from lakehouse.timers import Outcome, Timer
 from lineage import main
@@ -40,6 +41,7 @@ from lineage.api import relay
 from lineage.core.config import get_settings
 from tests.bus_double import BusDouble, session_holding
 from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, graph_backend, live_catalog, relay_tick, run_event
+from tests.traces import trace_id_of
 
 
 _TABLE = "lance_catalog$acme-silver$pages"
@@ -124,7 +126,7 @@ def test_a_tick_counts_a_refusal_it_records_as_every_door_counts_it(
     monkeypatch.setenv("LINEAGE_OUTBOX_URI", outbox_uri)
     monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps(["service-catalog"]))
     unsigned = run_event("1d3c5a07-0000-4000-8000-000000000573", "COMPLETE", "2026-11-12T10:00:00+00:00", outputs=[_TABLE])
-    outbox.stage_event(outbox_uri, StorageOptions(), unsigned["run"]["runId"], json.dumps(unsigned))
+    outbox.stage_envelope(outbox_uri, StorageOptions(), lineage_envelope(unsigned))
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, set()) as lineage:
         tick = relay_tick(lineage)
 
@@ -149,6 +151,8 @@ def _lineage_as_its_pod_starts_it(catalog_url: str, outbox_uri: str, bus: BusDou
 _RUN = "1d3c5a07-0000-4000-8000-000000000787"
 #: What a producer stages the run's COMPLETE under, and publishes it as: the id of its envelope.
 _STAGED_AS = f"{_RUN}@COMPLETE"
+#: The trace of the request that staged it.
+_STAGING_REQUEST = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 
 @pytest.mark.parametrize(
@@ -163,7 +167,8 @@ def test_a_tick_announces_a_staged_event_on_the_services_own_connection_and_drop
 ) -> None:
     outbox_uri = f"file://{tmp_path}/outbox"
     event = run_event(_RUN, "COMPLETE", "2026-11-14T10:00:00+00:00", outputs=[_TABLE])
-    outbox.stage_event(outbox_uri, StorageOptions(), _STAGED_AS, json.dumps(event))
+    # Staged in the trace of the request that made it, which the relay's copy is published in (ADR 0209).
+    outbox.stage_envelope(outbox_uri, StorageOptions(), lineage_envelope(event).model_copy(update={"traceparent": _STAGING_REQUEST}))
     staged_at_each_publish: list[int] = []
 
     class _Bus(BusDouble):
@@ -178,7 +183,7 @@ def test_a_tick_announces_a_staged_event_on_the_services_own_connection_and_drop
 
     assert (tick.outbox_drained, tick.outbox_stranded) == (drained, stranded), tick
     assert [(taken.topic, taken.message_id) for taken in bus.sent] == sent
-    assert [taken.event for taken in bus.sent] == [event] * len(sent)
+    assert [(taken.event, trace_id_of(taken.envelope["traceparent"])) for taken in bus.sent] == [(event, trace_id_of(_STAGING_REQUEST))] * len(sent)
     assert (staged_at_each_publish, [key for key, _ in outbox.list_events(outbox_uri, StorageOptions())]) == ([1], left), (
         "the staged copy went before the bus took the event, or stayed after it had"
     )
@@ -189,7 +194,7 @@ def test_the_relay_runs_on_lineages_own_timer_with_no_call_from_outside(tmp_path
     outbox with nothing calling the tick."""
     outbox_uri = f"file://{tmp_path}/outbox"
     event = run_event(_RUN, "COMPLETE", "2026-11-14T10:00:00+00:00", outputs=[_TABLE])
-    outbox.stage_event(outbox_uri, StorageOptions(), _STAGED_AS, json.dumps(event))
+    outbox.stage_envelope(outbox_uri, StorageOptions(), lineage_envelope(event))
     bus = BusDouble()
     timer_env = {"LINEAGE_RELAY_PERIOD_SECONDS": "0.2", "LINEAGE_TIMER_ROOT": str(tmp_path / "timers")}
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, _lineage_as_its_pod_starts_it(catalog_url, outbox_uri, bus, monkeypatch, **timer_env):

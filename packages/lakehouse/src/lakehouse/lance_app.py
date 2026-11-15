@@ -23,10 +23,10 @@ what it owns is the part that is identical in all of them:
    catch-all, so the two sets map disjoint classes.
 4. The layers every request passes, outermost first (ADR 0203):
 
-   * ``RequestIDMiddleware``. One id per request, minted or echoed, published to the context var
-     ``setup_logging``'s filter reads, so a caller can quote an id from a failed request and an operator
-     can grep for it. OUTERMOST, so every refusal a layer below answers carries it. PURE ASGI, so it passes
-     streaming bodies through untouched, which is what makes it safe on a plane that serves Arrow IPC.
+   * OpenTelemetry's server span (:func:`_trace_every_request`): every request runs in a trace, the caller's
+     ``traceparent`` continued where one is sent, so its id is the one correlation id (ADR 0209) the log lines, the
+     audit trail, the problem body's ``instance``, the commits and the events it causes all carry. OUTERMOST, so every
+     refusal a layer below answers runs in it.
    * ``PanicCatcherMiddleware``: a native library's panic answers 500 with the problem body and the process
      serves on.
    * ``RequestDeadlineMiddleware``: a request with no answer begun within ``request_deadline_seconds`` is
@@ -35,7 +35,7 @@ what it owns is the part that is identical in all of them:
    * ``outer_middleware``, the caller's own, in its order (the catalog's path reading and write shed).
    * ``BodySizeLimitMiddleware`` at ``max_body_bytes``, a body over it refused 413 before it is buffered.
    * ``inner_middleware``, the caller's ``http`` functions that must run INSIDE every other layer: the
-     catalog's read-only gate and signing gate answer through the request-id layer this way.
+     catalog's read-only gate and signing gate answer inside the request's trace this way.
 5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
 """
 
@@ -50,6 +50,9 @@ from typing import Any, Final
 from fastapi import APIRouter, FastAPI
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse
+from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.trace import TracerProvider
 from starlette.middleware import Middleware
 
 from lakehouse.app import setup_logging
@@ -57,7 +60,6 @@ from lakehouse.body_limit import BodySizeLimitMiddleware
 from lakehouse.deadline import RequestDeadlineMiddleware
 from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import configure_audit
-from lakehouse.middleware import RequestIDMiddleware
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.panic_catcher import PanicCatcherMiddleware
 from lakehouse.probes import LiveCheck, ReadyCheck, make_probes_router
@@ -86,6 +88,21 @@ _SERVED_BESIDE_THE_SCHEMA: Final = "."
 
 #: The schema as each docs page names it: beside the page, whatever prefix the page was reached under.
 _SCHEMA_BESIDE_THE_PAGE: Final = "openapi.json"
+
+
+def _trace_every_request(app: FastAPI) -> None:
+    """Run every request of ``app`` in a trace, so each has the one correlation id (ADR 0209).
+
+    A process `opentelemetry-instrument` launched already holds an SDK provider and instruments every FastAPI app it
+    builds (the flag the instrumentation sets on the app, read here, so a second call does not log its warning). A process launched without it (the
+    chart's with `observability.enabled` off, a test) holds the API's no-op provider, under which a request with no
+    ``traceparent`` of its own has no trace id at all; it gets an SDK provider with no exporter, which mints ids and
+    sends nothing anywhere. The provider is the process's, set once whichever app is built first.
+    """
+    if not isinstance(trace.get_tracer_provider(), TracerProvider):
+        trace.set_tracer_provider(TracerProvider())
+    if not getattr(app, "_is_instrumented_by_opentelemetry", False):
+        FastAPIInstrumentor.instrument_app(app)
 
 
 def _mount_docs(app: FastAPI) -> None:
@@ -169,7 +186,7 @@ def build_lance_service_app(
         app.add_middleware(layer.cls, *layer.args, **layer.kwargs)
     app.add_middleware(RequestDeadlineMiddleware, seconds=request_deadline_seconds, log=log)
     app.add_middleware(PanicCatcherMiddleware, log=log)
-    app.add_middleware(RequestIDMiddleware)
+    _trace_every_request(app)
     for router in routers:
         app.include_router(router)
     app.include_router(make_probes_router(ready_check, live_check))

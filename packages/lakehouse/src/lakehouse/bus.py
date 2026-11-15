@@ -76,14 +76,15 @@ from nats.aio.msg import Msg
 from nats.errors import Error as NatsError
 from nats.js.api import Header, PubAck
 from nats.js.errors import NotFoundError
-from opentelemetry import propagate, trace
-from opentelemetry.trace import Span, SpanKind, StatusCode
+from opentelemetry import trace
+from opentelemetry.trace import Link, Span, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.bus_delivery import Delivery, Handle, Lane, Outcome, Park, Settlement, being_cancelled, envelope_of, judged
 from lakehouse.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_refusal
 from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
+from lakehouse.context import continuing, current_trace_context
 from lakehouse.lifecycle import closed_quietly
 
 
@@ -833,19 +834,20 @@ def _event(body: bytes) -> str | None:
 
 
 def _trace_attributes() -> dict[str, str]:
-    """The publish's trace context as envelope attributes; nothing outside a span."""
-    carrier: dict[str, str] = {}
-    propagate.inject(carrier)
-    return {field: carrier[field] for field in TRACE_ATTRIBUTES if field in carrier}
+    """The publish's trace context as envelope attributes, written by the W3C propagator alone; nothing outside a span."""
+    return {field: value for field, value in current_trace_context().items() if field in TRACE_ATTRIBUTES}
 
 
 def _body(envelope: CloudEvent, topic: str) -> bytes:
-    """``envelope`` as the bytes the bus carries, with the current trace context, held to the claim-check sizes.
+    """``envelope`` as the bytes the bus carries, held to the claim-check sizes, with the publish's own trace context and
+    no other: a trace the envelope was staged with is the publish's parent (:func:`publish_event`), never copied onto the
+    wire, so a stager's text reaches no consumer.
 
     Raises:
         ValueError: The envelope is past ``MAX_PAYLOAD_BYTES``. The refusal is counted.
     """
-    body = json.dumps(envelope.as_wire() | _trace_attributes()).encode()
+    attributes = {name: value for name, value in envelope.as_wire().items() if name not in TRACE_ATTRIBUTES}
+    body = json.dumps(attributes | _trace_attributes()).encode()
     if len(body) > MAX_PAYLOAD_BYTES:
         # Counted because this ends before anything is sent: the bus never sees it, so nothing downstream can.
         record_refusal(topic, "oversize")
@@ -863,7 +865,8 @@ async def publish_event(bus: Bus, envelope: CloudEvent, *, topic: str, timeout_s
 
     Args:
         bus: This process's connection to the bus.
-        envelope: The event in its envelope; it goes out with the publish's trace context added.
+        envelope: The event in its envelope; it goes out with the publish's trace context, in the trace the envelope
+            names where it names one.
         topic: The NATS subject. A settings field or a constant, never a value off a payload: it labels the telemetry.
         timeout_seconds: How long the bus has to acknowledge the publish.
 
@@ -875,8 +878,20 @@ async def publish_event(bus: Bus, envelope: CloudEvent, *, topic: str, timeout_s
     """
     started = perf_counter()
     attributes = {**_MESSAGING, "messaging.destination.name": topic}
-    with tracer.start_as_current_span(
-        f"publish {topic}", kind=SpanKind.PRODUCER, attributes={**attributes, "messaging.message.id": envelope.id}, record_exception=False
+    # In the trace the envelope was staged under, where it names one: a relay's copy of a staged event is a span of the
+    # request that made it (ADR 0209), and its envelope goes out naming this span, a child of that request. The work that
+    # sent it (a relay's tick) is kept as a link, so both traces reach the publish.
+    sender = trace.get_current_span().get_span_context()
+    links = [Link(sender)] if envelope.traceparent is not None and sender.is_valid else None
+    with (
+        continuing(envelope.traceparent, envelope.tracestate),
+        tracer.start_as_current_span(
+            f"publish {topic}",
+            kind=SpanKind.PRODUCER,
+            attributes={**attributes, "messaging.message.id": envelope.id},
+            links=links,
+            record_exception=False,
+        ),
     ):
         try:
             body = _body(envelope, topic)

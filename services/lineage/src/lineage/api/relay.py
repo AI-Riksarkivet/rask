@@ -34,7 +34,7 @@ from lineage.core.metrics import Door, record_outcome, refusal_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload
 from lineage.services.forward import follower, forward
 from lineage.services.provenance import ProvenanceStore
-from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
+from lineage.services.staged import UnparseableEventError, parse_staged, read_staged, republish_staged
 
 
 log = logging.getLogger(__name__)
@@ -205,7 +205,8 @@ async def _drain_outbox(
         try:
             # THE DOORS' DISCRIMINATOR, never `RunEvent` alone: every catalog create, drop and alter is a
             # `DatasetEvent`, so a run-only parse destroys the staged copy of each one as poison ([[LH-199]]).
-            event: RunEvent | DatasetEvent = parse_staged(event_json)
+            staged_copy = read_staged(event_json)
+            event: RunEvent | DatasetEvent = parse_staged(staged_copy)
         except UnparseableEventError as exc:
             # ONLY a genuinely-unparseable event is poison. The author rides the RAW json: this branch fires
             # because the event would not validate, so the strict model is unavailable exactly where the answer
@@ -213,7 +214,7 @@ async def _drain_outbox(
             poison_author: str | None = None
             poison_run: str | None = None
             with suppress(Exception):
-                payload = json.loads(event_json)
+                payload = json.loads(event_json).get("data") or {}
                 poison_author = author_sub_from_payload(payload)
                 poison_run = str((payload.get("run") or {}).get("runId") or "") or None
             log.warning("lineage_outbox_poison_dropped", extra={"outbox_key": key, "run_id": poison_run, "error": str(exc), "author": poison_author})
@@ -229,21 +230,21 @@ async def _drain_outbox(
             # THE BUS DOOR'S GATE, never a second copy: the outbox is writable by the producers that stage there,
             # so a stager refused at the bus could stage instead. It authorizes AS the subject the producer
             # stamped, over THE STAGED BYTES (the signature covers what the producer wrote).
-            arrived = json.loads(event_json)
+            arrived = staged_copy.data
             await enforce_bus_authz(event, app, settings, arrived)
             await provenance.record(event)
             # RE-PUBLISH, then drop. Recording alone repairs the feed and leaves every SUBSCRIBER unaware:
             # maintenance's arrival consumer and a notifier on the bus hear of a recovered event only this way.
             # BEFORE the drop: a publish that fails leaves the staged object for the next tick, whose re-record
             # is a no-op. A duplicate delivery is the at-least-once contract subscribers are built for.
-            await republish_staged(publisher, settings, arrived)
+            await republish_staged(publisher, settings, staged_copy)
             await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
         except PermissionDeniedError as exc:
             # NEITHER POISON NOR STRANDED: a governance answer about a well-formed event, so the object is retired
             # only once the verdict AND the event are recorded below — never on the verdict alone.
             refused += 1
             outcome = refusal_outcome(exc)
-            refused_author = author_sub_from_payload(json.loads(event_json))
+            refused_author = author_sub_from_payload(staged_copy.data)
             log.warning(
                 "lineage_outbox_event_unauthorized",
                 extra={"outbox_key": key, "run_id": event.run_id, "author": refused_author, "outcome": outcome, "reason": str(exc)},
@@ -253,7 +254,9 @@ async def _drain_outbox(
             # durable copy. ITS OWN TRY ([[LH-297]]): a record or a drop that raised here would leave the loop.
             landed = False
             try:
-                await provenance.record_refusal(outbox_key=key, run_id=event.run_id, author=refused_author, reason=str(exc), event_json=event_json)
+                await provenance.record_refusal(
+                    outbox_key=key, run_id=event.run_id, author=refused_author, reason=str(exc), event_json=json.dumps(staged_copy.data)
+                )
                 landed = True
                 recorded += 1
                 # COUNTED ONCE RECORDED, under the outcome every door counts a refusal by, so the alerts reading it see a

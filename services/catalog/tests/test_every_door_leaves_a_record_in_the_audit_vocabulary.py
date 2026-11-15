@@ -25,6 +25,7 @@ from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome, configure_audit
 from lakehouse.governed.store_credential import S3KeyPair
+from tests.traces import trace_named, traceparent_named
 
 
 _PAYLOAD = b"hello-world"
@@ -235,7 +236,7 @@ def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_
     trail.clear()
 
     for door in _CORPUS:
-        headers = {**catalog.bearer(door.caller), "X-Request-ID": door.request_id, **door.keywords.get("headers", {})}
+        headers = {**catalog.bearer(door.caller), **traceparent_named(door.request_id), **door.keywords.get("headers", {})}
         answer = catalog.client.request(door.method, door.path, headers=headers, **{k: v for k, v in door.keywords.items() if k != "headers"})
         assert answer.status_code == door.status, f"{door.request_id}: {answer.status_code} {answer.text}"
 
@@ -246,7 +247,7 @@ def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_
     ]
     assert outside == [], "records outside the format or the closed vocabularies"
     assert [r for r in trail if not r["audit.subject"]] == [], "records naming no subject"
-    by_request = {door.request_id: [r for r in trail if r["audit.request_id"] == door.request_id] for door in _CORPUS}
+    by_request = {door.request_id: [r for r in trail if r["audit.trace_id"] == trace_named(door.request_id)] for door in _CORPUS}
     unauthenticated = [rid for rid, records in by_request.items() if not any(r["audit.action"] == AuditAction.AUTHN for r in records)]
     assert unauthenticated == [], "requests whose trail holds no authentication record"
     unverdicted = [rid for rid, records in by_request.items() if not any(r["audit.outcome"] in {"allow", "deny"} for r in records)]

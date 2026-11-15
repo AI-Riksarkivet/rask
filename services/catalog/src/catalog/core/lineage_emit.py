@@ -46,6 +46,7 @@ from catalog.core.run_context import RunContext
 from lakehouse import outbox
 from lakehouse.bus import Bus
 from lakehouse.cloud_events import lineage_envelope
+from lakehouse.context import current_trace_context
 from lakehouse.governed import fga
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.governed.subjects import is_person_subject
@@ -788,8 +789,9 @@ class HttpLineageEmitter(_BaseLineageEmitter):
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:
         # Forward the caller's bearer so ingest accepts the event when the lineage service has OIDC on
-        # (else the event 401s and is silently dropped). Lineage binds the author to this verified principal.
-        headers = {"Authorization": authorization} if authorization else None
+        # (else the event 401s and is silently dropped). Lineage binds the author to this verified principal. The event
+        # travels in the trace of the request that caused it (ADR 0209), whether or not anything instruments this client.
+        headers = current_trace_context() | ({"Authorization": authorization} if authorization else {})
         try:
             response = await self._client.post(self._url, json=event, headers=headers)
             response.raise_for_status()

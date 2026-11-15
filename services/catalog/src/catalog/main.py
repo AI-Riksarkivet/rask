@@ -392,12 +392,12 @@ async def _catalog_ready(request: Request) -> Readiness:
 
 _settings = get_settings()
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
-# gate, the handler pair in the order that makes it work, one request id, every layer a request passes, and the
+# gate, the handler pair in the order that makes it work, one trace per request, every layer a request passes, and the
 # probes — see `lakehouse.lance_app` for what each is for and what a copy of it got wrong.
 #
 # `maintenance_middleware` (the read-only gate, a no-op unless LANCE_MAINTENANCE_READ_ONLY=true) and
 # `signing_gate_middleware` (the writes a catalog without its signing key refuses) go in as `inner_middleware`, inside
-# the request-id layer, so their 503 carries an `X-Request-ID` an operator can correlate the refusal with.
+# the request's trace, so their 503 names the trace (the problem body's `instance`) an operator correlates the refusal with.
 #
 # The OUTER layers, in order: the write shed answers 429 once the concurrent-write cap is reached, when a write begins
 # to read its body and before a byte of it is buffered, so shedding relieves memory pressure rather than adding to it;

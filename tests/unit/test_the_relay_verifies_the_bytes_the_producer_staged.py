@@ -15,11 +15,11 @@ built by a helper that fills them in would assert nothing. The bus subscription 
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 from typing import Any, cast
 
 from lakehouse import outbox
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.storage_options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings, Signing
@@ -61,7 +61,7 @@ def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_stag
     uri = f"file://{tmp_path}/outbox"
     signer = event_signer(IDENTITY)
     secret_store.hold(f"signing-public-{IDENTITY}", {"keys": signer.public})
-    outbox.stage_event(uri, StorageOptions(), RUN_ID, json.dumps(signer.sign(_wire())))
+    outbox.stage_envelope(uri, StorageOptions(), lineage_envelope(signer.sign(_wire())))
     settings = LineageSettings.model_validate({"outbox_uri": uri, "signing": Signing(signers=frozenset({IDENTITY}), delegators=frozenset())})
     repo = _Repo()
     app = cast("Any", SimpleNamespace(state=SimpleNamespace(published_keys=store_published_keys())))

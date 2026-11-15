@@ -243,7 +243,7 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
         if (named, _version(event), schema) != (expected_ref, head.version, head.schema.names):
             wrong.append(f"{operation}: ref {named} v{_version(event)} {schema}, branch head v{head.version} {head.schema.names}")
         committed = head.read_transaction(head.version)
-        stamp = dict(committed.transaction_properties or {}) if committed is not None else {}
+        stamp = {key: value for key, value in (committed.transaction_properties or {}).items() if key != "rask.traceparent"} if committed is not None else {}
         if stamp != {"rask.author": "dex~alice", "rask.operation": operation}:
             wrong.append(f"{operation}: the branch head v{head.version} committed {stamp}")
     assert not wrong, "branch writes recorded as some other commit:\n" + "\n".join(wrong)

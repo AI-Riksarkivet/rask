@@ -24,7 +24,7 @@ trace/span context, so only the raw `kubectl logs` tier was blind.
 THE FORMATTER MUST NOT DEPEND ON OTEL BEING ON. A formatter naming `%(otelTraceID)s` raises on any
 record that lacks the attribute — which is every record in dev, in tests, and in any process that runs
 without `opentelemetry-instrument`. That would turn a correlation aid into a crash, so the attribute is
-guaranteed by the same filter that already guarantees `request_id`.
+guaranteed by the filter, which reads it off the active span (ADR 0209).
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def test_a_record_written_inside_a_span_PRINTS_its_trace_id(stdout_lines: io.Str
 
 def test_a_record_written_OUTSIDE_a_span_still_formats(stdout_lines: io.StringIO, instrumented: None) -> None:
     """Outside a span the instrumentor sets the id to '0'. Printing `[0]` on every line is noise; the
-    line must render a visible placeholder the way `request_id` already does."""
+    line must render a visible placeholder instead."""
     logging.getLogger("catalog.api.v1.endpoints.tables").warning("no span here")
 
     line = stdout_lines.getvalue()

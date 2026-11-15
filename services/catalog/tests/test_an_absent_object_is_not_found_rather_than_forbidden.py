@@ -147,7 +147,8 @@ def test_a_caller_holding_nothing_on_a_warehouse_learns_neither_its_names_nor_wh
 
     assert answered.status_code == 403
     assert answered.headers["content-type"] == "application/problem+json"
-    assert answered.json() == {
+    # `instance` is the request's own trace id (ADR 0209), which names the occurrence and nothing about the object.
+    assert {key: value for key, value in answered.json().items() if key != "instance"} == {
         "type": "https://lance.org/problems/permissiondeniederror",
         "title": "PermissionDeniedError",
         "status": 403,

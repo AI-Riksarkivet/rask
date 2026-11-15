@@ -5,7 +5,7 @@ DUP-12: "The lance-service entrypoint is hand-assembled eight times; there is no
 steps in prose comments copied between them.
 
 This pins what `lakehouse.lance_app` gives catalog, lineage and maintenance: the copies had drifted, one service
-serving no `RequestIDMiddleware` at all, and nothing compared them.
+serving no correlation layer at all, and nothing compared them.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import UnauthenticatedError
 from starlette.types import Message, Scope
+
+from lakehouse.context import current_trace_id
 
 
 LANCE_APPS = (
@@ -61,22 +63,39 @@ def _app(module_path: str) -> FastAPI:
     return app
 
 
-@pytest.mark.parametrize(("name", "module_path"), LANCE_APPS, ids=[row[0] for row in LANCE_APPS])
-def test_every_lance_app_stamps_one_request_id(name: str, module_path: str) -> None:
-    """Every lance app serves the request-id layer.
+#: A caller's own trace, as W3C Trace Context's example writes one.
+_CALLERS_TRACE = "4bf92f3577b34da6a3ce929d0e0e4736"
 
-    Driven through a REQUEST rather than by looking for the class on `app.user_middleware`: a
-    middleware that is registered but never reached stamps nothing, and the header is the contract.
+
+@pytest.mark.parametrize(
+    ("name", "module_path", "sent"),
+    [
+        *[pytest.param(name, module, None, id=f"{name}-no-trace-sent") for name, module in LANCE_APPS],
+        # The catalog's continuing of a caller's trace is pinned through its doors
+        # (`test_every_event_and_commit_a_write_causes_carries_the_trace_of_the_request_that_caused_it`).
+        *[
+            pytest.param(name, module, f"00-{_CALLERS_TRACE}-00f067aa0ba902b7-01", id=f"{name}-the-callers-trace")
+            for name, module in LANCE_APPS
+            if name != "catalog"
+        ],
+    ],
+)
+def test_every_lance_app_runs_each_request_in_a_trace(name: str, module_path: str, sent: str | None) -> None:
+    """Every lance app runs each request in a trace, the caller's where it sent one (ADR 0209): its id is the one
+    correlation id, so a request with no ``traceparent`` of its own still has one whether or not an exporter is set.
+
+    Driven through a REQUEST rather than by looking for the instrumentation on the app: what a handler reads as the
+    current trace is the contract.
     """
     app = _app(module_path)
     with _probe_route(app):
 
-        @app.get("/_probe_request_id")
-        async def _ok() -> dict[str, str]:
-            return {"ok": "yes"}
+        @app.get("/_probe_trace")
+        async def _trace() -> dict[str, str | None]:
+            return {"trace": current_trace_id()}
 
-        response = TestClient(app, raise_server_exceptions=False).get("/_probe_request_id", headers={"X-Request-ID": "quoted-by-a-caller"})
-    assert response.headers.get("X-Request-ID") == "quoted-by-a-caller", dict(response.headers)
+        trace_id = TestClient(app, raise_server_exceptions=False).get("/_probe_trace", headers={"traceparent": sent} if sent else {}).json()["trace"]
+    assert (trace_id == _CALLERS_TRACE) if sent else (trace_id is not None and len(trace_id) == 32), trace_id
 
 
 @pytest.mark.parametrize(("name", "module_path"), [row for row in LANCE_APPS if row[0] != "lineage"], ids=["catalog", "maintenance"])
@@ -131,13 +150,9 @@ def test_every_lance_app_translates_a_lance_error(name: str, module_path: str) -
     assert response.headers["content-type"].startswith("application/problem+json"), response.headers
 
 
-def test_the_catalog_maintenance_gate_stays_inside_the_request_id_layer() -> None:
-    """Middleware added LATER is OUTER, so the read-only gate must be registered BEFORE the id layer.
-
-    Registered after it, a maintenance-mode refusal never passes back through `RequestIDMiddleware`
-    and goes out with no `X-Request-ID` — a 503 an operator cannot correlate to anything. This is the
-    one reason `build_lance_service_app` takes `inner_middleware` at all, so it is pinned.
-    """
+def test_the_catalog_maintenance_gate_answers_inside_the_requests_trace() -> None:
+    """The read-only gate answers inside the request's trace, so its 503 names the trace (the problem body's
+    ``instance``) an operator correlates the refusal with (ADR 0209)."""
     from catalog.core.config import get_settings
 
     get_settings.cache_clear()
@@ -148,8 +163,7 @@ def test_the_catalog_maintenance_gate_stays_inside_the_request_id_layer() -> Non
     original = getattr(app.state, "settings", None)
     app.state.settings = get_settings().model_copy(update={"maintenance_read_only": True})
     try:
-        response = client.post("/v1/namespace/x/create", json={})
+        response = client.post("/v1/namespace/x/create", json={}, headers={"traceparent": f"00-{_CALLERS_TRACE}-00f067aa0ba902b7-01"})
     finally:
         app.state.settings = original
-    assert response.status_code == 503, response.text
-    assert response.headers.get("X-Request-ID"), dict(response.headers)
+    assert (response.status_code, response.json().get("instance")) == (503, _CALLERS_TRACE), response.text

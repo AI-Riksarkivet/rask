@@ -86,6 +86,9 @@ class Commit(BaseModel):
     author: str | None = None
     #: The commit's ``rask.*`` run, when it names one.
     run: run_context.RunContext | None
+    #: The trace of the request whose door made the commit (``rask.traceparent``), which its announcement is made in;
+    #: ``None`` for a commit that names none (a stock client's), announced in the reconcile's own trace.
+    traceparent: str | None = None
     committed_at: str | None
     #: Whether a table's first version committed rows, which makes its create a write ([[LH-492]]).
     commits_rows: bool
@@ -426,7 +429,7 @@ def _commit_at(handle: lance.LanceDataset, version: int, *, branch: str | None, 
     operation = properties.get(run_context.OPERATION_PROPERTY) or _operation_of(name, version=version, branch=branch)
     if operation is None:
         raise UnidentifiedCommitError(f"version {version} commits a {name}, which no door commits")
-    stock = {key: value for key, value in properties.items() if key != run_context.OPERATION_PROPERTY}
+    stock = {key: value for key, value in properties.items() if key not in {run_context.OPERATION_PROPERTY, run_context.TRACEPARENT_PROPERTY}}
     try:
         run = run_context.from_properties(stock)
     except InvalidInputError:
@@ -439,6 +442,7 @@ def _commit_at(handle: lance.LanceDataset, version: int, *, branch: str | None, 
         branch_identifier=branch_identifier,
         operation=operation,
         run=run,
+        traceparent=properties.get(run_context.TRACEPARENT_PROPERTY),
         committed_at=dataplane.commit_time(handle),
         commits_rows=operation == lineage_emit.CREATE_TABLE and sum(int(fragment.physical_rows or 0) for fragment in fragments) > 0,
         transaction_uuid=transaction.uuid,

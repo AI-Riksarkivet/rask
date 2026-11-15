@@ -36,7 +36,9 @@ from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, Trace
 
 from lakehouse import bus, bus_metrics
 from lakehouse.cloud_events import CloudEvent
+from lakehouse.context import continuing
 from lakehouse.supervision import EndProcess, Supervisor
+from tests.traces import trace_id_of
 
 
 #: The W3C Trace Context specification's own example.
@@ -163,8 +165,9 @@ def _envelope(**data: Any) -> CloudEvent:
 
 
 def _envelope_of(size: int) -> CloudEvent:
-    """An envelope that goes out as exactly ``size`` bytes."""
-    empty = len(json.dumps(_envelope(blob="").as_wire()).encode())
+    """An envelope that goes out as exactly ``size`` bytes when it is published in the trace :data:`TRACEPARENT` names:
+    the publish adds a ``traceparent`` of that length, whichever span it runs as."""
+    empty = len(json.dumps(_envelope(blob="").as_wire() | {"traceparent": TRACEPARENT}).encode())
     return _envelope(blob="x" * (size - empty))
 
 
@@ -200,7 +203,7 @@ async def test_an_envelope_is_held_to_the_claim_check_sizes(
     refusal's only trace."""
     session, client = connected
 
-    with caplog.at_level(logging.WARNING, logger=bus.__name__), contextlib.suppress(ValueError):
+    with caplog.at_level(logging.WARNING, logger=bus.__name__), contextlib.suppress(ValueError), continuing(TRACEPARENT):
         await bus.publish_event(session, _envelope_of(size), topic=TOPIC, timeout_seconds=5)
 
     assert (len(_sent(client)), [record.message for record in caplog.records], measured("bus.publish.refused")) == (published, warned, refused)
@@ -209,7 +212,8 @@ async def test_an_envelope_is_held_to_the_claim_check_sizes(
 @pytest.mark.asyncio
 async def test_a_publish_inside_a_span_carries_its_trace_context_in_the_envelope(connected: tuple[bus.Bus, MagicMock]) -> None:
     """The envelope goes out whole, with ``traceparent`` and ``tracestate`` beside its own attributes, as CloudEvents'
-    distributed tracing extension names them, and nothing else."""
+    distributed tracing extension names them, and nothing else: the trace and its state the publish ran in, as the
+    publish's own span (a child of the caller's, under an SDK provider) or the caller's (under the API's no-op one)."""
     session, client = connected
     envelope = _envelope(run="r1")
     span = SpanContext(
@@ -226,7 +230,11 @@ async def test_a_publish_inside_a_span_carries_its_trace_context_in_the_envelope
     finally:
         context.detach(token)
 
-    assert [sent["envelope"] for sent in _sent(client)] == [envelope.as_wire() | {"traceparent": TRACEPARENT, "tracestate": "vendor=1"}]
+    [sent] = [sent["envelope"] for sent in _sent(client)]
+    assert ({key: value for key, value in sent.items() if key != "traceparent"}, trace_id_of(sent["traceparent"])) == (
+        envelope.as_wire() | {"tracestate": "vendor=1"},
+        trace_id_of(TRACEPARENT),
+    )
 
 
 @pytest.mark.asyncio

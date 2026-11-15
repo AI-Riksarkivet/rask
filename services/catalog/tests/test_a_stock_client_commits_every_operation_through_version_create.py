@@ -1615,7 +1615,7 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
     landed = _opened(served.stock())
     assert landed.version == 2
     properties = _committed_properties(landed, 2)
-    assert {key: value for key, value in properties.items() if key != "rask.inputs"} == {
+    assert {key: value for key, value in properties.items() if key not in {"rask.inputs", "rask.traceparent"}} == {
         "rask.run_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
         "rask.job_namespace": "pipelines",
         "rask.job": "nightly",

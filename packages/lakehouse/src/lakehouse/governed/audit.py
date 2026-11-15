@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Final
 
-from lakehouse.context import current_request_id
+from lakehouse.context import NO_TRACE, current_trace_id
 
 
 #: The one well-known audit logger name (not a per-module logger) so audit records are a single stream.
@@ -29,7 +29,7 @@ _log = logging.getLogger(AUDIT_LOGGER)
 #: The record's format version, stamped on every record as ``audit.format``. A compliance query names the fields of
 #: one format; a renamed or retyped field is a new format, so the query that read the old one can tell it is reading
 #: records it was not written for instead of silently matching nothing.
-AUDIT_FORMAT: Final = "1.0"
+AUDIT_FORMAT: Final = "2.0"
 
 
 class AuditOutcome(StrEnum):
@@ -154,9 +154,10 @@ def audit(
 
     ``action`` is a member of a closed vocabulary (:class:`AuditAction` for the lakehouse); ``outcome`` one of
     :class:`AuditOutcome`; ``subject`` the verified principal; ``resource`` the object acted on. Every record carries
-    ``audit.format`` (:data:`AUDIT_FORMAT`) and the request id it was made under (``audit.request_id``, ``-`` outside a
-    request), so the records one request made are one filter. Extra ``fields`` (relation, tier, reason) ride the same
-    record under an ``audit.`` prefix so a compliance query sees a flat, consistent schema.
+    ``audit.format`` (:data:`AUDIT_FORMAT`) and the id of the trace it was made under (``audit.trace_id``, ``-`` outside
+    one, ADR 0209), so the records one request made are one filter, and the same id finds its log lines and its trace.
+    Extra ``fields`` (relation, tier, reason) ride the same record under an ``audit.`` prefix so a compliance query sees a
+    flat, consistent schema.
     """
     _log.info(
         "audit",
@@ -164,7 +165,7 @@ def audit(
             "audit.format": AUDIT_FORMAT,
             "audit.action": action.value,
             "audit.outcome": outcome.value,
-            "audit.request_id": current_request_id(),
+            "audit.trace_id": current_trace_id() or NO_TRACE,
             "audit.subject": subject or "",
             "audit.resource": resource or "",
             **{f"audit.{key}": value for key, value in fields.items()},

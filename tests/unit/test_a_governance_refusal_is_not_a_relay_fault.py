@@ -33,7 +33,6 @@ authorizes AS the subject the producer stamped, the only principal a tick has; a
 from __future__ import annotations
 
 import asyncio
-import json
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -42,6 +41,7 @@ from lance_namespace import PermissionDeniedError
 
 from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse import outbox
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.openlineage import run_id_for
 from lakehouse.storage_options import StorageOptions
 from lineage.api import relay
@@ -63,7 +63,7 @@ def _staged(uri: str, *, author: str, run: str, token: str) -> None:
         event_time="2026-10-12T00:00:00+00:00",
         job_namespace="lance-catalog",
     )
-    outbox.stage_event(uri, StorageOptions(), event["run"]["runId"], json.dumps(event))
+    outbox.stage_envelope(uri, StorageOptions(), lineage_envelope(event))
 
 
 class _Repo:

@@ -291,7 +291,10 @@ event rides the envelope its first publish rode.
 - **A signature covers `data`, never the envelope.** Verify the event; an envelope attribute is a routing hint that
   anything able to publish can write.
 - **`traceparent` and `tracestate`** (CloudEvents' distributed tracing extension) carry the W3C trace context of the
-  publish. Any other attribute a reader finds on a message carries no contract.
+  publish, which runs in the trace of the request that caused the event (ADR 0209): its trace id is the one the
+  request's log lines, audit records (`audit.trace_id`), problem body (`instance`) and commits (`rask.traceparent`) carry.
+  A relay's copy of a staged event is published in the trace the event was staged under, so it carries the same trace
+  id as the first publish would have. Any other attribute a reader finds on a message carries no contract.
 - **A `type` ends in its version.** A change that breaks a reader of an event or of its envelope is a new version.
 
 ### The names that carry the contract

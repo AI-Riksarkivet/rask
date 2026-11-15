@@ -31,6 +31,7 @@ from pydantic import SecretStr
 from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse import outbox, outbox_metrics, store_session
 from lakehouse.bus import BusUnavailableError
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.governed import fga
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -38,7 +39,7 @@ from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lineage.signing import signature_of
-from lakehouse.lineage_events import DatasetUuids, event_identity
+from lakehouse.lineage_events import DatasetUuids
 from lakehouse.openlineage import run_id_for
 from lakehouse.storage_options import StorageOptions
 from lineage.api import fga_deps, relay
@@ -153,12 +154,13 @@ def _create_event(signer: Any, *, author: str = _AUTHOR) -> dict[str, Any]:  # n
 
 
 def _stage_a_create(settings: LineageSettings, signer: Any, *, author: str = _AUTHOR) -> tuple[str, str]:  # noqa: ANN401 - the conftest's EventSigner
-    """What a stager leaves in the outbox when its publish fails: its create event, signed."""
+    """What a stager leaves in the outbox when its publish fails, and the create event it holds, signed."""
     doc = _create_event(signer, author=author)
-    outbox.stage_event(settings.outbox_uri, StorageOptions(), event_identity(doc), json.dumps(doc))
+    outbox.stage_envelope(settings.outbox_uri, StorageOptions(), lineage_envelope(doc))
     staged = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     assert len(staged) == 1, f"staging left {len(staged)} objects, not one"
-    key, event_json = staged[0]
+    key, record = staged[0]
+    event_json = json.dumps(json.loads(record)["data"])
     # ANTI-VACUITY: a run-shaped or unsigned fixture would pass every assertion below for the wrong reason.
     assert "dataset" in doc and "run" not in doc, "a create is no longer a DatasetEvent, so this file tests nothing"
     assert signature_of(doc) is not None, "the staged create is unsigned, so the signature leg of the gate never runs"
@@ -193,8 +195,8 @@ def _request() -> Any:  # noqa: ANN401 — the drain and the routes read only ap
 
 
 def _rewrite_staged(settings: LineageSettings, key: str, doc: dict[str, Any]) -> None:
-    """Overwrite a staged object in place, as a stager holding the outbox credential can."""
-    (Path(settings.outbox_uri) / f"{key}.json").write_text(json.dumps(doc))
+    """Overwrite a staged object's event in place, as a stager holding the outbox credential can."""
+    (Path(settings.outbox_uri) / f"{key}.json").write_text(json.dumps(lineage_envelope(doc).as_wire()))
 
 
 def _without_signature(staged_json: str) -> dict[str, Any]:
@@ -222,7 +224,7 @@ def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
         job_namespace="lance-catalog",
     )
     run_id = event["run"]["runId"]
-    outbox.stage_event(settings.outbox_uri, StorageOptions(), run_id, json.dumps(event))
+    outbox.stage_envelope(settings.outbox_uri, StorageOptions(), lineage_envelope(event))
     os.utime(Path(settings.outbox_uri) / f"{create_key}.json", ns=(1, 1))
     return run_id
 
@@ -315,7 +317,7 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers
         job_namespace="lance",
     )
     signed = catalog.sign(event, on_behalf_of=author) if by_the_catalog else other.sign(event)
-    outbox.stage_event(settings.outbox_uri, StorageOptions(), event_identity(signed), json.dumps(signed))
+    outbox.stage_envelope(settings.outbox_uri, StorageOptions(), lineage_envelope(signed))
     _arm_gate(monkeypatch, writer=None)
     repo = _Repo()
 
@@ -378,7 +380,7 @@ def _stage_a_refusable_first(settings: LineageSettings, kind: str, catalog: Any)
         event_time="2026-10-12T00:00:00+00:00",
         job_namespace="lance-catalog",
     )
-    outbox.stage_event(settings.outbox_uri, StorageOptions(), event["run"]["runId"], json.dumps(event))
+    outbox.stage_envelope(settings.outbox_uri, StorageOptions(), lineage_envelope(event))
     [(key, _)] = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     return key, _stage_a_run_behind(settings, key)
 
@@ -387,7 +389,7 @@ def _refusing(key: str, settings: LineageSettings) -> Any:  # noqa: ANN401 — t
     """A gate that refuses exactly the event staged under `key` and admits the rest."""
     refused_json = outbox.resolve_event(settings.outbox_uri, StorageOptions(), key)
     assert refused_json is not None
-    refused_doc = json.loads(refused_json[1])
+    refused_doc = json.loads(refused_json[1])["data"]
 
     async def gate(_event: object, _app: object, _settings: object, arrived: dict[str, Any]) -> None:
         if arrived == refused_doc:
@@ -609,8 +611,7 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
         job_namespace="lance-catalog",
     )
     event = catalog.sign(event, on_behalf_of=_AUTHOR)
-    staged_json = json.dumps(event)
-    outbox.stage_event(settings.outbox_uri, StorageOptions(), event["run"]["runId"], staged_json)
+    outbox.stage_envelope(settings.outbox_uri, StorageOptions(), lineage_envelope(event))
     [(key, _)] = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     publisher = BusDouble()
 

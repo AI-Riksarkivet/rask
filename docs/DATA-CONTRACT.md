@@ -137,7 +137,8 @@ takes the event in its envelope and sends it on the process's own connection in 
 (`application/cloudevents+json`), under the envelope's `id` as the message's `Nats-Msg-Id`. The envelope is derived from the event alone
 (`packages/lakehouse/src/lakehouse/cloud_events.py`; its attributes are `docs/COMMIT-EVENTS.md` § The envelope on
 the bus), so a relay's copy of an event carries the `id` its first publish carried, the message id a stream
-deduplicates on. Consumers
+deduplicates on. Its `traceparent` and `tracestate` are the publish's own, made in the trace of the request that caused
+the event, which an outbox stages with the envelope (ADR 0209). Consumers
 read the envelope from the delivery (`Delivery.envelope()` in `lakehouse.bus_delivery`, None for a body that is no
 JSON object) and read its `data`: `handle_cloud_event` in `services/lineage/services/consumer.py` and
 `ControlLane.handle` in `services/catalog/api/control_lane.py` treat it as untrusted and guard with `isinstance` before

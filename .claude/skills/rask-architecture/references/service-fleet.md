@@ -11,7 +11,7 @@ process routes: the public route table is the product chart's HTTPRoutes, served
 app serves only `/livez` and `/readyz`) build through
 `lakehouse.lance_app.build_lance_service_app`, because copied boots drift: each once repeated the same five-step
 boot in copied comments (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"
-DUP-12), and one lost its request-id layer in the copying. They still read their own `core/config.py` settings and
+DUP-12), and one lost its correlation layer in the copying. They still read their own `core/config.py` settings and
 keep the `api/v1/endpoints/` layout — the factory owns the boot, not the layout.
 
 | Service | Port | Composes package(s) | Factory | DB? | Notes |

@@ -44,14 +44,14 @@ from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from fastapi import Body, FastAPI, Response
+from fastapi import Body, FastAPI, Request, Response
 from lance.fragment import write_fragments
 from lance.namespace import DirectoryNamespace
 from lance_namespace import DescribeTableRequest, DescribeTableResponse, InternalError, PermissionDeniedError
@@ -61,6 +61,7 @@ from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.version_retention import manifest_version
 from tests.integration.lineage_app import catalog_tick, live_catalog, live_lineage, serve
 from tests.loopback import free_port
+from tests.traces import trace_id_of
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -111,6 +112,11 @@ def _publications(rows: list[dict[str, Any]], table: str) -> list[tuple[int, str
     return found
 
 
+#: The caller's own trace, as W3C Trace Context's example writes one.
+_TRACE: Final = "4bf92f3577b34da6a3ce929d0e0e4736"
+_TRACED: Final = {"traceparent": f"00-{_TRACE}-00f067aa0ba902b7-01"}
+
+
 class _Gate:
     """The hop the catalog announces through: it records every event, refuses it while down, and forwards it once up.
 
@@ -120,15 +126,18 @@ class _Gate:
 
     def __init__(self, bearer: str) -> None:
         self.refused: list[dict[str, Any]] = []
+        #: Every event the gate forwarded, with the trace it arrived in (its ``traceparent`` header).
+        self.forwarded: list[tuple[dict[str, Any], str | None]] = []
         self.lineage: str | None = None
         self.bearer = bearer
         self.app = FastAPI()
         self.app.add_api_route("/api/v1/lineage", self._take, methods=["POST"])
 
-    async def _take(self, event: dict[str, Any] = Body()) -> Response:  # noqa: B008 — FastAPI's own body declaration
+    async def _take(self, request: Request, event: dict[str, Any] = Body()) -> Response:  # noqa: B008 — FastAPI's own body declaration
         if self.lineage is None:
             self.refused.append(event)
             return Response(status_code=503)
+        self.forwarded.append((event, request.headers.get("traceparent")))
         async with httpx.AsyncClient(base_url=self.lineage, timeout=60) as client:
             forwarded = await client.post("/api/v1/lineage", json=event, headers={"Authorization": self.bearer})
         return Response(status_code=forwarded.status_code, content=forwarded.content)
@@ -207,11 +216,12 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 return catalog_tick(catalog_url, commit_reconcile.tick)
 
             assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-            # The gate is down, so each write's own announcement is lost after its commit.
-            assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
-            assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(3, 5), headers=_ARROW).status_code == 200
+            # The gate is down, so each write's own announcement is lost after its commit. Each write is made in the
+            # caller's own trace, which its commit records as `rask.traceparent` (ADR 0209).
+            assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW | _TRACED).status_code == 200
+            assert catalog.post("/v1/table/lance_catalog$db$t/insert", content=_rows(3, 5), headers=_ARROW | _TRACED).status_code == 200
             # A delete commits detached and is finalized by the catalog, where the create and the insert commit through Lance.
-            assert catalog.post("/v1/table/lance_catalog$db$t/delete", json={"predicate": "id = 0"}).status_code == 200
+            assert catalog.post("/v1/table/lance_catalog$db$t/delete", json={"predicate": "id = 0"}, headers=_TRACED).status_code == 200
             # A table only declared holds no version: nothing to announce, and nothing the tick cannot read.
             assert catalog.post("/v1/table/lance_catalog$db$declared/declare", json={}).status_code == 200
             originals = [event for event in gate.refused if "run" in event and event["outputs"][0]["name"] == "lance_catalog$db$t"]
@@ -278,6 +288,9 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
 
                 tick = reconcile()
                 assert tick.reannounced == 3, tick
+                # Each re-announcement is made in the trace of the request whose commit it announces, not the tick's own.
+                reannounced = [traceparent for event, traceparent in gate.forwarded if "run" in event and event["outputs"][0]["name"] == "lance_catalog$db$t"]
+                assert [trace_id_of(traceparent) if traceparent else None for traceparent in reannounced] == [_TRACE] * 3
                 assert _commits(_follow(lineage), "lance_catalog$db$t") == [
                     ("lance_catalog$db$t", "create_table", "1", author),
                     ("lance_catalog$db$t", "insert", "2", author),

@@ -47,6 +47,7 @@ from lakehouse import maintenance_due
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.maintenance_due import CompactionDue, DueRecord
+from tests.traces import trace_named, traceparent_named
 
 
 #: The estate the doors name: acme's warehouse, two namespaces in it, and a table in one.
@@ -89,9 +90,9 @@ class _Door(BaseModel):
         return f"{self.caller} {self.method} {self.route}"
 
     def send(self, client: TestClient, headers: dict[str, str]) -> httpx.Response:
-        """Send this door's request with ``headers``, under its request id, which the trail records."""
+        """Send this door's request with ``headers``, in the trace its request id names, which the trail records."""
         path = router_walk.PARAM.sub(lambda match: self.params[match.group(1)], self.route)
-        return client.request(self.method, path, headers={**headers, "X-Request-ID": self.request_id}, json=self.body)
+        return client.request(self.method, path, headers={**headers, **traceparent_named(self.request_id)}, json=self.body)
 
     @abstractmethod
     def kept_out(self, answered: _Answered) -> bool:
@@ -333,7 +334,7 @@ def test_every_door_the_router_leaves_to_its_handler_keeps_out_a_caller_it_grant
     answers = {door.request_id: door.send(client, estate.bearer(door.caller)) for door in _DOORS if door.key in left}
 
     refusals = {
-        (r.__dict__["audit.request_id"], r.__dict__["audit.subject"])
+        (r.__dict__["audit.trace_id"], r.__dict__["audit.subject"])
         for r in caplog.records
         if r.name == AUDIT_LOGGER and r.__dict__.get("audit.action") == AuditAction.AUTHZ and r.__dict__.get("audit.outcome") == AuditOutcome.DENY
     }
@@ -341,7 +342,7 @@ def test_every_door_the_router_leaves_to_its_handler_keeps_out_a_caller_it_grant
         door.request_id: (answer.status_code, answer.text)
         for door in _DOORS
         if (answer := answers.get(door.request_id)) is not None
-        and not door.kept_out(_Answered(response=answer, refused_by_a_decision=(door.request_id, f"dex~{door.caller}") in refusals))
+        and not door.kept_out(_Answered(response=answer, refused_by_a_decision=(trace_named(door.request_id), f"dex~{door.caller}") in refusals))
     }
     entered = {door.key for door in _DOORS}
     assert (let_through, left - entered - _ABOUT_THE_CALLER, entered - left) == ({}, set(), set()), (

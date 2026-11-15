@@ -48,25 +48,15 @@ def setup_logging() -> None:
     if not any(h.get_name() == "rask-stdout" for h in root.handlers):
         handler = logging.StreamHandler(sys.stdout)
         handler.set_name("rask-stdout")
-        # THE REQUEST ID JOINS EVERY RECORD HERE. `RequestIDMiddleware` mints one and echoes it to the
-        # caller; until this filter existed nothing read it, so a user could quote an id from a failed
-        # request and an operator had nothing to grep for.
-        #
-        # A FILTER on the one handler, not a `LoggingMiddleware`: a middleware annotates only the
-        # records it writes itself, while this covers every module in every service — libraries
-        # included — with no per-service edit. Outside a request it renders `-`, which is why the
-        # context var defaults to a visible placeholder rather than an empty string that would read
-        # like a formatting bug.
+        # THE TRACE ID JOINS EVERY RECORD HERE, the one correlation id (ADR 0209): the id a problem body's
+        # `instance` gives a caller, the audit trail's `audit.trace_id`, and the trace the OTLP copy in
+        # GreptimeDB is joined by. A FILTER on the one handler, not a `LoggingMiddleware`: a middleware
+        # annotates only the records it writes itself, while this covers every module in every service,
+        # libraries included, with no per-service edit. Outside a trace it renders `-`. The field comes from
+        # the filter, so this format string is safe on a record that never met OpenTelemetry.
         handler.addFilter(CorrelationFilter())
-        # THE TRACE ID JOINS IT, and this is the tier that was missing one. `LoggingInstrumentor`
-        # attaches `otelTraceID` to every record, but the only way it ever reached a LINE was
-        # `set_logging_format=True` → `logging.basicConfig(format=...)`, which no-ops because this
-        # handler already exists. So the id rode on every record and printed on none of them: the
-        # OTLP copy in GreptimeDB could be joined to a trace and `kubectl logs` — the copy an
-        # operator reads first — could not. Both fields come from the filter, so this format string
-        # is safe on a record that never met OpenTelemetry.
         # `DiagnosticFormatter`, not `Formatter`: the correlation fields have slots in this string, and
         # everything the caller recorded in `extra=` follows the message. A format string cannot do the
         # second half — it names fixed fields, and the diagnostics differ at every call site.
-        handler.setFormatter(DiagnosticFormatter("%(asctime)s %(levelname)-7s %(name)s [%(request_id)s] [%(trace_id)s] — %(message)s"))
+        handler.setFormatter(DiagnosticFormatter("%(asctime)s %(levelname)-7s %(name)s [%(trace_id)s] — %(message)s"))
         root.addHandler(handler)

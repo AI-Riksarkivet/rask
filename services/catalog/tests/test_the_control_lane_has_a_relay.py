@@ -47,6 +47,7 @@ from catalog.core.config import Settings
 from catalog.core.control_signing import control_sign
 from lakehouse import outbox, store_session
 from lakehouse.bus import MAX_PAYLOAD_BYTES
+from lakehouse.cloud_events import control_envelope
 from lakehouse.control_emit import BusControlEmitter
 from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
@@ -158,7 +159,8 @@ def _store_serving_the_catalogs_keys(secret_store: SecretStoreDouble, status: in
 
 
 async def _stage(uri: str, event: CatalogControlEvent, *, signing: SigningKeyHolder[SigningKey] | None = None) -> str:
-    """Stage one control event through the real emitter as a NATS blip leaves it, and answer the staged bytes.
+    """Stage one control event through the real emitter as a NATS blip leaves it, and answer the staged bytes: its
+    envelope, the event as ``data``.
 
     Signed as the catalog's emitter signs it when `signing` is the catalog's holder; unsigned for a catalog that does not sign.
     """
@@ -232,8 +234,9 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
     uri = f"file://{tmp_path}/control-outbox"
     pair = event_signer(CATALOG)
     signing = _catalog_key(secret_store, pair)
-    outbox.stage_event(uri, StorageOptions(), "forged", json.dumps(forge(pair, event_signer)))
-    _staged_before_everything_else(tmp_path, "forged")
+    forged = control_envelope(forge(pair, event_signer))
+    outbox.stage_envelope(uri, StorageOptions(), forged)
+    _staged_before_everything_else(tmp_path, forged.id)
     genuine = await _stage(uri, _published_event(), signing=signing)
     recorder = BusDouble()
 
@@ -241,7 +244,7 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
     with TestClient(_relay_app(recorder, signing=signing)) as client:
         report = _tick(client, deployed_settings(uri))
         delivered = [sent.envelope for sent in recorder.sent]
-        staged = json.loads(genuine)
+        staged = json.loads(genuine)["data"]
         assert [(envelope["id"], envelope["data"]) for envelope in delivered] == [(staged["event_id"], staged)], (
             "the relay published an object this catalog never signed, or the catalog's event other than as it was staged"
         )
@@ -282,23 +285,39 @@ async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
         assert secret_store.hold(f"signing-public-{CATALOG}", httpx.Response(keys)).call_count == read_before + 1
 
 
+def _enveloped(event: dict[str, Any], **attributes: str) -> str:
+    """``event`` as a stager leaves it, in an envelope carrying ``attributes``, whatever the event is."""
+    return json.dumps({"specversion": "1.0", "id": "poison", "source": "rask/catalog", "type": "rask.catalog.control.v1", "data": event} | attributes)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     [
         pytest.param("{'this': not json}", id="text-that-is-not-json"),
-        pytest.param('{"action": "table_published"}', id="an-object-that-is-no-control-event"),
-        pytest.param(json.dumps(_published_event().model_dump(mode="json") | {"event_id": ""}), id="a-control-event-no-envelope-can-carry"),
+        pytest.param(json.dumps(_published_event().model_dump(mode="json")), id="an-event-in-no-envelope"),
+        pytest.param(_enveloped({"action": "table_published"}), id="an-object-that-is-no-control-event"),
+        pytest.param(_enveloped(_published_event().model_dump(mode="json") | {"event_id": ""}), id="a-control-event-no-envelope-can-carry"),
         pytest.param(
-            json.dumps(_published_event().model_dump(mode="json") | {"extra": {"blob": "x" * (MAX_PAYLOAD_BYTES + 1)}}),
+            _enveloped(_published_event().model_dump(mode="json") | {"extra": {"blob": "x" * (MAX_PAYLOAD_BYTES + 1)}}),
             id="a-control-event-the-bus-can-never-carry",
+        ),
+        pytest.param(_enveloped(_published_event().model_dump(mode="json"), traceparent="00-not-a-trace"), id="a-trace-nobody-could-have-issued"),
+        pytest.param(
+            _enveloped(
+                _published_event().model_dump(mode="json"),
+                traceparent="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                tracestate="NOT A TRACESTATE <script>" + "z" * 500,
+            ),
+            id="a-trace-state-nobody-could-have-issued",
         ),
     ],
 )
 async def test_a_poison_object_is_dropped_rather_than_wedging_the_drain(tmp_path: Path, body: str) -> None:
     """One object no subscriber could be handed must not stop every real event behind it — the bounded drain is
     oldest-first, and the object is met first. An event with no id, and one past the size the bus carries, are such
-    objects: a publish refused on every tick would hold the whole lane at them."""
+    objects: a publish refused on every tick would hold the whole lane at them. So is an envelope naming a trace that is no
+    W3C traceparent, which a relay would otherwise publish its copy in (ADR 0209)."""
     uri = f"file://{tmp_path}/control-outbox"
     outbox.stage_event(uri, StorageOptions(), "poison", body)
     _staged_before_everything_else(tmp_path, "poison")
@@ -326,7 +345,7 @@ async def test_the_catalogs_timer_runs_the_relay_with_no_call_from_outside(tmp_p
     """With a period in git, the catalog's timers keep the relay on a loop of the process, so a staged event is delivered
     and leaves the outbox with nothing calling the tick."""
     uri = f"file://{tmp_path}/control-outbox"
-    staged = json.loads(await _stage(uri, _published_event()))
+    staged = json.loads(await _stage(uri, _published_event()))["data"]
     recorder = BusDouble()
     settings = _settings(uri, root=str(tmp_path / "control"), control_relay_period_seconds=0.2)
 

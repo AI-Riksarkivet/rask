@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
-from opentelemetry import trace
 from starlette.types import Send
+
+from lakehouse.context import current_trace_id
 
 
 #: The RFC 9457 media type every problem body is served with.
@@ -27,8 +28,8 @@ def occurrence() -> dict[str, str]:
     redacted, so this id is what a caller gives an operator, and it is the trace the request already has, where the
     redacted error's log line sits. Empty when no span is active (tracing off), since no id would then find anything.
     """
-    context = trace.get_current_span().get_span_context()
-    return {"instance": format(context.trace_id, "032x")} if context.is_valid else {}
+    trace_id = current_trace_id()
+    return {"instance": trace_id} if trace_id is not None else {}
 
 
 def problem_body(code: int, *, status: int, title: str, detail: str, slug: str | None = None) -> dict[str, object]:

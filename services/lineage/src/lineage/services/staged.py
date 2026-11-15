@@ -8,12 +8,9 @@ subscribers what another withholds, unseen.
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
-from typing import Any
-
 from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the relay's republish is a registered publish site
-from lakehouse.cloud_events import lineage_envelope
+from lakehouse.cloud_events import CloudEvent, lineage_envelope
+from lakehouse.outbox import staged_envelope
 from lineage.core.config import LineageSettings
 from lineage.models import DatasetEvent, RunEvent, parse_event
 
@@ -22,23 +19,34 @@ class UnparseableEventError(ValueError):
     """Staged bytes that are no OpenLineage event: deterministic, so no retry can repair them."""
 
 
-def parse_staged(event_json: str) -> RunEvent | DatasetEvent:
-    """The staged object as whichever event it is, through the doors' own discriminator (`parse_event`).
+def read_staged(record: str) -> CloudEvent:
+    """The envelope a staged object holds: the event as ``data``, and the trace it was staged under (ADR 0209).
 
     Raises:
-        UnparseableEventError: for ANY bytes that do not parse, and for nothing else. `json.loads`
-            refuses hostile input with more than `JSONDecodeError` — an integer past 4300 digits is a plain
-            `ValueError`, deep nesting a `RecursionError` — and one such object, read oldest-first, would
-            otherwise abort every drain tick and 500 both DLQ routes. The parse does no I/O, so no
-            transient failure can be mistaken for poison here.
+        UnparseableEventError: for ANY bytes that hold no envelope, and for nothing else. Hostile input is refused with
+            more than one error type (an integer past 4300 digits is a plain `ValueError`, deep nesting a
+            `RecursionError`), and one such object, read oldest-first, would otherwise abort every drain tick and 500
+            both DLQ routes. The read does no I/O, so no transient failure can be mistaken for poison here.
     """
     try:
-        return parse_event(json.loads(event_json))
-    except (ValueError, RecursionError) as exc:  # `JSONDecodeError` and pydantic's `ValidationError` are both `ValueError`s
+        return staged_envelope(record)
+    except (ValueError, RecursionError) as exc:  # pydantic's `ValidationError` is a `ValueError`
         raise UnparseableEventError(str(exc)) from exc
 
 
-async def republish_staged(publisher: Bus | None, settings: LineageSettings, staged: Mapping[str, Any]) -> None:
+def parse_staged(staged: CloudEvent) -> RunEvent | DatasetEvent:
+    """The staged event as whichever event it is, through the doors' own discriminator (`parse_event`).
+
+    Raises:
+        UnparseableEventError: the envelope's ``data`` is no OpenLineage event.
+    """
+    try:
+        return parse_event(staged.data)
+    except (ValueError, RecursionError) as exc:
+        raise UnparseableEventError(str(exc)) from exc
+
+
+async def republish_staged(publisher: Bus | None, settings: LineageSettings, staged: CloudEvent) -> None:
     """Re-announce a recovered event on the lineage topic, so its SUBSCRIBERS act on it as well as the feed.
 
     Recording alone repairs the feed and leaves its subscribers unaware: a recovered RUN never reaches
@@ -46,13 +54,15 @@ async def republish_staged(publisher: Bus | None, settings: LineageSettings, sta
     notifier's bus lane. ``None`` is a deployment without the outbox, which has
     nothing to re-announce (`api.dependencies.get_publisher`).
 
-    ``staged`` IS THE STAGED OBJECT AS IT PARSES, never the model's dump. The model is the parsed Python shape
+    ``staged`` IS THE STAGED ENVELOPE AS IT PARSES, never the model's dump. The model is the parsed Python shape
     (`run_id`, `event_type`); the wire is OpenLineage (`runId`, `eventType`), so a round-trip through the model
     publishes a document no subscriber can parse. The staged event is what subscribers would have seen the
     first time, and its envelope is derived from it alone (`lakehouse.cloud_events.lineage_envelope`), so the
     copy goes out under the id its producer's publish carried: inside its duplicate window the stream stores
-    it only when that publish never arrived.
+    it only when that publish never arrived. It goes out in the trace it was staged under (ADR 0209).
     """
     if publisher is None:
         return
-    await publish_event(publisher, lineage_envelope(staged), topic=settings.events_topic, timeout_seconds=settings.publish_timeout_seconds)
+    await publish_event(
+        publisher, lineage_envelope(staged.data).with_trace_of(staged), topic=settings.events_topic, timeout_seconds=settings.publish_timeout_seconds
+    )

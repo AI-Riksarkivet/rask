@@ -254,7 +254,7 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
 - `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
   - `packages/lakehouse` — **the lakehouse's one library** (import `lakehouse`, ADR 0195), imported only by its own
     services (`catalog`, `lineage`, `maintenance`) and by no client: everything they run on, organised by module (ADR 0199 decides ten subpackages under a layers contract, not yet moved). The
-    lance app factory (`lakehouse.lance_app`) and what it installs: exceptions, the request-id middleware, logging
+    lance app factory (`lakehouse.lance_app`) and what it installs: exceptions, the request's trace (ADR 0209), logging
     (`setup_logging`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
     the spec's error mapping (`naming`, `ns_errors`, `spec_routes`, `endpoint_scheme`); the input and credential guards
     (`arrow_ipc`, `storage_options`); the catalog's records, registries and governance guards (protection, trash,

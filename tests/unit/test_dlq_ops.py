@@ -26,6 +26,7 @@ from lance_namespace import (
 )
 
 from lakehouse import outbox
+from lakehouse.cloud_events import lineage_envelope
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
 from lakehouse.governed.decider import OpenFgaDecider
@@ -111,7 +112,13 @@ def _filter(request: Any, settings: LineageSettings, token: Any) -> DatasetFilte
 
 
 def _stage(settings: LineageSettings, run_id: str, body: str) -> None:
-    outbox.stage_event(settings.outbox_uri, storage_options(settings), run_id, body)
+    """Stage ``body`` under ``run_id``: an event in the envelope a producer stages it in, and bytes that are no event as
+    they are, which is what a poison object is."""
+    try:
+        staged = json.dumps(lineage_envelope(json.loads(body)).as_wire())
+    except ValueError:
+        staged = body
+    outbox.stage_event(settings.outbox_uri, storage_options(settings), run_id, staged)
 
 
 # --------------------------------------------------------------------------- #
@@ -292,10 +299,10 @@ def test_replay_audits_success_with_the_actor(tmp_path: Path, audit_records: lis
     assert len(audit_records) == 1
     fields = {k: v for k, v in audit_records[0].__dict__.items() if k.startswith("audit.")}
     assert fields == {
-        "audit.format": "1.0",
+        "audit.format": "2.0",
         "audit.action": "dlq_replay",
         "audit.outcome": "success",
-        "audit.request_id": "-",
+        "audit.trace_id": "-",
         "audit.subject": "dex~alice",
         "audit.resource": "run:r1",
     }

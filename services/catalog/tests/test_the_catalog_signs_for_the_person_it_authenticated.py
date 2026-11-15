@@ -33,9 +33,10 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import httpx
+import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
@@ -61,6 +62,7 @@ from lakehouse.lineage import SIGNATURE_FACET, RefusalReason, SignatureError, ve
 from lakehouse.storage_options import StorageOptions
 from tests.bus_double import BusDouble, session_holding
 from tests.secret_store_double import SecretStoreDouble
+from tests.traces import trace_id_of
 
 
 #: The catalog's own service account, whose principal it signs as on the estate (`lance.saSubject`).
@@ -188,6 +190,11 @@ def boot(  # noqa: PLR0913 — the fixtures a booted, signing catalog stands on
     get_settings.cache_clear()
 
 
+#: A caller's own trace, as W3C Trace Context's example writes one: what every record the request causes must name.
+_TRACE: Final = "4bf92f3577b34da6a3ce929d0e0e4736"
+_TRACED: Final = {"traceparent": f"00-{_TRACE}-00f067aa0ba902b7-01"}
+
+
 def _write_a_table_and_a_row(client: TestClient) -> None:
     assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     assert client.post("/v1/table/lance_catalog$db$t/create", content=_rows(0), headers=ARROW_STREAM).status_code == 200
@@ -263,6 +270,29 @@ def test_a_control_event_the_catalog_announced_reaches_the_feed_of_the_replica_f
     assert [event["action"] for event in client.get("/management/v1/events").json()["events"]] == ["namespace_created", "table_created"]
 
 
+def test_every_event_and_commit_a_write_causes_carries_the_trace_of_the_request_that_caused_it(
+    boot: Boot, bus: BusDouble, event_signer: Any, tmp_path: Path
+) -> None:
+    """[[XC-048]], ADR 0209: the request's W3C trace is the one id that joins it to what it caused. Each event goes out in
+    an envelope naming that trace (CloudEvents' distributed tracing extension), and each commit a door makes records it
+    as ``rask.traceparent``, which the reconcile announces a lost announcement under."""
+    pair = event_signer(CATALOG)
+    client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), _person(PERSON))
+
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}, headers=_TRACED).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/create", content=_rows(0), headers=ARROW_STREAM | _TRACED).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/insert", content=_rows(), headers=ARROW_STREAM | _TRACED).status_code == 200
+
+    table = connect("dir", {"root": str(tmp_path / "warehouse")}).describe_table(
+        DescribeTableRequest(id=["lance_catalog", "db", "t"], load_detailed_metadata=True)
+    )
+    dataset = lance.dataset(str(table.location))
+    transactions = {version: dataset.read_transaction(version) for version in (1, 2)}
+    commits = {version: (t.transaction_properties or {}).get("rask.traceparent") if t is not None else None for version, t in transactions.items()}
+    assert {(sent.topic, trace_id_of(sent.envelope["traceparent"])) for sent in bus.sent} == {(LINEAGE_TOPIC, _TRACE), (CONTROL_TOPIC, _TRACE)}
+    assert {version: trace_id_of(traceparent) if traceparent else None for version, traceparent in commits.items()} == {1: _TRACE, 2: _TRACE}
+
+
 def test_a_control_event_the_bus_did_not_take_is_delivered_by_the_relay_as_the_catalog_signed_it(
     boot: Boot, bus: BusDouble, control_outbox: str, event_signer: Any
 ) -> None:
@@ -275,8 +305,9 @@ def test_a_control_event_the_bus_did_not_take_is_delivered_by_the_relay_as_the_c
     client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), _person(PERSON))
 
     bus.failing = TimeoutError("the bus did not answer")
-    assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-    staged = [json.loads(body) for _key, body in outbox.list_events(control_outbox, StorageOptions())]
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}, headers=_TRACED).status_code == 200
+    envelopes = [json.loads(body) for _key, body in outbox.list_events(control_outbox, StorageOptions())]
+    staged = [envelope["data"] for envelope in envelopes]
     bus.failing = None
     assert client.portal is not None, "the catalog's lifespan is not running, so its relay has nothing to tick with"
     tick = client.portal.call(control_relay.tick, Tick(main.app, get_settings()))
@@ -284,6 +315,9 @@ def test_a_control_event_the_bus_did_not_take_is_delivered_by_the_relay_as_the_c
     assert [(event["action"], _control_verdict(event, pair.public)) for event in staged] == [("namespace_created", (CATALOG, f"user:{PERSON}"))]
     assert [(sent.topic, sent.message_id, sent.event) for sent in bus.sent] == [(CONTROL_TOPIC, staged[0]["event_id"], staged[0])]
     assert (tick.republished, list(outbox.list_events(control_outbox, StorageOptions()))) == (1, []), tick
+    # Staged and delivered in the trace of the request that made it, not in the relay tick's own ([[XC-048]], ADR 0209).
+    assert [trace_id_of(envelope["traceparent"]) for envelope in envelopes] == [_TRACE]
+    assert [trace_id_of(sent.envelope["traceparent"]) for sent in bus.sent] == [_TRACE]
 
 
 def test_the_catalogs_readiness_shows_the_state_of_the_connection_it_publishes_on(boot: Boot, event_signer: Any) -> None:
@@ -379,6 +413,6 @@ def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(  # 
     assert (written.status_code, written.json().get("code") if written.status_code != 200 else None) == answer, written.text
     assert _version(tmp_path / "warehouse", table) == version
     assert bus.sent == [], f"a catalog without its key announced {len(bus.sent)} events"
-    staged = [json.loads(body)["action"] for _key, body in outbox.list_events(control_outbox, StorageOptions())]
+    staged = [json.loads(body)["data"]["action"] for _key, body in outbox.list_events(control_outbox, StorageOptions())]
     assert staged == [], f"a catalog without its key staged {staged} unsigned, and a staged object proves nothing about who wrote it"
     assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["bus", "namespace", "secret-store", "signing", "store"])

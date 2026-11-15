@@ -42,7 +42,7 @@ the globs safe (see the invariants).
 
 **Python packages** (1): `lakehouse` (`packages/lakehouse`, ADR 0195), the lakehouse's one library, which only its
 own services import and no client: the lance-plane app factory (`lance_app`) and what it installs (exceptions, the
-request-id middleware, logging, the probes and the drain, the body cap), the auth plane (`governed`), the naming and
+request's trace (ADR 0209), logging, the probes and the drain, the body cap), the auth plane (`governed`), the naming and
 the input and credential guards, the records, registries and governance guards, the namespace clients, the events (the
 control lane, the outbox, the OpenLineage builders), the OpenLineage emission and Ed25519 signing seam
 (`lakehouse.lineage`), and the S3 client, STS and URI seam (`lakehouse.storage`). One package, organised by module: a
@@ -80,7 +80,8 @@ own, in its own repository, whose admissions it supplies to a lakehouse install 
 max_body_bytes, request_deadline_seconds, routers=(), outer_middleware=(), inner_middleware=())` builds `catalog`,
 `lineage` and `maintenance`: routers mount at the root, config is each service's own `core/config.py::get_settings()`,
 and the factory owns the logging, the docs gate, the audit trail, the problem handlers, `/livez` + `/readyz`, and every
-layer a request passes, outermost first: the request id, the panic catcher (a native panic is a 500 problem body), the
+layer a request passes, outermost first: the request's trace (OpenTelemetry's server span, the caller's `traceparent`
+continued, ADR 0209), the panic catcher (a native panic is a 500 problem body), the
 request deadline (503 code 17, the door left to run on), the service's `outer_middleware` (the catalog's write shed and
 path reading), the body cap (413), then its `inner_middleware` (ADR 0203). The **lifespan is injectable** and
 required: each service passes its own, which builds its resources through one `AsyncExitStack`, runs every background
@@ -95,7 +96,7 @@ caller is judged from the headers before FastAPI reads a body.
 A client is an outside tool on the public API and builds its own app (owner, 2026-11-07). The lance services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns
 the boot, not the layout. A `main.py` that opens
 its own `app = FastAPI(...)` is the exception to justify, not the norm: copied boots drift, and one once lost its
-request-id layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12).
+correlation layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12).
 
 ## Hard invariants (the gotchas)
 

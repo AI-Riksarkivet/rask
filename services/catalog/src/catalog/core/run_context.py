@@ -38,6 +38,8 @@ from uuid import UUID
 from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
+from lakehouse.context import current_traceparent
+
 
 RUN_ID_HEADER: Final = "x-rask-run-id"
 JOB_NAMESPACE_HEADER: Final = "x-rask-job-namespace"
@@ -53,6 +55,11 @@ OPERATION_PROPERTY: Final = "rask.operation"
 #: The caller's Idempotency-Key, by its scope, on a keyed append's commit: the record a takeover of the key reads to find
 #: an append that landed and was never answered ([[LH-577]]). The catalog's own; no stock commit may carry it.
 IDEMPOTENCY_KEY_PROPERTY: Final = "rask.idempotency_key"
+#: The W3C ``traceparent`` of the request whose door made the commit (ADR 0209): the trace the commit's announcement is
+#: made in, read back by the reconcile that announces a commit whose announcement was lost, so the late announcement
+#: joins the request's trace. The catalog's own; a stock client's commit through ``version/create`` carries none, and
+#: its announcement is made in that request's trace.
+TRACEPARENT_PROPERTY: Final = "rask.traceparent"
 
 #: Every ``rask.*`` transaction property a stock client's commit may carry.
 PROPERTIES: Final = frozenset({RUN_ID_PROPERTY, JOB_NAMESPACE_PROPERTY, JOB_PROPERTY, INPUTS_PROPERTY, AUTHOR_PROPERTY})
@@ -146,9 +153,11 @@ def from_properties(properties: Mapping[str, str] | None) -> RunContext | None:
 
 def commit_properties(run: RunContext | None, *, author: str | None, operation: str) -> dict[str, str]:
     """The transaction properties a catalog door stamps on its commit of ``operation`` by ``author``, with ``run``'s when
-    it names one. ``author`` is ``None`` only where the catalog authenticates nobody."""
+    it names one and the trace of the request it is made in. ``author`` is ``None`` only where the catalog authenticates
+    nobody."""
     stamped = run.properties(author=author) if run is not None else ({AUTHOR_PROPERTY: author} if author is not None else {})
-    return {**stamped, OPERATION_PROPERTY: operation}
+    traceparent = current_traceparent()
+    return {**stamped, OPERATION_PROPERTY: operation, **({TRACEPARENT_PROPERTY: traceparent} if traceparent is not None else {})}
 
 
 def require_caller_authored(properties: Mapping[str, str], *, caller: str | None) -> None:

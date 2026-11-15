@@ -156,7 +156,7 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
         from lakehouse.storage_options import StorageOptions
         so = StorageOptions.from_flat(json.loads(sys.stdin.readline()))
         event_json = {event_json!r}
-        outbox.stage_event({OUTBOX_URI!r}, so, lineage_envelope(json.loads(event_json)).id, event_json)
+        outbox.stage_envelope({OUTBOX_URI!r}, so, lineage_envelope(json.loads(event_json)))
         print("STAGED", flush=True)          # the commit→publish window is now OPEN
         time.sleep(300)                       # ...and we die inside it
     """)

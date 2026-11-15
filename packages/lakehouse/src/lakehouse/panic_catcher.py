@@ -3,7 +3,7 @@
 pylance and pyarrow are native code, and pyo3 raises a Rust panic as a BaseException that is no Exception
 (:func:`lakehouse.supervision.is_panic`). Every handler the app installs catches Exceptions, so without this layer a panic
 passes them all and reaches the server, which answers a bare text 500 and logs it under its own logger, with nothing
-that names the service or carries the request's id. Installed by the app factory inside the request-id layer, this
+that names the service or carries the request's trace. Installed by the app factory inside the request's trace, this
 answers it as the problem handlers answer any other failure, logs it with its traceback under the service's logger, and
 lets the process serve the next request: one table that makes Lance panic takes down that request, not the replica
 (ADR 0203). A request to stop (a cancellation, ``SystemExit``) passes through untouched.
