@@ -42,7 +42,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 import bus
 import byo_scenario as scenario
@@ -53,6 +53,7 @@ from byo_scenario import Commit, Identity, ScenarioRun
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse import outbox
+from lakehouse.context import is_traceparent
 from lakehouse.lineage_events import event_identity
 from lakehouse.naming import uuid_of
 from lakehouse.storage_options import StorageOptions
@@ -114,20 +115,29 @@ class Parked(BaseModel):
     refused_at: datetime
 
 
+#: What a commit's `rask.traceparent` reads as when it is a well-formed W3C traceparent: the trace of the request whose
+#: door made the commit (ADR 0209), which no scenario knows before it runs. A malformed one stays as it is, and differs.
+DOOR_TRACE: Final = "<the trace of the door's request>"
+
+
 def rask_properties(properties: Mapping[str, str]) -> dict[str, Any]:
-    """The `rask.*` entries of a commit's transaction properties, `rask.inputs` decoded."""
+    """The `rask.*` entries of a commit's transaction properties, `rask.inputs` decoded and a well-formed
+    `rask.traceparent` read as :data:`DOOR_TRACE`."""
     rask: dict[str, Any] = {key: value for key, value in properties.items() if key.startswith("rask.")}
     if "rask.inputs" in rask:
         rask["rask.inputs"] = json.loads(rask["rask.inputs"])
+    if is_traceparent(rask.get("rask.traceparent")):
+        rask["rask.traceparent"] = DOOR_TRACE
     return rask
 
 
 def as_named(commits: Iterable[Commit], *, author: str) -> History:
     """What Lance holds for ``commits`` once ``author`` has committed them: each at its table, ref and version, carrying
-    the `rask.*` properties its run names and, for a commit a catalog door made, the operation the door stamps."""
+    the `rask.*` properties its run names and, for a commit a catalog door made, the operation the door stamps and the
+    trace of the request it was made in; a stock client's commit carries none."""
     return {
         (commit.table, commit.branch, commit.version): rask_properties(commit.run.transaction_properties(author=author))
-        | ({"rask.operation": commit.operation} if commit.operation is not None else {})
+        | ({"rask.operation": commit.operation, "rask.traceparent": DOOR_TRACE} if commit.operation is not None else {})
         for commit in commits
     }
 
