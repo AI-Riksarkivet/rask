@@ -302,7 +302,7 @@ data:
         [ -n "$s" ] && [ -n "$callout" ] || { echo "nk made no key pair for the signer's user" >&2; exit 1; }
         err=$(nsc add user -a AUTH -n callout -k "$callout" --allow-sub '$SYS.REQ.USER.AUTH' --deny-pub '>' --allow-pub-response 2>&1) \
           || { echo "nsc could not issue the signer's user: $err" >&2; exit 1; }
-        nsc describe user -a AUTH -n callout --raw > "$B/callout.jwt"
+        jwt=$(nsc describe user -a AUTH -n callout --raw); printf '%s' "$jwt" > "$B/callout.jwt"
         (umask 077; printf '%s' "$s" > "$B/callout.seed")
         echo "NATS user callout: minted"
       else
@@ -326,7 +326,7 @@ data:
         printf '%s' "$t" > "$B/sentinel"; echo "NATS user sentinel: kept"
       else
         err=$(nsc add user -a AUTH -n sentinel --bearer --deny-pubsub '>' 2>&1) || { echo "nsc could not issue the sentinel: $err" >&2; exit 1; }
-        nsc describe user -a AUTH -n sentinel --raw > "$B/sentinel"
+        jwt=$(nsc describe user -a AUTH -n sentinel --raw); printf '%s' "$jwt" > "$B/sentinel"
         echo "NATS user sentinel: minted"
       fi
       printf '%s' "$auth" > "$B/auth_account"
