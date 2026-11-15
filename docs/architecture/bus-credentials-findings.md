@@ -304,11 +304,26 @@ margin), and the callout runs replicated.
 
 ## 8. Not confirmed
 
-What the nats-auth lane measures against the stand-in signer is recorded with the lane. Not measured by any run, or
-measured only on one server (§ 6):
+Measured on the nats-auth lane, 2026-11-15 (three clustered nats-server 2.15.2 in operator mode with TLS on the client
+port and `handshake_first: auto`, two stand-in signers, a stand-in TokenReview, nats-py 2.16.0; 70 tests): with 20 s
+sessions a service held one client through four renewals in 65 s while it published 258 events and its lane consumed
+them, no publish retried, the longest publish wait 3.2 ms and the longest wait from acknowledgement to handling 7.6 ms,
+nothing handled twice; a session the bus ended unrenewed was replaced in-process 0.6 s after the signers returned, and
+2.4 s after when they were away across a renewal; with no signer the server refuses a connect 6.0 s after it began;
+removing one user's scoped key closed that user's sessions and left the others.
 
-- **A three-node cluster.** The § 6 measurements ran on one server. Expiry and a callout answering on a clustered, R3 bus
-  (the estate's shape) are not part of § 6.
+Measured on the dev estate the same day (helm revision 14, the fixture in operator mode, a real TokenReview): each
+session user granted, a 300 s session asked for again at 270 s and back 9 ms later, a token of another ServiceAccount,
+of another audience and no token each refused, the live events, observability, secret-scope and route suites green (17
+tests), and the development object store publishing over the fixture's CA.
+
+Not measured by any run, or measured only on one server (§ 6):
+
+- **A reload of the server's config ends every session**: the server asks its signer about each open connection again
+  with no token, and closes it on the refusal; each service opens another the same second (measured on the dev estate,
+  docs/OPERATORS.md § 7). Whether a platform's signer can answer such a re-check, so that a reload costs no session, was
+  not tried.
+- **The maintenance worker's renewal during a pass, and a session ended unrenewed, on the estate**: both are the lane's.
 - **The platform's signer.** Whether the platform runs a callout, with which NATS version and TLS, is outside this
   repository; the owner's or the platform team's to state. rask's chart declares what that signer reads (the table) and
   refuses what a real deployment must not carry (a bus that is not `tls://`); it does not prove a signer it does not run.

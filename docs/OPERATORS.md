@@ -357,9 +357,27 @@ quiesce (outboxes at depth 0); `kubectl scale statefulset/rask-nats --replicas=0
 `make k3s-up`, whose `k3s-fixtures` installs the fixture with `nats.auth.server=true` and restores the three replicas
 together (each waits for ESO's `rask-nats-auth`) and whose stream Job runs as `admin` and recreates the streams and
 their durable consumers empty; each service's own connection opens again by itself, and its consumer is pulled again once
-the stream Job has declared it. Operator mode stays on only while git declares it: `scripts/fixtures.sh nats` run by hand
+the stream Job has declared it. ON AN ESTATE WHOSE STORE HOLDS NO SIGNER YET (the first switch), the fixture's servers
+and signer wait for secrets that rask's own seed mints, so the order is: scale the bus to 0; install the fixture in
+operator mode without waiting on it (`scripts/fixtures.sh nats -- --set nats.auth.server=true`, which makes the CA and
+the TLS Secret at once and leaves the pods waiting for `rask-nats-auth`); upgrade rask, whose seed mints AUTH, the
+sentinel, the signer's user and each session user's key in place; then have ESO read them
+(`kubectl annotate externalsecret rask-nats-auth rask-nats-signer rask-nats-signer-keys force-sync=$(date +%s) --overwrite`),
+after which the three servers and the signer start and the stream Job (a post-upgrade hook) declares the streams.
+Measured on the dev estate, 2026-11-15, helm revisions 13 and 14: the bus was away 23 minutes, most of it a signer that
+could not read its own credential (497acf5d1); no service pod restarted, and each connected within a minute of the
+signer's first answer. Operator mode stays on only while git declares it: `scripts/fixtures.sh nats` run by hand
 installs with `--reset-values`, so a `--set` given on one command line is dropped by the next install, which turns
 operator mode off and restarts the bus into an empty JetStream as above.
+
+**A reload of the bus's config ends every session, and each is opened again at once.** When the server's config
+changes (a changed row re-scopes a key, so the APP account's JWT in `resolver_preload` changes and the reloader signals
+the servers), the server asks its signer about each open connection again, without the token that connection presented;
+the signer refuses (`no token presented`) and the server closes the connection. A service opens a new one in-process the
+same second (`bus_connection_ended`, then `bus_connected`); a maintenance worker ends its process and starts again (ADR
+0198). Measured on the dev estate, 2026-11-15 10:30:59 and 10:31:06 UTC, nats-server 2.15.2: every session user refused
+once per reload and connected again inside the second. ESO refreshes the fixture's Secrets hourly, so a changed row
+reaches the bus and the signer within the hour, or at once with the `force-sync` annotation above.
 
 **Revoking a service** is a change of the table: remove its row, or its `serviceAccount`, and the signer's key for it goes
 at the next reconcile (the dev seed removes the key of a user that is no session user), which closes every session that
