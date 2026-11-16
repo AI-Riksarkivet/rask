@@ -285,6 +285,11 @@ class OidcSettings:
     #: The issuer serves discovery and its keys only to a bearer from a private CA (k3s, measured 2026-10-02).
     sa_fetch_token_file: str | None = Field(default=None, alias="RASK_SA_FETCH_TOKEN_FILE")
     sa_ca_file: str | None = Field(default=None, alias="RASK_SA_CA_FILE")
+    #: The longest lifetime (`exp - iat`) a service-account token may have been minted with ([[LH-585]]). The issuer
+    #: signs whatever lifetime a TokenRequest asks for, and a token verified offline stays good after its pod and its
+    #: account are deleted, so this bounds how long. An hour is a TokenRequest's own default; a pod's projected token
+    #: is 600 s.
+    sa_max_token_seconds: int = Field(default=3600, gt=0, alias="RASK_SA_MAX_TOKEN_SECONDS")
 
     @model_validator(mode="after")
     def _validate_service_accounts(self) -> Self:

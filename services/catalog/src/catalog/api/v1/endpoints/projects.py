@@ -142,13 +142,13 @@ _ADMINS_TIMEOUT_SECONDS = 2.0
 async def _admins_for(client: OpenFgaClient | None, settings: Settings, project: str) -> list[str]:
     """The project's effective ``can_administer`` subjects via ``fga.list_users`` (#51), or ``[]``.
 
-    Degrades — never 500s: FGA off/unwired yields ``[]`` outright; an OpenFGA outage
+    Degrades on an outage: FGA off yields ``[]`` outright (on with no client wired it is the 503 every gate answers); an OpenFGA outage
     (``ServiceUnavailableError``) or a lookup blowing the per-call ``_ADMINS_TIMEOUT_SECONDS`` budget is
     logged and yields ``[]`` too, so the registry-derived facts still serve while the authz lookup is
     down or slow. The estate gate already ran fail-closed before this, so a degraded ``admins`` is a
     display gap, not an authz gap.
     """
-    if not (settings.fga_enabled and client is not None):
+    if (client := fga_deps.wired(settings, client)) is None:
         return []
     try:
         async with asyncio.timeout(_ADMINS_TIMEOUT_SECONDS):
@@ -288,7 +288,7 @@ async def establish_project(
         message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=obj, actor=actor)),
     )
     # `seed_project_admin` writes the admin's grant exactly when authorization is on and an admin is named.
-    seeds = settings.fga_enabled and author is not None and client is not None and admin is not None
+    seeds = author is not None and admin is not None and fga_deps.wired(settings, client) is not None
     admin_granted = (
         announcing.grant_announcement(
             fga.ClientTuple(user=fga.user_object(admin), relation="admin", object=obj), action="grant_added", actor=actor, extra={"reason": "project_created"}
@@ -632,10 +632,11 @@ async def delete_project(
             recorded by then is finished by a retry.
     """
     so = settings.storage_options()
+    # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
+    authz = fga_deps.wired(settings, client)
     if record.get(project_registry.DELETING_BY) is None:
         await _start_delete(project_id, record, settings, token, force=force)
     actor = f"user:{token.subject}" if token is not None else None
-    authz = client if settings.fga_enabled else None
     obj = f"project:{project_id}"
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(

@@ -178,7 +178,8 @@ fi
 # authenticates whatever namespace it runs in, and what it may do is the tuples that name it.
 SA_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_SA_AUDIENCE")].value}' 2>/dev/null || true)"
 if [ -n "$SA_AUDIENCE" ]; then
-  minted="$(kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h)" \
+  # An hour: the longest lifetime a door admits (`auth.serviceAccountMaxTokenSeconds`).
+  minted="$(kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 1h)" \
     || fail "could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"
   keep service-token "$minted"
 fi

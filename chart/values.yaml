@@ -417,6 +417,11 @@ auth:
   # templates/openfga-authn.yaml refuses a render where the two differ.
   # -- The Kubernetes ServiceAccount token issuer every door verifies service tokens against (RASK_SA_ISSUER); must equal OpenFGA's issuer alias or the render fails.
   serviceAccountIssuer: &serviceAccountIssuer https://kubernetes.default.svc.cluster.local
+  # A door verifies a service token offline, so a token outlives its pod and its account by whatever lifetime it was
+  # minted with, and the issuer signs any lifetime a TokenRequest asks for. A token minted for longer than this is
+  # refused whatever is left of it. An hour is a TokenRequest's own default; the chart's pods project 600 s.
+  # -- The longest lifetime, in seconds, a ServiceAccount token presented at a door may have been minted with (RASK_SA_MAX_TOKEN_SECONDS).
+  serviceAccountMaxTokenSeconds: 3600 # @schema type: integer; minimum: 1
   # THE ISSUER MIRROR ([[XC-077]], [[XC-083]]): templates/issuer-mirror.yaml republishes this issuer's discovery
   # document and key set, unauthenticated, at http://<release>-issuer-mirror:8080 for a verifier that fetches them with
   # no credential. Two verifiers do. OpenFGA v1.18.3 fetches `<issuer>/.well-known/openid-configuration` and its

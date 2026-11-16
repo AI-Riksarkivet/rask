@@ -79,7 +79,7 @@ class _Converger:
     ) -> None:
         self._request = request
         self._settings = settings
-        self._client = client if settings.fga_enabled else None
+        self._client = fga_deps.wired(settings, client)
         self._control = control
         self._announcer = announcer
         self._vendor = vendor

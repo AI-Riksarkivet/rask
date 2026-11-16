@@ -1,6 +1,6 @@
 # 0083. A service is the ServiceAccount its projected token names (LH-220, D1, 2026-10-02)
 
-**Status:** accepted, reopened by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) (no door bounds a token's lifetime).
+**Status:** accepted, amended 2026-11-16 (LH-585): each door refuses a token minted for longer than `auth.serviceAccountMaxTokenSeconds` (an hour), which closes the gap [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) reopened it for.
 
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the 660 s bound holds only for a token the kubelet projects; a door checks no ceiling on `exp - iat`, so a token minted for a rask audience with a long duration outlives its pod and its account.
 
@@ -28,3 +28,18 @@ Read back live on helm rev 262: the claimed name answers 401. The producer's own
 while an unlisted account and a wrong-audience token are refused. The catalog may read only its own signing key.
 A service token cannot terminate another tenant's stage. The cascade ran to gold with every hop authenticated by
 token.
+
+## Amendment, 2026-11-16 (LH-585): a door bounds the lifetime a token was minted with
+
+The 660 s above held only for a token a pod projects. The issuer signs whatever lifetime a TokenRequest asks for
+(`kubectl create token --duration 8760h`), and offline verification cannot tell that the token's pod or account is
+gone, so such a token stayed good at a door for a year. Each door now refuses a token whose `exp - iat` is more than
+`RASK_SA_MAX_TOKEN_SECONDS` (chart `auth.serviceAccountMaxTokenSeconds`, 3600, a TokenRequest's own default), whatever
+is left of it, and logs the account and the lifetime. A deleted account's token is therefore good for at most an hour,
+and a pod's for the 660 s above.
+
+Considered and not taken: TokenReview on every request, which asks the API server per call and makes it a dependency of
+every door, the reason this ADR verifies offline; and requiring a pod-bound token (the `kubernetes.io` claim's `pod`),
+which a client running outside the cluster cannot present (its token is minted by TokenRequest for its account,
+`Lakehouse.ServiceAccountToken`). A cluster may set its own ceiling too (`--service-account-max-token-expiration`), which
+is the platform's.

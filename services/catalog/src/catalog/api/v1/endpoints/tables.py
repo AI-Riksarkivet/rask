@@ -825,7 +825,7 @@ async def drop_table(
         # that caller (found by driving the deployed catalog, not by a unit test — the unit tests run FGA
         # off). The grants die with the bytes instead: at purge, or when the sweep's expiry reclaims it.
         if not trashed:
-            await fga_deps.revoke_ownership(client, settings, obj=fga.table_object(table_uuid), token=token)
+            await fga_deps.revoke_ownership(client, settings, obj=fga.table_object(table_uuid), token=token, origin="lifecycle_delete")
         await filing.send(dropped_event)
     await converge.remember(200, response)
     return response
@@ -1009,7 +1009,7 @@ async def deregister_table(
         # BEFORE the revoke: on the http transport the caller's bearer authorizes ingest against their (still-live) write
         # grant — revoking first would 403 the very marker this endpoint exists to record.
         await filing.send(detached)
-        await fga_deps.revoke_ownership(client, settings, obj=fga.table_object(table_uuid), token=token)
+        await fga_deps.revoke_ownership(client, settings, obj=fga.table_object(table_uuid), token=token, origin="lifecycle_delete")
         await filing.send(detached_event)
     await converge.remember(200, response)
     return response

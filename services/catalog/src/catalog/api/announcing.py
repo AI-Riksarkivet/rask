@@ -20,6 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
+from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, ObjectUuidsDep, Resolver, ResolverDep, SettingsDep, originator_hint
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, UuidReader, emit_write_event
@@ -370,7 +371,7 @@ def get_announcer(
     emitter: LineageEmitter | None = getattr(request.app.state, "lineage_emitter", None)
     return Announcer(
         settings,
-        client=client if settings.fga_enabled else None,
+        client=fga_deps.wired(settings, client),
         resolver=resolver,
         control=control,
         lineage=emitter if emitter is not None else NoopEmitter(),

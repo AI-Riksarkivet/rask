@@ -1,7 +1,10 @@
 """A service is the Kubernetes service account its projected token names ([[LH-220]], ADR 0156 C5).
 
 A door verifies the token offline against the cluster issuer's key set (`OIDCVerifier`, carrying the fetch
-credential and CA that issuer demands): signature, issuer, the door's audience and expiry. Any token that verifies is
+credential and CA that issuer demands): signature, issuer, the door's audience, expiry, and the lifetime it was
+minted with. The issuer signs any lifetime a TokenRequest asks for, and nothing offline tells that a token's pod or
+account is gone, so a token minted for longer than the door admits (`max_lifetime`) is refused however much of that
+lifetime is left ([[LH-585]]): a deleted account's token is good for at most that long. Any token that verifies is
 the principal `kubernetes~<sub>` (`lakehouse.governed.principal`), where the token's `sub` is the account's full
 username, `system:serviceaccount:<ns>:<sa>`, the name the API server gives the account, so it names one account.
 No list of accounts stands in front of the door: an account in any namespace authenticates, and what it may do is
@@ -15,6 +18,7 @@ ten minutes.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import jwt
@@ -25,6 +29,8 @@ from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, SERVICE_ACCOUNT_IDP, Principal
 
+
+log = logging.getLogger(__name__)
 
 #: The username prefix the Kubernetes API server gives every service account (`system:serviceaccount:<ns>:<sa>`).
 _ACCOUNT_PREFIX = "system:serviceaccount:"
@@ -84,8 +90,10 @@ class ServiceAccountVerifier:
         leeway: int,
         fetch_token_file: str | None,
         ca_file: str | None,
+        max_lifetime: int,
     ) -> None:
         self.issuer = issuer.rstrip("/")
+        self._max_lifetime = max_lifetime
         self._oidc = OIDCVerifier(self.issuer, audience, cache_ttl, leeway=leeway, fetch_token_file=fetch_token_file, ca_file=ca_file)
 
     def issued(self, token: str) -> bool:
@@ -106,7 +114,12 @@ class ServiceAccountVerifier:
 
     def verify(self, token: str) -> ServicePrincipal:
         """The principal the token proves; `UnauthenticatedError` for a token at fault, `ProviderUnavailableError` for the issuer."""
-        return ServicePrincipal.for_account(self._oidc.verify(token).sub)
+        claims = self._oidc.verify(token)
+        if (lifetime := claims.exp - claims.iat) > self._max_lifetime:
+            # The caller is told what every refused token is told; the operator, which account and by how much.
+            log.warning("service_account_token_minted_too_long", extra={"account": claims.sub, "lifetime_seconds": lifetime, "max_seconds": self._max_lifetime})
+            raise UnauthenticatedError("Invalid or expired token")
+        return ServicePrincipal.for_account(claims.sub)
 
 
 class IdentityTokenUnavailableError(ServiceUnavailableError):

@@ -19,6 +19,7 @@ from catalog.api import fga_deps
 from catalog.core.config import Settings
 from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 
@@ -96,8 +97,22 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     }
 
 
+_PERSON = PersonPrincipal(
+    principal=Principal(idp_id="dex", subject="alice"),
+    claims=IDToken.model_validate({"sub": "alice", "iss": "https://dex", "aud": "rask", "iat": 0, "exp": 1}),
+)
+_MACHINE = ServicePrincipal.for_account("system:serviceaccount:etl:loader")
+
+
 @pytest.mark.asyncio
-async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("creator", "owners"),
+    [
+        pytest.param(_PERSON, [("user:dex~alice", "owner", "warehouse:wh1")], id="a-person-owns-the-warehouse-they-create"),
+        pytest.param(_MACHINE, [], id="a-machine-owns-nothing-its-project-administers-what-it-creates"),
+    ],
+)
+async def test_creating_a_warehouse_grants_it(monkeypatch, creator: PersonPrincipal | ServicePrincipal, owners: list[tuple[str, str, str]]) -> None:
     """A warehouse is maintainable the moment it exists, or its tenant's data is never compacted.
 
     [[LH-165]]. `warehouse.maintenance` has no `from parent`, so the sweep reaches a tenant's tables
@@ -106,18 +121,19 @@ async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
     maintained. It rides in `cascade_tuples`, which the create door and `converge_warehouse_grants` share,
     so the two populations of warehouse cannot differ. Measured 2026-09-15 on the live estate: the 4 of
     97 warehouses without the tuple were the 4 newest, every one created after the hand-written grants.
+
+    Only a person is made the owner ([[LH-433]], [[LH-585]]): a machine that creates a warehouse holds nothing on it by
+    creating it, as with a table or a project, and its project's admins own it through the project edge.
     """
     settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
-    token = PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice"),
-        claims=IDToken.model_validate({"sub": "alice", "iss": "https://dex", "aud": "rask", "iat": 0, "exp": 1}),
-    )
 
     seen = await _captured_tuples(
-        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, token, warehouse_id="wh1", project="acme"),
+        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, creator, warehouse_id="wh1", project="acme"),
         monkeypatch,
     )
 
-    assert ("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-maintenance", "maintenance", "warehouse:wh1") in [
-        (t.user, t.relation, t.object) for t in seen
+    assert [(t.user, t.relation, t.object) for t in seen] == [
+        *owners,
+        ("project:acme", "project", "warehouse:wh1"),
+        ("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-maintenance", "maintenance", "warehouse:wh1"),
     ]

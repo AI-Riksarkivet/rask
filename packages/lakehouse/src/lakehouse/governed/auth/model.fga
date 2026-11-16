@@ -536,6 +536,8 @@ type namespace
     # at the same tier as the `can_delete` it guards. See `type table`'s `can_set_protection` for why a
     # distinct action at an identical tier costs nobody a permission and buys back the audit trail.
     define can_set_protection: owner_effective
+    # Reading that flag: the table rung's twin.
+    define can_get_protection: owner_effective
     # Attaching or removing a label the project defines (ADR 0211): the table rung's twin. A label grants nothing.
     define can_label: owner_effective
     # ---- grant actions ---- (same shape as `warehouse`; see there for the reasoning)
@@ -647,6 +649,10 @@ type table
     # then lack", which is true of a GRANTABLE relation and false of a computed userset over `owner`.
     # This one is computed, so every owner already holds it the moment it exists.
     define can_set_protection: owner_effective
+    # Reading that flag, and who armed it, is the owner's too (the observer of a safety is whoever might trip it), on a
+    # relation of its own for the reason above: the trail records the relation, so a read asked on
+    # `can_set_protection` is recorded as an arming ([[LH-585]]).
+    define can_get_protection: owner_effective
     # Attaching or removing a label the project defines (ADR 0211). A label grants nothing and refuses nothing, so
     # classifying the table is the owner's statement about it, at the protection's tier and under its own name.
     define can_label: owner_effective

@@ -46,4 +46,4 @@ def _maintenance_suffixes() -> list[str]:
 @pytest.mark.parametrize("suffix", _maintenance_suffixes())
 def test_a_maintenance_verb_clears_the_owner_bar_and_a_maintainer_door_the_maintainer_rung(suffix: str) -> None:
     """Asserted through the resolver, not the dict: the mapping is only load-bearing if it is consulted."""
-    assert _action_relation("table", suffix) == MAINTAINER_DOORS.get(suffix, OWNER_RELATION)
+    assert _action_relation("table", suffix, method="POST") == MAINTAINER_DOORS.get(suffix, OWNER_RELATION)

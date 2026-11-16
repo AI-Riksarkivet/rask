@@ -22,7 +22,7 @@ from catalog.api.fga_deps import _action_relation, _suffix
 def test_erasure_clears_the_OWNER_rung() -> None:
     """It removes a subject from every ref, drops the tags pinning the versions that held them, and
     reclaims history. `can_drop` is the highest rung there is."""
-    assert _action_relation("table", "erasure") == "can_drop"
+    assert _action_relation("table", "erasure", method="POST") == "can_drop"
 
 
 def test_a_suffix_the_parser_cannot_strip_is_refused() -> None:
@@ -34,4 +34,4 @@ def test_a_suffix_the_parser_cannot_strip_is_refused() -> None:
     `test_a_door_the_router_leaves_open_decides_for_itself.py` drives."""
     assert _suffix("/some/other/mount/table/x/erasure", "table", "x") == ""
     with pytest.raises(InternalError, match="declares no rung"):
-        _action_relation("table", "")
+        _action_relation("table", "", method="POST")

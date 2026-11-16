@@ -6,6 +6,19 @@ One entry per change to `model.fga` that a store holding tuples has to know abou
 whether the change writes new tuples into a store. When both are `FALSE`, deploying the model is the whole migration:
 `write_model.py` writes it, and every tuple in the store keeps its name and is read by the new model as it stands.
 
+## 2026-11-16: reading an object's deletion protection has its own verb
+
+```text
+MODIFIES_TUPLES: FALSE
+ADDS_TUPLES:     FALSE
+```
+
+Row LH-585 (#813).
+
+- **Added:** `table#can_get_protection` and `namespace#can_get_protection`, each `owner_effective`: the verb `GET
+  …/protection` asks. It was asked on `can_set_protection`, so the audit trail, which records the relation, read an
+  owner's look at the flag as an arming. Computed, so every owner holds it and no tuple is written.
+
 ## 2026-11-16: publication goes; a tagger tags, and a table's owner sets its contract
 
 ```text

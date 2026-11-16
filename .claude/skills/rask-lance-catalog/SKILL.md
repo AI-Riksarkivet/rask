@@ -262,6 +262,10 @@ Two contracts stack here, and confusing them is how bugs happen:
   warehouse's, the catalog's boot the estate's. Names in each root's `__manifest` are therefore full ids
   (`acme$bronze$t`). Names are unique per warehouse, and two warehouses may hold the same names. Pinned by
   `tests/integration/test_warehouse_routing.py`.
+- **A service-account token is refused when it was minted for longer than an hour** (`RASK_SA_MAX_TOKEN_SECONDS`,
+  chart `auth.serviceAccountMaxTokenSeconds`, ADR 0083's amendment, [[LH-585]]): the door verifies offline, so the
+  lifetime a token was minted with is how long it outlives its pod and account. A batch names at most 100 tables
+  (`fga_deps.MOST_TABLES_IN_A_BATCH`, 400 at the shape rung).
 - **Identity headers:** `api_key` → `x-api-key`, `auth_token` → `Authorization: Bearer`; arbitrary
   context maps BOTH WAYS through a `header.<name>` context KEY — `{"header.x-trace-id": "abc"}` is
   sent as `x-trace-id: abc` (prefix stripped) and every response header returns as `header.<name>`
@@ -715,7 +719,8 @@ governing their data. The project-scoped surface is the console's project page, 
   toggling never creates a table version, and the guard answers even for a corrupted dataset. Set
   via `POST /management/v1/table/{id}/protection` / `/management/v1/namespace/{id}/protection`,
   owner-gated (`protection` maps to `can_set_protection`, the owner rung under its own audit name, in
-  `_OWNER_SUFFIX_RELATION`). A route suffix no rung map declares is REFUSED for every caller rather
+  `_OWNER_SUFFIX_RELATION`; the `GET` at the same path asks `can_get_protection`, the owner's too, so the trail never
+  records a read as an arming: `_READ_AT_A_SET_DOOR`, [[LH-585]]). A route suffix no rung map declares is REFUSED for every caller rather
   than defaulted to a rung — `InternalError` (code 18, 500), audited and logged at ERROR with the path,
   because only a route shipped without its rung reaches it — so a new door ships with its entry in
   `_OWNER_SUFFIX_RELATION` or `_WRITER_SUFFIX_RELATION` (or a trailing word in
@@ -993,7 +998,7 @@ governing their data. The project-scoped surface is the console's project page, 
   recorded only from its first commit through the catalog.
   **Each vend is a session of its own** ([[XC-083]], ADR 0170): the catalog exchanges its OWN projected ServiceAccount
   token through STS `AssumeRoleWithWebIdentity` with that session policy, named for the verified caller
-  (`vending.role_session_name`), and a refused or unanswered exchange answers 503 code 17 (`vending.vend_or_refuse`).
+  (`vending.role_session_name`: the subject made readable, ending with a digest of it, so two callers never share a name), and a refused or unanswered exchange answers 503 code 17 (`vending.vend_or_refuse`).
   The catalog holds no store key: its own IO signs with an hour's session of the same token, renewed at half life
   (`lakehouse.store_session`), so a running catalog never needs a restart for its credential.
   **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):

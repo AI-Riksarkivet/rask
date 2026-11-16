@@ -35,6 +35,7 @@ from fastapi import APIRouter
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
+from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
@@ -107,10 +108,9 @@ async def get_me(settings: SettingsDep, token: CurrentToken, client: FgaClientDe
     if token is None:
         raise UnauthenticatedError("authentication required")
     name, email = _claim(token, "name"), _claim(token, "email")
-    if not (settings.fga_enabled and client is not None):
+    if (client := fga_deps.wired(settings, client)) is None:
         # Dev parity (FGA off): every require_* gate is a no-op, so the caller effectively holds full
-        # standing — say so honestly rather than painting a locked-down shell over an open catalog. (The
-        # enabled-but-unwired client case never reaches here: the router-wide authorize 503s it first.)
+        # standing — say so honestly rather than painting a locked-down shell over an open catalog.
         return MeResponse(sub=token.subject, name=name, email=email, estate_admin=True, can_create_project=True, projects=[])
     # One shared deadline across the four sequential lookups — admin BEFORE member, so the stronger
     # role wins the dedupe below and a budget expiry costs the weaker list first.

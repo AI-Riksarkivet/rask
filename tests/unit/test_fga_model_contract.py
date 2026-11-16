@@ -124,11 +124,12 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     # suffix but `my-permissions`.
     for fga_type in set(fga_deps._FGA_TYPE.values()) - {"classification"}:
         for suffix in suffixes:
-            try:
-                relation = fga_deps._action_relation(fga_type, suffix)
-            except InternalError:
-                continue
-            pairs.add((fga_type, relation))
+            for method in ("POST", "GET"):
+                try:
+                    relation = fga_deps._action_relation(fga_type, suffix, method=method)
+                except InternalError:
+                    continue
+                pairs.add((fga_type, relation))
 
     # 2. Create-on-parent: the parent of a child nested in a namespace is that namespace, and the parent of a namespace
     #    directly in a warehouse is the warehouse, which the resolver governs a one-segment namespace name as — so each
@@ -223,8 +224,8 @@ def test_access_disclosure_routes_are_owner_tier() -> None:
     from catalog.api.fga_deps import _action_relation
 
     for suffix in ("access/list", "access/check", "access/graph"):
-        assert _action_relation("table", suffix) == "can_drop", suffix
-        assert _action_relation("namespace", suffix) == "can_delete", suffix
+        assert _action_relation("table", suffix, method="POST") == "can_drop", suffix
+        assert _action_relation("namespace", suffix, method="POST") == "can_delete", suffix
 
 
 @pytest.mark.parametrize("suffix", ["branches/delete", "tags/delete"])
@@ -245,10 +246,10 @@ def test_a_destructive_door_is_owner_tier(suffix: str) -> None:
     """
     from catalog.api.fga_deps import _action_relation
 
-    relation = _action_relation("table", suffix)
+    relation = _action_relation("table", suffix, method="POST")
 
     assert relation == "can_drop", f"{suffix!r} resolved to {relation!r}: a destructive door clears the owner bar, never the writer rung"
-    assert relation == _action_relation("table", "maintenance/run"), (
+    assert relation == _action_relation("table", "maintenance/run", method="POST"), (
         f"{suffix!r} is gated below the tag-respecting reclamation: the unguarded door must not be the cheaper one"
     )
 
@@ -269,7 +270,7 @@ def test_every_DATA_READ_door_is_gated_as_a_READ() -> None:
 
     assert "changes" in _DATA_READ_ACTIONS, "the change feed is the most disclosing read a table has"
     for action in _DATA_READ_ACTIONS:
-        assert _action_relation("table", action) == "can_read_data", action
+        assert _action_relation("table", action, method="POST") == "can_read_data", action
 
     # `history`'s endpoint runs its own `require_can_get_metadata`, a check that runs SECOND: any higher
     # rung the router asks first leaves it reachable only by callers who already cleared that bar.
@@ -277,7 +278,7 @@ def test_every_DATA_READ_door_is_gated_as_a_READ() -> None:
     # `can_get_metadata ALLOW`, in that order.
     assert "history" in _META_READ_ACTIONS, "a commit log is metadata about the data, not a write"
     for action in _META_READ_ACTIONS:
-        assert _action_relation("table", action) == "can_get_metadata", action
+        assert _action_relation("table", action, method="POST") == "can_get_metadata", action
 
 
 def _types_served_by(suffix: str) -> set[str]:

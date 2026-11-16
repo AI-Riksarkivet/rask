@@ -12,9 +12,10 @@ tenant that loses it is one nobody can administer, grant on, or delete. Until no
 detect that and not recover from it, and "the tuple estate cannot be rebuilt after a loss" is a
 resilience gap rather than a missing convenience.
 
-**STRUCTURE IS REBUILT; A PERMISSION IS NEVER RE-GRANTED.** The rebuild writes the parent/child edges between
-the estate, projects, warehouses, namespaces, tables and roles, and leaves ownership tuples, grants, role assignments,
-the estate administrator's tuples and the model's own bookkeeping alone.
+**STRUCTURE IS REBUILT; A PERMISSION IS NEVER RE-GRANTED.** The rebuild writes one kind of edge, a warehouse's
+tenancy pointer to its project, and leaves ownership tuples, grants, role assignments, the estate administrator's
+tuples and the model's own bookkeeping alone. A namespace's or a table's ``parent`` and ``child`` edges are not
+rebuilt: one that lost them is found by no listing and repaired by nothing here ([[LH-585]]).
 
 THE REASON IT IS THE RIGHT LINE: **the registry does not record REVOCATION.** A project record carries ``created_by`` — 93 of 93, measured on the live
 control root 2026-09-19 — but that field says who created the tenant, not who may administer it today.

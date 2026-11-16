@@ -56,7 +56,7 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
 
 def test_a_reader_keeps_a_renamed_table_and_holds_nothing_on_one_created_again_under_its_name(estate: Any, caplog: pytest.LogCaptureFixture) -> None:  # noqa: ANN401
     """The refusal is recorded twice: who was refused on the audit trail, and what was refused on the catalog's own log,
-    which names no subject."""
+    which names no subject. The drop's revokes are recorded as a deletion's, never as a create taking its grants back."""
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     caplog.set_level(logging.INFO, logger=_GATE_LOGGER)
     held = estate.store.tuples()
@@ -72,6 +72,8 @@ def test_a_reader_keeps_a_renamed_table_and_holds_nothing_on_one_created_again_u
     denied = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__["audit.outcome"] == "deny"]
     said = [r.__dict__ for r in caplog.records if r.name == _GATE_LOGGER and r.getMessage() == "access_denied"]
     assert ({r["audit.subject"] for r in denied}, len(said) >= 1, [r for r in said if "dex~bob" in repr(r)]) == ({"dex~bob"}, True, [])
+    revoked = {r.__dict__["audit.origin"] for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__["audit.action"] == "access_tuple_delete"}
+    assert revoked == {"lifecycle_delete"}
 
 
 def test_every_tuple_a_create_writes_names_the_objects_uuid(estate: Any) -> None:  # noqa: ANN401
@@ -103,3 +105,29 @@ def test_a_table_whose_name_holds_a_space_is_created_and_described(estate: Any) 
 
     described = _ok(estate, "/v1/table/lance_catalog$db$sp ace/describe", json={})
     assert (estate.person("alice"), "owner", f"table:{described['properties']['rask.uuid']}") in estate.store.tuples()
+
+
+def test_a_check_openfga_does_not_answer_is_recorded_and_refuses_the_request(
+    estate: Any,  # noqa: ANN401
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An outage is the deployment's, and the trail says so: one `failure` record naming the relation, never a silence
+    and never a denial against the caller ([[LH-585]])."""
+    from lance_namespace import ServiceUnavailableError
+
+    from lakehouse.governed import fga
+
+    async def unanswered(_client: Any, *, user: str, relation: str, obj: str) -> bool:  # noqa: ANN401, ARG001 — the SDK's client
+        raise ServiceUnavailableError("authorization service unavailable")
+
+    monkeypatch.setattr(fga, "check", unanswered)
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+
+    refused = estate.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=estate.bearer("alice"))
+
+    assert refused.status_code == 503, refused.text
+    failures = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__["audit.outcome"] == "failure"]
+    assert [(r["audit.action"], r["audit.relation"], r["audit.subject"], r["audit.reason"]) for r in failures] == [
+        ("authz", "can_get_metadata", "dex~alice", "authz_unavailable")
+    ]

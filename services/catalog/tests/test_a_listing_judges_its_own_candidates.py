@@ -15,6 +15,7 @@ Every decision is the real model's, on a store of this test's own ([[LH-235]]).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from lance_namespace import RegisterTableRequest, connect
 from catalog.core.config import get_settings
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.audit import AUDIT_LOGGER
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
@@ -54,12 +56,17 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
     return governed_catalog
 
 
-def test_a_page_counts_only_the_tables_the_caller_can_read(estate: Any) -> None:  # noqa: ANN401
+def test_a_page_counts_only_the_tables_the_caller_can_read(estate: Any, caplog: pytest.LogCaptureFixture) -> None:  # noqa: ANN401
+    """Each page leaves one record of how many candidates it judged for the caller and how many it served, so a listing
+    that hid a table from someone is on the trail, though it names none of what it hid."""
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     # bob reaches 1,500 tables elsewhere, so the pages hold all of a, b and c only if the listing judged its own candidates.
     first = _ok(estate, "/v1/namespace/lance_catalog$db/table/list", caller="bob", params={"limit": 2})
     rest = _ok(estate, "/v1/namespace/lance_catalog$db/table/list", caller="bob", params={"limit": 2, "page_token": first.get("page_token") or ""})
 
     assert (first["tables"], first.get("page_token"), rest["tables"], rest.get("page_token")) == (["a", "b"], "b", ["c"], None)
+    pages = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__["audit.action"] == "authz_listing"]
+    assert [(r["audit.subject"], r["audit.judged"], r["audit.served"]) for r in pages] == [("dex~bob", 2, 2), ("dex~bob", 2, 1)]
 
 
 def test_a_table_no_uuid_identifies_is_left_out_of_the_estate_listing_for_every_caller(estate: Any, tmp_path: Path) -> None:  # noqa: ANN401

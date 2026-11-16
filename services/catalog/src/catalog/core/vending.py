@@ -27,6 +27,7 @@ OpenFGA decides the tier: ``can_read_data`` -> ``"read"``, ``can_write_data`` ->
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -356,15 +357,22 @@ _SESSION_NAME_UNSAFE: Final = re.compile(r"[^A-Za-z0-9_+=,.@-]")
 _SESSION_NAME_MAX: Final = 64
 
 
-def role_session_name(subject: str) -> str:
-    """The STS session name a vend for ``subject`` carries: the subject, each character AWS refuses turned to ``-``.
+#: How many hex characters of the subject's SHA-256 end its session name.
+_SESSION_NAME_DIGEST: Final = 8
 
-    The name is what AWS's CloudTrail records a vended session under, so a session reads as the person or service
-    it was vended for (`kubernetes~system:serviceaccount:rask:rask-sa-maintenance` becomes
-    `kubernetes-system-serviceaccount-rask-rask-sa-maintenance`). Longer than 64 characters, it is cut; shorter than
-    the two AWS requires, it is padded with ``-``.
+
+def role_session_name(subject: str) -> str:
+    """The STS session name a vend for ``subject`` carries, which names one subject and no other.
+
+    The name is what the store's own trail (AWS's CloudTrail) records a vended session under, so it reads as the person
+    or service it was vended for: the subject, each character the store refuses turned to ``-`` and cut to fit. Two
+    subjects can read alike after that (``a:b`` and ``a/b``, or two long accounts differing past the cut), so every
+    name ends with the first :data:`_SESSION_NAME_DIGEST` hex characters of its subject's SHA-256:
+    `kubernetes~system:serviceaccount:rask:rask-sa-maintenance` becomes
+    `kubernetes-system-serviceaccount-rask-rask-sa-maintenan-af1838a2`.
     """
-    return _SESSION_NAME_UNSAFE.sub("-", subject)[:_SESSION_NAME_MAX].ljust(2, "-")
+    readable = _SESSION_NAME_UNSAFE.sub("-", subject)[: _SESSION_NAME_MAX - _SESSION_NAME_DIGEST - 1]
+    return f"{readable}-{hashlib.sha256(subject.encode()).hexdigest()[:_SESSION_NAME_DIGEST]}"
 
 
 #: What IAM reads as syntax inside a Resource ARN and an ``s3:prefix`` condition, not as a character of the value. ``*``

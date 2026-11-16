@@ -118,6 +118,8 @@ class _GovernedSettings(_DeciderSettings, Protocol):
     @property
     def sa_ca_file(self) -> str | None: ...
     @property
+    def sa_max_token_seconds(self) -> int: ...
+    @property
     def oidc_cache_ttl(self) -> int: ...
     @property
     def oidc_leeway(self) -> int: ...
@@ -280,6 +282,7 @@ async def attach_auth(
                 leeway=settings.oidc_leeway,
                 fetch_token_file=settings.sa_fetch_token_file,
                 ca_file=settings.sa_ca_file,
+                max_lifetime=settings.sa_max_token_seconds,
             )
             # Proved at boot, off the loop, reported and never fatal: the Dex verifier's reasons above.
             failures = await run_in_threadpool(app.state.sa_oidc.refresh)

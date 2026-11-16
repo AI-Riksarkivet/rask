@@ -50,6 +50,7 @@ class _Settings(BaseModel):
     sa_audience: str | None = None
     sa_fetch_token_file: str | None = None
     sa_ca_file: str | None = None
+    sa_max_token_seconds: int = 3600
     fga_enabled: bool = True
     fga_api_url: str = "http://fga.test:8080"
     fga_store_id: str | None = None

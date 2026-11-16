@@ -732,7 +732,7 @@ async def _read_managed_access(client: OpenFgaClient | None, settings: Settings,
     asking "is this managed?" wants an answer it can render.
     """
     segments = parse_identifier(id)
-    if not settings.fga_enabled or client is None:
+    if (client := fga_deps.wired(settings, client)) is None:
         return ManagedAccessResponse(object=f"{fga_type}:{fga.canonical_object_id(segments)}", managed_access=False)
     obj, name = await _target(resolver, fga_type, segments)
     tuples = await fga.read_object_tuples(client, obj)

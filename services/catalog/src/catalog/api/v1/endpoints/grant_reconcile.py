@@ -46,7 +46,7 @@ async def grant_census(settings: SettingsDep, client: FgaClientDep) -> GrantCens
     ``enabled`` is false when authorization is off in the catalog, which a drift report reads as nothing to check rather
     than as an estate holding no grants.
     """
-    if not (settings.fga_enabled and client is not None):
+    if (client := fga_deps.wired(settings, client)) is None:
         return GrantCensusResponse(enabled=False)
     counted = await fga.census(client, exclude=grant_reconcile.platform_objects(settings))
     return GrantCensusResponse(enabled=True, counts_by_type=counted.counts_by_type, truncated=counted.truncated)

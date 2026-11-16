@@ -90,7 +90,7 @@ async def list_members(project_id: ProjectId, client: FgaClientDep, settings: Se
     """
     obj = f"project:{project_id}"
     await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=obj)
-    if not settings.fga_enabled or client is None:
+    if (client := fga_deps.wired(settings, client)) is None:
         # Authz off (local dev): there are no tuples, and an empty list is the honest answer. Inventing
         # names here would put people in front of someone who never granted them.
         return MemberList(members=[])

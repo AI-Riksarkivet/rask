@@ -76,9 +76,9 @@ def get_table_owners(client: FgaClientDep, settings: SettingsDep) -> TableOwners
     container above it), or nobody when authorization is off: there is then no owner to tell."""
 
     async def _owners(object_id: str) -> list[str]:
-        if not settings.fga_enabled or client is None:
+        if (wired := fga_deps.wired(settings, client)) is None:
             return []
-        return await fga.list_users(client, relation="owner_effective", obj=object_id, qualified=True)
+        return await fga.list_users(wired, relation="owner_effective", obj=object_id, qualified=True)
 
     return _owners
 

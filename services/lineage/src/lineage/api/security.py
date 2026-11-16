@@ -24,16 +24,13 @@ from __future__ import annotations
 
 from typing import Annotated, Protocol, cast
 
-import jwt
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from lakehouse.admission import admitted_caller, caller_judge
-from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
-from lakehouse.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
-from lakehouse.governed.oidc import ProviderUnavailableError
+from lakehouse.governed.door_caller import caller_of
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.machine_identity import ServicePrincipal
 from lineage.api.dependencies import SettingsDep
 from lineage.core.config import LineageSettings, get_settings
 
@@ -55,40 +52,6 @@ class Caller(Protocol):
     def subject(self) -> str: ...
 
 
-def _service_account_issued(token: str, settings: LineageSettings, verifier: ServiceAccountVerifier | None) -> bool:
-    """Whether the bearer claims the service-account issuer: the routing question, asked before any signature check.
-
-    With the verifier absent the configured issuer still answers it, so a service-account token reaching a door whose
-    verifier failed to build is refused as an outage rather than handed to the IdP's verifier.
-    """
-    if verifier is not None:
-        return verifier.issued(token)
-    if not settings.sa_issuer:
-        return False
-    try:
-        claimed = jwt.decode(token, options={"verify_signature": False}).get("iss")
-    except jwt.PyJWTError:
-        return False
-    return isinstance(claimed, str) and claimed.rstrip("/") == settings.sa_issuer.rstrip("/")
-
-
-def _service_account(token: str, verifier: ServiceAccountVerifier | None) -> ServicePrincipal:
-    """The service a projected token proves, rendered in the door's problem vocabulary."""
-    if verifier is None:
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
-        raise ServiceUnavailableError("Authentication is enabled but unavailable")
-    try:
-        principal = verifier.verify(token)
-    except ProviderUnavailableError as exc:
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
-        raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
-    except UnauthenticatedError:
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
-        raise
-    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=principal.subject)
-    return principal
-
-
 def authenticate(
     request: Request,
     settings: SettingsDep,
@@ -106,23 +69,8 @@ def authenticate(
 
 
 def _authenticated(request: Request, settings: LineageSettings, bearer: str | None) -> Caller | None:
-    """The caller ``bearer`` proves, or ``None`` with OIDC off."""
-    if not settings.oidc_enabled:
-        return None
-    sa_verifier: ServiceAccountVerifier | None = getattr(request.app.state, "sa_oidc", None)
-    if bearer is not None and _service_account_issued(bearer, settings, sa_verifier):
-        return _service_account(bearer, sa_verifier)
-    verifier: IdpVerifier | None = getattr(request.app.state, "oidc", None)
-    if verifier is None:
-        # Enabled but no verifier wired (startup/discovery skew): fail closed, never open.
-        raise ServiceUnavailableError("Authentication is enabled but unavailable")
-    if bearer is None:
-        raise UnauthenticatedError("Missing bearer token")
-    try:
-        return verifier.verify(bearer)
-    except ProviderUnavailableError as exc:
-        # The missing-verifier branch's fact arriving later, so its body: the spec's `code` 17, not the fleet's.
-        raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
+    """The caller ``bearer`` proves, or ``None`` with OIDC off: judged, and recorded, as at every door (`door_caller`)."""
+    return caller_of(request.app.state, settings, bearer)
 
 
 #: The authenticated caller — a ``PersonPrincipal``, a ``ServicePrincipal``, or ``None`` when OIDC is off.

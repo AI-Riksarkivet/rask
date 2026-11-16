@@ -1135,7 +1135,7 @@ type Lakehouse struct {
 // lakehouse door, `rask-catalog` (the decision door included) or `rask-lineage` (the OpenLineage intake): what the
 // account's pod would project, for a client running outside the cluster. The account is created as the client's own
 // release would render it, labelled as a client's, and holds only what the catalog's doors grant it ([[LH-563]]); an
-// account the release or a fixture renders is refused, so a client cannot act as a lakehouse service. The token lives `duration` (10m at the least, the API server's floor).
+// account the release or a fixture renders is refused, so a client cannot act as a lakehouse service. The token lives `duration`: 10m at the least, the API server's floor, and an hour at the most, the longest a door admits.
 //
 // +cache="session"
 func (l *Lakehouse) ServiceAccountToken(
@@ -1153,8 +1153,14 @@ func (l *Lakehouse) ServiceAccountToken(
 	if !doorAudience[audience] {
 		return nil, fmt.Errorf("audience %q is not a lakehouse door's (rask-catalog, rask-lineage)", audience)
 	}
-	if _, err := time.ParseDuration(duration); err != nil {
+	lifetime, err := time.ParseDuration(duration)
+	if err != nil {
 		return nil, fmt.Errorf("duration %q: %w", duration, err)
+	}
+	// A door refuses a token minted for longer than the chart's `auth.serviceAccountMaxTokenSeconds` (an hour), and
+	// tells the caller only that the token is invalid, so a longer one is refused here, where the reason can be said.
+	if lifetime > time.Hour {
+		return nil, fmt.Errorf("duration %s is longer than the hour a lakehouse door admits a token minted for", duration)
 	}
 	namespace, name := parts[1], parts[3]
 	token, err := l.Cluster.

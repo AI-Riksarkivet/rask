@@ -305,3 +305,40 @@ def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches
     judged.clear()
     asyncio.run(fga_deps.authorize(_request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, None, _EveryNameHolds()))
     assert len(judged) == 1, f"{template}?{query} skips the write judge with FGA off"
+
+
+#: The namespace doors that only READ, each with the method that serves it. Written out, as the table doors above are:
+#: a namespace door's rung is read off the last word of its path, so one that changes something and ends in `list` or
+#: `describe` would be asked a reader's rung. A namespace door asks more than a read until this list says otherwise.
+_NAMESPACE_READ_DOORS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("access/my-permissions", "POST"),
+        ("describe", "POST"),
+        ("exists", "POST"),
+        ("labels/describe", "POST"),
+        ("list", "GET"),
+        ("managed-access/describe", "POST"),
+        ("policy/describe", "POST"),
+        ("protection", "GET"),
+        ("table/list", "GET"),
+        ("tasks", "GET"),
+    }
+)
+
+
+def test_a_namespace_door_asks_a_read_rung_only_where_it_is_listed_as_a_read() -> None:
+    """[[LH-289]]: the namespace doors the router asks a reader's rung on are exactly the ones listed as reads."""
+    asked_as_a_read: set[tuple[str, str]] = set()
+    for path, route in router_walk.mounted():
+        if not router_walk.names_a_guarded_object(path) or fga_deps._resource_for(router_walk.PARAM.sub("x", path)) != "namespace":
+            continue
+        suffix = path.split("/{id}/", 1)[1]
+        for method in route.methods or ():
+            try:
+                relation = fga_deps._action_relation("namespace", suffix, method=method)
+            except InternalError:
+                continue
+            if relation in fga_deps._READ_RELATIONS:
+                asked_as_a_read.add((suffix, method))
+
+    assert asked_as_a_read == _NAMESPACE_READ_DOORS

@@ -10,6 +10,10 @@ OTLP to GreptimeDB like every other log, queryable by ``audit.action`` / ``audit
 The whole trail is gated by one flag (:func:`configure_audit`, from a service's ``LANCE_AUDIT_ENABLED``
 setting): a deployment turns audit on or off for its compliance posture by setting the dedicated logger's
 level. Fields are consistent across every call site, so a record never misses who / what / outcome.
+
+The log path the records ride is not lossless, so each record emitted is also counted on the metric path
+(``audit.records``, by action and outcome): the platform's store is whole over a window when it holds as many records
+as were counted for it.
 """
 
 from __future__ import annotations
@@ -19,12 +23,25 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Final
 
+from opentelemetry import metrics
+
 from lakehouse.context import NO_TRACE, current_trace_id
 
 
 #: The one well-known audit logger name (not a per-module logger) so audit records are a single stream.
 AUDIT_LOGGER = "lance.audit"
 _log = logging.getLogger(AUDIT_LOGGER)
+
+#: Every record the trail emits, counted on the METRIC path, by action and outcome. The records themselves ride the log
+#: path, which can lose one (a full export queue, a process killed before its batch left, a gateway's retry window run
+#: out) without a word, and a record is the only account of who granted or was refused what. A store holding fewer
+#: records over a window than this counts for it has lost some ([[LH-585]]). Counted where the record is handed to the
+#: logger, so a trail that is switched off counts nothing.
+_records = metrics.get_meter("lance.audit").create_counter(
+    "audit.records",
+    unit="{record}",
+    description="Audit records this process emitted, by action and outcome: compare with the records the store holds.",
+)
 
 #: The record's format version, stamped on every record as ``audit.format``. A compliance query names the fields of
 #: one format; a renamed or retyped field is a new format, so the query that read the old one can tell it is reading
@@ -45,13 +62,15 @@ class AuditAction(StrEnum):
     """The lakehouse's closed action vocabulary: every action a lakehouse service records is one of these.
 
     An authorization verdict is ``AUTHZ`` and names the relation it decided in ``audit.relation``, so "every verdict on
-    this table" is one filter however many relations the model grows. A client of the lakehouse records under a closed
+    this table" is one filter however many relations the model grows. A listing that judges its own candidates records
+    ``AUTHZ_LISTING`` once per page, with how many it judged and how many it served. A client of the lakehouse records under a closed
     vocabulary of its own: :func:`audit` takes any ``StrEnum``, so no free string reaches the trail from anywhere.
     """
 
     AUTHN = "authn"
     AUTHZ = "authz"
     AUTHZ_DECISION = "authz_decision"
+    AUTHZ_LISTING = "authz_listing"
     READ_DATA = "read_data"
     VEND_CREDENTIALS = "vend_credentials"
     COMMIT_VERSION = "commit_version"
@@ -158,6 +177,9 @@ def audit(
     Extra ``fields`` (relation, tier, reason) ride the same record under an ``audit.`` prefix so a compliance query sees a
     flat, consistent schema.
     """
+    if not _log.isEnabledFor(logging.INFO):
+        return
+    _records.add(1, {"action": action.value, "outcome": outcome.value})
     _log.info(
         "audit",
         extra={

@@ -7,10 +7,13 @@ door answers are driven through the real catalog app on a moto STS in
 
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Any
 
 import pytest
 
+from catalog.core import vending
 from catalog.core.vending import Tier, build_session_policy, split_s3_location
 
 
@@ -109,3 +112,27 @@ def test_a_declared_base_is_granted_READ_even_at_the_maintain_tier() -> None:
 
     assert table["Action"] == ["s3:GetObject", "s3:DeleteObject"], "the table's own prefix keeps its maintain tier"
     assert base["Action"] == ["s3:GetObject"], f"a base must be readable and never writable: {base['Action']}"
+
+
+@pytest.mark.parametrize(
+    ("one", "other"),
+    [
+        pytest.param("corp~a:b", "corp~a/b", id="two-subjects-differing-in-a-character-the-store-refuses"),
+        pytest.param("a:b", "a-b-" + hashlib.sha256(b"a:b").hexdigest()[:8], id="a-subject-spelled-as-another-subjects-name"),
+        pytest.param(
+            "kubernetes~system:serviceaccount:" + "n" * 40 + ":reader",
+            "kubernetes~system:serviceaccount:" + "n" * 40 + ":writer",
+            id="two-subjects-alike-for-64-characters",
+        ),
+    ],
+)
+def test_two_subjects_are_never_vended_under_one_session_name(one: str, other: str) -> None:
+    """The session name is how the store's own trail attributes a vended session, so two callers never share one."""
+    names = {vending.role_session_name(one), vending.role_session_name(other)}
+
+    assert len(names) == 2
+    assert all(2 <= len(name) <= 64 and re.fullmatch(r"[A-Za-z0-9_+=,.@-]+", name) for name in names)
+
+
+def test_a_session_name_reads_as_its_subject() -> None:
+    assert vending.role_session_name("dex~alice") == "dex-alice-efd3fc21"

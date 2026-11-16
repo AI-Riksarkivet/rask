@@ -65,6 +65,7 @@ class _Request:
     def __init__(self, path: str, object_id: str) -> None:
         self.scope = {"path": path}
         self.path_params = {"id": object_id}
+        self.method = "POST"
 
 
 def _drive(monkeypatch: pytest.MonkeyPatch, path: str, object_id: str) -> list[str]:

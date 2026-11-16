@@ -23,6 +23,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lakehouse.exceptions import register_handlers
+from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.supervision import Supervisor
@@ -66,7 +67,13 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
     get_settings.cache_clear()
 
 
-def test_lineage_refuses_a_claimed_service_name(door: TestClient) -> None:
+def test_lineage_refuses_a_claimed_service_name(door: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    """The refusal is on the audit trail, as the catalog's is: a door that refuses a caller and records nothing leaves
+    no evidence anyone knocked ([[LH-585]])."""
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+
     answered = door.get("/who", headers={"x-lance-service-identity": "maintenance"})
 
     assert answered.status_code == 401, answered.text
+    recorded = [(r.__dict__["audit.action"], r.__dict__["audit.outcome"], r.__dict__["audit.reason"]) for r in caplog.records if r.name == AUDIT_LOGGER]
+    assert recorded == [("authn", "failure", "missing_token")]

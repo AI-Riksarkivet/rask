@@ -792,6 +792,7 @@ buckets as the estate's reads already are. */ -}}
 {{- if eq $part "env" }}
 - { name: RASK_SA_ISSUER, value: {{ $root.Values.auth.serviceAccountIssuer | quote }} }
 - { name: RASK_SA_AUDIENCE, value: {{ printf "rask-%s" $door }} }
+- { name: RASK_SA_MAX_TOKEN_SECONDS, value: {{ $root.Values.auth.serviceAccountMaxTokenSeconds | quote }} }
 - { name: RASK_SA_FETCH_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }
 - { name: RASK_SA_CA_FILE, value: /var/run/secrets/rask/sa-fetch/ca.crt }
 {{- else }}

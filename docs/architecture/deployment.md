@@ -350,6 +350,14 @@ platform's OTLP gateway, as itself: every export carries the pod's projected Ser
 credential entry point `rask_service_account` (`lakehouse.otlp_identity`). No telemetry secret exists. The governance
 trail rides the same export under the `lance.audit` instrumentation scope.
 
+**The trail's records are counted as they are emitted, so a store can tell when it lost some.** The records ride the
+log export, which is not lossless: a full export queue, a process killed before its batch left, or a gateway whose
+retries ran out each drop records without a word, and a record is the only account of who granted a tuple or was
+refused. Each service therefore also counts every record it emits on the metric export, as `audit.records`
+(`audit_records_total` in a Prometheus-shaped store) by `action` and `outcome`. The trail is whole over a window when
+the store holds as many records for it as the services counted; comparing the two is the platform's check to run, since
+the store and its query language are the platform's.
+
 **The gateway, store, dashboards and alerting are a prerequisite, not part of the chart** (ADR 0153). A platform
 provides an **OTLP/HTTP gateway** that verifies ServiceAccount tokens of `observability.identity.audience` signed by the
 cluster's issuer, routes the `lance.audit` scope to a store that refuses unauthenticated writes and deletes, and

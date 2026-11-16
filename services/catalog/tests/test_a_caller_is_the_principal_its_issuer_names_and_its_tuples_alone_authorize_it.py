@@ -277,6 +277,8 @@ def _describe(client: TestClient, token: str) -> httpx.Response:
         pytest.param("another-door", 401, None, id="a-token-minted-for-another-door"),
         pytest.param("another-key", 401, None, id="a-token-claiming-the-issuer-signed-by-another-key"),
         pytest.param("another-issuer", 401, None, id="a-token-another-clusters-issuer-signed"),
+        pytest.param("an-hour", 200, _PIPELINE_USER, id="the-granted-account-with-a-token-minted-for-the-longest-lifetime-admitted"),
+        pytest.param("a-year", 401, None, id="the-granted-account-with-a-token-minted-for-a-year"),
     ],
 )
 def test_a_service_account_token_is_its_subject_and_its_tuples_alone_authorize_it(
@@ -289,6 +291,8 @@ def test_a_service_account_token_is_its_subject_and_its_tuples_alone_authorize_i
         "another-door": lambda: sa_issuer.mint(_PIPELINE_SA, audience="rask-lineage", namespace=_PIPELINE_NS),
         "another-key": lambda: _signed_by_another_key(sa_issuer.issuer, sa_issuer.kid),
         "another-issuer": lambda: _another_clusters_token(sa_issuer, tmp_path),
+        "an-hour": lambda: sa_issuer.mint(_PIPELINE_SA, audience="rask-catalog", namespace=_PIPELINE_NS, ttl=3600),
+        "a-year": lambda: sa_issuer.mint(_PIPELINE_SA, audience="rask-catalog", namespace=_PIPELINE_NS, ttl=365 * 24 * 3600),
     }[caller]()
 
     answered = _describe(client, token)

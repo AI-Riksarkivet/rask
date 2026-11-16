@@ -55,6 +55,12 @@ def estate(governed_catalog: Any, monkeypatch: pytest.MonkeyPatch) -> Any:  # no
         pytest.param(
             "/v1/table/batch-commit", {"operations": [{"declare_table": {"id": ["lance_catalog", "db1", "t/2"]}}]}, "'/'", id="a-batch-id-that-is-not-a-name"
         ),
+        pytest.param(
+            "/v1/table/batch-commit",
+            {"operations": [{"declare_table": {"id": ["lance_catalog", "db1", f"t{n}"]}} for n in range(101)]},
+            "at most 100",
+            id="a-batch-naming-more-tables-than-one-request-resolves",
+        ),
         pytest.param("/v1/namespace/lance_catalog/drop", {}, "/management/v1/warehouses", id="a-warehouse-named-at-a-namespace-door-that-changes-it"),
         pytest.param("/v1/table/lance_catalog$t/describe", {}, "is not inside a namespace of a warehouse", id="a-table-in-no-namespace-of-a-warehouse"),
     ],

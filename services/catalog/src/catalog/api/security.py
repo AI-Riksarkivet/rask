@@ -23,19 +23,16 @@ from __future__ import annotations
 
 from typing import Annotated, cast
 
-import jwt
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings, get_settings
 from lakehouse.admission import admitted_caller, caller_judge
-from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
-from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
-from lakehouse.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
-from lakehouse.governed.oidc import ProviderUnavailableError
+from lakehouse.governed.door_caller import caller_of
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.machine_identity import ServicePrincipal
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.
@@ -46,36 +43,6 @@ _CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer
 #: IdP vouched for. Authorization reads the principal key off either as `.subject`; `isinstance(token, ServicePrincipal)`
 #: is the estate's one machine test.
 type Caller = PersonPrincipal | ServicePrincipal
-
-
-def _claims_issuer(bearer: str, issuer: str | None) -> bool:
-    """Whether the bearer's unverified ``iss`` is ``issuer``: the routing question, for when no verifier was built."""
-    if not issuer:
-        return False
-    try:
-        claimed = jwt.decode(bearer, options={"verify_signature": False}).get("iss")
-    except jwt.PyJWTError:
-        return False
-    return isinstance(claimed, str) and claimed.rstrip("/") == issuer.rstrip("/")
-
-
-def _service_principal(verifier: ServiceAccountVerifier | None, bearer: str) -> ServicePrincipal:
-    """The service a cluster-issued bearer proves, or the refusal that names why it proves none."""
-    if verifier is None:
-        # The settings name a service-account issuer and this bearer claims it, but no verifier was
-        # built: a 503 keeps a broken boot visible instead of handing the token to the IdP.
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
-        raise ServiceUnavailableError("Authentication is enabled but unavailable")
-    try:
-        principal = verifier.verify(bearer)
-    except ProviderUnavailableError as exc:
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
-        raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
-    except UnauthenticatedError:
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
-        raise
-    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=principal.subject)
-    return principal
 
 
 def authenticate(
@@ -94,39 +61,12 @@ def authenticate(
 
 
 def _authenticated(request: Request, settings: Settings, bearer: str | None) -> Caller | None:
-    """The caller ``bearer`` proves, or ``None`` with OIDC off.
+    """The caller ``bearer`` proves, or ``None`` with OIDC off: judged, and recorded, as at every door (`door_caller`).
 
-    The service-account verifier is chosen by the token's unverified ``iss`` and then checks the
-    signature, audience and expiry; every account in the cluster whose token carries this door's audience
-    authenticates, as its own subject, and is authorized by its tuples alone.
+    Every account in the cluster whose token carries this door's audience authenticates, as its own subject, and is
+    authorized by its tuples alone.
     """
-    if not settings.oidc_enabled:
-        return None
-
-    sa_verifier: ServiceAccountVerifier | None = getattr(request.app.state, "sa_oidc", None)
-    if bearer and (sa_verifier.issued(bearer) if sa_verifier is not None else _claims_issuer(bearer, settings.sa_issuer)):
-        return _service_principal(sa_verifier, bearer)
-
-    verifier: IdpVerifier | None = getattr(request.app.state, "oidc", None)
-    if verifier is None:
-        # OIDC is enabled but no verifier is available: fail closed, never open.
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
-        raise ServiceUnavailableError("Authentication is enabled but unavailable")
-    if not bearer:
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="missing_token")
-        raise UnauthenticatedError("Missing bearer token")
-    try:
-        token = verifier.verify(bearer)
-    except ProviderUnavailableError as exc:
-        # The IdP or this deployment's view of it failed, not the caller's bearer: the missing-verifier
-        # branch's fact, so its reason and its body — the spec's `code` 17, the URL left to the log.
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
-        raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
-    except Exception:
-        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
-        raise
-    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=token.subject)  # #41 record the authenticated principal
-    return token
+    return caller_of(request.app.state, settings, bearer)
 
 
 #: The authenticated caller (``None`` when OIDC is disabled). Endpoints that need claims depend on

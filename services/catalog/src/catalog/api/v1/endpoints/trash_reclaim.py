@@ -74,7 +74,7 @@ async def release_trash(
         if (reason := trash_reclaim.release_refusal(record, now=clock()) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
             raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
         obj = fga.object_of(kind, uuid)
-        held = await fga.read_object_tuples(client, obj) if client is not None and settings.fga_enabled else []
+        held = await fga.read_object_tuples(wired, obj) if (wired := fga_deps.wired(settings, client)) is not None else []
         told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(token)) for t in held if fga.names_someone(str(t.user))}
         async with announcer.announcing(door="trash_release", target=obj, announcements=list(told.values())) as filing:
             removed = await fga_deps.revoke_expired_object(client, settings, obj, token=token)

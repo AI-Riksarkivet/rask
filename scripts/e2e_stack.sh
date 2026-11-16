@@ -484,8 +484,13 @@ export LANCE_E2E_NATS_URL=nats://localhost:4222
 export LANCE_E2E_RELEASE="$RELEASE"
 # Criterion 2's service identity: the lineage service's account, for the audience the catalog's own door checks.
 SA_AUDIENCE="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_SA_AUDIENCE")].value}')"
-SERVICE_TOKEN="$(kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 2h)" || { echo "!! could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"; exit 1; }
-keep service-token "$SERVICE_TOKEN"
+# Minted for an hour, the longest lifetime a door admits (`auth.serviceAccountMaxTokenSeconds`), and minted again before
+# the session that presents it, so the token is young whatever the first session took.
+mint_service_token() {
+  SERVICE_TOKEN="$(kubectl create token "$RELEASE-sa-lineage" --audience "$SA_AUDIENCE" --duration 1h)" || { echo "!! could not mint a $SA_AUDIENCE token for $RELEASE-sa-lineage"; exit 1; }
+  keep service-token "$SERVICE_TOKEN"
+}
+mint_service_token
 
 # NO SILENT SKIPS. Every suite skips when the address or token it needs is missing, which is right on a laptop with
 # nothing running and a lie here: the stack is up, so a skip means a misnamed variable and a suite that never ran.
@@ -511,6 +516,7 @@ failed=()
 CHAOS=(--chaos)
 [ "${E2E_CHAOS:-1}" = "1" ] || CHAOS=()
 KEPT="$(mktemp -d)/kept-drive.json"
+mint_service_token
 if "${PYTEST[@]}" tests/e2e-py -m phase1 "${CHAOS[@]}" --keep-drive "$KEPT"; then
   # THE SOAK, AT ONCE. The deployed estate reads its kept drive again a day later (`make e2e-soak`); here the same
   # reading runs straight after the acceptance, so keeping and resuming a drive is exercised on every push. It removes

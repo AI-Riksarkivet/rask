@@ -206,7 +206,7 @@ def test_a_vend_is_a_session_of_its_own_named_for_the_caller(sessions: _Rig) -> 
     options = body["credentials"]["storage_options"]
     session = next(role for role in sessions.sessions() if role.access_key_id == options["aws_access_key_id"])
     assert session.access_key_id != sessions.own().access_key_id, "a vend handed out the catalog's own session"
-    assert session.session_name == "kubernetes-system-serviceaccount-rask-rask-sa-maintenance"
+    assert session.session_name == "kubernetes-system-serviceaccount-rask-rask-sa-maintenan-af1838a2"
     assert options["aws_session_token"] == session.session_token
     # moto keeps a session's expiry as a naive UTC datetime.
     assert body["credentials"]["expires_at_millis"] == int(session.expiration.replace(tzinfo=UTC).timestamp() * 1000)

@@ -155,6 +155,11 @@
                 },
                 "serviceAccountIssuer": {
                     "type": "string"
+                },
+                "serviceAccountMaxTokenSeconds": {
+                    "description": "The longest lifetime, in seconds, a ServiceAccount token presented at a door may have been minted with (RASK_SA_MAX_TOKEN_SECONDS).",
+                    "type": "integer",
+                    "minimum": 1
                 }
             },
             "additionalProperties": false

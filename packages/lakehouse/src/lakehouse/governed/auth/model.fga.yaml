@@ -792,17 +792,17 @@ tests:
       # which is the reach that makes the identity worth asserting on a leaf rather than a container.
       - user: user:alice
         object: table:acme_gold_catalog
-        assertions: { owner_effective: true, can_drop: true, can_set_protection: true, can_label: true, can_set_contract: true }
+        assertions: { owner_effective: true, can_drop: true, can_set_protection: true, can_get_protection: true, can_label: true, can_set_contract: true }
       - user: user:peter
         object: table:acme_gold_catalog
-        assertions: { can_write_data: true, can_drop: false, can_set_protection: false, can_label: false, can_set_contract: false }
+        assertions: { can_write_data: true, can_drop: false, can_set_protection: false, can_get_protection: false, can_label: false, can_set_contract: false }
       - user: user:alice
         object: namespace:acme_bronze
-        assertions: { can_delete: true, can_set_protection: true, can_label: true }
+        assertions: { can_delete: true, can_set_protection: true, can_get_protection: true, can_label: true }
       # carol reads acme_bronze through her warehouse grant and must not arm anything on it.
       - user: user:carol
         object: namespace:acme_bronze
-        assertions: { reader_effective: true, can_delete: false, can_set_protection: false, can_label: false }
+        assertions: { reader_effective: true, can_delete: false, can_set_protection: false, can_get_protection: false, can_label: false }
   - name: classifying is INDEPENDENT of writing, in both directions
     # [[LH-058]]. The reference model's principle — "independent of `modify` (separation of duties:
     # classify without holding data/DDL rights)" — as behaviour rather than as a comment. The hole it
