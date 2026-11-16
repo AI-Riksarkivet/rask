@@ -131,8 +131,8 @@ class IngestLane:
     def _provenance(self) -> ProvenanceStore:
         return self._app.state.provenance
 
-    async def _authorize(self, parsed: RunEvent | DatasetEvent, arrived: Mapping[str, Any]) -> None:
-        await enforce_bus_authz(parsed, self._app, self._settings, arrived)
+    async def _authorize(self, parsed: RunEvent | DatasetEvent, arrived: Mapping[str, Any]) -> frozenset[str]:
+        return await enforce_bus_authz(parsed, self._app, self._settings, arrived)
 
     async def _feed_holds(self, envelope: Mapping[str, Any]) -> bool:
         """Whether the feed already holds the row this delivery writes. The delivery's own row, never its run's: a run's

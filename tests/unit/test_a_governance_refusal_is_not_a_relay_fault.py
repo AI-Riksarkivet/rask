@@ -33,6 +33,7 @@ authorizes AS the subject the producer stamped, the only principal a tick has; a
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -78,7 +79,7 @@ class _Repo:
         that recorded nothing pass as one that did."""
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
-    async def record(self, ev: Any) -> None:  # noqa: ANN401 — the drain's own shape
+    async def record(self, ev: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 — the drain's own shape
         self.ingested.append(ev.run.run_id)
 
 
@@ -136,7 +137,7 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
     _staged(uri, author="mallory", run="bronze$events", token="order-probe")
 
     class _OrderRepo:
-        async def record(self, _ev: Any) -> None:  # noqa: ANN401
+        async def record(self, _ev: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401
             steps.append("ingest")
 
         async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
@@ -175,11 +176,12 @@ def test_one_refusal_does_not_decide_anything_about_the_others(tmp_path: Any, mo
     not reintroduce it by aborting the loop."""
     seen: list[str] = []
 
-    async def _refuse_one(event: Any, *_args: object, **_kwargs: object) -> None:  # noqa: ANN401
+    async def _refuse_one(event: Any, *_args: object, **_kwargs: object) -> frozenset[str]:  # noqa: ANN401
         names = [output.name for output in (getattr(event, "outputs", None) or [])]
         seen.extend(names)
         if any("refused" in name for name in names):
             raise PermissionDeniedError("can_write_data required to amend run")
+        return frozenset()
 
     monkeypatch.setattr(relay, "enforce_bus_authz", _refuse_one)
     uri = f"file://{tmp_path}/_lineage_outbox"

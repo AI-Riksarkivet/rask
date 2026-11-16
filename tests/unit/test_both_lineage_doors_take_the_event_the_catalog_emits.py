@@ -30,7 +30,7 @@ defect is that the two sides disagree, and only the real producer's output can s
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from typing import Any, cast
 
 import pytest
@@ -59,7 +59,7 @@ class _Repo:
         self.runs: list[RunEvent] = []
         self.datasets: list[DatasetEvent] = []
 
-    async def record(self, event: RunEvent | DatasetEvent) -> None:
+    async def record(self, event: RunEvent | DatasetEvent, *, aliased: Collection[str]) -> None:
         if isinstance(event, DatasetEvent):
             self.datasets.append(event)
         else:

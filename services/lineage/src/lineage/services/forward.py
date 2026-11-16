@@ -12,6 +12,20 @@ keyed by the endpoint, so a new backend starts from the feed's oldest row and a 
 restart. It moves only forward, because the ticks of two replicas overlap and a slower one's write must not undo a
 faster one's progress.
 
+A CURSOR BELONGS TO THE FEED IT WAS TAKEN ON. A seq is a row's position in one feed table, so the cursor's row is keyed
+by that table's uuid as well (`ProvenanceStore.feed_incarnation`). The supported way to replace the feed and keep the
+``cursors`` table is to drop ``events`` at the catalog and let lineage's start create it again: the new table is another
+uuid, no cursor is kept under it, and the forwarder follows it from its first row, whatever the old feed's cursor was.
+A table registered again is another uuid too, so the forwarder starts from its first row and the backend is sent again
+what it already took, which at least once allows.
+
+THE FEED'S BYTES PUT BACK UNDER ITS UUID ARE THE ONE CASE THE UUID CANNOT TELL. A store-level restore of the ``events``
+table to an older copy keeps the uuid and rewinds the table's row-id counter with its manifest, so rows committed after
+it reuse seqs the cursor has passed. Such a restore must bring ``cursors`` back from the same point, or delete the
+forwarder's row there. A tick that finds the feed's newest row behind its cursor has met exactly that, and follows the
+feed again from its oldest row; a feed refilled up to or past the cursor before any tick ran is indistinguishable from
+one that never rewound, which is why the precondition is the operator's (`docs/runbooks/RUNBOOK-restore.md`).
+
 WHAT STOPS A TICK AND WHAT DOES NOT. A transport failure, a timeout, or any answer but a success or a refusal of the
 event stops the tick with the cursor at the last event the backend took, and the next tick resumes there: the
 backend is down, or it refuses the forwarder itself (a 401 or 403 is a key to fix, not an event to skip). A 400, 413
@@ -56,9 +70,10 @@ def endpoint_url(settings: LineageSettings) -> str:
     return f"{settings.forward_url.rstrip('/')}/{settings.forward_endpoint.lstrip('/')}"
 
 
-def follower(settings: LineageSettings) -> str:
-    """The forwarder's name in the cursors table: its endpoint, so a new backend starts from the feed's oldest row."""
-    return f"forward:{endpoint_url(settings)}"
+def follower(settings: LineageSettings, feed: str) -> str:
+    """The forwarder's name in the cursors table: its endpoint and the feed table ``feed`` names (the store's
+    ``feed_incarnation``), so a new backend, and a feed created again, each start from the feed's oldest row."""
+    return f"forward:{endpoint_url(settings)}@{feed}"
 
 
 async def _authorization(settings: LineageSettings) -> dict[str, str]:
@@ -113,13 +128,13 @@ async def _send(window: FeedWindow, settings: LineageSettings, client: httpx.Asy
 async def forward(provenance: ProvenanceStore, settings: LineageSettings, client: httpx.AsyncClient) -> ForwardOutcome:
     """POST the feed's events after the forwarder's cursor to the backend, in seq order, and move the cursor past them."""
     url = endpoint_url(settings)
-    name = follower(settings)
+    name = follower(settings, await provenance.feed_incarnation())
     mark = await provenance.cursor(name)
     # One read of the feed serves the whole tick: its bounds judge the cursor and its rows are the pages sent.
     window = await provenance.window(since=mark)
     bounds = await window.bounds()
     if bounds is not None and bounds[1] < mark:
-        # A cursor this feed never issued: it was taken on another feed (the store moved, or was restored).
+        # The table's bytes were put back from a copy older than the cursor: rows committed since reuse the seqs it passed.
         log.warning("lineage_forward_cursor_ahead_of_feed", extra={"cursor": mark, "head": bounds[1]})
         mark = bounds[0] - 1
         await provenance.reset_cursor(name, mark)

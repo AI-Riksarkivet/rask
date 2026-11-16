@@ -15,6 +15,7 @@ built by a helper that fills them in would assert nothing. The bus subscription 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -51,7 +52,7 @@ class _Repo:
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         self.refusals.append(reason)
 
-    async def record(self, event: Any) -> None:  # noqa: ANN401 - the drain's own shape
+    async def record(self, event: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 - the drain's own shape
         self.ingested.append(event.run.run_id)
 
 

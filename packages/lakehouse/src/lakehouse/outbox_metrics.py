@@ -58,9 +58,10 @@ _drop_failed = _meter.create_counter(
     "outbox.drop.failed",
     unit="{event}",
     description=(
-        "Published events whose staged copy the publisher could not delete. Delivered, so nothing is lost: the copy is "
-        "re-ingested and dropped by the relay. Sustained non-zero with a rising depth means the store refuses the "
-        "publisher's deletes, and the relay is re-delivering every event it stages."
+        "Published events whose staged copy could not be deleted: by the publisher on ack, or by the catalog's control "
+        "relay after it republished one. Delivered, so nothing is lost: the copy is delivered again and dropped by a "
+        "later relay tick. Sustained non-zero with a rising depth means the store refuses the deletes, and the relay "
+        "is re-delivering every event left staged."
     ),
 )
 _drained = _meter.create_counter(

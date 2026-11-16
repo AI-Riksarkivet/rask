@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 async def handle_cloud_event(
     provenance: ProvenanceStore,
     body: Any,
-    authorize: Callable[[RunEvent | DatasetEvent, Mapping[str, Any]], Awaitable[None]] | None = None,
+    authorize: Callable[[RunEvent | DatasetEvent, Mapping[str, Any]], Awaitable[frozenset[str]]] | None = None,
     *,
     door: Door,
 ) -> Verdict:
@@ -49,7 +49,8 @@ async def handle_cloud_event(
     and the estate admin's replay re-presents a parked delivery here, where a hard-coded subscriber label would count
     one refusal as an arrival and then again as a park.
 
-    ``authorize`` runs after the parse and before any write. It is injected rather than imported so this module stays
+    ``authorize`` runs after the parse and before any write, and answers the tables the event's datasets alias, which
+    its feed row is scoped by (`fga_deps.enforce_bus_authz`). It is injected rather than imported so this module stays
     free of FGA — the door owns the policy, this owns what a delivery is answered — and it splits the failure kinds
     the way the lane needs them:
 
@@ -84,13 +85,14 @@ async def handle_cloud_event(
         # parking them would keep a copy no reader can act on. The count is the signal (`Outcome.UNREPAIRABLE`), and
         # the event stays on the stream for its retention.
         return Verdict.TAKEN
+    aliased: frozenset[str] = frozenset()
     if authorize is not None:
         try:
             # THE ARRIVED DICT RIDES ALONG, not just the parsed event. The door's signature check covers
             # the bytes the producer signed, and a model is a reconstruction of them — it grows every
             # field the schema defaults. `data` is what the bus delivered; the parse above is for everything
             # else.
-            await authorize(event, data if isinstance(data, dict) else {})
+            aliased = await authorize(event, data if isinstance(data, dict) else {})
         except PermissionDeniedError as exc:
             # ONE VERDICT (:func:`refusal_outcome`), the one every door that records an event counts by. Only a named
             # person lacking a grant is parked for repair; every other refusal is final, so it is taken and its count
@@ -107,7 +109,7 @@ async def handle_cloud_event(
     try:
         # The edges, then the feed row, each keyed: a failure here asks for the delivery again, and the next one lands
         # what is missing and nothing twice (see `ProvenanceStore.record`).
-        await provenance.record(event)
+        await provenance.record(event, aliased=aliased)
     except ForeignRunError as exc:
         # The commit's own refusal of a run another author bound first, among events delivered together: as
         # unrepairable as the door's.

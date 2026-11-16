@@ -8,6 +8,7 @@ again (a record is idempotent, so a redelivery is safe), reading the OpenLineage
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from typing import Any, cast
 
 from lakehouse.bus_delivery import Verdict
@@ -44,7 +45,7 @@ class _FakeRepo:
         nothing pass as one that did."""
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
-    async def record(self, event: RunEvent) -> None:
+    async def record(self, event: RunEvent, *, aliased: Collection[str]) -> None:
         if self._fail:
             raise RuntimeError("catalog unavailable")
         self.ingested = event

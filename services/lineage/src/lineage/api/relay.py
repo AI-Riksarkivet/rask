@@ -96,7 +96,7 @@ async def _prune_old_events(provenance: ProvenanceStore, settings: LineageSettin
     if not settings.events_retention_days:
         return 0
     try:
-        delivered = await provenance.cursor(follower(settings)) if settings.forward_url else None
+        delivered = await provenance.cursor(follower(settings, await provenance.feed_incarnation())) if settings.forward_url else None
         pruned = await provenance.prune_events(settings.events_retention_days, delivered_through=delivered)
     except Exception as exc:
         log.warning("lineage_event_prune_failed", extra={"error": str(exc)})
@@ -231,8 +231,8 @@ async def _drain_outbox(
             # so a stager refused at the bus could stage instead. It authorizes AS the subject the producer
             # stamped, over THE STAGED BYTES (the signature covers what the producer wrote).
             arrived = staged_copy.data
-            await enforce_bus_authz(event, app, settings, arrived)
-            await provenance.record(event)
+            aliased = await enforce_bus_authz(event, app, settings, arrived)
+            await provenance.record(event, aliased=aliased)
             # RE-PUBLISH, then drop. Recording alone repairs the feed and leaves every SUBSCRIBER unaware:
             # maintenance's arrival consumer and a notifier on the bus hear of a recovered event only this way.
             # BEFORE the drop: a publish that fails leaves the staged object for the next tick, whose re-record

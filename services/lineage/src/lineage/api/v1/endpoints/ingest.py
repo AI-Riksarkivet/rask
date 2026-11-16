@@ -171,12 +171,13 @@ async def ingest_event(
         enforce_author(event, token)
         decider = getattr(request.app.state, "decider", None) if settings.fga_enabled else None
         await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider, subject=token.subject if token else None)
-        await enforce_output_authz(event, request.app, settings, token)
+        # What the catalog answered the event's locations and symlinks name scopes its feed row for every reader ([[LH-598]]).
+        aliased = await enforce_output_authz(event, request.app, settings, token)
         started = time.perf_counter()
         # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the
         # retry lands what is missing and nothing twice (see `ProvenanceStore.record`). Its own refusal of a run
         # another author bound first is counted as the door's is.
-        await provenance.record(event)
+        await provenance.record(event, aliased=aliased)
     except PermissionDeniedError as exc:
         record_outcome(refusal_outcome(exc), door=Door.HTTP)
         raise

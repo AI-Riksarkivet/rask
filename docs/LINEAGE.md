@@ -31,7 +31,10 @@ namespace-qualified, `<namespace>/<name>`, so an external input can never resolv
 `docs/COMMIT-EVENTS.md` § A feed row). A dataset an outside producer names by a location a governed table holds, or lists
 in its own `symlinks`, is authorized as that table, because the forwarded graph joins it there
 (`lineage.api.fga_deps.resolve_aliases`), and a dataset named by such a location is recorded under the table's uuid in
-the feed and the edge list too (`lineage.services.names.stamp_resolved_uuids`). A dataset under another catalog's
+the feed and the edge list too (`lineage.services.names.stamp_resolved_uuids`). Every table those aliases resolved to
+is kept in the feed row's `table_uuids`, which every read of the row is decided on, with its payload or as a summary;
+a staged event at `/admin/dlq`, which no door has scoped yet, has its aliases resolved as the caller when it is listed
+or replayed (`DatasetFilter.scope_unrecorded`). A dataset under another catalog's
 `lance-namespace://` host is another estate's table, an outside source here (`LINEAGE_CATALOG_DATASET_NAMESPACE`).
 
 ## Where the records live
@@ -46,7 +49,7 @@ warehouse, which the render and the catalog's boot both require; `LANCE_PROVENAN
 | `lance_catalog$provenance$events` | the commit feed: one row per admitted event, the full event JSON in `event` |
 | `lance_catalog$provenance$edges` | one row per (input, output) pair a successful run asserts, with both versions and branches |
 | `lance_catalog$provenance$refusals` | outbox events refused by governance, recorded before the staged object is deleted |
-| `lance_catalog$provenance$cursors` | each forwarder's position in the feed, keyed by the endpoint URL it posts to |
+| `lance_catalog$provenance$cursors` | each forwarder's position in the feed, keyed by the endpoint URL it posts to and the uuid of the feed table the position was taken on, so a feed created again is forwarded from its first row |
 
 Lineage writes them through the catalog's `merge_insert` door and reads them through its `query` door, as its own
 principal (its projected service-account token for audience `rask-catalog`, `RASK_CATALOG_IDENTITY_TOKEN_FILE`). So
@@ -210,7 +213,10 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   publishes, and retires anything else under the control outbox unpublished (`outbox_events_poison_dropped_total`, WARN
   `control_outbox_unverifiable`), so an object another credential stages there never becomes a catalog-signed event. An
   event the bus can never carry (past the size the publish seam admits) is retired the same way (WARN
-  `control_outbox_undeliverable`), since left staged it would hold every event behind it.
+  `control_outbox_undeliverable`), since left staged it would hold every event behind it. A staged object whose delete
+  the store refuses stays staged (WARN `control_outbox_left_staged`, `outbox_drop_failed_total` for one already
+  republished) and the pass goes on to the events behind it; the next tick publishes it again under the same
+  `event_id`, which the stream and every subscriber deduplicate on.
 - **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
   secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
   that record a bus or staged event apply the rule: the ingest lane (`lineage.api.ingest_lane`), the outbox drain, the

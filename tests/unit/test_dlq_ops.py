@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -94,7 +94,7 @@ class _Repo:
         that recorded nothing pass as one that did."""
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
-    async def record(self, event: Any) -> None:
+    async def record(self, event: Any, *, aliased: Collection[str]) -> None:
         # One call records the edges and the feed row — a replay has one call to make, not two.
         self.ingested.append(event)
 

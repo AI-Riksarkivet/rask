@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Collection
 from contextlib import AbstractContextManager, nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
@@ -243,7 +244,7 @@ class _FakeStore:
         self.log: list[tuple[str, int]] = []
         self.oldest: int | None = None
 
-    async def record(self, event: RunEvent) -> None:
+    async def record(self, event: RunEvent, *, aliased: Collection[str]) -> None:
         self.recorded = event
 
     async def run_author(self, _run_id: str) -> str | None:

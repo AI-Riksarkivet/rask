@@ -26,6 +26,7 @@ from lakehouse.naming import CATALOG_DELIMITER
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, output_refs, require_event_feed_reader
 from lineage.api.security import CurrentToken
+from lineage.core.sources import is_external_source
 from lineage.schemas import EventRecord, Events, FeedProjection, ProjectedEvent
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import FeedWindow
@@ -54,11 +55,13 @@ _CHUNK_MARGIN: Final = 4
 
 
 def _column_lineage_datasets(event: dict) -> set[str]:
-    """Every SOURCE dataset named inside an event's columnLineage facets — the datasets that field-to-field
+    """Every governed SOURCE table named inside an event's columnLineage facets — the tables that field-to-field
     lineage discloses beyond the top-level inputs. In the raw OpenLineage payload these live at
     ``outputs[].facets.columnLineage.fields[<col>].inputFields[].name``. /events must govern on them too, or a
-    caller who can see the OUTPUT would receive input datasets' column schemas they cannot read. Best-effort
-    over an untrusted payload shape; ``{}`` (summary=True, no payload) yields the empty set."""
+    caller who can see the OUTPUT would receive input datasets' column schemas they cannot read. An upstream named
+    outside the catalog's names is the outside world, as an input so named is, and the table its location holds is in
+    the scope the row recorded. Best-effort over an untrusted payload shape; ``{}`` (summary=True, no payload) yields
+    the empty set."""
     out: set[str] = set()
     for o in event.get("outputs") or []:
         if not isinstance(o, dict):
@@ -70,7 +73,7 @@ def _column_lineage_datasets(event: dict) -> set[str]:
             input_fields = (field.get("inputFields") if isinstance(field, dict) else None) or []
             for inf in input_fields:
                 name = inf.get("name") if isinstance(inf, dict) else None
-                if name:
+                if name and not is_external_source(str(inf.get("namespace") or ""), str(name)):
                     out.add(name)
     return out
 
@@ -84,10 +87,13 @@ def _governed_datasets(record: EventRecord) -> Governed:
     uuid for it. A governed table the row recorded without a uuid (an outside producer's name its credential could not
     resolve) is named by no object, so the row is hidden under FGA.
 
-    The payload is read when it is there, because the column upstreams inside its ``columnLineage`` facets name source
-    tables beyond the top-level inputs (`_column_lineage_datasets`), and a caller who can see the output must not
-    receive input tables' column schemas they cannot read; each is the table a dataset of the event by that name is.
-    ``summary=true`` drops the payload, and the uuids the row recorded are then all there is.
+    THE SCOPE THE ROW RECORDED ALWAYS COUNTS, with the payload or without ([[LH-598]]). It holds what the door that
+    admitted the event had the catalog answer: the table an external dataset's location holds, and the tables its
+    ``symlinks`` name, which the payload names by identifiers no grant is held on. The payload only adds to it: the
+    column upstreams inside its ``columnLineage`` facets name source tables beyond the top-level inputs
+    (`_column_lineage_datasets`), and a caller who can see the output must not receive input tables' column schemas
+    they cannot read; each is the table a dataset of the event by that name is. ``summary=true`` drops the payload, and
+    the scope the row recorded is then all there is.
 
     OUTPUTS are never exempted, on the read path as on the write path. Writing is the direction that
     mutates the estate, and an output naming an external namespace is a producer claiming to have
@@ -97,11 +103,12 @@ def _governed_datasets(record: EventRecord) -> Governed:
     payload = payload if isinstance(payload, dict) else {}
     inputs = list(payload.get("inputs") or [])
     outputs = [*(payload.get("outputs") or []), *([payload["dataset"]] if isinstance(payload.get("dataset"), dict) else [])]
+    recorded = Governed(objects=frozenset(fga.table_object(uuid) for uuid in record.table_uuids), unresolved=frozenset(record.unresolved_tables))
     if not inputs and not outputs:
-        return Governed(objects=frozenset(fga.table_object(uuid) for uuid in record.table_uuids), unresolved=frozenset(record.unresolved_tables))
+        return recorded
     read = governed_refs([*inputs, *outputs], column_upstreams=_column_lineage_datasets(record.event))
     written = output_refs(outputs)
-    return Governed(objects=read.objects | written.objects, unresolved=read.unresolved | written.unresolved)
+    return Governed(objects=recorded.objects | read.objects | written.objects, unresolved=recorded.unresolved | read.unresolved | written.unresolved)
 
 
 #: The top-level fields of an OpenLineage event that targeting reads: the state, when it happened, and the

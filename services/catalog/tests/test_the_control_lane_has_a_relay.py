@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
@@ -320,6 +320,53 @@ async def test_a_poison_object_is_dropped_rather_than_wedging_the_drain(tmp_path
     assert report.poison_dropped == 1
     assert report.republished == 1, "a poison object blocked the real event behind it"
     assert list(outbox.list_events(uri, StorageOptions())) == []
+
+
+async def _a_delivered_event(uri: str) -> tuple[str, list[str]]:
+    """Stage an event the relay delivers; answers its staged key and the event ids the relay publishes for it."""
+    event = _published_event()
+    await _stage(uri, event)
+    return event.event_id, [event.event_id]
+
+
+async def _a_poison_object(uri: str) -> tuple[str, list[str]]:
+    """Stage an object the relay retires unpublished; answers its staged key and the event ids it publishes for it, none."""
+    outbox.stage_event(uri, StorageOptions(), "poison", "{'this': not json}")
+    return "poison", []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage_head", [pytest.param(_a_delivered_event, id="an-event-it-delivered"), pytest.param(_a_poison_object, id="an-object-it-retires-as-poison")]
+)
+async def test_an_object_the_store_will_not_delete_stays_staged_and_holds_nothing_behind_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage_head: Callable[[str], Awaitable[tuple[str, list[str]]]]
+) -> None:
+    """A delete the store refuses is that object's own failure ([[LH-600]]): it stays staged for the next tick, counted as
+    left and as neither republished nor retired, and the event staged behind it is delivered and dropped on the same tick.
+    The drain is oldest first, so a refused delete that ended the pass would hold every later event behind an object no
+    tick can remove."""
+    uri = f"file://{tmp_path}/control-outbox"
+    head, published_for_head = await stage_head(uri)
+    _staged_before_everything_else(tmp_path, head)
+    behind = _published_event()
+    await _stage(uri, behind)
+    drop = outbox.drop_event
+
+    def refusing_the_head(outbox_uri: str, storage_options: StorageOptions, key: str) -> None:
+        if key == head:
+            raise OSError("delete refused")
+        drop(outbox_uri, storage_options, key)
+
+    monkeypatch.setattr(outbox, "drop_event", refusing_the_head)
+    recorder = BusDouble()
+
+    with TestClient(_relay_app(recorder)) as client:
+        report = _tick(client, _settings(uri))
+
+    assert [sent.message_id for sent in recorder.sent] == [*published_for_head, behind.event_id]
+    assert (report.republished, report.poison_dropped, report.left_staged) == (1, 0, 1), report
+    assert [key for key, _ in outbox.list_events(uri, StorageOptions())] == [head]
 
 
 def test_pointing_the_control_outbox_at_the_LINEAGE_prefix_is_REFUSED_at_boot() -> None:

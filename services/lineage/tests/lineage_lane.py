@@ -74,7 +74,7 @@ class Feed:
     async def ready(self) -> None:
         return None
 
-    async def record(self, event: RunEvent | DatasetEvent) -> None:
+    async def record(self, event: RunEvent | DatasetEvent, *, aliased: Collection[str]) -> None:
         if self.unrecordable:
             raise ServiceUnavailableError("the catalog does not take the feed's write")
         self.recorded.append(event)

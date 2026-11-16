@@ -24,6 +24,7 @@ answer the same exception with the same outcome, and only running them shows tha
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any, cast
 
 import pytest
@@ -117,13 +118,13 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
         recorded.append((outcome, door))
 
     class _Store:
-        async def record(self, _event: Any) -> None:
+        async def record(self, _event: Any, *, aliased: Collection[str]) -> None:
             return None
 
     monkeypatch.setattr(ingest, "enforce_author", lambda *_a, **_k: None)
 
-    async def _allow(*_args: Any, **_kw: Any) -> None:
-        return None
+    async def _allow(*_args: Any, **_kw: Any) -> frozenset[str]:
+        return frozenset()
 
     monkeypatch.setattr(ingest, "enforce_output_authz", _allow)
     monkeypatch.setattr(ingest, "record_outcome", _record)

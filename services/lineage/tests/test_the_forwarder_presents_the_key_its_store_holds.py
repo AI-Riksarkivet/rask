@@ -50,6 +50,9 @@ class _Feed:
     def __init__(self) -> None:
         self.cursors: dict[str, int] = {}
 
+    async def feed_incarnation(self) -> str:
+        return "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5f"
+
     async def cursor(self, follower: str) -> int:
         return self.cursors.get(follower, 0)
 

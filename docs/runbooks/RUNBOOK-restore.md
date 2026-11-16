@@ -120,6 +120,16 @@ Three things that exercise taught, each of which had already produced a wrong an
   derived tables) to confirm provenance resolves against the restored data.
 - A forwarder cursor in `lance_catalog$provenance$cursors` restored behind the graph backend's state re-sends events the backend
   already took: the forwarder promises at least once, never exactly once.
+- A forwarder's cursor is kept under the uuid of the feed table it was taken on (`rask.uuid` of
+  `lance_catalog$provenance$events`). To replace the feed and keep the cursors, drop `events` at the catalog and restart
+  lineage, whose start creates it again: the new table has another uuid, so the forwarder follows it from its first row.
+  A feed that comes back under another uuid for any other reason (registered again at its restored location) is
+  forwarded from its first row too, and the backend is sent again what it already took.
+- Putting the bytes of `lance_catalog$provenance$events` back from an older copy keeps its uuid and rewinds its row
+  ids, so restore `lance_catalog$provenance$cursors` from the same point, or delete the forwarder's row there before
+  lineage ticks. Without that, rows committed after the restore reuse seqs the cursor has passed and are not forwarded;
+  the forwarder notices only while the feed's newest row is still behind the cursor (WARN
+  `lineage_forward_cursor_ahead_of_feed`, after which it follows the feed from its oldest row).
 - See [RUNBOOK-oncall.md](RUNBOOK-oncall.md) for the failure modes you may hit during recovery.
 
 ## Planned migration — bumping AGE across a Postgres major

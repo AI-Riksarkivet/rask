@@ -57,15 +57,16 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from lakehouse import derived_tables
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.derived_tables import EDGES
+from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.machine_identity import read_identity_token
-from lakehouse.lancekit.catalog_client import catalog_api_client, request_headers
+from lakehouse.lancekit.catalog_client import catalog_api_client, catalog_read_client, request_headers
 from lakehouse.lancekit.filters import in_lists, sql_literal
 from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from lakehouse.lancekit.writer import RestCatalogWriteTransport
 from lakehouse.lineage import ParentRunFacet
 from lakehouse.lineage.signing import SIGNATURE_FACET
 from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
-from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.naming import CATALOG_DELIMITER, uuid_of
 from lakehouse.openlineage import BRANCH_IDENTIFIER
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
@@ -157,7 +158,8 @@ REFUSAL_SCHEMA: Final = pa.schema(
     ]
 )
 
-#: Where each follower of the feed this service drives left it: the forwarder's cursor, keyed by the endpoint it posts to.
+#: Where each follower of the feed this service drives left it: the forwarder's cursor, keyed by the endpoint it posts to
+#: and the feed table it was taken on (:meth:`ProvenanceStore.feed_incarnation`).
 CURSORS: Final = "cursors"
 CURSOR_SCHEMA: Final = pa.schema(
     [
@@ -351,9 +353,15 @@ def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[d
     return rows
 
 
-def feed_row(event: RunEvent | DatasetEvent, *, received_at: datetime) -> dict[str, Any]:
-    """The feed row one admitted event becomes. The payload is the event as the parsed model dumps it, the JSON its bound weighs."""
-    scope = scope_of([*event.inputs, *event.outputs]).model_dump()
+def feed_row(event: RunEvent | DatasetEvent, *, received_at: datetime, aliased: Collection[str]) -> dict[str, Any]:
+    """The feed row one admitted event becomes. The payload is the event as the parsed model dumps it, the JSON its bound weighs.
+
+    ``aliased`` are the uuids of the tables the event's datasets are named as by a storage location or a ``symlinks``
+    identifier, as the door that admitted it had the catalog answer ([[LH-598]]). The row's scope names them beside the
+    uuids its datasets carry, so every read of the row, with its payload or without, is decided on them too.
+    """
+    named = scope_of([*event.inputs, *event.outputs])
+    scope = named.model_copy(update={"table_uuids": list(dict.fromkeys([*named.table_uuids, *sorted(aliased)]))}).model_dump()
     if isinstance(event, DatasetEvent):
         return {
             "event_key": feed_key(event),
@@ -401,8 +409,8 @@ class _Recording(BaseModel):
     landed: Future[None]
 
 
-def _recording_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> _Recording:
-    row = feed_row(event, received_at=received_at)
+def _recording_of(event: RunEvent | DatasetEvent, *, received_at: datetime, aliased: Collection[str]) -> _Recording:
+    row = feed_row(event, received_at=received_at, aliased=aliased)
     run_id = event.run.run_id if isinstance(event, RunEvent) and event.run.run_id else None
     edges = pa.Table.from_pylist(edges_of(event, received_at=received_at), schema=EDGE_SCHEMA)
     rows = pa.Table.from_pylist([row], schema=FEED_SCHEMA)
@@ -541,8 +549,12 @@ class ProvenanceStore:
 
     # ---- writes -------------------------------------------------------------------------------------------
 
-    async def record(self, event: RunEvent | DatasetEvent) -> None:
+    async def record(self, event: RunEvent | DatasetEvent, *, aliased: Collection[str]) -> None:
         """Record one admitted event: its run's author, its edges, then its feed row. Idempotent: a redelivery lands nothing new.
+
+        ``aliased`` is what the door that admitted the event answers (`fga_deps.enforce_output_authz`): the uuids of the
+        tables its datasets alias, which its feed row is scoped by (:func:`feed_row`). It has no default, so no door
+        records an event without saying what it aliases.
 
         A run is bound to its author first, by its first event, so the binding exists before any row of the run is
         visible; a later event of the run reads the binding and writes none. The edges go before the feed row so a
@@ -556,7 +568,7 @@ class ProvenanceStore:
         Raises:
             Exception: whatever kept the event's rows from landing; nothing it carries is recorded past the table that refused it.
         """
-        recording = _recording_of(event, received_at=datetime.now(UTC))
+        recording = _recording_of(event, received_at=datetime.now(UTC), aliased=aliased)
         with self._pending_lock:
             self._pending.append(recording)
             start = not self._landing
@@ -800,8 +812,41 @@ class ProvenanceStore:
         await self._run(lambda: self._writer(CURSORS).merge_upsert(_cursor_row(follower, seq), on="follower", matched_when="source.seq > target.seq"))
 
     async def reset_cursor(self, follower: str, seq: int) -> None:
-        """Set ``follower``'s cursor to ``seq`` whichever way it moves: for a cursor the feed never issued (a rebuilt feed)."""
+        """Set ``follower``'s cursor to ``seq`` whichever way it moves: for a feed whose bytes were put back from before it."""
         await self._run(lambda: self._writer(CURSORS).merge_upsert(_cursor_row(follower, seq), on="follower"))
+
+    async def feed_incarnation(self) -> str:
+        """Which feed table this is: the uuid the catalog minted when it was created, which a feed created again does not share.
+
+        A seq is a position in ONE feed table. Lance never issues a stable row id twice within a table, its own restore
+        to an earlier version included (measured on pylance 13.0.0: after ``restore()`` from five rows to two, the next two
+        rows took ids 5 and 6), so a cursor is exact for as long as the table's history is its own. A table created again
+        numbers its rows from the start, and the catalog mints it another uuid, so a cursor is kept under the uuid of the
+        feed it was taken on. The uuid is the catalog's record, not the table's bytes: bytes put back from an older copy
+        keep it (`lineage.services.forward`).
+
+        Raises:
+            ServiceUnavailableError: the catalog described the feed without a uuid, which no table it made lacks.
+        """
+        return await self._run(self._feed_incarnation)
+
+    def _feed_incarnation(self) -> str:
+        from lance_namespace_urllib3_client.api.table_api import TableApi
+        from lance_namespace_urllib3_client.models import DescribeTableRequest
+
+        with translate_catalog_errors():
+            described = TableApi(catalog_read_client(self._url)).describe_table(
+                CATALOG_DELIMITER.join(self.table_id(FEED)),
+                # The uuid is all this reads, so no credential is minted for the feed's location.
+                DescribeTableRequest(vend_credentials=False),
+                delimiter=CATALOG_DELIMITER,
+                _request_timeout=self._timeout,
+                _headers=request_headers(self._token()),
+            )
+        incarnation = uuid_of(described.properties)
+        if incarnation is None:
+            raise ServiceUnavailableError("the catalog described the feed table without the uuid it mints for every table")
+        return incarnation
 
     async def run_author(self, run_id: str) -> str | None:
         """The verified author sub the run is bound to, or ``None`` when no event of it was recorded or its first named none."""

@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import uuid
+from collections.abc import Collection
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
@@ -75,7 +76,7 @@ class _Repo:
         self.datasets: list[DatasetEvent] = []
         self.refusals: list[dict[str, str | None]] = []
 
-    async def record(self, event: Any) -> None:  # noqa: ANN401 — the store's own shape
+    async def record(self, event: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 — the store's own shape
         (self.datasets if isinstance(event, DatasetEvent) else self.runs).append(event)
 
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
@@ -229,16 +230,17 @@ def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
     return run_id
 
 
-async def _admit(*_args: object) -> None:
+async def _admit(*_args: object) -> frozenset[str]:
     """The gate admits: what is under test is the drain's handling after it, not the gate's decision."""
+    return frozenset()
 
 
 class _CreateDoorDown(_Repo):
     @override
-    async def record(self, event: Any) -> None:  # noqa: ANN401 — the store's own shape
+    async def record(self, event: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 — the store's own shape
         if isinstance(event, DatasetEvent):
             raise ConnectionError("catalog unreachable")
-        await super().record(event)
+        await super().record(event, aliased=aliased)
 
 
 class _RefusalLedgerDown(_Repo):
@@ -391,9 +393,10 @@ def _refusing(key: str, settings: LineageSettings) -> Any:  # noqa: ANN401 — t
     assert refused_json is not None
     refused_doc = json.loads(refused_json[1])["data"]
 
-    async def gate(_event: object, _app: object, _settings: object, arrived: dict[str, Any]) -> None:
+    async def gate(_event: object, _app: object, _settings: object, arrived: dict[str, Any]) -> frozenset[str]:
         if arrived == refused_doc:
             raise PermissionDeniedError("can_write_data required")
+        return frozenset()
 
     return gate
 

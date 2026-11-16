@@ -352,7 +352,7 @@ def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Pa
         ]
         with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
             for event in chain:
-                asyncio.run(lineage.app.state.provenance.record(parse_event(_stamped(event, uuid_of))))
+                asyncio.run(lineage.app.state.provenance.record(parse_event(_stamped(event, uuid_of)), aliased=()))
 
             answer = lineage.get("/tables/lance_catalog$acme-bronze$events/derived", headers={SUBJECT_HEADER: "dex~eraser"})
 

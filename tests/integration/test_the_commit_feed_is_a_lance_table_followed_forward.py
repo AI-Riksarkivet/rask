@@ -184,7 +184,7 @@ def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[T
 
             async def _seed() -> None:
                 for event in feed:
-                    await store.record(parse_event(_stamped(event, uuid_of)))
+                    await store.record(parse_event(_stamped(event, uuid_of)), aliased=())
 
             asyncio.run(_seed())
             yield client
@@ -215,7 +215,7 @@ def _recorded(store: ProvenanceStore, events: list[dict[str, Any]]) -> None:
     """Record ``events`` concurrently, as the bus delivers them, so they land in a few group commits."""
 
     async def burst() -> None:
-        await asyncio.gather(*(store.record(parse_event(event)) for event in events))
+        await asyncio.gather(*(store.record(parse_event(event), aliased=()) for event in events))
 
     asyncio.run(burst())
 

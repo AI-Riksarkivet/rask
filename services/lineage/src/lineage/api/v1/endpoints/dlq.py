@@ -11,6 +11,11 @@ Authz mirrors ingest exactly, because a replay IS a re-ingest: the view is filte
 events whose datasets you may read — :func:`governed`), and a replay requires ``can_write_data`` on the
 event's outputs + ``can_get_metadata`` on its inputs (:func:`enforce_output_authz`). Both are no-ops when FGA
 is off (dev/tests). Every replay is audited on the ``lance.audit`` trail (#41).
+
+A STAGED EVENT IS SCOPED AS THE CALLER, NOW ([[LH-598]]). No door has admitted it yet, so nothing recorded which
+tables its locations and ``symlinks`` name: the catalog is asked for every staged event the door reads
+(`fga_deps.DatasetFilter.scope_unrecorded`), and an event naming a table the caller may not see under any identifier is
+neither listed nor replayable, answered as an event nothing staged.
 """
 
 from __future__ import annotations
@@ -35,7 +40,6 @@ from lineage.api.fga_deps import (
     enforce_bus_authz,
     enforce_output_authz,
     governed,
-    governed_refs,
     require_parks_reader,
     require_parks_replayer,
 )
@@ -103,20 +107,24 @@ async def list_dlq(
     opts = storage_options(settings)
     depth, oldest_age = await run_in_threadpool(outbox.backlog, settings.outbox_uri, opts)
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.outbox_uri, opts, limit=limit)))
-    events = [(_summary(run_id, event_json), _governs(event_json)) for run_id, event_json in staged]
     # Drop events referencing datasets the caller may not see (fail-closed). A poison event has no parseable
     # datasets, so under FGA it is filtered out (dataset-less → dropped); in dev/tests (FGA off) it shows.
+    parsed = [_parsed(event_json) for _, event_json in staged]
+    scopes = iter(await datasets.scope_unrecorded([event for event in parsed if event is not None]))
+    # A poison object names nothing, so nothing is asked about it.
+    events = [
+        (_summary(run_id, event_json), next(scopes) if event is not None else Governed()) for (run_id, event_json), event in zip(staged, parsed, strict=True)
+    ]
     visible = await governed(datasets, settings.fga_enabled, events, lambda pair: pair[1])
     return DlqBacklog(depth=depth, oldest_age_seconds=oldest_age, events=[summary for summary, _ in visible], limit=limit)
 
 
-def _governs(event_json: str) -> Governed:
-    """The tables a staged event names, by the uuids it carries; a poison object names none."""
+def _parsed(event_json: str) -> RunEvent | DatasetEvent | None:
+    """The event a staged object holds, or ``None`` for a poison object."""
     try:
-        event = parse_staged(read_staged(event_json))
+        return parse_staged(read_staged(event_json))
     except UnparseableEventError:
-        return Governed()
-    return governed_refs([*event.inputs, *event.outputs])
+        return None
 
 
 @router.post("/{run_id}/replay")
@@ -165,9 +173,9 @@ async def replay_dlq(
             raise TransactionNotFoundError(f"no staged lineage event for run {run_id}") from exc
         raise UnsupportedOperationError(f"staged event for run {run_id} is unparseable (poison)") from exc
     # Visibility gate — mirror list_dlq's governance: you may only replay an event you could have SEEN. An
-    # event referencing a dataset the caller can't read is hidden as a 404, so enforce_output_authz's
-    # dataset-naming 403 can never disclose a dataset the list view withheld.
-    refs = governed_refs([*event.outputs, *event.inputs])
+    # event referencing a dataset the caller can't read, by its name, its location, a symlink or a column upstream, is
+    # hidden as a 404, so enforce_output_authz's dataset-naming 403 can never disclose a dataset the list view withheld.
+    (refs,) = await datasets.scope_unrecorded([event])
     if settings.fga_enabled and not refs.names_nothing and (refs.unresolved or refs.objects - await datasets.visible(refs.objects)):
         raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
     # TWO GATES, because a replay answers two questions. The relay's own, over the STAGED BYTES: the
@@ -175,9 +183,8 @@ async def replay_dlq(
     # and a forged or re-targeted object stays refused however trusted the operator is. Then the ingest
     # door's, over the operator: a caller may only replay what they could have written in the first place.
     arrived = staged.data
-    await enforce_bus_authz(event, request.app, settings, arrived)
-    await enforce_output_authz(event, request.app, settings, token)
-    await provenance.record(event)  # idempotent: every row under its key
+    aliased = await enforce_bus_authz(event, request.app, settings, arrived) | await enforce_output_authz(event, request.app, settings, token)
+    await provenance.record(event, aliased=aliased)  # idempotent: every row under its key
     # BEFORE the drop: the staged object is the only copy the relay could still re-publish. The feed is
     # already repaired when this fails, so the answer says so, and the partial outcome is audited: a 503
     # the operator can retry (the record is idempotent) rather than an unexplained 500 with no record.

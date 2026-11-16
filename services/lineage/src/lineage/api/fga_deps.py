@@ -26,7 +26,7 @@ Fail-closed when enabled-but-unwired (503, never silent allow).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Annotated, Any, Final, TypeGuard
 
 from fastapi import Depends, FastAPI, Request
@@ -328,8 +328,11 @@ class _StampedAuthor:
         self.subject = subject
 
 
-async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settings: LineageSettings, arrived: Mapping[str, Any]) -> None:
+async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settings: LineageSettings, arrived: Mapping[str, Any]) -> frozenset[str]:
     """Output-scoped authz for an event delivered from the BUS, as the subject the producer stamped (§ E2).
+
+    Returns what :func:`enforce_output_authz` returns, the tables the event's datasets alias, for the feed row's scope;
+    empty for an event admitted without that check (a drop the catalog attests, a redelivery, authorization off).
 
     The HTTP door proves WHO is ingesting (`enforce_author`) and then what they may write
     (`enforce_output_authz`); the bus door can do neither by itself, because it has no principal — a delivery
@@ -373,9 +376,9 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settin
     verified = await verify_arrived_event(arrived, app, settings)
     if _is_an_attested_drop(event, verified, settings):
         log.info("lineage_catalog_drop_admitted", extra={"dataset": event.dataset.name, "operation": event.operation})
-        return
+        return frozenset()
     if not settings.fga_enabled:
-        return
+        return frozenset()
     # The DUMP, deliberately, for everything below: `_is_replay` compares byte-for-byte against the row
     # the feed already holds, which was itself built from the model.
     payload = event.model_dump(by_alias=True)
@@ -386,7 +389,7 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settin
         # A stamp that names no principal is no author: nothing could be authorized as it ([[LH-063]]).
         if not is_principal(subject):
             raise UnauthoredRunError(f"a bus-delivered run's author {subject[:128]!r} is not a principal (<idp-id>~<subject>)")
-        await enforce_output_authz(
+        return await enforce_output_authz(
             event,
             app,
             settings,
@@ -398,6 +401,7 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settin
         if not await _is_replay(event, payload, app):
             raise
         log.info("lineage_replay_not_reauthorized", extra={"run": event.run_id, "event_type": event.feed_event_type})
+        return frozenset()
 
 
 def _is_an_attested_drop(event: RunEvent | DatasetEvent, verified: VerifiedSignature | None, settings: LineageSettings) -> TypeGuard[DatasetEvent]:
@@ -467,14 +471,21 @@ class Aliases(BaseModel):
 
     ``objects`` are the tables each dataset (by its index in the list asked about) names by a storage location or a
     ``symlinks`` identifier; ``located`` the indices of the datasets whose own name is a location a governed table holds,
-    each of which is that table; ``hidden`` are the identifiers naming a governed table by name the caller may not see,
-    which no grant asked about the dataset reaches."""
+    each of which is that table; ``hidden`` are, by the same index, the identifiers naming a governed table by name the
+    caller may not see, which no grant asked about the dataset reaches; ``tables`` are the uuids of every table
+    ``objects`` names."""
 
     model_config = ConfigDict(frozen=True)
 
     objects: dict[int, frozenset[str]] = {}
     located: frozenset[int] = frozenset()
-    hidden: frozenset[str] = frozenset()
+    hidden: dict[int, frozenset[str]] = {}
+    tables: frozenset[str] = frozenset()
+
+    @property
+    def hidden_names(self) -> frozenset[str]:
+        """Every identifier of ``hidden``, whichever dataset listed it."""
+        return frozenset[str]().union(*self.hidden.values())
 
 
 async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, user: str) -> Aliases:
@@ -502,26 +513,66 @@ async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, us
             elif (location := identifier_location(namespace, name)) is not None:
                 locations.setdefault(location, []).append(index)
     objects: dict[int, set[str]] = {}
+    tables: set[str] = set()
     held: set[str] = set()
     if locations:
         for location, table_uuid in (await decider.locate(sorted(locations))).items():
             if table_uuid is not None:
                 held.add(location)
+                tables.add(table_uuid)
                 for index in locations[location]:
                     objects.setdefault(index, set()).add(fga.table_object(table_uuid))
-    hidden: set[str] = set()
+    hidden: dict[int, set[str]] = {}
     if names:
         for name, decision in (await decider.check_tables(user=user, relation="can_get_metadata", tables=sorted(names))).items():
             if (table_uuid := decision.table_uuid) is None:
-                hidden.add(name)
+                for index in names[name]:
+                    hidden.setdefault(index, set()).add(name)
                 continue
+            tables.add(table_uuid)
             for index in names[name]:
                 objects.setdefault(index, set()).add(fga.table_object(table_uuid))
     return Aliases(
         objects={index: frozenset(found) for index, found in objects.items()},
         located=frozenset(index for index, location in own.items() if location in held),
-        hidden=frozenset(hidden),
+        hidden={index: frozenset(unseen) for index, unseen in hidden.items()},
+        tables=frozenset(tables),
     )
+
+
+def _upstreams_named_by_a_location(outputs: Iterable[Dataset]) -> list[Dataset]:
+    """The column upstreams ``outputs`` name outside the catalog's own names, each as a dataset: one named by a location a
+    governed table holds is read as that table, as an input is (:func:`resolve_aliases`)."""
+    return [Dataset(namespace=up.namespace, name=up.name) for out in outputs for up in out.column_upstreams if is_external_source(up.namespace, up.name)]
+
+
+def _upstreams_named_as_tables(outputs: Iterable[Dataset]) -> set[str]:
+    """The column upstreams ``outputs`` name by a governed table's own name."""
+    return {up.name for out in outputs for up in out.column_upstreams if not is_external_source(up.namespace, up.name)}
+
+
+async def governed_with_aliases(decider: AccessDecider, events: Sequence[RunEvent | DatasetEvent], *, user: str) -> list[Governed]:
+    """What each of ``events`` names in the governed estate for the reader ``user``, under every identifier it uses.
+
+    For an event no door has scoped yet, a staged one ([[LH-598]]), by the rule `enforce_output_authz` admits one on:
+    beside the tables its datasets carry the uuids of, it names every table an input, an output or a column upstream is
+    named as by a storage location or a ``symlinks`` identifier (:func:`resolve_aliases`), and a name the reader may
+    not see, symlinked or a column upstream's, is unresolved, so the event is hidden. Asked in one question about every
+    location and one about every symlinked name, whatever the number of events.
+    """
+    named_by = [[*event.inputs, *event.outputs, *_upstreams_named_by_a_location(event.outputs)] for event in events]
+    owners = [position for position, datasets in enumerate(named_by) for _ in datasets]
+    aliases = await resolve_aliases(decider, [dataset for datasets in named_by for dataset in datasets], user=user)
+    objects: list[set[str]] = [set() for _ in events]
+    unseen: list[set[str]] = [set() for _ in events]
+    for index, owner in enumerate(owners):
+        objects[owner] |= aliases.objects.get(index, frozenset())
+        unseen[owner] |= aliases.hidden.get(index, frozenset())
+    scoped: list[Governed] = []
+    for event, aliased, hidden in zip(events, objects, unseen, strict=True):
+        named = governed_refs([*event.inputs, *event.outputs], column_upstreams=_upstreams_named_as_tables(event.outputs))
+        scoped.append(Governed(objects=named.objects | aliased, unresolved=named.unresolved | hidden))
+    return scoped
 
 
 async def enforce_output_authz(
@@ -532,7 +583,7 @@ async def enforce_output_authz(
     *,
     relations: tuple[str, ...] = _WRITE_RELATIONS,
     signed_by: VerifiedSignature | None = None,
-) -> None:
+) -> frozenset[str]:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
     :func:`enforce_author` proves WHO is ingesting; this proves they were AUTHORIZED to write those outputs —
@@ -554,9 +605,15 @@ async def enforce_output_authz(
     catalog checked both before it committed the write, and a grant revoked since, or a table dropped since, takes nothing
     back. Everything else still holds for it: the run-author check, and the refusal of an output or input that names no
     uuid, since neither depends on when the event is recorded.
+
+    Returns:
+        The uuids of the governed tables the event's datasets are named as by a storage location or a ``symlinks``
+        identifier, as the catalog answered (:func:`resolve_aliases`): what the event's feed row is scoped by beside the
+        uuids its datasets carry, so a reader of the feed is shown the row only if it may see those tables too
+        ([[LH-598]]). Empty with authorization off, and for an event the catalog attests, which names its tables by uuid.
     """
     if not settings.fga_enabled:
-        return
+        return frozenset()
     # Fail-closed FIRST — BEFORE any empty-set short-circuit: an authenticated but unauthorized caller must
     # not be able to record a run merely by declaring no outputs. (bug hunt 2026-07-13)
     decider = getattr(app.state, "decider", None)
@@ -584,10 +641,7 @@ async def enforce_output_authz(
     # WHAT THE EVENT NAMES BY A LOCATION OR A SYMLINK ([[LH-553]]): the catalog attests its own, so they are not re-derived.
     written = Aliases() if attested else await resolve_aliases(decider, list(event.outputs), user=token.subject)
     # A column upstream named by a location is read as its table too: a graph backend joins it there as it joins an input.
-    sources = [
-        *event.inputs,
-        *(Dataset(namespace=up.namespace, name=up.name) for out in event.outputs for up in out.column_upstreams if is_external_source(up.namespace, up.name)),
-    ]
+    sources = [*event.inputs, *_upstreams_named_by_a_location(event.outputs)]
     read_as = Aliases() if attested else await resolve_aliases(decider, sources, user=token.subject)
     # OUTPUTS ARE NEVER EXEMPTED: writing is the direction that mutates the estate, so an output naming an external
     # namespace is a producer claiming to have written the outside world, and it names no object, as an output carrying
@@ -595,7 +649,7 @@ async def enforce_output_authz(
     # location of a governed table is that table, and is decided on its grants.
     outputs = output_refs(event.outputs)
     unnamed = frozenset(name for index, out in enumerate(event.outputs) if index not in written.located for name in output_refs([out]).unresolved)
-    outputs = Governed(objects=outputs.objects.union(*written.objects.values()), unresolved=unnamed | written.hidden)
+    outputs = Governed(objects=outputs.objects.union(*written.objects.values()), unresolved=unnamed | written.hidden_names)
     if outputs.unresolved:
         reason = f"{' or '.join(relations)} required on outputs: {', '.join(sorted(outputs.unresolved))}"
         log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": sorted(outputs.unresolved)})
@@ -624,9 +678,8 @@ async def enforce_output_authz(
     # `can_get_metadata` on the input side already governs. Same exemption too — an external upstream
     # has no `table:` object, and (since `lineage_name`) cannot be recorded as a governed table either. A column
     # upstream is the table a dataset of the event by that name is.
-    column_upstreams = {up.name for out in event.outputs for up in out.column_upstreams if not is_external_source(up.namespace, up.name)}
-    read = governed_refs(event.inputs, column_upstreams=column_upstreams)
-    read = Governed(objects=read.objects.union(*read_as.objects.values()), unresolved=read.unresolved | read_as.hidden)
+    read = governed_refs(event.inputs, column_upstreams=_upstreams_named_as_tables(event.outputs))
+    read = Governed(objects=read.objects.union(*read_as.objects.values()), unresolved=read.unresolved | read_as.hidden_names)
     hidden = set(read.unresolved)
     if read.objects and not attested:
         seen = await decider.batch_check(user=token.subject, relation="can_get_metadata", objects=sorted(read.objects))
@@ -634,6 +687,7 @@ async def enforce_output_authz(
     if hidden:
         log.info("ingest_input_denied", extra={"sub": token.subject, "relation": "can_get_metadata", "inputs": sorted(hidden)})
         raise PermissionDeniedError(f"can_get_metadata required on inputs: {', '.join(sorted(hidden))}")
+    return written.tables | read_as.tables
 
 
 def _names_of(datasets: Iterable[Dataset], objects: Iterable[str], aliases: Aliases | None = None) -> list[str]:
@@ -681,14 +735,27 @@ class DatasetFilter:
             return set(unique)
         undecided = [obj for obj in unique if obj not in self._decided]
         if undecided:
-            decider = getattr(self._request.app.state, "decider", None)
-            if decider is None:
-                raise ServiceUnavailableError("authorization service is not available")
-            if self._token is None:
-                raise UnauthenticatedError("authentication required")
-            allowed = await decider.batch_check(user=self._token.subject, relation="can_get_metadata", objects=undecided)
+            decider, subject = self._asking()
+            allowed = await decider.batch_check(user=subject, relation="can_get_metadata", objects=undecided)
             self._decided.update({obj: bool(allowed.get(obj)) for obj in undecided})
         return {obj for obj in unique if self._decided[obj]}
+
+    async def scope_unrecorded(self, events: Sequence[RunEvent | DatasetEvent]) -> list[Governed]:
+        """Ask the authorization service what each of ``events`` names for this caller: for an event no door has recorded,
+        whose aliases the catalog answers now (:func:`governed_with_aliases`). With FGA off nothing is asked."""
+        if not self._settings.fga_enabled:
+            return [governed_refs([*event.inputs, *event.outputs]) for event in events]
+        decider, subject = self._asking()
+        return await governed_with_aliases(decider, events, user=subject)
+
+    def _asking(self) -> tuple[AccessDecider, str]:
+        """The authorization service and the subject it is asked as; fail-closed where either is missing."""
+        decider = getattr(self._request.app.state, "decider", None)
+        if decider is None:
+            raise ServiceUnavailableError("authorization service is not available")
+        if self._token is None:
+            raise UnauthenticatedError("authentication required")
+        return decider, self._token.subject
 
 
 def get_dataset_filter(request: Request, settings: SettingsDep, token: CurrentToken) -> DatasetFilter:

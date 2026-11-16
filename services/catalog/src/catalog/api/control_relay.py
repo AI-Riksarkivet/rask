@@ -93,6 +93,9 @@ class ControlRelayReport(BaseModel):
     #: Objects retired unpublished so they cannot wedge the drain: one that is not a control event, one the bus can never
     #: carry, or, on a catalog that signs, one this catalog did not sign. Non-zero is a producer bug or a forgery.
     poison_dropped: int = 0
+    #: Objects whose delete the store refused, after their event was republished or they were judged poison. Each stays
+    #: staged for the next tick and is counted as neither, and the pass goes on to the events behind it.
+    left_staged: int = 0
     #: The pass stopped because the keys this catalog publishes could not be read, or a key id could not be decided yet:
     #: everything still staged waits, because the relay publishes only what it verified.
     keys_unavailable: bool = False
@@ -188,6 +191,10 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
     next tick, which is the entire point of staging. A redelivery costs a duplicate the lane already
     tolerates; a premature drop costs the cascade.
 
+    A DELETE THE STORE REFUSES IS THAT OBJECT'S OWN FAILURE. The object stays staged and the pass goes on: the next tick
+    republishes it under the same ``event_id``, which the stream and every subscriber deduplicate on, and an object no
+    tick can delete never holds the events behind it. Only a publish that fails stops the pass, since that is the bus.
+
     VERIFIED BEFORE IT GOES when this catalog signs (``verify``), and never signed here: the staged event
     goes out as it is or not at all. An object that is not a control event, or that this catalog did not
     sign, is retired as poison and never published. Keys that cannot be read stop the pass with every
@@ -214,11 +221,21 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
         log.warning("control_relay_no_publisher", extra={"depth": depth, "oldest_age_seconds": report.oldest_age_seconds})
         return report
 
+    async def drop_or_leave_staged(key: str) -> bool:
+        """Delete one staged object and answer whether the store did; one it refuses stays staged, logged and counted on the report."""
+        try:
+            await run_in_threadpool(outbox.drop_event, settings.control_outbox_uri, options, key)
+        except Exception as exc:
+            log.warning("control_outbox_left_staged", extra={"key": bounded(key), "error": bounded(str(exc))})
+            report.left_staged += 1
+            return False
+        return True
+
     async def retire(key: str) -> None:
         """Drop one staged object this lane can never deliver, so the pass goes on to the events behind it."""
-        outbox_metrics.record_poison_dropped()
-        await run_in_threadpool(outbox.drop_event, settings.control_outbox_uri, options, key)
-        report.poison_dropped += 1
+        if await drop_or_leave_staged(key):
+            outbox_metrics.record_poison_dropped()
+            report.poison_dropped += 1
 
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.control_outbox_uri, options, limit=DRAIN_LIMIT)))
     for key, event_json in staged:
@@ -261,8 +278,10 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
             log.warning("control_outbox_republish_failed", extra={"key": key, "error": str(exc)})
             outbox_metrics.record_publish_failed()
             break
-        await run_in_threadpool(outbox.drop_event, settings.control_outbox_uri, options, key)
-        report.republished += 1
+        if await drop_or_leave_staged(key):
+            report.republished += 1
+        else:
+            outbox_metrics.record_drop_failed()
     outbox_metrics.record_drained(report.republished)
     return report
 
@@ -279,6 +298,7 @@ async def tick(ctx: Tick) -> ControlRelayReport:
             "oldest_age_seconds": report.oldest_age_seconds,
             "republished": report.republished,
             "poison_dropped": report.poison_dropped,
+            "left_staged": report.left_staged,
             "keys_unavailable": report.keys_unavailable,
         },
     )

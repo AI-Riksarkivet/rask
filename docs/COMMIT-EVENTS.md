@@ -143,7 +143,10 @@ the table it names, because the forwarded graph joins them to that table: lineag
 location holds (`POST /management/v1/decisions/locate`, on the `governance_prober` role), and resolves a symlinked
 catalog name as the poster. Recording one the poster may not see is refused 403, as naming the table by its id is, and
 a dataset named by a location a table holds carries that table's `tableUuid` in the feed; a location no table holds is
-an outside source, and so is a dataset under another catalog's `lance-namespace://` host.
+an outside source, and so is a dataset under another catalog's `lance-namespace://` host. Every table the catalog
+answered for a location or a symlink is in the row's `table_uuids`, and a reader is shown the row, whole or as a
+summary, only if it may see each of them: naming a table by an alias shows nobody an event they could not see had it
+named the table by its id.
 
 ## Delivery
 
