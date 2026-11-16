@@ -375,6 +375,9 @@ def drive(tenant: Tenant) -> ScenarioRun:
         transaction_properties=branch_run.transaction_properties(author=pipeline.principal),
     )
     commits.append(Commit(table=silver_table, branch=STAGING, version=on_branch.version, run=branch_run))
+    # The drive ends once lineage's feed holds its last commit, so every criterion reads a whole drive: a reader of
+    # the feed right after the commit landed is otherwise racing lineage's ingest of it.
+    follow(pipeline, since=cursor, table=silver_table, until=lambda rows: ("insert", on_branch.version) in writes(rows))
 
     return ScenarioRun(
         start=start,
